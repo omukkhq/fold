@@ -41,6 +41,7 @@ describe("describeError", () => {
       "checklist_origin",
       "linked_item",
       "proposal_open",
+      "two_areas",
     ]) {
       const view = describeError(refusal("invalid_request", { reason }));
       expect(view?.field, reason).toBeNull();
@@ -52,6 +53,19 @@ describe("describeError", () => {
     ).not.toBe(
       describeError(refusal("invalid_request", { reason: "linked_item" }))
         ?.text,
+    );
+  });
+
+  it("says a task keeps one area when the daemon refuses a second", () => {
+    expect(
+      describeError(
+        refusal("invalid_request", {
+          reason: "two_areas",
+          areas: ["web", "api"],
+        }),
+      )?.text,
+    ).toBe(
+      "A task can have only one area label. Keep one area, or let the main agent choose it.",
     );
   });
 

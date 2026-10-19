@@ -9,7 +9,7 @@ fn fold(args: &[&str]) -> io::Result<Output> {
 fn bare_invocation_prints_the_version_line() -> io::Result<()> {
     let output = fold(&[])?;
     assert!(output.status.success());
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "fld 0.2.0\n");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "fld 0.2.1\n");
     Ok(())
 }
 
@@ -17,7 +17,7 @@ fn bare_invocation_prints_the_version_line() -> io::Result<()> {
 fn version_flag_prints_the_version_line() -> io::Result<()> {
     let output = fold(&["--version"])?;
     assert!(output.status.success());
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "fld 0.2.0\n");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "fld 0.2.1\n");
     Ok(())
 }
 

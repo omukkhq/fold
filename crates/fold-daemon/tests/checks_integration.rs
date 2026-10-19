@@ -10,7 +10,7 @@ use fold_core::roles::Role;
 use fold_core::{TaskDescription, TaskStatus, TaskTitle};
 use fold_daemon::services::agents::peers;
 use fold_daemon::services::reviews::{IntegrationOutcome, Turn};
-use fold_daemon::services::tasks::CreateTask;
+use fold_daemon::services::tasks::{CreateTask, TaskPatch};
 use fold_store::reviews::ProposalState;
 use fold_store::testing::eventually;
 
@@ -67,6 +67,22 @@ async fn state_of(fx: &Fixture, proposal: u32) -> ProposalState {
         .unwrap()
         .summary
         .state
+}
+
+/// Moves `T-2` into the area that `frontend` leads, so that [`approved`] can let `frontend` work on it: a task has one area.
+#[cfg(test)]
+async fn second_task_to_frontend(fx: &Fixture) {
+    fx.tasks
+        .update_task(
+            &human(),
+            t(2),
+            TaskPatch {
+                labels: Some(crate::common::roles::work_labels_of("frontend")),
+                ..TaskPatch::default()
+            },
+        )
+        .await
+        .unwrap();
 }
 
 #[cfg(test)]
@@ -277,6 +293,7 @@ async fn queued_integrations_run_one_at_a_time_in_the_order_asked() {
         )
         .await
         .unwrap();
+    second_task_to_frontend(&fx).await;
     let second = approved(&fx, 2, |dir| {
         std::fs::write(dir.join("two.txt"), "2\n").unwrap();
     })
@@ -338,6 +355,7 @@ async fn a_queued_integration_that_conflicts_is_told_to_the_integrating_agent() 
         )
         .await
         .unwrap();
+    second_task_to_frontend(&fx).await;
     let second = approved(&fx, 2, |dir| {
         std::fs::write(dir.join("same.txt"), "two\n").unwrap();
     })
@@ -441,6 +459,7 @@ async fn a_fault_of_folds_own_stops_the_run_sends_nothing_back_and_is_not_retrie
         .await
         .unwrap();
     integrated(&fx, first).await;
+    second_task_to_frontend(&fx).await;
     let second = approved(&fx, 2, |dir| {
         std::fs::write(dir.join("two.txt"), "2\n").unwrap();
     })

@@ -1,4 +1,8 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueryClient,
+  type MutationKey,
+} from "@tanstack/react-query";
 import { keys } from "@/api/keys";
 
 /**
@@ -9,9 +13,12 @@ export function useTaskWrite<V>(
   slug: string,
   task: string,
   write: (vars: V) => Promise<unknown>,
+  /** Groups writes that must not run at the same time, as `useIsMutating` counts them. */
+  mutationKey?: MutationKey,
 ) {
   const queryClient = useQueryClient();
   return useMutation({
+    mutationKey,
     mutationFn: async (vars: V) => {
       await write(vars);
       await Promise.all([

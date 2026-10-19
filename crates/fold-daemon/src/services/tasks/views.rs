@@ -5,9 +5,10 @@ use fold_core::claims::is_stale;
 use fold_core::events::types;
 use fold_core::reviews::ProposalStanding;
 use fold_core::status::status_reason;
+use fold_core::tasks::areas::areas_conflict;
 use fold_core::{
-    ChangesetId, ChecklistName, DependencyOrigin, Event, HoldMark, ProposalId, RevisionId, TaskId,
-    TaskKind, TaskStatus, TaskTitle, Timestamp, WorkerName, WorkspaceId,
+    AreaName, ChangesetId, ChecklistName, DependencyOrigin, Event, HoldMark, LabelName, ProposalId,
+    RevisionId, TaskId, TaskKind, TaskStatus, TaskTitle, Timestamp, WorkerName, WorkspaceId,
 };
 use fold_store::reviews::{self, ProposalSummary, ReviewEntry};
 use fold_store::tasks::checklists::{self, ItemContent};
@@ -22,7 +23,7 @@ pub use fold_store::tasks::{ChecklistCounts, TaskRef};
 use super::attention::{AttentionItem, attention, attention_in, stalled_tasks};
 use super::{
     ChecklistItemView, ClaimView, HumanReviewMark, LabelView, REPORT_LIMIT, ReportView, TaskError,
-    TaskService, TaskView, label_view, task_not_found, view,
+    TaskService, TaskView, area_labels, label_view, task_not_found, view,
 };
 
 /// How many Done cards the board returns: the most recently completed ones. The Done column's `total` counts them all.
@@ -167,6 +168,8 @@ pub struct BoardCard {
     /// The note of the task worker's open report on a task without a proposal: the card waits for a lead check.
     pub report: Option<String>,
     pub labels: Vec<LabelView>,
+    /// The labels hold two or more areas' labels, as [`TaskView::areas_conflict`] says.
+    pub areas_conflict: bool,
     pub checklist: ChecklistCounts,
     /// Every direct prerequisite.
     pub needs: Vec<TaskId>,
@@ -237,6 +240,7 @@ impl TaskService {
             .await?
             .ok_or_else(|| task_not_found(id))?;
         let labels = tasks::labels_for_conn(&mut tx, id).await?;
+        let areas = area_labels(&mut tx).await?;
         let names = checklists::checklists(&mut tx, id).await?;
         let items = checklists::items(&mut tx, id).await?;
         let edges = tasks::edges_of(&mut tx, id).await?;
@@ -400,7 +404,7 @@ impl TaskService {
                 .map(|p| p.id),
         );
         Ok(TaskDetail {
-            task: view(row, labels),
+            task: view(row, labels, &areas),
             checklists,
             progress,
             needs: needs.iter().filter_map(edge).collect(),
@@ -461,6 +465,14 @@ impl TaskService {
     /// The five columns in board order. Backlog to Review hold every task in number order; Done holds the [`BOARD_DONE_LIMIT`] most recently completed tasks, newest first, and counts the rest in `total`.
     pub async fn board(&self) -> Result<Board, TaskError> {
         let mut snapshot = tasks::board_snapshot(self.store.read()).await?;
+        let mut conn = self
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        let areas = area_labels(&mut conn).await?;
+        drop(conn);
         let ids: Vec<TaskId> = snapshot.tasks.iter().map(|row| row.id).collect();
         let stalled = stalled_tasks(self.live.as_ref());
         let mut attention = attention(&self.store, &ids, &stalled).await?;
@@ -487,7 +499,9 @@ impl TaskService {
             .collect();
         for row in std::mem::take(&mut snapshot.tasks) {
             let needs = needs.get(&row.id).cloned().unwrap_or_default();
+            let labels = labels_of(&mut snapshot, row.id);
             let card = BoardCard {
+                areas_conflict: card_areas_conflict(&labels, &areas),
                 blocked_by: needs
                     .iter()
                     .filter(|need| !is_done(need))
@@ -495,7 +509,7 @@ impl TaskService {
                     .collect(),
                 needs,
                 blocks: blocks.get(&row.id).copied().unwrap_or(0),
-                labels: labels_of(&mut snapshot, row.id),
+                labels,
                 checklist: snapshot
                     .checklists
                     .get(&row.id)
@@ -550,6 +564,11 @@ fn needs_by_task(snapshot: &BoardSnapshot) -> BTreeMap<TaskId, Vec<TaskId>> {
         list.sort();
     }
     needs
+}
+
+fn card_areas_conflict(labels: &[LabelView], areas: &[(AreaName, LabelName)]) -> bool {
+    let names: Vec<LabelName> = labels.iter().map(|label| label.name.clone()).collect();
+    areas_conflict(&names, areas)
 }
 
 fn labels_of(snapshot: &mut BoardSnapshot, task: TaskId) -> Vec<LabelView> {

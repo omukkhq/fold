@@ -931,7 +931,7 @@ async fn a_daemon_start_resumes_a_working_task_worker_once_its_socket_is_bound()
     registry.close().await.unwrap();
     let launcher = Launcher {
         claude: program,
-        fold: Some(std::path::PathBuf::from("/usr/local/bin/fld")),
+        fold: fake.launcher.fold.clone(),
         env: vec![
             (
                 "FOLD_TEST_SOCKET".to_owned(),
@@ -954,6 +954,145 @@ async fn a_daemon_start_resumes_a_working_task_worker_once_its_socket_is_bound()
         "the resumed task worker found the daemon's socket"
     );
     daemon.shutdown().await;
+}
+
+/// A stand-in for Claude Code that ignores SIGINT and SIGTERM, so only the last step of a stop ends it, and writes the time in nanoseconds at which fold closed its input.
+const STUBBORN: &str = r#"#!/bin/sh
+trap '' INT TERM
+: > "$FOLD_TEST_DIR/started.$$"
+cat > /dev/null
+date +%s%N > "$FOLD_TEST_DIR/closed.$$.tmp" && mv "$FOLD_TEST_DIR/closed.$$.tmp" "$FOLD_TEST_DIR/closed.$$"
+while :; do sleep 1; done
+"#;
+
+#[tokio::test]
+async fn a_daemon_stop_ends_the_workers_of_every_project_at_the_same_time() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+
+    use fold_daemon::services::agents::{Launcher, StopTimeouts};
+    use fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME;
+    use fold_daemon::{Daemon, DaemonConfig, SystemClock};
+    use fold_store::projects::{self, ProjectRow};
+    use fold_store::{Store, StoreError};
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let marks = dir.path().join("marks");
+    std::fs::create_dir_all(&marks).unwrap();
+    let count = |prefix: &str| {
+        std::fs::read_dir(&marks)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with(prefix) && !name.ends_with(".tmp")
+            })
+            .count()
+    };
+    let config = DaemonConfig {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        socket: dir.path().join("run").join("fold.sock"),
+        data_dir: dir.path().join("data"),
+        runtime_dir: dir.path().join("run"),
+        web_dir: None,
+        session_lifetime: DEFAULT_SESSION_LIFETIME,
+    };
+    let registry = Store::open_registry(&config.registry_path()).await.unwrap();
+    let fake = FakeClaude::new("init");
+    let mut harnesses = Vec::new();
+    let mut resumed = 0;
+    for slug in [SLUG, "second"] {
+        let mut harness = task_worker_for(&fake, &["Draw the page"], WorkerState::Working).await;
+        for agent in ["web-lead", TASK_WORKER] {
+            if matches!(
+                worker(&harness, agent).await.state,
+                WorkerState::Working | WorkerState::Idle
+            ) {
+                resumed += 1;
+            }
+        }
+        harness.stop().await;
+        let row = ProjectRow {
+            slug: slug.to_owned(),
+            name: slug.to_owned(),
+            root: harness.root().to_owned(),
+        };
+        let now = harness.project.now();
+        registry
+            .write(async |tx| {
+                projects::insert_project(tx, &row, now).await?;
+                Ok::<_, StoreError>(())
+            })
+            .await
+            .unwrap();
+        harnesses.push(harness);
+    }
+    registry.close().await.unwrap();
+    assert!(resumed >= 2, "each project has a worker to resume");
+
+    let program = dir.path().join("claude");
+    std::fs::write(&program, STUBBORN).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let launcher = Launcher {
+        claude: program,
+        fold: fake.launcher.fold.clone(),
+        env: vec![(
+            "FOLD_TEST_DIR".to_owned(),
+            marks.to_string_lossy().into_owned(),
+        )],
+    };
+    let daemon = Daemon::start_with(config, Arc::new(SystemClock), launcher)
+        .await
+        .unwrap();
+    eventually(WAIT, async || {
+        let started = count("started.");
+        if started == resumed {
+            Ok(())
+        } else {
+            Err(started)
+        }
+    })
+    .await;
+    let handles = daemon.state().projects.handles();
+    assert_eq!(handles.len(), 2);
+    // Each project's stop takes the whole ladder of about four seconds, so one project after the other would close the second project's workers that much later.
+    for handle in &handles {
+        handle.workers.set_stop_timeouts(StopTimeouts {
+            interrupt: Duration::from_secs(2),
+            sigint: Duration::from_secs(1),
+            sigterm: Duration::from_secs(1),
+        });
+    }
+    daemon.shutdown().await;
+
+    let closed: Vec<u128> = std::fs::read_dir(&marks)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("closed.") && !name.ends_with(".tmp")
+        })
+        .map(|entry| {
+            std::fs::read_to_string(entry.path())
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(
+        closed.len(),
+        resumed,
+        "fold closed the input of every worker"
+    );
+    let spread = closed.iter().max().unwrap() - closed.iter().min().unwrap();
+    assert!(
+        spread < Duration::from_secs(2).as_nanos(),
+        "the projects began their stops {spread} ns apart"
+    );
+    drop(harnesses);
 }
 
 #[tokio::test]

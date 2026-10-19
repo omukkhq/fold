@@ -6,7 +6,7 @@ use fold_core::roles::{
     handoff_overdue, refresh_turn,
 };
 use fold_core::{AgentName, AreaName, EventActor, NewEvent, WorkerState};
-use fold_store::agents::{self, WorkerProcessRow};
+use fold_store::agents::{self, ProcessEnd, WorkerProcessRow};
 use fold_store::{StoreError, messages};
 use serde_json::json;
 
@@ -153,7 +153,7 @@ impl Supervisor {
                     return Ok(None);
                 }
                 if current.state == WorkerState::Stopping {
-                    agents::record_exit(tx, current.id, WorkerState::Stopped, None, now).await?;
+                    agents::record_exit(tx, current.id, ProcessEnd::Stopped, None, now).await?;
                     buffer
                         .append(tx, &stopped_event(&current, None)?, now)
                         .await?;

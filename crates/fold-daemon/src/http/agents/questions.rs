@@ -142,6 +142,8 @@ pub enum NeedsYouItemKind {
     UnstashConflicted,
     /// The checks file on main is not valid, so fold holds the integrations of proposals until a revision of main fixes it; `title` states the file, the line and the problem, and `paths` names the file.
     ChecksFileInvalidOnMain,
+    /// The worker `agent` failed because it cannot reach fold: its fold MCP server did not connect, or the fld binary it would start is gone. Starting it again fails the same way until the daemon runs the installed fld; `reason` says what the human does. A daemon start resumes the worker once fld is there. The item ends when the worker runs again, through that resume or through `resume_worker`.
+    WorkerUnreachable,
 }
 
 /// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task and `repository` the history of main.
@@ -196,7 +198,7 @@ pub struct NeedsYouEntry {
     /// The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`.
     #[schema(required = true, example = "Database schema for reports")]
     pub title: Option<String>,
-    /// The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, or ends the conflict for `unstash_conflicted`.
+    /// The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, ends the conflict for `unstash_conflicted`, or lets the worker of a `worker_unreachable` reach fold again.
     #[schema(required = true, example = "Wait until the design is signed off")]
     pub reason: Option<String>,
     /// The human's Git commit of a `human_change`.
@@ -220,6 +222,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::FolderHeld => NeedsYouItemKind::FolderHeld,
             NeedsYouKind::UnstashConflicted => NeedsYouItemKind::UnstashConflicted,
             NeedsYouKind::ChecksFileInvalidOnMain => NeedsYouItemKind::ChecksFileInvalidOnMain,
+            NeedsYouKind::WorkerUnreachable => NeedsYouItemKind::WorkerUnreachable,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,
@@ -315,7 +318,7 @@ pub async fn answer_worker_question(
     Ok(Json(answered.into()))
 }
 
-/// Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, and an unstash whose conflict markers wait in the folder, which stands for the folder too. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted` and `stash.dropped`.
+/// Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, and a worker that failed because it cannot reach fold. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed` and `worker.refreshed`.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/needs-you",

@@ -335,7 +335,7 @@ async fn the_proposal_and_task_rules_read_their_context() {
             CreateTask {
                 title: TaskTitle::parse("api").unwrap(),
                 description: TaskDescription::new("work"),
-                labels: crate::common::roles::work_labels(),
+                labels: crate::common::roles::work_labels_of("backend"),
             },
         )
         .await

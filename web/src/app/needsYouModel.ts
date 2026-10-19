@@ -15,7 +15,7 @@ export interface NeedsYouLine {
   /** The words, with each command between backticks and the item's data escaped, for `CodeText`. */
   text: string;
   task: string | null;
-  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker, the conflicting files of a human change or of an unstash, the files that hold the project folder back, the file, line and problem of main's checks file, the command that brings the Git branch back. Marked and escaped as `text` is. */
+  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker, the conflicting files of a human change or of an unstash, the files that hold the project folder back, the file, line and problem of main's checks file, the command that brings the Git branch back or lets a worker reach fold again. Marked and escaped as `text` is. */
   title: string | null;
   since: number;
   /** What the line opens; null for a line that opens nothing, with `href`. */
@@ -41,6 +41,7 @@ const GROUPS: readonly { kind: NeedsYouKind; title: string }[] = [
   { kind: "folder_held", title: "Project folder" },
   { kind: "unstash_conflicted", title: "Unstash conflict" },
   { kind: "checks_file_invalid_on_main", title: "Checks file" },
+  { kind: "worker_unreachable", title: "Worker connection" },
 ];
 
 /** The items for this human: an item that waits for another named human is theirs. Before a name, every item shows. */
@@ -195,6 +196,17 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         hint: null,
         href: null,
       };
+    case "worker_unreachable":
+      return {
+        ...base,
+        person: item.agent,
+        chip: null,
+        task: null,
+        title: markedText(item.reason),
+        text: "cannot reach fold and stopped",
+        hint: "opens the agents",
+        href: projectPath(slug, "agents"),
+      };
     case "human_review":
       return {
         ...base,
@@ -216,7 +228,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
   }
 }
 
-/** The list in group order: questions, permissions, reviews, request drafts, human tasks, blockers, human changes, the Git branch, the project folder, an unstash conflict, main's checks file; a group without items is left out. */
+/** The list in group order: questions, permissions, reviews, request drafts, human tasks, blockers, human changes, the Git branch, the project folder, an unstash conflict, main's checks file, workers that cannot reach fold; a group without items is left out. */
 export function needsYouGroups(
   slug: string,
   items: readonly NeedsYouItem[],

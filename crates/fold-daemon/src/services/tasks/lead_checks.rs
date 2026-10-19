@@ -1,4 +1,5 @@
 use fold_core::events::types;
+use fold_core::tasks::areas::areas_among;
 use fold_core::{
     Actor, AreaName, FoldError, LabelName, NewEvent, TaskId, TaskKind, Timestamp, WorkerName,
     codes, policy,
@@ -7,12 +8,12 @@ use fold_store::tasks::TaskRow;
 use fold_store::tasks::claims::{self, ReleaseReason};
 use fold_store::tasks::completions::{self, CompletionKind};
 use fold_store::tasks::reports::{self, ReportRow, Resolution};
-use fold_store::{WriteTx, agents, tasks};
+use fold_store::{WriteTx, tasks};
 use serde_json::json;
 
 use super::{
-    TaskError, TaskService, TaskView, agent_refusal, closed_refusal, recompute, task_not_found,
-    worker_row,
+    TaskError, TaskService, TaskView, agent_refusal, area_labels, closed_refusal, recompute,
+    task_not_found, worker_row,
 };
 use crate::services::agents::starter_of;
 use crate::services::events::EventBuffer;
@@ -274,11 +275,10 @@ pub(crate) async fn areas_of(
     tx: &mut WriteTx,
     labels: &[LabelName],
 ) -> Result<Vec<AreaName>, TaskError> {
-    Ok(agents::list_areas(tx.conn())
-        .await?
+    let areas = area_labels(tx.conn()).await?;
+    Ok(areas_among(labels, &areas)
         .into_iter()
-        .filter(|area| labels.contains(&area.label))
-        .map(|area| area.name)
+        .map(|(area, _)| area.clone())
         .collect())
 }
 

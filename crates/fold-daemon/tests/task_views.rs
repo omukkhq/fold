@@ -78,20 +78,23 @@ struct Fixture {
 
 #[cfg(test)]
 impl Fixture {
-    /// `count` tasks titled `task 1` to `task <count>`, and the agents `frontend` and `backend`, which lead the areas of the tasks.
+    /// `count` tasks titled `task 1` to `task <count>` in the area that `frontend` leads, and the main agent `backend`, the second claimant of a task of that area: a task has one area.
     async fn new(count: u32) -> Self {
         let project = TestProject::new().await;
         let clock = Arc::new(project.clock().clone());
         let bus = EventBus::new();
         let agents = AgentService::new(project.store().clone(), bus.clone(), clock.clone());
-        for name in ["frontend", "backend"] {
+        for (name, tags) in [
+            ("frontend", vec![]),
+            ("backend", vec![fold_core::Tag::parse("main").unwrap()]),
+        ] {
             let mut session = agents.start_session(1).await.unwrap();
             agents
-                .register_agent(&mut session, &AgentName::parse(name).unwrap(), &[])
+                .register_agent(&mut session, &AgentName::parse(name).unwrap(), &tags)
                 .await
                 .unwrap();
         }
-        crate::common::roles::lead_work_areas(project.store()).await;
+        crate::common::roles::lead_frontend_area(project.store()).await;
         let tasks = TaskService::new(project.store().clone(), bus, clock, LEASE);
         for n in 1..=count {
             tasks

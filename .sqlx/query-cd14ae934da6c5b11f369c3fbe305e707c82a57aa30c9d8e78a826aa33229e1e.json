@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT w.id AS \"id!: i64\", w.agent_id, g.name AS agent, w.role, w.area_id, a.name AS \"area?: String\",\n                      w.model, w.session_id, w.pid, w.state, w.started_by, w.started_at, w.stopped_at,\n                      w.idle_since, w.turns, w.cost_micro_usd, w.cache_read_tokens, w.cache_write_tokens,\n                      w.context_tokens, w.exit_code\n               FROM worker_processes w JOIN agents g ON g.id = w.agent_id LEFT JOIN areas a ON a.id = w.area_id\n               ORDER BY w.id",
+  "query": "SELECT w.id AS \"id!: i64\", w.agent_id, g.name AS agent, w.role, w.area_id, a.name AS \"area?: String\",\n                      w.model, w.session_id, w.pid, w.state, w.started_by, w.started_at, w.stopped_at,\n                      w.idle_since, w.turns, w.cost_micro_usd, w.cache_read_tokens, w.cache_write_tokens,\n                      w.context_tokens, w.exit_code, w.failed_reason\n               FROM worker_processes w JOIN agents g ON g.id = w.agent_id LEFT JOIN areas a ON a.id = w.area_id\n               WHERE g.name = ?",
   "describe": {
     "columns": [
       {
@@ -222,10 +222,21 @@
             "name": "exit_code"
           }
         }
+      },
+      {
+        "name": "failed_reason",
+        "ordinal": 20,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "failed_reason"
+          }
+        }
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 1
     },
     "nullable": [
       false,
@@ -247,8 +258,9 @@
       false,
       false,
       false,
+      true,
       true
     ]
   },
-  "hash": "9188ae17b605975e3837004581de211e07a9f6837f83b3ba31b878097efe24bb"
+  "hash": "cd14ae934da6c5b11f369c3fbe305e707c82a57aa30c9d8e78a826aa33229e1e"
 }

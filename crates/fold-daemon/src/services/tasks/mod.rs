@@ -3,13 +3,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use fold_core::events::types;
+use fold_core::tasks::areas::{areas_conflict, check_one_area};
 use fold_core::{
-    Actor, ChecklistName, Clock, DependencyOrigin, EventError, FoldError, HoldMark, IdKind,
-    LabelColor, LabelName, NewEvent, ProjectPaths, TaskDescription, TaskId, TaskKind, TaskStatus,
-    TaskTitle, Timestamp, codes, policy,
+    Actor, AreaName, ChecklistName, Clock, DependencyOrigin, EventError, FoldError, HoldMark,
+    IdKind, LabelColor, LabelName, NewEvent, ProjectPaths, TaskDescription, TaskId, TaskKind,
+    TaskStatus, TaskTitle, Timestamp, codes, policy,
 };
 use fold_store::tasks::{self, NewTask};
-use fold_store::{Store, StoreError, WriteTx, counters};
+use fold_store::{SqliteConnection, Store, StoreError, WriteTx, agents, counters};
 use serde_json::json;
 use thiserror::Error;
 
@@ -145,6 +146,8 @@ pub struct TaskView {
     /// `None` while the task is not on hold.
     pub hold: Option<HoldMark>,
     pub labels: Vec<LabelView>,
+    /// The labels hold two or more areas' labels. Every write refuses such a label set, but the database can hold one; such a task's title and description change freely, and each change of its labels must leave at most one area label.
+    pub areas_conflict: bool,
 }
 
 fn label_view(row: tasks::LabelRow) -> LabelView {
@@ -397,7 +400,8 @@ impl TaskService {
             .await?
             .ok_or_else(|| task_not_found(id))?;
         let labels = tasks::labels_for_conn(&mut conn, id).await?;
-        Ok(view(row, labels))
+        let areas = area_labels(&mut conn).await?;
+        Ok(view(row, labels, &areas))
     }
 
     /// Tasks in number order with their labels, read in one transaction; archived tasks only when `include_archived`.
@@ -405,12 +409,13 @@ impl TaskService {
         let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
         let rows = tasks::list_conn(&mut tx, include_archived).await?;
         let mut labels = tasks::labels_by_task(&mut tx, include_archived).await?;
+        let areas = area_labels(&mut tx).await?;
         tx.commit().await.map_err(StoreError::from)?;
         Ok(rows
             .into_iter()
             .map(|row| {
                 let own = labels.remove(&row.id).unwrap_or_default();
-                view(row, own)
+                view(row, own, &areas)
             })
             .collect())
     }
@@ -424,8 +429,14 @@ impl TaskService {
     }
 }
 
-fn view(row: tasks::TaskRow, labels: Vec<tasks::LabelRow>) -> TaskView {
+fn view(
+    row: tasks::TaskRow,
+    labels: Vec<tasks::LabelRow>,
+    areas: &[(AreaName, LabelName)],
+) -> TaskView {
+    let names: Vec<LabelName> = labels.iter().map(|label| label.name.clone()).collect();
     TaskView {
+        areas_conflict: areas_conflict(&names, areas),
         id: row.id,
         title: row.title,
         description: row.description,
@@ -440,6 +451,26 @@ fn view(row: tasks::TaskRow, labels: Vec<tasks::LabelRow>) -> TaskView {
         hold: row.hold,
         labels: labels.into_iter().map(label_view).collect(),
     }
+}
+
+/// Every area with the label that puts a task in it, as the one-area rule reads them.
+pub(crate) async fn area_labels(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<(AreaName, LabelName)>, StoreError> {
+    Ok(agents::list_areas(conn)
+        .await?
+        .into_iter()
+        .map(|area| (area.name, area.label))
+        .collect())
+}
+
+/// Refuses a label set that would put a task in two areas, read inside the write that stores the set. A set of fewer than two labels holds at most one area, so it needs no read.
+async fn require_one_area(tx: &mut WriteTx, names: &[LabelName]) -> Result<(), TaskError> {
+    if names.len() < 2 {
+        return Ok(());
+    }
+    let areas = area_labels(tx.conn()).await?;
+    Ok(check_one_area(names, &areas)?)
 }
 
 pub(crate) fn task_not_found(id: TaskId) -> TaskError {
@@ -487,6 +518,7 @@ pub(crate) async fn create_in_tx(
     now: Timestamp,
 ) -> Result<TaskId, TaskError> {
     require_labels(tx, &input.labels).await?;
+    require_one_area(tx, &input.labels).await?;
     let number = counters::allocate(tx, IdKind::Task).await?;
     let id = TaskId::from_number(number).ok_or(StoreError::Corrupt("counters.next"))?;
     tasks::insert(
@@ -540,6 +572,7 @@ async fn update_in_tx(
         .description
         .as_ref()
         .filter(|description| **description != row.description);
+    let mut labels_added: Vec<&str> = Vec::new();
     let new_labels = match &patch.labels {
         Some(names) => {
             let current: BTreeSet<LabelName> = tasks::labels_for_conn(tx.conn(), id)
@@ -548,6 +581,13 @@ async fn update_in_tx(
                 .map(|label| label.name)
                 .collect();
             let wanted: BTreeSet<LabelName> = names.iter().cloned().collect();
+            labels_added = names
+                .iter()
+                .filter(|name| !current.contains(*name))
+                .map(LabelName::as_str)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
             (wanted != current).then_some(names)
         }
         None => None,
@@ -564,6 +604,9 @@ async fn update_in_tx(
     }
     if fields.is_empty() {
         return Ok(());
+    }
+    if let Some(names) = &patch.labels {
+        require_one_area(tx, names).await?;
     }
     if title.is_some() || description.is_some() {
         tasks::update_text(
@@ -582,7 +625,7 @@ async fn update_in_tx(
     }
     let event = NewEvent::new(types::TASK_UPDATED, actor.event_actor())?
         .task(id)
-        .data(json!({"fields": fields}))?;
+        .data(json!({"fields": fields, "labels_added": labels_added}))?;
     buffer.append(tx, &event, now).await?;
     Ok(())
 }

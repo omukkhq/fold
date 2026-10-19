@@ -351,6 +351,8 @@ async fn the_claim_holder_creates_without_a_second_claim_event() {
 #[tokio::test]
 async fn another_workers_claim_refuses_the_create() {
     let fx = Fixture::new().await;
+    // `T-1` is in the area that `frontend` leads, so `backend` claims it as the main agent.
+    crate::common::roles::give_main_tag(fx.project.store(), "backend").await;
     fx.tasks.claim_task(&by(&fx.backend), t(1)).await.unwrap();
     let before = fx.last_seq().await;
     let error = refusal(fx.create(&fx.frontend, 1).await.unwrap_err());
@@ -571,6 +573,8 @@ async fn abandon_with_an_open_proposal_changes_nothing_until_it_is_closed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_workers_creating_at_once_yield_one_workspace() {
     let fx = Fixture::new().await;
+    // `T-1` is in the area that `frontend` leads, so `backend` claims it as the main agent.
+    crate::common::roles::give_main_tag(fx.project.store(), "backend").await;
     let (first, second) = tokio::join!(fx.create(&fx.frontend, 1), fx.create(&fx.backend, 1));
     let (won, lost) = match (first, second) {
         (Ok(view), Err(error)) | (Err(error), Ok(view)) => (view, refusal(error)),

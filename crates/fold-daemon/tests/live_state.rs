@@ -180,8 +180,8 @@ impl Fixture {
         )
         .with_live(live.clone());
         let creator = agent("frontend");
+        crate::common::roles::lead_frontend_area(project.store()).await;
         for _ in 0..2 {
-            crate::common::roles::lead_work_areas(project.store()).await;
             tasks
                 .create_task(
                     &creator,
@@ -196,6 +196,8 @@ impl Fixture {
         }
         let frontend = register(&agents, "frontend").await;
         let backend = register(&agents, "backend").await;
+        // The tasks are in the area that `frontend` leads, so the main agent `backend` is the other agent that claims them.
+        crate::common::roles::give_main_tag(project.store(), "backend").await;
         Self {
             project,
             bus,

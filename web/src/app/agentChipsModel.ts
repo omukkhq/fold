@@ -21,18 +21,95 @@ export function stalledCount(agent: ProjectAgent): number {
   return agent.attention.filter((item) => item.kind === "stalled").length;
 }
 
-/** The chip's second line from the agent's claims, or that no session is connected. */
+type AgentProcess = NonNullable<ProjectAgent["process"]>;
+
+/** The short words for a failure reason a person can act on; any other failure reads plain `failed`. */
+const FAILED_REASONS: Readonly<Record<string, string>> = {
+  mcp_unavailable: "no fold connection",
+  fld_missing: "fld not found",
+};
+
+/** `failed`, followed by the reason when the chip has words for it. */
+export function failedText(reason: string | null): string {
+  const words = reason === null ? undefined : FAILED_REASONS[reason];
+  return words === undefined ? "failed" : `failed: ${words}`;
+}
+
+/** `text`, followed by the count of stalled tasks when there are any. */
+function withStalled(agent: ProjectAgent, text: string): string {
+  const stalled = stalledCount(agent);
+  return stalled > 0 ? `${text} · ${String(stalled)} stalled` : text;
+}
+
+/** A supervised agent runs Claude Code only during a turn, so its process tells its state; its presence would read offline between turns. */
+function processText(agent: ProjectAgent, process: AgentProcess): string {
+  switch (process.state) {
+    case "working": {
+      const working = workingCount(agent);
+      return withStalled(
+        agent,
+        working === 0 ? "working" : `${String(working)} working`,
+      );
+    }
+    case "idle":
+      return withStalled(agent, "idle");
+    case "failed":
+      return failedText(process.failed_reason);
+    default:
+      return process.state;
+  }
+}
+
+/** The process the chip follows: the one fold supervises for the agent, unless that process has ended while a session the user started is connected as the agent. */
+function chipProcess(agent: ProjectAgent): AgentProcess | null {
+  const { process } = agent;
+  if (process === null) {
+    return null;
+  }
+  const ended = process.state === "stopped" || process.state === "failed";
+  return ended && agent.presence !== "offline" ? null : process;
+}
+
+/** The chip's second line: the state of the process fold supervises for the agent; for an agent fold does not run, or whose process ended while a session is connected, its claims, or that no session is connected. */
 export function agentStateText(agent: ProjectAgent): string {
+  const process = chipProcess(agent);
+  if (process !== null) {
+    return processText(agent, process);
+  }
   if (agent.presence === "offline") {
     return "not connected";
   }
   const working = workingCount(agent);
-  if (working === 0) {
-    return "waiting";
+  return working === 0
+    ? "waiting"
+    : withStalled(agent, `${String(working)} working`);
+}
+
+/** Whether a pause holds the agent: every agent but the main agent, whose session fold does not stop. */
+function pausedAgent(agent: ProjectAgent, paused: boolean): boolean {
+  return paused && !agent.tags.includes("main");
+}
+
+/** The dot beside the name: the state of the process the chip follows as a presence, so a lead between turns shows idle instead of offline; for any other agent, its presence. A pause ends every worker process but keeps its row's state, so a paused agent's dot is offline. */
+export function chipPresence(
+  agent: ProjectAgent,
+  paused: boolean,
+): ProjectAgent["presence"] {
+  if (pausedAgent(agent, paused)) {
+    return "offline";
   }
-  const text = `${String(working)} working`;
-  const stalled = stalledCount(agent);
-  return stalled > 0 ? `${text} · ${String(stalled)} stalled` : text;
+  switch (chipProcess(agent)?.state) {
+    case undefined:
+      return agent.presence;
+    case "starting":
+    case "working":
+      return "active";
+    case "idle":
+    case "stopping":
+      return "idle";
+    default:
+      return "offline";
+  }
 }
 
 /** Whether the project's agents are paused, from the overview's `paused_since`; `undefined` while the project is not read yet. */
@@ -48,21 +125,26 @@ export function chipStateText(
   paused: boolean,
 ): string {
   if (status.state === "live") {
-    return paused && !agent.tags.includes("main")
-      ? "paused"
-      : agentStateText(agent);
+    return pausedAgent(agent, paused) ? "paused" : agentStateText(agent);
   }
   const at = status.state === "reconnecting" ? syncedAt(status) : null;
   return at === null ? "—" : `as of ${formatAsOfMinute(now, at)}`;
 }
 
 /**
- * Connected agents (active or idle) before offline ones, each group in the order the API lists them, at most `MAX_CHIPS`.
+ * Connected agents (active or idle, by `chipPresence`) before offline ones, each group in the order the API lists them, at most `MAX_CHIPS`.
  * Active and idle share a group because presence flips between them every few minutes, and a chip keeps its place while it does.
  */
-export function chipAgents(agents: readonly ProjectAgent[]): ProjectAgent[] {
-  const connected = agents.filter((agent) => agent.presence !== "offline");
-  const offline = agents.filter((agent) => agent.presence === "offline");
+export function chipAgents(
+  agents: readonly ProjectAgent[],
+  paused: boolean,
+): ProjectAgent[] {
+  const connected = agents.filter(
+    (agent) => chipPresence(agent, paused) !== "offline",
+  );
+  const offline = agents.filter(
+    (agent) => chipPresence(agent, paused) === "offline",
+  );
   return [...connected, ...offline].slice(0, MAX_CHIPS);
 }
 

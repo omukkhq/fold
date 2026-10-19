@@ -6,7 +6,7 @@ use fold_core::{
     TaskDescription, TaskTitle, codes,
 };
 use fold_daemon::services::reviews::{BatchVerdict, ReviewError};
-use fold_daemon::services::tasks::{CreateTask, TaskError};
+use fold_daemon::services::tasks::{CreateTask, TaskError, TaskPatch};
 use fold_store::{StoreError, events};
 
 use crate::common::roles::{give_batch, give_claim, give_review_claim, give_role};
@@ -117,6 +117,19 @@ async fn scene() -> Fixture {
         register(&fx, name, &[]).await;
         give_role(store, name, role, area).await;
     }
+    // The author leads the area of the task it works on, and a task has one area.
+    fx.handle
+        .tasks
+        .update_task(
+            &human("tanim"),
+            t(1),
+            TaskPatch {
+                labels: Some(crate::common::roles::work_labels_of("backend")),
+                ..TaskPatch::default()
+            },
+        )
+        .await
+        .unwrap();
     let author = actor(&fx, Who::Author).await;
     fx.proposal(&author, 1, "pub fn y() {}\n").await;
     fx
@@ -357,7 +370,7 @@ async fn second_proposal(fx: &Fixture) {
             CreateTask {
                 title: TaskTitle::parse("import").unwrap(),
                 description: TaskDescription::new("what to build"),
-                labels: crate::common::roles::work_labels(),
+                labels: crate::common::roles::work_labels_of("backend"),
             },
         )
         .await

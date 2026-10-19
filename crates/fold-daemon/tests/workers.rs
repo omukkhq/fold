@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use axum::http::{Method, StatusCode};
 use fold_core::{Actor, AgentActor, AgentName, Clock, HumanName, WorkerName, WorkerState, codes};
-use fold_daemon::services::agents::RESTART_TURN;
+use fold_daemon::services::agents::{MCP_RETRY_TURN, RESTART_TURN};
 use fold_daemon::services::events::BusMessage;
 use fold_store::agents::WorkerProcessRow;
 use fold_store::testing::{eventually, remove_dir_eventually};
@@ -208,9 +208,10 @@ async fn an_area_lead_starts_task_workers_only_for_tasks_of_its_own_area() {
         &std::fs::read_to_string(task_worker_run.flag("--mcp-config").unwrap()).unwrap(),
     )
     .unwrap();
+    let fold = fake.launcher.fold.clone().unwrap();
     assert_eq!(
         config,
-        json!({"mcpServers": {"fold": {"command": "/usr/local/bin/fld", "args": ["mcp"], "env": {"FOLD_AGENT": "web-worker"}}}})
+        json!({"mcpServers": {"fold": {"command": fold, "args": ["mcp"], "env": {"FOLD_AGENT": "web-worker"}}}})
     );
     for run in [&lead_run, &task_worker_run] {
         let own: Value = serde_json::from_str(
@@ -1733,4 +1734,438 @@ async fn a_task_worker_stops_when_its_task_is_done_unless_it_holds_another_claim
         .map(|(_, data)| data["agent"].clone())
         .collect();
     assert_eq!(stops, [json!("web-worker")]);
+}
+
+/// Points `fake`'s user turns at a copy of the fixture `name` in `dir`, which a test can replace while workers run.
+fn writable_turn(fake: &mut FakeClaude, dir: &tempfile::TempDir, name: &str) -> std::path::PathBuf {
+    let turn = dir.path().join("turn.jsonl");
+    std::fs::copy(crate::workers_support::fixture(name), &turn).unwrap();
+    for (key, value) in &mut fake.launcher.env {
+        if key == "FOLD_FAKE_CLAUDE_TURN" {
+            *value = turn.to_string_lossy().into_owned();
+        }
+    }
+    turn
+}
+
+#[tokio::test]
+async fn a_task_worker_that_cannot_reach_fold_keeps_its_claim_until_a_daemon_start_resumes_it() {
+    let mut fake = FakeClaude::new("mcp_failed");
+    let turns = tempfile::TempDir::new().unwrap();
+    let turn = writable_turn(&mut fake, &turns, "mcp_failed");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    give_role(
+        &harness.handle.store,
+        "backend",
+        Role::AreaLead,
+        Some("web"),
+    )
+    .await;
+    let started = harness
+        .call(
+            "backend",
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    assert_eq!(started["worker"]["name"], "web-worker", "{started}");
+
+    let failed = until_state(&harness, "web-worker", WorkerState::Failed).await;
+    assert_eq!(failed.failed_reason.as_deref(), Some("mcp_unavailable"));
+    assert_eq!(
+        failed.turns, 0,
+        "it failed at the first step of its first turn"
+    );
+    let view = harness.call(MAIN, "get_task", json!({"id": "T-1"})).await;
+    assert_eq!(view["claim"]["holder"], "web-worker", "{view}");
+    let events = stored_events(&harness).await;
+    assert!(
+        !events.iter().any(|(kind, _)| kind == "claim.released"),
+        "the task does not turn ready, so no lead hears of it: {events:?}"
+    );
+
+    std::fs::copy(crate::workers_support::fixture("result"), &turn).unwrap();
+    harness.restart().await;
+    let runs = until_runs(&fake, "web-worker", 2, 2).await;
+    assert_eq!(runs[1].flag("--resume"), Some(failed.session_id.as_str()));
+    assert!(
+        runs[1].stdin[1].contains(MCP_RETRY_TURN),
+        "{:?}",
+        runs[1].stdin
+    );
+    until_state(&harness, "web-worker", WorkerState::Idle).await;
+    let view = harness.call(MAIN, "get_task", json!({"id": "T-1"})).await;
+    assert_eq!(view["claim"]["holder"], "web-worker", "{view}");
+}
+
+#[tokio::test]
+async fn a_daemon_start_during_a_pause_leaves_a_worker_that_could_not_reach_fold_to_the_resume() {
+    let mut fake = FakeClaude::new("mcp_failed");
+    let turns = tempfile::TempDir::new().unwrap();
+    let turn = writable_turn(&mut fake, &turns, "mcp_failed");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    let failed = until_state(&harness, &lead, WorkerState::Failed).await;
+    eventually(WAIT, async || {
+        if harness.handle.workers.is_running(&name(&lead)) {
+            Err(())
+        } else {
+            Ok(())
+        }
+    })
+    .await;
+    harness.call(MAIN, "pause_project", json!({})).await;
+    std::fs::copy(crate::workers_support::fixture("result"), &turn).unwrap();
+
+    harness.restart().await;
+    assert_eq!(
+        fake.runs_of(&lead).len(),
+        1,
+        "a paused project runs no worker"
+    );
+    assert_eq!(worker(&harness, &lead).await.state, WorkerState::Failed);
+
+    harness.call(MAIN, "resume_project", json!({})).await;
+    let runs = until_runs(&fake, &lead, 2, 2).await;
+    assert_eq!(runs[1].flag("--resume"), Some(failed.session_id.as_str()));
+    assert!(
+        runs[1].stdin[1].contains(MCP_RETRY_TURN),
+        "{:?}",
+        runs[1].stdin
+    );
+    until_state(&harness, &lead, WorkerState::Idle).await;
+}
+
+#[tokio::test]
+async fn a_resume_waits_until_the_process_that_could_not_reach_fold_has_ended() {
+    let mut fake = FakeClaude::new("mcp_failed").stubborn();
+    let turns = tempfile::TempDir::new().unwrap();
+    let turn = writable_turn(&mut fake, &turns, "mcp_failed");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    until_state(&harness, &lead, WorkerState::Failed).await;
+    let old = fake.runs_of(&lead).pop().unwrap();
+    assert!(
+        harness.handle.workers.is_running(&name(&lead)),
+        "the stand-in ignores the closed stdin and SIGINT"
+    );
+    std::fs::copy(crate::workers_support::fixture("result"), &turn).unwrap();
+
+    let agents = harness.handle.agents();
+    let human = Actor::human(HumanName::parse("ana").unwrap());
+    let target = name(&lead);
+    let resume = tokio::spawn(async move {
+        agents
+            .resume_worker(&human, &target, "Go on.".to_owned())
+            .await
+    });
+    let early =
+        tokio::time::timeout(Duration::from_millis(300), until_runs(&fake, &lead, 2, 0)).await;
+    assert!(early.is_err(), "no second process runs beside the first");
+    let clock = harness.project.clock().clone();
+    eventually(WAIT, async || {
+        if resume.is_finished() {
+            Ok(())
+        } else {
+            clock.advance(Duration::from_secs(6)).unwrap();
+            Err(clock.now())
+        }
+    })
+    .await;
+    resume.await.unwrap().unwrap();
+    assert!(ended(old.pid), "the first process ended before the resume");
+    let runs = until_runs(&fake, &lead, 2, 2).await;
+    let resumed = until_state(&harness, &lead, WorkerState::Idle).await;
+    assert_eq!(
+        resumed.pid,
+        Some(i64::from(runs[1].pid)),
+        "the ended process left the new pid in place"
+    );
+}
+
+/// The `command` of the fold server in the MCP configuration of `agent`'s latest launch.
+fn mcp_command(harness: &Harness, agent: &str) -> String {
+    let path = harness
+        .project
+        .paths()
+        .worker_dir(&name(agent))
+        .join("mcp.json");
+    let config: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    config["mcpServers"]["fold"]["command"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[tokio::test]
+async fn a_worker_whose_fold_server_failed_ends_failed_and_asks_for_a_restart() {
+    let fake = FakeClaude::new("mcp_failed");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let mut inbox = harness.register_inbox(MAIN).await;
+    let lead = start_lead(&mut harness, "web").await;
+
+    let row = until_state(&harness, &lead, WorkerState::Failed).await;
+    assert_eq!(row.failed_reason.as_deref(), Some("mcp_unavailable"));
+    assert_eq!(row.turns, 0, "the turn without fold tools counts no turn");
+    let events = stored_events(&harness).await;
+    let failed: Vec<&Value> = events
+        .iter()
+        .filter(|(kind, _)| kind == "worker.failed")
+        .map(|(_, data)| data)
+        .collect();
+    assert_eq!(
+        failed,
+        [&json!({"agent": "web-lead", "reason": "mcp_unavailable"})]
+    );
+    let run = fake.runs_of(&lead).pop().unwrap();
+    eventually(
+        WAIT,
+        async || {
+            if fake.saw_eof(&run) { Ok(()) } else { Err(()) }
+        },
+    )
+    .await;
+    eventually(WAIT, async || {
+        if harness.handle.workers.is_running(&name(&lead)) {
+            Err(())
+        } else {
+            Ok(())
+        }
+    })
+    .await;
+    assert_eq!(
+        worker(&harness, &lead).await.state,
+        WorkerState::Failed,
+        "the end of the stopped process keeps the failure"
+    );
+
+    let notice = loop {
+        let post = inbox.next().await;
+        if post.contains("worker web-lead failed") {
+            break post;
+        }
+    };
+    assert!(
+        notice.contains(
+            "its fold MCP server did not connect; ask the human to run `fld restart`, which resumes it"
+        ),
+        "{notice}"
+    );
+
+    let (status, list) = harness
+        .http(Method::GET, "/api/v1/projects/demo/needs-you", None, "ana")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let items: Vec<&Value> = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["kind"] == "worker_unreachable")
+        .collect();
+    assert_eq!(items.len(), 1, "{list}");
+    assert_eq!(items[0]["agent"], "web-lead");
+    assert_eq!(items[0]["screen"], "worker");
+    assert_eq!(
+        items[0]["reason"],
+        "run `fld restart`; the daemon then resumes the worker"
+    );
+    let listed = harness.call(MAIN, "list_workers", json!({})).await;
+    assert_eq!(listed["workers"][0]["failed_reason"], "mcp_unavailable");
+    let (status, agents) = harness
+        .http(Method::GET, "/api/v1/projects/demo/agents", None, "ana")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{agents}");
+    let process_of = |agent: &str| {
+        agents["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == agent)
+            .map(|entry| entry["process"].clone())
+            .unwrap()
+    };
+    assert_eq!(
+        process_of("web-lead"),
+        json!({"state": "failed", "failed_reason": "mcp_unavailable"})
+    );
+    assert_eq!(
+        process_of(MAIN),
+        Value::Null,
+        "fold does not run the main agent"
+    );
+}
+
+#[tokio::test]
+async fn a_launch_names_the_fld_path_and_fails_once_no_fld_is_there() {
+    let fake = FakeClaude::new("result");
+    let fold = fake.launcher.fold.clone().unwrap();
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    until_state(&harness, &lead, WorkerState::Idle).await;
+    assert_eq!(mcp_command(&harness, &lead), fold.to_string_lossy());
+
+    // An installer puts the new fld in place by a rename, so the path names the new file.
+    let staged = fold.with_file_name(".fld.new");
+    std::fs::copy(&fold, &staged).unwrap();
+    std::fs::rename(&staged, &fold).unwrap();
+    harness
+        .call(MAIN, "stop_worker", json!({"name": lead}))
+        .await;
+    until_state(&harness, &lead, WorkerState::Stopped).await;
+    harness
+        .call(
+            MAIN,
+            "start_worker",
+            json!({"role": "area_lead", "area": "web"}),
+        )
+        .await;
+    until_state(&harness, &lead, WorkerState::Idle).await;
+    assert_eq!(mcp_command(&harness, &lead), fold.to_string_lossy());
+    assert_eq!(fake.runs_of(&lead).len(), 2);
+
+    std::fs::remove_file(&fold).unwrap();
+    harness
+        .call(MAIN, "stop_worker", json!({"name": lead}))
+        .await;
+    until_state(&harness, &lead, WorkerState::Stopped).await;
+    harness
+        .call(
+            MAIN,
+            "start_worker",
+            json!({"role": "area_lead", "area": "web"}),
+        )
+        .await;
+    let row = until_state(&harness, &lead, WorkerState::Failed).await;
+    assert_eq!(row.failed_reason.as_deref(), Some("fld_missing"));
+    assert_eq!(fake.runs_of(&lead).len(), 2, "no process ran without fld");
+    let (_, list) = harness
+        .http(Method::GET, "/api/v1/projects/demo/needs-you", None, "ana")
+        .await;
+    let item = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["kind"] == "worker_unreachable" && item["agent"] == "web-lead")
+        .unwrap_or_else(|| panic!("{list}"));
+    assert_eq!(
+        item["reason"],
+        "install fld and run `fld restart`; the daemon then resumes the worker, or an agent resumes it with `resume_worker`"
+    );
+
+    harness.restart().await;
+    let still = worker(&harness, &lead).await;
+    assert_eq!(
+        (still.state, still.failed_reason.as_deref()),
+        (WorkerState::Failed, Some("fld_missing")),
+        "a daemon start leaves a worker failed while its fld is gone"
+    );
+    assert_eq!(fake.runs_of(&lead).len(), 2);
+
+    std::fs::write(&fold, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(
+        &fold,
+        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
+    )
+    .unwrap();
+    harness.restart().await;
+    let runs = until_runs(&fake, &lead, 3, 2).await;
+    assert_eq!(runs[2].flag("--resume"), Some(row.session_id.as_str()));
+    assert!(
+        runs[2].stdin[1].contains(MCP_RETRY_TURN),
+        "{:?}",
+        runs[2].stdin
+    );
+    let resumed = until_state(&harness, &lead, WorkerState::Idle).await;
+    assert_eq!(resumed.failed_reason, None);
+    let (_, list) = harness
+        .http(Method::GET, "/api/v1/projects/demo/needs-you", None, "ana")
+        .await;
+    assert!(
+        !list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["kind"] == "worker_unreachable"),
+        "{list}"
+    );
+}
+
+#[tokio::test]
+async fn a_daemon_start_resumes_a_worker_whose_fold_connection_failed_once_per_start() {
+    let mut fake = FakeClaude::new("mcp_failed");
+    let turns = tempfile::TempDir::new().unwrap();
+    let turn = turns.path().join("turn.jsonl");
+    std::fs::copy(crate::workers_support::fixture("mcp_failed"), &turn).unwrap();
+    for (key, value) in &mut fake.launcher.env {
+        if key == "FOLD_FAKE_CLAUDE_TURN" {
+            *value = turn.to_string_lossy().into_owned();
+        }
+    }
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    let failed = until_state(&harness, &lead, WorkerState::Failed).await;
+    assert_eq!(failed.failed_reason.as_deref(), Some("mcp_unavailable"));
+    until_runs(&fake, &lead, 1, 2).await;
+
+    harness.restart().await;
+    let runs = until_runs(&fake, &lead, 2, 2).await;
+    assert_eq!(runs[1].flag("--resume"), Some(failed.session_id.as_str()));
+    assert!(
+        runs[1].stdin[1].contains(MCP_RETRY_TURN),
+        "{:?}",
+        runs[1].stdin
+    );
+    eventually(WAIT, async || {
+        if fake.saw_eof(&runs[1]) {
+            Ok(())
+        } else {
+            Err(())
+        }
+    })
+    .await;
+    let again = until_state(&harness, &lead, WorkerState::Failed).await;
+    assert_eq!(again.failed_reason.as_deref(), Some("mcp_unavailable"));
+    eventually(WAIT, async || {
+        if harness.handle.workers.is_running(&name(&lead)) {
+            Err(())
+        } else {
+            Ok(())
+        }
+    })
+    .await;
+    assert_eq!(
+        fake.runs_of(&lead).len(),
+        2,
+        "a failure on the resumed turn waits for the next start"
+    );
+
+    std::fs::copy(crate::workers_support::fixture("result"), &turn).unwrap();
+    harness.restart().await;
+    let runs = until_runs(&fake, &lead, 3, 2).await;
+    assert_eq!(runs[2].flag("--resume"), Some(failed.session_id.as_str()));
+    let resumed = until_state(&harness, &lead, WorkerState::Idle).await;
+    assert_eq!(resumed.failed_reason, None);
+    let (_, list) = harness
+        .http(Method::GET, "/api/v1/projects/demo/needs-you", None, "ana")
+        .await;
+    assert!(
+        !list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["kind"] == "worker_unreachable"),
+        "{list}"
+    );
 }

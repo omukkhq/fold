@@ -35,7 +35,7 @@ fn about<'a>(events: &'a [StoredEvent], from: usize, task: &str) -> Vec<(usize, 
 async fn acceptance_6_frontend_task_moves_from_backlog_to_todo_when_backend_reaches_done() {
     let harness = Harness::start().await;
     let endpoint = harness
-        .create_task("frontend", "Add the login endpoint")
+        .create_task_for("frontend", "backend", "Add the login endpoint")
         .await;
     let screen = harness
         .create_task("frontend", "Build the login screen")
@@ -102,7 +102,7 @@ async fn acceptance_6_frontend_task_moves_from_backlog_to_todo_when_backend_reac
 async fn acceptance_6_integration_is_refused_while_a_prerequisite_is_open() {
     let harness = Harness::start().await;
     let endpoint = harness
-        .create_task("frontend", "Add the login endpoint")
+        .create_task_for("frontend", "backend", "Add the login endpoint")
         .await;
     let screen = harness
         .create_task("frontend", "Build the login screen")

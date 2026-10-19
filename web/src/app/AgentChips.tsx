@@ -10,6 +10,7 @@ import { PersonName } from "../people/PersonName";
 import {
   agentBoardPath,
   chipAgents,
+  chipPresence,
   chipStateText,
   isPaused,
 } from "./agentChipsModel";
@@ -28,7 +29,7 @@ export function AgentChips({ slug }: { slug: string }) {
   }
   return (
     <ul aria-label="Agents" className="flex items-center gap-6">
-      {chipAgents(agents.data).map((agent) => (
+      {chipAgents(agents.data, paused).map((agent) => (
         <li key={agent.name}>
           <HrefLink
             href={agentBoardPath(slug, agent.name)}
@@ -38,7 +39,7 @@ export function AgentChips({ slug }: { slug: string }) {
             )}
           >
             <PersonName name={agent.name} className="text-bar" />
-            <PresenceDot state={agent.presence} />
+            <PresenceDot state={chipPresence(agent, paused)} />
             <span className="text-meta text-text-muted">
               {chipStateText(agent, status, now, paused)}
             </span>

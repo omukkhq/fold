@@ -264,7 +264,7 @@ const FOLD_ERROR_CODES: [&str; 157] = [
 const PENDING_ERROR_CODES: [&str; 1] = ["too_large"];
 
 /// The `invalid_request` reasons that have a name.
-const INVALID_REQUEST_REASONS: [&str; 12] = [
+const INVALID_REQUEST_REASONS: [&str; 13] = [
     "self_dependency",
     "checklist_origin",
     "linked_item",
@@ -277,9 +277,10 @@ const INVALID_REQUEST_REASONS: [&str; 12] = [
     "human_change_superseded",
     "checks_failed",
     "integration_queued",
+    "two_areas",
 ];
 
-const NON_TOOL_NAMES: [&str; 36] = [
+const NON_TOOL_NAMES: [&str; 37] = [
     "human_review",
     "fold_failed",
     "left_out",
@@ -316,6 +317,7 @@ const NON_TOOL_NAMES: [&str; 36] = [
     "large_delta",
     "v3_or_later",
     "review_scope",
+    "areas_conflict",
 ];
 
 const SECTIONS: [&str; 14] = [

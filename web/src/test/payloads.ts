@@ -28,6 +28,7 @@ export function boardCard(
     messages: 0,
     completed_at: null,
     labels: [],
+    areas_conflict: false,
     checklist: {
       steps_done: 0,
       steps_total: 0,
@@ -70,6 +71,7 @@ export function taskView(
     blocked: false,
     kind: "proposal",
     labels: [],
+    areas_conflict: false,
     checklists: [],
     dependencies: [],
     claims: [],

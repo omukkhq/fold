@@ -10,6 +10,7 @@ mod mcp;
 mod news;
 mod output;
 mod platform;
+mod restart;
 #[cfg(feature = "dev-seed")]
 mod seed;
 mod serve;
@@ -38,6 +39,8 @@ enum Command {
     Mcp(mcp::McpArgs),
     /// Check the host, the daemon and each project, and name the fix for every problem
     Doctor(doctor::DoctorArgs),
+    /// Restart the daemon, so a newly installed fld takes over: through the service that fld setup installed, else in the background as fld claude starts it. Supervised workers stop and continue in their sessions
+    Restart(restart::RestartArgs),
     /// Install the service that starts the daemon at login, then start it: a systemd user unit on Linux, a launchd agent on macOS. Then offer to add fold to Claude Code for your user
     Setup(service::SetupArgs),
     /// Delete unreferenced objects, prune checkpoints and remove closed workspace directories
@@ -85,6 +88,7 @@ enum Failure {
     Mcp(mcp::McpError),
     Doctor(doctor::DoctorError),
     Service(service::ServiceError),
+    Restart(restart::RestartError),
     Gc(commands::gc::GcError),
     Claude(claude::ClaudeError),
     Token(token::TokenError),
@@ -102,6 +106,7 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::Serve(args)) => serve::run(&args).map_err(Failure::Serve),
         Some(Command::Doctor(args)) => doctor::run(&args, out).map_err(Failure::Doctor),
         Some(Command::Setup(args)) => service::run(&args, out).map_err(Failure::Service),
+        Some(Command::Restart(args)) => restart::run(&args, out).map_err(Failure::Restart),
         Some(Command::Mcp(args)) => mcp::run(&args).map_err(Failure::Mcp),
         Some(Command::Gc(args)) => commands::gc::run(
             &args,
@@ -193,6 +198,7 @@ coded!(news::NewsError, hint);
 coded!(token::TokenError, hint);
 coded!(doctor::DoctorError, hint);
 coded!(service::ServiceError, hint);
+coded!(restart::RestartError, hint);
 coded!(commands::gc::GcError, hint);
 coded!(commands::remote::RemoteError, hint);
 #[cfg(feature = "dev-seed")]
@@ -244,6 +250,7 @@ fn main() -> anyhow::Result<()> {
         }
         Err(Failure::Doctor(error)) => Err(failure_message(&error)),
         Err(Failure::Service(error)) => Err(failure_message(&error)),
+        Err(Failure::Restart(error)) => Err(failure_message(&error)),
         Err(Failure::Gc(error)) => Err(failure_message(&error)),
         Err(Failure::Remote(error)) => Err(failure_message(&error)),
         #[cfg(feature = "dev-seed")]
@@ -274,7 +281,7 @@ mod tests {
     fn no_subcommand_prints_the_version_line() {
         let (result, out) = run_with(&["fld"]);
         assert!(result.is_ok());
-        assert_eq!(out, "fld 0.2.0\n");
+        assert_eq!(out, "fld 0.2.1\n");
     }
 
     #[test]
@@ -284,7 +291,7 @@ mod tests {
             panic!("expected a parse failure, got {result:?}");
         };
         assert_eq!(error.kind(), ErrorKind::DisplayVersion);
-        assert_eq!(error.to_string().trim(), "fld 0.2.0");
+        assert_eq!(error.to_string().trim(), "fld 0.2.1");
         assert!(out.is_empty());
     }
 

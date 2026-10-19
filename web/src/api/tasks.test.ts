@@ -33,6 +33,7 @@ import {
   renameChecklistItem,
   sendFeedback,
   setDescription,
+  setLabels,
   setTitle,
   taskMessagesQuery,
   taskQuery,
@@ -149,6 +150,20 @@ describe("writes to a task", () => {
     ]);
   });
 
+  it("sends the labels only when the task gets some", async () => {
+    daemon.on(`POST ${P}/tasks`, ok(taskView("T-19"), 201));
+    await createTask("demo", {
+      title: "Fix it",
+      description: "",
+      labels: ["frontend", "bug"],
+    });
+    await createTask("demo", { title: "Plan it", description: "", labels: [] });
+    expect(daemon.made(`POST ${P}/tasks`).map((c) => c.body)).toEqual([
+      { title: "Fix it", description: "", labels: ["frontend", "bug"] },
+      { title: "Plan it", description: "" },
+    ]);
+  });
+
   it("sets and clears a blocker", async () => {
     daemon.on(`PUT ${P}/tasks/T-6/blocker`, ok(taskView("T-6")));
     daemon.on(`DELETE ${P}/tasks/T-6/blocker`, ok(taskView("T-6")));
@@ -187,6 +202,14 @@ describe("writes to a task", () => {
       { title: "New" },
       { description: "Text" },
     ]);
+  });
+
+  it("replaces the whole label set with one patch", async () => {
+    daemon.on(`PATCH ${P}/tasks/T-2`, ok(taskView("T-2")));
+    await setLabels("demo", "T-2", ["bug", "frontend"]);
+    expect(bodyOf(`PATCH ${P}/tasks/T-2`)).toEqual({
+      labels: ["bug", "frontend"],
+    });
   });
 
   it("refuses a write to a closed task with the daemon's code", async () => {

@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use fold_core::claims::is_stale;
 use fold_core::{
     AgentName, CheckpointId, Event, FoldError, Presence, ProposalId, RevisionId, Tag, TaskId,
-    Timestamp, WorkerName, WorkspaceId, codes, presence_of,
+    Timestamp, WorkerName, WorkerState, WorkspaceId, codes, presence_of,
 };
 use fold_store::agents::{self, ClaimKind};
 use fold_store::workspaces::WorkspaceState;
@@ -43,6 +43,15 @@ pub struct AgentOverview {
     pub workers: Vec<WorkerOverview>,
     /// The newest events the agent's workers performed, newest first; empty unless the filter asks for events.
     pub events: Vec<Event>,
+    /// The Claude Code process that fold supervises for the agent; `None` for an agent fold does not run, such as the main agent.
+    pub process: Option<ProcessSummary>,
+}
+
+/// The state of an agent's supervised process, and why it failed when it did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessSummary {
+    pub state: WorkerState,
+    pub failed_reason: Option<String>,
 }
 
 /// A connected session of the agent. `cwd` is `None` for a session opened without a working directory.
@@ -133,6 +142,19 @@ impl AgentService {
         let claims = agents::held_claims(&mut *tx).await?;
         let workspaces = agents::owned_live_workspaces(&mut *tx).await?;
         let proposals = agents::open_proposals(&mut *tx).await?;
+        let mut processes: HashMap<i64, ProcessSummary> = agents::list_worker_processes(&mut tx)
+            .await?
+            .into_iter()
+            .map(|row| {
+                (
+                    row.agent_id,
+                    ProcessSummary {
+                        state: row.state,
+                        failed_reason: row.failed_reason,
+                    },
+                )
+            })
+            .collect();
         let limit = filter.events.min(MAX_OVERVIEW_EVENTS);
         let mut events_of = HashMap::new();
         if limit > 0 {
@@ -230,6 +252,7 @@ impl AgentService {
                     attention: agent_attention(&workers, &stalled),
                     workers,
                     events: events_of.remove(&row.id).unwrap_or_default(),
+                    process: processes.remove(&row.id),
                     name: row.name,
                 }
             })

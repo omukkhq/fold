@@ -1,3 +1,4 @@
+use fold_core::layout::MCP_SERVER_NAME;
 use serde_json::{Value, json};
 
 use crate::services::agents::claude::{
@@ -187,6 +188,16 @@ pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
     }
 }
 
+/// Whether the line is a `system/init` whose `fold` MCP server failed to connect, so the turn it starts has no fold tool. Only `failed` counts: a server that is still `pending` can connect during the turn, and an init without a `fold` entry names no server fold configured.
+pub(super) fn fold_unreachable(message: &ClaudeMessage) -> bool {
+    let ClaudeMessage::System(SystemMessage::Init(init)) = message else {
+        return false;
+    };
+    init.mcp_servers
+        .iter()
+        .any(|server| server.name == MCP_SERVER_NAME && server.status == "failed")
+}
+
 fn block_step(block: &ContentBlock) -> Step {
     match block {
         ContentBlock::Text { text } => Step {
@@ -242,6 +253,29 @@ mod tests {
 
     fn effects(name: &str) -> Vec<LineEffect> {
         lines(name).iter().map(effect_of).collect()
+    }
+
+    #[test]
+    fn only_an_init_whose_fold_server_failed_counts_as_unreachable() {
+        let failed: Vec<bool> = lines("mcp_failed").iter().map(fold_unreachable).collect();
+        assert_eq!(failed, [false, false, false, true]);
+        assert!(!lines("init").iter().any(fold_unreachable));
+        let init = |servers: &str| {
+            ClaudeMessage::parse(&format!(
+                r#"{{"type":"system","subtype":"init","session_id":"s","mcp_servers":{servers}}}"#
+            ))
+            .unwrap()
+        };
+        assert!(!fold_unreachable(&init("[]")));
+        assert!(!fold_unreachable(&init(
+            r#"[{"name":"fold","status":"pending"}]"#
+        )));
+        assert!(!fold_unreachable(&init(
+            r#"[{"name":"pencil","status":"failed"},{"name":"fold","status":"connected"}]"#
+        )));
+        assert!(fold_unreachable(&init(
+            r#"[{"name":"pencil","status":"connected"},{"name":"fold","status":"failed"}]"#
+        )));
     }
 
     #[test]

@@ -29,6 +29,7 @@ export function workerProcess(
     cache_write_tokens: 90,
     context_tokens: 164_000,
     exit_code: null,
+    failed_reason: null,
     cache_ttl: "1h",
     ...fields,
   };

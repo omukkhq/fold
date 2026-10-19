@@ -61,6 +61,7 @@ export function agent(
     attention: [],
     workers: [worker(name)],
     events: [],
+    process: null,
     ...fields,
   };
 }

@@ -1,33 +1,16 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as RadixDialog from "@radix-ui/react-dialog";
-import { Pencil, Plus, X } from "lucide-react";
+import { Pencil } from "lucide-react";
 import { useForm } from "react-hook-form";
-import { useQuery } from "@tanstack/react-query";
-import {
-  attachLabel,
-  createLabelOn,
-  labelsQuery,
-  removeLabel,
-  setTitle,
-  type TaskDetail,
-} from "@/api/tasks";
+import { setTitle, type TaskDetail } from "@/api/tasks";
 import { Button, IconButton } from "@/components/button/Button";
-import { Select, TextField } from "@/components/form/controls";
-import { Label } from "@/components/label/Label";
-import { LABEL_NAMES } from "@/components/label/labelColors";
-import { Popover } from "@/components/overlay/Popover";
+import { TextField } from "@/components/form/controls";
 import { useState } from "react";
 import { cn } from "@/lib/cn";
 import { PersonName } from "@/people/PersonName";
 import type { LiveStrip } from "./liveStrip";
-import { SmallAction, submit, WriteError } from "./parts";
-import {
-  labelSchema,
-  titleSchema,
-  type LabelForm,
-  type TitleForm,
-} from "./schemas";
-import { fieldError } from "./errors";
+import { submit, WriteError } from "./parts";
+import { titleSchema, type TitleForm } from "./schemas";
 import { statusLook } from "./text";
 import { useTaskWrite } from "./useTaskWrite";
 
@@ -87,127 +70,6 @@ function TitleEditor({
   );
 }
 
-function LabelEditor({ slug, task }: { slug: string; task: TaskDetail }) {
-  const labels = useQuery(labelsQuery(slug));
-  const attach = useTaskWrite(slug, task.task, (name: string) =>
-    attachLabel(slug, task.task, name),
-  );
-  const remove = useTaskWrite(slug, task.task, (name: string) =>
-    removeLabel(slug, task.task, name),
-  );
-  const create = useTaskWrite(slug, task.task, (label: LabelForm) =>
-    createLabelOn(slug, task.task, label),
-  );
-  const form = useForm<LabelForm>({
-    resolver: zodResolver(labelSchema),
-    defaultValues: { name: "", color: "sage" },
-  });
-  const onTask = new Set(task.labels.map((label) => label.name));
-  const available = (labels.data ?? []).filter(
-    (label) => !onTask.has(label.name),
-  );
-  return (
-    <div className="flex w-search flex-col gap-12">
-      {task.labels.length > 0 ? (
-        <ul aria-label="Labels on this task" className="flex flex-col gap-4">
-          {task.labels.map((label) => (
-            <li
-              key={label.name}
-              className="flex items-center justify-between gap-8"
-            >
-              <Label color={label.color}>{label.name}</Label>
-              <IconButton
-                size="sm"
-                aria-label={`Remove label ${label.name}`}
-                pending={remove.isPending && remove.variables === label.name}
-                pendingLabel={`Removing label ${label.name}…`}
-                disabled={remove.isPending}
-                onClick={() => {
-                  remove.mutate(label.name);
-                }}
-              >
-                <X aria-hidden="true" size={13} />
-              </IconButton>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      <WriteError error={remove.error} />
-      {available.length > 0 ? (
-        <ul aria-label="Labels of the project" className="flex flex-col gap-4">
-          {available.map((label) => (
-            <li
-              key={label.name}
-              className="flex items-center justify-between gap-8"
-            >
-              <Label color={label.color}>{label.name}</Label>
-              <SmallAction
-                icon={Plus}
-                aria-label={`Add label ${label.name}`}
-                pending={attach.isPending && attach.variables === label.name}
-                pendingLabel="Adding…"
-                disabled={attach.isPending}
-                onClick={() => {
-                  attach.mutate(label.name);
-                }}
-              >
-                Add
-              </SmallAction>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      <WriteError error={attach.error} />
-      <form
-        className="flex flex-col gap-8"
-        onSubmit={submit(
-          form.handleSubmit((values) => {
-            create.mutate(values, {
-              onSuccess: () => {
-                form.reset({ name: "", color: values.color });
-              },
-            });
-          }),
-        )}
-      >
-        <TextField
-          label="New label name"
-          disabled={create.isPending}
-          error={
-            form.formState.errors.name?.message ??
-            fieldError(create.error, "name")
-          }
-          {...form.register("name")}
-        />
-        <Select
-          label="Colour"
-          disabled={create.isPending}
-          error={
-            form.formState.errors.color?.message ??
-            fieldError(create.error, "color")
-          }
-          {...form.register("color")}
-        >
-          {LABEL_NAMES.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-        </Select>
-        <WriteError error={create.error} />
-        <Button
-          type="submit"
-          variant="primary"
-          pending={create.isPending}
-          pendingLabel="Creating label…"
-        >
-          Create label
-        </Button>
-      </form>
-    </div>
-  );
-}
-
 function Strip({ strip }: { strip: LiveStrip }) {
   return (
     <div
@@ -247,7 +109,7 @@ function Strip({ strip }: { strip: LiveStrip }) {
   );
 }
 
-/** The title block: the title, the calculated status, the live strip and the labels. */
+/** The title block: the title, the calculated status and the live strip. */
 export function TitleBlock({ slug, task, strip }: Props) {
   const [editing, setEditing] = useState(false);
   const look = statusLook(task.status);
@@ -305,16 +167,6 @@ export function TitleBlock({ slug, task, strip }: Props) {
         ) : null}
       </div>
       {strip ? <Strip strip={strip} /> : null}
-      <div className="flex flex-wrap items-center gap-6">
-        {task.labels.map((label) => (
-          <Label key={label.name} color={label.color}>
-            {label.name}
-          </Label>
-        ))}
-        <Popover trigger={<SmallAction icon={Plus}>Label</SmallAction>}>
-          <LabelEditor slug={slug} task={task} />
-        </Popover>
-      </div>
     </div>
   );
 }

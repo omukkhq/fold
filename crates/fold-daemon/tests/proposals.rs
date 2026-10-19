@@ -107,15 +107,16 @@ impl Fixture {
             Arc::default(),
         );
         let creator = agent("frontend");
-        for _ in 0..2 {
-            crate::common::roles::lead_work_areas(project.store()).await;
+        crate::common::roles::lead_work_areas(project.store()).await;
+        // A task has one area: `T-1` is in the area that `frontend` leads, `T-2` in the one `backend` leads.
+        for lead in ["frontend", "backend"] {
             tasks
                 .create_task(
                     &creator,
                     CreateTask {
                         title: TaskTitle::parse("task").unwrap(),
                         description: TaskDescription::new("body"),
-                        labels: crate::common::roles::work_labels(),
+                        labels: crate::common::roles::work_labels_of(lead),
                     },
                 )
                 .await

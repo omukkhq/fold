@@ -128,6 +128,28 @@ impl WorkerState {
     }
 }
 
+/// The `worker.failed` reason of a worker whose fold MCP server did not connect, so its session has no fold tool.
+pub const MCP_UNAVAILABLE: &str = "mcp_unavailable";
+
+/// The `worker.failed` reason of a worker whose MCP configuration would start an fld binary that is not there.
+pub const FLD_MISSING: &str = "fld_missing";
+
+/// A worker that failed for `reason` cannot reach fold, and starting it again fails the same way until the daemon runs the installed fld. Such a worker keeps its claims, as in a pause, and a daemon start resumes it in its own session: its cause lies outside the agent, and a start of the installed fld removes it.
+pub fn needs_restart(reason: &str) -> bool {
+    reason == MCP_UNAVAILABLE || reason == FLD_MISSING
+}
+
+/// What a human does about a failure that [`needs_restart`] accepts; `None` for any other reason.
+pub fn restart_hint(reason: &str) -> Option<&'static str> {
+    match reason {
+        MCP_UNAVAILABLE => Some("run `fld restart`; the daemon then resumes the worker"),
+        FLD_MISSING => Some(
+            "install fld and run `fld restart`; the daemon then resumes the worker, or an agent resumes it with `resume_worker`",
+        ),
+        _ => None,
+    }
+}
+
 /// A model or MCP server name goes on Claude Code's command line or into its configuration, so it cannot look like an option or hold a control character or a space.
 pub fn is_command_word(text: &str) -> bool {
     !text.is_empty()
@@ -417,6 +439,26 @@ mod tests {
 
     fn area(name: &str) -> AreaName {
         AreaName::parse(name).unwrap()
+    }
+
+    #[test]
+    fn only_a_worker_that_cannot_reach_fold_waits_for_a_restart() {
+        assert!(needs_restart(MCP_UNAVAILABLE));
+        assert!(needs_restart(FLD_MISSING));
+        for reason in ["exited", "spawn", "daemon_restart"] {
+            assert!(!needs_restart(reason), "{reason}");
+        }
+        assert_eq!(
+            restart_hint(MCP_UNAVAILABLE),
+            Some("run `fld restart`; the daemon then resumes the worker")
+        );
+        assert_eq!(
+            restart_hint(FLD_MISSING),
+            Some(
+                "install fld and run `fld restart`; the daemon then resumes the worker, or an agent resumes it with `resume_worker`"
+            )
+        );
+        assert_eq!(restart_hint("exited"), None);
     }
 
     #[test]

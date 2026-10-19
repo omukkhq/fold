@@ -85,7 +85,7 @@ pub struct CreateTaskInput {
     /// The description in Markdown. Leave it out for an empty one. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub description: Option<String>,
-    /// Names of existing labels to attach. Call create_label first for a new one.
+    /// Names of existing labels to attach. Call create_label first for a new one. At most one may be the label of an area (two_areas); leave the area label out to let the main agent choose the area.
     #[serde(default)]
     pub labels: Vec<String>,
     /// Tasks the new task needs, such as T-3. Each adds one direct dependency.
@@ -166,7 +166,7 @@ pub struct PlannedTaskInput {
     pub title: String,
     /// The task template: summary, Refs, Scope, Out of scope and testable Acceptance.
     pub description: String,
-    /// Existing labels, including the label of the area that owns this task.
+    /// Existing labels, including the one label of the area that owns this task. At most one may be the label of an area (two_areas).
     #[serde(default)]
     pub labels: Vec<String>,
     /// Prerequisites, each an existing task id such as T-3 or a key in this plan.
@@ -211,7 +211,7 @@ pub struct UpdateTaskInput {
     /// The new description in Markdown. Leave it out to keep the description. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub description: Option<String>,
-    /// The whole new label set, by name. Leave it out to keep the labels; pass an empty list to remove them all.
+    /// The whole new label set, by name. Leave it out to keep the labels; pass an empty list to remove them all. At most one may be the label of an area (two_areas); on a task that get_task marks with areas_conflict, a new label set must keep at most one.
     #[serde(default)]
     pub labels: Option<Vec<String>>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
@@ -550,6 +550,9 @@ fn detail_json(detail: &TaskDetail) -> Value {
             "actor": event.actor.to_string(),
         })).collect::<Vec<_>>(),
     });
+    if task.areas_conflict {
+        value["areas_conflict"] = json!(true);
+    }
     if task.kind == TaskKind::NoProposal {
         value["reports"] = detail
             .reports

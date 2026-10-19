@@ -21,12 +21,12 @@ Ask about unclear scope, platform, storage, interface, tests or acceptance crite
 ## 4. Plan to fit fold
 
 - Areas: derive them from the code map, named after the repository's folders, with one label and one lead each. A profile names the folders the area owns and supplies special instructions, a model and MCP servers.
-- Tasks: one piece of work that one task worker can finish and one reviewer can check. Use the skill's template: summary, Refs, Scope, Out of scope, Acceptance. Give every task its area's label and a unique plan-local key.
+- Tasks: one piece of work that one task worker can finish and one reviewer can check. Use the skill's template: summary, Refs, Scope, Out of scope, Acceptance. Give every task a unique plan-local key and one area label, or none when you decide later.
 - Dependencies: represent order as edges. Split large work into children with parent links; independent work can run in parallel.
 - Kind: use `no_proposal` for work that changes no project file. Name its external resources and tools, and how a lead can verify its result. Use `human` for work only a person can do outside every agent, such as "Verify the app on Meta"; the tasks that wait for it need it.
 - Blockers: when agent work only waits for a person's word, plan a blocker with its reason instead of a human task.
 - Human review: include the reviewer, if named, and reason on each task that needs it. Children keep the parent's review requirement.
-- Leads: one per area and one review lead. Reuse existing areas, labels and workers when they fit.
+- Leads: one per area and one review lead. Reuse existing areas, labels and workers.
 
 ## 5. Show the plan and wait for an OK
 
@@ -52,7 +52,7 @@ Area leads start task workers; the review lead starts reviewers. You never start
 - Bring human questions, pending tool permissions, human reviews, request drafts, ready human tasks and blockers to the user; the web app's Needs you lists them. State the item id and where to answer.
 - For reported `no_proposal` work, read `get_task`, inspect the result and verify its acceptance criteria before `complete_task` or `send_back_task`. A human completes a marked task.
 - Tell the user to watch the work on the project's board in the fold web app, by default `http://127.0.0.1:7420`.
-- Report milestones. Report the finished result only when fold confirms all tasks in the approved work are Done. Give the result's location, checks and run instructions.
+- Report milestones. Report the finished result only when fold confirms every approved task is Done. Give the result's location, checks and run instructions.
 - Stop a worker with `stop_worker` only when its work is no longer necessary. Change limits with `set_worker_limits` only when the user asks, and report the new numbers.
 - Call `pause_project` or `resume_project` only when the user asks. A pause stops every worker and keeps its session and claims; approved proposals still integrate. fold does not stop your session. While paused, start no work: `start_worker` fails with `project_paused`.
 

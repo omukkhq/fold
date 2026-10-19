@@ -13,7 +13,7 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::config::DaemonConfig;
+use crate::config::{DaemonConfig, LockOwner};
 use crate::http::{self, assets::AssetSource};
 use crate::jobs::{self, Job};
 use crate::mcp;
@@ -108,6 +108,7 @@ impl Daemon {
         clock: Arc<dyn Clock>,
         launcher: Launcher,
     ) -> Result<RunningDaemon, DaemonError> {
+        let launcher = launcher.with_own_binary();
         let lock = {
             let config = config.clone();
             tokio::task::spawn_blocking(move || prepare_runtime_dir(&config))
@@ -281,9 +282,13 @@ impl RunningDaemon {
         self.auto_integrate.stopped(DRAIN_TIMEOUT).await;
         self.worker_idle.stopped(DRAIN_TIMEOUT).await;
         let handles = self.state.projects.handles();
+        // The projects end their workers at the same time, so the stop that systemd and `fld restart` wait for does not grow with the number of projects.
+        let mut stops = tokio::task::JoinSet::new();
         for handle in &handles {
-            handle.workers.shutdown().await;
+            let handle = Arc::clone(handle);
+            stops.spawn(async move { handle.workers.shutdown().await });
         }
+        while stops.join_next().await.is_some() {}
         for handle in &handles {
             handle.bus.close();
         }
@@ -308,16 +313,17 @@ impl RunningDaemon {
     }
 }
 
-/// Resolves when the process receives SIGINT or SIGTERM.
-pub async fn shutdown_signal() -> io::Result<()> {
+/// Listens for SIGINT and SIGTERM from the moment it returns, inside a tokio runtime, and the future resolves at the first one. Taken before the daemon starts, it turns a signal that arrives during the start into a clean shutdown right after it, where the default action would end the process at once.
+pub fn shutdown_signal() -> io::Result<impl Future<Output = ()>> {
     use tokio::signal::unix::{SignalKind, signal};
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
-    tokio::select! {
-        _ = interrupt.recv() => {}
-        _ = terminate.recv() => {}
-    }
-    Ok(())
+    Ok(async move {
+        tokio::select! {
+            _ = interrupt.recv() => {}
+            _ = terminate.recv() => {}
+        }
+    })
 }
 
 async fn serve_http(listener: TcpListener, router: Router, mut stopped: watch::Receiver<bool>) {
@@ -327,6 +333,14 @@ async fn serve_http(listener: TcpListener, router: Router, mut stopped: watch::R
     if let Err(error) = served.await {
         tracing::error!(%error, "HTTP listener failed");
     }
+}
+
+/// Replaces what an earlier holder left in the lock file with this daemon's [`LockOwner`].
+fn record_owner(mut lock: &File) -> io::Result<()> {
+    use std::io::Write;
+    lock.set_len(0)?;
+    lock.write_all(LockOwner::current().render().as_bytes())?;
+    lock.sync_data()
 }
 
 async fn remove_stale_socket(path: &Path) -> Result<(), DaemonError> {
@@ -360,7 +374,10 @@ fn prepare_runtime_dir(config: &DaemonConfig) -> Result<File, DaemonError> {
         .open(config.lock_path())
         .map_err(DaemonError::io("open the lock file"))?;
     match lock.try_lock() {
-        Ok(()) => Ok(lock),
+        Ok(()) => {
+            record_owner(&lock).map_err(DaemonError::io("write the lock file"))?;
+            Ok(lock)
+        }
         Err(TryLockError::WouldBlock) => Err(DaemonError::AlreadyRunning {
             path: config.lock_path(),
         }),

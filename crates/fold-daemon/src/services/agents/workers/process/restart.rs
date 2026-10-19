@@ -1,4 +1,6 @@
-use fold_core::roles::{StartFacts, first_turn};
+use std::sync::atomic::Ordering;
+
+use fold_core::roles::{FLD_MISSING, StartFacts, first_turn, needs_restart};
 use fold_core::{AgentName, WorkerState};
 use fold_store::StoreError;
 use fold_store::agents::{self, WorkerProcessRow};
@@ -10,13 +12,17 @@ use crate::services::agents::workers::code_of;
 /// The turn a worker that was working gets after a daemon restart resumed its session.
 pub const RESTART_TURN: &str = "fold restarted while you were working. Check your claims and your workspace, then continue your work.";
 
+/// The turn of a worker that could not reach fold, which a daemon start resumed. Its claims stayed with it, but their leases ran on.
+pub const MCP_RETRY_TURN: &str = "fold resumed you after your fold MCP server failed to start or connect, so your last turn may have run without the fold tools. You kept your claims, but a lease can have expired while you waited: check your claims before you continue. Check your inbox and your workspace, then continue your work.";
+
 /// The first turn of each worker that the resume of a pause runs again in its own session. Its claims kept their leases through the pause.
 pub const PAUSE_TURN: &str = "fold resumed you after a pause of every agent of the project. Your claims kept their leases. Check your inbox, your claims and your workspace, then continue your work.";
 
 impl Supervisor {
-    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped: `--resume` of its session, with a turn that tells a working one to go on. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. A row that cannot be served is logged and the next row is served. Requested changes, conflicts and send-backs that the worker limits held back are then served.
+    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped, and every worker that could not reach fold: `--resume` of its session, with a turn that tells a working one to go on and a turn that tells the other one that its fold connection failed. A worker whose fld binary was gone resumes only once the fld path names a file again. A start reads the rows once, so a worker that fails the same way again stays failed until the next start. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. A row that cannot be served is logged and the next row is served. Requested changes, conflicts and send-backs that the worker limits held back are then served. A start in a paused project does none of this: the resume of the pause runs the workers again, those that could not reach fold among them.
     pub async fn resume_after_restart(&self) -> Result<(), AgentError> {
         if self.is_paused().await? {
+            self.inner.unreachable_owed.store(true, Ordering::SeqCst);
             return Ok(());
         }
         let mut conn = self
@@ -28,8 +34,9 @@ impl Supervisor {
             .map_err(StoreError::from)?;
         let rows = agents::list_worker_processes(&mut conn).await?;
         drop(conn);
+        let fld = self.fld_present().await;
         for row in rows {
-            if let Err(error) = self.restart_row(&row).await {
+            if let Err(error) = self.restart_row(&row, fld).await {
                 tracing::warn!(agent = %row.agent, code = code_of(&error), "could not serve a worker after the daemon start");
             }
         }
@@ -39,8 +46,8 @@ impl Supervisor {
         Ok(())
     }
 
-    /// What a daemon start does with one row; see [`Supervisor::resume_after_restart`].
-    async fn restart_row(&self, row: &WorkerProcessRow) -> Result<(), AgentError> {
+    /// What a daemon start does with one row; see [`Supervisor::resume_after_restart`]. `fld` tells whether the fld binary of the workers' MCP configuration is there.
+    async fn restart_row(&self, row: &WorkerProcessRow, fld: bool) -> Result<(), AgentError> {
         match row.state {
             WorkerState::Working | WorkerState::Idle => {
                 let turn = (row.state == WorkerState::Working).then(|| RESTART_TURN.to_owned());
@@ -48,6 +55,10 @@ impl Supervisor {
             }
             WorkerState::Starting => self.fail(row.id, &row.agent, "daemon_restart").await?,
             WorkerState::Stopping => self.stopped_without_process(row).await?,
+            WorkerState::Failed if reaches_fold_again(row, fld) => {
+                self.relaunch(row, Some(MCP_RETRY_TURN.to_owned()), None)
+                    .await?;
+            }
             WorkerState::Stopped | WorkerState::Failed => {}
         }
         Ok(())
@@ -80,7 +91,7 @@ impl Supervisor {
             .is_paused())
     }
 
-    /// Ends a pause that began at `paused_at`: each worker that was working, idle or starting runs again in its own session with [`PAUSE_TURN`], followed by the first turn a starting worker never read, the answer to a question a human answered during the pause, and the requested changes, conflicts and send-backs its task worker missed; a worker left `stopping` ends `stopped`. The resumes, send-backs and fresh starts of lost sessions that the pause held back are then served. A row that cannot be served is logged and the next row is served.
+    /// Ends a pause that began at `paused_at`: each worker that was working, idle or starting runs again in its own session with [`PAUSE_TURN`], followed by the first turn a starting worker never read, the answer to a question a human answered during the pause, and the requested changes, conflicts and send-backs its task worker missed; a worker left `stopping` ends `stopped`. When the daemon started during the pause, each worker that could not reach fold runs again with [`MCP_RETRY_TURN`], as that start would have resumed it. The resumes, send-backs and fresh starts of lost sessions that the pause held back are then served. A row that cannot be served is logged and the next row is served.
     pub(in crate::services::agents::workers) async fn resume_after_pause(
         &self,
         paused_at: fold_core::Timestamp,
@@ -96,6 +107,8 @@ impl Supervisor {
         drop(conn);
         let mut owed = self.owed_to_running().await;
         let mut sent_back = self.send_backs_owed_to_paused().await;
+        let unreachable = self.inner.unreachable_owed.swap(false, Ordering::SeqCst);
+        let fld = unreachable && self.fld_present().await;
         for row in rows {
             if self.is_running(&row.agent) {
                 continue;
@@ -115,6 +128,10 @@ impl Supervisor {
                     }
                 }
                 WorkerState::Stopping => self.stopped_without_process(&row).await,
+                WorkerState::Failed if unreachable && reaches_fold_again(&row, fld) => {
+                    self.relaunch(&row, Some(MCP_RETRY_TURN.to_owned()), None)
+                        .await
+                }
                 WorkerState::Stopped | WorkerState::Failed => Ok(()),
             };
             if let Err(error) = served {
@@ -188,4 +205,11 @@ impl Supervisor {
             instructions: None,
         }))
     }
+}
+
+/// A failed worker that a start resumes: one whose fold MCP server did not connect, or whose fld binary was gone and is there again (`fld`).
+fn reaches_fold_again(row: &WorkerProcessRow, fld: bool) -> bool {
+    row.failed_reason
+        .as_deref()
+        .is_some_and(|reason| needs_restart(reason) && (reason != FLD_MISSING || fld))
 }

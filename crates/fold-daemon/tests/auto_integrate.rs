@@ -14,7 +14,7 @@ use fold_core::{
 use fold_daemon::daemon::AppState;
 use fold_daemon::jobs::{Job, spawn_auto_integrate};
 use fold_daemon::services::reviews::{BatchVerdict, IntegrationOutcome};
-use fold_daemon::services::tasks::CreateTask;
+use fold_daemon::services::tasks::{CreateTask, TaskPatch};
 use fold_store::events;
 use fold_store::workspaces;
 use tokio::sync::watch;
@@ -200,7 +200,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_approved_proposal_integrates_with_no_tool_call_and_gets_its_git_commit() {
     let fx = Fixture::new().await;
-    let author = fx.agent("backend").await;
+    let author = fx.agent("frontend").await;
     let review = review_lead(&fx, "review").await;
     propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
     let job = Running::start(&fx.state);
@@ -242,7 +242,7 @@ async fn an_approved_proposal_integrates_with_no_tool_call_and_gets_its_git_comm
 #[tokio::test]
 async fn only_the_agent_with_the_main_tag_approves_as_the_main_agent() {
     let fx = Fixture::new().await;
-    let author = fx.agent("backend").await;
+    let author = fx.agent("frontend").await;
     // Nobody has the `main` tag, and `solo` has no role: it is no main agent and decides nothing.
     let solo = fx.agent("solo").await;
     propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
@@ -266,7 +266,7 @@ async fn only_the_agent_with_the_main_tag_approves_as_the_main_agent() {
 #[tokio::test]
 async fn a_marked_proposal_waits_for_the_human_after_the_agent_approval() {
     let fx = Fixture::new().await;
-    let author = fx.agent("backend").await;
+    let author = fx.agent("frontend").await;
     let review = review_lead(&fx, "review").await;
     fx.reviews()
         .require_human_review(&review, t(1), None, "touches the public API")
@@ -307,7 +307,7 @@ async fn a_marked_proposal_waits_for_the_human_after_the_agent_approval() {
 #[tokio::test]
 async fn a_human_approval_alone_integrates_a_ready_proposal() {
     let fx = Fixture::new().await;
-    let author = fx.agent("backend").await;
+    let author = fx.agent("frontend").await;
     propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
     let job = Running::start(&fx.state);
     job.runs(1).await;
@@ -327,10 +327,12 @@ async fn a_human_approval_alone_integrates_a_ready_proposal() {
 #[tokio::test]
 async fn two_dependent_proposals_integrate_in_dependency_order() {
     let fx = Fixture::new().await;
-    let author = fx.agent("backend").await;
+    let author = fx.agent("frontend").await;
+    // `T-2` is in the area that `backend` leads.
+    let second = fx.agent("backend").await;
     let review = review_lead(&fx, "review").await;
     propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
-    propose(&fx, &author, 2, "README.md", "# demo, exported\n").await;
+    propose(&fx, &second, 2, "README.md", "# demo, exported\n").await;
     fx.handle
         .tasks
         .add_dependency(&human("tanim"), t(2), t(1))
@@ -361,9 +363,9 @@ async fn two_dependent_proposals_integrate_in_dependency_order() {
 #[tokio::test]
 async fn a_conflict_leaves_the_proposal_open_and_is_recorded_once() {
     let fx = Fixture::new().await;
-    let author = fx.agent("backend").await;
+    let author = fx.agent("frontend").await;
     let review = review_lead(&fx, "review").await;
-    let other = fx.agent("frontend").await;
+    let other = fx.agent("backend").await;
     propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
     propose(&fx, &other, 2, "src/lib.rs", "pub fn z() {}\n").await;
     let job = Running::start(&fx.state);
@@ -417,7 +419,7 @@ async fn a_conflict_leaves_the_proposal_open_and_is_recorded_once() {
 async fn with_automatic_off_nothing_integrates_on_its_own() {
     let fx = Fixture::new().await;
     write_config(&fx, "[integration]\nautomatic = false\n");
-    let author = fx.agent("backend").await;
+    let author = fx.agent("frontend").await;
     let review = review_lead(&fx, "review").await;
     propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
     let job = Running::start(&fx.state);
@@ -463,7 +465,20 @@ async fn a_reviewers_batch_integrates_its_approved_members_in_dependency_order()
         )
         .await
         .unwrap();
-    let author = fx.agent("backend").await;
+    // The author leads the area of every member, so `T-2` moves into it.
+    fx.handle
+        .tasks
+        .update_task(
+            &human("tanim"),
+            t(2),
+            TaskPatch {
+                labels: Some(crate::common::roles::work_labels_of("frontend")),
+                ..TaskPatch::default()
+            },
+        )
+        .await
+        .unwrap();
+    let author = fx.agent("frontend").await;
     // A reviewer that the review lead started decides by its role.
     let review = with_role(&fx, "reviewer-1", Role::Reviewer).await;
     fx.reviews()

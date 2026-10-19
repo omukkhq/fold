@@ -404,7 +404,9 @@ async fn two_clients_racing_for_a_claim_get_one_claim_and_one_already_claimed() 
     let frontend = fx.connect("frontend").await;
     let backend = fx.connect("backend").await;
     crate::common::roles::lead_work_areas(fx.project.store()).await;
-    let labels = crate::common::roles::WORK_AREAS.map(|(_, label)| label);
+    // The task is in the area that `frontend` leads, so `backend` contends for it as the main agent.
+    crate::common::roles::give_main_tag(fx.project.store(), "backend").await;
+    let labels = [crate::common::roles::WORK_AREAS[0].1];
     ok(
         &frontend,
         "create_task",
@@ -452,7 +454,9 @@ async fn takeover_claim_waits_for_a_stale_lease() {
     let frontend = fx.connect("frontend").await;
     let backend = fx.connect("backend").await;
     crate::common::roles::lead_work_areas(fx.project.store()).await;
-    let labels = crate::common::roles::WORK_AREAS.map(|(_, label)| label);
+    // The task is in the area that `frontend` leads, so `backend` contends for it as the main agent.
+    crate::common::roles::give_main_tag(fx.project.store(), "backend").await;
+    let labels = [crate::common::roles::WORK_AREAS[0].1];
     ok(
         &frontend,
         "create_task",

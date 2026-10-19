@@ -54,6 +54,7 @@ import {
   resolvedText,
 } from "./leadCheck";
 import { blockerControls, blockerView } from "./humanTask";
+import { LabelsSide } from "./LabelsSide";
 import { recordedCheckpoints } from "./liveStrip";
 import { proposalPath, revisionPath } from "./links";
 import {
@@ -983,6 +984,7 @@ function History({ task }: { task: TaskDetail }) {
 export function TaskSide({ slug, task, live, now }: Props) {
   return (
     <aside className="flex w-full shrink-0 flex-col gap-20 border-border-subtle md:w-side-panel md:border-l md:pt-2 md:pl-20">
+      <LabelsSide slug={slug} task={task} />
       <Responsible task={task} now={now} />
       {needsProposal(task) ? (
         <>

@@ -440,11 +440,29 @@ async fn the_row_follows_its_process_through_turns_stops_and_restarts() {
     );
     assert_eq!(row.model.as_deref(), Some("sonnet"));
     assert_eq!(row.pid, Some(42));
+    let pid_after_clear = async |pid: u32| {
+        store
+            .write(async |tx| agents::clear_worker_pid(tx, id, pid).await)
+            .await
+            .unwrap();
+        let mut conn = store.read().acquire().await.unwrap();
+        agents::find_worker_process(&mut conn, &lead)
+            .await
+            .unwrap()
+            .unwrap()
+            .pid
+    };
+    assert_eq!(
+        pid_after_clear(41).await,
+        Some(42),
+        "an ended process clears only its own pid"
+    );
+    assert_eq!(pid_after_clear(42).await, None);
     store
         .write(async |tx| {
             agents::set_worker_state(tx, id, WorkerState::Stopping, at(30)).await?;
             assert!(!agents::mark_worker_working(tx, id).await?);
-            agents::record_exit(tx, id, WorkerState::Stopped, Some(0), at(31)).await?;
+            agents::record_exit(tx, id, agents::ProcessEnd::Stopped, Some(0), at(31)).await?;
             Ok::<_, fold_store::StoreError>(())
         })
         .await
@@ -532,13 +550,43 @@ async fn a_new_session_comes_only_with_a_new_start() {
     .expect("a running row moves to starting with a new session");
     store
         .write(async |tx| {
-            agents::record_exit(tx, task_worker, WorkerState::Failed, Some(1), at(30)).await?;
-            agents::refresh_session(tx, task_worker, "s3", at(40)).await
+            agents::record_exit(
+                tx,
+                task_worker,
+                agents::ProcessEnd::Failed("mcp_unavailable"),
+                Some(1),
+                at(30),
+            )
+            .await
         })
         .await
         .unwrap();
     let mut conn = store.read().acquire().await.unwrap();
     let rows = agents::list_worker_processes(&mut conn).await.unwrap();
+    assert_eq!(rows[0].failed_reason.as_deref(), Some("mcp_unavailable"));
+    drop(conn);
+    store
+        .write(async |tx| agents::refresh_session(tx, task_worker, "s3", at(40)).await)
+        .await
+        .unwrap();
+    let mut conn = store.read().acquire().await.unwrap();
+    let rows = agents::list_worker_processes(&mut conn).await.unwrap();
+    assert_eq!(
+        rows[0].failed_reason, None,
+        "a new start forgets the failure"
+    );
+    let refused = exec(
+        &store,
+        &format!("UPDATE worker_processes SET failed_reason = 'exited' WHERE id = {task_worker}"),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("worker_processes_failed_reason_only_failed"),
+        "{refused}"
+    );
     assert_eq!(rows[0].session_id, "s3");
     assert_eq!(rows[0].state, WorkerState::Starting);
     assert_eq!(rows[0].started_at, at(40));

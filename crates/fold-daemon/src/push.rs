@@ -535,6 +535,12 @@ async fn deliver_events(
     }
 }
 
+/// The agent of a worker row's `started_by`, an event actor such as `web-lead` or `web-lead/sub` for a subagent; `None` for a human and for fold.
+fn starter_agent(started_by: &str) -> Option<AgentName> {
+    let actor = fold_core::EventActor::parse(started_by).ok()?;
+    AgentName::parse(actor.agent()?).ok()
+}
+
 /// Reads only what the event's rule needs.
 async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError> {
     let mut ctx = PushContext::default();
@@ -599,9 +605,25 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
         ctx.main_agents = tagged(store, Tag::is_main).await?;
         return Ok(ctx);
     }
+    if kind == fold_core::events::types::WORKER_FAILED {
+        let reason = event.data.get("reason").and_then(serde_json::Value::as_str);
+        let agent = event
+            .data
+            .get("agent")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|agent| AgentName::parse(agent).ok());
+        if let (Some(agent), Some(true)) = (agent, reason.map(fold_core::roles::needs_restart)) {
+            ctx.main_agents = tagged(store, Tag::is_main).await?;
+            let mut conn = store.read().acquire().await?;
+            ctx.starter = agents::find_worker_process(&mut conn, &agent)
+                .await?
+                .and_then(|row| starter_agent(&row.started_by));
+        }
+        return Ok(ctx);
+    }
     if kind == fold_core::events::types::TASK_REPORTED {
         if let Some(task) = event.task {
-            route(store, task, &mut ctx).await?;
+            route(store, task, None, &mut ctx).await?;
         }
         return Ok(ctx);
     }
@@ -624,28 +646,39 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
                     .await?
                     .is_some_and(|row| row.kind == TaskKind::Human || row.hold.is_some());
                 if ctx.implementation_claim.is_none() && !ctx.held_from_agents {
-                    route(store, task, &mut ctx).await?;
+                    route(store, task, None, &mut ctx).await?;
                 }
+            }
+        }
+        return Ok(ctx);
+    }
+    if kind == fold_core::events::types::TASK_UPDATED {
+        let added: Vec<&str> = event
+            .data
+            .get("labels_added")
+            .and_then(serde_json::Value::as_array)
+            .map(|labels| {
+                labels
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(task) = event.task
+            && !added.is_empty()
+        {
+            ctx.held_from_agents = !open_to_agents(store, task).await?;
+            if !ctx.held_from_agents {
+                route(store, task, Some(&added), &mut ctx).await?;
             }
         }
         return Ok(ctx);
     }
     if kind == fold_core::events::types::TASK_HOLD_CLEARED {
         if let Some(task) = event.task {
-            let claimed = claims::unreleased_for_task(store.read(), task)
-                .await?
-                .is_some();
-            let open = tasks::get_by_number(store.read(), task)
-                .await?
-                .is_some_and(|row| {
-                    row.status == TaskStatus::Todo
-                        && row.kind != TaskKind::Human
-                        && row.hold.is_none()
-                        && row.archived_at.is_none()
-                });
-            ctx.held_from_agents = claimed || !open;
+            ctx.held_from_agents = !open_to_agents(store, task).await?;
             if !ctx.held_from_agents {
-                route(store, task, &mut ctx).await?;
+                route(store, task, None, &mut ctx).await?;
             }
         }
         return Ok(ctx);
@@ -668,11 +701,36 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
     Ok(ctx)
 }
 
-/// The areas whose label the task carries, their leads and the main agents, which take a ready or reported task when no lead does.
-async fn route(store: &Store, task: TaskId, ctx: &mut PushContext) -> Result<(), StoreError> {
+/// An agent can take the task now: an unclaimed agent task in Todo that is neither on hold nor archived.
+async fn open_to_agents(store: &Store, task: TaskId) -> Result<bool, StoreError> {
+    if claims::unreleased_for_task(store.read(), task)
+        .await?
+        .is_some()
+    {
+        return Ok(false);
+    }
+    Ok(tasks::get_by_number(store.read(), task)
+        .await?
+        .is_some_and(|row| {
+            row.status == TaskStatus::Todo
+                && row.kind != TaskKind::Human
+                && row.hold.is_none()
+                && row.archived_at.is_none()
+        }))
+}
+
+/// The areas whose label the task carries (only those among `only`, when given), their leads and the main agents, which take a ready or reported task when no lead does.
+async fn route(
+    store: &Store,
+    task: TaskId,
+    only: Option<&[&str]>,
+    ctx: &mut PushContext,
+) -> Result<(), StoreError> {
     let labels = tasks::labels_for(store.read(), task).await?;
     for area in agents::list_areas(store.read()).await? {
-        if labels.iter().any(|label| label.name == area.label) {
+        if labels.iter().any(|label| label.name == area.label)
+            && only.is_none_or(|only| only.contains(&area.label.as_str()))
+        {
             ctx.area_leads.extend(area.lead);
             ctx.areas.insert(area.name);
         }
@@ -744,6 +802,18 @@ async fn tagged_among(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_starter_is_the_agent_of_the_starting_worker() {
+        assert_eq!(starter_agent("web-lead"), AgentName::parse("web-lead").ok());
+        assert_eq!(
+            starter_agent("web-lead/review"),
+            AgentName::parse("web-lead").ok()
+        );
+        assert_eq!(starter_agent("human:ana"), None);
+        assert_eq!(starter_agent("fold"), None);
+        assert_eq!(starter_agent("not an actor"), None);
+    }
 
     #[test]
     fn the_frames_match_the_sessions_wire_format() {

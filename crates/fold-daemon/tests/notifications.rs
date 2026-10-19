@@ -161,8 +161,11 @@ impl Notified {
         }
     }
 
-    /// `T-3`, claimed by `worker` and waiting on `T-1`.
+    /// `T-3` in the area of `worker`'s agent, claimed by `worker` and waiting on `T-1`.
     async fn dependent_task(&self, worker: &Actor) -> TaskId {
+        let Actor::Agent(claimant) = worker else {
+            panic!("an agent claims the task");
+        };
         let task = self
             .fx
             .tasks
@@ -171,7 +174,7 @@ impl Notified {
                 CreateTask {
                     title: TaskTitle::parse("follow-up").unwrap(),
                     description: TaskDescription::new("after T-1"),
-                    labels: crate::common::roles::work_labels(),
+                    labels: crate::common::roles::work_labels_of(claimant.agent.as_str()),
                 },
             )
             .await

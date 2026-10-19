@@ -421,7 +421,7 @@ impl Seeder {
             .task(
                 "Add full text search",
                 "Search the notes by their text.",
-                &["backend", "frontend"],
+                &["backend"],
                 &[&export],
             )
             .await?;

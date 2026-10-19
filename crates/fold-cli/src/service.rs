@@ -152,7 +152,7 @@ fn install(
     Ok(())
 }
 
-fn systemctl_user(program: &Path, args: &[&str]) -> Result<(), ServiceError> {
+pub(crate) fn systemctl_user(program: &Path, args: &[&str]) -> Result<(), ServiceError> {
     let status = Command::new(program)
         .arg("--user")
         .args(args)
@@ -255,7 +255,7 @@ fn launchctl_command(program: &Path, args: &[&str]) -> Command {
 }
 
 /// True when `launchctl` exits 0. Its error text goes nowhere: a `bootout` of an agent that is not loaded fails, and that is no error here.
-fn launchctl_succeeds(program: &Path, args: &[&str]) -> Result<bool, ServiceError> {
+pub(crate) fn launchctl_succeeds(program: &Path, args: &[&str]) -> Result<bool, ServiceError> {
     launchctl_command(program, args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -267,7 +267,7 @@ fn launchctl_succeeds(program: &Path, args: &[&str]) -> Result<bool, ServiceErro
         })
 }
 
-fn launchctl_run(program: &Path, args: &[&str]) -> Result<(), ServiceError> {
+pub(crate) fn launchctl_run(program: &Path, args: &[&str]) -> Result<(), ServiceError> {
     let status = launchctl_command(program, args)
         .status()
         .map_err(|source| ServiceError::Spawn {
@@ -327,12 +327,86 @@ fn xml_text(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// The unit file for a daemon started from `exe`.
+/// How long systemd waits for the daemon's own stop before it sends SIGKILL: longer than the 60 seconds `fld restart` gives that stop, which ends every worker in turn.
+pub(crate) const UNIT_STOP_TIMEOUT_SECS: u64 = 90;
+
+/// The unit file for a daemon started from `exe`. `KillMode=mixed` sends the stop's SIGTERM to the daemon alone, so a stop, a logout or a reboot ends the workers through the daemon's clean shutdown, which keeps each one resumable; the default would signal every worker at the same time, and a worker that exits before the daemon lets go of it counts as failed. What still runs after `TimeoutStopSec` gets SIGKILL.
 pub fn render_unit(exe: &Path) -> String {
     format!(
-        "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\nExecStart={} serve\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\nExecStart={} serve\nRestart=on-failure\nRestartSec=2\nKillMode=mixed\nTimeoutStopSec={UNIT_STOP_TIMEOUT_SECS}\n\n[Install]\nWantedBy=default.target\n",
         exec_word(&exe.to_string_lossy())
     )
+}
+
+/// What [`refresh_unit`] did with an installed unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Refreshed {
+    /// The unit already had the text `fld setup` writes for this fld.
+    Current,
+    /// The unit started this fld with older lines and now has the current text.
+    Wrote,
+    /// The unit starts another fld, named when its `ExecStart` has the form `fld setup` writes, so it was left as it is.
+    Kept(Option<PathBuf>),
+}
+
+/// Writes the unit for `exe` at `unit` when the installed unit starts that same fld with other text, then has systemd read it again. A unit that an older fld installed thus gets the current lines without a new `fld setup`, while a unit that starts another fld, such as the installed one when a build of fld runs the restart, keeps pointing at it. The reload runs also when nothing was written, because a reload that failed after an earlier write left systemd with the old unit while the file already holds the new text.
+pub(crate) fn refresh_unit(
+    unit: &Path,
+    exe: &Path,
+    systemctl: &Path,
+) -> Result<Refreshed, ServiceError> {
+    let exe = exe.to_str().ok_or(ServiceError::ExeNotUtf8)?;
+    let text = render_unit(Path::new(exe));
+    let installed = std::fs::read_to_string(unit).ok();
+    let refreshed = match installed.as_deref() {
+        Some(installed) if installed == text => Refreshed::Current,
+        installed => match installed.and_then(unit_exe) {
+            Some(started) if same_file(&started, Path::new(exe)) => {
+                write_unit(unit, &text).map_err(|source| ServiceError::WriteUnit {
+                    path: unit.to_owned(),
+                    source,
+                })?;
+                Refreshed::Wrote
+            }
+            started => Refreshed::Kept(started),
+        },
+    };
+    systemctl_user(systemctl, &["daemon-reload"])?;
+    Ok(refreshed)
+}
+
+/// The fld that a unit's `ExecStart` starts, read back from the form [`render_unit`] writes; `None` for a unit without such a line.
+pub(crate) fn unit_exe(text: &str) -> Option<PathBuf> {
+    let word = text
+        .lines()
+        .find_map(|line| line.strip_prefix("ExecStart="))?
+        .strip_suffix(" serve")?;
+    let path = match word.strip_prefix('"') {
+        Some(quoted) => {
+            let mut path = String::new();
+            let mut chars = quoted.strip_suffix('"')?.chars();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\\' => path.push(chars.next()?),
+                    '"' => return None,
+                    c => path.push(c),
+                }
+            }
+            path
+        }
+        None => word.to_owned(),
+    };
+    Some(PathBuf::from(path.replace("%%", "%").replace("$$", "$")))
+}
+
+/// Whether `a` and `b` name one file: the same path, or the same device and inode once symlinks are followed.
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a == b
+        || matches!(
+            (std::fs::metadata(a), std::fs::metadata(b)),
+            (Ok(a), Ok(b)) if a.dev() == b.dev() && a.ino() == b.ino()
+        )
 }
 
 /// systemd expands `%` specifiers and `$` variables in `ExecStart`, so each `%` and `$` is doubled; a word with whitespace, quotes or a backslash is quoted.
@@ -364,11 +438,183 @@ mod tests {
         args: SetupArgs,
     }
 
-    const GOLDEN: &str = "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\nExecStart=/usr/bin/fld serve\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n";
+    const GOLDEN: &str = "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\nExecStart=/usr/bin/fld serve\nRestart=on-failure\nRestartSec=2\nKillMode=mixed\nTimeoutStopSec=90\n\n[Install]\nWantedBy=default.target\n";
 
     #[test]
     fn the_unit_matches_the_golden_text() {
         assert_eq!(render_unit(Path::new("/usr/bin/fld")), GOLDEN);
+    }
+
+    #[test]
+    fn systemd_waits_longer_for_the_stop_than_fld_restart_does() {
+        assert!(
+            std::time::Duration::from_secs(UNIT_STOP_TIMEOUT_SECS) > crate::restart::STOP_TIMEOUT
+        );
+    }
+
+    /// A `systemctl` in `dir/bin` that logs its arguments to `dir/calls.log` and exits with `status`.
+    fn fake_systemctl(dir: &Path, status: u8) -> (PathBuf, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let log = dir.join("calls.log");
+        let script = bin.join("systemctl");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho \"$@\" >> '{}'\nexit {status}\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (script, log)
+    }
+
+    /// The unit an older fld wrote for `/usr/bin/fld`, without the stop lines.
+    fn older() -> String {
+        GOLDEN.replace("KillMode=mixed\nTimeoutStopSec=90\n", "")
+    }
+
+    #[test]
+    fn a_unit_that_starts_this_fld_is_written_again_and_reloaded_and_a_current_one_is_left() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (systemctl, log) = fake_systemctl(dir.path(), 0);
+        let unit = dir.path().join("systemd/user/fold.service");
+        std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
+        std::fs::write(&unit, older()).unwrap();
+        let exe = Path::new("/usr/bin/fld");
+        assert_eq!(
+            refresh_unit(&unit, exe, &systemctl).unwrap(),
+            Refreshed::Wrote
+        );
+        assert_eq!(std::fs::read_to_string(&unit).unwrap(), GOLDEN);
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "--user daemon-reload\n"
+        );
+        assert_eq!(
+            refresh_unit(&unit, exe, &systemctl).unwrap(),
+            Refreshed::Current
+        );
+        assert_eq!(std::fs::read_to_string(&unit).unwrap(), GOLDEN);
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "--user daemon-reload\n--user daemon-reload\n",
+            "a current unit is not written, but systemd reads it again"
+        );
+
+        let (failing, _) = fake_systemctl(&dir.path().join("broken"), 1);
+        std::fs::write(&unit, older()).unwrap();
+        let error = refresh_unit(&unit, exe, &failing).unwrap_err();
+        assert_eq!(error.code(), Some("service_install_failed"));
+        assert_eq!(std::fs::read_to_string(&unit).unwrap(), GOLDEN);
+        std::fs::remove_file(&log).unwrap();
+        assert_eq!(
+            refresh_unit(&unit, exe, &systemctl).unwrap(),
+            Refreshed::Current
+        );
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "--user daemon-reload\n",
+            "the reload that failed after the write runs at the next refresh"
+        );
+        use std::os::unix::ffi::OsStrExt;
+        let bad = Path::new(std::ffi::OsStr::from_bytes(b"/fold-\xff"));
+        assert!(matches!(
+            refresh_unit(&unit, bad, &systemctl),
+            Err(ServiceError::ExeNotUtf8)
+        ));
+    }
+
+    #[test]
+    fn a_unit_that_starts_another_fld_is_kept() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (systemctl, log) = fake_systemctl(dir.path(), 0);
+        let unit = dir.path().join("fold.service");
+        std::fs::write(&unit, older()).unwrap();
+        assert_eq!(
+            refresh_unit(
+                &unit,
+                Path::new("/home/ana/fold/target/debug/fld"),
+                &systemctl
+            )
+            .unwrap(),
+            Refreshed::Kept(Some(PathBuf::from("/usr/bin/fld")))
+        );
+        assert_eq!(std::fs::read_to_string(&unit).unwrap(), older());
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "--user daemon-reload\n"
+        );
+        for text in [
+            "",
+            "[Service]\nExecStart=/usr/bin/fld serve --socket /run/a.sock\n",
+        ] {
+            std::fs::write(&unit, text).unwrap();
+            assert_eq!(
+                refresh_unit(&unit, Path::new("/usr/bin/fld"), &systemctl).unwrap(),
+                Refreshed::Kept(None),
+                "{text:?}"
+            );
+            assert_eq!(std::fs::read_to_string(&unit).unwrap(), text);
+        }
+        assert_eq!(
+            refresh_unit(
+                &dir.path().join("missing"),
+                Path::new("/usr/bin/fld"),
+                &systemctl
+            )
+            .unwrap(),
+            Refreshed::Kept(None)
+        );
+    }
+
+    #[test]
+    fn a_unit_that_starts_this_fld_through_a_symlink_is_written_again() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let (systemctl, _) = fake_systemctl(dir.path(), 0);
+        let exe = dir.path().join("versions/fld");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, "").unwrap();
+        let link = dir.path().join("fld");
+        std::os::unix::fs::symlink(&exe, &link).unwrap();
+        let units = dir.path().join("units");
+        std::fs::create_dir_all(&units).unwrap();
+        let unit = units.join("fold.service");
+        std::fs::write(&unit, render_unit(&link).replace("KillMode=mixed\n", "")).unwrap();
+        assert_eq!(
+            refresh_unit(&unit, &exe, &systemctl).unwrap(),
+            Refreshed::Wrote
+        );
+        assert_eq!(std::fs::read_to_string(&unit).unwrap(), render_unit(&exe));
+
+        std::fs::write(&unit, render_unit(&link).replace("KillMode=mixed\n", "")).unwrap();
+        std::fs::set_permissions(&units, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let error = refresh_unit(&unit, &exe, &systemctl).unwrap_err();
+        std::fs::set_permissions(&units, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(error, ServiceError::WriteUnit { .. }), "{error}");
+    }
+
+    #[test]
+    fn the_exe_of_a_unit_is_read_back_from_every_form_render_unit_writes() {
+        for path in [
+            "/usr/bin/fld",
+            "/opt/my apps/fld",
+            "/opt/100%/fld",
+            "/opt/$HOME/fld",
+            "/opt/a b/50%/fo\"ld",
+            "/opt/back\\slash/fld",
+        ] {
+            assert_eq!(
+                unit_exe(&render_unit(Path::new(path))),
+                Some(PathBuf::from(path)),
+                "{path}"
+            );
+        }
+        assert_eq!(unit_exe("ExecStart=\"/opt/a\"b\" serve\n"), None);
+        assert_eq!(unit_exe("ExecStart=\"/opt/a\\\" serve\n"), None);
     }
 
     #[test]

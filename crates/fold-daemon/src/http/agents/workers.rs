@@ -235,6 +235,9 @@ pub struct WorkerEntry {
     /// The exit code of the last process; a signal counts as 128 plus its number.
     #[schema(required = true)]
     pub exit_code: Option<i64>,
+    /// Why the worker's latest process failed, such as `exited`, `spawn`, `mcp_unavailable` (its fold MCP server did not connect) or `fld_missing` (the fld binary of that server is gone); null unless `state` is `failed`, and for a worker that failed before fold stored the reason.
+    #[schema(required = true, example = "mcp_unavailable")]
+    pub failed_reason: Option<String>,
     /// The prompt cache time of the worker's role from `.fold/config.toml`, `1h` or `5m`; null when fold cannot read the file.
     #[schema(required = true, example = "5m")]
     pub cache_ttl: Option<String>,
@@ -260,6 +263,7 @@ impl WorkerEntry {
             cache_write_tokens: row.cache_write_tokens,
             context_tokens: row.context_tokens,
             exit_code: row.exit_code,
+            failed_reason: row.failed_reason,
             cache_ttl,
         }
     }
@@ -466,7 +470,7 @@ pub async fn stop_worker(
     request_body = DefineAreaBody,
     responses(
         (status = 201, description = "The new area", body = AreaEntry),
-        (status = 400, description = "`invalid_request`, `invalid_name` or `invalid_label_name`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request` (also with `details.reason` `two_areas` when the label shares a task with another area's label, named in `details.tasks`), `invalid_name` or `invalid_label_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`label_not_found` or `project_not_found`", body = ErrorEnvelope),
         (status = 409, description = "`area_exists`", body = ErrorEnvelope),

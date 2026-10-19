@@ -1,6 +1,7 @@
 #![cfg(test)]
 
-use fold_core::{Actor, AgentName, HumanName, RequestId, codes};
+use fold_core::{Actor, AgentName, HumanName, LabelName, RequestId, TaskId, codes};
+use fold_daemon::services::tasks::TaskPatch;
 use fold_store::testing::eventually;
 use serde_json::{Value, json};
 
@@ -311,6 +312,162 @@ async fn approved_cards_go_to_the_lead_of_their_area_and_the_rest_to_the_main_ag
         !api.iter().any(|line| line.contains("T-3 is ready")),
         "{api:?}"
     );
+    nothing_before_a_message(&h, &mut main, MAIN).await;
+}
+
+#[tokio::test]
+async fn an_area_label_added_to_a_ready_task_offers_it_to_the_lead_of_that_area() {
+    let fake = FakeClaude::new("result");
+    let mut h = Harness::start_with_launcher(fake.launcher.clone()).await;
+    make_main(&h, MAIN).await;
+    let mut main = h.register_inbox(MAIN).await;
+    h.call(MAIN, "create_label", json!({"name": "ui", "color": "sage"}))
+        .await;
+    h.call(MAIN, "define_area", json!({"name": "web", "label": "ui"}))
+        .await;
+    h.call(
+        MAIN,
+        "start_worker",
+        json!({"role": "area_lead", "area": "web"}),
+    )
+    .await;
+    until_stdin(&fake, "web-lead", "fold started you").await;
+    h.connect("web-lead").await;
+
+    h.call(MAIN, "create_task", json!({"title": "Polish the board"}))
+        .await;
+    expect(
+        &mut main,
+        "fold: T-1 is ready and has no area. Call update_task.",
+    )
+    .await;
+    h.call(
+        MAIN,
+        "update_task",
+        json!({"id": "T-1", "title": "Polish the board header"}),
+    )
+    .await;
+    h.call(MAIN, "update_task", json!({"id": "T-1", "labels": ["ui"]}))
+        .await;
+    let lines = until_stdin(
+        &fake,
+        "web-lead",
+        "fold: T-1 is ready in your area. Call start_worker.",
+    )
+    .await;
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.contains("T-1 is ready"))
+            .count(),
+        1,
+        "{lines:?}"
+    );
+    let started = h
+        .call(
+            "web-lead",
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    assert!(started["worker"]["name"].is_string(), "{started}");
+}
+
+#[tokio::test]
+async fn a_label_added_to_a_claimed_task_offers_it_to_nobody() {
+    let fake = FakeClaude::new("result");
+    let mut h = Harness::start_with_launcher(fake.launcher.clone()).await;
+    make_main(&h, MAIN).await;
+    let mut main = h.register_inbox(MAIN).await;
+    h.call(MAIN, "create_label", json!({"name": "ui", "color": "sage"}))
+        .await;
+    h.call(MAIN, "define_area", json!({"name": "web", "label": "ui"}))
+        .await;
+    h.call(
+        MAIN,
+        "start_worker",
+        json!({"role": "area_lead", "area": "web"}),
+    )
+    .await;
+    until_stdin(&fake, "web-lead", "fold started you").await;
+    h.connect("web-lead").await;
+
+    h.call(MAIN, "create_task", json!({"title": "Polish the board"}))
+        .await;
+    expect(
+        &mut main,
+        "fold: T-1 is ready and has no area. Call update_task.",
+    )
+    .await;
+    h.call(MAIN, "claim_task", json!({"id": "T-1"})).await;
+    h.call(MAIN, "update_task", json!({"id": "T-1", "labels": ["ui"]}))
+        .await;
+    let message = h.send(MAIN, &["web-lead"], "ping").await;
+    let lines = until_stdin(&fake, "web-lead", &message_notice(&message)).await;
+    assert!(
+        !lines.iter().any(|line| line.contains("T-1 is ready")),
+        "{lines:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_human_who_labels_a_ready_task_into_an_area_without_a_lead_tells_the_main_agent() {
+    let h = Harness::start_without_leads().await;
+    make_main(&h, MAIN).await;
+    let mut main = h.register_inbox(MAIN).await;
+    for label in ["server", "chore"] {
+        h.call(
+            MAIN,
+            "create_label",
+            json!({"name": label, "color": "sage"}),
+        )
+        .await;
+    }
+    h.call(
+        MAIN,
+        "define_area",
+        json!({"name": "api", "label": "server"}),
+    )
+    .await;
+    h.call(
+        MAIN,
+        "create_task",
+        json!({"title": "Speed up the board query"}),
+    )
+    .await;
+    expect(
+        &mut main,
+        "fold: T-1 is ready and has no area. Call update_task.",
+    )
+    .await;
+
+    let task = TaskId::from_number(1).unwrap();
+    let relabel = async |labels: &[&str]| {
+        h.handle
+            .tasks
+            .update_task(
+                &ana(),
+                task,
+                TaskPatch {
+                    labels: Some(
+                        labels
+                            .iter()
+                            .map(|label| LabelName::parse(label).unwrap())
+                            .collect(),
+                    ),
+                    ..TaskPatch::default()
+                },
+            )
+            .await
+            .unwrap();
+    };
+    relabel(&["chore"]).await;
+    relabel(&["chore", "server"]).await;
+    expect(
+        &mut main,
+        "fold: T-1 is ready in area api, which has no lead. Call start_worker.",
+    )
+    .await;
     nothing_before_a_message(&h, &mut main, MAIN).await;
 }
 

@@ -393,7 +393,7 @@ async fn flow() {
         assert_eq!(registered["worker"], format!("{agent}/{name}"));
     }
     let readme = harness
-        .create_task("review", "Name the login endpoint in the readme")
+        .create_task_for("review", "backend", "Name the login endpoint in the readme")
         .await;
     let first = start_work_as(&harness, "frontend", "frontend/ui", &screen).await;
     let second = start_work_as(&harness, "backend", "backend/api", &readme).await;

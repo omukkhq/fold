@@ -144,12 +144,47 @@ pub async fn give_batch(
 pub const WORK_AREAS: [(&str, &str); 2] =
     [("frontend", "frontend-work"), ("backend", "backend-work")];
 
-/// The labels of [`WORK_AREAS`]: a task with them is in the area of either lead, so either claims it.
+/// The label of `frontend`'s area of [`WORK_AREAS`]: a task has at most one area, so a task with it is in that area and its lead claims it. [`work_labels_of`] names another lead's area.
 pub fn work_labels() -> Vec<LabelName> {
-    WORK_AREAS
-        .iter()
-        .map(|(_, label)| LabelName::parse(label).unwrap())
-        .collect()
+    work_labels_of("frontend")
+}
+
+/// The label of the area of [`WORK_AREAS`] that `agent` leads, for a task that `agent` claims.
+pub fn work_labels_of(agent: &str) -> Vec<LabelName> {
+    let (_, label) = WORK_AREAS
+        .into_iter()
+        .find(|(name, _)| *name == agent)
+        .expect("an agent of WORK_AREAS");
+    vec![LabelName::parse(label).unwrap()]
+}
+
+/// Makes `frontend` the lead of its area of [`WORK_AREAS`] alone, for the fixtures whose tasks are all in that area: a task has one area, so another agent that claims one of them is the main agent ([`give_main_tag`]).
+pub async fn lead_frontend_area(store: &Store) {
+    let (agent, area) = WORK_AREAS[0];
+    give_role(store, agent, Role::AreaLead, Some(area)).await;
+}
+
+/// Gives the registered agent `agent` the `main` tag, as the handshake of `fld claude` gives it, so it claims any task.
+pub async fn give_main_tag(store: &Store, agent: &str) {
+    let name = AgentName::parse(agent).unwrap();
+    let now = Timestamp::from_millis(1).unwrap();
+    store
+        .write(async |tx| {
+            let row = agents::find_agent(tx.conn(), &name)
+                .await?
+                .expect("a registered agent");
+            agents::add_tag(
+                tx,
+                row.id,
+                &fold_core::Tag::parse("main").unwrap(),
+                None,
+                now,
+            )
+            .await?;
+            Ok::<_, StoreError>(())
+        })
+        .await
+        .unwrap();
 }
 
 /// Makes each registered agent of [`WORK_AREAS`] the lead of its area.

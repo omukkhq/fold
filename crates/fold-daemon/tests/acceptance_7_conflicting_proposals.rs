@@ -46,7 +46,7 @@ async fn conflicted() -> (Conflicted, Value) {
         .create_task("review", "Show the product name on the login screen")
         .await;
     let endpoint = harness
-        .create_task("review", "Name the login endpoint in the readme")
+        .create_task_for("review", "backend", "Name the login endpoint in the readme")
         .await;
     let first = harness.start_work("frontend", &screen).await;
     let second = harness.start_work("backend", &endpoint).await;

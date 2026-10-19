@@ -44,6 +44,8 @@ pub struct WorkerProcessRow {
     pub cache_write_tokens: u64,
     pub context_tokens: u64,
     pub exit_code: Option<i64>,
+    /// Why the latest process failed, such as `exited` or `mcp_unavailable`; `None` unless the row is `failed`, and for a row that failed before fold stored the reason.
+    pub failed_reason: Option<String>,
     pub tasks: Vec<TaskId>,
     pub proposals: Vec<ProposalId>,
 }
@@ -332,6 +334,7 @@ struct RawProcess {
     cache_write_tokens: i64,
     context_tokens: i64,
     exit_code: Option<i64>,
+    failed_reason: Option<String>,
 }
 
 impl RawProcess {
@@ -364,6 +367,7 @@ impl RawProcess {
             )?,
             context_tokens: count(self.context_tokens, "worker_processes.context_tokens")?,
             exit_code: self.exit_code,
+            failed_reason: self.failed_reason,
             tasks: Vec::new(),
             proposals: Vec::new(),
         })
@@ -378,7 +382,7 @@ macro_rules! select_processes {
             r#"SELECT w.id AS "id!: i64", w.agent_id, g.name AS agent, w.role, w.area_id, a.name AS "area?: String",
                       w.model, w.session_id, w.pid, w.state, w.started_by, w.started_at, w.stopped_at,
                       w.idle_since, w.turns, w.cost_micro_usd, w.cache_read_tokens, w.cache_write_tokens,
-                      w.context_tokens, w.exit_code
+                      w.context_tokens, w.exit_code, w.failed_reason
                FROM worker_processes w JOIN agents g ON g.id = w.agent_id LEFT JOIN areas a ON a.id = w.area_id
                "# + $tail
             $(, $arg)*
@@ -506,7 +510,8 @@ pub async fn set_worker_state(
         "UPDATE worker_processes
          SET state = ?2,
              idle_since = CASE WHEN ?2 = 'idle' THEN COALESCE(idle_since, ?3) ELSE NULL END,
-             stopped_at = CASE WHEN ?2 IN ('stopped', 'failed') THEN ?3 ELSE NULL END
+             stopped_at = CASE WHEN ?2 IN ('stopped', 'failed') THEN ?3 ELSE NULL END,
+             failed_reason = CASE WHEN ?2 = 'failed' THEN failed_reason ELSE NULL END
          WHERE id = ?1",
         id,
         state,
@@ -534,6 +539,19 @@ pub async fn set_worker_pid(tx: &mut WriteTx, id: i64, pid: Option<u32>) -> Resu
     sqlx::query!("UPDATE worker_processes SET pid = ? WHERE id = ?", pid, id)
         .execute(tx.conn())
         .await?;
+    Ok(())
+}
+
+/// Forgets the pid of the row's ended process `pid`. A row that records another pid keeps it: a new start of the row can run while the process it let go of is still ending.
+pub async fn clear_worker_pid(tx: &mut WriteTx, id: i64, pid: u32) -> Result<(), StoreError> {
+    let pid = i64::from(pid);
+    sqlx::query!(
+        "UPDATE worker_processes SET pid = NULL WHERE id = ?1 AND pid = ?2",
+        id,
+        pid
+    )
+    .execute(tx.conn())
+    .await?;
     Ok(())
 }
 
@@ -586,23 +604,35 @@ pub async fn record_turn(
     Ok(())
 }
 
-/// Ends the process of the row: `stopped` or `failed`, with its exit code.
+/// How a worker's process ended: `stopped`, or `failed` for a reason such as `exited`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessEnd<'a> {
+    Stopped,
+    Failed(&'a str),
+}
+
+/// Ends the process of the row as `end` says, with its exit code.
 pub async fn record_exit(
     tx: &mut WriteTx,
     id: i64,
-    state: WorkerState,
+    end: ProcessEnd<'_>,
     exit_code: Option<i32>,
     now: Timestamp,
 ) -> Result<(), StoreError> {
-    let state = state.as_str();
+    let (state, reason) = match end {
+        ProcessEnd::Stopped => (WorkerState::Stopped.as_str(), None),
+        ProcessEnd::Failed(reason) => (WorkerState::Failed.as_str(), Some(reason)),
+    };
     let now = now.as_millis();
     sqlx::query!(
-        "UPDATE worker_processes SET state = ?2, stopped_at = ?3, idle_since = NULL, pid = NULL, exit_code = ?4
+        "UPDATE worker_processes SET state = ?2, stopped_at = ?3, idle_since = NULL, pid = NULL, exit_code = ?4,
+             failed_reason = ?5
          WHERE id = ?1",
         id,
         state,
         now,
-        exit_code
+        exit_code,
+        reason
     )
     .execute(tx.conn())
     .await?;
@@ -618,7 +648,8 @@ pub async fn restart_worker_process(
     let now = now.as_millis();
     sqlx::query!(
         "UPDATE worker_processes
-         SET state = 'starting', started_at = ?2, stopped_at = NULL, idle_since = NULL, pid = NULL, exit_code = NULL
+         SET state = 'starting', started_at = ?2, stopped_at = NULL, idle_since = NULL, pid = NULL, exit_code = NULL,
+             failed_reason = NULL
          WHERE id = ?1",
         id,
         now

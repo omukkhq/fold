@@ -57,7 +57,7 @@ struct Fixture {
 
 #[cfg(test)]
 impl Fixture {
-    /// Three tasks, the agent `frontend` with its child worker `frontend/ui`, and the agent `backend`. Claims use a lease of `lease_minutes`.
+    /// Three tasks in the area that `frontend` leads, the agent `frontend` with its child worker `frontend/ui`, and the main agent `backend`, the second claimant of a task of that area: a task has one area. Claims use a lease of `lease_minutes`.
     async fn new(lease_minutes: u64) -> Self {
         let project = TestProject::new().await;
         let bus = EventBus::new();
@@ -70,8 +70,8 @@ impl Fixture {
             worker: frontend_name,
             tags: Vec::new(),
         });
+        crate::common::roles::lead_frontend_area(project.store()).await;
         for _ in 0..3 {
-            crate::common::roles::lead_work_areas(project.store()).await;
             tasks
                 .create_task(
                     &creator,
@@ -84,13 +84,13 @@ impl Fixture {
                 .await
                 .unwrap();
         }
-        let frontend = register(&agents, "frontend").await;
+        let frontend = register(&agents, "frontend", &[]).await;
         let ui = agents
             .register_worker(&frontend.ctx, "ui", None)
             .await
             .unwrap()
             .worker;
-        let backend = register(&agents, "backend").await;
+        let backend = register(&agents, "backend", &["main"]).await;
         Self {
             project,
             bus,
@@ -130,10 +130,14 @@ impl Fixture {
 }
 
 #[cfg(test)]
-async fn register(agents: &AgentService, name: &str) -> Agent {
+async fn register(agents: &AgentService, name: &str, tags: &[&str]) -> Agent {
     let mut ctx = agents.start_session(1).await.unwrap();
+    let tags: Vec<fold_core::Tag> = tags
+        .iter()
+        .map(|tag| fold_core::Tag::parse(tag).unwrap())
+        .collect();
     agents
-        .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &[])
+        .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &tags)
         .await
         .unwrap();
     let main = agents.resolve_worker(&ctx, None).await.unwrap();

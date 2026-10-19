@@ -38,17 +38,23 @@ describe("titleSchema", () => {
 });
 
 describe("newTaskSchema", () => {
-  it("takes the kind with the title and refuses an unknown kind", () => {
+  it("takes the kind, the area and the labels with the title and refuses an unknown kind", () => {
+    const rest = { area: "web", labels: ["bug"] };
     expect(
       newTaskSchema.parse({
         title: " Verify it ",
         description: "",
         kind: "human",
+        ...rest,
       }),
-    ).toEqual({ title: "Verify it", description: "", kind: "human" });
+    ).toEqual({ title: "Verify it", description: "", kind: "human", ...rest });
     expect(
-      newTaskSchema.safeParse({ title: "x", description: "", kind: "design" })
-        .success,
+      newTaskSchema.safeParse({
+        title: "x",
+        description: "",
+        kind: "design",
+        ...rest,
+      }).success,
     ).toBe(false);
   });
 });

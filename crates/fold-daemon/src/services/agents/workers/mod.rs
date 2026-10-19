@@ -5,6 +5,7 @@ use fold_core::roles::{
     AreaProfile, AreaProfileChange, StartFacts, check_model, default_worker_name, first_turn,
     outside_area, session_uuid,
 };
+use fold_core::tasks::areas::check_new_area;
 use fold_core::{
     Actor, AgentName, AreaName, FoldError, LabelName, NewEvent, ProjectConfig, ProposalId,
     ReviewBatchId, Role, TaskId, WorkerName, WorkspaceId, codes,
@@ -31,7 +32,7 @@ pub use limits::WorkerLimitsChanged;
 pub use pause::PauseState;
 #[cfg(feature = "dev-launcher")]
 pub use process::{DEV_STUB_COMMAND, DEV_STUB_DIR};
-pub use process::{Launcher, PAUSE_TURN, RESTART_TURN, StopTimeouts, Supervisor};
+pub use process::{Launcher, MCP_RETRY_TURN, PAUSE_TURN, RESTART_TURN, StopTimeouts, Supervisor};
 
 /// The most default names tried for one start before the start gives up.
 const MAX_NAME_ATTEMPTS: u32 = 100;
@@ -172,7 +173,7 @@ impl AgentService {
         Ok(Starter::of(actor, supervised))
     }
 
-    /// Defines area `name` over the tasks labelled `label`, with its `profile`. The label must exist; an area name or label that another area has is refused with `area_exists`.
+    /// Defines area `name` over the tasks labelled `label`, with its `profile`. The label must exist; an area name or label that another area has is refused with `area_exists`, and a label that shares a task that is not archived with another area's label is refused with `two_areas` (`check_new_area`), so no task gains a second area.
     pub async fn define_area(
         &self,
         actor: &Actor,
@@ -196,9 +197,9 @@ impl AgentService {
                     .with_details([("label", json!(label.as_str()))])
                     .with_hint("create it with create_label first")
                 })?;
-                let taken = agents::list_areas(tx.conn())
-                    .await?
-                    .into_iter()
+                let areas = agents::list_areas(tx.conn()).await?;
+                let taken = areas
+                    .iter()
                     .find(|area| area.name == *name || area.label_id == label_id);
                 if let Some(taken) = taken {
                     return Err(FoldError::new(
@@ -209,6 +210,19 @@ impl AgentService {
                     .with_hint("call list_workers to see the areas")
                     .into());
                 }
+                let labelled: Vec<(TaskId, Vec<LabelName>)> =
+                    tasks::labels_by_task(tx.conn(), false)
+                        .await?
+                        .into_iter()
+                        .map(|(task, labels)| {
+                            (task, labels.into_iter().map(|label| label.name).collect())
+                        })
+                        .collect();
+                let existing: Vec<(AreaName, LabelName)> = areas
+                    .into_iter()
+                    .map(|area| (area.name, area.label))
+                    .collect();
+                check_new_area(name, label, &labelled, &existing)?;
                 let area_id = agents::insert_area(tx, name, label_id, by.as_str(), now).await?;
                 if !profile.is_empty() {
                     agents::set_area_profile(tx, area_id, profile).await?;
