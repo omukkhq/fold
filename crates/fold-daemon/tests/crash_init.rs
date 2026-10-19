@@ -212,7 +212,7 @@ async fn a_replacing_init_stopped_inside_the_import_is_refused_as_incomplete_and
         panic!("a fold error");
     };
     assert!(error.hint().unwrap().contains(&format!(
-        "delete {} and run fld init again",
+        "delete {} and run `fld init` again",
         paths.fold_dir().display()
     )));
     assert_eq!(files(host.dir.path()), before, "nothing is removed");
@@ -252,7 +252,7 @@ async fn an_init_stopped_inside_the_import_is_refused_and_nothing_is_deleted() {
             .contains(&paths.root().display().to_string())
     );
     assert!(error.hint().unwrap().contains(&format!(
-        "delete {} and run fld init again",
+        "delete {} and run `fld init` again",
         paths.fold_dir().display()
     )));
     assert_eq!(files(host.dir.path()), before);

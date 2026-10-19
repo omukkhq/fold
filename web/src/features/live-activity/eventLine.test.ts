@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DurableEvent } from "../../api/events";
 import schema from "../../api/schema.d.ts?raw";
 import { Check, MessageSquare, X } from "lucide-react";
+import { codeParts } from "../../format/codeText";
 import { EVENT_TYPES, eventLine } from "./eventLine";
 
 function event(
@@ -410,13 +411,13 @@ describe("eventLine", () => {
       "the Git branch has commits fold did not write",
     );
     expect(eventLine(event("git.uncommitted_changes")).text).toBe(
-      "the project folder has changes that are not recorded; run fld record",
+      "the project folder has changes that are not recorded; run `fld record`",
     );
     expect(
       eventLine(event("git.uncommitted_changes", { data: { staged: true } }))
         .text,
     ).toBe(
-      "the Git index holds a staged change on a file main changed; run git restore --staged on it",
+      "the Git index holds a staged change on a file main changed; run `git restore --staged` on it",
     );
     expect(
       eventLine(
@@ -425,7 +426,7 @@ describe("eventLine", () => {
         }),
       ).text,
     ).toBe(
-      "the project folder waits on your changes to README.md that are not recorded; run fld record, or take them back",
+      "the project folder waits on your changes to README.md that are not recorded; run `fld record`, or take them back",
     );
     expect(
       eventLine(
@@ -434,23 +435,23 @@ describe("eventLine", () => {
         }),
       ).text,
     ).toBe(
-      "the project folder waits on your changes to a.md, b.md and 50 more that are not recorded; run fld record, or take them back",
+      "the project folder waits on your changes to a.md, b.md and 50 more that are not recorded; run `fld record`, or take them back",
     );
     expect(
       eventLine(event("git.uncommitted_changes", { data: { held: "a.md" } }))
         .text,
     ).toBe(
-      "the project folder has changes that are not recorded; run fld record",
+      "the project folder has changes that are not recorded; run `fld record`",
     );
-    expect(
-      eventLine(
-        event("git.head_moved", {
-          data: { hint: "run git switch main in the project folder" },
-        }),
-      ).text,
-    ).toBe(
-      "the Git branch changed in a way fold did not make; run git switch main in the project folder",
+    const moved = eventLine(
+      event("git.head_moved", {
+        data: { hint: "run `git switch main` in the project folder" },
+      }),
+    ).text;
+    expect(moved).toBe(
+      "the Git branch changed in a way fold did not make; run `git switch main` in the project folder",
     );
+    expect(codeParts(moved)).toContainEqual({ code: "git switch main" });
     expect(eventLine(event("git.head_moved", { data: {} })).text).toBe(
       "the Git branch changed in a way fold did not make; the project folder waits",
     );
@@ -525,6 +526,24 @@ describe("eventLine", () => {
     ).toBe("recorded the conflict of the unstash on main; T-9 fixes it");
   });
 
+  it("keeps a backtick in a path from pairing with the marks of a command", () => {
+    const line = eventLine(
+      event("git.uncommitted_changes", {
+        data: { held: ["a`b.md", "c\\d.md"] },
+      }),
+    );
+    expect(codeParts(line.text)).toEqual([
+      "the project folder waits on your changes to a`b.md, c\\d.md that are not recorded; run ",
+      { code: "fld record" },
+      ", or take them back",
+    ]);
+    const conflicted = eventLine(
+      event("stash.conflicted", { data: { conflicted: ["x`y", "z`w"] } }),
+    );
+    expect(codeParts(conflicted.text)).toEqual([
+      "unstashed changes that conflict with the project folder in x`y, z`w; the entry stays",
+    ]);
+  });
   it("names the task of a check run and how it ended", () => {
     expect(eventLine(event("checks.started")).text).toBe(
       "started the checks of T-12",

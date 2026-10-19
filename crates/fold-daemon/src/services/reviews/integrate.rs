@@ -659,7 +659,7 @@ impl ReviewService {
             codes::HEAD_MOVED,
             format!("main moved during each of {ATTEMPTS} integration attempts"),
         )
-        .with_hint("call integrate_proposal or submit_main_change again, or run fld pull again")
+        .with_hint("call integrate_proposal or submit_main_change again, or run `fld pull` again")
         .into())
     }
 
@@ -954,7 +954,7 @@ impl ReviewService {
                 codes::HUMAN_REQUIRED,
                 "only the human who runs fld pull integrates remote commits",
             )
-            .with_hint("ask a human to run fld pull")
+            .with_hint("ask a human to run `fld pull`")
             .into());
         }
         let commit = pull.remote_commit.as_str();
@@ -989,7 +989,7 @@ fn record_plan(actor: &Actor, record: &RecordIntegration) -> Result<Plan, Step> 
             codes::HUMAN_REQUIRED,
             "only a human records a change of the project folder",
         )
-        .with_hint("ask a human to run fld record")
+        .with_hint("ask a human to run `fld record`")
         .into());
     }
     if let Some(commit) = &record.commit

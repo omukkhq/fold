@@ -28,6 +28,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { DurableEvent } from "../../api/events";
+import { codeData } from "../../format/codeText";
 import { COLUMNS } from "../board/columns";
 
 type EventType = DurableEvent["type"];
@@ -37,7 +38,7 @@ export type AnyEvent = Omit<DurableEvent, "type"> & { type: string };
 
 export interface EventLine {
   icon: LucideIcon;
-  /** The sentence after the actor, built from ids and counts only. */
+  /** The sentence after the actor. A command stands between backticks, and the event's data is escaped so that it never reads as a mark. */
   text: string;
   /** Integrations, approvals and main moves read in the full text colour. */
   emphasis: boolean;
@@ -56,7 +57,13 @@ interface Spec {
   look?: (event: DurableEvent) => Look;
 }
 
+/** A string of the event's data, escaped for a line that marks its commands. */
 function text(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? codeData(value) : null;
+}
+
+/** A daemon text of the event's data that marks its commands between backticks itself, as it is. */
+function marked(value: unknown): string | null {
   return typeof value === "string" && value !== "" ? value : null;
 }
 
@@ -67,7 +74,9 @@ function count(value: unknown): number | null {
 /** The paths an event lists, joined, with the number the event left out; null when it lists none. */
 function heldText(listed: unknown, total: unknown): string | null {
   const paths = Array.isArray(listed)
-    ? listed.filter((path): path is string => typeof path === "string")
+    ? listed
+        .filter((path): path is string => typeof path === "string")
+        .map(codeData)
     : [];
   if (paths.length === 0) {
     return null;
@@ -585,12 +594,12 @@ const SPECS: Record<EventType, Spec> = {
     icon: TriangleAlert,
     text: (e) => {
       if (e.data.staged === true) {
-        return "the Git index holds a staged change on a file main changed; run git restore --staged on it";
+        return "the Git index holds a staged change on a file main changed; run `git restore --staged` on it";
       }
       const held = heldText(e.data.held, e.data.held_count);
       return held === null
-        ? "the project folder has changes that are not recorded; run fld record"
-        : `the project folder waits on your changes to ${held} that are not recorded; run fld record, or take them back`;
+        ? "the project folder has changes that are not recorded; run `fld record`"
+        : `the project folder waits on your changes to ${held} that are not recorded; run \`fld record\`, or take them back`;
     },
   },
   "git.sync_enabled": {
@@ -600,7 +609,7 @@ const SPECS: Record<EventType, Spec> = {
   "git.head_moved": {
     icon: TriangleAlert,
     text: (e) => {
-      const hint = text(e.data.hint);
+      const hint = marked(e.data.hint);
       return hint === null
         ? "the Git branch changed in a way fold did not make; the project folder waits"
         : `the Git branch changed in a way fold did not make; ${hint}`;

@@ -310,7 +310,7 @@ pub(crate) fn read(path: &Path) -> Result<Option<Vec<u8>>, ClaudeFileError> {
 }
 
 /// The hint of a malformed project file.
-const PROJECT_HINT: &str = "correct or move the file, then run fld init --refresh";
+const PROJECT_HINT: &str = "correct or move the file, then run `fld init --refresh`";
 
 fn malformed(path: &Path, problem: &str) -> ClaudeFileError {
     malformed_with(path, problem, PROJECT_HINT)

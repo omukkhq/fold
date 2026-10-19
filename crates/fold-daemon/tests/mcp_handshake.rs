@@ -281,7 +281,7 @@ async fn a_cwd_outside_every_project_gets_project_not_found() {
         assert_eq!(code, "project_not_found");
         assert_eq!(
             hint.as_deref(),
-            Some("run the command inside a project directory, or fld init one")
+            Some("run the command inside a project directory, or `fld init` one")
         );
     }
     assert_eq!(host.count("SELECT count(*) FROM sessions").await, 0);

@@ -51,7 +51,7 @@ export function ProjectsScreen() {
               title="No projects yet"
               action={<Mono className="text-text">fld init &lt;dir&gt;</Mono>}
             >
-              Run fld init in a project directory. It appears here when the
+              Run `fld init` in a project directory. It appears here when the
               daemon has registered it.
             </EmptyPanel>
           ) : (

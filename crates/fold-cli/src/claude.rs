@@ -111,7 +111,7 @@ impl ClaudeError {
     pub fn hint(&self) -> Option<&str> {
         match self {
             Self::Project(_) if self.code() == Some(codes::PROJECT_NOT_FOUND) => {
-                Some("run fld init in the project folder first")
+                Some("run `fld init` in the project folder first")
             }
             Self::Fold(error) | Self::Project(ProjectError::Fold(error)) => error.hint(),
             Self::Refused { hint, .. } => hint.as_deref(),
@@ -451,7 +451,9 @@ fn main_is_free(response: &Response, agent: &AgentName) -> Result<(), ClaudeErro
         Some(holder) if holder != agent.as_str() => Err(ClaudeError::Refused {
             code: codes::MAIN_TAG_DENIED.to_owned(),
             message: format!("agent {holder} is the main agent of this project"),
-            hint: Some(format!("run fld claude --name {holder} to continue as it")),
+            hint: Some(format!(
+                "run `fld claude --name {holder}` to continue as it"
+            )),
         }),
         _ => Ok(()),
     }
@@ -968,7 +970,7 @@ mod tests {
         );
         assert_eq!(
             taken.hint(),
-            Some("run fld claude --name lead to continue as it")
+            Some("run `fld claude --name lead` to continue as it")
         );
         let refused = Response {
             status: 404,

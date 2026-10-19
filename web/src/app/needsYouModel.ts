@@ -2,6 +2,7 @@ import type { NeedsYouItem, NeedsYouKind } from "@/api/workers";
 import { taskPath } from "@/features/board/card";
 import { messagesHref } from "@/features/messages/search";
 import { asksText } from "@/features/workers/permission";
+import { codeData } from "@/format/codeText";
 import { projectPath, withQuery } from "@/routes/paths";
 
 /** A line of the list: a person who asks, or an item chip, then the words and the screen it opens, if any. */
@@ -11,9 +12,10 @@ export interface NeedsYouLine {
   /** The agent that asks; null for an item the line names by its chip. */
   person: string | null;
   chip: string | null;
+  /** The words, with each command between backticks and the item's data escaped, for `CodeText`. */
   text: string;
   task: string | null;
-  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker, the conflicting files of a human change or of an unstash, the files that hold the project folder back, the file, line and problem of main's checks file. */
+  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker, the conflicting files of a human change or of an unstash, the files that hold the project folder back, the file, line and problem of main's checks file, the command that brings the Git branch back. Marked and escaped as `text` is. */
   title: string | null;
   since: number;
   /** What the line opens; null for a line that opens nothing, with `href`. */
@@ -51,10 +53,16 @@ export function itemsFor(
   );
 }
 
-/** The title as the second line shows it, trimmed; null for a blank or missing title. The line cuts a long one to its width. */
+/** The title as the second line shows it, trimmed and escaped as data; null for a blank or missing title. The line cuts a long one to its width. */
 export function titleText(title: string | null): string | null {
-  const text = title?.trim() ?? "";
-  return text === "" ? null : text;
+  const text = markedText(title);
+  return text === null ? null : codeData(text);
+}
+
+/** A daemon text that marks its commands between backticks, trimmed; null for a blank or missing text. */
+function markedText(text: string | null): string | null {
+  const trimmed = text?.trim() ?? "";
+  return trimmed === "" ? null : trimmed;
 }
 
 /** The files an item names, such as the conflicting files of a human change, for the second line, which holds one short path: the first file, and how many more there are; null when none is named. */
@@ -64,15 +72,15 @@ export function pathsText(paths: readonly string[]): string | null {
     return null;
   }
   return paths.length === 1
-    ? first
-    : `${first} and ${String(paths.length - 1)} more`;
+    ? codeData(first)
+    : `${codeData(first)} and ${String(paths.length - 1)} more`;
 }
 
 /** `asks about Chart library` with the question's header, else what kind of answer it wants. */
 export function questionText(
   item: Pick<NeedsYouItem, "header" | "choices">,
 ): string {
-  if (item.header !== null) return `asks about ${item.header}`;
+  if (item.header !== null) return `asks about ${codeData(item.header)}`;
   return item.choices.length > 0 ? "asks you to choose" : "asks a question";
 }
 
@@ -126,7 +134,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         ...base,
         person: item.agent,
         chip: null,
-        text: asksText(item.tool ?? "a tool"),
+        text: asksText(codeData(item.tool ?? "a tool")),
         hint: "opens the permission panel",
         href: withQuery(projectPath(slug, "agents"), {
           question: item.question ?? "",
@@ -149,7 +157,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         person: null,
         chip: null,
         task: null,
-        title: titleText(item.reason),
+        title: markedText(item.reason),
         text: "fold does not update the project folder until the Git branch is back",
         hint: "opens the history of main",
         href: projectPath(slug, "repository"),
@@ -161,7 +169,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         chip: null,
         task: null,
         title: pathsText(item.paths),
-        text: "Changes were made in your project. Undo the changes or save them using fld record",
+        text: "Changes were made in your project. Undo the changes or save them using `fld record`",
         hint: "opens the history of main",
         href: projectPath(slug, "repository"),
       };
@@ -172,7 +180,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         chip: null,
         task: null,
         title: pathsText(item.paths),
-        text: "Unstash conflicts. Fix the files and run fld record",
+        text: "Unstash conflicts. Fix the files and run `fld record`",
         hint: null,
         href: null,
       };

@@ -329,7 +329,7 @@ async fn refuse_unstashable(
             named.join(", ")
         ),
     )
-    .with_hint("make each file readable and no larger than max_file_bytes in .fold/config.toml, or remove it, then run fld stash again")
+    .with_hint("make each file readable and no larger than max_file_bytes in .fold/config.toml, or remove it, then run `fld stash` again")
     .with_details([("reason", json!("skipped_tracked")), ("paths", json!(paths))])
     .into())
 }
@@ -369,7 +369,7 @@ async fn put_back(
             changed_meanwhile.join(", ")
         ),
     )
-    .with_hint("stash@{0} holds the changes as fold read them; fld unstash merges them back")
+    .with_hint("stash@{0} holds the changes as fold read them; `fld unstash` merges them back")
     .with_details([
         ("reason", json!("changed_during_stash")),
         ("paths", json!(changed_meanwhile)),
@@ -390,7 +390,7 @@ async fn run_unstash(
     let stack = stack(handle).await?;
     let Some(entry) = stack.first() else {
         return Err(FoldError::new(codes::INVALID_REQUEST, "the stash is empty")
-            .with_hint("fld stash puts the changes of the project folder aside")
+            .with_hint("`fld stash` puts the changes of the project folder aside")
             .with_details([("reason", json!("stash_empty"))])
             .into());
     };
@@ -565,7 +565,7 @@ fn occupied_refusal(paths: &[String]) -> FoldError {
             paths.join(", ")
         ),
     )
-    .with_hint("an ignore rule or the size limit keeps these files out of fold; move or remove each one, then run fld unstash again")
+    .with_hint("an ignore rule or the size limit keeps these files out of fold; move or remove each one, then run `fld unstash` again")
     .with_details([("reason", json!("unstash_path_occupied")), ("paths", json!(paths))])
 }
 
@@ -903,7 +903,7 @@ fn markers_wait(conflicts: &[ConflictRow]) -> FoldError {
             paths.join(", ")
         ),
     )
-    .with_hint("fix the conflict markers in these files, then run fld record")
+    .with_hint("fix the conflict markers in these files, then run `fld record`")
     .with_details([
         ("reason", json!("stash_conflicted")),
         ("paths", json!(paths)),
@@ -934,7 +934,7 @@ fn changed_during_unstash(error: FoldError) -> FoldError {
         codes::INVALID_REQUEST,
         "files of the project folder changed while fold read them; nothing was written",
     )
-    .with_hint("run fld unstash again")
+    .with_hint("run `fld unstash` again")
     .with_details([("reason", json!("changed_during_unstash"))])
 }
 

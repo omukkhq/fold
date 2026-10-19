@@ -12,7 +12,7 @@ pub fn can_pull(actor: &Actor) -> Result<(), PolicyDenied> {
         Err(PolicyDenied {
             code: codes::HUMAN_REQUIRED,
             message: "only a human brings the remote branch into main",
-            hint: "ask a human to run fld pull",
+            hint: "ask a human to run `fld pull`",
         })
     }
 }
@@ -25,7 +25,7 @@ pub fn can_record(actor: &Actor) -> Result<(), PolicyDenied> {
         Err(PolicyDenied {
             code: codes::HUMAN_REQUIRED,
             message: "only a human records the changes of the project folder",
-            hint: "ask a human to run fld record in the project folder",
+            hint: "ask a human to run `fld record` in the project folder",
         })
     }
 }
@@ -38,7 +38,7 @@ pub fn can_stash(actor: &Actor) -> Result<(), PolicyDenied> {
         Err(PolicyDenied {
             code: codes::HUMAN_REQUIRED,
             message: "only a human stashes the changes of the project folder",
-            hint: "ask a human to run fld stash or fld unstash in the project folder",
+            hint: "ask a human to run `fld stash` or `fld unstash` in the project folder",
         })
     }
 }
@@ -51,7 +51,7 @@ pub fn can_enable_git(actor: &Actor) -> Result<(), PolicyDenied> {
         Err(PolicyDenied {
             code: codes::HUMAN_REQUIRED,
             message: "only a human turns Git on",
-            hint: "ask a human to run fld init --with-git in the project folder",
+            hint: "ask a human to run `fld init --with-git` in the project folder",
         })
     }
 }
@@ -90,7 +90,7 @@ mod tests {
         for actor in [agent, Actor::System] {
             let denied = can_pull(&actor).unwrap_err();
             assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
-            assert_eq!(denied.hint(), "ask a human to run fld pull");
+            assert_eq!(denied.hint(), "ask a human to run `fld pull`");
         }
     }
 

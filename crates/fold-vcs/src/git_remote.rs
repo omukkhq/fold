@@ -51,7 +51,7 @@ fn no_repository() -> FoldError {
         codes::INVALID_REQUEST,
         "the project folder has no Git repository of its own in .git",
     )
-    .with_hint("re-create the project with fld init")
+    .with_hint("re-create the project with `fld init`")
 }
 
 /// Makes `info/exclude` of `repo`, the project's `.git`, a symlink to the project's `.fold/exclude`, so Git and fold read the same local rules, and makes sure that file lists [`EXCLUDE_LINE`]. The lines an `info/exclude` of its own holds move into `.fold/exclude` first, after the lines already there, each once. The file is written to a temporary name and renamed into place, and so is the link. Blocking.
@@ -297,12 +297,12 @@ impl Moved {
     /// The command that brings the folder back to what fold left, without losing a file: the human's own files stay, and `fld record` records what differs.
     pub fn hint(&self, branch: &str) -> String {
         match self {
-            Self::OtherBranch(_) => format!("run git switch {branch} in the project folder"),
+            Self::OtherBranch(_) => format!("run `git switch {branch}` in the project folder"),
             Self::Rewritten { fold, .. } => format!(
-                "run git reset --soft {} in the project folder; your files stay as they are and fld record records them",
+                "run `git reset --soft {}` in the project folder; your files stay as they are and `fld record` records them",
                 &fold.as_str()[..12]
             ),
-            Self::Stash => "run git stash pop in the project folder".to_owned(),
+            Self::Stash => "run `git stash pop` in the project folder".to_owned(),
         }
     }
 }
@@ -839,7 +839,7 @@ pub fn remote_ahead(branch: &str, remote_commit: Option<&CommitId>) -> FoldError
         codes::REMOTE_AHEAD,
         format!("the remote branch {branch} has commits that fold main does not have"),
     )
-    .with_hint("run fld pull to bring the remote commits into main, then fld push again");
+    .with_hint("run `fld pull` to bring the remote commits into main, then `fld push` again");
     match remote_commit {
         Some(commit) => error.with_details([
             ("branch", json!(branch)),
@@ -874,6 +874,27 @@ mod tests {
             b"=\trefs/fold/main:refs/heads/main\t[up to date]\n"
         ));
         assert!(!rejected(b""));
+    }
+
+    #[test]
+    fn a_moved_head_names_its_commands_between_backticks() {
+        let fold: CommitId = "b".repeat(40).parse().unwrap();
+        assert_eq!(
+            Moved::OtherBranch(Some("dev".to_owned())).hint("main"),
+            "run `git switch main` in the project folder"
+        );
+        assert_eq!(
+            Moved::Rewritten {
+                tip: fold.clone(),
+                fold
+            }
+            .hint("main"),
+            "run `git reset --soft bbbbbbbbbbbb` in the project folder; your files stay as they are and `fld record` records them"
+        );
+        assert_eq!(
+            Moved::Stash.hint("main"),
+            "run `git stash pop` in the project folder"
+        );
     }
 
     #[test]

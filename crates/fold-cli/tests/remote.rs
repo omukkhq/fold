@@ -411,8 +411,9 @@ fn remote_add_without_a_branch_takes_the_remote_default_branch_or_main() {
         "{refusal}"
     );
     assert!(
-        refusal
-            .contains("hint: run fld remote remove origin, then fld remote add origin <url> again"),
+        refusal.contains(
+            "hint: run `fld remote remove origin`, then `fld remote add origin <url>` again"
+        ),
         "{refusal}"
     );
     assert_eq!(fs::read_to_string(&config_path).unwrap(), config_before);
@@ -509,7 +510,7 @@ fn push_and_pull_leave_out_the_name_of_the_only_remote_and_need_it_among_several
         assert!(!several.status.success(), "{several:?}");
         assert!(
             stderr(&several)
-                .contains("name one of the remotes backup, origin; fld remote list shows them"),
+                .contains("name one of the remotes backup, origin; `fld remote list` shows them"),
             "{several:?}"
         );
         let unknown = sandbox.sync(action, &project, Some("elsewhere"));

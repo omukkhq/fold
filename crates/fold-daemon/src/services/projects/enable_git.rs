@@ -56,7 +56,7 @@ pub async fn enable_git(
     let Actor::Human { name: human } = actor else {
         return Err(
             FoldError::new(codes::HUMAN_REQUIRED, "only a human turns Git on")
-                .with_hint("ask a human to run fld init --with-git in the project folder")
+                .with_hint("ask a human to run `fld init --with-git` in the project folder")
                 .into(),
         );
     };
@@ -87,7 +87,9 @@ pub async fn enable_git(
                 codes::INVALID_REQUEST,
                 "Git sync is on already in this project",
             )
-            .with_hint("run fld remote add <name> <url> [<branch>] to push the project to a remote")
+            .with_hint(
+                "run `fld remote add <name> <url> [<branch>]` to push the project to a remote",
+            )
             .with_details([("reason", json!("git_sync_on"))])
             .into());
         }
@@ -181,7 +183,7 @@ fn prepare_repository(
                     codes::INVALID_REQUEST,
                     "the project folder holds a Git repository with commits of its own, which fold cannot join to main's history",
                 )
-                .with_hint("move .git out of the project folder, then run fld init --with-git again")
+                .with_hint("move .git out of the project folder, then run `fld init --with-git` again")
                 .with_details([("reason", json!("git_history"))]));
             }
         }
@@ -190,7 +192,7 @@ fn prepare_repository(
                 codes::INVALID_REQUEST,
                 "the project folder holds a .git that is not a directory",
             )
-            .with_hint("move .git out of the project folder, then run fld init --with-git again")
+            .with_hint("move .git out of the project folder, then run `fld init --with-git` again")
             .with_details([("reason", json!("git_dir_elsewhere"))]));
         }
     }

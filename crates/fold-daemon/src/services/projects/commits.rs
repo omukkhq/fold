@@ -220,7 +220,7 @@ fn history_missing(revision: RevisionId, commit: &CommitId) -> FoldError {
             "the project's Git repository does not hold {commit}, the commit of {revision}, so the commits of the revisions after it cannot be written"
         ),
     )
-    .with_hint("run fld remote add <name> <url> with a repository that holds that commit, such as one the project was pushed to, then fld pull <name>")
+    .with_hint("run `fld remote add <name> <url>` with a repository that holds that commit, such as one the project was pushed to, then `fld pull <name>`")
     .with_details([
         ("revision", json!(revision.to_string())),
         ("commit", json!(commit.as_str())),

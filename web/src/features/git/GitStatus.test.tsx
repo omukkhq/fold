@@ -30,7 +30,9 @@ describe("GitStatus", () => {
     });
     show();
     expect(await screen.findByText("/home/ana/ledger")).toBeTruthy();
-    expect(screen.getByText("fld remote add <name> <url>")).toBeTruthy();
+    const command = screen.getByText("fld remote add <name> <url>");
+    expect(command.tagName).toBe("CODE");
+    expect(command.className).toContain("text-caption");
   });
 
   it("shows each remote with its last push, a failure and the commit", async () => {

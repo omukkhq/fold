@@ -188,7 +188,7 @@ fn inside_repository(root: &Path, top: &Path) -> FoldError {
         ),
     )
     .with_hint(format!(
-        "run fld init --with-git in {} to make the whole repository the project, or move the folder out of it",
+        "run `fld init --with-git` in {} to make the whole repository the project, or move the folder out of it",
         top.display()
     ))
     .with_details([("reason", serde_json::json!("inside_git_repository"))])
@@ -259,7 +259,7 @@ pub async fn init_new_project(
                 codes::INVALID_REQUEST,
                 format!("{} is a Git repository", root.display()),
             )
-            .with_hint("run fld init --with-git there, so the repository keeps its history")
+            .with_hint("run `fld init --with-git` there, so the repository keeps its history")
             .with_details([("reason", serde_json::json!("git_repository"))])
             .into());
         }
@@ -289,7 +289,7 @@ pub async fn init_project_from_git(
             codes::INVALID_REQUEST,
             format!("{} is not the top of a Git repository", root.display()),
         )
-        .with_hint("run fld init there to make a new project")
+        .with_hint("run `fld init` there to make a new project")
         .with_details([("reason", serde_json::json!("not_git_repository"))])
     };
     let Some(root) = found else {
@@ -324,28 +324,28 @@ fn git_start(git: &Git, root: &Path) -> Result<Option<Start>, ProjectError> {
     if !std::fs::symlink_metadata(paths.git_dir()).is_ok_and(|meta| meta.is_dir()) {
         return Err(refused(
             "the repository keeps its Git data elsewhere, as a linked worktree or a submodule does",
-            "run fld init --with-git in a repository whose .git is a directory",
+            "run `fld init --with-git` in a repository whose .git is a directory",
             "git_dir_elsewhere",
         ));
     }
     let Some(branch) = checked_out_branch(git, &paths.git_dir())? else {
         return Err(refused(
             "the repository has no branch checked out",
-            "check out a branch, then run fld init --with-git again",
+            "check out a branch, then run `fld init --with-git` again",
             "detached_head",
         ));
     };
     let Ok(head) = git.resolve_commit(root, "HEAD") else {
         return Err(refused(
             "the checked-out branch has no commit yet",
-            "commit the files, then run fld init --with-git again",
+            "commit the files, then run `fld init --with-git` again",
             "no_commit",
         ));
     };
     if !folder_clean(git, &paths, &head)? {
         return Err(refused(
             "the repository has changes that are not committed",
-            "commit or stash them, then run fld init --with-git again",
+            "commit or stash them, then run `fld init --with-git` again",
             "uncommitted_changes",
         ));
     }
@@ -1435,7 +1435,7 @@ fn incomplete(paths: &ProjectPaths) -> FoldError {
         ),
     )
     .with_hint(format!(
-        "if no other fld init is running there, delete {} and run fld init again",
+        "if no other `fld init` is running there, delete {} and run `fld init` again",
         paths.fold_dir().display()
     ))
 }
@@ -1459,7 +1459,7 @@ pub(crate) async fn require_git_sync(store: &Store, command: &str) -> Result<(),
         codes::INVALID_REQUEST,
         format!("Git sync is off in this project, so {command} has no Git repository to use"),
     )
-    .with_hint("run fld init --with-git in the project folder to turn Git on")
+    .with_hint("run `fld init --with-git` in the project folder to turn Git on")
     .with_details([("reason", serde_json::json!("git_sync_off"))])
     .into())
 }
@@ -1815,7 +1815,7 @@ async fn row_for_dir(registry: &Store, cwd: &Path) -> Result<projects::ProjectRo
                 codes::PROJECT_NOT_FOUND,
                 "no registered project holds this directory",
             )
-            .with_hint("run the command inside a project directory, or fld init one")
+            .with_hint("run the command inside a project directory, or `fld init` one")
             .into()
         })
 }
@@ -1918,18 +1918,18 @@ mod tests {
             ["uncommitted_changes", "head_moved"]
         );
         attention.note_moved(
-            Some("run git switch main".to_owned()),
+            Some("run `git switch main`".to_owned()),
             Timestamp::from_millis(5).unwrap(),
         );
         attention.note_moved(
-            Some("run git switch main".to_owned()),
+            Some("run `git switch main`".to_owned()),
             Timestamp::from_millis(9).unwrap(),
         );
         assert_eq!(
             attention.head_moved(),
             Some((
                 Timestamp::from_millis(5).unwrap(),
-                "run git switch main".to_owned()
+                "run `git switch main`".to_owned()
             ))
         );
         attention.note_moved(None, Timestamp::from_millis(9).unwrap());

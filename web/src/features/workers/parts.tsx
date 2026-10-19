@@ -1,4 +1,5 @@
 import { CircleAlert } from "lucide-react";
+import { CodeText } from "@/components/code/CodeText";
 import { cn } from "@/lib/cn";
 import { pillSpec, type StatePill as Pill, type Step } from "./team";
 import type { Failure } from "./startLead";
@@ -64,7 +65,9 @@ export function ErrorNote({
         className="mt-2 shrink-0 text-danger"
       />
       <p className="flex min-w-0 flex-col gap-2 text-bar text-danger">
-        <span>{failure.text}</span>
+        <span>
+          <CodeText text={failure.text} />
+        </span>
         {failure.code ? (
           <span className="font-mono text-meta text-text-muted">
             code: {failure.code}

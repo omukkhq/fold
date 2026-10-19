@@ -360,7 +360,7 @@ impl ReviewService {
         }
         let head = workspaces::head(read).await?.ok_or_else(|| {
             FoldError::new(codes::REVISION_NOT_FOUND, "main has no revision")
-                .with_hint("run fld init to create the first revision")
+                .with_hint("run `fld init` to create the first revision")
         })?;
         let inputs = members
             .iter()

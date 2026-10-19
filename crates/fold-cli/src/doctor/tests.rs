@@ -276,7 +276,7 @@ fn a_socket_with_mode_0644_fails_with_the_chmod_fix() {
     let check = socket_check(Some(&path), Some(state));
     assert_eq!(check.status, Status::Fail);
     assert!(check.message.contains("0644"));
-    assert_eq!(check.fix, Some(format!("chmod 600 {}", path.display())));
+    assert_eq!(check.fix, Some(format!("`chmod 600 {}`", path.display())));
     let no_modes = Platform {
         linux: false,
         macos: false,
@@ -317,7 +317,7 @@ fn a_missing_or_dead_socket_warns_with_fold_serve() {
     let missing = socket_check(Some(&path), Some(SocketState::Missing));
     assert_eq!(
         (missing.status, missing.fix.as_deref()),
-        (Status::Warn, Some("fld serve"))
+        (Status::Warn, Some("`fld serve`"))
     );
     drop(bind(&path));
     mode(&path, 0o600);
@@ -326,7 +326,7 @@ fn a_missing_or_dead_socket_warns_with_fold_serve() {
     let dead = socket_check(Some(&path), Some(state));
     assert_eq!(
         (dead.status, dead.fix.as_deref()),
-        (Status::Warn, Some("fld serve"))
+        (Status::Warn, Some("`fld serve`"))
     );
 }
 
@@ -352,7 +352,7 @@ fn no_socket_path_is_a_warning() {
     let check = socket_check(None, None);
     assert_eq!(check.status, Status::Warn);
     let fix = check.fix.unwrap();
-    assert!(fix.starts_with("export XDG_RUNTIME_DIR=") && fix.contains("--socket"));
+    assert!(fix.starts_with("`export XDG_RUNTIME_DIR=") && fix.contains("`--socket <path>`"));
 }
 
 #[test]
@@ -398,7 +398,7 @@ fn http_is_ok_with_a_listener_and_a_warning_without() {
     let check = http_check(addr);
     assert_eq!(
         (check.status, check.fix.as_deref()),
-        (Status::Warn, Some("fld serve"))
+        (Status::Warn, Some("`fld serve`"))
     );
 }
 
@@ -534,7 +534,7 @@ fn a_probe_with_no_proc_and_no_systemd_fails_nothing() {
     assert_eq!(service.message, "no service manager support");
     assert_eq!(
         service.fix.as_deref(),
-        Some("fld serve, started by the host's own supervisor")
+        Some("`fld serve`, started by the host's own supervisor")
     );
     for check in [linger_check(&host), inotify_limit_check(&host)] {
         assert_eq!(
@@ -634,7 +634,7 @@ fn linger_warns_only_for_an_installed_service() {
     fixture.install_unit();
     let off = linger_check(&host);
     assert_eq!(off.status, Status::Warn);
-    assert_eq!(off.fix.as_deref(), Some("loginctl enable-linger ana"));
+    assert_eq!(off.fix.as_deref(), Some("`loginctl enable-linger ana`"));
     std::fs::write(fixture.path("root/var/lib/systemd/linger/ana"), "").unwrap();
     assert_eq!(linger_check(&host).status, Status::Ok);
     let mut nobody = host;
@@ -1048,7 +1048,7 @@ fn objects_checks_cover_missing_unwritable_and_low_space() {
     assert_eq!(locked.status, Status::Fail);
     assert_eq!(
         locked.fix.as_deref(),
-        Some("chmod -R u+rwX /p/.fold/objects")
+        Some("`chmod -R u+rwX /p/.fold/objects`")
     );
     let low = objects_verdict(
         path,
@@ -1111,13 +1111,13 @@ fn a_project_folder_without_its_fold_data_fails_alone_with_the_init_that_replace
     let quoted = output::shell_quote(&root);
     assert_eq!(
         check.fix.as_deref(),
-        Some(format!("cd {quoted} && fld init --with-git").as_str())
+        Some(format!("`cd {quoted} && fld init --with-git`").as_str())
     );
     std::fs::remove_dir_all(root.join(".git")).unwrap();
     let checks = project_report(&host, &root, at(0));
     assert_eq!(
         checks[0].fix.as_deref(),
-        Some(format!("cd {quoted} && fld init").as_str())
+        Some(format!("`cd {quoted} && fld init`").as_str())
     );
 }
 
@@ -1173,7 +1173,7 @@ fn fold_entries_left_in_the_project_files_name_the_refresh() {
         check.message,
         ".mcp.json holds fold entries, which belong in your Claude Code config; .claude/settings.json holds fold entries, which belong in your Claude Code config"
     );
-    assert_eq!(check.fix.as_deref(), Some("fld init --refresh"));
+    assert_eq!(check.fix.as_deref(), Some("`fld init --refresh`"));
 }
 
 #[test]
@@ -1198,7 +1198,7 @@ fn the_claude_setup_check_reads_the_user_files_and_names_the_fix() {
             files.settings.display()
         )
     );
-    assert_eq!(missing.fix.as_deref(), Some("fld setup --claude"));
+    assert_eq!(missing.fix.as_deref(), Some("`fld setup --claude`"));
     std::fs::create_dir_all(files.settings.parent().unwrap()).unwrap();
     std::fs::write(&files.config, good_mcp()).unwrap();
     std::fs::write(&files.settings, settings(ALLOW_FOLD_TOOLS, &HOOKS[..1])).unwrap();
@@ -1284,7 +1284,7 @@ fn an_agents_file_without_the_markers_gives_the_claude_files_warning() {
     let check = find(&checks, "claude files");
     assert_eq!(check.status, Status::Warn);
     assert!(check.message.contains("AGENTS.md lacks the fold section"));
-    assert_eq!(check.fix.as_deref(), Some("fld init --refresh"));
+    assert_eq!(check.fix.as_deref(), Some("`fld init --refresh`"));
     assert_eq!(
         failed(&[Section {
             title: String::new(),
@@ -1355,7 +1355,7 @@ fn the_claude_files_check_reads_the_file_that_gets_the_section() {
         check.message,
         "CLAUDE.md lacks the fold section; AGENTS.md holds a second fold section, which belongs in CLAUDE.md"
     );
-    assert_eq!(check.fix.as_deref(), Some("fld init --refresh"));
+    assert_eq!(check.fix.as_deref(), Some("`fld init --refresh`"));
     assert_eq!(
         claude_md(&checks),
         (Status::Ok, "no CLAUDE.md hides AGENTS.md".to_owned())

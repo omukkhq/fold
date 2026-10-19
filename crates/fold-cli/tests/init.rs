@@ -463,7 +463,7 @@ fn a_second_init_prints_project_exists_and_keeps_the_first_project() {
     let refused = String::from_utf8_lossy(&named.stderr).into_owned();
     assert!(refused.contains("invalid_request"), "{refused}");
     assert!(
-        refused.contains(&format!("cd {} && fld init", project.display())),
+        refused.contains(&format!("`cd {} && fld init", project.display())),
         "{refused}"
     );
     let second = sandbox.fold_in(&project, &["init"], &[]);

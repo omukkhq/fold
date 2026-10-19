@@ -211,7 +211,7 @@ fn with_git_in_a_git_repository_makes_its_head_the_genesis() {
     assert!(!refused.status.success());
     assert!(
         String::from_utf8_lossy(&refused.stderr)
-            .contains("commit or stash them, then run fld init --with-git again"),
+            .contains("commit or stash them, then run `fld init --with-git` again"),
         "{refused:?}"
     );
     git(&repo, &["checkout", "--quiet", "--", "README.md"]);

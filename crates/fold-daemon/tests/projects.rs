@@ -707,7 +707,7 @@ async fn init_refuses_a_git_repository_and_from_git_refuses_anything_else() {
     let ProjectError::Fold(error) = error else {
         panic!("a fold error");
     };
-    assert!(error.hint().unwrap().contains("fld init --with-git"));
+    assert!(error.hint().unwrap().contains("`fld init --with-git`"));
     assert!(!repo.join(".fold").exists());
 
     // A `.git` that is no repository is refused too, and kept.
@@ -793,7 +793,7 @@ async fn a_plain_init_without_git_refuses_a_folder_inside_a_repository() {
             error
                 .hint()
                 .unwrap()
-                .contains(&format!("fld init --with-git in {}", top.display())),
+                .contains(&format!("`fld init --with-git` in {}", top.display())),
             "{error:?}"
         );
         assert!(!folder.join(".fold").exists());
@@ -1036,7 +1036,7 @@ async fn init_refuses_a_registered_folder_whose_fold_holds_content_without_a_dat
         };
         let hint = refused.hint().unwrap();
         assert!(
-            hint.contains("from a backup") && hint.contains("fld init again"),
+            hint.contains("from a backup") && hint.contains("`fld init` again"),
             "{hint}"
         );
         assert_eq!(

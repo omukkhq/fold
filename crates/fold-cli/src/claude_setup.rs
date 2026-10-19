@@ -316,7 +316,7 @@ mod tests {
         let (set, shown) = ask(home.path(), Offer::Setup, true, "\n");
         assert!(!set);
         assert!(shown.contains("invalid_request: "), "{shown}");
-        assert!(shown.contains("hint: correct or move the file, then run fld setup --claude"));
+        assert!(shown.contains("hint: correct or move the file, then run `fld setup --claude`"));
         assert_eq!(
             std::fs::read_to_string(home.path().join(".claude.json")).unwrap(),
             "{"

@@ -108,7 +108,7 @@ pub fn can_push(actor: &Actor) -> Result<(), PolicyDenied> {
         Actor::Agent(_) => Err(PolicyDenied {
             code: codes::HUMAN_REQUIRED,
             message: "only a human can push main to the Git remote",
-            hint: "ask a human to run fld push",
+            hint: "ask a human to run `fld push`",
         }),
     }
 }
@@ -138,7 +138,7 @@ pub fn can_take_main_tag(
         return Err(PolicyDenied {
             code: codes::MAIN_TAG_DENIED,
             message: "only the session that fld claude starts takes the main tag",
-            hint: "call register_agent without the main tag; run fld claude to start the main agent",
+            hint: "call register_agent without the main tag; run `fld claude` to start the main agent",
         });
     }
     if held_by_other {

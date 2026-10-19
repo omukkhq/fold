@@ -88,7 +88,7 @@ export function startFailure(error: unknown, values: StartLeadValues): Failure {
     case "invalid_config":
       return {
         code,
-        text: "fold cannot read the worker settings in .fold/config.toml. Run fld doctor.",
+        text: "fold cannot read the worker settings in .fold/config.toml. Run `fld doctor`.",
       };
     case "worker_start_denied":
       return { code, text: "A human starts only the leads." };

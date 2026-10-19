@@ -85,7 +85,7 @@ fn warnings_alone_exit_0_and_every_project_in_the_registry_is_checked() {
     assert!(text.starts_with("host\n"), "{text}");
     assert!(text.contains("project alpha\n") && text.contains("project beta\n"));
     assert!(text.contains("warn socket: no daemon socket at"));
-    assert!(text.contains("fix: fld serve"));
+    assert!(text.contains("fix: `fld serve`"));
     assert!(text.contains("warn git: git is not on PATH"));
     assert!(text.contains("fix: install git"));
     assert!(text.contains("warn claude: claude is not on PATH"));
@@ -93,8 +93,8 @@ fn warnings_alone_exit_0_and_every_project_in_the_registry_is_checked() {
     assert!(text.contains("ok   database: quick_check is ok and journal_mode is wal"));
     assert!(text.contains("warn claude files: .claude/skills/fold/SKILL.md is missing"));
     assert!(text.contains("warn claude setup: "));
-    assert!(text.contains("fix: fld setup --claude"));
-    assert_eq!(text.matches("fix: fld init --refresh").count(), 1);
+    assert!(text.contains("fix: `fld setup --claude`"));
+    assert_eq!(text.matches("fix: `fld init --refresh`").count(), 1);
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn a_project_whose_fold_was_deleted_leaves_the_registry_and_the_report() {
     assert!(text.contains("project gamma\n"), "{text}");
     assert!(text.contains("fix: mount the disk that holds"), "{text}");
     assert!(text.contains("project delta\n"), "{text}");
-    assert!(text.contains("and run fld init again"), "{text}");
+    assert!(text.contains("and run `fld init` again"), "{text}");
     let again = stdout(&doctor());
     assert!(!again.contains("project alpha"), "the row is gone: {again}");
     assert!(again.contains("project gamma\n") && again.contains("project delta\n"));
@@ -140,7 +140,7 @@ fn a_socket_with_mode_0644_fails_with_exit_1() {
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let text = stdout(&output);
     assert!(text.contains("fail socket:"), "{text}");
-    assert!(text.contains(&format!("fix: chmod 600 {}", socket.display())));
+    assert!(text.contains(&format!("fix: `chmod 600 {}`", socket.display())));
     assert!(stderr(&output).contains("doctor_checks_failed: checks failed: 1"));
 }
 

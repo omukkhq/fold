@@ -206,7 +206,7 @@ fn git_sync_off() -> FoldError {
         "Git sync is off in this project, so it has no Git repository for a remote",
     )
     .with_hint(
-        "run fld init --with-git in the project folder to turn Git on, then fld remote add again",
+        "run `fld init --with-git` in the project folder to turn Git on, then `fld remote add` again",
     )
     .with_details([("reason", serde_json::json!("git_sync_off"))])
 }
@@ -221,7 +221,7 @@ fn refuse_existing(text: &str, name: &str) -> Result<(), FoldError> {
         format!("the project has a Git remote named {name} already"),
     )
     .with_hint(format!(
-        "run fld remote remove {name}, then fld remote add {name} <url> again"
+        "run `fld remote remove {name}`, then `fld remote add {name} <url>` again"
     ))
     .with_details([("reason", serde_json::json!("remote_exists"))]))
 }
@@ -373,7 +373,7 @@ fn without_remote(text: &str, name: &str) -> Result<String, FoldError> {
             codes::REMOTE_NOT_SET,
             format!("the project has no Git remote named {name}"),
         )
-        .with_hint("run fld remote list to see the remotes"));
+        .with_hint("run `fld remote list` to see the remotes"));
     }
     if remotes_table(&mut doc)?.is_empty() {
         doc.remove(REMOTES_SECTION);
@@ -640,7 +640,7 @@ mod tests {
         assert_eq!(exists.details().unwrap()["reason"], "remote_exists");
         assert_eq!(
             exists.hint(),
-            Some("run fld remote remove origin, then fld remote add origin <url> again")
+            Some("run `fld remote remove origin`, then `fld remote add origin <url>` again")
         );
         let edited = held;
         let config = ProjectConfig::from_toml(edited).unwrap();
@@ -1093,7 +1093,7 @@ mod tests {
         assert_eq!(error.code(), Some(codes::INVALID_REQUEST));
         assert_eq!(
             error.hint(),
-            Some("run fld remote remove backup, then fld remote add backup <url> again")
+            Some("run `fld remote remove backup`, then `fld remote add backup <url>` again")
         );
         assert_eq!(
             std::fs::read_to_string(paths.config()).unwrap(),

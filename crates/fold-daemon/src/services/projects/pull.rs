@@ -277,7 +277,7 @@ async fn run(
         codes::HEAD_MOVED,
         format!("main moved during each of {ATTEMPTS} pull attempts"),
     )
-    .with_hint("run fld pull again")
+    .with_hint("run `fld pull` again")
     .into())
 }
 

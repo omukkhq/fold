@@ -6,7 +6,7 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { ApiError } from "../api/errors";
@@ -81,7 +81,7 @@ describe("route states", () => {
       return Promise.reject(
         new ApiError("project_unavailable", "unavailable", {
           reason: "database_missing",
-          hint: "restore /srv/app/.fold/fold.db from a backup",
+          hint: "restore /srv/app/.fold/fold.db from a backup, or delete /srv/app/.fold and run `fld init` again to make a new project there",
         }),
       );
     });
@@ -89,8 +89,13 @@ describe("route states", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Project database missing");
     expect(alert.textContent).toContain(
-      "restore /srv/app/.fold/fold.db from a backup",
+      "restore /srv/app/.fold/fold.db from a backup, or delete /srv/app/.fold and run fld init again",
     );
+    expect(
+      within(alert)
+        .getAllByText("fld init")
+        .every((code) => code.tagName === "CODE"),
+    ).toBe(true);
     expect(alert.textContent).toContain("code: project_unavailable");
     expect(alert.textContent).not.toContain("did not arrive");
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));

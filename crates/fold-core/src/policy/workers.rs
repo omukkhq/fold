@@ -263,7 +263,7 @@ pub fn can_change_main_directly(starter: &Starter) -> Result<(), PolicyDenied> {
         Starter::Human => Err(PolicyDenied {
             code: codes::MAIN_AGENT_REQUIRED,
             message: "only the main agent makes a direct change to main",
-            hint: "change the files in the project folder and run fld record, or ask the main agent",
+            hint: "change the files in the project folder and run `fld record`, or ask the main agent",
         }),
         _ => Err(PolicyDenied {
             code: codes::MAIN_AGENT_REQUIRED,

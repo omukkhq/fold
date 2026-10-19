@@ -282,7 +282,7 @@ fn a_plain_init_refuses_a_git_repository_and_both_refuse_a_folder_inside_one() {
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("invalid_request"), "{output:?}");
     assert!(
-        stderr(&output).contains("hint: run fld init --with-git"),
+        stderr(&output).contains("hint: run `fld init --with-git`"),
         "{output:?}"
     );
     assert!(!repo.join(".fold").exists());
@@ -296,7 +296,7 @@ fn a_plain_init_refuses_a_git_repository_and_both_refuse_a_folder_inside_one() {
         assert_eq!(output.status.code(), Some(1), "{args:?}");
         assert!(
             stderr(&output).contains(&format!(
-                "hint: run fld init --with-git in {}",
+                "hint: run `fld init --with-git` in {}",
                 top.display()
             )),
             "{output:?}"
@@ -334,7 +334,7 @@ fn a_plain_init_finds_the_repository_around_it_without_git_and_never_above_a_cei
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(
         stderr(&output).contains(&format!(
-            "hint: run fld init --with-git in {}",
+            "hint: run `fld init --with-git` in {}",
             top.display()
         )),
         "{output:?}"
@@ -351,7 +351,7 @@ fn a_plain_init_finds_the_repository_around_it_without_git_and_never_above_a_cei
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         assert!(
             stderr(&output).contains(&format!(
-                "hint: run fld init --with-git in {}",
+                "hint: run `fld init --with-git` in {}",
                 top.display()
             )),
             "{output:?}"

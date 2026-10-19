@@ -98,7 +98,7 @@ async fn run(
             codes::HUMAN_REQUIRED,
             "only a human records the project folder",
         )
-        .with_hint("ask a human to run fld record")
+        .with_hint("ask a human to run `fld record`")
         .into());
     };
     let config = load_config(&handle.paths).await?;
@@ -594,7 +594,7 @@ pub(crate) async fn integrate_change(
         codes::HEAD_MOVED,
         format!("main moved during each of {ATTEMPTS} record attempts"),
     )
-    .with_hint("run fld record again")
+    .with_hint("run `fld record` again")
     .into())
 }
 
@@ -710,7 +710,7 @@ pub(super) fn head_moved(branch: &str, moved: &Moved) -> FoldError {
         Moved::Stash => "the project folder has a stash that fold did not make".to_owned(),
     };
     FoldError::new(codes::INVALID_REQUEST, found)
-        .with_hint(format!("{}, then fld record again", moved.hint(branch)))
+        .with_hint(format!("{}, then `fld record` again", moved.hint(branch)))
         .with_details([
             ("reason", json!("head_moved")),
             ("moved", json!(moved.reason())),
@@ -744,21 +744,23 @@ mod tests {
         for (moved, hint) in [
             (
                 Moved::OtherBranch(Some("dev".to_owned())),
-                "git switch main",
+                "`git switch main`",
             ),
-            (Moved::OtherBranch(None), "git switch main"),
+            (Moved::OtherBranch(None), "`git switch main`"),
             (
                 Moved::Rewritten {
                     tip: commit.clone(),
                     fold: commit.clone(),
                 },
-                "git reset --soft aaaaaaaaaaaa",
+                "`git reset --soft aaaaaaaaaaaa`",
             ),
-            (Moved::Stash, "git stash pop"),
+            (Moved::Stash, "`git stash pop`"),
         ] {
             let error = head_moved("main", &moved);
             assert_eq!(error.code(), codes::INVALID_REQUEST);
-            assert!(error.hint().unwrap().contains(hint), "{moved:?}");
+            let shown = error.hint().unwrap();
+            assert!(shown.contains(hint), "{moved:?}");
+            assert!(shown.ends_with(", then `fld record` again"), "{shown}");
             assert_eq!(error.details().unwrap()["reason"], "head_moved");
         }
     }

@@ -175,7 +175,10 @@ fn dir_exists(dir: &Path, with_git: bool) -> FoldError {
         codes::INVALID_REQUEST,
         format!("{} exists already", dir.display()),
     )
-    .with_hint(format!("cd {} && fld init{flag}", output::shell_quote(dir)))
+    .with_hint(format!(
+        "`cd {} && fld init{flag}`",
+        output::shell_quote(dir)
+    ))
     .with_details([("reason", serde_json::json!("dir_exists"))])
 }
 
@@ -395,7 +398,7 @@ fn human_name() -> Result<HumanName, InitError> {
                 codes::HUMAN_REQUIRED,
                 "cannot tell who you are, and the folder's files become your change",
             )
-            .with_hint("set FOLD_HUMAN to your fold name, then run fld init again"),
+            .with_hint("set FOLD_HUMAN to your fold name, then run `fld init` again"),
         )
     };
     let name = crate::fold_name::current().ok_or_else(refused)?;
@@ -675,7 +678,7 @@ mod tests {
         assert_eq!(error.code(), Some("invalid_request"));
         assert_eq!(
             error.hint(),
-            Some(format!("cd {} && fld init", dir.path().display()).as_str())
+            Some(format!("`cd {} && fld init`", dir.path().display()).as_str())
         );
         assert!(matches!(error, InitError::Refused(_)));
         assert!(!dir.path().join(".fold").exists());
@@ -698,7 +701,7 @@ mod tests {
         let error = run(&args, &Dirs::default(), &mut Vec::new()).unwrap_err();
         assert_eq!(
             error.hint(),
-            Some(format!("cd '{}' && fld init", spaced.display()).as_str())
+            Some(format!("`cd '{}' && fld init`", spaced.display()).as_str())
         );
     }
 

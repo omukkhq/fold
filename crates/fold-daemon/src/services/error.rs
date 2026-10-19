@@ -13,7 +13,7 @@ use super::workspaces::WorkspaceError;
 pub fn from_store(error: StoreError) -> FoldError {
     if error.closed() {
         return FoldError::new(codes::PROJECT_UNAVAILABLE, "the project was closed")
-            .with_hint("the project folder, its .fold or its database went away; open the projects page or run fld doctor to see what to do, then start a new session");
+            .with_hint("the project folder, its .fold or its database went away; open the projects page or run `fld doctor` to see what to do, then start a new session");
     }
     match error.code() {
         Some(code) => FoldError::new(code, error.to_string()),

@@ -36,4 +36,19 @@ describe("Markdown code", () => {
     ]);
     expect(container.querySelector("code span")).toBeNull();
   });
+
+  it("draws inline code as inline code and keeps a fenced block's look", () => {
+    const { container } = render(
+      <Markdown>{"```\nfld record\n```\n\nRun `fld record` now."}</Markdown>,
+    );
+    const fenced = container.querySelector("pre code");
+    expect(fenced?.className).toContain("text-meta");
+    expect(fenced?.className).toContain("px-4");
+    const inline = container.querySelector("p code");
+    expect(inline?.textContent).toBe("fld record");
+    expect(inline?.className).toContain("text-code");
+    expect(inline?.className).toContain("px-5");
+    expect(inline?.className).toContain("text-text");
+    expect(inline?.className).not.toContain("text-meta");
+  });
 });

@@ -333,7 +333,7 @@ fn setup_claude_refuses_a_malformed_user_file_and_changes_neither() {
     let text = stderr(&output);
     assert!(
         text.contains(&format!(
-            "invalid_request: {} does not hold a JSON object\nhint: correct or move the file, then run fld setup --claude",
+            "invalid_request: {} does not hold a JSON object\nhint: correct or move the file, then run `fld setup --claude`",
             home.join(".claude.json").display()
         )),
         "{text}"

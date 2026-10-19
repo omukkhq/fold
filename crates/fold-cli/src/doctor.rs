@@ -42,7 +42,8 @@ const SQLITE_MAGIC: &[u8] = b"SQLite format 3\0";
 const CLAUDE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long `run_briefly` still reads the output of a command that ended at its deadline.
 const OUTPUT_GRACE: Duration = Duration::from_millis(200);
-const CLAUDE_INSTALL: &str = "install Claude Code: curl -fsSL https://claude.ai/install.sh | bash";
+const CLAUDE_INSTALL: &str =
+    "install Claude Code: `curl -fsSL https://claude.ai/install.sh | bash`";
 
 #[derive(Args, Debug)]
 pub struct DoctorArgs {
@@ -331,7 +332,7 @@ fn socket_check(path: Option<&Path>, state: Option<SocketState>) -> Check {
         return Check::warn(
             "socket",
             "no socket path: XDG_RUNTIME_DIR is not set",
-            "export XDG_RUNTIME_DIR=/run/user/$(id -u), or pass --socket <path> to fld serve and fld doctor",
+            "`export XDG_RUNTIME_DIR=/run/user/$(id -u)`, or pass `--socket <path>` to `fld serve` and `fld doctor`",
         );
     };
     let shown = path.display();
@@ -340,17 +341,17 @@ fn socket_check(path: Option<&Path>, state: Option<SocketState>) -> Check {
         SocketState::WrongMode { mode, .. } => Check::fail(
             "socket",
             format!("{shown} has mode {mode:04o}, not 0600"),
-            format!("chmod 600 {shown}"),
+            format!("`chmod 600 {shown}`"),
         ),
         SocketState::Missing => Check::warn(
             "socket",
             format!("no daemon socket at {shown}"),
-            "fld serve",
+            "`fld serve`",
         ),
         SocketState::Dead => Check::warn(
             "socket",
             format!("the daemon does not answer on {shown}"),
-            "fld serve",
+            "`fld serve`",
         ),
     }
 }
@@ -382,7 +383,7 @@ fn lock_check(path: Option<&Path>, socket_answers: bool) -> Check {
             "locks",
             format!("{} is held and the socket is dead", path.display()),
             format!(
-                "stop the process that holds it (fuser {}), then rm {}",
+                "stop the process that holds it (`fuser {}`), then `rm {}`",
                 path.display(),
                 path.display()
             ),
@@ -403,7 +404,7 @@ fn http_check(listen: std::net::SocketAddr) -> Check {
         Err(_) => Check::warn(
             "http",
             format!("{listen} does not accept connections"),
-            "fld serve",
+            "`fld serve`",
         ),
     }
 }
@@ -422,7 +423,7 @@ fn git_check(host: &Host) -> Check {
 
 /// The name fld sends as the human, and where it comes from. The daemon refuses a name outside the fold name rules, so such a name is a warning.
 pub(crate) fn fold_name_check(found: Option<&crate::fold_name::Found>) -> Check {
-    const FIX: &str = "run fld claude on a terminal to choose a fold name, or set FOLD_HUMAN to 1 to 32 characters of a-z, 0-9, - and _";
+    const FIX: &str = "run `fld claude` on a terminal to choose a fold name, or set FOLD_HUMAN to 1 to 32 characters of a-z, 0-9, - and _";
     match found {
         Some(found) if HumanName::parse(&found.name).is_ok() => {
             Check::ok("fold name", format!("{} from {}", found.name, found.source))
@@ -504,9 +505,11 @@ pub(crate) fn claude_setup_verdict(setup: Option<UserSetup>, declined: bool) -> 
                 claude_setup::ADD_COMMAND
             ),
         ),
-        Some(UserSetup::Incomplete(problems)) => {
-            Check::warn(NAME, problems.join("; "), claude_setup::ADD_COMMAND)
-        }
+        Some(UserSetup::Incomplete(problems)) => Check::warn(
+            NAME,
+            problems.join("; "),
+            format!("`{}`", claude_setup::ADD_COMMAND),
+        ),
     }
 }
 
@@ -602,7 +605,7 @@ fn service_manager_check(host: &Host) -> Check {
         Check::warn(
             "service manager",
             "no service manager support",
-            "fld serve, started by the host's own supervisor",
+            "`fld serve`, started by the host's own supervisor",
         )
     }
 }
@@ -644,7 +647,7 @@ fn linger_check(host: &Host) -> Check {
         LingerVerdict::Off => Check::warn(
             "linger",
             "linger is off, so the daemon stops at logout",
-            format!("loginctl enable-linger {}", user.unwrap_or_default()),
+            format!("`loginctl enable-linger {}`", user.unwrap_or_default()),
         ),
     }
 }
@@ -838,7 +841,7 @@ fn fold_data_check(paths: &ProjectPaths) -> Check {
             "{} is missing: the fold data of the project was deleted",
             paths.fold_dir().display()
         ),
-        format!("cd {} && {init}", output::shell_quote(paths.root())),
+        format!("`cd {} && {init}`", output::shell_quote(paths.root())),
     )
 }
 
@@ -1014,7 +1017,7 @@ pub(crate) fn objects_verdict(path: &Path, facts: ObjectsFacts) -> Check {
         return Check::fail(
             "objects",
             format!("{shown} is not writable"),
-            format!("chmod -R u+rwX {shown}"),
+            format!("`chmod -R u+rwX {shown}`"),
         );
     }
     match facts.free_bytes {
@@ -1068,7 +1071,7 @@ fn git_history_check(paths: &ProjectPaths, host: &Host) -> Check {
         return Check::warn(
             NAME,
             "the project folder has no Git repository in .git, so new revisions get no Git commit",
-            "re-create the project with fld init",
+            "re-create the project with `fld init`",
         );
     }
     let fold_dir = paths.fold_dir();
@@ -1095,7 +1098,7 @@ fn git_history_check(paths: &ProjectPaths, host: &Host) -> Check {
             format!(
                 ".git does not hold {commit}, the commit of {revision}, so new revisions get no Git commit"
             ),
-            "run fld remote add <name> <url> with a repository that holds that commit, then fld pull <name>",
+            "run `fld remote add <name> <url>` with a repository that holds that commit, then `fld pull <name>`",
         ),
     }
 }
@@ -1110,7 +1113,7 @@ fn folder_check(paths: &ProjectPaths, host: &Host) -> Check {
         return Check::warn(
             NAME,
             "the project folder has no Git repository in .git, so it cannot follow main",
-            "re-create the project with fld init",
+            "re-create the project with `fld init`",
         );
     }
     match folder_has_changes(&Git::new(program), paths) {
@@ -1121,12 +1124,12 @@ fn folder_check(paths: &ProjectPaths, host: &Host) -> Check {
         Ok(true) => Check::warn(
             NAME,
             "the project folder has changes that are not committed; on a file main changes they hold the folder and its branch back",
-            "run fld record in the project folder to record them on main, or undo what you staged with git restore --staged; fold brings the folder to main at the next integration or daemon start",
+            "run `fld record` in the project folder to record them on main, or undo what you staged with `git restore --staged`; fold brings the folder to main at the next integration or daemon start",
         ),
         Err(_) => Check::warn(
             NAME,
             "git cannot read the state of the project folder",
-            "run git status in the project folder",
+            "run `git status` in the project folder",
         ),
     }
 }
@@ -1146,7 +1149,7 @@ fn exclude_check(paths: &ProjectPaths) -> Check {
         _ => Check::warn(
             NAME,
             ".git/info/exclude is not the link to .fold/exclude, so Git and fold can leave out different paths",
-            "fld init --refresh, which moves its lines into .fold/exclude and makes the link",
+            "`fld init --refresh`, which moves its lines into .fold/exclude and makes the link",
         ),
     }
 }
@@ -1167,7 +1170,7 @@ fn claude_files_check(root: &Path) -> Check {
     if problems.is_empty() {
         Check::ok("claude files", "the fold entries are in place")
     } else {
-        Check::warn("claude files", problems.join("; "), "fld init --refresh")
+        Check::warn("claude files", problems.join("; "), "`fld init --refresh`")
     }
 }
 

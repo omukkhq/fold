@@ -108,7 +108,7 @@ impl NeedsYouItem {
     /// The `FolderHeld` item of a project folder that waits since `since` on the human's changes to `paths`.
     pub fn folder_held(since: Timestamp, paths: Vec<String>) -> Self {
         let mut item = Self::new(NeedsYouKind::FolderHeld, since);
-        item.reason = Some("run fld record, or take the changes back".to_owned());
+        item.reason = Some("run `fld record`, or take the changes back".to_owned());
         item.paths = paths;
         item
     }
@@ -227,7 +227,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
     {
         let mut item = NeedsYouItem::new(NeedsYouKind::UnstashConflicted, since);
         item.reason =
-            Some("fix the conflict markers in these files, then run fld record".to_owned());
+            Some("fix the conflict markers in these files, then run `fld record`".to_owned());
         item.paths = entry
             .conflicts
             .iter()
@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn a_waiting_conflict_stands_for_the_held_folder_until_it_is_resolved() {
         let held = || Some((at(5), vec!["README.md".to_owned()]));
-        let moved = Some((at(3), "run git switch main".to_owned()));
+        let moved = Some((at(3), "run `git switch main`".to_owned()));
         let mut conflict = NeedsYouItem::new(NeedsYouKind::HumanChange, at(9));
         conflict.paths = vec!["README.md".to_owned()];
         assert_eq!(

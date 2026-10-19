@@ -202,7 +202,7 @@ async fn fld_claude_starts_the_daemon_and_runs_claude_as_the_main_agent_in_the_p
     assert!(other.stdout.is_empty(), "claude did not run");
     let stderr = text(&other.stderr);
     assert!(
-        stderr.contains("main_tag_denied: agent main is the main agent of this project\nhint: run fld claude --name main to continue as it"),
+        stderr.contains("main_tag_denied: agent main is the main agent of this project\nhint: run `fld claude --name main` to continue as it"),
         "{stderr}"
     );
     guard.stop().await;
@@ -443,7 +443,7 @@ async fn fld_claude_outside_a_project_fails_with_a_hint_and_runs_nothing() {
     assert!(output.stdout.is_empty(), "claude did not run");
     let stderr = text(&output.stderr);
     assert!(
-        stderr.contains("project_not_found: no registered project holds this directory\nhint: run fld init in the project folder first"),
+        stderr.contains("project_not_found: no registered project holds this directory\nhint: run `fld init` in the project folder first"),
         "{stderr}"
     );
     assert!(daemons(&host.default_socket()).is_empty());

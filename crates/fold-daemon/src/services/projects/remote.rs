@@ -262,7 +262,7 @@ pub(crate) fn first_unreached(
 
 pub(super) fn remote_not_set() -> FoldError {
     FoldError::new(codes::REMOTE_NOT_SET, "the project has no Git remote")
-        .with_hint("run fld remote add <name> <url> in the project first")
+        .with_hint("run `fld remote add <name> <url>` in the project first")
 }
 
 /// The remote `name` names, or the only remote when `name` is `None`. No remote is refused with a hint that names `fld remote add`, an unknown name and several remotes without a name with one that names `fld remote list`; several remotes are listed in the hint.
@@ -280,7 +280,9 @@ pub(crate) fn select_remote(
                     codes::REMOTE_NOT_SET,
                     format!("the project has no Git remote named {name}"),
                 )
-                .with_hint("run fld remote list to see the remotes, or fld remote add to add one")
+                .with_hint(
+                    "run `fld remote list` to see the remotes, or `fld remote add` to add one",
+                )
             }),
         None => {
             let mut remotes = config.remotes.iter();
@@ -294,7 +296,7 @@ pub(crate) fn select_remote(
                         "the project has several Git remotes, so the command must name one",
                     )
                     .with_hint(format!(
-                        "name one of the remotes {}; fld remote list shows them",
+                        "name one of the remotes {}; `fld remote list` shows them",
                         names.join(", ")
                     ))
                     .with_details([("reason", json!("several_remotes"))]))

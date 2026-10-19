@@ -1,4 +1,5 @@
 import { CommitId } from "@/components/mono/CommitId";
+import { CodeText } from "@/components/code/CodeText";
 import { PersonName } from "@/people/PersonName";
 import { cn } from "../../lib/cn";
 import { liveDot } from "./eventStreamModel";
@@ -78,7 +79,7 @@ export function EventStream({ slug }: { slug: string }) {
                   row.emphasis ? "text-text" : "text-text-muted",
                 )}
               >
-                {row.text}
+                <CodeText text={row.text} />
                 {row.commit === null ? null : " · "}
                 <CommitId commit={row.commit} />
               </p>

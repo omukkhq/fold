@@ -420,7 +420,7 @@ async fn another_branch_checked_out_stops_the_folder_until_the_branch_is_back() 
     let synced = sync(&h).await;
     assert_eq!(synced.attention(), [ProjectAttention::HeadMoved]);
     eventually(WAIT, async || match h.handle.git_attention.head_moved() {
-        Some((_, hint)) if hint.contains("git switch main") => Ok(()),
+        Some((_, hint)) if hint.contains("`git switch main`") => Ok(()),
         other => Err(other),
     })
     .await;
@@ -446,7 +446,10 @@ async fn another_branch_checked_out_stops_the_folder_until_the_branch_is_back() 
         .find(|item| item["kind"] == "head_moved")
         .unwrap();
     assert!(
-        item["reason"].as_str().unwrap().contains("git switch main"),
+        item["reason"]
+            .as_str()
+            .unwrap()
+            .contains("`git switch main`"),
         "{item}"
     );
     assert_eq!(item["screen"], "repository");
@@ -526,7 +529,7 @@ async fn a_stash_or_a_reset_fold_did_not_make_stops_the_folder_until_it_is_undon
             .moved()
             .unwrap()
             .hint("main")
-            .contains("git stash pop")
+            .contains("`git stash pop`")
     );
     git(&dir, &["stash", "pop", "--quiet"]);
     assert!(sync(&h).await.moved().is_none());
@@ -550,7 +553,10 @@ async fn a_stash_or_a_reset_fold_did_not_make_stops_the_folder_until_it_is_undon
     let synced = sync(&h).await;
     let hint = synced.moved().unwrap().hint("main");
     assert!(
-        hint.contains(&format!("git reset --soft {}", &fold_commit.as_str()[..12])),
+        hint.contains(&format!(
+            "`git reset --soft {}`",
+            &fold_commit.as_str()[..12]
+        )),
         "{hint}"
     );
     // The hint brings the branch back and keeps the files: the reset's files are a change of the human's again.
@@ -606,7 +612,7 @@ async fn a_dropped_stash_of_the_older_ones_is_no_change_and_a_new_one_is() {
             .moved()
             .unwrap()
             .hint("main")
-            .contains("git stash pop")
+            .contains("`git stash pop`")
     );
     git(&dir, &["stash", "pop", "--quiet"]);
     assert!(sync(&h).await.moved().is_none());

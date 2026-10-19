@@ -11,7 +11,7 @@ use crate::claude_files::{
 use fold_core::layout::{ALLOW_FOLD_TOOLS, HOOKS, MCP_SERVER_NAME, MCP_SERVERS_KEY};
 
 /// The hint of a malformed user file.
-const USER_HINT: &str = "correct or move the file, then run fld setup --claude";
+const USER_HINT: &str = "correct or move the file, then run `fld setup --claude`";
 
 /// Claude Code's own files of the user, which fold's user-scope setup changes: the configuration that holds the user-scope MCP servers, and the user settings.
 #[derive(Debug, Clone, PartialEq, Eq)]

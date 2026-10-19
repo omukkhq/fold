@@ -17,11 +17,11 @@ const TEXTS = {
   },
   database_missing: {
     title: "Project database missing",
-    text: "The .fold folder of this project has no project database. Restore the database from a backup, or delete the .fold folder and run fld init again to make a new project there.",
+    text: "The .fold folder of this project has no project database. Restore the database from a backup, or delete the .fold folder and run `fld init` again to make a new project there.",
   },
   unavailable: {
     title: "Project unavailable",
-    text: "fold could not open this project. Run fld doctor to see why.",
+    text: "fold could not open this project. Run `fld doctor` to see why.",
   },
 } as const;
 

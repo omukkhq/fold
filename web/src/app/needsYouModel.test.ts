@@ -207,6 +207,11 @@ describe("needsYouGroups", () => {
     expect(pathsText([])).toBeNull();
     expect(pathsText(["src/forms/index.ts"])).toBe("src/forms/index.ts");
     expect(pathsText(["a.md", "b.md", "c.md"])).toBe("a.md and 2 more");
+    expect(pathsText(["a`b.md", "c.md"])).toBe("a\\`b.md and 1 more");
+    expect(titleText(" Wait for `x` ")).toBe("Wait for \\`x\\`");
+    expect(questionText({ header: "Use `pnpm`?", choices: [] })).toBe(
+      "asks about Use \\`pnpm\\`?",
+    );
   });
 
   it("links a Git branch that fold did not move to the history of main with the command that brings it back", () => {
@@ -214,14 +219,14 @@ describe("needsYouGroups", () => {
       needsItem({
         kind: "head_moved",
         screen: "repository",
-        reason: "run git switch main in the project folder",
+        reason: "run `git switch main` in the project folder",
       }),
     ]);
     expect(group?.title).toBe("Git branch");
     expect(group?.lines[0]).toMatchObject({
       person: null,
       chip: null,
-      title: "run git switch main in the project folder",
+      title: "run `git switch main` in the project folder",
       text: "fold does not update the project folder until the Git branch is back",
       href: "/p/demo/repository",
     });
@@ -232,7 +237,7 @@ describe("needsYouGroups", () => {
       needsItem({
         kind: "folder_held",
         screen: "repository",
-        reason: "run fld record, or take the changes back",
+        reason: "run `fld record`, or take the changes back",
         paths: ["README.md", "src/app.ts"],
       }),
     ]);
@@ -241,7 +246,7 @@ describe("needsYouGroups", () => {
       person: null,
       chip: null,
       title: "README.md and 1 more",
-      text: "Changes were made in your project. Undo the changes or save them using fld record",
+      text: "Changes were made in your project. Undo the changes or save them using `fld record`",
       hint: "opens the history of main",
       href: "/p/demo/repository",
     });
@@ -252,7 +257,8 @@ describe("needsYouGroups", () => {
       needsItem({
         kind: "unstash_conflicted",
         screen: "repository",
-        reason: "fix the conflict markers in these files, then run fld record",
+        reason:
+          "fix the conflict markers in these files, then run `fld record`",
         paths: ["src/forms/index.ts", "src/forms/a.ts", "src/forms/b.ts"],
       }),
     ]);
@@ -262,7 +268,7 @@ describe("needsYouGroups", () => {
       chip: null,
       task: null,
       title: "src/forms/index.ts and 2 more",
-      text: "Unstash conflicts. Fix the files and run fld record",
+      text: "Unstash conflicts. Fix the files and run `fld record`",
       hint: null,
       href: null,
     });
@@ -282,7 +288,7 @@ describe("needsYouGroups", () => {
       person: null,
       chip: null,
       task: null,
-      title: "fold-checks.toml line 12: unknown field `tiemout`",
+      title: "fold-checks.toml line 12: unknown field \\`tiemout\\`",
       text: "Integrations wait until the checks file on main is fixed",
       hint: null,
       href: null,

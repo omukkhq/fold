@@ -95,7 +95,7 @@ async fn refuse_old_layout(slug: &str, paths: &ProjectPaths) -> Result<(), FoldE
                 codes::PROJECT_UNAVAILABLE,
                 format!("project {slug} has the old layout with main/ and ws/, which this fold cannot open"),
             )
-            .with_hint("re-create it with fld init in a new folder, or with fld init --with-git in a Git repository of its code")
+            .with_hint("re-create it with `fld init` in a new folder, or with `fld init --with-git` in a Git repository of its code")
             .with_details([("reason", serde_json::json!("old_layout"))]));
         }
     }
@@ -385,7 +385,7 @@ pub fn database_missing(slug: &str, paths: &ProjectPaths) -> FoldError {
 /// The way back for a `.fold/` without its database, shared by the daemon, `fld init` and `fld doctor`.
 pub fn database_missing_hint(paths: &ProjectPaths) -> String {
     format!(
-        "restore {} from a backup, or delete {} and run fld init again to make a new project there",
+        "restore {} from a backup, or delete {} and run `fld init` again to make a new project there",
         paths.db().display(),
         paths.fold_dir().display()
     )
@@ -401,7 +401,7 @@ pub fn removed(slug: &str, root: &Path) -> FoldError {
         ),
     )
     .with_hint(format!(
-        "if {} comes back, run fld init in {} to register the project again",
+        "if {} comes back, run `fld init` in {} to register the project again",
         ProjectPaths::new(root).fold_dir().display(),
         root.display()
     ))

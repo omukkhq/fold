@@ -1,4 +1,5 @@
 import { CircleAlert } from "lucide-react";
+import { CodeText } from "@/components/code/CodeText";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
@@ -14,7 +15,7 @@ export function FailurePanel({
   title: string;
   text: string;
   code: string | null;
-  /** The daemon's next step, which names the paths of the case. */
+  /** The daemon's next step, which names the paths of the case and marks its commands between backticks. */
   hint?: string | null;
   action?: ReactNode;
   className?: string;
@@ -36,9 +37,13 @@ export function FailurePanel({
         <p className="text-body leading-snug font-semibold text-text">
           {title}
         </p>
-        <p className="text-bar leading-snug text-text-muted">{text}</p>
+        <p className="text-bar leading-snug text-text-muted">
+          <CodeText text={text} />
+        </p>
         {hint ? (
-          <p className="text-bar leading-snug break-words text-text">{hint}</p>
+          <p className="text-bar leading-snug break-words text-text">
+            <CodeText text={hint} />
+          </p>
         ) : null}
         {code ? (
           <p className="font-mono text-meta text-text-muted">code: {code}</p>

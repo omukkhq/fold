@@ -1,4 +1,5 @@
 import * as RadixPopover from "@radix-ui/react-popover";
+import { CodeText } from "@/components/code/CodeText";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bell,
@@ -74,14 +75,18 @@ function Line({
               {line.chip}
             </span>
           ) : null}
-          <span>{line.text}</span>
+          <span>
+            <CodeText text={line.text} />
+          </span>
         </span>
         <span className="flex items-center gap-6 text-meta text-text-muted">
           {line.task ? (
             <span className="font-mono text-label">{line.task}</span>
           ) : null}
           {line.title ? (
-            <span className="min-w-0 truncate">{line.title}</span>
+            <span className="min-w-0 truncate">
+              <CodeText text={line.title} caption />
+            </span>
           ) : null}
           <span>{formatAsOfMinute(now, line.since)}</span>
           {line.hint ? (

@@ -214,7 +214,7 @@ async fn a_request_removes_a_project_whose_fold_was_deleted_and_its_handle_write
         body["error"]["details"]["hint"]
             .as_str()
             .unwrap()
-            .contains("run fld init in")
+            .contains("run `fld init` in")
     );
     running.assert_removed(&handle).await;
     let (status, body) = running.get("").await;
@@ -315,7 +315,7 @@ async fn every_check_point_removes_a_project_whose_fold_was_deleted() {
                     body["error"]["details"]["hint"]
                         .as_str()
                         .unwrap()
-                        .contains("run fld init in")
+                        .contains("run `fld init` in")
                 );
                 let (_, body) = running.get("").await;
                 assert_eq!(body["error"]["code"], "project_not_found");
@@ -547,7 +547,7 @@ async fn a_fold_dir_without_its_database_keeps_the_project_and_says_how_to_get_i
     assert_eq!(body["error"]["details"]["reason"], "database_missing");
     let hint = body["error"]["details"]["hint"].as_str().unwrap();
     assert!(
-        hint.starts_with("restore ") && hint.contains("and run fld init again"),
+        hint.starts_with("restore ") && hint.contains("and run `fld init` again"),
         "{hint}"
     );
     assert_eq!(
