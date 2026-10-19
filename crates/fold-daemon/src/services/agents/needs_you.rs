@@ -1,8 +1,9 @@
 use fold_core::requests::{RequestState, Requester};
 use fold_core::reviews::checks::CHECKS_FILE;
+use fold_core::roles::restart_hint;
 use fold_core::{
     AgentName, Choice, HumanName, MessageId, PermissionQuestionId, ProposalId, RequestId, Sender,
-    TaskId, Timestamp,
+    TaskId, Timestamp, WorkerState,
 };
 use fold_store::agents::{self, QuestionKind};
 use fold_store::reviews;
@@ -37,6 +38,8 @@ pub enum NeedsYouKind {
     UnstashConflicted,
     /// The checks file on main is not valid, so fold holds the integrations of proposals until a revision of main fixes it; `title` states the file, the line and the problem, and `paths` names the file.
     ChecksFileInvalidOnMain,
+    /// A worker failed because it cannot reach fold: its fold MCP server did not connect, or the fld binary it would start is gone. A new start fails the same way until the daemon runs the installed fld, so `reason` names `fld restart`, after which the daemon start resumes the worker once fld is there; the item ends when the worker runs again, through that resume or through `resume_worker`.
+    WorkerUnreachable,
 }
 
 /// The screen on which a human answers an item.
@@ -63,6 +66,7 @@ impl NeedsYouKind {
             | NeedsYouKind::FolderHeld
             | NeedsYouKind::UnstashConflicted
             | NeedsYouKind::ChecksFileInvalidOnMain => Screen::Repository,
+            NeedsYouKind::WorkerUnreachable => Screen::Worker,
         }
     }
 }
@@ -76,7 +80,7 @@ pub struct NeedsYouItem {
     /// The question message and its thread.
     pub message: Option<(MessageId, MessageId)>,
     pub question: Option<PermissionQuestionId>,
-    /// The agent that asks: the question's sender or the worker of a permission question.
+    /// The agent that asks: the question's sender, the worker of a permission question, or the worker that cannot reach fold.
     pub agent: Option<AgentName>,
     pub tool: Option<String>,
     pub task: Option<TaskId>,
@@ -89,7 +93,7 @@ pub struct NeedsYouItem {
     pub header: Option<String>,
     /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft; the task title of a `HumanTask` or a `Blocker`.
     pub title: Option<String>,
-    /// The reason of a `Blocker`; the command that brings the branch back for `HeadMoved`, records the folder's changes for `FolderHeld`, or ends the conflict for `UnstashConflicted`.
+    /// The reason of a `Blocker`; the command that brings the branch back for `HeadMoved`, records the folder's changes for `FolderHeld`, ends the conflict for `UnstashConflicted`, or lets a `WorkerUnreachable` worker reach fold again.
     pub reason: Option<String>,
     /// The human's Git commit of a `HumanChange`.
     pub commit: Option<String>,
@@ -190,6 +194,20 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         item.request = row.request;
         item.choices = row.choices;
         item.header = row.header;
+        items.push(item);
+    }
+    for row in agents::list_worker_processes(&mut conn).await? {
+        let hint = row
+            .failed_reason
+            .as_deref()
+            .filter(|_| row.state == WorkerState::Failed)
+            .and_then(restart_hint);
+        let (Some(since), Some(hint)) = (row.stopped_at, hint) else {
+            continue;
+        };
+        let mut item = NeedsYouItem::new(NeedsYouKind::WorkerUnreachable, since);
+        item.agent = Some(row.agent);
+        item.reason = Some(hint.to_owned());
         items.push(item);
     }
     for question in agents::open_questions(&mut *conn).await? {

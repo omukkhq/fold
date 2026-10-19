@@ -26,7 +26,7 @@ mod send_back;
 mod stop;
 mod watch;
 
-pub use restart::{PAUSE_TURN, RESTART_TURN};
+pub use restart::{MCP_RETRY_TURN, PAUSE_TURN, RESTART_TURN};
 
 /// The folder below a project's `.fold/` that, in a build for development, makes every worker of the project run fld's scripted stand-in for Claude Code instead of `claude`. It holds one script per agent, `<agent>.json`; the development seed writes it.
 #[cfg(feature = "dev-launcher")]
@@ -42,7 +42,7 @@ pub(super) use resume::StartWatch;
 pub struct Launcher {
     /// Claude Code; `claude` is looked up on `PATH`.
     pub claude: PathBuf,
-    /// The fld binary that the worker's MCP configuration starts with the argument `mcp`; `None` is the running daemon's own binary.
+    /// The fld binary that the worker's MCP configuration starts with the argument `mcp`; `None` is the running daemon's own binary, which [`Launcher::with_own_binary`] reads once at the daemon's start.
     pub fold: Option<PathBuf>,
     /// Extra environment for every worker process.
     pub env: Vec<(String, String)>,
@@ -55,6 +55,35 @@ impl Default for Launcher {
             fold: None,
             env: Vec::new(),
         }
+    }
+}
+
+impl Launcher {
+    /// The launcher with `fold` set to the daemon's own binary when it names none. The path is read once, at the daemon's start: an installer that replaces fld while the daemon runs leaves the running binary's link as `<path> (deleted)`, and the path without that suffix names the newly installed fld.
+    #[must_use]
+    pub fn with_own_binary(mut self) -> Self {
+        if self.fold.is_none() {
+            self.fold = own_binary();
+        }
+        self
+    }
+}
+
+/// The path of the running binary, without the suffix Linux gives the link of a binary whose file was replaced. Blocking.
+pub(super) fn own_binary() -> Option<PathBuf> {
+    std::env::current_exe().ok().map(installed_path)
+}
+
+/// `path` without a trailing ` (deleted)`, the suffix of the link to a running binary whose file was removed or replaced. A file whose name really ends that way keeps it. Blocking.
+fn installed_path(path: PathBuf) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    const DELETED: &[u8] = b" (deleted)";
+    if path.is_file() {
+        return path;
+    }
+    match path.as_os_str().as_bytes().strip_suffix(DELETED) {
+        Some(kept) => PathBuf::from(std::ffi::OsStr::from_bytes(kept)),
+        None => path,
     }
 }
 
@@ -88,7 +117,7 @@ struct Running {
     input: mpsc::UnboundedSender<Input>,
     exited: tokio::sync::watch::Receiver<bool>,
     pid: Option<u32>,
-    /// Set when the daemon stops or a lead is refreshed: the process ends but the row keeps its state, so a restarted daemon resumes the worker and a refresh starts it in a new session.
+    /// Set when the daemon stops or a lead is refreshed: the process ends but the row keeps its state, so a restarted daemon resumes the worker and a refresh starts it in a new session. Also set when a worker's fold MCP server did not connect, just before its row ends `failed`, so the rest of its process changes no row and a resume waits for its exit.
     detached: Arc<AtomicBool>,
     /// Set once the process is reaped, after which its pid may belong to another process and is never signalled.
     reaped: Arc<AtomicBool>,
@@ -130,6 +159,8 @@ struct Inner {
     registry: Mutex<Option<Store>>,
     /// The workers whose session was gone and whose fresh start a pause refused, with the starter's instructions; the resume of the pause starts each fresh.
     held_lost: Mutex<HashMap<AgentName, Option<String>>>,
+    /// Set when the daemon started while the project was paused, so the resume of the pause resumes the workers that could not reach fold, as the daemon start would have.
+    unreachable_owed: AtomicBool,
 }
 
 impl Drop for Inner {
@@ -148,6 +179,8 @@ struct Process {
     /// The row's cost before this process, to which the process's running total adds.
     base_cost: u64,
     generation: u64,
+    /// The process id that the row records while this process runs.
+    pid: Option<u32>,
     /// The process runs with `--resume`.
     resumed: bool,
     /// Whether the process's session went on (`true`) or was not found (`false`); `None` until its first output tells.
@@ -185,6 +218,7 @@ impl Supervisor {
                 replays: Mutex::new(HashMap::new()),
                 registry: Mutex::new(None),
                 held_lost: Mutex::new(HashMap::new()),
+                unreachable_owed: AtomicBool::new(false),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();
@@ -254,4 +288,43 @@ pub(super) async fn reviewer_batch(
             .find(|batch| batch.holder.belongs_to(&row.agent))
             .map(|batch| batch.id),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_replaced_binary_names_the_file_installed_at_its_path() {
+        assert_eq!(
+            installed_path(PathBuf::from("/home/ana/.local/bin/fld (deleted)")),
+            PathBuf::from("/home/ana/.local/bin/fld")
+        );
+        assert_eq!(
+            installed_path(PathBuf::from("/usr/bin/fld")),
+            PathBuf::from("/usr/bin/fld")
+        );
+        assert_eq!(
+            installed_path(PathBuf::from("/opt/fld (deleted)/fld")),
+            PathBuf::from("/opt/fld (deleted)/fld")
+        );
+        let dir = tempfile::TempDir::new().unwrap();
+        let named = dir.path().join("fld (deleted)");
+        std::fs::write(&named, "").unwrap();
+        assert_eq!(installed_path(named.clone()), named);
+    }
+
+    #[test]
+    fn a_launcher_keeps_the_fld_it_names_and_reads_its_own_otherwise() {
+        let named = Launcher {
+            fold: Some(PathBuf::from("/bin/fld")),
+            ..Launcher::default()
+        };
+        assert_eq!(
+            named.with_own_binary().fold,
+            Some(PathBuf::from("/bin/fld"))
+        );
+        let own = Launcher::default().with_own_binary().fold.unwrap();
+        assert!(own.is_file(), "{}", own.display());
+    }
 }

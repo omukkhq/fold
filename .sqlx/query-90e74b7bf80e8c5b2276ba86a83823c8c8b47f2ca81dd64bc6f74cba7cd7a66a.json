@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE worker_processes SET pid = NULL WHERE id = ?1 AND pid = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "90e74b7bf80e8c5b2276ba86a83823c8c8b47f2ca81dd64bc6f74cba7cd7a66a"
+}

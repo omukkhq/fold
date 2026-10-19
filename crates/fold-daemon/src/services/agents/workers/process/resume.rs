@@ -211,13 +211,14 @@ enum Section {
 }
 
 impl Supervisor {
-    /// Starts a stopped or failed worker again in the same agent and session with `--resume`, binds it to `bind` as well, and sends it `turn`. The worker counts against the limits again. A running worker is refused with `worker_exists`, and any start while the project's agents are paused with `project_paused`.
+    /// Starts a stopped or failed worker again in the same agent and session with `--resume`, binds it to `bind` as well, and sends it `turn`. The worker counts against the limits again. A running worker is refused with `worker_exists`, and any start while the project's agents are paused with `project_paused`. A last process that fold let go of is waited for first.
     pub(in crate::services::agents::workers) async fn resume(
         &self,
         agent: &AgentName,
         turn: String,
         bind: &[TaskId],
     ) -> Result<Option<StartWatch>, AgentError> {
+        self.until_let_go_exited(agent).await?;
         let config = load_config(&self.inner.paths).await?;
         let limits = config.workers.limits();
         let now = self.inner.clock.now();

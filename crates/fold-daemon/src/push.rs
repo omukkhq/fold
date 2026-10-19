@@ -535,6 +535,12 @@ async fn deliver_events(
     }
 }
 
+/// The agent of a worker row's `started_by`, an event actor such as `web-lead` or `web-lead/sub` for a subagent; `None` for a human and for fold.
+fn starter_agent(started_by: &str) -> Option<AgentName> {
+    let actor = fold_core::EventActor::parse(started_by).ok()?;
+    AgentName::parse(actor.agent()?).ok()
+}
+
 /// Reads only what the event's rule needs.
 async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError> {
     let mut ctx = PushContext::default();
@@ -597,6 +603,22 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
         || kind == fold_core::events::types::INTEGRATION_HELD
     {
         ctx.main_agents = tagged(store, Tag::is_main).await?;
+        return Ok(ctx);
+    }
+    if kind == fold_core::events::types::WORKER_FAILED {
+        let reason = event.data.get("reason").and_then(serde_json::Value::as_str);
+        let agent = event
+            .data
+            .get("agent")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|agent| AgentName::parse(agent).ok());
+        if let (Some(agent), Some(true)) = (agent, reason.map(fold_core::roles::needs_restart)) {
+            ctx.main_agents = tagged(store, Tag::is_main).await?;
+            let mut conn = store.read().acquire().await?;
+            ctx.starter = agents::find_worker_process(&mut conn, &agent)
+                .await?
+                .and_then(|row| starter_agent(&row.started_by));
+        }
         return Ok(ctx);
     }
     if kind == fold_core::events::types::TASK_REPORTED {
@@ -780,6 +802,18 @@ async fn tagged_among(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_starter_is_the_agent_of_the_starting_worker() {
+        assert_eq!(starter_agent("web-lead"), AgentName::parse("web-lead").ok());
+        assert_eq!(
+            starter_agent("web-lead/review"),
+            AgentName::parse("web-lead").ok()
+        );
+        assert_eq!(starter_agent("human:ana"), None);
+        assert_eq!(starter_agent("fold"), None);
+        assert_eq!(starter_agent("not an actor"), None);
+    }
 
     #[test]
     fn the_frames_match_the_sessions_wire_format() {

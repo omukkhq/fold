@@ -258,8 +258,9 @@ fn area_json(area: &AreaRow) -> Value {
     })
 }
 
+/// A failed worker also names why it failed.
 fn worker_process_json(row: &WorkerProcessRow) -> Value {
-    json!({
+    let mut value = json!({
         "name": row.agent.as_str(),
         "role": row.role.as_str(),
         "area": row.area.as_ref().map(AreaName::as_str),
@@ -270,7 +271,11 @@ fn worker_process_json(row: &WorkerProcessRow) -> Value {
         "turns": row.turns,
         "cost_micro_usd": row.cost_micro_usd,
         "context_tokens": row.context_tokens,
-    })
+    });
+    if let Some(reason) = &row.failed_reason {
+        value["failed_reason"] = json!(reason);
+    }
+    value
 }
 
 fn ids<T: std::str::FromStr>(texts: &[String], what: &str) -> Result<Vec<T>, FoldError> {

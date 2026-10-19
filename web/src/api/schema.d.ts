@@ -355,7 +355,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, and an unstash whose conflict markers wait in the folder, which stands for the folder too. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted` and `stash.dropped`. */
+        /** Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, and a worker that failed because it cannot reach fold. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed` and `worker.refreshed`. */
         get: operations["list_needs_you"];
         put?: never;
         post?: never;
@@ -2489,7 +2489,7 @@ export interface components {
              */
             question: string | null;
             /**
-             * @description The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, or ends the conflict for `unstash_conflicted`.
+             * @description The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, ends the conflict for `unstash_conflicted`, or lets the worker of a `worker_unreachable` reach fold again.
              * @example Wait until the design is signed off
              */
             reason: string | null;
@@ -2523,7 +2523,7 @@ export interface components {
          * @description Why an item waits for a human.
          * @enum {string}
          */
-        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main";
+        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable";
         /** @description Every item that waits for a human, oldest first. */
         NeedsYouList: {
             items: components["schemas"]["NeedsYouEntry"][];
@@ -3964,6 +3964,11 @@ export interface components {
              * @description The exit code of the last process; a signal counts as 128 plus its number.
              */
             exit_code: number | null;
+            /**
+             * @description Why the worker's latest process failed, such as `exited`, `spawn`, `mcp_unavailable` (its fold MCP server did not connect) or `fld_missing` (the fld binary of that server is gone); null unless `state` is `failed`, and for a worker that failed before fold stored the reason.
+             * @example mcp_unavailable
+             */
+            failed_reason: string | null;
             /** @description The model Claude Code reported, or the one fold asked for; null for Claude Code's default before the first turn. */
             model: string | null;
             /**

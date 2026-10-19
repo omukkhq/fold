@@ -8,17 +8,17 @@ use fold_core::events::types;
 use fold_core::layout::{
     AGENT_ENV, AGENT_TAGS_ENV, MCP_COMMAND, MCP_SERVER_NAME, MCP_SERVERS_KEY, session_settings,
 };
-use fold_core::roles::area_prompt;
+use fold_core::roles::{FLD_MISSING, area_prompt, needs_restart};
 use fold_core::{AgentName, AreaName, EventActor, NewEvent, ProjectPaths, WorkerState, codes};
 use fold_store::StoreError;
-use fold_store::agents::{self, WorkerProcessRow};
+use fold_store::agents::{self, ProcessEnd, WorkerProcessRow};
 use fold_store::tasks::claims::{self, ClaimTarget, ReleaseReason};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{ChildStderr, ChildStdin, Command};
 use tokio::sync::{mpsc, watch};
 
-use super::{Input, Launcher, Process, Running, StartWatch, Supervisor, lock};
+use super::{Input, Launcher, Process, Running, StartWatch, Supervisor, lock, own_binary};
 use crate::push::StdinSink;
 use crate::services::agents::AgentError;
 use crate::services::agents::claude::{ClaudeInput, OutgoingRequest};
@@ -75,7 +75,12 @@ impl Supervisor {
             program_args,
         } = match files {
             Ok(files) => files,
-            Err(_) => {
+            Err(FilesError::FldMissing) => {
+                tracing::warn!(agent = %row.agent, "the fld binary of the worker's MCP server is not there");
+                self.fail(row.id, &row.agent, FLD_MISSING).await?;
+                return Ok(None);
+            }
+            Err(FilesError::Io) => {
                 tracing::warn!(agent = %row.agent, "could not write the worker's files");
                 self.fail(row.id, &row.agent, "files").await?;
                 return Ok(None);
@@ -159,6 +164,7 @@ impl Supervisor {
             agent: row.agent.clone(),
             base_cost: row.cost_micro_usd,
             generation,
+            pid,
             resumed: resume,
             session_id: row.session_id.clone(),
             session: Arc::new(session),
@@ -245,37 +251,61 @@ impl Supervisor {
         Ok(Some(start))
     }
 
-    /// Records a worker whose process could not start. A row that another start replaced, or that has ended already, is left as it is.
+    /// Records a worker whose process could not start. A row that another start replaced, or that has ended already, is left as it is. A worker that failed before its first turn gives its claims back, unless it failed because it cannot reach fold: then it keeps them, as in a pause, for the daemon start that resumes it.
     pub(super) async fn fail(
         &self,
         id: i64,
         agent: &AgentName,
         reason: &str,
     ) -> Result<(), AgentError> {
+        self.fail_when(id, agent, reason, |_| true)
+            .await
+            .map(|_| ())
+    }
+
+    /// [`Supervisor::fail`] of a row that `still` holds for, read in the transaction that ends it. Returns whether it ended the row.
+    pub(super) async fn fail_when(
+        &self,
+        id: i64,
+        agent: &AgentName,
+        reason: &str,
+        still: impl Fn(&WorkerProcessRow) -> bool,
+    ) -> Result<bool, AgentError> {
         let now = self.inner.clock.now();
         let mut buffer = EventBuffer::new();
-        self.inner
+        let failed = self
+            .inner
             .store
             .write(async |tx| {
                 let current = agents::find_worker_process(tx.conn(), agent).await?;
-                let Some(current) =
-                    current.filter(|current| current.id == id && current.state.is_running())
-                else {
-                    return Ok(());
+                let Some(current) = current.filter(|current| {
+                    current.id == id && current.state.is_running() && still(current)
+                }) else {
+                    return Ok(false);
                 };
-                agents::record_exit(tx, id, WorkerState::Failed, None, now).await?;
+                agents::record_exit(tx, id, ProcessEnd::Failed(reason), None, now).await?;
                 agents::close_open_questions(tx, id, now).await?;
                 let event = NewEvent::new(types::WORKER_FAILED, EventActor::fold())?
                     .data(json!({"agent": agent.as_str(), "reason": reason}))?;
                 buffer.append(tx, &event, now).await?;
-                if current.turns == 0 {
+                if current.turns == 0 && !needs_restart(reason) {
                     give_back_claims(tx, &mut buffer, &current, now).await?;
                 }
-                Ok::<_, AgentError>(())
+                Ok::<_, AgentError>(true)
             })
             .await?;
         self.inner.bus.publish(buffer);
-        Ok(())
+        Ok(failed)
+    }
+
+    /// Whether the fld binary that a worker's MCP configuration starts is there.
+    pub(super) async fn fld_present(&self) -> bool {
+        let fold = lock(&self.inner.launcher).fold.clone();
+        tokio::task::spawn_blocking(move || {
+            fold.or_else(own_binary).is_some_and(|fold| fold.is_file())
+        })
+        .await
+        .unwrap_or(false)
     }
 
     /// Writes the lines of the input channel to the process's stdin until the channel closes or a `Close` arrives, which closes stdin so Claude Code exits after its turn. Each user turn makes the worker `working`.
@@ -321,6 +351,20 @@ async fn drain(mut stderr: ChildStderr) {
     }
 }
 
+/// Why a worker's files were not written.
+enum FilesError {
+    /// The fld binary that the MCP configuration would start is not a file, so the worker would run without the fold tools.
+    FldMissing,
+    /// A file could not be written; its error never reaches a log, because it can name a path of the user's.
+    Io,
+}
+
+impl From<std::io::Error> for FilesError {
+    fn from(_: std::io::Error) -> Self {
+        Self::Io
+    }
+}
+
 /// The files a worker process reads and the program that reads them.
 struct WorkerFiles {
     mcp: PathBuf,
@@ -331,27 +375,27 @@ struct WorkerFiles {
     program_args: &'static [&'static str],
 }
 
-/// Writes the worker's MCP configuration, its settings and its prompt under the worker's folder. The settings allow the fold tools and run fold's hooks, so a worker never depends on the user's own Claude Code settings. The prompt is the role's text, shipped or the project's override, then the shared rules, then the area's instructions when there are any; the override file itself is never passed, because it lacks the shared rules. Returns the three paths Claude Code reads, with the program to run.
+/// Writes the worker's MCP configuration, its settings and its prompt under the worker's folder. The settings allow the fold tools and run fold's hooks, so a worker never depends on the user's own Claude Code settings. The prompt is the role's text, shipped or the project's override, then the shared rules, then the area's instructions when there are any; the override file itself is never passed, because it lacks the shared rules. Returns the three paths Claude Code reads, with the program to run. An fld path that names no file writes nothing.
 async fn write_files(
     paths: &ProjectPaths,
     launcher: &Launcher,
     row: &WorkerProcessRow,
     settings: &RoleSettings,
     area_instructions: Option<(AreaName, String)>,
-) -> std::io::Result<WorkerFiles> {
+) -> Result<WorkerFiles, FilesError> {
     let dir = paths.worker_dir(&row.agent);
     let fold_dir = paths.fold_dir();
     let override_prompt = paths.role_prompt(row.role);
     let project_mcp = paths.mcp_json();
-    let fold = match &launcher.fold {
-        Some(fold) => fold.clone(),
-        None => std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fld")),
-    };
+    let fold = launcher.fold.clone();
     let agent = row.agent.clone();
     let prompt_text = row.role.prompt();
     let limit = settings.mcp.clone();
     let claude = launcher.claude.clone();
     tokio::task::spawn_blocking(move || {
+        let Some(fold) = fold.or_else(own_binary).filter(|fold| fold.is_file()) else {
+            return Err(FilesError::FldMissing);
+        };
         let (program, program_args) = worker_program(&fold_dir, claude, &fold);
         fold_vcs::platform::create_dir_below(&fold_dir, &dir)?;
         let config = mcp_config(&fold, &agent, limit.as_deref(), &project_mcp);
@@ -385,7 +429,7 @@ async fn write_files(
         })
     })
     .await
-    .map_err(std::io::Error::other)?
+    .map_err(|_| FilesError::Io)?
 }
 
 /// Claude Code, or, in a build for development whose project holds [`super::DEV_STUB_DIR`] as a real folder, never a symlink, the fld binary of the worker's MCP server as `fld dev stub`, which runs the agent's script from that folder through the same tools. Blocking.

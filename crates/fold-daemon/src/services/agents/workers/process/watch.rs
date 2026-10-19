@@ -3,15 +3,16 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use fold_core::events::types;
+use fold_core::roles::MCP_UNAVAILABLE;
 use fold_core::{EventActor, LiveEvent, NewEvent, WorkerState, codes};
 use fold_store::StoreError;
-use fold_store::agents::{self, TurnTotals};
+use fold_store::agents::{self, ProcessEnd, TurnTotals};
 use serde_json::json;
 use tokio::process::{Child, ChildStdout};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::watch;
 
-use super::super::output::{LineEffect, RowChange, effect_of, micro_usd};
+use super::super::output::{LineEffect, RowChange, effect_of, fold_unreachable, micro_usd};
 use super::lines::Lines;
 use super::resume;
 use super::stop::stopped_event;
@@ -67,7 +68,13 @@ impl Supervisor {
         {
             tracing::warn!(agent = %process.agent, code = code_of(&error), "could not record a worker's exit");
         }
-        lock(&self.inner.replays).remove(&process.agent);
+        // A newer process of the agent owns the replays from here on.
+        let newer = lock(&self.inner.running)
+            .get(&process.agent)
+            .is_some_and(|run| run.generation != process.generation);
+        if !newer {
+            lock(&self.inner.replays).remove(&process.agent);
+        }
         self.forget(&process);
         self.forget_waiters(process.generation);
         let _ = exit.send(true);
@@ -97,6 +104,10 @@ impl Supervisor {
             if !went {
                 change = RowChange::None;
             }
+        }
+        if !detached && fold_unreachable(&message) {
+            self.fail_unreachable(process).await;
+            return;
         }
         if let Some(reply) = reply
             && let Ok(line) = reply.to_line()
@@ -172,6 +183,40 @@ impl Supervisor {
         }
     }
 
+    /// Ends a worker whose fold MCP server did not connect, which without the fold tools can only end its turns: the row ends `failed` with [`MCP_UNAVAILABLE`] at once, and the process is let go of and stopped, so the rest of its turn changes no row. A worker that a stop is ending is left to the stop. A failure that cannot be recorded still stops the process, whose exit then records the failure. The stop runs in a task of its own, because it waits for the exit that this process's reader records.
+    async fn fail_unreachable(&self, process: &Process) {
+        let run = lock(&self.inner.running)
+            .get(&process.agent)
+            .filter(|run| run.generation == process.generation)
+            .cloned();
+        let Some(run) = run else {
+            return;
+        };
+        tracing::warn!(agent = %process.agent, "the fold MCP server of a worker did not connect");
+        // Let go of before the row ends, so a resume that sees the failed row also waits for this process. A process that a pause or the daemon's stop let go of already is theirs.
+        if run.detached.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let failed = self
+            .fail_when(process.id, &process.agent, MCP_UNAVAILABLE, |row| {
+                row.state != WorkerState::Stopping
+            })
+            .await;
+        match failed {
+            Ok(true) => {}
+            Ok(false) => {
+                run.detached.store(false, Ordering::SeqCst);
+                return;
+            }
+            Err(error) => {
+                run.detached.store(false, Ordering::SeqCst);
+                tracing::warn!(agent = %process.agent, code = code_of(&error), "could not record a worker that cannot reach fold");
+            }
+        }
+        let supervisor = self.clone();
+        tokio::spawn(async move { supervisor.terminate(&run, true).await });
+    }
+
     /// A stop that fold asked for ends `stopped` with `worker.stopped`; any other exit ends `failed` with `worker.failed`. A process the daemon let go of at its own stop leaves the row as it was.
     async fn on_exit(
         &self,
@@ -182,10 +227,12 @@ impl Supervisor {
         let now = self.inner.clock.now();
         let id = process.id;
         if detached {
-            self.inner
-                .store
-                .write(async |tx| agents::set_worker_pid(tx, id, None).await)
-                .await?;
+            if let Some(pid) = process.pid {
+                self.inner
+                    .store
+                    .write(async |tx| agents::clear_worker_pid(tx, id, pid).await)
+                    .await?;
+            }
             return Ok(());
         }
         let mut buffer = EventBuffer::new();
@@ -201,10 +248,10 @@ impl Supervisor {
                 }
                 agents::close_open_questions(tx, id, now).await?;
                 let event = if row.state == WorkerState::Stopping {
-                    agents::record_exit(tx, id, WorkerState::Stopped, code, now).await?;
+                    agents::record_exit(tx, id, ProcessEnd::Stopped, code, now).await?;
                     stopped_event(&row, code)?
                 } else {
-                    agents::record_exit(tx, id, WorkerState::Failed, code, now).await?;
+                    agents::record_exit(tx, id, ProcessEnd::Failed("exited"), code, now).await?;
                     NewEvent::new(types::WORKER_FAILED, EventActor::fold())?.data(json!({
                         "agent": agent.as_str(),
                         "reason": "exited",

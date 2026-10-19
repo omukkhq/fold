@@ -14,6 +14,7 @@ import {
   Inbox,
   MessagesSquare,
   ShieldAlert,
+  Unplug,
   UserRound,
   type LucideIcon,
 } from "lucide-react";
@@ -46,6 +47,7 @@ const ICONS: Record<NeedsYouKind, LucideIcon> = {
   folder_held: FolderClock,
   unstash_conflicted: FileWarning,
   checks_file_invalid_on_main: FileX,
+  worker_unreachable: Unplug,
 };
 
 const MINUTE_MS = 60_000;

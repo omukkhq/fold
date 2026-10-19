@@ -308,6 +308,32 @@ describe("needsYouGroups", () => {
     ]);
   });
 
+  it("shows a worker that cannot reach fold with the command that brings it back, last of the groups", () => {
+    const groups = needsYouGroups("demo", [
+      needsItem({
+        kind: "worker_unreachable",
+        screen: "worker",
+        agent: "backend-lead",
+        reason: "run `fld restart`; the daemon then resumes the worker",
+      }),
+      needsItem({ kind: "checks_file_invalid_on_main", paths: ["a.toml"] }),
+    ]);
+    expect(groups.map((group) => group.kind)).toEqual([
+      "checks_file_invalid_on_main",
+      "worker_unreachable",
+    ]);
+    expect(groups[1]?.title).toBe("Worker connection");
+    expect(groups[1]?.lines[0]).toMatchObject({
+      person: "backend-lead",
+      chip: null,
+      task: null,
+      title: "run `fld restart`; the daemon then resumes the worker",
+      text: "cannot reach fold and stopped",
+      hint: "opens the agents",
+      href: "/p/demo/agents",
+    });
+  });
+
   it("counts what waits", () => {
     expect(waitingText(4)).toBe("4 waiting");
   });

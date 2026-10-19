@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::agents::roles::{FLD_MISSING, MCP_UNAVAILABLE};
 use crate::agents::{AgentName, AreaName};
 use crate::events::{Event, types};
 use crate::ids::{MessageId, RequestId, TaskId};
@@ -37,6 +38,8 @@ pub struct PushContext {
     pub main_agents: BTreeSet<AgentName>,
     /// No agent can take the event's task now: it is a human task or on hold, or, for `task.hold_cleared` and `task.updated`, it is not an unclaimed Todo task.
     pub held_from_agents: bool,
+    /// For `worker.failed`, the agent that started the failed worker; `None` for a human.
+    pub starter: Option<AgentName>,
 }
 
 /// One line for one agent's Claude Code session. `text` holds public ids and the next tool only.
@@ -75,6 +78,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::HUMAN_CHANGE_WITHDRAWN,
         types::PROPOSAL_REVIEWER_FIXED,
         types::INTEGRATION_HELD,
+        types::WORKER_FAILED,
     ]
     .contains(&event.event_type)
 }
@@ -464,6 +468,9 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
             "list_workers",
         ));
     }
+    if kind == types::WORKER_FAILED {
+        return unreachable_worker_rule(event, ctx);
+    }
     if let Some(rule) = request_rule(event, ctx) {
         return Some(rule);
     }
@@ -481,6 +488,38 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
         ));
     }
     None
+}
+
+/// A worker that failed because it cannot reach fold reaches the main agent and the agent that started it, so they tell the human what brings it back instead of waiting for the worker; the worker keeps its claims until then. Any other failure sends nothing: a new start fixes it.
+fn unreachable_worker_rule(
+    event: &Event,
+    ctx: &PushContext,
+) -> Option<(Vec<AgentName>, String, &'static str)> {
+    let reason = event
+        .data
+        .get("reason")
+        .and_then(serde_json::Value::as_str)?;
+    let agent = event
+        .data
+        .get("agent")
+        .and_then(serde_json::Value::as_str)?;
+    let text = match reason {
+        MCP_UNAVAILABLE => format!(
+            "worker {agent} failed: its fold MCP server did not connect; ask the human to run `fld restart`, which resumes it"
+        ),
+        FLD_MISSING => format!(
+            "worker {agent} failed: its fld is gone; ask the human to install fld and run `fld restart`, which resumes it, or call resume_worker once fld is back"
+        ),
+        _ => return None,
+    };
+    let agents = ctx
+        .main_agents
+        .iter()
+        .chain(&ctx.starter)
+        .filter(|starter| starter.as_str() != agent)
+        .cloned()
+        .collect();
+    Some((agents, text, "list_workers"))
 }
 
 /// A ready task nobody claimed goes to whoever starts its builder. The lead of its area starts a task worker; while the area has no lead, the main agent starts one; a task in no area waits for the main agent to give it an area label. Both an approved request card and a dependent of an integrated task turn ready through `task.status_changed`, so this one rule routes them.
@@ -649,6 +688,7 @@ mod tests {
             areas: BTreeSet::new(),
             main_agents: BTreeSet::new(),
             held_from_agents: false,
+            starter: None,
         }
     }
 
@@ -1080,6 +1120,61 @@ mod tests {
                 "open_main_workspace"
             )]
         );
+    }
+
+    #[test]
+    fn a_worker_that_cannot_reach_fold_tells_the_main_agent_and_its_starter() {
+        let mut ctx = ctx();
+        ctx.main_agents = [name("main")].into_iter().collect();
+        ctx.starter = Some(name("backend-lead"));
+        let failed = |reason: &str| {
+            with_data(
+                event(types::WORKER_FAILED, "fold"),
+                serde_json::json!({"agent": "backend-worker", "reason": reason}),
+            )
+        };
+        assert!(is_pushed(&failed("exited")));
+        let text = "fold: worker backend-worker failed: its fold MCP server did not connect; ask the human to run `fld restart`, which resumes it. Call list_workers.";
+        assert_eq!(
+            sent(&notice_for(&failed(MCP_UNAVAILABLE), &ctx)),
+            vec![
+                row("main", text, "list_workers"),
+                row("backend-lead", text, "list_workers"),
+            ]
+        );
+        let missing = notice_for(&failed(FLD_MISSING), &ctx);
+        assert_eq!(missing.len(), 2);
+        assert_eq!(
+            missing[0].text,
+            "fold: worker backend-worker failed: its fld is gone; ask the human to install fld and run `fld restart`, which resumes it, or call resume_worker once fld is back. Call list_workers."
+        );
+        let longest = "w".repeat(32);
+        for reason in [MCP_UNAVAILABLE, FLD_MISSING] {
+            let event = with_data(
+                event(types::WORKER_FAILED, "fold"),
+                serde_json::json!({"agent": longest, "reason": reason}),
+            );
+            assert!(
+                notice_for(&event, &ctx)
+                    .iter()
+                    .all(|notice| notice.text.len() <= MAX_NOTICE_LEN),
+                "{reason}"
+            );
+        }
+        assert!(notice_for(&failed("exited"), &ctx).is_empty());
+        let lead = with_data(
+            event(types::WORKER_FAILED, "fold"),
+            serde_json::json!({"agent": "backend-lead", "reason": MCP_UNAVAILABLE}),
+        );
+        assert_eq!(
+            sent(&notice_for(&lead, &ctx))
+                .into_iter()
+                .map(|(agent, _, _)| agent)
+                .collect::<Vec<_>>(),
+            ["main"]
+        );
+        let bare = event(types::WORKER_FAILED, "fold");
+        assert!(notice_for(&bare, &ctx).is_empty());
     }
 
     #[test]

@@ -3,9 +3,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use fold_core::events::types;
-use fold_core::{AgentName, EventActor, NewEvent, WorkerState, codes};
+use fold_core::{AgentName, EventActor, FoldError, NewEvent, WorkerState, codes};
 use fold_store::StoreError;
-use fold_store::agents::{self, WorkerProcessRow};
+use fold_store::agents::{self, ProcessEnd, WorkerProcessRow};
 use serde_json::json;
 use tokio::sync::watch;
 
@@ -92,7 +92,7 @@ impl Supervisor {
                 if !stopping {
                     return Ok(());
                 }
-                agents::record_exit(tx, row.id, WorkerState::Stopped, None, now).await?;
+                agents::record_exit(tx, row.id, ProcessEnd::Stopped, None, now).await?;
                 agents::close_open_questions(tx, row.id, now).await?;
                 buffer.append(tx, &stopped_event(row, None)?, now).await?;
                 Ok::<_, AgentError>(())
@@ -100,6 +100,32 @@ impl Supervisor {
             .await?;
         self.inner.bus.publish(buffer);
         Ok(())
+    }
+
+    /// Waits until a process of `agent` that fold let go of has exited, such as one whose fold MCP server did not connect: its row has ended already, but a new start of the agent must not run beside it in the same row and session. It waits as long as a stop's steps take, then refuses with `worker_exists`.
+    pub(super) async fn until_let_go_exited(&self, agent: &AgentName) -> Result<(), AgentError> {
+        let exited = lock(&self.inner.running)
+            .get(agent)
+            .filter(|run| run.detached.load(Ordering::SeqCst))
+            .map(|run| run.exited.clone());
+        let Some(mut exited) = exited else {
+            return Ok(());
+        };
+        let timeouts = *lock(&self.inner.timeouts);
+        let wait = timeouts.interrupt + timeouts.sigint + timeouts.sigterm + KILL_WAIT;
+        if matches!(
+            tokio::time::timeout(wait, exited.wait_for(|done| *done)).await,
+            Ok(Ok(_))
+        ) {
+            return Ok(());
+        }
+        Err(FoldError::new(
+            codes::WORKER_EXISTS,
+            format!("the last process of worker {agent} is still ending"),
+        )
+        .with_details([("agent", json!(agent.as_str()))])
+        .with_hint("call list_workers, then call resume_worker again")
+        .into())
     }
 
     pub(super) async fn terminate(&self, run: &Running, working: bool) {

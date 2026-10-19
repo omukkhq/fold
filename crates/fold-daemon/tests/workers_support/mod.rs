@@ -102,9 +102,13 @@ impl FakeClaude {
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
         let runs = dir.path().join("runs");
         std::fs::create_dir(&runs).unwrap();
+        // The fake never starts the fold server of its MCP configuration, but fold refuses a launch whose fld binary is not there.
+        let fold = dir.path().join("fld");
+        std::fs::write(&fold, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&fold, std::fs::Permissions::from_mode(0o755)).unwrap();
         let launcher = Launcher {
             claude: program,
-            fold: Some(PathBuf::from("/usr/local/bin/fld")),
+            fold: Some(fold),
             env: vec![
                 (
                     "FOLD_FAKE_CLAUDE_DIR".to_owned(),

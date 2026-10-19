@@ -931,7 +931,7 @@ async fn a_daemon_start_resumes_a_working_task_worker_once_its_socket_is_bound()
     registry.close().await.unwrap();
     let launcher = Launcher {
         claude: program,
-        fold: Some(std::path::PathBuf::from("/usr/local/bin/fld")),
+        fold: fake.launcher.fold.clone(),
         env: vec![
             (
                 "FOLD_TEST_SOCKET".to_owned(),

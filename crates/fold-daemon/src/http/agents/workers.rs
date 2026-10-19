@@ -235,6 +235,9 @@ pub struct WorkerEntry {
     /// The exit code of the last process; a signal counts as 128 plus its number.
     #[schema(required = true)]
     pub exit_code: Option<i64>,
+    /// Why the worker's latest process failed, such as `exited`, `spawn`, `mcp_unavailable` (its fold MCP server did not connect) or `fld_missing` (the fld binary of that server is gone); null unless `state` is `failed`, and for a worker that failed before fold stored the reason.
+    #[schema(required = true, example = "mcp_unavailable")]
+    pub failed_reason: Option<String>,
     /// The prompt cache time of the worker's role from `.fold/config.toml`, `1h` or `5m`; null when fold cannot read the file.
     #[schema(required = true, example = "5m")]
     pub cache_ttl: Option<String>,
@@ -260,6 +263,7 @@ impl WorkerEntry {
             cache_write_tokens: row.cache_write_tokens,
             context_tokens: row.context_tokens,
             exit_code: row.exit_code,
+            failed_reason: row.failed_reason,
             cache_ttl,
         }
     }

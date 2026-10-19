@@ -108,6 +108,7 @@ impl Daemon {
         clock: Arc<dyn Clock>,
         launcher: Launcher,
     ) -> Result<RunningDaemon, DaemonError> {
+        let launcher = launcher.with_own_binary();
         let lock = {
             let config = config.clone();
             tokio::task::spawn_blocking(move || prepare_runtime_dir(&config))
