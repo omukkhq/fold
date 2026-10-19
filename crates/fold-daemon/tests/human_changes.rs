@@ -78,14 +78,14 @@ fn changed(h: &Harness) -> String {
     )
 }
 
-/// Waits until the Git job has written `r1`'s commit and created the branch on it.
+/// Waits until the Git job has written `r1`'s commit, created the branch on it and pointed `HEAD` at it. `refs/fold/branch` is the last ref that creation writes, after `HEAD`, so a test that changes `HEAD` once it exists never races fold's own write of it.
 pub async fn branch_born(h: &Harness) {
     let root = root(h);
     eventually(WAIT, async || {
         let born = Command::new("git")
             .arg("-C")
             .arg(&root)
-            .args(["rev-parse", "--verify", "--quiet", "refs/heads/main"])
+            .args(["rev-parse", "--verify", "--quiet", "refs/fold/branch"])
             .output()
             .unwrap()
             .status
