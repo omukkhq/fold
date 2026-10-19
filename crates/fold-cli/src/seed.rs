@@ -46,6 +46,9 @@ model = \"fold-dev-stub\"
 model = \"fold-dev-stub\"
 ";
 
+/// The step of a failed worker that left no `stub.log`, as a worker that runs `claude` instead of the stub does.
+const NO_STEP: &str = "it ran no step";
+
 /// How long the seed waits for the agents' work.
 const WAIT: Duration = Duration::from_secs(180);
 const POLL: Duration = Duration::from_millis(100);
@@ -143,10 +146,13 @@ impl SeedError {
     pub fn hint(&self) -> Option<&'static str> {
         match self {
             Self::Exists { .. } => Some(
-                "stop make dev-daemon, run make clean-keep-cargo, start make dev-daemon again, then run make seed-dev",
+                "stop `make dev-daemon`, run `make clean-keep-cargo`, start `make dev-daemon` again, then run `make seed-dev`",
+            ),
+            Self::Worker { step, .. } if step == NO_STEP => Some(
+                "the daemon must run the stub workers, which only a build with the `dev-seed` feature has: stop the daemon, run `make clean-keep-cargo`, start `make dev-daemon`, which builds fld with that feature, then run `make seed-dev`",
             ),
             Self::Worker { .. } | Self::Timeout { .. } => Some(
-                "the daemon must run the stub workers: start make dev-daemon again, which builds it with the dev-seed feature, then make clean-keep-cargo and make seed-dev; each worker's steps are in .fold/workers/<agent>/stub.log",
+                "each worker's steps are in `.fold/workers/<agent>/stub.log`; to build the demo again, stop `make dev-daemon`, run `make clean-keep-cargo`, start `make dev-daemon` again, then run `make seed-dev`",
             ),
             _ => None,
         }
@@ -605,7 +611,7 @@ impl Seeder {
             .await
             .ok()
             .and_then(|text| text.lines().last().map(str::to_owned))
-            .unwrap_or_else(|| "it ran no step".to_owned());
+            .unwrap_or_else(|| NO_STEP.to_owned());
         Err(SeedError::Worker {
             agent: agent.to_owned(),
             step,
@@ -734,7 +740,7 @@ mod tests {
         assert_eq!(
             error.hint(),
             Some(
-                "stop make dev-daemon, run make clean-keep-cargo, start make dev-daemon again, then run make seed-dev"
+                "stop `make dev-daemon`, run `make clean-keep-cargo`, start `make dev-daemon` again, then run `make seed-dev`"
             )
         );
         assert_eq!(SeedError::NoSocket.code(), None);
@@ -749,6 +755,11 @@ mod tests {
             step: "turn 0, step 1: get_task failed: task_not_found".to_owned(),
         };
         assert!(failed.hint().unwrap().contains("stub.log"));
+        let without_stub = SeedError::Worker {
+            agent: "api-lead".to_owned(),
+            step: NO_STEP.to_owned(),
+        };
+        assert!(without_stub.hint().unwrap().contains("`dev-seed`"));
         assert!(failed.to_string().contains("api-lead"));
         assert!(SeedError::Timeout { what: "x" }.hint().is_some());
     }
