@@ -19,11 +19,15 @@ pub const DEFAULT_REVISION_PAGE: usize = 50;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RevisionOrigin {
-    /// `r1`, from `fld init` or an import.
+    /// The genesis `r0`, which every project starts from: the empty tree, or the `HEAD` commit of a Git repository.
     Initial,
     Proposal,
     /// A revision `fld pull` made from a remote commit.
     Pull,
+    /// A direct change of the main agent, on the user's word.
+    Direct,
+    /// A change of the project folder by a human: what `fld record` read from the folder, or a Git commit the human made there.
+    Record,
 }
 
 impl RevisionOrigin {
@@ -32,6 +36,8 @@ impl RevisionOrigin {
             Self::Initial => "initial",
             Self::Proposal => "proposal",
             Self::Pull => "pull",
+            Self::Direct => "direct",
+            Self::Record => "record",
         }
     }
 }
@@ -46,9 +52,9 @@ pub struct RevisionSummary {
     pub origin: RevisionOrigin,
     pub task: Option<TaskId>,
     pub proposal: Option<ProposalId>,
-    /// The title of the integrated proposal.
+    /// The title of the integrated proposal, or the first line of a direct change's commit message.
     pub title: Option<String>,
-    /// The agent whose proposal was integrated, or the human who pulled.
+    /// The agent whose proposal was integrated, the human who pulled, or the main worker that made a direct change.
     pub author: Option<String>,
     /// The remote commit a pull brought in.
     pub pull: Option<String>,
@@ -63,11 +69,20 @@ impl From<RevisionRow> for RevisionSummary {
             None => RevisionOrigin::Initial,
             Some(IntegrationKind::Proposal) => RevisionOrigin::Proposal,
             Some(IntegrationKind::Pull) => RevisionOrigin::Pull,
+            Some(IntegrationKind::Direct) => RevisionOrigin::Direct,
+            Some(IntegrationKind::Record) => RevisionOrigin::Record,
         };
         let proposal = integration.as_ref().and_then(|info| info.proposal.clone());
         let author = match (&proposal, &integration) {
             (Some(proposal), _) => Some(proposal.agent.clone()),
-            (None, Some(info)) if info.kind == IntegrationKind::Pull => Some(info.actor.clone()),
+            (None, Some(info))
+                if matches!(
+                    info.kind,
+                    IntegrationKind::Pull | IntegrationKind::Direct | IntegrationKind::Record
+                ) =>
+            {
+                Some(info.actor.clone())
+            }
             _ => None,
         };
         Self {
@@ -78,9 +93,21 @@ impl From<RevisionRow> for RevisionSummary {
             origin,
             task: proposal.as_ref().map(|proposal| proposal.task),
             proposal: proposal.as_ref().map(|proposal| proposal.number),
-            title: proposal.map(|proposal| proposal.title),
+            title: match proposal {
+                Some(proposal) => Some(proposal.title),
+                // The subject line of the commit message the main agent wrote.
+                None => integration
+                    .as_ref()
+                    .and_then(|info| info.message.as_deref())
+                    .and_then(|message| {
+                        message.lines().map(str::trim).find(|line| !line.is_empty())
+                    })
+                    .map(str::to_owned),
+            },
             author,
-            pull: integration.and_then(|info| info.remote_commit),
+            pull: integration
+                .filter(|info| info.kind != IntegrationKind::Record)
+                .and_then(|info| info.remote_commit),
             commit: row.commit,
         }
     }
@@ -90,8 +117,10 @@ impl From<RevisionRow> for RevisionSummary {
 pub struct RepositoryState {
     /// `None` only before `r1` exists.
     pub head: Option<RevisionId>,
-    /// The project folder, whose files follow main through its own Git repository.
+    /// The project folder, whose files follow main through fold's checkout of it.
     pub main_path: PathBuf,
+    /// The main revision the project folder holds, apart from the changes no revision records: behind `head` while the folder waits on such a change on a path main changed, or on the Git branch. `None` before fold first wrote the folder.
+    pub folder: Option<RevisionId>,
     /// The newest revisions, newest first.
     pub recent: Vec<RevisionSummary>,
 }
@@ -116,9 +145,11 @@ impl WorkspaceService {
         let read = self.store.read();
         let head = workspaces::head(read).await?.map(|row| row.number);
         let recent = workspaces::list_recent(read, RECENT_REVISIONS, None).await?;
+        let folder = workspaces::checkout(read).await?.map(|row| row.revision);
         Ok(RepositoryState {
             head,
             main_path: self.paths.root().to_path_buf(),
+            folder,
             recent: recent.into_iter().map(RevisionSummary::from).collect(),
         })
     }
@@ -203,13 +234,19 @@ impl WorkspaceService {
         number: RevisionId,
         path: &str,
     ) -> Result<FileContent, WorkspaceError> {
-        let path = browse::parse_path(path)?.ok_or_else(|| {
-            fold_core::FoldError::new(fold_core::codes::INVALID_PATH, "a file path is required")
-                .with_details([("path", serde_json::json!(""))])
-        })?;
+        let path = file_path(path)?;
         let tree = workspaces::get_by_number(self.store.read(), number)
             .await?
             .tree_hash;
+        self.read_tree_file(tree, path).await
+    }
+
+    /// One file of a stored tree, such as a proposal version's. A symlink gives its target text.
+    pub(crate) async fn read_tree_file(
+        &self,
+        tree: ObjectHash,
+        path: RepoPath,
+    ) -> Result<FileContent, WorkspaceError> {
         let paths = self.paths.clone();
         blocking(move || browse::read_file(&open_objects(&paths)?, &tree, &path)).await
     }
@@ -240,4 +277,12 @@ impl WorkspaceService {
         })
         .await
     }
+}
+
+/// A file path as a caller writes it: relative, normalised and not empty, so the root is refused with `invalid_path`.
+pub(crate) fn file_path(path: &str) -> Result<RepoPath, WorkspaceError> {
+    Ok(browse::parse_path(path)?.ok_or_else(|| {
+        fold_core::FoldError::new(fold_core::codes::INVALID_PATH, "a file path is required")
+            .with_details([("path", serde_json::json!(""))])
+    })?)
 }

@@ -215,7 +215,8 @@ async fn flow() {
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(target, content).unwrap();
     }
-    let (harness, initialized) = Harness::start_initialized(&source).await;
+    let (mut harness, initialized) = Harness::start_initialized(&source).await;
+    harness.lead_the_work_area().await;
 
     // No remote and no push on integrate, so no integration starts a `git` process.
     let config = std::fs::read_to_string(harness.project.paths().config()).unwrap();
@@ -231,21 +232,21 @@ async fn flow() {
     };
     let watched_from = snapshot.seq;
 
-    // 1. History: init made r1 from the folder's files and the ignore files it wrote beside them.
+    // 1. History: init made the empty genesis r0, then r1 from the folder's files and the empty `.foldignore` it wrote beside them.
     assert_eq!(initialized.revision.to_string(), "r1");
-    assert_eq!(initialized.imported.files, 5);
+    assert_eq!(initialized.imported.files, 4);
     let repository = harness
         .call("review", "get_repository_state", json!({}))
         .await;
     assert_eq!(repository["head"], "r1");
-    assert_eq!(repository["recent"].as_array().unwrap().len(), 1);
+    assert_eq!(repository["recent"].as_array().unwrap().len(), 2);
     let r1 = harness
         .call("review", "get_revision", json!({"r": "r1"}))
         .await;
     let mut listed: Vec<String> = changes(&r1).into_iter().map(|(path, _)| path).collect();
     listed.sort();
     let mut expected: Vec<String> = SOURCE.iter().map(|(path, _)| (*path).to_owned()).collect();
-    expected.extend([".foldignore".to_owned(), ".gitignore".to_owned()]);
+    expected.push(".foldignore".to_owned());
     expected.sort();
     assert_eq!(listed, expected, "{r1}");
     let source_tree: BTreeMap<String, Vec<u8>> = SOURCE
@@ -255,7 +256,6 @@ async fn flow() {
     // The project folder is main, ignore files included.
     let mut folder = read_tree(harness.project.paths().root());
     assert!(folder.remove(".foldignore").is_some());
-    assert!(folder.remove(".gitignore").is_some());
     assert_eq!(folder, source_tree);
 
     // 2. Task changes: the screen needs the endpoint, so it waits in Backlog.

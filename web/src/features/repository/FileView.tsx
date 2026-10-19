@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { FileX, Link2, Ruler } from "lucide-react";
+import { SyntaxText } from "@/components/code/SyntaxText";
 import { Mono } from "@/components/mono/Mono";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
 import { fileState, formatSize } from "./describe";
 import { fileQuery } from "@/api/repositoryQueries";
+import { languageForPath } from "@/syntax/languages";
 
 interface FileViewProps {
   slug: string;
@@ -12,7 +14,7 @@ interface FileViewProps {
   path: string;
 }
 
-/** A read-only view of one file. A binary or too-large file shows its size and hash and no content; a symlink shows its target text and is never followed. */
+/** A read-only view of one file, highlighted when Shiki has a grammar for its name. A binary or too-large file shows its size and hash and no content; a symlink shows its target text and is never followed. */
 export function FileView({ slug, revision, path }: FileViewProps) {
   const file = useQuery(fileQuery(slug, revision, path));
   const shown = file.data ? fileState(file.data) : null;
@@ -35,7 +37,7 @@ export function FileView({ slug, revision, path }: FileViewProps) {
       ) : null}
       {shown?.kind === "text" ? (
         <pre className="overflow-x-auto px-14 py-12 font-mono text-code leading-normal text-text">
-          {shown.text}
+          <SyntaxText code={shown.text} language={languageForPath(path)} />
         </pre>
       ) : null}
       {shown?.kind === "symlink" ? (

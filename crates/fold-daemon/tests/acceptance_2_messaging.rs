@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use crate::common::acceptance::{
-    AGENTS, Harness, TOKEN, ids, message_notice, proposal_notice, wire,
+    AGENTS, Harness, TOKEN, ids, message_notice, proposal_notice, ready_notice, wire,
 };
 use fold_core::AgentName;
 use serde_json::json;
@@ -128,7 +128,7 @@ async fn acceptance_2_the_push_wakes_an_idle_session_and_skips_an_agent_without_
     assert_eq!(harness.inbox("review").await, [first, sentinel]);
 }
 
-/// Acceptance 2, session push: a proposal opened while `review` is idle wakes it through its inbox socket with a notice naming `claim_review`, because `review` is the review lead. The author's own agent hears nothing about its proposal.
+/// Acceptance 2, session push: a proposal opened while `review` is idle wakes it through its inbox socket with a notice naming `claim_review`, because `review` is the review lead. The author's own agent hears nothing about its proposal; as the lead of the task's area it heard that the task was ready.
 #[tokio::test]
 async fn acceptance_2_a_proposal_opened_while_review_is_idle_wakes_it_through_the_push() {
     let harness = Harness::start().await;
@@ -151,6 +151,8 @@ async fn acceptance_2_a_proposal_opened_while_review_is_idle_wakes_it_through_th
     let sentinel = harness
         .send("frontend", &["backend"], "after the proposal")
         .await;
+    // `backend` leads the area of the task, so it heard that the task was ready before it claimed it.
+    assert_eq!(backend.next().await, wire(TOKEN, &ready_notice(&task)));
     assert_eq!(
         backend.next().await,
         wire(TOKEN, &message_notice(&sentinel))

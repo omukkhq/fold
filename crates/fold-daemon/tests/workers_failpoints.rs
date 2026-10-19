@@ -5,7 +5,10 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use axum::http::{Method, StatusCode};
-use fold_core::{Actor, AgentName, HumanName, IdKind, PermissionQuestionId, Role, WorkerState};
+use fold_core::{
+    Actor, AgentActor, AgentName, HumanName, IdKind, PermissionQuestionId, ProposalId, Role,
+    WorkerName, WorkerState,
+};
 use fold_daemon::services::agents::{PAUSE_TURN, StartWorker};
 use fold_store::agents::{self, NewQuestion, QuestionKind};
 use fold_store::testing::eventually;
@@ -456,5 +459,82 @@ async fn an_answer_between_the_question_read_and_the_join_reaches_the_waiting_ca
     let allowed = responses(&run).remove(0);
     assert_eq!(allowed["behavior"], "allow");
     assert_eq!(allowed["updatedInput"]["command"], "echo fold-probe-allow");
+    scenario.teardown();
+}
+
+/// A daemon that stops after a start committed and before the worker's process ran leaves the worker `starting`. The next daemon start marks it failed, and a worker that never took a turn gives back the claims and the batch its lead gave it, so the lead gives them to a new reviewer at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_reviewer_that_never_ran_before_a_restart_gives_back_its_claims_and_its_batch() {
+    let scenario = fail::FailScenario::setup();
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    for number in 1..=2 {
+        let task = harness.create_task(MAIN, &format!("Part {number}")).await;
+        let work = harness.start_work(MAIN, &task).await;
+        std::fs::write(work.dir.join(format!("part{number}.txt")), "part\n").unwrap();
+        harness.propose(MAIN, &work, &task).await;
+    }
+    harness
+        .call(MAIN, "start_worker", json!({"role": "review_lead"}))
+        .await;
+    let lead = AgentName::parse("review-lead").unwrap();
+    let reviewer = AgentName::parse("reviewer").unwrap();
+    fail::cfg(BEFORE_SPAWN, "panic").unwrap();
+    let agents = harness.handle.agents();
+    let starter = Actor::Agent(AgentActor {
+        agent: lead.clone(),
+        worker: WorkerName::main(&lead),
+        tags: Vec::new(),
+    });
+    let proposals = ["P-1", "P-2"].map(|id| id.parse::<ProposalId>().unwrap());
+    let start = tokio::spawn(async move {
+        agents
+            .start_worker(
+                &starter,
+                StartWorker {
+                    role: Some(Role::Reviewer),
+                    proposals: proposals.to_vec(),
+                    ..StartWorker::default()
+                },
+            )
+            .await
+    });
+    assert!(start.await.is_err(), "the start stopped after its commit");
+    fail::remove(BEFORE_SPAWN);
+    let left = harness.handle.agents().get_worker(&reviewer).await.unwrap();
+    assert_eq!(left.state, WorkerState::Starting);
+
+    harness.restart().await;
+    eventually(WAIT, async || {
+        match harness.handle.agents().get_worker(&reviewer).await {
+            Ok(row) if row.state == WorkerState::Failed => Ok(()),
+            other => Err(other.map(|row| row.state).ok()),
+        }
+    })
+    .await;
+    harness.connect(lead.as_str()).await;
+    for proposal in ["P-1", "P-2"] {
+        let view = harness
+            .call(MAIN, "get_proposal", json!({"id": proposal}))
+            .await;
+        assert_eq!(view["claim"], Value::Null, "{view}");
+    }
+    let batch = harness
+        .call(lead.as_str(), "get_review_batch", json!({"id": "rb-1"}))
+        .await;
+    assert_eq!(batch["state"], "closed", "{batch}");
+    let again = harness
+        .call(
+            lead.as_str(),
+            "start_worker",
+            json!({"role": "reviewer", "proposals": ["P-1", "P-2"]}),
+        )
+        .await;
+    assert_eq!(again["worker"]["name"], "reviewer-2", "{again}");
+    let view = harness
+        .call(MAIN, "get_proposal", json!({"id": "P-1"}))
+        .await;
+    assert_eq!(view["claim"]["holder"], "reviewer-2", "{view}");
     scenario.teardown();
 }

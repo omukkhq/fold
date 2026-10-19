@@ -47,7 +47,7 @@ import {
 } from "./draft";
 import { DraftEditor } from "./DraftEditor";
 import { describeFailure, reloadsRequest, type Failure } from "./errors";
-import { FailurePanel } from "./FailurePanel";
+import { FailurePanel } from "@/components/states/FailurePanel";
 import { createdTasks, shownDraft } from "./present";
 import {
   BodySection,

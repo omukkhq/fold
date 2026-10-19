@@ -97,6 +97,6 @@ pub fn stalled_tasks(live: Option<&LiveState>) -> BTreeSet<TaskId> {
         .unwrap_or_default()
         .iter()
         .filter(|state| state.view.stalled)
-        .map(|state| state.view.task)
+        .filter_map(|state| state.view.task)
         .collect()
 }

@@ -181,13 +181,14 @@ impl Fixture {
         .with_live(live.clone());
         let creator = agent("frontend");
         for _ in 0..2 {
+            crate::common::roles::lead_work_areas(project.store()).await;
             tasks
                 .create_task(
                     &creator,
                     CreateTask {
                         title: TaskTitle::parse("task").unwrap(),
                         description: TaskDescription::new("body"),
-                        labels: Vec::new(),
+                        labels: crate::common::roles::work_labels(),
                     },
                 )
                 .await
@@ -398,7 +399,7 @@ async fn adds_edits_deletes_and_renames_show_in_the_live_state() {
     let mut bus = fx.bus.subscribe();
     let (id, dir) = fx.create(&fx.frontend, 1).await;
     let first = fx.live.get(id).unwrap();
-    assert_eq!(first.view.task, t(1));
+    assert_eq!(first.view.task, Some(t(1)));
     assert_eq!(first.view.worker, "frontend");
     assert_eq!(first.view.base.number(), 1);
     assert!(first.view.files.is_empty());
@@ -987,6 +988,8 @@ async fn proposal_commands_update_the_proposal_and_checkpoints_of_the_state() {
     let opened = reviews
         .create_proposal(&actor, t(1), "Change the readme", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let proposal = opened.summary.id;
     let state = fx.live.get(id).unwrap();
@@ -998,6 +1001,8 @@ async fn proposal_commands_update_the_proposal_and_checkpoints_of_the_state() {
     reviews
         .update_proposal(&actor, proposal, Some("tests pass"))
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let state = fx.live.get(id).unwrap();
     assert_eq!(state.view.proposal, Some(proposal));
@@ -1025,6 +1030,8 @@ async fn a_reject_clears_the_proposal_of_the_state() {
     let opened = reviews
         .create_proposal(&by(&fx.frontend), t(1), "Change the readme", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let proposal = opened.summary.id;
     assert_eq!(fx.live.get(id).unwrap().view.proposal, Some(proposal));

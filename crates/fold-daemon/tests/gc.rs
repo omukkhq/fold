@@ -384,7 +384,7 @@ async fn closed_workspaces_past_their_retention_lose_directories_and_checkpoints
             insert_changeset(
                 tx,
                 ws(1),
-                TaskId::from_number(1).unwrap(),
+                Some(TaskId::from_number(1).unwrap()),
                 RevisionId::from_number(1).unwrap(),
                 recorded,
                 "record",
@@ -728,7 +728,7 @@ async fn the_roots_keep_what_rows_reach_and_old_orphans_go() {
             insert_changeset(
                 tx,
                 ws(1),
-                TaskId::from_number(1).unwrap(),
+                Some(TaskId::from_number(1).unwrap()),
                 RevisionId::from_number(1).unwrap(),
                 recorded,
                 "record",

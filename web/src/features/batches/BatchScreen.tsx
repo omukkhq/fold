@@ -236,7 +236,7 @@ export function BatchScreen({ slug, id }: { slug: string; id: string }) {
         </div>
         {/* Only a named human stops a worker. */}
         {reviewer !== null &&
-        reviewer.role === "batch_reviewer" &&
+        reviewer.role === "reviewer" &&
         (session.data?.human ?? null) !== null ? (
           <StopReviewer slug={slug} worker={reviewer} />
         ) : null}

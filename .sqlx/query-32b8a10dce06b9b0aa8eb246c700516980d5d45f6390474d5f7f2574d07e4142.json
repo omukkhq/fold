@@ -1,0 +1,165 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT v.version, r.verdict, w.name AS \"worker?: String\", r.reviewer_human, r.body,\n                  r.created_at,\n                  (SELECT COUNT(*) FROM review_comments c WHERE c.review_id = r.id) AS \"comments!: i64\",\n                  (SELECT kv.version FROM reviews kept JOIN proposal_versions kv ON kv.id = kept.version_id\n                   WHERE kept.id = r.kept_from_review_id) AS \"kept_from?: i64\",\n                  s.since_version AS \"scope_since?: i64\", s.suggested AS \"scope_suggested?: String\",\n                  s.rules AS \"scope_rules?: String\", s.scope AS \"scope?: String\",\n                  s.reason AS \"scope_reason?: String\"\n           FROM reviews r\n           JOIN proposal_versions v ON v.id = r.version_id\n           JOIN proposals p ON p.id = v.proposal_id\n           LEFT JOIN workers w ON w.id = r.reviewer_worker_id\n           LEFT JOIN review_scopes s ON s.review_id = r.id\n           WHERE p.number = ?\n             AND (r.kept_from_review_id IS NULL\n                 OR NOT EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = r.version_id))\n           ORDER BY r.created_at, r.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "version",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "verdict",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "reviews",
+            "name": "verdict"
+          }
+        }
+      },
+      {
+        "name": "worker?: String",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "reviewer_human",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "reviews",
+            "name": "reviewer_human"
+          }
+        }
+      },
+      {
+        "name": "body",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "reviews",
+            "name": "body"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "reviews",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "comments!: i64",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "kept_from?: i64",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "scope_since?: i64",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_scopes",
+            "name": "since_version"
+          }
+        }
+      },
+      {
+        "name": "scope_suggested?: String",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_scopes",
+            "name": "suggested"
+          }
+        }
+      },
+      {
+        "name": "scope_rules?: String",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_scopes",
+            "name": "rules"
+          }
+        }
+      },
+      {
+        "name": "scope?: String",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_scopes",
+            "name": "scope"
+          }
+        }
+      },
+      {
+        "name": "scope_reason?: String",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_scopes",
+            "name": "reason"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "32b8a10dce06b9b0aa8eb246c700516980d5d45f6390474d5f7f2574d07e4142"
+}

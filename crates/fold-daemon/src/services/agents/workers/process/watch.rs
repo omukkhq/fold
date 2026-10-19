@@ -219,12 +219,13 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Does from the stored state what the events the watcher missed would have done: answers each `ask` question whose messages all have their replies, stops each short-lived worker whose work is done, tells each running task worker about changes requested of it, and serves the resumes and send-backs the limits held back.
+    /// Does from the stored state what the events the watcher missed would have done: answers each `ask` question whose messages all have their replies, stops each short-lived worker whose work is done, tells each running task worker about changes requested of it, and serves the resumes, send-backs and failed proposal checks the limits held back.
     async fn recover(self) {
         self.answer_open_asks().await;
         self.stop_done_workers().await;
         self.notify_running_authors().await;
         self.clone().resume_owed_send_backs().await;
+        self.clone().resume_owed_gate_runs().await;
         self.resume_pending().await;
     }
 }
@@ -282,6 +283,9 @@ pub(super) async fn watch_done(
         if !items.is_empty() {
             tokio::spawn(supervisor.clone().resume_authors(items));
         }
+        if let Some(run) = super::gate::gate_run(&event) {
+            tokio::spawn(supervisor.clone().resume_gate_author(run));
+        }
         if event.event_type == types::TASK_SENT_BACK
             && let Some(task) = event.task
         {
@@ -293,6 +297,7 @@ pub(super) async fn watch_done(
             || event.event_type == types::WORKERS_LIMITS_CHANGED
         {
             tokio::spawn(supervisor.clone().resume_owed_send_backs());
+            tokio::spawn(supervisor.clone().resume_owed_gate_runs());
             tokio::spawn(supervisor.resume_pending());
         }
     }

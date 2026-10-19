@@ -1,0 +1,69 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.verdict, w.name AS \"worker?: String\", r.reviewer_human,\n                  EXISTS (\n                      SELECT 1 FROM agent_tags a\n                      WHERE a.agent_id = w.agent_id AND a.tag = 'main'\n                  ) AS \"holds_main!: bool\",\n                  (SELECT wp.role FROM worker_processes wp WHERE wp.agent_id = w.agent_id) AS \"role?: String\"\n           FROM reviews r\n           JOIN proposal_versions v ON v.id = r.version_id\n           JOIN proposals p ON p.id = v.proposal_id\n           LEFT JOIN workers w ON w.id = r.reviewer_worker_id\n           WHERE p.number = ?1 AND v.version = ?2\n             AND (r.kept_from_review_id IS NULL\n                 OR NOT EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = r.version_id))\n           ORDER BY r.created_at, r.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "verdict",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "reviews",
+            "name": "verdict"
+          }
+        }
+      },
+      {
+        "name": "worker?: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "reviewer_human",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "reviews",
+            "name": "reviewer_human"
+          }
+        }
+      },
+      {
+        "name": "holds_main!: bool",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "role?: String",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "role"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "63d3f7d5cf527a4ae723420e0e0ffbc4e85694f16c9c0b6822c4c346aad1223d"
+}

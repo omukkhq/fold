@@ -104,6 +104,7 @@ async fn integrate_conflicted(fx: &Fixture, review: &Actor) -> Vec<Conflict> {
     {
         IntegrationOutcome::Conflicted(conflicts) => conflicts,
         IntegrationOutcome::Succeeded { revision } => panic!("integrated as {revision}"),
+        other => panic!("expected a conflict, got {other:?}"),
     }
 }
 
@@ -119,6 +120,8 @@ async fn resolve_and_update(fx: &Fixture) -> ProposalDetail {
     fx.reviews
         .update_proposal(&author, p(1), None)
         .await
+        .unwrap()
+        .detail()
         .unwrap()
 }
 
@@ -378,6 +381,8 @@ async fn binary_and_delete_versus_edit_conflicts_are_reported_by_kind() {
     fx.reviews
         .create_proposal(&author, t(1), "Change every file", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let review = review_lead(&fx).await;
     approve(&fx, &review).await;

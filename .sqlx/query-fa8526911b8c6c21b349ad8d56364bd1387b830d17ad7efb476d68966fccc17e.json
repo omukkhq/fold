@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO checkout (id, tree_hash, revision_id, human_change_id, updated_at)\n         SELECT 1, ?1, id, ?3, ?4 FROM revisions WHERE number = ?2\n         ON CONFLICT (id) DO UPDATE SET tree_hash = excluded.tree_hash, revision_id = excluded.revision_id,\n             human_change_id = excluded.human_change_id, updated_at = excluded.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "fa8526911b8c6c21b349ad8d56364bd1387b830d17ad7efb476d68966fccc17e"
+}

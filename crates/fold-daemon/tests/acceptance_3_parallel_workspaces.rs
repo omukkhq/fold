@@ -84,7 +84,11 @@ async fn acceptance_3_parallel_workspaces_do_not_change_each_other() {
     let mut tasks = Vec::new();
     for title in ["Build the login screen", "Add the login endpoint"] {
         let created = harness
-            .call("review", "create_task", json!({"title": title}))
+            .call(
+                "review",
+                "create_task",
+                json!({"title": title, "labels": Harness::work_labels()}),
+            )
             .await;
         tasks.push(created["id"].as_str().unwrap().to_owned());
     }

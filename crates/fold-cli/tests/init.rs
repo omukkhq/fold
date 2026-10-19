@@ -1,11 +1,13 @@
 use std::path::Path;
 use std::process::{Command, Output};
 use std::sync::Arc;
+use std::time::Duration;
 
 use fold_cli::claude_files;
 use fold_core::ManualClock;
 use fold_daemon::{Daemon, DaemonConfig};
 use fold_store::Store;
+use fold_store::testing::remove_dir_eventually;
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -144,6 +146,150 @@ async fn init_registers_with_a_running_daemon() {
     let listed = get_projects(&socket).await;
     assert_eq!(listed["projects"][0]["slug"], "scratch");
     assert_eq!(listed["projects"][0]["available"], true);
+    daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn init_in_a_folder_whose_fold_data_was_deleted_registers_it_again_in_the_running_daemon() {
+    let sandbox = Arc::new(Sandbox::new());
+    let daemon = start_daemon(&sandbox, "data").await;
+    let socket = daemon.socket_path().to_string_lossy().into_owned();
+    let project = sandbox.path("scratch");
+    let init = |args: Vec<String>| fold_blocking(sandbox.clone(), args);
+    let first = init(vec![
+        "init".into(),
+        project.to_string_lossy().into_owned(),
+        "--socket".into(),
+        socket.clone(),
+    ])
+    .await;
+    assert!(first.status.success(), "{first:?}");
+    let Some(fold_daemon::projects::Slot::Open(old)) = daemon.state().projects.slot("scratch")
+    else {
+        panic!("the daemon opened the project");
+    };
+
+    // The open project can write into `.fold/` while it is removed.
+    remove_dir_eventually(&project.join(".fold"), Duration::from_secs(10)).await;
+    let (sandbox_again, cwd) = (sandbox.clone(), project.clone());
+    let second = tokio::task::spawn_blocking(move || {
+        sandbox_again.fold_in(&cwd, &["init", "--socket", &socket], &[])
+    })
+    .await
+    .unwrap();
+    assert!(second.status.success(), "{second:?}");
+    let text = stdout(&second);
+    // The daemon removed the old registration before init ran, so init registers the folder anew under the same slug.
+    assert!(
+        text.starts_with("initialised project scratch at "),
+        "{text}"
+    );
+    assert!(!text.contains("replaced the registration"), "{text}");
+    assert!(text.ends_with("opened by the running daemon\n"), "{text}");
+    assert!(old.store.read().is_closed());
+    let Some(fold_daemon::projects::Slot::Open(new)) = daemon.state().projects.slot("scratch")
+    else {
+        panic!("the daemon opened the new project");
+    };
+    assert!(!Arc::ptr_eq(&old, &new));
+    assert!(!new.database_replaced().await);
+    let listed = get_projects(daemon.socket_path()).await;
+    assert_eq!(listed["projects"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["projects"][0]["slug"], "scratch");
+    assert_eq!(listed["projects"][0]["available"], true);
+    daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_running_daemon_closes_a_project_whose_fold_was_deleted_and_init_makes_it_again() {
+    let sandbox = Arc::new(Sandbox::new());
+    let daemon = start_daemon(&sandbox, "data").await;
+    let socket = daemon.socket_path().to_string_lossy().into_owned();
+    let project = sandbox.path("scratch");
+    let first = fold_blocking(
+        sandbox.clone(),
+        vec![
+            "init".into(),
+            project.to_string_lossy().into_owned(),
+            "--socket".into(),
+            socket.clone(),
+        ],
+    )
+    .await;
+    assert!(first.status.success(), "{first:?}");
+    let Some(fold_daemon::projects::Slot::Open(old)) = daemon.state().projects.slot("scratch")
+    else {
+        panic!("the daemon opened the project");
+    };
+
+    // The open project can write into `.fold/` while it is removed.
+    remove_dir_eventually(&project.join(".fold"), Duration::from_secs(10)).await;
+    // The daemon's live job finds the deleted database on its next tick, with no request for the project.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !old.store.read().is_closed() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(daemon.state().projects.handles().is_empty());
+    assert!(!project.join(".fold").exists());
+    // The same tick removed the project from fold.
+    let listed = get_projects(daemon.socket_path()).await;
+    assert_eq!(listed["projects"], serde_json::json!([]));
+
+    let (sandbox_again, cwd) = (sandbox.clone(), project.clone());
+    let second = tokio::task::spawn_blocking(move || {
+        sandbox_again.fold_in(&cwd, &["init", "--socket", &socket], &[])
+    })
+    .await
+    .unwrap();
+    assert!(second.status.success(), "{second:?}");
+    assert!(
+        stdout(&second).ends_with("opened by the running daemon\n"),
+        "{second:?}"
+    );
+    let Some(fold_daemon::projects::Slot::Open(new)) = daemon.state().projects.slot("scratch")
+    else {
+        panic!("the daemon opened the new project");
+    };
+    assert!(!Arc::ptr_eq(&old, &new));
+    daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn doctor_with_a_running_daemon_reports_nothing_for_a_project_whose_fold_was_deleted() {
+    let sandbox = Arc::new(Sandbox::new());
+    let daemon = start_daemon(&sandbox, "data").await;
+    let socket = daemon.socket_path().to_string_lossy().into_owned();
+    for name in ["kept", "gone"] {
+        let output = fold_blocking(
+            sandbox.clone(),
+            vec![
+                "init".into(),
+                sandbox.path(name).to_string_lossy().into_owned(),
+                "--socket".into(),
+                socket.clone(),
+            ],
+        )
+        .await;
+        assert!(output.status.success(), "{output:?}");
+    }
+    let gone = sandbox.path("gone");
+    std::fs::remove_dir_all(gone.join(".fold")).unwrap();
+
+    let doctor = fold_blocking(
+        sandbox.clone(),
+        vec!["doctor".into(), "--socket".into(), socket.clone()],
+    )
+    .await;
+    let text = stdout(&doctor);
+    assert!(!text.contains("project gone"), "{text}");
+    assert!(text.contains("project kept\n"), "{text}");
+    assert!(daemon.state().projects.slot("gone").is_none());
+    let listed = get_projects(daemon.socket_path()).await;
+    assert_eq!(listed["projects"].as_array().unwrap().len(), 1, "{listed}");
+    assert!(!gone.join(".fold").exists());
     daemon.shutdown().await;
 }
 
@@ -317,7 +463,7 @@ fn a_second_init_prints_project_exists_and_keeps_the_first_project() {
     let refused = String::from_utf8_lossy(&named.stderr).into_owned();
     assert!(refused.contains("invalid_request"), "{refused}");
     assert!(
-        refused.contains(&format!("cd {} && fld init", project.display())),
+        refused.contains(&format!("`cd {} && fld init", project.display())),
         "{refused}"
     );
     let second = sandbox.fold_in(&project, &["init"], &[]);
@@ -336,7 +482,7 @@ fn an_init_the_registry_does_not_know_is_finished_with_its_claude_files() {
     assert!(first.status.success(), "{first:?}");
     // A registry that lost the row leaves `.fold/` as an init stopped before the registry insert does.
     std::fs::remove_dir_all(sandbox.path("data")).unwrap();
-    std::fs::remove_file(project.join(claude_files::MCP_FILE)).unwrap();
+    std::fs::remove_file(project.join(claude_files::SKILL_FILE)).unwrap();
 
     std::fs::write(project.join("new.txt"), "not read\n").unwrap();
 
@@ -351,16 +497,23 @@ fn an_init_the_registry_does_not_know_is_finished_with_its_claude_files() {
             machine_warnings(&project)
         )
     );
-    assert!(project.join(claude_files::MCP_FILE).is_file());
+    assert!(project.join(claude_files::SKILL_FILE).is_file());
+    assert!(!project.join(claude_files::MCP_FILE).exists());
     assert!(sandbox.registry_path().is_file());
 }
 
 #[test]
-fn name_sets_the_slug_and_a_new_folder_gets_the_ignore_files() {
+fn name_sets_the_slug_and_a_new_folder_gets_only_an_empty_foldignore() {
     let sandbox = Sandbox::new();
     let project = sandbox.path("dir");
     let output = sandbox.fold(&["init", project.to_str().unwrap(), "--name", "Big Shop"]);
     assert!(stdout(&output).starts_with("initialised project big-shop at "));
-    assert!(project.join(".foldignore").is_file());
-    assert!(project.join(".gitignore").is_symlink());
+    assert_eq!(
+        std::fs::metadata(project.join(".foldignore"))
+            .unwrap()
+            .len(),
+        0
+    );
+    assert!(!project.join(".gitignore").exists());
+    assert!(!project.join(".git").exists());
 }

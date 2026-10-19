@@ -1,8 +1,14 @@
 import * as RadixPopover from "@radix-ui/react-popover";
+import { CodeText } from "@/components/code/CodeText";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bell,
   ChevronRight,
+  FileWarning,
+  FileX,
+  FolderClock,
+  GitBranch,
+  GitMerge,
   GitPullRequest,
   Hand,
   Inbox,
@@ -35,6 +41,11 @@ const ICONS: Record<NeedsYouKind, LucideIcon> = {
   request_draft: Inbox,
   human_task: UserRound,
   blocker: Hand,
+  human_change: GitMerge,
+  head_moved: GitBranch,
+  folder_held: FolderClock,
+  unstash_conflicted: FileWarning,
+  checks_file_invalid_on_main: FileX,
 };
 
 const MINUTE_MS = 60_000;
@@ -49,45 +60,57 @@ function Line({
   onOpen: () => void;
 }) {
   const Icon = ICONS[line.kind];
+  const row = "flex items-center gap-10 px-16 py-8";
+  const content = (
+    <>
+      <Icon aria-hidden="true" size={15} className="shrink-0 text-text-muted" />
+      <span className="flex min-w-0 flex-1 flex-col gap-2">
+        <span className="flex items-center gap-5 text-body text-text">
+          {line.person ? (
+            <PersonName name={line.person} slot="needsYouLine" />
+          ) : null}
+          {line.chip ? (
+            <span className="inline-flex items-center gap-4 rounded-s bg-sunken px-6 py-2 font-mono text-code text-primary-text">
+              <Icon aria-hidden="true" size={12} />
+              {line.chip}
+            </span>
+          ) : null}
+          <span>
+            <CodeText text={line.text} />
+          </span>
+        </span>
+        <span className="flex items-center gap-6 text-meta text-text-muted">
+          {line.task ? (
+            <span className="font-mono text-label">{line.task}</span>
+          ) : null}
+          {line.title ? (
+            <span className="min-w-0 truncate">
+              <CodeText text={line.title} caption />
+            </span>
+          ) : null}
+          <span>{formatAsOfMinute(now, line.since)}</span>
+          {line.hint ? (
+            <span className="text-text-faint">· {line.hint}</span>
+          ) : null}
+        </span>
+      </span>
+    </>
+  );
+  if (line.href === null) {
+    return (
+      <li>
+        <div className={row}>{content}</div>
+      </li>
+    );
+  }
   return (
     <li>
       <HrefLink
         href={line.href}
         onClick={onOpen}
-        className={cn(
-          "flex items-center gap-10 px-16 py-8 hover:bg-sunken",
-          focusRing,
-        )}
+        className={cn(row, "hover:bg-sunken", focusRing)}
       >
-        <Icon
-          aria-hidden="true"
-          size={15}
-          className="shrink-0 text-text-muted"
-        />
-        <span className="flex min-w-0 flex-1 flex-col gap-2">
-          <span className="flex items-center gap-5 text-body text-text">
-            {line.person ? (
-              <PersonName name={line.person} slot="needsYouLine" />
-            ) : null}
-            {line.chip ? (
-              <span className="inline-flex items-center gap-4 rounded-s bg-sunken px-6 py-2 font-mono text-code text-primary-text">
-                <Icon aria-hidden="true" size={12} />
-                {line.chip}
-              </span>
-            ) : null}
-            <span>{line.text}</span>
-          </span>
-          <span className="flex items-center gap-6 text-meta text-text-muted">
-            {line.task ? (
-              <span className="font-mono text-label">{line.task}</span>
-            ) : null}
-            {line.title ? (
-              <span className="min-w-0 truncate">{line.title}</span>
-            ) : null}
-            <span>{formatAsOfMinute(now, line.since)}</span>
-            <span className="text-text-faint">· {line.hint}</span>
-          </span>
-        </span>
+        {content}
         <ChevronRight
           aria-hidden="true"
           size={14}
@@ -159,9 +182,6 @@ export function NeedsYou({ slug }: { slug: string }) {
               </ul>
             </section>
           ))}
-          <p className="border-t border-border-subtle px-16 py-10 text-meta text-text-faint">
-            Each item opens its own screen.
-          </p>
         </RadixPopover.Content>
       </RadixPopover.Portal>
     </RadixPopover.Root>

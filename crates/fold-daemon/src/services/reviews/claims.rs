@@ -1,21 +1,24 @@
 use fold_core::claims::is_stale;
 use fold_core::events::types;
-use fold_core::reviews::MAX_REASON_CHARS;
+use fold_core::reviews::{MAX_REASON_CHARS, ScopeChoice};
 use fold_core::{
-    Actor, EventActor, FoldError, NewEvent, ProposalId, Timestamp, WorkerName, codes, policy,
+    Actor, EventActor, FoldError, NewEvent, ProposalId, ReviewBatchId, Timestamp, WorkerName,
+    codes, policy,
 };
 use fold_store::WriteTx;
-use fold_store::agents::WorkerRow;
+use fold_store::agents::{self, WorkerRow};
 use fold_store::reviews::{self, ProposalRow, ReviewClaimRow};
 use serde_json::json;
 
+use super::batches::{batch_in_tx, check_members};
 use super::proposals::{proposal_not_found, require_open};
+use super::scopes::{check_choices, choose_scope_in_tx};
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::{renew_leases, worker_row};
 
 /// The `release_reason` of a claim that a stale take-over ended.
-const TAKEN_OVER: &str = "taken_over";
+pub(super) const TAKEN_OVER: &str = "taken_over";
 
 /// The `release_reason` of a release that names no reason.
 const RELEASED: &str = "released";
@@ -32,12 +35,25 @@ pub struct ReviewClaimView {
 
 /// Review claims. A review claim lives in its own row beside the task's implementation claim and never changes it, so neither command writes a status. Leases are renewed by the same session touch as implementation claims.
 impl ReviewService {
-    /// Takes the review claim on an open proposal for the actor's worker; `policy::can_claim_review` refuses the author's agent. The insert runs before any read of the holder, so the partial unique index on unreleased review claims decides a race: the loser gets `already_claimed` naming the holder. A repeat call by the holder renews the claim without a second `claim.acquired`. A holder whose lease has run out is taken over in the same transaction: its claim is released as `taken_over` with `claim.taken_over`, and the new claim follows with `claim.acquired`.
+    /// Takes the review claim on an open proposal for the actor's worker; `policy::can_claim_review` refuses the author's agent and every agent that does not decide reviews. The insert runs before any read of the holder, so the partial unique index on unreleased review claims decides a race: the loser gets `already_claimed` naming the holder. A repeat call by the holder renews the claim without a second `claim.acquired`. A holder whose lease has run out is taken over in the same transaction: its claim is released as `taken_over` with `claim.taken_over`, and the new claim follows with `claim.acquired`.
     pub async fn claim_review(
         &self,
         actor: &Actor,
         proposal: ProposalId,
     ) -> Result<ReviewClaimView, ReviewError> {
+        self.claim_review_with_scope(actor, proposal, None).await
+    }
+
+    /// [`ReviewService::claim_review`] with the scope the claimant chooses for its own review of the current version, stored in the same transaction with `review.scope_chosen`; without one the review follows fold's suggestion.
+    pub async fn claim_review_with_scope(
+        &self,
+        actor: &Actor,
+        proposal: ProposalId,
+        choice: Option<ScopeChoice>,
+    ) -> Result<ReviewClaimView, ReviewError> {
+        if let Some(choice) = &choice {
+            check_choices(&[proposal], std::slice::from_ref(choice))?;
+        }
         let lease_minutes = self.lease_minutes().await?;
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
@@ -46,14 +62,22 @@ impl ReviewService {
             .write(async |tx| {
                 let row =
                     require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
-                let reviewer = policy::can_claim_review(actor, &row.author).map_err(|denied| {
-                    FoldError::from(denied).with_details([
-                        ("proposal", json!(proposal.to_string())),
-                        ("author", json!(row.author.as_str())),
-                    ])
-                })?;
+                let standing = agents::standing_of(tx.conn(), actor).await?;
+                let reviewer =
+                    policy::can_claim_review(actor, standing, &row.author).map_err(|denied| {
+                        FoldError::from(denied).with_details([
+                            ("proposal", json!(proposal.to_string())),
+                            ("author", json!(row.author.as_str())),
+                        ])
+                    })?;
                 let worker = worker_row(tx, reviewer).await?;
-                take_review_claim(tx, &mut buffer, &row, &worker, lease_minutes, now).await
+                let view =
+                    take_review_claim(tx, &mut buffer, &row, &worker, lease_minutes, now).await?;
+                if let Some(choice) = &choice {
+                    let by = EventActor::worker(&worker.name);
+                    choose_scope_in_tx(tx, &mut buffer, &by, &row, choice, now).await?;
+                }
+                Ok::<_, ReviewError>(view)
             })
             .await?;
         self.bus.publish(buffer);
@@ -108,6 +132,46 @@ impl ReviewService {
         self.bus.publish(buffer);
         Ok(())
     }
+}
+
+/// The review that the review lead gives a new reviewer at its start: the proposals, the scope it chose for some of them, and who it is.
+pub(crate) struct Assignment<'a> {
+    pub proposals: &'a [ProposalId],
+    pub scopes: &'a [ScopeChoice],
+    pub by: &'a EventActor,
+}
+
+/// Gives the new reviewer `worker` its review of the assigned proposals inside the caller's write, for the review lead that starts it with `start_worker`: one proposal takes its review claim as by `claim_review`, and two or more become a batch of the reviewer's, as by `create_review_batch`. Each chosen scope is stored with `review.scope_chosen` by the review lead. The new reviewer is an agent of its own, so it is never the author's agent. Returns the batch.
+pub(crate) async fn assign_reviews_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    worker: &WorkerRow,
+    assignment: &Assignment<'_>,
+    lease_minutes: u64,
+    now: Timestamp,
+) -> Result<Option<ReviewBatchId>, ReviewError> {
+    let proposals = assignment.proposals;
+    check_choices(proposals, assignment.scopes)?;
+    let mut rows = Vec::with_capacity(proposals.len());
+    for &proposal in proposals {
+        rows.push(require_open(
+            reviews::get_proposal(tx.conn(), proposal).await?,
+            proposal,
+        )?);
+    }
+    let batch = if let [row] = rows.as_slice() {
+        take_review_claim(tx, buffer, row, worker, lease_minutes, now).await?;
+        None
+    } else {
+        check_members(proposals)?;
+        Some(batch_in_tx(tx, buffer, worker, rows.clone(), lease_minutes, now).await?)
+    };
+    for choice in assignment.scopes {
+        if let Some(row) = rows.iter().find(|row| row.id == choice.proposal) {
+            choose_scope_in_tx(tx, buffer, assignment.by, row, choice, now).await?;
+        }
+    }
+    Ok(batch)
 }
 
 /// Takes the review claim on the open proposal `row` for `worker` inside the caller's write, by the rules of `claim_review`: the insert decides a race, a repeat by the holder renews the claim without an event, and a stale holder is taken over with `claim.taken_over` before `claim.acquired`.
@@ -189,7 +253,7 @@ fn check_reason(reason: Option<&str>) -> Result<&str, ReviewError> {
 }
 
 /// `already_claimed` naming the other worker that holds the review. Its lease has not run out, or the claim would have been taken over.
-fn already_claimed(holder: &ReviewClaimRow) -> ReviewError {
+pub(super) fn already_claimed(holder: &ReviewClaimRow) -> ReviewError {
     FoldError::new(
         codes::ALREADY_CLAIMED,
         format!("{} is under review by {}", holder.proposal, holder.worker),

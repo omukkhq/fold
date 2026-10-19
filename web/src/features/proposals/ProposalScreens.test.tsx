@@ -1091,3 +1091,365 @@ describe("Proposal detail", () => {
     ).toBeTruthy();
   });
 });
+
+describe("Human edit", () => {
+  const EDITS = "POST /api/v1/projects/demo/proposals/P-4/edits";
+  const AGAIN = "POST /api/v1/projects/demo/proposals/P-4/review-again";
+
+  function editRoutes(): void {
+    daemon.on("GET /api/v1/projects/:slug/proposals/:id/file", () =>
+      ok({
+        path: SCHEMA,
+        kind: "file",
+        hash: "f".repeat(64),
+        size: 26,
+        binary: false,
+        too_large: false,
+        text: "CREATE TABLE reports (\r\n);\r\n",
+      }),
+    );
+    daemon.on("POST /api/v1/projects/:slug/proposals/:id/edits", async () => {
+      if (held) await held;
+      const made = proposalVersion(3, {
+        created_by: "human:tanim",
+        human_edit: true,
+      });
+      update("P-4", (p) => ({
+        ...p,
+        summary: { ...p.summary, current_version: 3 },
+        versions: [...p.versions, made],
+        reviews: [
+          ...p.reviews,
+          review(3, "review/quality", "approve", {
+            kept_from: 2,
+            created_at: Date.now(),
+          }),
+        ],
+      }));
+      return ok(made, 201);
+    });
+    daemon.on(
+      "POST /api/v1/projects/:slug/proposals/:id/review-again",
+      async () => {
+        if (held) await held;
+        update("P-4", (p) => ({
+          ...p,
+          summary: { ...p.summary, latest_verdict: null },
+          versions: p.versions.map((v) =>
+            v.version === 3 ? { ...v, review_again: true } : v,
+          ),
+          reviews: p.reviews.filter((r) => r.kept_from === null),
+          agent_approved: false,
+        }));
+        return ok(proposals.get("P-4")?.summary);
+      },
+    );
+  }
+
+  it("edits a file of the current version in a human review: pending, then the new version with its kept approval", async () => {
+    editRoutes();
+    const user = userEvent.setup();
+    renderAt("/p/demo/proposals/P-4");
+    await user.click(
+      await screen.findByRole("button", { name: `Edit ${SCHEMA}` }),
+    );
+    const editor = await screen.findByRole("region", {
+      name: `Edit ${SCHEMA}`,
+    });
+    expect(
+      within(editor).getByText(
+        "You are editing v2. Saving writes v3 under your name; v2 stays in the history. v3 keeps the agent approvals of v2, and you approve v3 again.",
+      ),
+    ).toBeTruthy();
+    const save = within(editor).getByRole("button", { name: "Save as v3" });
+    expect(save).toHaveProperty("disabled", true);
+    const box = within(editor).getByLabelText(`Content of ${SCHEMA}`);
+    expect((box as HTMLTextAreaElement).value).toBe(
+      "CREATE TABLE reports (\n);\n",
+    );
+    fireEvent.change(box, {
+      target: { value: "CREATE TABLE reports (\n);\n-- checked\n" },
+    });
+    const release = hold();
+    await user.click(save);
+    expect(
+      within(editor)
+        .getByRole("button", { name: "Saving v3…" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    expect(screen.queryByText("Approved (kept from v2)")).toBeNull();
+    release();
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("region", { name: `Edit ${SCHEMA}` }),
+      ).toBeNull();
+    });
+    expect(await screen.findByText("Approved (kept from v2)")).toBeTruthy();
+    const panel = await integration();
+    expect(
+      within(panel).getByText(
+        "v3 is a human edit. It keeps the agent approvals of v2 until it is sent for review again.",
+      ),
+    ).toBeTruthy();
+    expect(writes(EDITS)[0]?.body).toEqual({
+      version: 2,
+      path: SCHEMA,
+      content: "CREATE TABLE reports (\r\n);\r\n-- checked\r\n",
+    });
+  });
+
+  it("sends a human edit for review again: pending, then the kept approval no longer shows", async () => {
+    editRoutes();
+    update("P-4", (p) => ({
+      ...p,
+      summary: { ...p.summary, current_version: 3 },
+      versions: [
+        ...p.versions,
+        proposalVersion(3, { created_by: "human:tanim", human_edit: true }),
+      ],
+      reviews: [
+        ...p.reviews,
+        review(3, "review/quality", "approve", { kept_from: 2 }),
+      ],
+    }));
+    const user = userEvent.setup();
+    renderAt("/p/demo/proposals/P-4");
+    const panel = await integration();
+    const release = hold();
+    await user.click(
+      within(panel).getByRole("button", { name: "Send v3 for review again" }),
+    );
+    expect(
+      within(panel)
+        .getByRole("button", { name: "Sending for review…" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    release();
+    await waitFor(() => {
+      expect(screen.queryByText("Approved (kept from v2)")).toBeNull();
+    });
+    expect(
+      within(panel).queryByRole("button", { name: "Send v3 for review again" }),
+    ).toBeNull();
+    expect(writes(AGAIN)[0]?.body).toEqual({ version: 3 });
+  });
+
+  it("shows a refusal of the edit on the edit box", async () => {
+    editRoutes();
+    daemon.on("POST /api/v1/projects/:slug/proposals/:id/edits", () =>
+      refuse(409, "worker_busy", { reason: "working" }),
+    );
+    const user = userEvent.setup();
+    renderAt("/p/demo/proposals/P-4");
+    await user.click(
+      await screen.findByRole("button", { name: `Edit ${SCHEMA}` }),
+    );
+    const editor = await screen.findByRole("region", {
+      name: `Edit ${SCHEMA}`,
+    });
+    fireEvent.change(within(editor).getByLabelText(`Content of ${SCHEMA}`), {
+      target: { value: "x\n" },
+    });
+    await user.click(
+      within(editor).getByRole("button", { name: "Save as v3" }),
+    );
+    expect(
+      await within(editor).findByText(
+        "The task worker is working in its workspace now. Try again when it stops.",
+      ),
+    ).toBeTruthy();
+    await user.click(within(editor).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("region", { name: `Edit ${SCHEMA}` })).toBeNull();
+  });
+
+  it("offers no edit box outside a human review", async () => {
+    renderAt("/p/demo/proposals/P-3");
+    await integration();
+    expect(screen.queryByRole("button", { name: /^Edit / })).toBeNull();
+  });
+});
+
+describe("Checks", () => {
+  const passed = {
+    name: "unit",
+    setup: false,
+    required: true,
+    outcome: "passed" as const,
+    exit_code: 0,
+    duration_ms: 1200,
+    log_bytes: 8,
+    log: "",
+    truncated: false,
+  };
+  function checkRun(
+    id: string,
+    fields: Partial<ProposalDetail["checks"][number]> = {},
+  ) {
+    return {
+      id,
+      stage: "proposal" as const,
+      purpose: "create_proposal" as const,
+      task: "T-3",
+      version: null,
+      base: "r8",
+      state: "passed" as const,
+      reason: null,
+      created_at: 1,
+      finished_at: 2,
+      results: [passed],
+      ...fields,
+    };
+  }
+
+  it("lists the check runs of the version and reads a failed check's log end", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      summary: { ...p.summary, checks_failed: true, turn: "with_author" },
+      checks: [
+        checkRun("cr-9", {
+          stage: "integration",
+          purpose: "integrate",
+          version: 2,
+          state: "failed",
+          reason: "check_failed",
+          results: [
+            {
+              ...passed,
+              name: "e2e",
+              outcome: "failed",
+              exit_code: 1,
+              log_bytes: 20,
+            },
+          ],
+        }),
+        checkRun("cr-7"),
+      ],
+    }));
+    daemon.on("GET /api/v1/projects/:slug/check-runs/:id", (call) =>
+      ok(
+        checkRun(call.params.id ?? "", {
+          results: [
+            {
+              ...passed,
+              name: "e2e",
+              outcome: "failed",
+              exit_code: 1,
+              log: "step one\nassertion failed\n",
+            },
+          ],
+        }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderAt("/p/demo/proposals/P-4");
+    const checks = await screen.findByRole("region", { name: "Checks" });
+    expect(
+      within(checks).getByText("Integration checks of v2 on r8"),
+    ).toBeTruthy();
+    expect(within(checks).getByText("Proposal checks on r8")).toBeTruthy();
+    expect(within(checks).getByText("a required check failed")).toBeTruthy();
+    expect(within(checks).getByText("failed · exit 1 · 1.2 s")).toBeTruthy();
+    expect(await within(checks).findByText(/assertion failed/)).toBeTruthy();
+    expect(
+      daemon.made("GET /api/v1/projects/demo/check-runs/cr-9"),
+    ).toHaveLength(1);
+    await user.click(within(checks).getByRole("button", { name: "Hide log" }));
+    expect(within(checks).queryByText(/assertion failed/)).toBeNull();
+    const panel = await integration();
+    expect(
+      within(panel).getByText(
+        "The integration checks of v2 failed on the merge with main. The author sends a new version.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(panel).getByRole("button", { name: "Approve v2" }),
+    ).toHaveProperty("disabled", true);
+    expect(
+      within(panel).getByRole("button", { name: "Integrate" }),
+    ).toHaveProperty("disabled", true);
+    expect(
+      within(panel).getAllByText(
+        "The integration checks failed; the author sends a new version.",
+      ),
+    ).toHaveLength(1);
+    expect(
+      within(panel).getByRole("button", { name: "Request changes" }),
+    ).toHaveProperty("disabled", false);
+  });
+
+  it("says when fold ran no check on the version", async () => {
+    renderAt("/p/demo/proposals/P-3");
+    const checks = await screen.findByRole("region", { name: "Checks" });
+    expect(
+      within(checks).getByText("fold ran no check on this version."),
+    ).toBeTruthy();
+  });
+
+  it("shows a queued integration as waiting for its checks until the stream brings the result", async () => {
+    daemon.on("POST /api/v1/projects/:slug/proposals/:id/integrate", (call) => {
+      update("P-4", (p) => ({
+        ...p,
+        summary: { ...p.summary, integration_queued: true },
+      }));
+      return ok({
+        proposal: call.params.id,
+        result: "queued",
+        revision: null,
+        run: null,
+      });
+    });
+    const user = userEvent.setup();
+    const { queryClient } = renderAt("/p/demo/proposals/P-4");
+    const panel = await integration();
+    await user.click(within(panel).getByRole("button", { name: "Integrate" }));
+    expect(
+      await within(panel).findByText(
+        "Queued: fold runs the integration checks on the merge with main, then integrates when they pass.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(panel).getByText("This integration is already queued."),
+    ).toBeTruthy();
+    expect(
+      within(panel).getByRole("button", { name: "Integrate" }),
+    ).toHaveProperty("disabled", true);
+    integrate("P-4", 9);
+    deliver(queryClient, "proposal.integrated", {
+      proposal: "P-4",
+      task: "T-3",
+      revision: "r9",
+      data: { version: 2 },
+    });
+    expect(await within(panel).findByRole("link", { name: "r9" })).toBeTruthy();
+    expect(within(panel).queryByText(/^Queued:/)).toBeNull();
+  });
+
+  it("shows an integration someone else queued after a reload, and lets it go when fold takes it out of the queue", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      summary: { ...p.summary, integration_queued: true },
+    }));
+    const { queryClient } = renderAt("/p/demo/proposals/P-4");
+    const panel = await integration();
+    expect(await within(panel).findByText(/^Queued:/)).toBeTruthy();
+    expect(
+      within(panel).getByRole("button", { name: "Integrate" }),
+    ).toHaveProperty("disabled", true);
+    update("P-4", (p) => ({
+      ...p,
+      summary: { ...p.summary, integration_queued: false },
+    }));
+    deliver(queryClient, "integration.unqueued", {
+      proposal: "P-4",
+      task: "T-3",
+      actor: "fold",
+      data: { version: 2 },
+    });
+    await waitFor(() => {
+      expect(within(panel).queryByText(/^Queued:/)).toBeNull();
+    });
+    expect(
+      within(panel).getByRole("button", { name: "Integrate" }),
+    ).toHaveProperty("disabled", false);
+  });
+});

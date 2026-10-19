@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DurableEvent } from "../../api/events";
 import schema from "../../api/schema.d.ts?raw";
 import { Check, MessageSquare, X } from "lucide-react";
+import { codeParts } from "../../format/codeText";
 import { EVENT_TYPES, eventLine } from "./eventLine";
 
 function event(
@@ -185,6 +186,24 @@ describe("eventLine", () => {
       "added v2 to P-4",
     );
     expect(line("proposal.version_added")).toBe("added a version to P-4");
+    expect(line("proposal.human_edited", { version: 3 })).toBe(
+      "edited P-4 as v3",
+    );
+    expect(line("proposal.human_edited")).toBe("edited P-4");
+    expect(line("proposal.reviewer_fixed", { version: 3 })).toBe(
+      "fixed P-4 in review as v3",
+    );
+    expect(line("proposal.reviewer_fixed")).toBe("fixed P-4 in review");
+    expect(
+      line("review.scope_chosen", { scope: "full", version: 3, reason: "API" }),
+    ).toBe("chose a full review of P-4 v3");
+    expect(line("review.scope_chosen")).toBe("chose the review scope of P-4");
+    expect(line("proposal.review_again_requested", { version: 3 })).toBe(
+      "sent v3 of P-4 for review again",
+    );
+    expect(line("proposal.review_again_requested")).toBe(
+      "sent P-4 for review again",
+    );
     expect(
       line("proposal.author_changed", {
         reason: "taken_over",
@@ -296,6 +315,21 @@ describe("eventLine", () => {
     ).toBe("restarted web-worker in a new session for the conflict on P-4");
     expect(
       line("worker.resumed", {
+        agent: "web-worker",
+        reason: "checks",
+        resumed: true,
+      }),
+    ).toBe("resumed web-worker for the failed integration checks of P-4");
+    expect(
+      line("worker.resumed", {
+        agent: "web-worker",
+        reason: "checks",
+        stage: "proposal",
+        resumed: true,
+      }),
+    ).toBe("resumed web-worker for the failed checks of T-12");
+    expect(
+      line("worker.resumed", {
         agent: "web-lead",
         reason: "session_lost",
         resumed: false,
@@ -347,6 +381,22 @@ describe("eventLine", () => {
     expect(eventLine(event("integration.succeeded")).text).toBe(
       "integration succeeded as r17",
     );
+    const direct = { data: { kind: "direct", changeset: "C-40" } };
+    expect(eventLine(event("integration.succeeded", direct)).text).toBe(
+      "integrated direct change C-40 with the user's OK as r17",
+    );
+    expect(
+      eventLine(
+        event("integration.succeeded", {
+          ...bare,
+          data: { kind: "direct" },
+        }),
+      ).text,
+    ).toBe("integrated a direct change with the user's OK");
+    expect(
+      eventLine(event("integration.succeeded", { data: { kind: "pull" } }))
+        .text,
+    ).toBe("integration succeeded as r17");
     expect(eventLine(event("main.advanced", bare)).text).toBe("main advanced");
     expect(eventLine(event("main.advanced")).text).toBe("main advanced to r17");
     expect(eventLine(event("git.commit_failed", bare)).text).toBe(
@@ -362,11 +412,58 @@ describe("eventLine", () => {
       "wrote the Git commit of r17",
     );
     expect(eventLine(event("git.outside_commits")).text).toBe(
-      "the Git branch has commits fold did not write; run fld pull",
+      "the Git branch has commits fold did not write",
     );
     expect(eventLine(event("git.uncommitted_changes")).text).toBe(
-      "the project folder has changes that are not committed; commit or stash them",
+      "the project folder has changes that are not recorded; run `fld record`",
     );
+    expect(
+      eventLine(event("git.uncommitted_changes", { data: { staged: true } }))
+        .text,
+    ).toBe(
+      "the Git index holds a staged change on a file main changed; run `git restore --staged` on it",
+    );
+    expect(
+      eventLine(
+        event("git.uncommitted_changes", {
+          data: { staged: false, held: ["README.md", 7] },
+        }),
+      ).text,
+    ).toBe(
+      "the project folder waits on your changes to README.md that are not recorded; run `fld record`, or take them back",
+    );
+    expect(
+      eventLine(
+        event("git.uncommitted_changes", {
+          data: { held: ["a.md", "b.md"], held_count: 52 },
+        }),
+      ).text,
+    ).toBe(
+      "the project folder waits on your changes to a.md, b.md and 50 more that are not recorded; run `fld record`, or take them back",
+    );
+    expect(
+      eventLine(event("git.uncommitted_changes", { data: { held: "a.md" } }))
+        .text,
+    ).toBe(
+      "the project folder has changes that are not recorded; run `fld record`",
+    );
+    const moved = eventLine(
+      event("git.head_moved", {
+        data: { hint: "run `git switch main` in the project folder" },
+      }),
+    ).text;
+    expect(moved).toBe(
+      "the Git branch changed in a way fold did not make; run `git switch main` in the project folder",
+    );
+    expect(codeParts(moved)).toContainEqual({ code: "git switch main" });
+    expect(eventLine(event("git.head_moved", { data: {} })).text).toBe(
+      "the Git branch changed in a way fold did not make; the project folder waits",
+    );
+    expect(
+      eventLine(
+        event("git.attention_cleared", { data: { kind: "head_moved" } }),
+      ).text,
+    ).toBe("the Git branch is back where fold left it");
     expect(
       eventLine(
         event("git.attention_cleared", { data: { kind: "outside_commits" } }),
@@ -381,7 +478,104 @@ describe("eventLine", () => {
     ).toBe("the project folder follows main again");
   });
 
-  it("marks integrations, main moves and request approvals as emphasised, review approvals by their verdict", () => {
+  it("writes a line for each step of a human change", () => {
+    expect(eventLine(event("human_change.recorded"))).toMatchObject({
+      text: "recorded a change of the project folder as r17",
+      emphasis: true,
+    });
+    expect(
+      eventLine(event("human_change.recorded", { revision: null })).text,
+    ).toBe("recorded a change of the project folder");
+    expect(eventLine(event("human_change.conflicted")).text).toBe(
+      "recorded a change of the project folder that conflicts with main; main did not move",
+    );
+    expect(eventLine(event("human_change.resolved")).text).toBe(
+      "resolved the change of the project folder in r17",
+    );
+    expect(
+      eventLine(event("human_change.resolved", { revision: null })).text,
+    ).toBe("resolved the change of the project folder");
+    expect(eventLine(event("human_change.withdrawn")).text).toBe(
+      "took back the change of the project folder that waited for the main agent",
+    );
+  });
+
+  it("writes a line for each step of a stash", () => {
+    expect(
+      eventLine(event("stash.pushed", { data: { file_count: 2 } })).text,
+    ).toBe("stashed 2 files of the project folder");
+    expect(eventLine(event("stash.pushed")).text).toBe(
+      "stashed changes of the project folder",
+    );
+    expect(
+      eventLine(event("stash.applied", { data: { file_count: 1 } })).text,
+    ).toBe("unstashed 1 file into the project folder");
+    expect(
+      eventLine(
+        event("stash.conflicted", {
+          data: { conflicted: ["a.txt"], conflicted_count: 3 },
+        }),
+      ).text,
+    ).toBe(
+      "unstashed changes that conflict with the project folder in a.txt and 2 more; the entry stays",
+    );
+    expect(eventLine(event("stash.conflicted")).text).toBe(
+      "unstashed changes that conflict with the project folder; the entry stays",
+    );
+    expect(eventLine(event("stash.dropped")).text).toBe(
+      "fixed the conflict of the unstash; the stash entry is dropped",
+    );
+    expect(
+      eventLine(event("stash.dropped", { data: { task: "T-9" } })).text,
+    ).toBe("recorded the conflict of the unstash on main; T-9 fixes it");
+  });
+
+  it("keeps a backtick in a path from pairing with the marks of a command", () => {
+    const line = eventLine(
+      event("git.uncommitted_changes", {
+        data: { held: ["a`b.md", "c\\d.md"] },
+      }),
+    );
+    expect(codeParts(line.text)).toEqual([
+      "the project folder waits on your changes to a`b.md, c\\d.md that are not recorded; run ",
+      { code: "fld record" },
+      ", or take them back",
+    ]);
+    const conflicted = eventLine(
+      event("stash.conflicted", { data: { conflicted: ["x`y", "z`w"] } }),
+    );
+    expect(codeParts(conflicted.text)).toEqual([
+      "unstashed changes that conflict with the project folder in x`y, z`w; the entry stays",
+    ]);
+  });
+  it("names the task of a check run and how it ended", () => {
+    expect(eventLine(event("checks.started")).text).toBe(
+      "started the checks of T-12",
+    );
+    expect(
+      eventLine(event("checks.finished", { data: { state: "failed" } })).text,
+    ).toBe("ended the checks of T-12: failed");
+    expect(eventLine(event("checks.finished", { task: null })).text).toBe(
+      "ended the checks of a task",
+    );
+  });
+
+  it("names the proposal of a queued integration and of its end", () => {
+    expect(eventLine(event("integration.queued")).text).toBe(
+      "queued the integration of P-4",
+    );
+    expect(eventLine(event("integration.unqueued")).text).toBe(
+      "took the integration of P-4 out of the queue",
+    );
+    expect(eventLine(event("integration.held", { revision: "r7" })).text).toBe(
+      "held the integrations: fold-checks.toml on r7 is not valid",
+    );
+    expect(eventLine(event("integration.held", { revision: null })).text).toBe(
+      "held the integrations: fold-checks.toml on main is not valid",
+    );
+  });
+
+  it("marks integrations, main moves, request approvals and recorded human changes as emphasised, review approvals by their verdict", () => {
     const emphasised = EVENT_TYPES.filter(
       (type) => eventLine(event(type)).emphasis,
     );
@@ -390,6 +584,7 @@ describe("eventLine", () => {
       "integration.succeeded",
       "main.advanced",
       "request.approved",
+      "human_change.recorded",
     ]);
   });
 });

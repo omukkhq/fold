@@ -18,6 +18,13 @@ pub mod workspaces_support;
 
 mod acceptance_10_requests;
 mod acceptance_11_main_agent;
+mod acceptance_12_main_direct_change;
+mod acceptance_13_human_edit;
+mod acceptance_14_human_changes;
+mod acceptance_15_genesis_and_git;
+mod acceptance_16_reviewer_fix;
+mod acceptance_17_stash;
+mod acceptance_18_project_checks;
 mod acceptance_1_three_sessions;
 mod acceptance_2_messaging;
 mod acceptance_3_parallel_workspaces;
@@ -35,11 +42,20 @@ mod auto_integrate;
 #[cfg(feature = "failpoints")]
 mod auto_integrate_failpoints;
 mod checklists_service;
+mod checks;
+#[cfg(feature = "failpoints")]
+mod checks_failpoints;
+mod checks_gate;
+mod checks_integration;
 mod claims_service;
 mod claude_probe;
 mod conflicts;
 #[cfg(feature = "failpoints")]
 mod crash_checkpoint;
+#[cfg(feature = "failpoints")]
+mod crash_direct_change;
+#[cfg(feature = "failpoints")]
+mod crash_folder;
 #[cfg(feature = "failpoints")]
 mod crash_git_commit;
 #[cfg(feature = "failpoints")]
@@ -48,12 +64,21 @@ mod crash_init;
 mod crash_integration;
 #[cfg(feature = "failpoints")]
 mod crash_messages;
+#[cfg(feature = "failpoints")]
+mod crash_record;
+#[cfg(feature = "failpoints")]
+mod crash_stash;
 mod daemon_shell;
 mod delete_archive;
+mod deleted_projects;
 mod dependencies_service;
 mod diff_routes;
+mod direct_changes;
+mod enable_git;
 mod event_bus;
 mod events_service;
+mod exclude_file;
+mod folder_stash;
 mod gc;
 mod git_commits;
 mod handoffs;
@@ -61,6 +86,7 @@ mod http_agents;
 mod http_assets;
 mod http_auth;
 mod http_events_history;
+mod http_human_edits;
 mod http_human_review;
 mod http_messages;
 mod http_project_overview;
@@ -70,6 +96,8 @@ mod http_review_checkouts;
 mod http_reviews;
 mod http_tasks;
 mod http_workspaces;
+mod human_changes;
+mod human_edits;
 mod human_review;
 mod human_tasks;
 mod inbox_probe;
@@ -92,6 +120,7 @@ mod no_proposal_tasks;
 mod notifications;
 mod openapi;
 mod presence_events;
+mod project_folder;
 mod project_git;
 mod project_pause;
 mod projects;
@@ -112,7 +141,9 @@ mod restart_sessions;
 mod review_batches;
 mod review_checkouts;
 mod review_claims;
+mod review_fixes;
 mod review_rights;
+mod review_scopes;
 mod reviews;
 mod services_agents;
 mod services_inbox;

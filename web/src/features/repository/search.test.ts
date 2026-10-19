@@ -13,10 +13,16 @@ describe("parseRepositorySearch", () => {
     });
   });
 
+  it("keeps the genesis r0", () => {
+    expect(parseRepositorySearch({ revision: "r0" })).toEqual({
+      revision: "r0",
+    });
+  });
+
   it("ignores anything else", () => {
     for (const revision of [
       "T-4",
-      "r0",
+      "r00",
       "r04",
       "r1 ",
       "main",

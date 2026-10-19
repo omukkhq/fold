@@ -206,7 +206,7 @@ export function workerTotals(worker: WorkerProcess): string {
   ].join(" · ");
 }
 
-/** `Batch reviewer · sonnet`, leaving out what the daemon does not know. */
+/** `Reviewer · sonnet`, leaving out what the daemon does not know. */
 export function reviewerLine(worker: WorkerProcess): string {
   return [roleName(worker.role), worker.model]
     .filter((part) => part !== null)

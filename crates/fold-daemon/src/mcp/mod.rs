@@ -34,7 +34,7 @@ use error::{from_agent, tool_error};
 pub use footer::{FooterCounts, FooterPart, FooterSource, footer};
 
 /// The short workflow every session receives in the `initialize` answer.
-pub const INSTRUCTIONS: &str = "fold coordinates the agents of one project. The main agent is the session fld claude starts with the main tag: it reads the project, resolves choices and gets the user's OK to a plan, then publishes its tasks, dependencies, parent links and human review marks together with create_task_plan. It starts area leads and the review lead with start_worker. Area leads start task workers; the review lead chooses self-review or delegation before taking review claims. A delegated reviewer creates its own batch. Task workers claim assigned tasks, edit only their own task workspace, run required checks and send proposal evidence; no_proposal tasks use report_task without a workspace. Reviewers keep source and tests unchanged and approve only inspected versions with check results. fold integrates ready approvals when automatic integration is enabled. Use fold messages between agents, keep your assigned role and authority, and read current state before retrying uncertain writes. A session opened by hand calls register_agent first. Load the fold skill for tool details. A footer beginning with \"fold:\" names work waiting for you.";
+pub const INSTRUCTIONS: &str = "fold coordinates the agents of one project. The main agent is the session fld claude starts with the main tag: it reads the project, resolves choices and gets the user's OK to a plan, then publishes its tasks, dependencies, parent links and human review marks together with create_task_plan. It starts area leads and the review lead with start_worker. Area leads start task workers, and the start gives each the claim on its tasks; the review lead chooses self-review or delegation before taking review claims, and a reviewer it starts gets its review claim or batch from the start. Workers never claim; only the main agent and the review lead claim reviews, and an area lead or a task worker messages the review lead instead. Task workers work only on the tasks they were given, edit only their own task workspace, run required checks and send proposal evidence; no_proposal tasks use report_task without a workspace. Reviewers fix what the task's agreed scope settles in their own review checkout and send it with submit_review_fix, return product questions and feature-size work with request_changes, and approve only inspected versions with check results. fold integrates ready approvals when automatic integration is enabled. Use fold messages between agents, keep your assigned role and authority, and read current state before retrying uncertain writes. A session opened by hand calls register_agent first. Load the fold skill for tool details. A footer beginning with \"fold:\" names work waiting for you.";
 
 /// The MCP server of one adapter session. Every tool call passes through [`FoldServer::call_tool`], which checks the agent, resolves `as`, records the call and adds the footer, so a tool only parses its input and calls its service.
 pub struct FoldServer {
@@ -366,6 +366,34 @@ fn as_worker(arguments: &JsonObject) -> Result<Option<WorkerName>, FoldError> {
             codes::INVALID_REQUEST,
             "as must be a worker name",
         )),
+    }
+}
+
+/// The `initialize` instructions of [`OutsideProject`].
+pub const OUTSIDE_INSTRUCTIONS: &str = "This folder is in no fold project, so fold offers no tools here. Run fld init in a folder to make it a fold project, then start Claude Code there.";
+
+/// The MCP server of a session outside every fold project, which the user's Claude Code configuration starts in any folder: it answers `initialize` with no capabilities, so the session lists no fold tools and shows no error.
+pub struct OutsideProject;
+
+impl ServerHandler for OutsideProject {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::default())
+            .with_server_info(Implementation::new("fold", env!("CARGO_PKG_VERSION")))
+            .with_instructions(OUTSIDE_INSTRUCTIONS)
+    }
+}
+
+impl OutsideProject {
+    /// Serves the session on the two streams until the client closes its side.
+    pub async fn serve<R, W>(read: R, write: W)
+    where
+        R: tokio::io::AsyncRead + Send + Unpin + 'static,
+        W: tokio::io::AsyncWrite + Send + Unpin + 'static,
+    {
+        use rmcp::ServiceExt;
+        if let Ok(running) = Self.serve((read, write)).await {
+            let _ = running.waiting().await;
+        }
     }
 }
 

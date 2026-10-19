@@ -481,13 +481,21 @@ async fn the_route_judges_stale_claims_by_the_configured_lease() {
         worker: WorkerName::parse("backend").unwrap(),
         tags: Vec::new(),
     });
+    // `backend` claims the task as the lead of its area.
+    crate::common::roles::give_role(
+        &fixture.handle.store,
+        "backend",
+        fold_core::roles::Role::AreaLead,
+        Some("backend-work"),
+    )
+    .await;
     let task = tasks
         .create_task(
             &backend,
             CreateTask {
                 title: TaskTitle::parse("task").unwrap(),
                 description: TaskDescription::new("body"),
-                labels: Vec::new(),
+                labels: vec![fold_core::LabelName::parse("backend-work").unwrap()],
             },
         )
         .await

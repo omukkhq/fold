@@ -1,3 +1,4 @@
+import { CodeText } from "@/components/code/CodeText";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
@@ -33,7 +34,9 @@ export function EmptyPanel({
       <h2 className="text-card leading-snug font-semibold text-text">
         {title}
       </h2>
-      <p className="text-bar leading-snug text-text-muted">{children}</p>
+      <p className="text-bar leading-snug text-text-muted">
+        <CodeText text={children} />
+      </p>
       {action}
     </section>
   );

@@ -66,6 +66,14 @@ pub fn is_pushed(event: &Event) -> bool {
         types::PROJECT_PAUSED,
         types::PROJECT_RESUMED,
         types::TASK_HOLD_CLEARED,
+        types::PROPOSAL_HUMAN_EDITED,
+        types::PROPOSAL_REVIEW_AGAIN_REQUESTED,
+        types::HUMAN_CHANGE_RECORDED,
+        types::HUMAN_CHANGE_CONFLICTED,
+        types::HUMAN_CHANGE_RESOLVED,
+        types::HUMAN_CHANGE_WITHDRAWN,
+        types::PROPOSAL_REVIEWER_FIXED,
+        types::INTEGRATION_HELD,
     ]
     .contains(&event.event_type)
 }
@@ -82,20 +90,205 @@ pub fn request_of(event: &Event) -> Option<RequestId> {
 
 /// The notices one committed event sends. An agent never hears about what its own workers did, and an event that misses an id its rule names sends nothing.
 pub fn notice_for(event: &Event, ctx: &PushContext) -> Vec<Notice> {
-    let Some((agents, text, next_tool)) = rule(event, ctx) else {
-        return Vec::new();
+    let rules = match human_change_rules(event, ctx) {
+        Some(rules) => rules,
+        None => rule(event, ctx).into_iter().collect(),
     };
     let own = event.actor.agent();
     let mut seen = BTreeSet::new();
-    agents
-        .into_iter()
-        .filter(|agent| own != Some(agent.as_str()) && seen.insert(agent.clone()))
-        .map(|agent| Notice {
-            agent,
-            text: format!("fold: {text}. Call {next_tool}."),
-            next_tool,
+    let mut notices = Vec::new();
+    for (agents, text, next_tool) in rules {
+        notices.extend(
+            agents
+                .into_iter()
+                .filter(|agent| own != Some(agent.as_str()) && seen.insert(agent.clone()))
+                .map(|agent| Notice {
+                    agent,
+                    text: format!("fold: {text}. Call {next_tool}."),
+                    next_tool,
+                }),
+        );
+    }
+    notices
+}
+
+/// The longest file or task list a human-change notice spells out; a longer one is counted, so the notice stays within [`MAX_NOTICE_LEN`].
+const MAX_LISTED_LEN: usize = 48;
+
+/// A human change reaches the main agent, which tells the user about it in its own session: what was recorded as which revision, that it conflicts and main did not move, that an integration resolved the waiting change, or that the human took it back. The leads of the tasks whose open workspaces change the same files hear of a recorded change too, and the main agent's notice says they did. The daemon writes the files, the touched tasks and workspaces, and those leads into the event, so a notice tells what the record found.
+fn human_change_rules(
+    event: &Event,
+    ctx: &PushContext,
+) -> Option<Vec<(Vec<AgentName>, String, &'static str)>> {
+    let kind = event.event_type;
+    if ![
+        types::HUMAN_CHANGE_RECORDED,
+        types::HUMAN_CHANGE_CONFLICTED,
+        types::HUMAN_CHANGE_RESOLVED,
+        types::HUMAN_CHANGE_WITHDRAWN,
+    ]
+    .contains(&kind)
+    {
+        return None;
+    }
+    let main: Vec<AgentName> = ctx.main_agents.iter().cloned().collect();
+    // A resolution is the act of the integration's actor, and a withdrawal that of the human who ran `fld record`, so their data names the human whose change it is.
+    let human = match event.data.get("human").and_then(serde_json::Value::as_str) {
+        Some(human)
+            if kind == types::HUMAN_CHANGE_RESOLVED || kind == types::HUMAN_CHANGE_WITHDRAWN =>
+        {
+            human
+        }
+        _ => event.actor.as_str(),
+    };
+    let strings = |key: &str| -> Vec<String> {
+        event
+            .data
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let count = |key: &str, listed: usize| {
+        event
+            .data
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|count| usize::try_from(count).ok())
+            .unwrap_or(listed)
+    };
+    let files = strings("files");
+    let file_count = count("file_count", files.len());
+    let tasks = strings("tasks");
+    let workspaces = strings("workspaces");
+    // The lists are spelled out when the notice still fits; otherwise only counted.
+    let fits =
+        |text: &str, tool: &str| format!("fold: {text}. Call {tool}.").len() <= MAX_NOTICE_LEN;
+    if kind == types::HUMAN_CHANGE_CONFLICTED {
+        let paths = strings("conflicted");
+        let conflicted = count("conflicted_count", paths.len());
+        let compose = |spelled: bool| {
+            let paths = listed(&paths, conflicted, "file", "files", spelled);
+            let mut text =
+                format!("{human}'s change conflicts with main in {paths}; main did not move");
+            if let Some(tasks) = touched_text(&tasks, &workspaces, spelled) {
+                text.push_str(&format!("; touches {tasks}"));
+            }
+            text.push_str("; explain it and prepare the merge");
+            text
+        };
+        let tool = "open_main_workspace";
+        let text = Some(compose(true))
+            .filter(|text| fits(text, tool))
+            .unwrap_or_else(|| compose(false));
+        return Some(vec![(main, text, tool)]);
+    }
+    if kind == types::HUMAN_CHANGE_WITHDRAWN {
+        // The folder holds none of the change any more, so a main workspace that holds its merge holds nothing to submit.
+        let text = format!("{human} took back the waiting change; nothing is left to merge");
+        let rule = match event
+            .data
+            .get("workspace")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(workspace) => (
+                main,
+                format!("{text}; abandon {workspace}, which holds its merge, and tell the user"),
+                "abandon_workspace",
+            ),
+            None => (
+                main,
+                format!("{text}; tell the user"),
+                "get_repository_state",
+            ),
+        };
+        return Some(vec![rule]);
+    }
+    let revision = event.revision?;
+    let leads: Vec<AgentName> = strings("leads")
+        .iter()
+        .filter_map(|lead| AgentName::parse(lead).ok())
+        .filter(|lead| !ctx.main_agents.contains(lead))
+        .collect();
+    let lead_rule = || {
+        let compose = |spelled: bool| {
+            let listed_files = listed(&files, file_count, "file", "files", spelled);
+            let touched = touched_text(&tasks, &workspaces, spelled).unwrap_or_default();
+            format!(
+                "{human} changed {listed_files} in main as {revision}, which {touched} also changes"
+            )
+        };
+        let tool = "get_task";
+        let text = Some(compose(true))
+            .filter(|text| fits(text, tool))
+            .unwrap_or_else(|| compose(false));
+        (leads.clone(), text, tool)
+    };
+    if kind == types::HUMAN_CHANGE_RESOLVED {
+        // An agent never hears of its own act, so the main agent hears of a resolution only when another integration brings the change onto main.
+        let text = format!(
+            "{human}'s waiting change is resolved: main holds it as {revision}; tell the user"
+        );
+        let mut rules = vec![(main, text, "compare_revisions")];
+        if !tasks.is_empty() {
+            rules.push(lead_rule());
+        }
+        return Some(rules);
+    }
+    let compose = |spelled: bool| {
+        let listed_files = listed(&files, file_count, "file", "files", spelled);
+        let mut text =
+            format!("{human} recorded {revision} from the project folder: {listed_files}");
+        match touched_text(&tasks, &workspaces, spelled) {
+            Some(tasks) if leads.is_empty() => text.push_str(&format!("; touches {tasks}")),
+            Some(tasks) => text.push_str(&format!("; touches {tasks}, whose leads were told")),
+            None => text.push_str("; touches no open task"),
+        }
+        text.push_str("; tell the user");
+        text
+    };
+    let tool = "compare_revisions";
+    let text = Some(compose(true))
+        .filter(|text| fits(text, tool))
+        .unwrap_or_else(|| compose(false));
+    let mut rules = vec![(main, text, tool)];
+    if !tasks.is_empty() {
+        rules.push(lead_rule());
+    }
+    Some(rules)
+}
+
+/// `T-4 (ws-7)`, one task per workspace in the order the daemon wrote them, or a count when `spelled` is false or the list is long; `None` when no open workspace is touched.
+fn touched_text(tasks: &[String], workspaces: &[String], spelled: bool) -> Option<String> {
+    if tasks.is_empty() {
+        return None;
+    }
+    let pairs: Vec<String> = tasks
+        .iter()
+        .zip(workspaces.iter().map(Some).chain(std::iter::repeat(None)))
+        .map(|(task, workspace)| match workspace {
+            Some(workspace) => format!("{task} ({workspace})"),
+            None => task.clone(),
         })
-        .collect()
+        .collect();
+    Some(listed(&pairs, pairs.len(), "task", "tasks", spelled))
+}
+
+/// The items joined with commas, or `<count> <noun>` when `spelled` is false, when they are fewer than `count` or when they are too long to list.
+fn listed(items: &[String], count: usize, one: &str, many: &str, spelled: bool) -> String {
+    let joined = items.join(", ");
+    if spelled && !items.is_empty() && items.len() == count && joined.len() <= MAX_LISTED_LEN {
+        joined
+    } else if count == 1 {
+        format!("1 {one}")
+    } else {
+        format!("{count} {many}")
+    }
 }
 
 fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'static str)> {
@@ -119,6 +312,37 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
             None => format!("{proposal} has a new version"),
         };
         return Some((reviewers(ctx), text, "create_review_checkout"));
+    }
+    if kind == types::PROPOSAL_HUMAN_EDITED {
+        let proposal = event.proposal?;
+        let version = event.data.get("version")?.as_u64()?;
+        return Some((
+            ctx.author.iter().cloned().collect(),
+            format!(
+                "a human edited {proposal} as version {version}; sync your workspace before you work in it"
+            ),
+            "sync_workspace",
+        ));
+    }
+    if kind == types::PROPOSAL_REVIEWER_FIXED {
+        let proposal = event.proposal?;
+        let version = event.data.get("version")?.as_u64()?;
+        return Some((
+            ctx.author.iter().cloned().collect(),
+            format!(
+                "the reviewer fixed {proposal} as version {version}; sync your workspace before you work in it"
+            ),
+            "sync_workspace",
+        ));
+    }
+    if kind == types::PROPOSAL_REVIEW_AGAIN_REQUESTED {
+        let proposal = event.proposal?;
+        let version = event.data.get("version")?.as_u64()?;
+        return Some((
+            reviewers(ctx),
+            format!("a human sent {proposal} version {version} for review again"),
+            "create_review_checkout",
+        ));
     }
     if kind == types::INTEGRATION_SUCCEEDED {
         let proposal = event.proposal?;
@@ -197,6 +421,18 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
             ctx.implementation_claim.iter().cloned().collect(),
             format!("{task} was sent back"),
             "get_task",
+        ));
+    }
+    if kind == types::INTEGRATION_HELD {
+        let head = event
+            .revision
+            .map_or_else(|| "main".to_owned(), |revision| format!("main {revision}"));
+        return Some((
+            ctx.main_agents.iter().cloned().collect(),
+            format!(
+                "fold-checks.toml on {head} is not valid; fold holds the integrations of proposals until it is fixed on main"
+            ),
+            "open_main_workspace",
         ));
     }
     if kind == types::PROJECT_PAUSED {
@@ -357,7 +593,7 @@ mod tests {
 
     use super::*;
     use crate::events::EventActor;
-    use crate::ids::ProposalId;
+    use crate::ids::{ProposalId, RevisionId};
     use crate::time::Timestamp;
 
     fn name(text: &str) -> AgentName {
@@ -758,6 +994,23 @@ mod tests {
     }
 
     #[test]
+    fn integrations_held_by_main_tell_the_main_agent() {
+        let mut ctx = ctx();
+        ctx.main_agents = [name("main")].into_iter().collect();
+        let mut held = event(types::INTEGRATION_HELD, "fold");
+        assert!(is_pushed(&held));
+        held.revision = RevisionId::from_number(7);
+        assert_eq!(
+            sent(&notice_for(&held, &ctx)),
+            vec![row(
+                "main",
+                "fold: fold-checks.toml on main r7 is not valid; fold holds the integrations of proposals until it is fixed on main. Call open_main_workspace.",
+                "open_main_workspace"
+            )]
+        );
+    }
+
+    #[test]
     fn an_unrelated_event_sends_nothing() {
         for kind in [
             types::TASK_CREATED,
@@ -837,6 +1090,9 @@ mod tests {
             types::REQUEST_DRAFT_SUBMITTED,
             types::REQUEST_CHANGES_REQUESTED,
             types::REQUEST_APPROVED,
+            types::PROPOSAL_HUMAN_EDITED,
+            types::PROPOSAL_REVIEW_AGAIN_REQUESTED,
+            types::PROPOSAL_REVIEWER_FIXED,
         ] {
             let long = AreaName::parse(&"a".repeat(32)).unwrap();
             let unled = PushContext {
@@ -893,6 +1149,60 @@ mod tests {
             notice_for(&bare, &ctx())[0].text,
             "fold: P-3 has a new version. Call create_review_checkout."
         );
+    }
+
+    #[test]
+    fn a_human_edit_reaches_only_the_author_and_a_review_again_the_reviewers() {
+        let edited = with_data(
+            event(types::PROPOSAL_HUMAN_EDITED, "human:tanim"),
+            json!({"version": 4, "from_version": 3}),
+        );
+        assert_eq!(
+            sent(&notice_for(&edited, &ctx())),
+            vec![row(
+                "frontend",
+                "fold: a human edited P-3 as version 4; sync your workspace before you work in it. Call sync_workspace.",
+                "sync_workspace"
+            )]
+        );
+        let again = with_data(
+            event(types::PROPOSAL_REVIEW_AGAIN_REQUESTED, "human:tanim"),
+            json!({"version": 4}),
+        );
+        let text =
+            "fold: a human sent P-3 version 4 for review again. Call create_review_checkout.";
+        assert_eq!(
+            sent(&notice_for(&again, &ctx())),
+            vec![
+                row("lead", text, "create_review_checkout"),
+                row("review", text, "create_review_checkout"),
+            ]
+        );
+        for kind in [
+            types::PROPOSAL_HUMAN_EDITED,
+            types::PROPOSAL_REVIEW_AGAIN_REQUESTED,
+        ] {
+            assert!(is_pushed(&event(kind, "human:tanim")));
+            assert!(notice_for(&event(kind, "human:tanim"), &ctx()).is_empty());
+        }
+    }
+
+    #[test]
+    fn a_reviewer_fix_reaches_only_the_author() {
+        let fixed = with_data(
+            event(types::PROPOSAL_REVIEWER_FIXED, "review"),
+            json!({"version": 3, "from_version": 2}),
+        );
+        assert!(is_pushed(&fixed));
+        assert_eq!(
+            sent(&notice_for(&fixed, &ctx())),
+            vec![row(
+                "frontend",
+                "fold: the reviewer fixed P-3 as version 3; sync your workspace before you work in it. Call sync_workspace.",
+                "sync_workspace"
+            )]
+        );
+        assert!(notice_for(&with_data(fixed, json!({})), &ctx()).is_empty());
     }
 
     #[test]
@@ -1111,5 +1421,201 @@ mod tests {
         );
         assert!(!is_pushed(&claimed));
         assert!(notice_for(&claimed, &ctx()).is_empty());
+    }
+
+    fn human_change(kind: crate::events::EventType, data: serde_json::Value) -> Event {
+        Event {
+            task: None,
+            proposal: None,
+            revision: Some(RevisionId::from_number(14).unwrap()),
+            ..with_data(event(kind, "human:ana"), data)
+        }
+    }
+
+    fn main_ctx() -> PushContext {
+        PushContext {
+            main_agents: [name("main")].into_iter().collect(),
+            ..PushContext::default()
+        }
+    }
+
+    #[test]
+    fn a_recorded_human_change_reaches_the_main_agent_and_the_leads_of_touched_tasks() {
+        let event = human_change(
+            types::HUMAN_CHANGE_RECORDED,
+            json!({
+                "files": ["README.md", "src/lib.rs"], "file_count": 2,
+                "tasks": ["T-4"], "workspaces": ["ws-7"], "leads": ["backend", "main"],
+            }),
+        );
+        assert!(is_pushed(&event));
+        assert_eq!(
+            sent(&notice_for(&event, &main_ctx())),
+            vec![
+                row(
+                    "main",
+                    "fold: human:ana recorded r14 from the project folder: README.md, src/lib.rs; touches T-4 (ws-7), whose leads were told; tell the user. Call compare_revisions.",
+                    "compare_revisions"
+                ),
+                row(
+                    "backend",
+                    "fold: human:ana changed README.md, src/lib.rs in main as r14, which T-4 (ws-7) also changes. Call get_task.",
+                    "get_task"
+                ),
+            ]
+        );
+        let alone = human_change(
+            types::HUMAN_CHANGE_RECORDED,
+            json!({"files": ["a.txt"], "file_count": 1, "tasks": [], "workspaces": [], "leads": []}),
+        );
+        assert_eq!(
+            sent(&notice_for(&alone, &main_ctx())),
+            vec![row(
+                "main",
+                "fold: human:ana recorded r14 from the project folder: a.txt; touches no open task; tell the user. Call compare_revisions.",
+                "compare_revisions"
+            )]
+        );
+        let unled = human_change(
+            types::HUMAN_CHANGE_RECORDED,
+            json!({"files": ["a.txt"], "file_count": 1, "tasks": ["T-4"], "workspaces": ["ws-7"], "leads": []}),
+        );
+        assert_eq!(
+            sent(&notice_for(&unled, &main_ctx()))[0].1,
+            "fold: human:ana recorded r14 from the project folder: a.txt; touches T-4 (ws-7); tell the user. Call compare_revisions."
+        );
+        let mut no_revision = alone;
+        no_revision.revision = None;
+        assert!(notice_for(&no_revision, &main_ctx()).is_empty());
+    }
+
+    #[test]
+    fn a_resolved_human_change_reaches_the_main_agent_that_did_not_resolve_it_and_the_leads() {
+        let data = json!({
+            "human": "human:ana", "commit": "c1", "integration": "i-3",
+            "files": ["README.md"], "file_count": 1,
+            "tasks": ["T-4"], "workspaces": ["ws-7"], "leads": ["backend", "main"],
+        });
+        let mut event = human_change(types::HUMAN_CHANGE_RESOLVED, data.clone());
+        event.actor = EventActor::parse("main").unwrap();
+        assert!(is_pushed(&event));
+        let to_lead = row(
+            "backend",
+            "fold: human:ana changed README.md in main as r14, which T-4 (ws-7) also changes. Call get_task.",
+            "get_task",
+        );
+        assert_eq!(
+            sent(&notice_for(&event, &main_ctx())),
+            vec![to_lead.clone()]
+        );
+        let to_main = row(
+            "main",
+            "fold: human:ana's waiting change is resolved: main holds it as r14; tell the user. Call compare_revisions.",
+            "compare_revisions",
+        );
+        let mut by_review = human_change(types::HUMAN_CHANGE_RESOLVED, data);
+        by_review.actor = EventActor::parse("review").unwrap();
+        assert_eq!(
+            sent(&notice_for(&by_review, &main_ctx())),
+            vec![to_main.clone(), to_lead]
+        );
+        let untouched = human_change(
+            types::HUMAN_CHANGE_RESOLVED,
+            json!({"human": "human:ana", "files": ["a.txt"], "file_count": 1, "tasks": [], "workspaces": [], "leads": []}),
+        );
+        assert_eq!(sent(&notice_for(&untouched, &main_ctx())), vec![to_main]);
+        let mut no_revision = untouched;
+        no_revision.revision = None;
+        assert!(notice_for(&no_revision, &main_ctx()).is_empty());
+    }
+
+    #[test]
+    fn a_withdrawn_human_change_tells_the_main_agent_to_drop_its_merge() {
+        let mut event = human_change(
+            types::HUMAN_CHANGE_WITHDRAWN,
+            json!({
+                "human": "human:ana", "commit": null, "conflicted": ["a.txt"], "conflicted_count": 1,
+                "workspace": "ws-9",
+            }),
+        );
+        event.revision = None;
+        event.actor = EventActor::parse("human:bo").unwrap();
+        assert!(is_pushed(&event));
+        assert_eq!(
+            sent(&notice_for(&event, &main_ctx())),
+            vec![row(
+                "main",
+                "fold: human:ana took back the waiting change; nothing is left to merge; abandon ws-9, which holds its merge, and tell the user. Call abandon_workspace.",
+                "abandon_workspace"
+            )]
+        );
+        event.data["workspace"] = json!(null);
+        assert_eq!(
+            sent(&notice_for(&event, &main_ctx())),
+            vec![row(
+                "main",
+                "fold: human:ana took back the waiting change; nothing is left to merge; tell the user. Call get_repository_state.",
+                "get_repository_state"
+            )]
+        );
+    }
+
+    #[test]
+    fn a_conflicted_human_change_asks_the_main_agent_to_prepare_the_merge() {
+        let event = human_change(
+            types::HUMAN_CHANGE_CONFLICTED,
+            json!({
+                "files": ["a.txt", "b.txt"], "file_count": 2,
+                "conflicted": ["a.txt"], "conflicted_count": 1,
+                "tasks": [], "workspaces": [], "leads": [],
+            }),
+        );
+        assert!(is_pushed(&event));
+        assert_eq!(
+            sent(&notice_for(&event, &main_ctx())),
+            vec![row(
+                "main",
+                "fold: human:ana's change conflicts with main in a.txt; main did not move; explain it and prepare the merge. Call open_main_workspace.",
+                "open_main_workspace"
+            )]
+        );
+    }
+
+    #[test]
+    fn a_long_human_change_counts_its_files_and_tasks_and_stays_one_short_line() {
+        let many = |prefix: &str, n: u32| -> Vec<String> {
+            (1..=n).map(|i| format!("{prefix}{i}")).collect()
+        };
+        let human = format!("human:{}", "a".repeat(32));
+        let recorded = Event {
+            actor: crate::events::EventActor::parse(&human).unwrap(),
+            ..human_change(
+                types::HUMAN_CHANGE_RECORDED,
+                json!({
+                    "files": many("docs/a-rather-long-file-name-", 40), "file_count": 400,
+                    "tasks": many("T-", 30), "workspaces": many("ws-", 30), "leads": ["backend"],
+                }),
+            )
+        };
+        let conflicted = Event {
+            event_type: types::HUMAN_CHANGE_CONFLICTED,
+            data: json!({
+                "files": many("f", 3), "file_count": 3,
+                "conflicted": many("docs/a-rather-long-file-name-", 9), "conflicted_count": 9,
+                "tasks": many("T-", 30), "workspaces": many("ws-", 30), "leads": [],
+            }),
+            ..recorded.clone()
+        };
+        let notices: Vec<Notice> = [recorded, conflicted]
+            .iter()
+            .flat_map(|event| notice_for(event, &main_ctx()))
+            .collect();
+        assert_eq!(notices.len(), 3);
+        for notice in &notices {
+            assert!(notice.text.len() <= MAX_NOTICE_LEN, "{}", notice.text);
+            assert!(!notice.text.contains('\n'));
+        }
+        assert!(notices[0].text.contains(": 400 files; touches 30 tasks"));
+        assert!(notices[2].text.contains("in 9 files"));
     }
 }

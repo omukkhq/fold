@@ -9,7 +9,9 @@ use super::actor::Human;
 use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use super::{Project, SocketOnly};
 use crate::daemon::AppState;
-use crate::services::projects::{self, PullOutcome, PushOutcome};
+use crate::services::projects::{
+    self, PullOutcome, PushOutcome, RecordOutcome, StashOutcome, UnstashOutcome,
+};
 use fold_core::{Presence, TaskStatus, Timestamp};
 use fold_vcs::git::Git;
 
@@ -18,10 +20,13 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list, open))
         .routes(routes!(list_humans))
         .routes(routes!(show))
-        .routes(routes!(show_git))
+        .routes(routes!(show_git, enable_git))
         .routes(routes!(collect_garbage))
         .routes(routes!(push))
         .routes(routes!(pull))
+        .routes(routes!(record))
+        .routes(routes!(list_stash, stash))
+        .routes(routes!(unstash))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -58,19 +63,19 @@ pub struct ProjectOverview {
     pub paused_by: Option<String>,
 }
 
-/// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `outside_commits`: the Git branch of main has commits fold did not write, so the project folder stops following main until a human runs `fld pull`. `uncommitted_changes`: the project folder has changes that are not committed, so it follows main again once the human commits or stashes them.
+/// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `uncommitted_changes`: the project folder has changes that no revision records, which the human records with `fld record` or puts aside with `fld stash`; such a change on a path main changed, or the conflict markers of `fld unstash`, keep the whole folder where it is until then. `head_moved`: the Git branch or HEAD shows a change fold did not make, such as another branch checked out, a reset or a stash, so the project folder stops following main until the human brings the branch back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectAttentionKind {
-    OutsideCommits,
     UncommittedChanges,
+    HeadMoved,
 }
 
 impl From<projects::ProjectAttention> for ProjectAttentionKind {
     fn from(attention: projects::ProjectAttention) -> Self {
         match attention {
-            projects::ProjectAttention::OutsideCommits => Self::OutsideCommits,
             projects::ProjectAttention::UncommittedChanges => Self::UncommittedChanges,
+            projects::ProjectAttention::HeadMoved => Self::HeadMoved,
         }
     }
 }
@@ -140,7 +145,7 @@ pub struct OpenedProject {
     pub name: String,
 }
 
-/// Every registered project and whether the daemon has it open.
+/// Every registered project and whether the daemon has it open. A project whose `.fold/` was deleted is removed from fold before the list is read, so it is not in the list.
 #[utoipa::path(
     get,
     path = "/api/v1/projects",
@@ -306,7 +311,7 @@ pub async fn show_git(Project(handle): Project) -> Result<Json<ProjectGit>, ApiE
     Ok(Json(projects::git_status(&handle).await?.into()))
 }
 
-/// Opens a project that was registered after the daemon started. Socket only; an open project answers the same again.
+/// Opens a project that was registered after the daemon started. Socket only; an open project answers the same again, unless its database was replaced: the daemon then closes it and opens the folder as it is now. A folder that is there without `.fold/`, as after its fold data was deleted, is removed from fold and answers `project_not_found`; a missing folder or a `.fold/` without its database keeps the project and answers `project_unavailable` with `details.reason` `folder_missing` or `database_missing`.
 #[utoipa::path(
     post,
     path = "/api/v1/projects",
@@ -638,4 +643,454 @@ pub async fn pull(
     )
     .await?;
     Ok(Json(outcome.into()))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordState {
+    /// The project folder holds no change that is not recorded.
+    UpToDate,
+    /// The human change merged cleanly into main as a new revision, and the project folder follows main.
+    Recorded,
+    /// The merge conflicted and main did not move; the main agent prepares the merge with the human.
+    Conflicted,
+}
+
+/// A file of the project folder that fold leaves out, as an import does.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RecordSkipped {
+    pub path: String,
+    /// Why it is left out, such as `too_large`.
+    pub reason: String,
+}
+
+/// An open task workspace whose own changes touch a file the human changed.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RecordTouched {
+    #[schema(example = "T-12")]
+    pub task: String,
+    #[schema(example = "ws-9")]
+    pub workspace: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RecordResult {
+    pub outcome: RecordState,
+    /// The Git commit of the new revision while Git sync is on; null otherwise.
+    #[schema(required = true)]
+    pub commit: Option<String>,
+    /// Main's head: the new revision of a recorded change, else the head main stays on.
+    #[schema(example = "r18")]
+    pub revision: String,
+    /// The files the human changed, in path order; empty unless recorded.
+    pub files: Vec<String>,
+    /// In path order; empty unless conflicted.
+    pub conflicted: Vec<PullConflict>,
+    pub touched: Vec<RecordTouched>,
+    pub skipped: Vec<RecordSkipped>,
+    /// False when the same conflicted change waited already and nothing was written.
+    pub created: bool,
+}
+
+impl From<RecordOutcome> for RecordResult {
+    fn from(outcome: RecordOutcome) -> Self {
+        let touched = |touched: Vec<projects::TouchedTask>| {
+            touched
+                .into_iter()
+                .map(|touched| RecordTouched {
+                    task: touched.task.to_string(),
+                    workspace: touched.workspace.to_string(),
+                })
+                .collect()
+        };
+        let skipped = |skipped: Vec<fold_vcs::scan::Skipped>| {
+            skipped
+                .into_iter()
+                .map(|skipped| RecordSkipped {
+                    path: skipped.path.to_string(),
+                    reason: skipped.reason.as_str().to_owned(),
+                })
+                .collect()
+        };
+        match outcome {
+            RecordOutcome::UpToDate { revision } => Self {
+                outcome: RecordState::UpToDate,
+                commit: None,
+                revision: revision.to_string(),
+                files: Vec::new(),
+                conflicted: Vec::new(),
+                touched: Vec::new(),
+                skipped: Vec::new(),
+                created: false,
+            },
+            RecordOutcome::Recorded {
+                commit,
+                revision,
+                files,
+                touched: found,
+                skipped: left,
+            } => Self {
+                outcome: RecordState::Recorded,
+                commit: commit.map(|commit| commit.to_string()),
+                revision: revision.to_string(),
+                files,
+                conflicted: Vec::new(),
+                touched: touched(found),
+                skipped: skipped(left),
+                created: true,
+            },
+            RecordOutcome::Conflicted {
+                head,
+                conflicted,
+                touched: found,
+                skipped: left,
+                created,
+            } => Self {
+                outcome: RecordState::Conflicted,
+                commit: None,
+                revision: head.to_string(),
+                files: Vec::new(),
+                conflicted: conflicted
+                    .into_iter()
+                    .map(|conflict| PullConflict {
+                        path: conflict.path,
+                        kind: conflict.kind.as_str().to_owned(),
+                    })
+                    .collect(),
+                touched: touched(found),
+                skipped: skipped(left),
+                created,
+            },
+        }
+    }
+}
+
+/// Records the human's changes in the project folder on main, as `fld record` asks: what the folder holds against the entries fold last wrote there is one change of the human's, which a clean merge integrates with no review, and the folder follows main; a conflict leaves main as it is and waits in Needs you while the main agent prepares the merge. While Git sync is on, the human's Git commits on the branch are recorded first, and a project whose branch or HEAD shows a change fold did not make is refused until the human undoes it. Socket only; the human comes from `x-fold-human`, and a process under a worker fold started is refused.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/record",
+    operation_id = "record_project",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "Main holds the human change, or it waits for the main agent", body = RecordResult),
+        (status = 400, description = "The human name is not valid, the branch or HEAD shows a change fold did not make (`reason` `head_moved`), or files still hold the conflict of `fld unstash` (`reason` `stash_markers`, the files in `paths`)", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 409, description = "Main moved during every attempt, or the config or sync map is invalid", body = ErrorEnvelope),
+        (status = 502, description = "A Git command failed", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open, git is not on PATH, or the objects of the change could not be stored", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn record(
+    _socket: SocketOnly,
+    human: Human,
+    Project(handle): Project,
+) -> Result<Json<RecordResult>, ApiError> {
+    let outcome = projects::record(&handle, &human.actor(), &Git::default()).await?;
+    Ok(Json(outcome.into()))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StashState {
+    /// The project folder holds no change that is not recorded; nothing was stashed.
+    Nothing,
+    /// The changes are the newest entry, `stash@{0}`, and the project folder follows main.
+    Stashed,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct StashResult {
+    pub outcome: StashState,
+    /// The main revision the project folder holds now.
+    #[schema(example = "r18")]
+    pub revision: String,
+    /// The paths of the new entry, in path order; empty when nothing was stashed.
+    pub files: Vec<String>,
+    /// The entries on the stack now.
+    pub entries: u32,
+    /// New files the read of the folder left out, such as one over the size limit: they stay in the folder and are not in the entry.
+    pub skipped: Vec<RecordSkipped>,
+}
+
+impl From<StashOutcome> for StashResult {
+    fn from(outcome: StashOutcome) -> Self {
+        let skipped = |skipped: Vec<fold_vcs::scan::Skipped>| {
+            skipped
+                .into_iter()
+                .map(|skipped| RecordSkipped {
+                    path: skipped.path.to_string(),
+                    reason: skipped.reason.as_str().to_owned(),
+                })
+                .collect()
+        };
+        match outcome {
+            StashOutcome::Nothing {
+                revision,
+                entries,
+                skipped: left,
+            } => Self {
+                outcome: StashState::Nothing,
+                revision: revision.to_string(),
+                files: Vec::new(),
+                entries: u32::try_from(entries).unwrap_or(u32::MAX),
+                skipped: skipped(left),
+            },
+            StashOutcome::Stashed {
+                revision,
+                files,
+                entries,
+                skipped: left,
+            } => Self {
+                outcome: StashState::Stashed,
+                revision: revision.to_string(),
+                files,
+                entries: u32::try_from(entries).unwrap_or(u32::MAX),
+                skipped: skipped(left),
+            },
+        }
+    }
+}
+
+/// Puts the human's changes in the project folder aside, as `fld stash` asks: what the folder holds against the entries fold last wrote there becomes the newest entry of fold's own stash, those paths go back to fold's entries, and the folder follows main. While Git sync is on, the index entries of those paths go back too; no Git stash is made. A conflicted human change from an earlier `fld record` that waits for the main agent is closed with `human_change.withdrawn`, since the entry holds its changes. A project whose branch or HEAD shows a change fold did not make is refused, and so is one whose unstash conflict waits or that holds a file fold tracks and cannot read. Socket only; the human comes from `x-fold-human`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/stash",
+    operation_id = "stash_project",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "The changes are stashed, or there were none", body = StashResult),
+        (status = 400, description = "The human name is not valid; the branch or HEAD shows a change fold did not make (`reason` `head_moved`); the human's Git commits wait for the main agent (`reason` `git_commits_wait`); an unstash conflict waits, or a stop left an unstash's markers in the files, which keeps its entry as conflicted (`reason` `stash_conflicted`); a file fold tracks is too large or unreadable to stash (`reason` `skipped_tracked`, the files in `paths`); or files changed while fold stashed them (`reason` `changed_during_stash`)", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 409, description = "The config or sync map is invalid", body = ErrorEnvelope),
+        (status = 502, description = "A Git command failed", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open, git is not on PATH, or the objects of the entry could not be stored", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn stash(
+    _socket: SocketOnly,
+    human: Human,
+    Project(handle): Project,
+) -> Result<Json<StashResult>, ApiError> {
+    let outcome = projects::stash(&handle, &human.actor(), &Git::default()).await?;
+    Ok(Json(outcome.into()))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UnstashState {
+    /// The newest entry merged cleanly into the project folder and left the stack; its files are changes that no revision records again.
+    Applied,
+    /// The merge conflicted: the folder holds conflict markers, or the stash's side beside a file, and the entry stays until `fld record` finds them fixed.
+    Conflicted,
+}
+
+/// One path where the unstash conflicted with the project folder.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct UnstashConflictView {
+    pub path: String,
+    /// `both_modified_text`, `both_modified_binary`, `modify_delete`, `add_add` or `type_change`.
+    pub kind: String,
+    /// The file or directory beside the path that holds the stash's side of a conflict that takes no markers; null for a text conflict, which holds markers.
+    #[schema(required = true, example = "logo.png.fold-stash")]
+    pub sidecar: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct UnstashResult {
+    pub outcome: UnstashState,
+    /// The main revision the project folder holds, which the conflict markers name; null when the merge was clean.
+    #[schema(required = true, example = "r18")]
+    pub revision: Option<String>,
+    /// The paths of the entry, in path order.
+    pub files: Vec<String>,
+    /// In path order; empty unless conflicted.
+    pub conflicted: Vec<UnstashConflictView>,
+    /// The entries on the stack now.
+    pub entries: u32,
+}
+
+impl From<UnstashOutcome> for UnstashResult {
+    fn from(outcome: UnstashOutcome) -> Self {
+        let count = |entries: usize| u32::try_from(entries).unwrap_or(u32::MAX);
+        match outcome {
+            UnstashOutcome::Applied { files, entries } => Self {
+                outcome: UnstashState::Applied,
+                revision: None,
+                files,
+                conflicted: Vec::new(),
+                entries: count(entries),
+            },
+            UnstashOutcome::Conflicted {
+                revision,
+                files,
+                conflicted,
+                entries,
+            } => Self {
+                outcome: UnstashState::Conflicted,
+                revision: Some(revision.to_string()),
+                files,
+                conflicted: conflicted
+                    .into_iter()
+                    .map(|conflict| UnstashConflictView {
+                        path: conflict.path,
+                        kind: conflict.kind.as_str().to_owned(),
+                        sidecar: conflict.sidecar,
+                    })
+                    .collect(),
+                entries: count(entries),
+            },
+        }
+    }
+}
+
+/// Merges the newest entry of the stash into the project folder as it is now, as `fld unstash` asks, with the human's newer unrecorded changes. A clean merge writes the files, which are changes that no revision records again, and removes the entry. A conflict writes conflict markers labelled `main (r<n>)` and `stash@{0}`, or the stash's side as `<path>.fold-stash`, keeps the entry, and holds the folder until `fld record` finds the files fixed. Socket only; the human comes from `x-fold-human`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/unstash",
+    operation_id = "unstash_project",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "The entry is applied, or it conflicted and stays", body = UnstashResult),
+        (status = 400, description = "The human name is not valid; the stash is empty (`reason` `stash_empty`); an unstash conflict waits (`reason` `stash_conflicted`); files still hold the markers of an earlier unstash (`reason` `stash_markers`), which keeps the entry as conflicted; the folder holds a file fold leaves out, such as an ignored one, where the unstash writes (`reason` `unstash_path_occupied`, the files in `paths`); files changed while fold read them (`reason` `changed_during_unstash`); the branch or HEAD shows a change fold did not make (`reason` `head_moved`); or the human's Git commits wait (`reason` `git_commits_wait`)", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 409, description = "The config or sync map is invalid", body = ErrorEnvelope),
+        (status = 502, description = "A Git command failed", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open, or git is not on PATH", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn unstash(
+    _socket: SocketOnly,
+    human: Human,
+    Project(handle): Project,
+) -> Result<Json<UnstashResult>, ApiError> {
+    let outcome = projects::unstash(&handle, &human.actor(), &Git::default()).await?;
+    Ok(Json(outcome.into()))
+}
+
+/// One entry of the stash.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct StashEntryView {
+    /// Its name on the stack: `stash@{0}` is the newest.
+    #[schema(example = "stash@{0}")]
+    pub stash: String,
+    /// UTC milliseconds of the stash.
+    #[schema(value_type = i64)]
+    pub created_at: Timestamp,
+    /// The main revision the project folder held then.
+    #[schema(example = "r8")]
+    pub base: String,
+    /// Who stashed, such as `human:ana`.
+    pub actor: String,
+    /// The paths of the entry, in path order.
+    pub files: Vec<String>,
+    /// The paths whose unstash conflict waits in the folder; empty otherwise.
+    pub conflicted: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct StashList {
+    /// Newest first.
+    pub entries: Vec<StashEntryView>,
+}
+
+/// The stash of the project folder, newest entry first, as `fld stash list` shows it. Socket only.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/stash",
+    operation_id = "list_project_stash",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "The entries", body = StashList),
+        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn list_stash(
+    _socket: SocketOnly,
+    Project(handle): Project,
+) -> Result<Json<StashList>, ApiError> {
+    let entries = projects::stash_list(&handle).await?;
+    Ok(Json(StashList {
+        entries: entries
+            .into_iter()
+            .map(|entry| StashEntryView {
+                stash: format!("stash@{{{}}}", entry.position),
+                created_at: entry.created_at,
+                base: entry.base.to_string(),
+                actor: entry.actor,
+                files: entry.files,
+                conflicted: entry.conflicted,
+            })
+            .collect(),
+    }))
+}
+
+/// The Git identity for the project's own Git config, as `fld init --with-git` settled it; a value left out is not written.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+pub struct EnableGit {
+    /// `user.name` for the repository's own config; no control character, `<` or `>`.
+    #[schema(required = false, example = "Ana Lima")]
+    pub git_name: Option<String>,
+    /// `user.email` for the repository's own config; no control character, `<` or `>`.
+    #[schema(required = false, example = "ana@example.com")]
+    pub git_email: Option<String>,
+}
+
+/// What turning Git on did.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GitEnabledView {
+    /// Main's head.
+    #[schema(example = "r4")]
+    pub revision: String,
+    /// The revision that records the `.gitignore` fold wrote or changed; null when it changed none.
+    #[schema(required = true, example = "r4")]
+    pub gitignore: Option<String>,
+    /// The commit the Git branch points to; null while main holds only the empty genesis.
+    #[schema(required = true)]
+    pub commit: Option<String>,
+    /// The configured remotes, by name.
+    pub remotes: Vec<String>,
+}
+
+/// Turns Git on in a project whose Git sync is off, as `fld init --with-git` asks in its folder: fold creates `.git` when it is missing, writes the identity into its config, records the `.gitignore` copy rule as the human's revision, turns Git sync on with `git.sync_enabled` and writes the commit of every revision after the empty genesis, with the branch and the index on the newest. Git sync never goes off again. Socket only; the human comes from `x-fold-human`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/git",
+    operation_id = "enable_project_git",
+    params(("slug" = String, Path, description = "The project slug")),
+    request_body = EnableGit,
+    responses(
+        (status = 200, description = "Git sync is on", body = GitEnabledView),
+        (status = 400, description = "Git sync is on already (`reason` `git_sync_on`), the folder holds a `.git` with commits of its own (`reason` `git_history`) or a `.git` that is no directory (`reason` `git_dir_elsewhere`), or `git_name` or `git_email` cannot go into an author line", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 502, description = "A Git command failed", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open, or git is not on PATH", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn enable_git(
+    _socket: SocketOnly,
+    human: Human,
+    Project(handle): Project,
+    ApiJson(body): ApiJson<EnableGit>,
+) -> Result<Json<GitEnabledView>, ApiError> {
+    let identity = projects::GitIdentity {
+        name: body.git_name,
+        email: body.git_email,
+    };
+    let enabled = projects::enable_git(&handle, &human.actor(), &Git::default(), identity).await?;
+    Ok(Json(GitEnabledView {
+        revision: enabled.head.to_string(),
+        gitignore: enabled.gitignore.map(|revision| revision.to_string()),
+        commit: enabled.commit.map(|commit| commit.to_string()),
+        remotes: enabled.remotes,
+    }))
 }

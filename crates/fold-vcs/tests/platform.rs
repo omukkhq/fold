@@ -105,6 +105,12 @@ fn symlink_creation_and_identity() {
 fn probe_agrees_with_a_direct_symlink_attempt() {
     let dir = tempfile::tempdir().unwrap();
     let fold = dir.path().join(".fold");
+    assert_eq!(
+        Capabilities::probe(&fold).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound,
+        "the probe never makes a deleted .fold again"
+    );
+    fs::create_dir(&fold).unwrap();
     let caps = Capabilities::probe(&fold).unwrap();
     let direct = std::os::unix::fs::symlink("x", dir.path().join("direct")).is_ok();
     assert_eq!(caps.symlinks, direct);

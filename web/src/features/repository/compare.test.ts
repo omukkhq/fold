@@ -28,12 +28,19 @@ describe("normalizeCompare", () => {
     });
   });
 
+  it("compares from the genesis r0", () => {
+    expect(normalizeCompare("r3", "r0")).toEqual({
+      ok: true,
+      pair: { from: "r0", to: "r3" },
+    });
+  });
+
   it("rejects the same revision twice", () => {
     expect(normalizeCompare("r4", "r4")).toEqual({ ok: false, reason: "same" });
   });
 
   it("rejects anything that is not a revision id", () => {
-    for (const bad of ["T-4", "r0", "r04", "main", "", "r4 "]) {
+    for (const bad of ["T-4", "r00", "r04", "main", "", "r4 "]) {
       expect(normalizeCompare(bad, "r8")).toEqual({
         ok: false,
         reason: "invalid",

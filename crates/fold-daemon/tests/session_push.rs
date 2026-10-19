@@ -327,6 +327,7 @@ async fn the_proposal_and_task_rules_read_their_context() {
         .await;
     // Nobody holds the review claim, so the human approval reaches nobody; the sentinel below arrives first.
 
+    crate::common::roles::lead_work_areas(fixture.project.store()).await;
     let task = fixture
         .tasks
         .create_task(
@@ -334,7 +335,7 @@ async fn the_proposal_and_task_rules_read_their_context() {
             CreateTask {
                 title: TaskTitle::parse("api").unwrap(),
                 description: TaskDescription::new("work"),
-                labels: Vec::new(),
+                labels: crate::common::roles::work_labels(),
             },
         )
         .await
@@ -354,6 +355,14 @@ async fn the_proposal_and_task_rules_read_their_context() {
                 .unwrap(),
         )
         .await;
+    // `backend` leads the area of the task, so the new task reached it before its claim.
+    assert_eq!(
+        backend.next().await,
+        wire(
+            TOKEN,
+            &format!("fold: {task} is ready in your area. Call start_worker.")
+        )
+    );
     assert_eq!(
         backend.next().await,
         wire(

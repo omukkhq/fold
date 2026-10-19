@@ -4,9 +4,11 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use clap::Args;
+use fold_cli::claude_files::ClaudeFileError;
 use fold_core::{FoldError, codes};
 use thiserror::Error;
 
+use crate::claude_setup::{self, Offer, SetupError};
 use crate::output;
 use crate::platform::{Host, LAUNCH_AGENT_LABEL};
 
@@ -15,6 +17,12 @@ pub struct SetupArgs {
     /// Write the systemd unit or the launchd agent file and start nothing
     #[arg(long)]
     no_start: bool,
+    /// Add fold to Claude Code for your user without asking, and install no service
+    #[arg(long, conflicts_with_all = ["no_start", "remove"])]
+    claude: bool,
+    /// Remove fold's entries from Claude Code's config of your user; the service stays
+    #[arg(long, conflicts_with = "no_start")]
+    remove: bool,
 }
 
 #[derive(Debug, Error)]
@@ -39,6 +47,8 @@ pub enum ServiceError {
     Launchctl { args: String, status: String },
     #[error("cannot write the output: {0}")]
     Write(#[from] io::Error),
+    #[error(transparent)]
+    ClaudeFiles(#[from] ClaudeFileError),
 }
 
 impl ServiceError {
@@ -50,6 +60,7 @@ impl ServiceError {
             | Self::Spawn { .. }
             | Self::Systemctl { .. }
             | Self::Launchctl { .. } => Some(codes::SERVICE_INSTALL_FAILED),
+            Self::ClaudeFiles(error) => error.code(),
             Self::NoHome | Self::NoHomeDir | Self::Exe(_) | Self::ExeNotUtf8 | Self::Write(_) => {
                 None
             }
@@ -60,6 +71,7 @@ impl ServiceError {
     pub fn hint(&self) -> Option<&str> {
         match self {
             Self::Refused(error) => error.hint(),
+            Self::ClaudeFiles(error) => error.hint(),
             _ => None,
         }
     }
@@ -75,10 +87,25 @@ fn no_service_manager() -> ServiceError {
 
 const START_ARGS: [&[&str]; 2] = [&["daemon-reload"], &["enable", "--now", "fold.service"]];
 
+/// `--claude` and `--remove` change only Claude Code's user configuration. A plain setup installs the service and then offers to add fold to that configuration.
 pub fn run(args: &SetupArgs, out: &mut impl Write) -> Result<(), ServiceError> {
-    let no_start = &args.no_start;
+    let host = Host::from_env();
+    if args.claude || args.remove {
+        let files = host.claude.as_ref().ok_or(ServiceError::NoHomeDir)?;
+        let changed = if args.remove {
+            claude_setup::remove(&host.dirs, files, out)
+        } else {
+            claude_setup::add(&host.dirs, files, out)
+        };
+        return changed.map_err(|error| match error {
+            SetupError::Files(error) => ServiceError::ClaudeFiles(error),
+            SetupError::Write(error) => ServiceError::Write(error),
+        });
+    }
     let exe = std::env::current_exe().map_err(ServiceError::Exe)?;
-    install(&Host::from_env(), &exe, *no_start, out)
+    install(&host, &exe, args.no_start, out)?;
+    claude_setup::offer_on_terminal(&host.dirs, host.claude.as_ref(), Offer::Setup, out);
+    Ok(())
 }
 
 /// `--no-start` is the way to write the unit on a host where `systemctl` is not on `PATH`; only a host that is neither Linux nor macOS is refused whatever the flags say.
@@ -380,6 +407,8 @@ mod tests {
                 file_modes: true,
             },
             probe: Probe::new(config_home.join("root")),
+            names: crate::fold_name::Environment::default(),
+            claude: None,
         }
     }
 

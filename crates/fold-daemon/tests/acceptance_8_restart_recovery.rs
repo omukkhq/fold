@@ -57,7 +57,11 @@ impl Scene {
             "Ship the login",
         ] {
             let created = harness
-                .call("review", "create_task", json!({"title": title}))
+                .call(
+                    "review",
+                    "create_task",
+                    json!({"title": title, "labels": Harness::work_labels()}),
+                )
                 .await;
             tasks.push(created["id"].as_str().unwrap().to_owned());
         }

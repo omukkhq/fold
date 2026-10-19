@@ -114,13 +114,14 @@ impl Fixture {
             LEASE_MINUTES,
         );
         for _ in 0..3 {
+            crate::common::roles::lead_work_areas(project.store()).await;
             tasks
                 .create_task(
                     &actor("planner"),
                     CreateTask {
                         title: TaskTitle::parse("task").unwrap(),
                         description: TaskDescription::new("body"),
-                        labels: Vec::new(),
+                        labels: crate::common::roles::work_labels(),
                     },
                 )
                 .await
@@ -463,8 +464,12 @@ async fn a_missing_workspace_a_proposal_and_a_review_claim_are_listed() {
         ui["proposals"],
         json!([{"id": "P-2", "task": "T-1", "title": "Login form", "conflicted": true}])
     );
-    let reviewer = &all["workers"][2];
-    assert_eq!(reviewer["worker"], "review");
+    let reviewer = all["workers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|worker| worker["worker"] == "review")
+        .unwrap();
     assert_eq!(reviewer["claims"][0]["kind"], "review");
     assert_eq!(
         reviewer["claims"][0]["task"], "T-1",

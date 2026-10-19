@@ -63,6 +63,7 @@ pub struct MarkedProposal {
     pub task: TaskId,
     pub mark: HumanReviewMark,
     pub version: u32,
+    /// The proposal is with its author: its merge conflicted or its integration checks failed.
     pub conflicted: bool,
     /// When the current version was added.
     pub version_at: Timestamp,
@@ -81,7 +82,7 @@ pub async fn marked_open_proposals(
                   t.human_reviewer,
                   t.human_review_reason,
                   t.human_review_set_by,
-                  p.conflicted AS "conflicted: bool",
+                  (p.conflicted OR p.checks_failed) AS "conflicted: bool",
                   v.version,
                   v.created_at AS version_at,
                   (

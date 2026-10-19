@@ -25,9 +25,20 @@ pub async fn gc(project: &ProjectHandle, dry_run: bool) -> Result<GcReport, Proj
             codes::GC_IN_PROGRESS,
             format!("garbage collection of project {} is running", project.slug),
         )
-        .with_hint("wait for the running collection to finish, then run fld gc again")
+        .with_hint("wait for the running collection to finish, then run `fld gc` again")
         .into());
     };
+    // The sweep opens the object store, which would make the deleted `.fold/` again.
+    if project.database_replaced().await {
+        return Err(FoldError::new(
+            codes::PROJECT_UNAVAILABLE,
+            format!(
+                "the database of project {} was deleted or replaced",
+                project.slug
+            ),
+        )
+        .into());
+    }
     let now = project.clock.now();
     let config = load_config(&project.paths).await?;
     let keep = u32::try_from(config.auto_checkpoints_kept).unwrap_or(u32::MAX);
@@ -42,7 +53,7 @@ pub async fn gc(project: &ProjectHandle, dry_run: bool) -> Result<GcReport, Proj
     let fs_now = file_time(now);
     let roots = pruning.roots;
     let marked = blocking(move || -> Result<_, FoldError> {
-        let objects = ObjectStore::open(&objects_dir)?;
+        let objects = ObjectStore::open_existing(&objects_dir)?;
         let marked = vcs_gc::mark(&objects, roots)?;
         Ok((objects, marked))
     })

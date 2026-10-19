@@ -5,6 +5,7 @@ use crate::agents::WorkerName;
 use crate::agents::roles::Role;
 use crate::error::{FoldError, codes};
 use crate::reviews::{Reviewer, Verdict};
+use crate::tasks::LabelName;
 
 mod batches;
 mod human_review;
@@ -18,13 +19,14 @@ mod workers;
 
 pub use batches::can_review_batch;
 pub use human_review::{
-    MarkChange, can_clear_human_review, can_human_approve, can_set_human_review,
+    CHECKS_FILE_REASON, MarkChange, can_clear_human_review, can_edit_as_human, can_human_approve,
+    can_set_human_review, checks_file_mark,
 };
 pub use integrate::{
     CallerFacts, Gate, GateRefusal, GateState, GateStatus, IntegrateInput, ProposalFacts,
     can_integrate, gate_report, human_check_done, prerequisites_done,
 };
-pub use projects::can_pull;
+pub use projects::{can_add_exclude_patterns, can_enable_git, can_pull, can_record, can_stash};
 pub use questions::can_answer_worker_permission;
 pub use requests::{can_claim_request, can_create_request, is_drafter, is_requester};
 pub use sessions::{SessionPeer, can_bind_agent, can_name_human};
@@ -32,9 +34,10 @@ pub use tasks::{
     TaskHolder, TaskStart, can_archive_task, can_change_checklist, can_delete_task, can_hold_task,
 };
 pub use workers::{
-    Starter, can_check_task, can_choose_no_proposal, can_clear_hold, can_complete_human_task,
-    can_define_area, can_pause_project, can_publish_task_plan, can_set_hold, can_set_worker_limits,
-    can_start_worker, can_stop_worker, can_update_area, can_write_handoff,
+    Starter, can_change_main_directly, can_check_task, can_choose_no_proposal, can_clear_hold,
+    can_complete_human_task, can_define_area, can_pause_project, can_publish_task_plan,
+    can_set_hold, can_set_worker_limits, can_start_worker, can_stop_worker, can_update_area,
+    can_write_handoff,
 };
 
 /// The facts behind an agent's rights that its name and tags do not carry, which the services read inside the command's transaction. `role` is the role of the agent's worker process, fixed when fold started it, and `None` for an agent that fold does not supervise.
@@ -56,9 +59,9 @@ impl AgentStanding {
         self.holds_main
     }
 
-    /// Approving, rejecting and integrating decide a proposal's fate. The main agent and the review lead act for the user, and a batch reviewer reviews for the review lead that started it; an area lead and a task worker only comment and ask for changes.
+    /// Approving, rejecting and integrating decide a proposal's fate. The main agent and the review lead act for the user, and a reviewer reviews for the review lead that started it; an area lead and a task worker only comment and ask for changes.
     pub fn decides_reviews(self) -> bool {
-        self.is_main_agent() || matches!(self.role, Some(Role::ReviewLead | Role::BatchReviewer))
+        self.is_main_agent() || matches!(self.role, Some(Role::ReviewLead | Role::Reviewer))
     }
 }
 
@@ -99,6 +102,44 @@ pub fn can_claim(actor: &Actor) -> Result<&AgentActor, PolicyDenied> {
     }
 }
 
+/// Leads hand out the work: an area lead claims a task that carries its area's label (`lead_label`, the label of the area it leads), usually through the `start_worker` that gives the claim to a new task worker, and the main agent claims one when the user tells it to. A worker that fold started never takes work of its own, so an agent whose worker process is a task worker or a reviewer is refused through every one of its workers, and the review lead and a session without a fold role are refused too. `task_labels` are the task's labels. It returns the admitted agent, which is the claimant.
+pub fn can_claim_task<'a>(
+    actor: &'a Actor,
+    standing: AgentStanding,
+    lead_label: Option<&LabelName>,
+    task_labels: &[LabelName],
+) -> Result<&'a AgentActor, PolicyDenied> {
+    let agent = can_claim(actor)?;
+    if standing.is_main_agent() {
+        return Ok(agent);
+    }
+    match standing.role {
+        Some(Role::TaskWorker | Role::Reviewer) => Err(worker_claim_denied()),
+        Some(Role::AreaLead) if lead_label.is_some_and(|label| task_labels.contains(label)) => {
+            Ok(agent)
+        }
+        Some(Role::AreaLead) => Err(PolicyDenied {
+            code: codes::TASK_OUTSIDE_AREA,
+            message: "an area lead claims only a task of its own area",
+            hint: "call get_task to see the task's labels, and start a task worker with start_worker for a task of your area",
+        }),
+        Some(Role::ReviewLead) | None => Err(PolicyDenied {
+            code: codes::ORCHESTRATOR_REQUIRED,
+            message: "only the lead of the task's area or the main agent claims a task",
+            hint: "ask the lead of the task's area to start a task worker for it with start_worker",
+        }),
+    }
+}
+
+/// The refusal of a claim by a worker that fold started for its lead's work.
+fn worker_claim_denied() -> PolicyDenied {
+    PolicyDenied {
+        code: codes::WORKER_CLAIM_DENIED,
+        message: "a worker that fold started never claims work; its lead gives it the claims when it starts it",
+        hint: "work on the tasks or proposals named in your first turn, and send_message to your lead for other work",
+    }
+}
+
 /// A push publishes main to a shared Git remote with the user's own Git credentials, so a human runs it, or the daemon itself when it pushes after an integration. An agent never pushes.
 pub fn can_push(actor: &Actor) -> Result<(), PolicyDenied> {
     match actor {
@@ -106,7 +147,7 @@ pub fn can_push(actor: &Actor) -> Result<(), PolicyDenied> {
         Actor::Agent(_) => Err(PolicyDenied {
             code: codes::HUMAN_REQUIRED,
             message: "only a human can push main to the Git remote",
-            hint: "ask a human to run fld push",
+            hint: "ask a human to run `fld push`",
         }),
     }
 }
@@ -136,7 +177,7 @@ pub fn can_take_main_tag(
         return Err(PolicyDenied {
             code: codes::MAIN_TAG_DENIED,
             message: "only the session that fld claude starts takes the main tag",
-            hint: "call register_agent without the main tag; run fld claude to start the main agent",
+            hint: "call register_agent without the main tag; run `fld claude` to start the main agent",
         });
     }
     if held_by_other {
@@ -179,6 +220,15 @@ pub fn can_change_workspace(actor: &Actor, owner: Option<&WorkerName>) -> Result
         actor,
         owner,
         "only the owning worker can change a workspace",
+    )
+}
+
+/// The checks run in a task workspace and their commands write into it, so only the worker that owns the workspace asks fold to run them there.
+pub fn can_run_checks(actor: &Actor, owner: Option<&WorkerName>) -> Result<(), PolicyDenied> {
+    owning_worker(
+        actor,
+        owner,
+        "only the owning worker can run the checks in a workspace",
     )
 }
 
@@ -252,7 +302,7 @@ pub fn can_close_proposal(
         }
         Actor::Agent(_) | Actor::System => Err(PolicyDenied {
             code: codes::NOT_PROPOSAL_AUTHOR,
-            message: "only the author's agent, the main agent, the review lead, a batch reviewer or a human can close a proposal",
+            message: "only the author's agent, the main agent, the review lead, a reviewer or a human can close a proposal",
             hint: "call get_proposal to see the author, or ask the review lead",
         }),
     }
@@ -309,15 +359,16 @@ pub fn can_submit_verdict<'a>(
         }
         Verdict::Approve | Verdict::Reject => Err(PolicyDenied {
             code: codes::INTEGRATOR_REQUIRED,
-            message: "only the main agent, the review lead, a batch reviewer or a human can approve or reject a proposal",
+            message: "only the main agent, the review lead, a reviewer or a human can approve or reject a proposal",
             hint: "submit comment or request_changes, or ask the review lead",
         }),
     }
 }
 
-/// A review is a second agent's look at the work, so the author's agent never claims its own proposal through any of its workers. Only an agent's worker holds a claim. It returns the admitted agent, which becomes the reviewer.
+/// A review is a second agent's look at the work, so the author's agent never claims its own proposal through any of its workers. A claim lets its holder check out, fix and verdict the proposal for the user, so only the main agent and the review lead claim one, for a review of their own; the review lead gives a reviewer its claims when it starts it, and the reviewer never claims. An area lead or a task worker asks the review lead instead. Only an agent's worker holds a claim. `standing` is the acting agent's. It returns the admitted agent, which becomes the reviewer.
 pub fn can_claim_review<'a>(
     actor: &'a Actor,
+    standing: AgentStanding,
     author: &WorkerName,
 ) -> Result<&'a AgentActor, PolicyDenied> {
     match actor {
@@ -326,11 +377,31 @@ pub fn can_claim_review<'a>(
             message: "an agent cannot review its own proposal",
             hint: "ask another agent to call claim_review",
         }),
-        Actor::Agent(agent) => Ok(agent),
+        Actor::Agent(_) if standing.role == Some(Role::Reviewer) => Err(worker_claim_denied()),
+        Actor::Agent(agent) if standing.decides_reviews() => Ok(agent),
+        Actor::Agent(_) => Err(PolicyDenied {
+            code: codes::INTEGRATOR_REQUIRED,
+            message: "only the main agent or the review lead can claim a review",
+            hint: "send_message to the review lead about the proposal",
+        }),
         Actor::Human { .. } | Actor::System => Err(PolicyDenied {
             code: codes::ACTOR_CANNOT_CLAIM,
             message: "only an agent's worker can claim a review",
             hint: "ask an agent to claim the review with claim_review",
+        }),
+    }
+}
+
+/// The review lead decides how much of a revised version a review reads, so it and the main agent, which keeps the user's rights, choose a review scope, through any of their workers; a reviewer follows the scope it gets, and a human or the system chooses none. `standing` is the acting agent's.
+pub fn can_choose_review_scope(actor: &Actor, standing: AgentStanding) -> Result<(), PolicyDenied> {
+    match actor {
+        Actor::Agent(_) if standing.is_main_agent() || standing.role == Some(Role::ReviewLead) => {
+            Ok(())
+        }
+        Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
+            code: codes::INTEGRATOR_REQUIRED,
+            message: "only the review lead or the main agent chooses a review scope",
+            hint: "follow the scope you got, and send_message to the review lead when it does not fit",
         }),
     }
 }
@@ -363,6 +434,29 @@ pub fn can_create_review_checkout<'a>(
             code: codes::REVIEW_CLAIM_REQUIRED,
             message: "only the agent that holds the review claim can check out the proposal",
             hint: "call claim_review, then create_review_checkout",
+        }),
+    }
+}
+
+/// A reviewer fixes what it finds inside the task's agreed scope itself, in its own review checkout, and the fix becomes the next version under the reviewer's name. Only the agent that holds the review claim makes it, through any of its workers, because the fix is part of the review the claim holds; the author's agent never does, since its change goes through `update_proposal`. A human changes a proposal only through a human edit, and the system never. `holder` is the claim's worker and `author` the proposal's author. It returns the admitted reviewer, which becomes the new version's author.
+pub fn can_fix_in_review<'a>(
+    actor: &'a Actor,
+    holder: Option<&WorkerName>,
+    author: &WorkerName,
+) -> Result<&'a AgentActor, PolicyDenied> {
+    match actor {
+        Actor::Agent(agent) if author.belongs_to(&agent.agent) => Err(PolicyDenied {
+            code: codes::AUTHOR_CANNOT_REVIEW,
+            message: "the author's agent cannot fix its own proposal as a reviewer",
+            hint: "change the task workspace, then call update_proposal",
+        }),
+        Actor::Agent(agent) if holder.is_some_and(|holder| holder.belongs_to(&agent.agent)) => {
+            Ok(agent)
+        }
+        Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
+            code: codes::REVIEW_CLAIM_REQUIRED,
+            message: "only the agent that holds the review claim can fix the proposal",
+            hint: "call claim_review and create_review_checkout, fix the files there, then call submit_review_fix",
         }),
     }
 }
@@ -494,7 +588,7 @@ mod tests {
             .into_iter()
             .filter(|role| supervised(*role).decides_reviews())
             .collect();
-        assert_eq!(deciders, [Role::ReviewLead, Role::BatchReviewer]);
+        assert_eq!(deciders, [Role::ReviewLead, Role::Reviewer]);
         assert!(MAIN.decides_reviews());
         assert!(!UNSUPERVISED.decides_reviews());
     }
@@ -515,7 +609,7 @@ mod tests {
             assert_eq!(outcome(result), expected, "{case}");
         }
         for (role, expected) in [
-            (Role::BatchReviewer, None),
+            (Role::Reviewer, None),
             (Role::AreaLead, Some(codes::NOT_PROPOSAL_AUTHOR)),
             (Role::TaskWorker, Some(codes::NOT_PROPOSAL_AUTHOR)),
         ] {
@@ -528,7 +622,7 @@ mod tests {
         assert!(
             denied
                 .to_string()
-                .contains("the review lead, a batch reviewer or a human")
+                .contains("the review lead, a reviewer or a human")
         );
     }
 
@@ -566,9 +660,9 @@ mod tests {
                 Some(()),
             ),
             (
-                "batch reviewer",
+                "reviewer",
                 agent("reviewer-1", &[]),
-                supervised(Role::BatchReviewer),
+                supervised(Role::Reviewer),
                 Some(()),
                 Some(()),
             ),
@@ -649,23 +743,117 @@ mod tests {
     }
 
     #[test]
-    fn the_author_agent_never_claims_its_own_review() {
+    fn only_a_review_role_claims_a_review_and_never_the_author() {
         let author = worker("backend/api");
         let expected = [
             Some(codes::AUTHOR_CANNOT_REVIEW),
             Some(codes::AUTHOR_CANNOT_REVIEW),
-            None,
+            Some(codes::INTEGRATOR_REQUIRED),
             None,
             Some(codes::ACTOR_CANNOT_CLAIM),
             Some(codes::ACTOR_CANNOT_CLAIM),
         ];
         for ((case, actor), expected) in actors().into_iter().zip(expected) {
-            let result = can_claim_review(&actor, &author);
+            let result = can_claim_review(&actor, standing_of(case), &author);
             assert_eq!(outcome(result), expected, "{case}");
         }
         let reviewer = agent("frontend", &[]);
-        let admitted = can_claim_review(&reviewer, &author).unwrap();
+        for (standing, expected) in [
+            (MAIN, None),
+            (supervised(Role::ReviewLead), None),
+            (supervised(Role::Reviewer), Some(codes::WORKER_CLAIM_DENIED)),
+            (supervised(Role::AreaLead), Some(codes::INTEGRATOR_REQUIRED)),
+            (
+                supervised(Role::TaskWorker),
+                Some(codes::INTEGRATOR_REQUIRED),
+            ),
+            (UNSUPERVISED, Some(codes::INTEGRATOR_REQUIRED)),
+        ] {
+            let result = can_claim_review(&reviewer, standing, &author);
+            assert_eq!(outcome(result), expected, "{standing:?}");
+        }
+        let admitted = can_claim_review(&reviewer, MAIN, &author).unwrap();
         assert_eq!(admitted.worker, worker("frontend"));
+        let denied = can_claim_review(&reviewer, supervised(Role::AreaLead), &author).unwrap_err();
+        assert!(denied.hint().contains("review lead"));
+        // The author's agent is refused first, whatever its role.
+        let author_agent = agent("backend", &[]);
+        let result = can_claim_review(&author_agent, supervised(Role::ReviewLead), &author);
+        assert_eq!(outcome(result), Some(codes::AUTHOR_CANNOT_REVIEW));
+        let result = can_claim_review(&author_agent, MAIN, &author);
+        assert_eq!(outcome(result), Some(codes::AUTHOR_CANNOT_REVIEW));
+    }
+
+    #[test]
+    fn only_an_area_lead_in_its_area_or_the_main_agent_claims_a_task() {
+        let label = |name: &str| LabelName::parse(name).unwrap();
+        let web = [label("web")];
+        let claimant = agent("web-lead", &[]);
+        for (standing, lead_label, expected) in [
+            (MAIN, None, None),
+            (UNSUPERVISED, None, Some(codes::ORCHESTRATOR_REQUIRED)),
+            (
+                supervised(Role::ReviewLead),
+                None,
+                Some(codes::ORCHESTRATOR_REQUIRED),
+            ),
+            (supervised(Role::AreaLead), Some(label("web")), None),
+            (
+                supervised(Role::AreaLead),
+                Some(label("api")),
+                Some(codes::TASK_OUTSIDE_AREA),
+            ),
+            (
+                supervised(Role::AreaLead),
+                None,
+                Some(codes::TASK_OUTSIDE_AREA),
+            ),
+            (
+                supervised(Role::TaskWorker),
+                None,
+                Some(codes::WORKER_CLAIM_DENIED),
+            ),
+            (
+                supervised(Role::Reviewer),
+                None,
+                Some(codes::WORKER_CLAIM_DENIED),
+            ),
+        ] {
+            let result = can_claim_task(&claimant, standing, lead_label.as_ref(), &web);
+            assert_eq!(outcome(result), expected, "{standing:?} {lead_label:?}");
+        }
+        // A subagent worker of a task worker's agent stands as that agent.
+        let subagent = agent("web-worker/tests", &[]);
+        let denied =
+            can_claim_task(&subagent, supervised(Role::TaskWorker), None, &web).unwrap_err();
+        assert!(denied.hint().contains("lead"));
+        let admitted = can_claim_task(&claimant, MAIN, None, &web).unwrap();
+        assert_eq!(admitted.worker, worker("web-lead"));
+        for actor in [human(), Actor::System] {
+            let result = can_claim_task(&actor, AgentStanding::NO_RIGHTS, None, &web);
+            assert_eq!(outcome(result), Some(codes::ACTOR_CANNOT_CLAIM));
+        }
+    }
+
+    #[test]
+    fn only_the_review_lead_or_the_main_agent_chooses_a_review_scope() {
+        let lead = agent("review", &[]);
+        for (actor, standing, allowed) in [
+            (&lead, supervised(Role::ReviewLead), true),
+            (&lead, MAIN, true),
+            (&lead, supervised(Role::Reviewer), false),
+            (&lead, supervised(Role::AreaLead), false),
+            (&lead, supervised(Role::TaskWorker), false),
+            (&lead, UNSUPERVISED, false),
+            (&human(), AgentStanding::NO_RIGHTS, false),
+            (&Actor::System, AgentStanding::NO_RIGHTS, false),
+        ] {
+            let result = can_choose_review_scope(actor, standing);
+            assert_eq!(result.is_ok(), allowed, "{standing:?}");
+            if let Err(denied) = result {
+                assert_eq!(denied.code(), codes::INTEGRATOR_REQUIRED);
+            }
+        }
     }
 
     #[test]
@@ -708,5 +896,29 @@ mod tests {
                 "{case} on an unclaimed proposal"
             );
         }
+    }
+
+    #[test]
+    fn only_the_holder_agent_fixes_a_proposal_and_never_the_author() {
+        let author = worker("backend/api");
+        let holder = worker("frontend/r1");
+        let expected = [
+            Some(codes::AUTHOR_CANNOT_REVIEW),
+            Some(codes::AUTHOR_CANNOT_REVIEW),
+            None,
+            Some(codes::REVIEW_CLAIM_REQUIRED),
+            Some(codes::REVIEW_CLAIM_REQUIRED),
+            Some(codes::REVIEW_CLAIM_REQUIRED),
+        ];
+        for ((case, actor), expected) in actors().into_iter().zip(expected) {
+            let result = can_fix_in_review(&actor, Some(&holder), &author);
+            assert_eq!(outcome(result), expected, "{case}");
+        }
+        // A claim that names the author's agent still never lets it fix as a reviewer.
+        let actors = actors();
+        let result = can_fix_in_review(&actors[1].1, Some(&author), &author);
+        assert_eq!(outcome(result), Some(codes::AUTHOR_CANNOT_REVIEW));
+        let result = can_fix_in_review(&actors[2].1, None, &author);
+        assert_eq!(outcome(result), Some(codes::REVIEW_CLAIM_REQUIRED));
     }
 }

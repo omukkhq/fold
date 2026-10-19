@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.id AS \"id!: i64\", s.base_tree_hash, s.tree_hash, r.number AS \"revision!: i64\",\n                  s.actor, s.state, s.created_at AS \"created_at!: i64\", s.conflicted_at AS \"conflicted_at?: i64\"\n           FROM folder_stashes s JOIN revisions r ON r.id = s.revision_id\n           WHERE s.state IN ('stashed', 'conflicted')\n           ORDER BY s.number DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "folder_stashes",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "base_tree_hash",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "folder_stashes",
+            "name": "base_tree_hash"
+          }
+        }
+      },
+      {
+        "name": "tree_hash",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "folder_stashes",
+            "name": "tree_hash"
+          }
+        }
+      },
+      {
+        "name": "revision!: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "actor",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "folder_stashes",
+            "name": "actor"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "folder_stashes",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "created_at!: i64",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "folder_stashes",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "conflicted_at?: i64",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "folder_stashes",
+            "name": "conflicted_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "ceb28fc0709326279610cb393508f6bb9a5c43b025052c8d779938f2a227c454"
+}

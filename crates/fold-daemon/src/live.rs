@@ -101,8 +101,9 @@ pub struct WorkspaceLive {
 pub struct LiveWorkspace {
     #[schema(value_type = String, example = "ws-9")]
     pub workspace: WorkspaceId,
-    #[schema(value_type = String, example = "T-12")]
-    pub task: TaskId,
+    /// The workspace's task; null for the main workspace, which belongs to no task.
+    #[schema(value_type = Option<String>, required = true, example = "T-12")]
+    pub task: Option<TaskId>,
     /// The worker label, `agent` or `agent/worker`.
     #[schema(example = "frontend/ui")]
     pub worker: String,
@@ -436,6 +437,7 @@ impl LiveState {
             .with_details([("reason", json!("review_checkout"))])
             .into());
         }
+        let task = row.task;
         if row.state != WorkspaceState::Active {
             return Err(FoldError::new(
                 codes::WORKSPACE_NOT_ACTIVE,
@@ -482,7 +484,7 @@ impl LiveState {
         }
         let pipeline = Pipeline {
             workspace,
-            task: row.task,
+            task,
             store: shared.store.clone(),
             bus: shared.bus.clone(),
             clock: Arc::clone(&shared.clock),
@@ -495,7 +497,7 @@ impl LiveState {
             rebased: None,
             initial: LiveWorkspace {
                 workspace,
-                task: row.task,
+                task,
                 worker: row
                     .worker
                     .map(|worker| worker.to_string())
@@ -775,7 +777,7 @@ struct Seed {
 
 struct Pipeline {
     workspace: WorkspaceId,
-    task: TaskId,
+    task: Option<TaskId>,
     store: Store,
     bus: EventBus,
     clock: Arc<dyn Clock>,
@@ -1116,12 +1118,19 @@ struct Scanner {
 }
 
 impl Scanner {
+    /// A project whose database is gone, as after its `.fold/` was deleted, is refused, so the scan never makes `.fold/` again.
     fn open(paths: &ProjectPaths, caps: Capabilities, seed: &Seed) -> Result<Self, FoldError> {
-        let objects = ObjectStore::open(&paths.fold_dir()).map_err(FoldError::from)?;
+        if !paths.db().is_file() {
+            return Err(FoldError::new(
+                codes::PROJECT_UNAVAILABLE,
+                "the project database is missing",
+            ));
+        }
+        let objects = ObjectStore::open_existing(&paths.fold_dir()).map_err(FoldError::from)?;
         let base = vcs::load_flat(&objects, &seed.base_tree)?;
         let index = StatIndex::load(&paths.workspace_index(seed.workspace), caps);
         let boundary_dir = paths.index();
-        std::fs::create_dir_all(&boundary_dir)
+        fold_vcs::platform::create_dir_below(&paths.fold_dir(), &boundary_dir)
             .map_err(|error| FoldError::from(fold_vcs::paths::WorkspaceError::from(error)))?;
         Ok(Self {
             root: seed.root.clone(),

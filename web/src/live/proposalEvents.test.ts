@@ -51,6 +51,9 @@ describe("proposal keys and the event stream", () => {
   it.each([
     "proposal.opened",
     "proposal.version_added",
+    "proposal.human_edited",
+    "proposal.reviewer_fixed",
+    "proposal.review_again_requested",
     "proposal.author_changed",
     "proposal.closed",
     "review.submitted",
@@ -118,5 +121,31 @@ describe("proposal keys and the event stream", () => {
     );
     expect(stale()).toContain(revisions.join("/"));
     expect(stale().filter((k) => k.includes("proposal"))).toEqual([]);
+  });
+
+  it("the end of a check run refreshes its proposal and the run's own logs", () => {
+    const run = keys.checkRun(slug, "cr-9");
+    client.setQueryData(run, { cached: true });
+    applyEvent(
+      client,
+      slug,
+      event("checks.finished", {
+        proposal: "P-4",
+        data: { run: "cr-9", state: "failed" },
+      }),
+    );
+    expect(stale()).toEqual(
+      expect.arrayContaining([
+        `${slug}/proposals`,
+        `${slug}/proposal/P-4`,
+        `${slug}/board`,
+      ]),
+    );
+    expect(stale()).not.toContain(`${slug}/proposal/P-5`);
+    expect(client.getQueryState(run)?.isInvalidated).toBe(true);
+    client = new QueryClient();
+    for (const key of watched) client.setQueryData(key, { cached: true });
+    applyEvent(client, slug, event("checks.started", { data: {} }));
+    expect(stale()).toEqual([`${slug}/proposals`, `${slug}/board`]);
   });
 });

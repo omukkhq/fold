@@ -6,10 +6,14 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { SyntaxTokens } from "@/components/code/SyntaxText";
 import { DiffLine } from "@/components/diff/DiffLine";
 import { cn } from "@/lib/cn";
+import { languageForPath } from "@/syntax/languages";
+import { useHighlight } from "@/syntax/useHighlight";
 import type { DiffRow, LineRow } from "./layout";
 import { NO_NEWLINE, hiddenLinesText, lineLabel } from "./present";
+import { diffSyntax, rowTokens } from "./syntax";
 import {
   EMPTY_STATE,
   isLastSelected,
@@ -74,6 +78,8 @@ export function DiffRows({
   const cells = useRef(new Map<string, HTMLElement>());
   const points = pointsOf(rows);
   const stop = tabStop(state.cursor, points);
+  const syntax = diffSyntax(rows, languageForPath(path));
+  const tokens = useHighlight(syntax.request);
 
   function dispatch(action: SelectionAction) {
     const result = reduceSelection(stateRef.current, action, {
@@ -110,6 +116,7 @@ export function DiffRows({
     const covering = drawn.flatMap((p) => threadsCovering(threads, path, p));
     const ending = drawn.flatMap((p) => threadsEndingAt(threads, path, p));
     const selected = isSelected(selection, path, point);
+    const lineTokens = rowTokens(syntax, tokens, row.key);
     return (
       <Fragment key={row.key}>
         <div role="row">
@@ -148,7 +155,7 @@ export function DiffRows({
               dispatch({ type: "click", point, shift: event.shiftKey });
             }}
           >
-            {row.text}
+            {lineTokens ? <SyntaxTokens tokens={lineTokens} /> : row.text}
             {row.noNewline ? (
               <span
                 aria-hidden="true"

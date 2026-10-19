@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE folder_stashes SET state = 'applied', closed_at = ? WHERE id = ? AND state = 'stashed'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "6459c71d5270c0cdcaab4d30a2bcec79e6145fad5fe2ba241786582033331fd4"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE workspaces\n         SET version_id = (SELECT v.id FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id\n                           WHERE p.number = ?2 AND v.version = ?3)\n         WHERE number = ?1 AND kind = 'review' AND state = 'active'\n           AND proposal_id = (SELECT id FROM proposals WHERE number = ?2)\n           AND EXISTS (SELECT 1 FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id\n                       WHERE p.number = ?2 AND v.version = ?3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "37adacf1a7982e774ad61e863f5e44938b640663d9f5c567a57cde4255b9e2d2"
+}

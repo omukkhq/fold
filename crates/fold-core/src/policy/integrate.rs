@@ -52,9 +52,7 @@ pub enum GateRefusal {
     ProposalNotOpen,
     #[error("the caller saw v{expected}, but the current version is v{current}")]
     StaleVersion { expected: u32, current: u32 },
-    #[error(
-        "only the main agent, the review lead, a batch reviewer or a human can integrate a proposal"
-    )]
+    #[error("only the main agent, the review lead, a reviewer or a human can integrate a proposal")]
     IntegratorRequired,
     #[error("the author's agent cannot integrate its own proposal")]
     AuthorCannotIntegrate,
@@ -417,9 +415,9 @@ mod tests {
         let cases: Vec<(&str, Case, Result<(), GateRefusal>)> = vec![
             ("approved by the review lead", Case::new(), Ok(())),
             (
-                "a batch reviewer as caller",
+                "a reviewer as caller",
                 Case {
-                    caller: agent_caller("reviewer-1", Some(Role::BatchReviewer)),
+                    caller: agent_caller("reviewer-1", Some(Role::Reviewer)),
                     ..Case::new()
                 },
                 Ok(()),
@@ -948,7 +946,7 @@ mod tests {
     fn caller() -> impl Strategy<Value = CallerFacts> {
         prop_oneof![
             Just(decider()),
-            Just(agent_caller("reviewer-1", Some(Role::BatchReviewer))),
+            Just(agent_caller("reviewer-1", Some(Role::Reviewer))),
             Just(agent_caller("frontend", None)),
             Just(agent_caller("web-worker", Some(Role::TaskWorker))),
             Just(agent_caller(AUTHOR, Some(Role::ReviewLead))),
@@ -1036,7 +1034,7 @@ mod tests {
             CallerFacts::Human(_) | CallerFacts::Automatic => true,
             CallerFacts::Agent { agent, standing } => {
                 agent.as_str() != AUTHOR
-                    && matches!(standing.role, Some(Role::ReviewLead | Role::BatchReviewer))
+                    && matches!(standing.role, Some(Role::ReviewLead | Role::Reviewer))
             }
         };
         let last_request = case

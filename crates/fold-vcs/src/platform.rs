@@ -45,11 +45,11 @@ pub struct Capabilities {
 }
 
 impl Capabilities {
-    /// `dir` is the project's `.fold` directory; the probe files live in a scratch directory under it and are removed again.
+    /// `dir` is the project's `.fold` directory, which must exist; the probe files live in a scratch directory under it and are removed again.
     pub fn probe(dir: &Path) -> io::Result<Self> {
         let number = PROBE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let scratch = dir.join(format!("probe-{}-{number}", std::process::id()));
-        fs::create_dir_all(&scratch)?;
+        fs::create_dir(&scratch)?;
         let found = probe_in(&scratch);
         let _ = fs::remove_dir_all(&scratch);
         found
@@ -340,6 +340,29 @@ pub fn sync_dir(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Creates `dir` and the missing directories between it and `base`, but never `base` or a directory above it: a missing `base` is `NotFound`. A project's `.fold/` is the base of every directory the daemon makes below it, so a write that runs after `.fold/` was deleted fails instead of making `.fold/` again. A `dir` outside `base` is `InvalidInput`.
+pub fn create_dir_below(base: &Path, dir: &Path) -> io::Result<()> {
+    let relative = dir.strip_prefix(base).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the directory is outside its base",
+        )
+    })?;
+    if !fs::metadata(base)?.is_dir() {
+        return Err(io::Error::from(io::ErrorKind::NotADirectory));
+    }
+    let mut at = base.to_path_buf();
+    for component in relative.components() {
+        at.push(component);
+        match fs::create_dir(&at) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists && at.is_dir() => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 /// `Unsupported` and `PermissionDenied` mean the platform has no directory sync; every other kind is a real failure.
 pub fn tolerate_sync_error(error: io::Error) -> io::Result<()> {
     match error.kind() {
@@ -380,6 +403,29 @@ mod tests {
     fn syncs_a_real_directory() {
         let dir = tempfile::tempdir().unwrap();
         sync_dir(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn a_directory_below_a_base_is_made_only_while_the_base_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join(".fold");
+        let deep = base.join("ws/T-1");
+        let missing = create_dir_below(&base, &deep).unwrap_err();
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
+        assert!(!base.exists(), "the base is never made");
+
+        fs::create_dir(&base).unwrap();
+        create_dir_below(&base, &deep).unwrap();
+        assert!(deep.is_dir());
+        create_dir_below(&base, &deep).unwrap();
+        create_dir_below(&base, &base).unwrap();
+        fs::write(base.join("file"), b"x").unwrap();
+        let file = create_dir_below(&base, &base.join("file")).unwrap_err();
+        assert_eq!(file.kind(), io::ErrorKind::AlreadyExists);
+        let outside = create_dir_below(&base, dir.path()).unwrap_err();
+        assert_eq!(outside.kind(), io::ErrorKind::InvalidInput);
+        let not_dir = create_dir_below(&base.join("file"), &base.join("file/x")).unwrap_err();
+        assert_eq!(not_dir.kind(), io::ErrorKind::NotADirectory);
     }
 
     #[test]

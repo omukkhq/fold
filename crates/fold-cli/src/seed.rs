@@ -1,12 +1,16 @@
 mod agent;
 mod sample;
+mod scripts;
+mod stub;
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use clap::{Args, Subcommand};
 use fold_cli::daemon_client::{ClientConfig, ClientError, DaemonClient, HandshakeError};
-use fold_core::{EventActor, ProjectPaths, codes};
+use fold_core::{ProjectPaths, codes};
+use fold_daemon::services::agents::DEV_STUB_DIR;
 use hyper::Method;
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -15,9 +19,39 @@ use crate::init::{self, InitArgs, InitError};
 use crate::output;
 use crate::serve::{self, Dirs, ServeError};
 use agent::Agent;
+use scripts::{API_LEAD, LIMIT_WORKER, REVIEW_LEAD, ROUTES_WORKER, Tasks, WEB_LEAD};
 
 /// The human the seed acts as; `make seed-dev` sets `FOLD_HUMAN` to the same name.
 const HUMAN: &str = "dev";
+
+/// The project settings of the demo. The review lead integrates each proposal at the step that needs it, so approved proposals stay open for the board; every worker the demo needs runs at once; and the model is one no Claude Code knows, so a daemon that runs `claude` instead of the stub fails each worker before it does any work.
+const CONFIG: &str = "
+[integration]
+automatic = false
+
+[workers]
+task_worker = 8
+reviewer = 6
+
+[roles.area_lead]
+model = \"fold-dev-stub\"
+
+[roles.review_lead]
+model = \"fold-dev-stub\"
+
+[roles.task_worker]
+model = \"fold-dev-stub\"
+
+[roles.reviewer]
+model = \"fold-dev-stub\"
+";
+
+/// The step of a failed worker that left no `stub.log`, as a worker that runs `claude` instead of the stub does.
+const NO_STEP: &str = "it ran no step";
+
+/// How long the seed waits for the agents' work.
+const WAIT: Duration = Duration::from_secs(180);
+const POLL: Duration = Duration::from_millis(100);
 
 #[derive(Args, Debug)]
 pub struct DevArgs {
@@ -29,6 +63,8 @@ pub struct DevArgs {
 enum DevCommand {
     /// Build a throwaway demo project through the tools and routes a real client uses
     Seed(SeedArgs),
+    /// Stand in for Claude Code as a worker of a project with a .fold/dev-stub folder: run the agent's script from it through the fold MCP tools
+    Stub(stub::StubArgs),
 }
 
 #[derive(Args, Debug)]
@@ -77,6 +113,12 @@ pub enum SeedError {
     },
     #[error("cannot write the output: {0}")]
     Write(io::Error),
+    #[error(transparent)]
+    Stub(#[from] stub::StubError),
+    #[error("the worker {agent} failed: {step}")]
+    Worker { agent: String, step: String },
+    #[error("the demo's agents did not reach {what} in time")]
+    Timeout { what: &'static str },
 }
 
 impl From<HandshakeError> for SeedError {
@@ -104,7 +146,13 @@ impl SeedError {
     pub fn hint(&self) -> Option<&'static str> {
         match self {
             Self::Exists { .. } => Some(
-                "stop make dev-daemon, run make clean-keep-cargo, start make dev-daemon again, then run make seed-dev",
+                "stop `make dev-daemon`, run `make clean-keep-cargo`, start `make dev-daemon` again, then run `make seed-dev`",
+            ),
+            Self::Worker { step, .. } if step == NO_STEP => Some(
+                "the daemon must run the stub workers, which only a build with the `dev-seed` feature has: stop the daemon, run `make clean-keep-cargo`, start `make dev-daemon`, which builds fld with that feature, then run `make seed-dev`",
+            ),
+            Self::Worker { .. } | Self::Timeout { .. } => Some(
+                "each worker's steps are in `.fold/workers/<agent>/stub.log`; to build the demo again, stop `make dev-daemon`, run `make clean-keep-cargo`, start `make dev-daemon` again, then run `make seed-dev`",
             ),
             _ => None,
         }
@@ -114,6 +162,7 @@ impl SeedError {
 pub fn run(args: &DevArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), SeedError> {
     match &args.command {
         DevCommand::Seed(args) => seed(args, dirs, out),
+        DevCommand::Stub(args) => Ok(stub::run(args)?),
     }
 }
 
@@ -130,17 +179,20 @@ fn seed(args: &SeedArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), SeedEr
     let init = InitArgs {
         dir: Some(dir.clone()),
         name: Some("Demo".to_owned()),
-        from_git: false,
+        with_git: true,
         socket: Some(socket.clone()),
         refresh: false,
+        git_name: Some("Demo".to_owned()),
+        git_email: Some("demo@example.com".to_owned()),
     };
-    let slug = init::initialise(&dir, &init, dirs, &mut io::sink())?;
+    let slug = init::initialise(&dir, &init, init::Kind::New, dirs, &mut io::sink())?;
     let root = dir.canonicalize()?;
-    // The scenario integrates each proposal at the step that needs it and keeps approved proposals open for the board.
-    let config = ProjectPaths::new(&root).config();
-    let mut text = std::fs::read_to_string(&config)?;
-    text.push_str("\n[integration]\nautomatic = false\n");
-    std::fs::write(&config, text)?;
+    let paths = ProjectPaths::new(&root);
+    let mut text = std::fs::read_to_string(paths.config())?;
+    text.push_str(CONFIG);
+    std::fs::write(paths.config(), text)?;
+    // The folder makes the daemon run every worker of the project as the stub, which follows the agent's script from it.
+    std::fs::create_dir_all(paths.fold_dir().join(DEV_STUB_DIR))?;
 
     let runtime = serve::current_thread_runtime().map_err(SeedError::Runtime)?;
     let built = runtime.block_on(build(&socket, &root, &slug))?;
@@ -148,8 +200,8 @@ fn seed(args: &SeedArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), SeedEr
     let mut write = |text: String| output::line(out, &text).map_err(SeedError::Write);
     write(format!("seeded project {slug} at {}", root.display()))?;
     write(format!(
-        "{} tasks, {} workspaces, {} proposals, {} messages, 3 agents and 1 worker",
-        built.counts.tasks, built.counts.workspaces, built.counts.proposals, built.counts.messages
+        "{} tasks, {} proposals and {} workers",
+        built.tasks, built.proposals, built.workers
     ))?;
     for (column, total) in &built.columns {
         write(format!("{column}: {total}"))?;
@@ -163,16 +215,10 @@ fn seed(args: &SeedArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), SeedEr
     write(format!("board: http://{listen}/p/{slug}/board"))
 }
 
-#[derive(Debug, Default)]
-struct Counts {
-    tasks: u32,
-    workspaces: u32,
-    proposals: u32,
-    messages: u32,
-}
-
 struct Built {
-    counts: Counts,
+    tasks: u32,
+    proposals: usize,
+    workers: usize,
     columns: Vec<(String, u64)>,
 }
 
@@ -182,49 +228,21 @@ async fn build(socket: &Path, root: &Path, slug: &str) -> Result<Built, SeedErro
         root: root.to_owned(),
         slug: slug.to_owned(),
         human: DaemonClient::new(config, Some(HUMAN.to_owned())),
-        frontend: Agent::connect(socket, root, "frontend", &["frontend"]).await?,
-        backend: Agent::connect(socket, root, "backend", &["backend"]).await?,
-        // `review` is the project's main agent, the only session opened without a role that may approve and integrate.
-        review: Agent::connect(socket, root, "review", &["main", "review"]).await?,
-        counts: Counts::default(),
+        // The user's own session, which `fld claude` opens as the project's main agent; every other agent is a worker that fold starts.
+        main: Agent::connect(socket, root, "main", &["main"]).await?,
+        tasks: 0,
     };
     let outcome = seeder.scenario().await;
-    let columns = match outcome {
-        Ok(()) => seeder.columns().await,
+    let built = match outcome {
+        Ok(()) => seeder.built().await,
         Err(error) => Err(error),
     };
-    let Seeder {
-        frontend,
-        backend,
-        review,
-        counts,
-        ..
-    } = seeder;
-    frontend.close().await;
-    backend.close().await;
-    review.close().await;
-    Ok(Built {
-        counts,
-        columns: columns?,
-    })
+    seeder.main.close().await;
+    built
 }
 
-/// A task workspace and the directory its worker edits.
-struct Workspace {
-    id: String,
-    dir: PathBuf,
-}
-
-/// The ids the later steps need.
-struct Tasks {
-    schema: String,
-    routes: String,
-    local_dates: String,
-    relative_dates: String,
-    counts: String,
-    login: String,
-    audit: String,
-    limit: String,
+/// The tasks the main agent adds after the scripts are written.
+struct Later {
     pagination: String,
 }
 
@@ -232,33 +250,78 @@ struct Seeder {
     root: PathBuf,
     slug: String,
     human: DaemonClient,
-    frontend: Agent,
-    backend: Agent,
-    review: Agent,
-    counts: Counts,
+    main: Agent,
+    tasks: u32,
 }
 
 impl Seeder {
+    /// The main agent plans the work and starts the leads; the leads start the task workers and reviewers, which follow their scripts. The main agent then waits for their work at the points where it acts itself.
     async fn scenario(&mut self) -> Result<(), SeedError> {
-        self.frontend
-            .call("register_worker", json!({"name": "ui"}))
+        let (tasks, later) = self.plan().await?;
+        for (name, label) in [("api", "backend"), ("web", "frontend")] {
+            self.main
+                .call("define_area", json!({"name": name, "label": label}))
+                .await?;
+        }
+        self.write_scripts(&tasks).await?;
+        self.main
+            .call(
+                "start_worker",
+                json!({"role": "review_lead", "name": REVIEW_LEAD}),
+            )
             .await?;
-        let tasks = self.plan().await?;
-        self.finish_schema(&tasks).await?;
-        self.work_on_routes(&tasks).await?;
-        self.review_round(&tasks).await?;
+        for (name, area) in [(API_LEAD, "api"), (WEB_LEAD, "web")] {
+            self.main
+                .call(
+                    "start_worker",
+                    json!({"role": "area_lead", "name": name, "area": area}),
+                )
+                .await?;
+        }
+
+        // The limit task already has a workspace when it gets a prerequisite, so its card shows the blocked indicator.
+        self.wait_task(&tasks.limit, "the limit task's workspace", |task| {
+            !task["workspace"].is_null()
+        })
+        .await?;
+        self.main
+            .call(
+                "add_dependency",
+                json!({"task": tasks.limit, "needs": later.pagination}),
+            )
+            .await?;
+
+        // The feedback goes to the worker that holds the task.
+        self.wait_worker(ROUTES_WORKER, "the work on the user routes", done)
+            .await?;
+        self.route(
+            Method::POST,
+            "/feedback",
+            Some(json!({
+                "body": "Keep the handlers small; one file per resource is fine.",
+                "task": tasks.routes,
+            })),
+        )
+        .await?;
+
+        for task in [&tasks.schema, &tasks.local_dates] {
+            self.wait_task(task, "the integrations", |task| {
+                !task["integration"].is_null()
+            })
+            .await?;
+        }
         self.container(&tasks).await?;
-        self.talk(&tasks).await
+        self.settled(&tasks).await
     }
 
     /// Labels, and every task with its edges. Each column is reached later by the work done on the tasks.
-    async fn plan(&mut self) -> Result<Tasks, SeedError> {
+    async fn plan(&mut self) -> Result<(Tasks, Later), SeedError> {
         for (name, color) in [
             ("backend", "sage"),
             ("frontend", "slate"),
             ("infra", "teal"),
         ] {
-            self.frontend
+            self.main
                 .call("create_label", json!({"name": name, "color": color}))
                 .await?;
         }
@@ -334,13 +397,18 @@ impl Seeder {
                 &[],
             )
             .await?;
-        self.task(
-            "Write the deployment guide",
-            "Describe how to run the service on a small server.",
-            &["infra"],
-            &[],
+        // The human adds one task on the board, which also makes them known to the project, so the agents can write to them.
+        self.route(
+            Method::POST,
+            "/tasks",
+            Some(json!({
+                "title": "Write the deployment guide",
+                "description": "Describe how to run the service on a small server.",
+                "labels": ["infra"],
+            })),
         )
         .await?;
+        self.tasks += 1;
         let export = self
             .task(
                 "Add the admin export",
@@ -357,301 +425,42 @@ impl Seeder {
                 &[&export],
             )
             .await?;
-        self.frontend
+        self.main
             .call(
                 "add_dependency",
                 json!({"task": search, "needs": pagination}),
             )
             .await?;
-        Ok(Tasks {
-            schema,
-            routes,
-            local_dates,
-            relative_dates,
-            counts,
-            login,
-            audit,
-            limit,
-            pagination,
-        })
+        Ok((
+            Tasks {
+                schema,
+                routes,
+                local_dates,
+                relative_dates,
+                counts,
+                login,
+                audit,
+                limit,
+            },
+            Later { pagination },
+        ))
     }
 
-    /// The first task is reviewed and integrated, which unblocks the routes.
-    async fn finish_schema(&mut self, tasks: &Tasks) -> Result<(), SeedError> {
-        let backend = self.backend.name();
-        let workspace = self.start(backend, &tasks.schema, None).await?;
-        edit(&workspace, "src/db.js", |text| {
-            insert_after(&text, 6, "  tables.set(\"users\", []);\n")
+    async fn write_scripts(&self, tasks: &Tasks) -> Result<(), SeedError> {
+        let dir = ProjectPaths::new(&self.root).fold_dir().join(DEV_STUB_DIR);
+        let files: Vec<(PathBuf, Vec<u8>)> = scripts::scripts(tasks)
+            .into_iter()
+            .map(|(agent, script)| {
+                let text = serde_json::to_vec_pretty(&script).map_err(io::Error::other)?;
+                Ok((dir.join(format!("{agent}.json")), text))
+            })
+            .collect::<io::Result<_>>()?;
+        blocking(move || {
+            for (path, text) in files {
+                std::fs::write(path, text)?;
+            }
+            Ok(())
         })
-        .await?;
-        let proposal = self
-            .propose(
-                backend,
-                &workspace,
-                &tasks.schema,
-                "Create the users table",
-                "The service starts and the users table exists.",
-                None,
-            )
-            .await?;
-        self.approve(&proposal, 1, "The table and the helper look right.")
-            .await?;
-        self.integrate(&proposal, 1).await
-    }
-
-    /// The routes task stays In Progress with recorded and unrecorded changes in its workspace.
-    async fn work_on_routes(&mut self, tasks: &Tasks) -> Result<(), SeedError> {
-        let backend = self.backend.name();
-        let workspace = self.start(backend, &tasks.routes, None).await?;
-        edit(&workspace, "src/users.js", |_| {
-            "export function listUsers(db) {\n  return db.all(\"users\");\n}\n\nexport function createUser(db, user) {\n  return db.insert(\"users\", user);\n}\n".to_owned()
-        })
-        .await?;
-        edit(&workspace, "src/routes.js", |text| {
-            insert_after(
-                &text,
-                4,
-                "    \"GET /users\": async () => ({ status: 200, body: await db.all(\"users\") }),\n",
-            )
-        })
-        .await?;
-        remove(&workspace, "docs/changelog.md").await?;
-        self.backend
-            .call(
-                "record_checkpoint",
-                json!({"ws": workspace.id, "label": "Handlers listed"}),
-            )
-            .await?;
-        edit(&workspace, "src/users.js", |text| {
-            format!("{text}\nexport function removeUser(db, id) {{\n  return db.remove(\"users\", id);\n}}\n")
-        })
-        .await?;
-        self.route(
-            Method::POST,
-            "/feedback",
-            Some(json!({
-                "body": "Keep the handlers small; one file per resource is fine.",
-                "task": tasks.routes,
-            })),
-        )
-        .await?;
-        self.counts.messages += 1;
-        Ok(())
-    }
-
-    /// Four open proposals, an integrated one and a conflicted one, all from the same base.
-    async fn review_round(&mut self, tasks: &Tasks) -> Result<(), SeedError> {
-        let frontend = self.frontend.name();
-        let backend = self.backend.name();
-        let local = self.start(frontend, &tasks.local_dates, None).await?;
-        let relative = self.start(backend, &tasks.relative_dates, None).await?;
-        let counts = self.start(frontend, &tasks.counts, None).await?;
-        let login = self
-            .start(frontend, &tasks.login, Some("frontend/ui"))
-            .await?;
-        let audit = self.start(backend, &tasks.audit, None).await?;
-        let limit = self.start(backend, &tasks.limit, None).await?;
-
-        edit(&local, "src/format.js", |text| {
-            replace_line(
-                &text,
-                4,
-                "  return new Date(value).toLocaleDateString(\"en-GB\");",
-            )
-        })
-        .await?;
-        edit(&relative, "src/format.js", |text| {
-            replace_line(
-                &text,
-                4,
-                "  return relativeTime(Date.now() - new Date(value));",
-            )
-        })
-        .await?;
-        edit(&counts, "src/format.js", |text| {
-            replace_line(&text, 8, "  return count.toLocaleString(\"en-US\");")
-        })
-        .await?;
-        edit(&login, "src/app.js", |text| {
-            replace_line(
-                &text,
-                6,
-                "  const handler = routes(db);\n  const form = {\n    fields: [\"name\", \"password\"],\n    submit: (values) => db.insert(\"sessions\", values),\n  };\n  handler.login = form;",
-            )
-        })
-        .await?;
-        edit(&audit, "src/audit.js", |_| {
-            "export function record(log, who, what) {\n  log.push({ who, what });\n}\n".to_owned()
-        })
-        .await?;
-        edit(&limit, "src/routes.js", |text| {
-            format!("{text}\nexport function limited(counts, client, max) {{\n  return (counts.get(client) ?? 0) >= max;\n}}\n")
-        })
-        .await?;
-
-        let local_proposal = self
-            .propose(
-                frontend,
-                &local,
-                &tasks.local_dates,
-                "Show dates in the local time zone",
-                "Checked in the list view with two time zones.",
-                None,
-            )
-            .await?;
-        let relative_proposal = self
-            .propose(
-                backend,
-                &relative,
-                &tasks.relative_dates,
-                "Show dates as relative text",
-                "Checked with items from the last day.",
-                None,
-            )
-            .await?;
-        let counts_proposal = self
-            .propose(
-                frontend,
-                &counts,
-                &tasks.counts,
-                "Format counts with separators",
-                "Checked with counts above one thousand.",
-                None,
-            )
-            .await?;
-        let login_proposal = self
-            .propose(
-                frontend,
-                &login,
-                &tasks.login,
-                "Add the login form",
-                "The form renders and submits.",
-                Some("frontend/ui"),
-            )
-            .await?;
-        let audit_proposal = self
-            .propose(
-                backend,
-                &audit,
-                &tasks.audit,
-                "Record changes in an audit log",
-                "Each write adds one entry.",
-                None,
-            )
-            .await?;
-        // The limit task already has a workspace when it gets a prerequisite, so its card shows the blocked indicator.
-        self.frontend
-            .call(
-                "add_dependency",
-                json!({"task": tasks.limit, "needs": tasks.pagination}),
-            )
-            .await?;
-
-        // Two proposals changed the same line of one file. The first integrates; the second gets its conflict report.
-        self.approve(&local_proposal, 1, "Reads well.").await?;
-        self.approve(&relative_proposal, 1, "Reads well.").await?;
-        self.integrate(&local_proposal, 1).await?;
-        let refused = self
-            .review
-            .refused(
-                "integrate_proposal",
-                json!({"id": relative_proposal, "expected_version": 1}),
-            )
-            .await?;
-        if refused.code != "integration_conflicted" {
-            return Err(SeedError::Unexpected {
-                tool: "integrate_proposal",
-            });
-        }
-
-        // The counts proposal gets a second version after a change request.
-        self.review
-            .call("claim_review", json!({"id": counts_proposal}))
-            .await?;
-        self.review
-            .call(
-                "submit_review",
-                json!({
-                    "id": counts_proposal,
-                    "version": 1,
-                    "verdict": "request_changes",
-                    "body": "Keep the separator for small counts too.",
-                    "comments": [{
-                        "path": "src/format.js",
-                        "start_line": 8,
-                        "end_line": 8,
-                        "side": "new",
-                        "body": "This is right for large counts. What about counts below one thousand?"
-                    }],
-                }),
-            )
-            .await?;
-        edit(&counts, "src/format.js", |text| {
-            insert_after(&text, 6, "// Counts use a separator at every size.\n")
-        })
-        .await?;
-        self.update(
-            frontend,
-            &counts_proposal,
-            "Checked with counts from 1 to 10000000.",
-        )
-        .await?;
-
-        // The login form stays with its author after a review with one range comment and two single-line comments.
-        self.review
-            .call("claim_review", json!({"id": login_proposal}))
-            .await?;
-        self.review
-            .call(
-                "submit_review",
-                json!({
-                    "id": login_proposal,
-                    "version": 1,
-                    "verdict": "request_changes",
-                    "body": "The form needs a failure path and a clearer name for the handler.",
-                    "comments": [
-                        {
-                            "path": "src/app.js",
-                            "start_line": 6,
-                            "end_line": 10,
-                            "side": "new",
-                            "body": "The submit function writes the password into the session row. Store a hash instead."
-                        },
-                        {
-                            "path": "src/app.js",
-                            "start_line": 12,
-                            "end_line": 12,
-                            "side": "new",
-                            "body": "Name the server after what it serves."
-                        },
-                        {
-                            "path": "src/app.js",
-                            "start_line": 7,
-                            "end_line": 7,
-                            "side": "old",
-                            "body": "Keep creating the server after the handler is built."
-                        }
-                    ],
-                }),
-            )
-            .await?;
-
-        // A human has to look at the audit log before it integrates. The agent approves it, which puts it on the human's screen, and the human's approval stays missing.
-        self.review
-            .call(
-                "require_human_review",
-                json!({
-                    "task": tasks.audit,
-                    "reviewer": HUMAN,
-                    "reason": "The audit log records personal data.",
-                }),
-            )
-            .await?;
-        self.approve(
-            &audit_proposal,
-            1,
-            "Each write adds one entry, as the evidence says.",
-        )
         .await
     }
 
@@ -666,21 +475,21 @@ impl Seeder {
             )
             .await?;
         let step = self
-            .review
+            .main
             .call(
                 "add_checklist_item",
                 json!({"task": parent, "text": "Check the empty state"}),
             )
             .await?;
         for child in [&tasks.schema, &tasks.local_dates] {
-            self.review
+            self.main
                 .call(
                     "add_checklist_item",
                     json!({"task": parent, "linked_task": child}),
                 )
                 .await?;
         }
-        self.review
+        self.main
             .call(
                 "update_checklist_item",
                 json!({"id": text(&step["item"], "add_checklist_item")?, "done": true}),
@@ -689,40 +498,30 @@ impl Seeder {
         Ok(())
     }
 
-    /// Two messages between agents, and a question to the human that gives the limit task its `question` item.
-    async fn talk(&mut self, tasks: &Tasks) -> Result<(), SeedError> {
-        self.backend
-            .call(
-                "send_message",
-                json!({
-                    "to": ["frontend"],
-                    "body": "The user routes are in progress; the form can post to /users.",
-                    "task": tasks.routes,
-                }),
-            )
+    /// Waits until the review lead has tried its last integration, the counts proposal has its second version and no worker has a turn under way.
+    async fn settled(&self, tasks: &Tasks) -> Result<(), SeedError> {
+        self.wait_worker(REVIEW_LEAD, "the end of the review round", done)
             .await?;
-        self.frontend
-            .call(
-                "send_message",
-                json!({
-                    "to": ["backend"],
-                    "body": "Thanks. I will connect the login form once the first change lands.",
-                    "task": tasks.login,
-                }),
-            )
-            .await?;
-        self.backend
-            .call(
-                "send_message",
-                json!({
-                    "to": [format!("{}{HUMAN}", EventActor::HUMAN_PREFIX)],
-                    "body": "Should the limit apply per client address or per token?",
-                    "task": tasks.limit,
-                }),
-            )
-            .await?;
-        self.counts.messages += 3;
-        Ok(())
+        self.wait_task(
+            &tasks.counts,
+            "the second version of the counts proposal",
+            |task| task["proposal"]["version"] == 2,
+        )
+        .await?;
+        for name in [API_LEAD, WEB_LEAD, LIMIT_WORKER] {
+            self.wait_worker(name, "the end of the leads' turns", done)
+                .await?;
+        }
+        self.wait("the end of every worker's turn", async || {
+            let workers = self.main.call("list_workers", json!({})).await?;
+            let busy = workers["workers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|worker| !matches!(worker["state"].as_str(), Some("idle" | "stopped")));
+            Ok(!busy)
+        })
+        .await
     }
 
     async fn task(
@@ -733,103 +532,90 @@ impl Seeder {
         needs: &[&String],
     ) -> Result<String, SeedError> {
         let made = self
-            .frontend
+            .main
             .call(
                 "create_task",
                 json!({"title": title, "description": description, "labels": labels, "needs": needs}),
             )
             .await?;
-        self.counts.tasks += 1;
+        self.tasks += 1;
         Ok(text(&made["id"], "create_task")?.to_owned())
     }
 
-    async fn start(
-        &mut self,
-        who: &str,
+    async fn wait_task(
+        &self,
         task: &str,
-        as_worker: Option<&str>,
-    ) -> Result<Workspace, SeedError> {
-        let made = self
-            .agent(who)
-            .call(
-                "create_workspace",
-                with_worker(json!({"task": task}), as_worker),
-            )
-            .await?;
-        self.counts.workspaces += 1;
-        let id = text(&made["workspace"], "create_workspace")?.to_owned();
-        let dir = self.root.join(text(&made["path"], "create_workspace")?);
-        Ok(Workspace { id, dir })
+        what: &'static str,
+        ready: impl Fn(&Value) -> bool,
+    ) -> Result<(), SeedError> {
+        self.wait(what, async || {
+            let task = self.main.call("get_task", json!({"id": task})).await?;
+            Ok(ready(&task))
+        })
+        .await
     }
 
-    async fn propose(
-        &mut self,
-        who: &str,
-        workspace: &Workspace,
-        task: &str,
-        title: &str,
-        evidence: &str,
-        as_worker: Option<&str>,
-    ) -> Result<String, SeedError> {
-        let agent = self.agent(who);
-        agent
-            .call(
-                "record_changes",
-                with_worker(json!({"ws": workspace.id, "message": title}), as_worker),
-            )
-            .await?;
-        let made = agent
-            .call(
-                "create_proposal",
-                with_worker(
-                    json!({"task": task, "title": title, "evidence": evidence}),
-                    as_worker,
-                ),
-            )
-            .await?;
-        self.counts.proposals += 1;
-        Ok(text(&made["id"], "create_proposal")?.to_owned())
+    async fn wait_worker(
+        &self,
+        name: &str,
+        what: &'static str,
+        ready: impl Fn(&Value) -> bool,
+    ) -> Result<(), SeedError> {
+        self.wait(what, async || {
+            let workers = self.main.call("list_workers", json!({})).await?;
+            Ok(workers["workers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|worker| worker["name"] == name && ready(worker)))
+        })
+        .await
     }
 
-    async fn update(&self, who: &str, proposal: &str, evidence: &str) -> Result<(), SeedError> {
-        self.agent(who)
-            .call(
-                "update_proposal",
-                json!({"id": proposal, "evidence": evidence}),
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn approve(&self, proposal: &str, version: u32, body: &str) -> Result<(), SeedError> {
-        self.review
-            .call("claim_review", json!({"id": proposal}))
-            .await?;
-        self.review
-            .call(
-                "submit_review",
-                json!({"id": proposal, "version": version, "verdict": "approve", "body": body}),
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn integrate(&self, proposal: &str, version: u32) -> Result<(), SeedError> {
-        self.review
-            .call(
-                "integrate_proposal",
-                json!({"id": proposal, "expected_version": version}),
-            )
-            .await?;
-        Ok(())
-    }
-
-    fn agent(&self, name: &str) -> &Agent {
-        if name == self.backend.name() {
-            &self.backend
-        } else {
-            &self.frontend
+    /// Polls `ready` until it holds. A failed worker ends the wait with the step its stub could not do.
+    async fn wait(
+        &self,
+        what: &'static str,
+        ready: impl AsyncFn() -> Result<bool, SeedError>,
+    ) -> Result<(), SeedError> {
+        let started = Instant::now();
+        loop {
+            if ready().await? {
+                return Ok(());
+            }
+            self.no_failed_worker().await?;
+            if started.elapsed() > WAIT {
+                return Err(SeedError::Timeout { what });
+            }
+            tokio::time::sleep(POLL).await;
         }
+    }
+
+    async fn no_failed_worker(&self) -> Result<(), SeedError> {
+        let workers = self.main.call("list_workers", json!({})).await?;
+        let failed = workers["workers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|worker| worker["state"] == "failed")
+            .and_then(|worker| worker["name"].as_str());
+        let Some(agent) = failed else {
+            return Ok(());
+        };
+        let log = ProjectPaths::new(&self.root)
+            .fold_dir()
+            .join("workers")
+            .join(agent)
+            .join("stub.log");
+        let step = tokio::fs::read_to_string(log)
+            .await
+            .ok()
+            .and_then(|text| text.lines().last().map(str::to_owned))
+            .unwrap_or_else(|| NO_STEP.to_owned());
+        Err(SeedError::Worker {
+            agent: agent.to_owned(),
+            step,
+        })
     }
 
     /// A route of this project, as the human `dev`.
@@ -854,29 +640,35 @@ impl Seeder {
         Ok(response.body)
     }
 
-    /// The name and size of each board column.
-    async fn columns(&self) -> Result<Vec<(String, u64)>, SeedError> {
+    /// What the seed made: the tasks, the proposals, the workers and the name and size of each board column.
+    async fn built(&self) -> Result<Built, SeedError> {
         let board = self.route(Method::GET, "/board", None).await?;
         let columns = board["columns"]
             .as_array()
             .ok_or(SeedError::Unexpected { tool: "get_board" })?;
-        Ok(columns
-            .iter()
-            .map(|column| {
-                (
-                    column["status"].as_str().unwrap_or("unknown").to_owned(),
-                    column["total"].as_u64().unwrap_or(0),
-                )
-            })
-            .collect())
+        let proposals = self.route(Method::GET, "/proposals", None).await?;
+        let workers = self.main.call("list_workers", json!({})).await?;
+        let length = |value: &Value| value.as_array().map_or(0, Vec::len);
+        Ok(Built {
+            tasks: self.tasks,
+            proposals: length(&proposals["proposals"]),
+            workers: length(&workers["workers"]),
+            columns: columns
+                .iter()
+                .map(|column| {
+                    (
+                        column["status"].as_str().unwrap_or("unknown").to_owned(),
+                        column["total"].as_u64().unwrap_or(0),
+                    )
+                })
+                .collect(),
+        })
     }
 }
 
-fn with_worker(mut arguments: Value, as_worker: Option<&str>) -> Value {
-    if let Some(worker) = as_worker {
-        arguments["as"] = json!(worker);
-    }
-    arguments
+/// A worker whose turn ended and which has one behind it.
+fn done(worker: &Value) -> bool {
+    worker["state"] == "idle" && worker["turns"].as_u64().is_some_and(|turns| turns >= 1)
 }
 
 fn text<'a>(value: &'a Value, tool: &'static str) -> Result<&'a str, SeedError> {
@@ -903,32 +695,6 @@ fn insert_after(text: &str, line: usize, added: &str) -> String {
     joined
 }
 
-/// Rewrites a file of the workspace the way an agent's editor would, creating it when it is new.
-async fn edit(
-    workspace: &Workspace,
-    path: &str,
-    change: impl FnOnce(String) -> String + Send + 'static,
-) -> Result<(), SeedError> {
-    let file = workspace.dir.join(path);
-    blocking(move || {
-        let current = match std::fs::read_to_string(&file) {
-            Ok(text) => text,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
-            Err(error) => return Err(error),
-        };
-        if let Some(parent) = file.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&file, change(current))
-    })
-    .await
-}
-
-async fn remove(workspace: &Workspace, path: &str) -> Result<(), SeedError> {
-    let file = workspace.dir.join(path);
-    blocking(move || std::fs::remove_file(file)).await
-}
-
 async fn blocking(work: impl FnOnce() -> io::Result<()> + Send + 'static) -> Result<(), SeedError> {
     tokio::task::spawn_blocking(work)
         .await
@@ -947,25 +713,6 @@ mod tests {
         assert_eq!(insert_after("a\n", 1, "x\n"), "a\nx\n");
     }
 
-    #[tokio::test]
-    async fn an_edit_creates_a_missing_file_and_stops_at_an_unreadable_one() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = Workspace {
-            id: "ws-1".to_owned(),
-            dir: dir.path().to_owned(),
-        };
-        edit(&workspace, "new/a.txt", |text| format!("{text}x"))
-            .await
-            .unwrap();
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("new/a.txt")).unwrap(),
-            "x"
-        );
-        let error = edit(&workspace, "new", |text| text).await.unwrap_err();
-        assert!(matches!(error, SeedError::Files(_)));
-        assert!(dir.path().join("new/a.txt").is_file());
-    }
-
     #[test]
     fn a_line_outside_the_text_never_panics() {
         assert_eq!(replace_line("a\n", 0, "x"), "a\n");
@@ -975,16 +722,17 @@ mod tests {
     }
 
     #[test]
-    fn a_tool_argument_names_the_worker_only_when_one_is_given() {
-        assert_eq!(with_worker(json!({"id": 1}), None), json!({"id": 1}));
+    fn the_demo_settings_are_a_valid_project_configuration() {
+        let config = fold_core::ProjectConfig::from_toml(CONFIG).unwrap();
+        assert_eq!(config.workers.limits().task_worker, 8);
         assert_eq!(
-            with_worker(json!({"id": 1}), Some("frontend/ui")),
-            json!({"id": 1, "as": "frontend/ui"})
+            config.role(fold_core::Role::Reviewer).model.as_deref(),
+            Some("fold-dev-stub")
         );
     }
 
     #[test]
-    fn an_existing_directory_has_a_code_and_a_hint() {
+    fn errors_have_their_codes_and_hints() {
         let error = SeedError::Exists {
             dir: PathBuf::from(".dev/projects/demo"),
         };
@@ -992,7 +740,7 @@ mod tests {
         assert_eq!(
             error.hint(),
             Some(
-                "stop make dev-daemon, run make clean-keep-cargo, start make dev-daemon again, then run make seed-dev"
+                "stop `make dev-daemon`, run `make clean-keep-cargo`, start `make dev-daemon` again, then run `make seed-dev`"
             )
         );
         assert_eq!(SeedError::NoSocket.code(), None);
@@ -1002,5 +750,17 @@ mod tests {
             code: "already_claimed".to_owned(),
         };
         assert_eq!(refused.code(), Some("already_claimed"));
+        let failed = SeedError::Worker {
+            agent: "api-lead".to_owned(),
+            step: "turn 0, step 1: get_task failed: task_not_found".to_owned(),
+        };
+        assert!(failed.hint().unwrap().contains("stub.log"));
+        let without_stub = SeedError::Worker {
+            agent: "api-lead".to_owned(),
+            step: NO_STEP.to_owned(),
+        };
+        assert!(without_stub.hint().unwrap().contains("`dev-seed`"));
+        assert!(failed.to_string().contains("api-lead"));
+        assert!(SeedError::Timeout { what: "x" }.hint().is_some());
     }
 }

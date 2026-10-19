@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use axum::http::{Method, StatusCode};
-use fold_core::{AgentName, WorkerState, codes};
+use fold_core::{Actor, AgentName, HumanName, WorkerState, codes};
 use fold_store::agents::WorkerProcessRow;
 use fold_store::testing::eventually;
 use serde_json::{Value, json};
@@ -114,11 +114,8 @@ async fn designed_by_a_task_worker(fake: &FakeClaude) -> Harness {
     harness
 }
 
-/// The task worker claims T-1 and reports it finished, after which fold stops it.
+/// The task worker, which holds the claim on T-1 from its start, reports it finished, after which fold stops it.
 async fn reported(harness: &Harness, note: &str) -> Value {
-    harness
-        .call(TASK_WORKER, "claim_task", json!({"id": "T-1"}))
-        .await;
     let done = harness
         .call(
             TASK_WORKER,
@@ -137,10 +134,8 @@ async fn a_task_without_a_proposal_goes_from_todo_to_done_through_its_claim_repo
     let mut harness = designed_by_a_task_worker(&fake).await;
     assert_eq!(task(&harness, "T-1").await["kind"], "no_proposal");
 
-    harness
-        .call(TASK_WORKER, "claim_task", json!({"id": "T-1"}))
-        .await;
     let claimed = task(&harness, "T-1").await;
+    assert_eq!(claimed["claim"]["holder"], TASK_WORKER, "{claimed}");
     assert_eq!(claimed["status"], "in_progress", "{claimed}");
     assert_eq!(claimed["workspace"], Value::Null);
     assert_eq!(
@@ -224,6 +219,34 @@ async fn a_task_without_a_proposal_goes_from_todo_to_done_through_its_claim_repo
         !events
             .iter()
             .any(|event| event.kind == "workspace.created" || event.kind == "proposal.opened")
+    );
+}
+
+#[tokio::test]
+async fn completing_a_task_without_a_proposal_stops_its_running_task_worker() {
+    let fake = FakeClaude::new("result");
+    let harness = designed_by_a_task_worker(&fake).await;
+    reported(&harness, "Drew the board screens.").await;
+    let human = Actor::human(HumanName::parse(HUMAN).unwrap());
+    harness
+        .handle
+        .agents()
+        .resume_worker(
+            &human,
+            &AgentName::parse(TASK_WORKER).unwrap(),
+            "Wait for the check.".to_owned(),
+        )
+        .await
+        .unwrap();
+    let running = until_state(&harness, TASK_WORKER, WorkerState::Idle).await;
+    harness
+        .call(LEAD, "complete_task", json!({"id": "T-1"}))
+        .await;
+    let stopped = until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
+    assert_eq!(stopped.exit_code, Some(0));
+    assert_eq!(
+        stopped.session_id, running.session_id,
+        "the session stays for its history"
     );
 }
 

@@ -26,6 +26,34 @@ pub struct Signature {
     pub email: String,
 }
 
+impl Signature {
+    /// The author and committer of the commits in a repository whose config names no identity a commit can carry.
+    pub fn fold() -> Self {
+        Self {
+            name: "fold".to_owned(),
+            email: "fold@localhost".to_owned(),
+        }
+    }
+}
+
+/// The identity the config of `repo` names, from the repository's own, the global and the system files, which is the author and the committer of every commit fold writes there: the commits are the human's project history, and fold's own names stay in fold. [`Signature::fold`] stands in when the name or the email is unset or blank, or holds what an author line cannot carry. Blocking.
+pub fn repository_identity(git: &Git, repo: &Path) -> Result<Signature, FoldError> {
+    let value = |key: &str| -> Result<Option<String>, FoldError> {
+        Ok(git
+            .config_get(repo, key)?
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty()))
+    };
+    let identity = match (value("user.name")?, value("user.email")?) {
+        (Some(name), Some(email)) => Signature { name, email },
+        _ => return Ok(Signature::fold()),
+    };
+    Ok(match check_signature(&identity) {
+        Ok(()) => identity,
+        Err(_) => Signature::fold(),
+    })
+}
+
 /// One fold revision as the commit it becomes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportRevision {
@@ -35,8 +63,8 @@ pub struct ExportRevision {
     pub message: String,
     pub author: Signature,
     pub committer: Signature,
-    /// The second parent: the remote commit a pull, or the sync task that resolved one, brought into this revision. Writing it makes the remote accept the commit as a fast-forward of its branch.
-    pub merge: Option<CommitId>,
+    /// The parents after the first, in order: the remote commit a pull, or the sync task that resolved one, brought into this revision, which makes the remote accept the commit as a fast-forward of its branch, and the human's commit of a human change it brought onto main, which gives the project folder that holds the human's files a way to follow main.
+    pub merges: Vec<CommitId>,
 }
 
 /// The last exported revision: the commit the next one continues and the fold tree it holds.
@@ -100,6 +128,42 @@ pub fn write_commits(
         .map(|revision| revision.number)
         .zip(commits)
         .collect())
+}
+
+/// A commit that is no fold revision: the commit `fld record` makes of the project folder for the human who runs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportCommit {
+    pub tree: ObjectHash,
+    pub created_at: Timestamp,
+    pub message: String,
+    pub author: Signature,
+    pub committer: Signature,
+}
+
+/// Writes `commit` as one commit on `target.refname` that continues `base`, as [`write_commits`] writes a revision, and returns its id. Blocking.
+pub fn write_commit(
+    objects: &ObjectStore,
+    git: &Git,
+    target: &ExportTarget<'_>,
+    base: &ExportBase,
+    commit: &ExportCommit,
+    scratch: &Path,
+) -> Result<CommitId, FoldError> {
+    // The number only pairs the commit with its input; it is not written into the commit.
+    let number = RevisionId::from_number(1).ok_or_else(|| unexpected_output("fast-import"))?;
+    let revision = ExportRevision {
+        number,
+        tree: commit.tree,
+        created_at: commit.created_at,
+        message: commit.message.clone(),
+        author: commit.author.clone(),
+        committer: commit.committer.clone(),
+        merges: Vec::new(),
+    };
+    write_commits(objects, git, target, Some(base), &[revision], scratch)?
+        .pop()
+        .map(|(_, id)| id)
+        .ok_or_else(|| unexpected_output("fast-import"))
 }
 
 fn run_fast_import(
@@ -186,7 +250,7 @@ fn write_stream(
             out.write_all(format!("from {from}\n").as_bytes())
                 .map_err(pipe)?;
         }
-        if let Some(merge) = &revision.merge {
+        for merge in &revision.merges {
             out.write_all(format!("merge {merge}\n").as_bytes())
                 .map_err(pipe)?;
         }
@@ -481,11 +545,7 @@ mod tests {
 
     #[test]
     fn signatures_cannot_break_the_header() {
-        let ok = Signature {
-            name: "fold".to_owned(),
-            email: "fold@localhost".to_owned(),
-        };
-        assert!(check_signature(&ok).is_ok());
+        assert!(check_signature(&Signature::fold()).is_ok());
         for (name, email) in [("a<b", "e"), ("a", "e>"), ("a\nb", "e")] {
             let bad = Signature {
                 name: name.to_owned(),
@@ -496,5 +556,59 @@ mod tests {
                 codes::INVALID_REQUEST
             );
         }
+    }
+
+    /// A repository whose `git` reads `global` as the global config and no system config.
+    fn isolated(global: &str) -> (tempfile::TempDir, Git) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("gitconfig");
+        fs::write(&config, global).unwrap();
+        let script = dir.path().join("git-isolated");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nGIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL='{}' exec git \"$@\"\n",
+                config.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let git = Git::new(script);
+        let repo = dir.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        git.init_checkout(&repo, "main").unwrap();
+        (dir, git)
+    }
+
+    #[test]
+    fn the_identity_comes_from_the_repository_config_and_else_is_fold() {
+        let (dir, git) = isolated("[user]\n\tname = Global\n\temail = global@example.com\n");
+        let repo = dir.path().join("repo");
+        let global = Signature {
+            name: "Global".to_owned(),
+            email: "global@example.com".to_owned(),
+        };
+        assert_eq!(repository_identity(&git, &repo).unwrap(), global);
+        git.config_set_local(&repo, "user.name", "Ana Lima")
+            .unwrap();
+        let local = repository_identity(&git, &repo).unwrap();
+        assert_eq!(
+            (local.name.as_str(), local.email.as_str()),
+            ("Ana Lima", "global@example.com")
+        );
+        git.config_set_local(&repo, "user.name", "Ana <x>").unwrap();
+        assert_eq!(repository_identity(&git, &repo).unwrap(), Signature::fold());
+
+        let (dir, git) = isolated("[user]\n\tname = Only a name\n");
+        assert_eq!(
+            repository_identity(&git, &dir.path().join("repo")).unwrap(),
+            Signature::fold()
+        );
+        let (dir, git) = isolated("[user]\n\tname = \" \"\n\temail = a@b\n");
+        assert_eq!(
+            repository_identity(&git, &dir.path().join("repo")).unwrap(),
+            Signature::fold()
+        );
     }
 }

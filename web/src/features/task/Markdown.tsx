@@ -1,12 +1,58 @@
-import { memo, useMemo, type ComponentProps } from "react";
+import {
+  createContext,
+  memo,
+  useContext,
+  useMemo,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { InlineCode } from "@/components/code/CodeText";
+import { SyntaxText } from "@/components/code/SyntaxText";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { MentionLink } from "@/mentions/MentionLink";
 import type { Known } from "@/mentions/parse";
 import { remarkMentions } from "@/mentions/remark";
 import { usePeople } from "@/mentions/usePeople";
+import { languageForFence } from "@/syntax/languages";
+
+/** A fenced block's text, highlighted when its fence names a language Shiki has a grammar for; a bare fence stays plain. */
+function FencedCode({
+  code,
+  className,
+}: {
+  code: string;
+  className: string | undefined;
+}) {
+  const language = languageForFence(className);
+  if (language === null) return code;
+  return <SyntaxText code={code} language={language} />;
+}
+
+/** True inside a `pre`: react-markdown draws a fenced block and inline code with the same `code` component. */
+const InFence = createContext(false);
+
+/** Inline code is drawn the same way as a command in the app's own sentences; a fenced block keeps its block look. */
+function Code({
+  children,
+  className,
+}: {
+  children?: ReactNode;
+  className: string | undefined;
+}) {
+  if (!useContext(InFence)) return <InlineCode>{children}</InlineCode>;
+  return (
+    <code className="rounded-xs bg-sunken px-4 font-mono text-meta">
+      {typeof children === "string" ? (
+        <FencedCode code={children} className={className} />
+      ) : (
+        children
+      )}
+    </code>
+  );
+}
 
 // Every element takes token classes; the description is 14 / 400 body text with 600 subheads.
 const COMPONENTS: Components = {
@@ -89,14 +135,12 @@ const COMPONENTS: Components = {
       </a>
     );
   },
-  code: ({ children }) => (
-    <code className="rounded-xs bg-sunken px-4 font-mono text-meta">
-      {children}
-    </code>
+  code: ({ children, className }) => (
+    <Code className={className}>{children}</Code>
   ),
   pre: ({ children }) => (
     <pre className="overflow-x-auto rounded-m bg-sunken p-12 font-mono text-meta">
-      {children}
+      <InFence.Provider value>{children}</InFence.Provider>
     </pre>
   ),
   blockquote: ({ children }) => (

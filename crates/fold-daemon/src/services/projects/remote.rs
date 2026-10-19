@@ -39,7 +39,7 @@ pub enum PushOutcome {
     },
 }
 
-/// Writes the commits that the project's repository lacks for main, as every integration does, then pushes main's newest commit to the branch of the remote `remote`, never with force, and appends `remote.pushed` with the push in `remote_states` in one transaction. Without a name the push goes to the only remote. The configuration is read on every call, so `fld remote set` takes effect without a restart. A remote that is an absolute local path that does not exist is created as a bare repository first. A remote branch with commits that main lacks fails with `remote_ahead` before anything is sent; one already on main's newest commit is up to date. A push never changes main, tasks, workspaces or claims, and a failed one writes no event. The project's remote lock and its Git sync lock are held throughout, so pushes, pulls and the commit of each integration run one after the other. The push runs as its own task, so a caller that stops waiting never leaves the remote moved without its event.
+/// Writes the commits that the project's repository lacks for main, as every integration does, then pushes main's newest commit to the branch of the remote `remote`, never with force, and appends `remote.pushed` with the push in `remote_states` in one transaction. Without a name the push goes to the only remote. The configuration is read on every call, so `fld remote add` takes effect without a restart. A remote that is an absolute local path that does not exist is created as a bare repository first. A remote branch with commits that main lacks fails with `remote_ahead` before anything is sent; one already on main's newest commit is up to date. A push never changes main, tasks, workspaces or claims, and a failed one writes no event. The project's remote lock and its Git sync lock are held throughout, so pushes, pulls and the commit of each integration run one after the other. The push runs as its own task, so a caller that stops waiting never leaves the remote moved without its event.
 pub async fn push(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
@@ -65,8 +65,14 @@ pub struct RemoteContext {
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) bus: EventBus,
     pub(crate) remote_lock: Arc<tokio::sync::Mutex<()>>,
-    /// What the commit writer last found that needs a person.
+    /// Held for each follow of main in the project folder and for a whole `fld record`, so only one of them reads and writes the folder and its checkout record at a time.
+    pub(crate) folder_lock: Arc<tokio::sync::Mutex<()>>,
+    /// The project's object lock, held shared while a follow reads and writes objects.
+    pub(crate) objects: Arc<tokio::sync::RwLock<()>>,
+    /// What the folder's last follow and the commit writer last found that needs a person.
     pub(crate) git_attention: Arc<GitAttention>,
+    /// The open project's handle, once it is shared, so the Git job records a commit of the human with the services the handle holds; a weak link, so the job never keeps a closed project open.
+    pub(crate) handle: Arc<std::sync::OnceLock<std::sync::Weak<ProjectHandle>>>,
 }
 
 impl RemoteContext {
@@ -85,7 +91,10 @@ impl RemoteContext {
             clock,
             bus,
             remote_lock: Arc::new(tokio::sync::Mutex::new(())),
+            folder_lock: Arc::new(tokio::sync::Mutex::new(())),
+            objects: Arc::new(tokio::sync::RwLock::new(())),
             git_attention: Arc::new(GitAttention::default()),
+            handle: Arc::default(),
         }
     }
 
@@ -94,7 +103,8 @@ impl RemoteContext {
         self.git_attention.kinds()
     }
 
-    pub(crate) fn of(handle: &ProjectHandle) -> Self {
+    /// The context of an open project, sharing its locks and its attention.
+    pub fn of(handle: &ProjectHandle) -> Self {
         Self {
             slug: handle.slug.clone(),
             paths: handle.paths.clone(),
@@ -102,7 +112,10 @@ impl RemoteContext {
             clock: handle.clock.clone(),
             bus: handle.bus.clone(),
             remote_lock: handle.remote_lock.clone(),
+            folder_lock: handle.folder_lock.clone(),
+            objects: handle.objects.clone(),
             git_attention: handle.git_attention.clone(),
+            handle: handle.shared.clone(),
         }
     }
 }
@@ -128,6 +141,7 @@ async fn run(
     git: &Git,
     remote: Option<&str>,
 ) -> Result<PushOutcome, ProjectError> {
+    super::require_git_sync(&handle.store, "fld push").await?;
     let config = load_config(&handle.paths).await?;
     let (name, remote) = select_remote(&config, remote)?;
     let (url, branch, local) = (remote.url, remote.branch, config.git.branch);
@@ -158,6 +172,7 @@ async fn run(
         &local,
         held,
         map,
+        None,
         handle.clock.now(),
     )
     .await?;
@@ -247,10 +262,10 @@ pub(crate) fn first_unreached(
 
 pub(super) fn remote_not_set() -> FoldError {
     FoldError::new(codes::REMOTE_NOT_SET, "the project has no Git remote")
-        .with_hint("run fld remote set <name> <url> in the project first")
+        .with_hint("run `fld remote add <name> <url>` in the project first")
 }
 
-/// The remote `name` names, or the only remote when `name` is `None`. No remote, an unknown name and several remotes without a name are refused with a hint that names `fld remote list`.
+/// The remote `name` names, or the only remote when `name` is `None`. No remote is refused with a hint that names `fld remote add`, an unknown name and several remotes without a name with one that names `fld remote list`; several remotes are listed in the hint.
 pub(crate) fn select_remote(
     config: &ProjectConfig,
     name: Option<&str>,
@@ -265,19 +280,27 @@ pub(crate) fn select_remote(
                     codes::REMOTE_NOT_SET,
                     format!("the project has no Git remote named {name}"),
                 )
-                .with_hint("run fld remote list to see the remotes")
+                .with_hint(
+                    "run `fld remote list` to see the remotes, or `fld remote add` to add one",
+                )
             }),
         None => {
             let mut remotes = config.remotes.iter();
             match (remotes.next(), remotes.next()) {
                 (Some((name, remote)), None) => Ok((name.clone(), remote.clone())),
                 (None, _) => Err(remote_not_set()),
-                (Some(_), Some(_)) => Err(FoldError::new(
-                    codes::INVALID_REQUEST,
-                    "the project has several Git remotes, so the command must name one",
-                )
-                .with_hint("run fld remote list, then name the remote")
-                .with_details([("reason", json!("several_remotes"))])),
+                (Some(_), Some(_)) => {
+                    let names: Vec<&str> = config.remotes.keys().map(String::as_str).collect();
+                    Err(FoldError::new(
+                        codes::INVALID_REQUEST,
+                        "the project has several Git remotes, so the command must name one",
+                    )
+                    .with_hint(format!(
+                        "name one of the remotes {}; `fld remote list` shows them",
+                        names.join(", ")
+                    ))
+                    .with_details([("reason", json!("several_remotes"))]))
+                }
             }
         }
     }

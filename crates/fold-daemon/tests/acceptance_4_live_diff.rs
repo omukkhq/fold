@@ -25,7 +25,11 @@ impl Scene {
     async fn new() -> Self {
         let harness = Harness::start().await;
         let task = harness
-            .call("frontend", "create_task", json!({"title": "Add the login"}))
+            .call(
+                "frontend",
+                "create_task",
+                json!({"title": "Add the login", "labels": Harness::work_labels()}),
+            )
             .await;
         let task = task["id"].as_str().unwrap().to_owned();
         harness

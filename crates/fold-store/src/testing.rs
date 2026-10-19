@@ -16,7 +16,7 @@ use crate::{Store, StoreError};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
-/// A temporary project: the layout on disk with the project folder's own Git repository, a migrated project database and a manual clock. Dropping it deletes the directory.
+/// A temporary project: the layout on disk with the project folder's own Git repository and Git sync on, a migrated project database and a manual clock. [`TestProject::plain`] leaves out Git. Dropping it deletes the directory.
 #[derive(Debug)]
 pub struct TestProject {
     _dir: TempDir,
@@ -56,7 +56,7 @@ fn restore_write_access(dir: &Path) {
 #[cfg(not(unix))]
 fn restore_write_access(_dir: &Path) {}
 
-/// `git init` in the project folder with `main` as its branch, as `fld init` leaves a new project, so the commit writer has its repository. The user's and the system's Git configuration are left out, so no template or hook of theirs reaches the test.
+/// `git init` in the project folder with `main` as its branch, as `fld init --with-git` leaves a new project, so the commit writer has its repository. The user's and the system's Git configuration are left out, so no template or hook of theirs reaches the test.
 fn init_repository(root: &Path) {
     let status = std::process::Command::new("git")
         .arg("-C")
@@ -72,14 +72,29 @@ fn init_repository(root: &Path) {
     assert!(status.success(), "git init in the test project");
 }
 
+/// The event actor label of the human who turns Git sync on in a test project.
+pub const GIT_SYNC_HUMAN: &str = "human:ana";
+
 impl TestProject {
     pub async fn new() -> Self {
+        let project = Self::plain().await;
+        init_repository(project.paths.root());
+        let now = project.now();
+        project
+            .store
+            .write(async |tx| crate::workspaces::enable_git_sync(tx, GIT_SYNC_HUMAN, now).await)
+            .await
+            .expect("turn Git sync on");
+        project
+    }
+
+    /// [`TestProject::new`] without a Git repository and with Git sync off, as a plain `fld init` leaves a project.
+    pub async fn plain() -> Self {
         let dir = TempDir::new().expect("create the project directory");
         let paths = ProjectPaths::new(dir.path().join("project"));
         let store = Store::open_project(&paths)
             .await
             .expect("open the project database");
-        init_repository(paths.root());
         // The host registry lives in its own directory so host-level tests never share state with a project.
         let registry_dir = TempDir::new().expect("create the registry directory");
         let registry = Store::open_registry(&registry_dir.path().join("registry.db"))
@@ -257,4 +272,25 @@ pub async fn eventually<T, V: Debug>(
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
+}
+
+/// Removes the folder `dir` and everything in it while a writer that still has it open may add or remove entries during the walk, which fails the removal with `DirectoryNotEmpty` or `NotFound`. Tries again through [`eventually`] until `dir` is gone or `timeout` passes; any other error fails the test at once.
+pub async fn remove_dir_eventually(dir: &Path, timeout: Duration) {
+    eventually(timeout, async || match std::fs::remove_dir_all(dir) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::DirectoryNotEmpty | std::io::ErrorKind::NotFound
+            ) =>
+        {
+            if dir.exists() {
+                Err(error.kind())
+            } else {
+                Ok(())
+            }
+        }
+        Err(error) => panic!("remove {}: {error}", dir.display()),
+    })
+    .await;
 }

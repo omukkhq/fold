@@ -1,7 +1,9 @@
 use fold_core::merge::ConflictReport;
 use fold_core::reviews::{HumanReviewMark, ReviewFact};
 use fold_core::revision::StoredRevision;
-use fold_core::{IntegrationId, ProposalId, TaskId, TaskStatus, Timestamp, WorkspaceId};
+use fold_core::{
+    ChangesetId, IntegrationId, ProposalId, TaskId, TaskStatus, Timestamp, WorkspaceId,
+};
 use sqlx::{SqliteConnection, SqliteExecutor};
 
 use super::{ProposalRow, ReviewTarget, get_proposal, review_facts, review_target};
@@ -53,7 +55,7 @@ pub async fn integration_facts(
     }))
 }
 
-/// What an integration brings onto main: a version of a proposal, or the newest commit of the Git remote. A proposal of a sync task carries the remote commit its task resolves, so the Git writers see it as merged.
+/// What an integration brings onto main: a version of a proposal, the newest commit of the Git remote, or a changeset of the main workspace with the Git commit message the main agent wrote. A proposal of a sync task carries the remote commit its task resolves, so the Git writers see it as merged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntegrationSubject<'a> {
     Proposal {
@@ -63,6 +65,14 @@ pub enum IntegrationSubject<'a> {
     },
     Pull {
         remote_commit: &'a str,
+    },
+    Direct {
+        changeset: ChangesetId,
+        message: &'a str,
+    },
+    /// A change of the project folder by a human, with the id of the human's Git commit when it is one.
+    Record {
+        remote_commit: Option<&'a str>,
     },
 }
 
@@ -143,6 +153,24 @@ pub async fn mark_conflicted(
     Ok(updated == 1)
 }
 
+/// Sends an open proposal back to its author because the integration checks of its current version failed; a new version clears the flag. False when the proposal is not open.
+pub async fn mark_checks_failed(
+    tx: &mut WriteTx,
+    proposal: ProposalId,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let (number, now) = (proposal.to_db(), now.as_millis());
+    let updated = sqlx::query!(
+        "UPDATE proposals SET checks_failed = 1, updated_at = ?2 WHERE number = ?1 AND state = 'open'",
+        number,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(updated == 1)
+}
+
 /// The report of the latest `conflicted` integration of `version` of `proposal`, as it was stored; `None` when that version never conflicted.
 pub async fn conflict_report(
     executor: impl SqliteExecutor<'_>,
@@ -189,12 +217,23 @@ async fn insert(
             remote_commit,
         ),
         IntegrationSubject::Pull { remote_commit } => ("pull", None, None, Some(remote_commit)),
+        IntegrationSubject::Direct { .. } => ("direct", None, None, None),
+        IntegrationSubject::Record { remote_commit } => ("record", None, None, remote_commit),
+    };
+    let (changeset, message) = match new.subject {
+        IntegrationSubject::Direct { changeset, message } => {
+            (Some(changeset.to_db()), Some(message))
+        }
+        IntegrationSubject::Proposal { .. }
+        | IntegrationSubject::Pull { .. }
+        | IntegrationSubject::Record { .. } => (None, None),
     };
     let succeeded = result == "succeeded";
     let created_at = new.created_at.as_millis();
     sqlx::query!(
         "INSERT INTO integrations
-             (number, kind, proposal_id, version_id, remote_commit, result, revision_id, report, actor, created_at)
+             (number, kind, proposal_id, version_id, remote_commit, result, revision_id, report, actor, created_at,
+              changeset_id, message)
          VALUES (
              ?1, ?2,
              (SELECT id FROM proposals WHERE number = ?3),
@@ -202,7 +241,9 @@ async fn insert(
               WHERE p.number = ?3 AND v.version = ?4),
              ?5, ?6,
              CASE WHEN ?7 THEN (SELECT COALESCE(MAX(id), 0) + 1 FROM revisions) END,
-             ?8, ?9, ?10
+             ?8, ?9, ?10,
+             (SELECT id FROM changesets WHERE number = ?11),
+             ?12
          )",
         number,
         kind,
@@ -213,7 +254,9 @@ async fn insert(
         succeeded,
         report,
         new.actor,
-        created_at
+        created_at,
+        changeset,
+        message
     )
     .execute(tx.conn())
     .await?;

@@ -106,13 +106,14 @@ impl Fixture {
 
     async fn create_tasks(&self, count: u32) {
         for _ in 0..count {
+            crate::common::roles::lead_work_areas(self.store()).await;
             self.tasks
                 .create_task(
                     &ana(),
                     CreateTask {
                         title: TaskTitle::parse("task").unwrap(),
                         description: TaskDescription::new(""),
-                        labels: Vec::new(),
+                        labels: crate::common::roles::work_labels(),
                     },
                 )
                 .await

@@ -1,7 +1,9 @@
 #![cfg(test)]
 
+use crate::common::roles::give_role;
 use crate::daemon_support::{Opened, agent, t};
 use axum::http::StatusCode;
+use fold_core::roles::Role;
 use fold_core::{AgentName, ProposalId};
 use fold_daemon::services::agents::AgentService;
 use fold_daemon::services::reviews::ReviewService;
@@ -39,12 +41,15 @@ fn reviews(opened: &Opened) -> ReviewService {
 async fn proposed() -> Opened {
     let opened = Opened::new().await;
     register(&opened, "review").await;
+    give_role(&opened.handle.store, "review", Role::ReviewLead, None).await;
     let (_, dir) = opened.create(1).await;
     std::fs::write(dir.join("src/lib.rs"), "pub fn y() {}\n").unwrap();
     let reviews = reviews(&opened);
     reviews
         .create_proposal(&agent("frontend"), t(1), "Change x", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     reviews.claim_review(&agent("review"), p(1)).await.unwrap();
     opened
@@ -99,6 +104,8 @@ async fn a_batch_checkout_lists_its_batch_and_its_members_in_merge_order() {
     reviews
         .create_proposal(&agent("frontend"), t(2), "Add two", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let batch = reviews
         .create_review_batch(&agent("review"), vec![p(1), p(2)])

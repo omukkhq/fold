@@ -92,7 +92,7 @@ pub struct UpdateAreaInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct StartWorkerInput {
-    /// area_lead or review_lead (started by the main agent), task_worker (started by an area lead) or batch_reviewer (started by the review lead).
+    /// area_lead or review_lead (started by the main agent), task_worker (started by an area lead) or reviewer (started by the review lead).
     pub role: String,
     /// The worker's agent name. Leave it out for a name from the role and area, such as web-lead or web-worker-2.
     #[serde(default)]
@@ -100,12 +100,15 @@ pub struct StartWorkerInput {
     /// The area of an area lead. A task worker takes its lead's area; leave it out for the other roles.
     #[serde(default)]
     pub area: Option<String>,
-    /// The tasks a task worker works on, such as T-12. Each must carry the area's label.
+    /// The tasks a task worker works on, such as T-12. Each must carry the area's label; fold gives the worker the claim on each.
     #[serde(default)]
     pub tasks: Vec<String>,
-    /// The proposals a batch reviewer reviews, such as P-3.
+    /// The proposals a reviewer reviews, such as P-3: one proposal, or two or more related proposals, which fold makes into a review batch of the reviewer's.
     #[serde(default)]
     pub proposals: Vec<String>,
+    /// For a reviewer's revised proposals: the scope of the review you choose for some of them, each with its reason, when fold's suggested_scope from get_proposal_diff does not fit. The other proposals follow the suggestion, and the reviewer follows the scope it gets.
+    #[serde(default)]
+    pub scopes: Vec<super::reviews::ScopeChoiceInput>,
     /// The Claude Code model, such as sonnet. Leave it out for the area's model, else the role's model from .fold/config.toml.
     #[serde(default)]
     pub model: Option<String>,
@@ -141,9 +144,9 @@ pub struct SetWorkerLimitsInput {
     /// The most task workers that run at once, a whole number with no upper bound; 0 lets none start. Leave it out to keep the limit.
     #[serde(default)]
     pub task_worker: Option<u64>,
-    /// The most batch reviewers that run at once, a whole number with no upper bound; 0 lets none start. Leave it out to keep the limit.
+    /// The most reviewers that run at once, a whole number with no upper bound; 0 lets none start. Leave it out to keep the limit.
     #[serde(default)]
-    pub batch_reviewer: Option<u64>,
+    pub reviewer: Option<u64>,
     /// The most task workers that run at once in one area, a whole number with no upper bound; 0 lets none start. Leave it out to keep the limit.
     #[serde(default)]
     pub max_per_area: Option<u64>,
@@ -208,7 +211,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             START_WORKER,
-            "Start a worker agent that fold runs and supervises: the main agent starts an area lead or the review lead, an area lead starts task workers for tasks of its area, the review lead starts batch reviewers. Refused over the worker limits.",
+            "Start a worker agent that fold runs and supervises: the main agent starts an area lead or the review lead, an area lead starts a task worker for tasks of its area, the review lead starts a reviewer for one proposal or a group of related proposals. fold gives the new worker its claims in the same step: the implementation claim on each task, or the review claim on the one proposal, or a review batch of two or more. A task or proposal that another running worker holds refuses the start with already_claimed; a stale claim, a claim of a worker that has ended and a task claim of your own agent move to the new worker. A group with a proposal whose task has the human review mark is refused with invalid_request: give that proposal to a reviewer alone. Refused over the worker limits.",
             schema_for_type::<StartWorkerInput>(),
         ),
         Tool::new(
@@ -223,7 +226,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             SET_WORKER_LIMITS,
-            "As the main agent, change how many task workers and batch reviewers run at once, for example when the user asks for more or fewer agents. Each limit is a whole number with no upper bound, and 0 lets no worker of that role start. The new limits apply to the next start; a running worker is never stopped by a lower limit. Say the new numbers back to the user.",
+            "As the main agent, change how many task workers and reviewers run at once, for example when the user asks for more or fewer agents. Each limit is a whole number with no upper bound, and 0 lets no worker of that role start. The new limits apply to the next start; a running worker is never stopped by a lower limit. Say the new numbers back to the user.",
             schema_for_type::<SetWorkerLimitsInput>(),
         ),
         Tool::new(
@@ -334,7 +337,7 @@ pub async fn start_worker(
     let input: StartWorkerInput = parse(arguments)?;
     let role = Role::parse(&input.role).ok_or_else(|| {
         FoldError::new(codes::INVALID_REQUEST, "role is not a worker role")
-            .with_hint("pass area_lead, review_lead, task_worker or batch_reviewer")
+            .with_hint("pass area_lead, review_lead, task_worker or reviewer")
     })?;
     let request = StartWorker {
         role: Some(role),
@@ -342,6 +345,7 @@ pub async fn start_worker(
         area: input.area.as_deref().map(AreaName::parse).transpose()?,
         tasks: ids::<TaskId>(&input.tasks, "task")?,
         proposals: ids::<ProposalId>(&input.proposals, "proposal")?,
+        scopes: super::reviews::scope_choices(&input.scopes)?,
         model: input.model,
         instructions: input.instructions,
     };
@@ -373,7 +377,7 @@ pub async fn stop_worker(
 fn limits_json(limits: WorkerLimits) -> Value {
     json!({
         "task_worker": limits.task_worker,
-        "batch_reviewer": limits.batch_reviewer,
+        "reviewer": limits.reviewer,
         "max_per_area": limits.max_per_area,
     })
 }
@@ -386,7 +390,7 @@ pub async fn set_worker_limits(
     let input: SetWorkerLimitsInput = parse(arguments)?;
     let change = WorkerLimitsChange::from_request(
         input.task_worker,
-        input.batch_reviewer,
+        input.reviewer,
         input.max_per_area,
         input.clear_max_per_area,
     )?;

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
@@ -33,6 +34,11 @@ impl Sandbox {
     }
 
     fn fold_in(&self, cwd: &Path, args: &[&str]) -> Output {
+        self.fold_with(cwd, args, &[])
+    }
+
+    /// [`Self::fold_in`] with `vars` set last, so they replace a value of the same name.
+    fn fold_with(&self, cwd: &Path, args: &[&str], vars: &[(&str, &OsStr)]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fld"));
         command
             .args(args)
@@ -50,6 +56,7 @@ impl Sandbox {
         if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
             command.env("LLVM_PROFILE_FILE", profile);
         }
+        command.envs(vars.iter().copied());
         command.output().unwrap()
     }
 }
@@ -160,7 +167,7 @@ fn folder(sandbox: &Sandbox) -> PathBuf {
 }
 
 #[test]
-fn init_makes_the_folder_files_r1_and_its_first_commit() {
+fn a_plain_init_makes_the_folder_files_r1_on_the_empty_genesis_and_no_git_data() {
     let sandbox = Sandbox::new();
     let project = folder(&sandbox);
     let before = snapshot(&project);
@@ -172,50 +179,51 @@ fn init_makes_the_folder_files_r1_and_its_first_commit() {
         format!(
             "initialised project app at {}\n{}\n{}",
             canonical.display(),
-            crate::common::r1_line(&project, 5, 46),
+            crate::common::r1_line(&project, 4, 40),
             machine_warnings(&project)
         )
     );
     let row = r1(&project);
     assert_eq!(row.number.to_string(), "r1");
-    assert_eq!(row.import_source, None);
-    // The folder's files stay as they were, writable, with the `.gitignore` the folder had.
+    assert_eq!(
+        row.parent.map(|parent| parent.to_string()).as_deref(),
+        Some("r0")
+    );
+    // The folder's files stay as they were, writable; init adds only the empty `.foldignore` and the Claude Code files.
     let after = snapshot(&project);
     for (path, entry) in &before {
         assert_eq!(after.get(path), Some(entry), "{path:?}");
     }
-    assert!(!project.join(".foldignore").exists());
     assert_eq!(
-        git(&project, &["ls-tree", "-r", "--name-only", "HEAD"]),
-        ".claude/settings.json\n.claude/skills/fold/SKILL.md\n.gitignore\n.mcp.json\nAGENTS.md\nREADME.md\nlink\nrun.sh\nsrc/lib.rs\n"
+        fs::read_to_string(project.join(".gitignore")).unwrap(),
+        "*.log\n"
     );
-    assert_eq!(git(&project, &["log", "--format=%s"]), "fold r1\n");
-    // The Claude Code files init writes are part of r1, so Git sees nothing new.
-    assert_eq!(git(&project, &["status", "--porcelain"]), "");
+    assert_eq!(fs::metadata(project.join(".foldignore")).unwrap().len(), 0);
+    assert!(!project.join(".git").exists());
 }
 
 #[test]
-fn init_in_a_new_dir_writes_foldignore_and_a_gitignore_link_to_it() {
+fn init_with_git_records_the_gitignore_change_as_r2_and_commits_from_r1() {
     let sandbox = Sandbox::new();
-    let project = sandbox.path("app");
-    let output = sandbox.fold(&["init", project.to_str().unwrap()]);
+    let project = folder(&sandbox);
+    let output = sandbox.fold_in(&project, &["init", "--with-git"]);
     assert!(output.status.success(), "{output:?}");
-    assert!(stdout(&output).ends_with(&format!(
-        "\n{}\n{}",
-        crate::common::r1_line(&project, 0, 0),
-        machine_warnings(&project)
-    )));
-    assert_eq!(r1(&project).number.to_string(), "r1");
-    assert!(project.join(".foldignore").is_file());
-    assert_eq!(
-        fs::read_link(project.join(".gitignore")).unwrap(),
-        Path::new(".foldignore")
+    let text = stdout(&output);
+    assert!(
+        text.contains("\nr2 records the .gitignore that keeps .fold/ out of Git\nGit sync is on: every revision gets its Git commit in .git\n"),
+        "{text}"
     );
-    assert_eq!(git(&project, &["log", "--format=%s"]), "fold r1\n");
+    assert_eq!(r1(&project).number.to_string(), "r2");
     assert_eq!(
-        git(&project, &["ls-tree", "--name-only", "HEAD"]),
-        ".claude\n.foldignore\n.gitignore\n.mcp.json\nAGENTS.md\n"
+        fs::read_to_string(project.join(".gitignore")).unwrap(),
+        "*.log\n.fold/\n"
     );
+    assert_eq!(
+        git(&project, &["ls-tree", "-r", "--name-only", "HEAD"]),
+        ".claude/skills/fold/SKILL.md\n.foldignore\n.gitignore\nAGENTS.md\nREADME.md\nlink\nrun.sh\nsrc/lib.rs\n"
+    );
+    // The empty genesis gets no commit, so the history starts at r1.
+    assert_eq!(git(&project, &["rev-list", "--count", "HEAD"]).trim(), "2");
     assert_eq!(git(&project, &["status", "--porcelain"]), "");
     assert!(
         fs::read_to_string(project.join(".git/info/exclude"))
@@ -223,6 +231,25 @@ fn init_in_a_new_dir_writes_foldignore_and_a_gitignore_link_to_it() {
             .lines()
             .any(|line| line == "/.fold/")
     );
+}
+
+#[test]
+fn init_with_git_in_a_new_dir_writes_a_gitignore_that_copies_the_foldignore() {
+    let sandbox = Sandbox::new();
+    let project = sandbox.path("app");
+    let output = sandbox.fold(&["init", "--with-git", project.to_str().unwrap()]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(fs::metadata(project.join(".foldignore")).unwrap().len(), 0);
+    assert!(!project.join(".gitignore").is_symlink());
+    assert_eq!(
+        fs::read_to_string(project.join(".gitignore")).unwrap(),
+        ".fold/\n"
+    );
+    assert_eq!(
+        git(&project, &["ls-tree", "--name-only", "HEAD"]),
+        ".claude\n.foldignore\n.gitignore\nAGENTS.md\n"
+    );
+    assert_eq!(git(&project, &["status", "--porcelain"]), "");
 }
 
 #[test]
@@ -243,14 +270,10 @@ fn a_file_over_the_size_limit_is_printed_as_skipped() {
         "{}",
         stdout(&output)
     );
-    assert_eq!(
-        git(&project, &["ls-tree", "-r", "--name-only", "HEAD"]),
-        ".claude/settings.json\n.claude/skills/fold/SKILL.md\n.foldignore\n.gitignore\n.mcp.json\nAGENTS.md\nsmall.txt\n"
-    );
 }
 
 #[test]
-fn init_and_from_git_each_refuse_the_other_kind_of_folder_with_a_hint() {
+fn a_plain_init_refuses_a_git_repository_and_both_refuse_a_folder_inside_one() {
     let sandbox = Sandbox::new();
     let repo = sandbox.path("repo");
     fs::create_dir_all(&repo).unwrap();
@@ -259,7 +282,7 @@ fn init_and_from_git_each_refuse_the_other_kind_of_folder_with_a_hint() {
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("invalid_request"), "{output:?}");
     assert!(
-        stderr(&output).contains("hint: run fld init --from-git"),
+        stderr(&output).contains("hint: run `fld init --with-git`"),
         "{output:?}"
     );
     assert!(!repo.join(".fold").exists());
@@ -268,12 +291,12 @@ fn init_and_from_git_each_refuse_the_other_kind_of_folder_with_a_hint() {
     let nested = repo.join("sub");
     fs::create_dir_all(&nested).unwrap();
     let top = repo.canonicalize().unwrap();
-    for args in [&["init"][..], &["init", "--from-git"][..]] {
+    for args in [&["init"][..], &["init", "--with-git"][..]] {
         let output = sandbox.fold_in(&nested, args);
         assert_eq!(output.status.code(), Some(1), "{args:?}");
         assert!(
             stderr(&output).contains(&format!(
-                "hint: run fld init --from-git in {}",
+                "hint: run `fld init --with-git` in {}",
                 top.display()
             )),
             "{output:?}"
@@ -281,22 +304,6 @@ fn init_and_from_git_each_refuse_the_other_kind_of_folder_with_a_hint() {
         assert!(!nested.join(".fold").exists() && !nested.join(".git").exists());
     }
 
-    let plain = sandbox.path("plain");
-    fs::create_dir_all(&plain).unwrap();
-    let output = sandbox.fold_in(&plain, &["init", "--from-git"]);
-    assert_eq!(output.status.code(), Some(1));
-    assert!(
-        stderr(&output).contains("hint: run fld init there"),
-        "{output:?}"
-    );
-    assert!(!plain.join(".fold").exists());
-    let output = sandbox.fold(&[
-        "init",
-        sandbox.path("absent").to_str().unwrap(),
-        "--from-git",
-    ]);
-    assert_eq!(output.status.code(), Some(1));
-    assert!(!sandbox.path("absent").exists());
     assert!(
         !sandbox
             .path("data")
@@ -304,6 +311,121 @@ fn init_and_from_git_each_refuse_the_other_kind_of_folder_with_a_hint() {
             .join("registry.db")
             .exists()
     );
+    // --from-git is gone: --with-git takes a Git repository, a fold project or a new folder.
+    assert!(
+        !sandbox
+            .fold_in(&repo, &["init", "--from-git"])
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn a_plain_init_finds_the_repository_around_it_without_git_and_never_above_a_ceiling() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.path("repo");
+    let nested = repo.join("sub");
+    fs::create_dir_all(&nested).unwrap();
+    git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+    let top = repo.canonicalize().unwrap();
+    let no_git = sandbox.path("no-git");
+    fs::create_dir(&no_git).unwrap();
+    let output = sandbox.fold_with(&nested, &["init"], &[("PATH", no_git.as_os_str())]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        stderr(&output).contains(&format!(
+            "hint: run `fld init --with-git` in {}",
+            top.display()
+        )),
+        "{output:?}"
+    );
+    assert!(!nested.join(".fold").exists());
+
+    // Git refuses to read a repository that another user owns, and that repository still holds the folder.
+    for args in [&["init"][..], &["init", "--with-git"][..]] {
+        let output = sandbox.fold_with(
+            &nested,
+            args,
+            &[("GIT_TEST_ASSUME_DIFFERENT_OWNER", OsStr::new("1"))],
+        );
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(
+            stderr(&output).contains(&format!(
+                "hint: run `fld init --with-git` in {}",
+                top.display()
+            )),
+            "{output:?}"
+        );
+        assert!(!nested.join(".fold").exists() && !nested.join(".git").exists());
+    }
+
+    // Git never goes up into a ceiling folder, so the folder below one is inside no repository.
+    let output = sandbox.fold_with(
+        &nested,
+        &["init"],
+        &[("GIT_CEILING_DIRECTORIES", repo.as_os_str())],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(nested.join(".fold").is_dir() && !nested.join(".git").exists());
+}
+
+#[test]
+fn both_inits_refuse_a_folder_in_a_git_directory_with_or_without_git() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.path("repo");
+    fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+    git(
+        sandbox.dir.path(),
+        &["init", "--quiet", "--bare", "bare.git"],
+    );
+    let (dot_git, bare) = (repo.join(".git"), sandbox.path("bare.git"));
+    fs::create_dir(dot_git.join("notes")).unwrap();
+    fs::create_dir(bare.join("notes")).unwrap();
+    let no_git = sandbox.path("no-git");
+    fs::create_dir(&no_git).unwrap();
+    // The folder above the sandbox is a ceiling, so a repository around it never changes an answer.
+    let above = sandbox.dir.path().canonicalize().unwrap();
+    let ceiling = above.parent().unwrap().as_os_str();
+    let with_git = [("GIT_CEILING_DIRECTORIES", ceiling)];
+    let without_git = [
+        ("GIT_CEILING_DIRECTORIES", ceiling),
+        ("PATH", no_git.as_os_str()),
+    ];
+    for (folder, git_dir) in [
+        (dot_git.join("notes"), &dot_git),
+        (dot_git.clone(), &dot_git),
+        (bare.join("notes"), &bare),
+        (bare.clone(), &bare),
+    ] {
+        let hint = format!(
+            "hint: choose a folder outside {}",
+            git_dir.canonicalize().unwrap().display()
+        );
+        for (args, vars) in [
+            (&["init"][..], &with_git[..]),
+            (&["init", "--with-git"][..], &with_git[..]),
+            (&["init"][..], &without_git[..]),
+        ] {
+            let output = sandbox.fold_with(&folder, args, vars);
+            assert_eq!(output.status.code(), Some(1), "{args:?} {output:?}");
+            assert!(stderr(&output).contains(&hint), "{args:?} {output:?}");
+            assert!(!folder.join(".fold").exists());
+        }
+    }
+    // `fld init DIR` makes DIR inside the Git directory, and takes it away again with the refusal.
+    let new = dot_git.join("new");
+    for args in [&["init"][..], &["init", "--with-git"][..]] {
+        let mut args = args.to_vec();
+        args.push(new.to_str().unwrap());
+        let output = sandbox.fold_with(sandbox.dir.path(), &args, &with_git);
+        assert_eq!(output.status.code(), Some(1), "{args:?} {output:?}");
+        assert!(
+            stderr(&output).contains("inside the Git directory"),
+            "{output:?}"
+        );
+        assert!(!new.exists());
+    }
 }
 
 #[test]
@@ -324,7 +446,7 @@ fn a_failing_import_removes_what_init_made_and_keeps_the_folder() {
     assert!(!project.join(".fold").exists());
     assert!(!project.join(".git").exists());
     // The Claude Code files init wrote for r1 go with it.
-    for made in [".claude", ".mcp.json", "AGENTS.md"] {
+    for made in [".claude", "AGENTS.md"] {
         assert!(!project.join(made).exists(), "{made}");
     }
     assert_eq!(

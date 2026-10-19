@@ -101,6 +101,7 @@ impl Opened {
             .await
             .unwrap();
         for _ in 0..2 {
+            crate::common::roles::lead_work_areas(&handle.store).await;
             handle
                 .tasks
                 .create_task(
@@ -108,7 +109,7 @@ impl Opened {
                     CreateTask {
                         title: TaskTitle::parse("task").unwrap(),
                         description: TaskDescription::new("body"),
-                        labels: Vec::new(),
+                        labels: crate::common::roles::work_labels(),
                     },
                 )
                 .await

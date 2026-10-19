@@ -13,6 +13,8 @@ pub enum SessionPeer {
     Worker(AgentName),
     /// A worker of another project runs the session; it is no agent of this one.
     OtherProjectWorker,
+    /// A check command that fold runs for no worker, such as an integration check, runs the session; it is no agent.
+    Check,
 }
 
 impl SessionPeer {
@@ -20,12 +22,12 @@ impl SessionPeer {
     pub fn worker(&self) -> Option<&AgentName> {
         match self {
             Self::Worker(agent) => Some(agent),
-            Self::Unsupervised | Self::OtherProjectWorker => None,
+            Self::Unsupervised | Self::OtherProjectWorker | Self::Check => None,
         }
     }
 }
 
-/// A process under a worker acts only as that worker's own agent, so a worker cannot become `main` or another agent by setting `FOLD_AGENT` in its Bash.
+/// A process under a worker, or under a check that fold runs for a worker, acts only as that worker's own agent, so a worker cannot become `main` or another agent by setting `FOLD_AGENT` in its Bash or in a check command. A check that fold runs for no worker acts as no agent.
 pub fn can_bind_agent(peer: &SessionPeer, agent: &AgentName) -> Result<(), PolicyDenied> {
     match peer {
         SessionPeer::Unsupervised => Ok(()),
@@ -35,17 +37,22 @@ pub fn can_bind_agent(peer: &SessionPeer, agent: &AgentName) -> Result<(), Polic
             message: "a process that a fold worker started can act only as that worker's own agent",
             hint: "use the fold tools of your own session; do not set FOLD_AGENT",
         }),
+        SessionPeer::Check => Err(PolicyDenied {
+            code: codes::WORKER_PEER_REFUSED,
+            message: "a check command that fold runs for no worker cannot act as an agent",
+            hint: "a check runs the project's own commands; it does not call fold",
+        }),
     }
 }
 
-/// A worker never acts as a human, so `x-fold-human` from any process under a worker is refused. `under_worker` is true when a worker of any project is an ancestor of the peer.
+/// A worker never acts as a human, so `x-fold-human` from any process under a worker is refused. `under_worker` is true when a worker of any project, or a check command that fold runs, is an ancestor of the peer: a check runs commands from a file that a worker can change.
 pub fn can_name_human(under_worker: bool) -> Result<(), PolicyDenied> {
     if !under_worker {
         return Ok(());
     }
     Err(PolicyDenied {
         code: codes::WORKER_PEER_REFUSED,
-        message: "a process that a fold worker started cannot act as a human",
+        message: "a process that a fold worker or a fold check started cannot act as a human",
         hint: "use the fold tools of your own session, or ask a human",
     })
 }
@@ -71,6 +78,9 @@ mod tests {
         );
         assert_eq!(worker.worker(), Some(&name("web-worker")));
         assert_eq!(SessionPeer::OtherProjectWorker.worker(), None);
+        let check = can_bind_agent(&SessionPeer::Check, &name("main")).unwrap_err();
+        assert_eq!(check.code(), codes::WORKER_PEER_REFUSED);
+        assert_eq!(SessionPeer::Check.worker(), None);
         assert_eq!(SessionPeer::default(), SessionPeer::Unsupervised);
     }
 

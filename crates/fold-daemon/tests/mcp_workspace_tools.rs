@@ -92,13 +92,14 @@ impl Fixture {
             tags: Vec::new(),
         });
         for _ in 0..2 {
+            crate::common::roles::lead_work_areas(project.store()).await;
             tasks
                 .create_task(
                     &creator,
                     CreateTask {
                         title: TaskTitle::parse("task").unwrap(),
                         description: TaskDescription::new("body"),
-                        labels: Vec::new(),
+                        labels: crate::common::roles::work_labels(),
                     },
                 )
                 .await
@@ -539,7 +540,7 @@ async fn the_workspace_tools_need_a_registered_agent() {
 #[test]
 fn every_workspace_tool_field_has_a_description() {
     let tools = fold_daemon::mcp::workspaces::tools();
-    assert_eq!(tools.len(), 12);
+    assert_eq!(tools.len(), 14);
     for tool in &tools {
         assert!(tool.description.is_some(), "{}", tool.name);
         let properties = tool.input_schema["properties"].as_object().unwrap();

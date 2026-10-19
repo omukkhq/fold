@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// One line Claude Code writes on stdout when fold runs it as `claude -p --input-format stream-json --output-format stream-json --verbose --session-id <uuid> --model <name> --permission-mode auto --permission-prompt-tool stdio --mcp-config <file> --append-system-prompt-file <file>`, with `--strict-mcp-config` only for a role that limits its MCP servers.
+/// One line Claude Code writes on stdout when fold runs it as `claude -p --input-format stream-json --output-format stream-json --verbose --session-id <uuid> --model <name> --permission-mode auto --permission-prompt-tool stdio --mcp-config <file> --settings <file> --append-system-prompt-file <file>`, with `--strict-mcp-config` only for a role that limits its MCP servers.
 ///
 /// Facts from the probe against Claude Code 2.1.301: `--permission-prompt-tool stdio` is accepted although `--help` lists only `--permission-prompts <host|none>` (default `host`); `--permission-mode auto` works under `-p`; `system/init` comes again at the start of every user turn, not once per process; hook lines (`system/hook_started`, `system/hook_response`) appear only with `--include-hook-events`, and `stream_event` lines only with `--include-partial-messages`. Lines of a type or subtype fold does not read become `Other`, and unknown fields are ignored, so a newer Claude Code never breaks the reader.
 #[derive(Debug, Clone, PartialEq, Deserialize)]

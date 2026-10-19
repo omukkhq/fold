@@ -319,3 +319,19 @@ fn an_index_never_saved_or_marked_has_nothing_fresh() {
     assert_eq!(index.is_fresh(&rp("f"), &meta), None);
     assert!(index.mark_boundary(&dir.path().join("absent")).is_err());
 }
+
+#[test]
+fn a_save_makes_the_index_directory_but_never_the_folder_that_holds_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let fold = dir.path().join(".fold");
+    let mut index = StatIndex::empty(HOST);
+    let path = fold.join("index/ws-1.idx");
+    let error = index.save(&path).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert!(!fold.exists());
+
+    fs::create_dir(&fold).unwrap();
+    index.save(&path).unwrap();
+    index.save(&path).unwrap();
+    assert!(path.is_file());
+}

@@ -878,8 +878,14 @@ async fn the_project_handle_applies_the_configured_lease() {
         .await
         .unwrap();
     let actor = backend(&fx).await;
-    fx.ok(Method::POST, "/tasks", Some(json!({"title": "Leased"})))
-        .await;
+    crate::common::roles::lead_work_areas(&fx.handle.store).await;
+    let labels = crate::common::roles::WORK_AREAS.map(|(_, label)| label);
+    fx.ok(
+        Method::POST,
+        "/tasks",
+        Some(json!({"title": "Leased", "labels": labels})),
+    )
+    .await;
     let task = TaskId::from_number(1).unwrap();
     fx.handle.tasks.claim_task(&actor, task).await.unwrap();
     fx.project
@@ -901,8 +907,14 @@ async fn an_invalid_configuration_fails_only_what_needs_the_lease() {
         .await
         .unwrap();
     let actor = backend(&fx).await;
-    fx.ok(Method::POST, "/tasks", Some(json!({"title": "Unclaimed"})))
-        .await;
+    crate::common::roles::lead_work_areas(&fx.handle.store).await;
+    let labels = crate::common::roles::WORK_AREAS.map(|(_, label)| label);
+    fx.ok(
+        Method::POST,
+        "/tasks",
+        Some(json!({"title": "Unclaimed", "labels": labels})),
+    )
+    .await;
     fx.ok(Method::GET, "/board", None).await;
     let view = fx.ok(Method::GET, "/tasks/T-1", None).await;
     assert_eq!(view["claims"], json!([]));

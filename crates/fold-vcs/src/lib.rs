@@ -1,10 +1,13 @@
 pub mod atomic;
 pub mod batch;
 pub mod browse;
+pub mod checkout;
 pub mod compare;
 pub mod diff;
+pub mod edit;
 pub mod gc;
 pub mod git;
+pub mod git_discovery;
 pub mod git_export;
 pub mod git_import;
 pub mod git_remote;
@@ -21,6 +24,7 @@ pub mod restore;
 pub mod revision_store;
 pub mod scan;
 pub mod snapshot;
+pub mod stash;
 pub mod sync;
 pub mod watch;
 

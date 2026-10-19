@@ -36,7 +36,7 @@ pub struct ProjectConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct WorkersConfig {
     pub task_worker: u64,
-    pub batch_reviewer: u64,
+    pub reviewer: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_per_area: Option<u64>,
 }
@@ -45,7 +45,7 @@ impl Default for WorkersConfig {
     fn default() -> Self {
         Self {
             task_worker: 4,
-            batch_reviewer: 3,
+            reviewer: 3,
             max_per_area: None,
         }
     }
@@ -55,7 +55,7 @@ impl WorkersConfig {
     pub fn limits(self) -> WorkerLimits {
         WorkerLimits {
             task_worker: self.task_worker,
-            batch_reviewer: self.batch_reviewer,
+            reviewer: self.reviewer,
             max_per_area: self.max_per_area,
         }
     }
@@ -375,11 +375,11 @@ fn check_workers_section(value: &toml::Value) -> Result<(), FoldError> {
     for (key, value) in table {
         let name = format!("{WORKERS_SECTION}.{key}");
         match key.as_str() {
-            "task_worker" | "batch_reviewer" | "max_per_area" => check_limit(&name, value)?,
+            "task_worker" | "reviewer" | "max_per_area" => check_limit(&name, value)?,
             _ => {
                 return Err(refused(
                     &name,
-                    "is not a config key: use task_worker, batch_reviewer or max_per_area",
+                    "is not a config key: use task_worker, reviewer or max_per_area",
                 ));
             }
         }
@@ -396,7 +396,7 @@ fn check_roles_section(value: &toml::Value) -> Result<(), FoldError> {
         let role = Role::parse(role_name).ok_or_else(|| {
             refused(
                 &section,
-                "is not a role: use area_lead, review_lead, task_worker or batch_reviewer",
+                "is not a role: use area_lead, review_lead, task_worker or reviewer",
             )
         })?;
         let fields = value
@@ -415,10 +415,7 @@ fn check_roles_section(value: &toml::Value) -> Result<(), FoldError> {
                     }
                 }
                 "idle_minutes" if role.is_long_lived() => {
-                    return Err(refused(
-                        &name,
-                        "applies only to task_worker and batch_reviewer",
-                    ));
+                    return Err(refused(&name, "applies only to task_worker and reviewer"));
                 }
                 "idle_minutes" => check_positive(&name, value)?,
                 "mcp" => {
@@ -590,26 +587,26 @@ mod tests {
     #[test]
     fn the_workers_and_roles_sections_set_limits_and_role_settings() {
         let config = ProjectConfig::from_toml(
-            "[workers]\ntask_worker = 5\nbatch_reviewer = 2\nmax_per_area = 1\n[roles.task_worker]\nmodel = \"sonnet\"\ncache_ttl = \"1h\"\nidle_minutes = 3\nmcp = [\"fold\", \"pencil\"]\n[roles.area_lead]\ncache_ttl = \"5m\"\n",
+            "[workers]\ntask_worker = 5\nreviewer = 2\nmax_per_area = 1\n[roles.task_worker]\nmodel = \"sonnet\"\ncache_ttl = \"1h\"\nidle_minutes = 3\nmcp = [\"fold\", \"pencil\"]\n[roles.area_lead]\ncache_ttl = \"5m\"\n",
         )
         .unwrap();
         assert_eq!(
             config.workers.limits(),
             WorkerLimits {
                 task_worker: 5,
-                batch_reviewer: 2,
+                reviewer: 2,
                 max_per_area: Some(1)
             }
         );
         let open = ProjectConfig::from_toml(
-            "[workers]\ntask_worker = 0\nbatch_reviewer = 500\nmax_per_area = 0\n",
+            "[workers]\ntask_worker = 0\nreviewer = 500\nmax_per_area = 0\n",
         )
         .unwrap();
         assert_eq!(
             open.workers.limits(),
             WorkerLimits {
                 task_worker: 0,
-                batch_reviewer: 500,
+                reviewer: 500,
                 max_per_area: Some(0)
             }
         );
@@ -627,11 +624,11 @@ mod tests {
             defaults.workers.limits(),
             WorkerLimits {
                 task_worker: 4,
-                batch_reviewer: 3,
+                reviewer: 3,
                 max_per_area: None
             }
         );
-        let reviewer = defaults.role(Role::BatchReviewer);
+        let reviewer = defaults.role(Role::Reviewer);
         assert_eq!(reviewer.cache_ttl, CacheTtl::OneHour);
         assert_eq!(reviewer.idle_minutes, Some(DEFAULT_IDLE_MINUTES));
         assert_eq!(reviewer.mcp, None);
@@ -653,7 +650,7 @@ mod tests {
             Some(DEFAULT_HANDOFF_AT)
         );
         assert_eq!(config.role(Role::TaskWorker).handoff_at, None);
-        assert_eq!(config.role(Role::BatchReviewer).handoff_at, None);
+        assert_eq!(config.role(Role::Reviewer).handoff_at, None);
         for (text, key) in [
             (
                 "[roles.task_worker]\nhandoff_at = 50",
@@ -687,7 +684,7 @@ mod tests {
         for (text, key) in [
             ("workers = 3", "workers"),
             ("[workers]\ntask_worker = -1", "workers.task_worker"),
-            ("[workers]\nbatch_reviewer = -1", "workers.batch_reviewer"),
+            ("[workers]\nreviewer = -1", "workers.reviewer"),
             ("[workers]\nmax_per_area = 1.5", "workers.max_per_area"),
             ("[workers]\nmax = 3", "workers.max"),
             ("[workers]\nmax_per_area = \"2\"", "workers.max_per_area"),
@@ -736,7 +733,7 @@ mod tests {
         let unknown = ProjectConfig::from_toml("[workers]\nmax = 3").unwrap_err();
         assert_eq!(
             unknown.message(),
-            "config key workers.max is not a config key: use task_worker, batch_reviewer or max_per_area"
+            "config key workers.max is not a config key: use task_worker, reviewer or max_per_area"
         );
     }
 

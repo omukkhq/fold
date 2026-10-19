@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO human_changes (commit_id, human, base_tree_hash, tree_hash, state, integration_id, created_at, closed_at)\n           VALUES (?, ?, ?, ?, 'recorded', (SELECT id FROM integrations WHERE number = ?), ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "ce18bfa40fcd7cbe285a71e4804a3080a6546c898142173582db462310776a36"
+}

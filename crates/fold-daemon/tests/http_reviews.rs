@@ -220,6 +220,8 @@ async fn the_proposal_diff_reads_the_change_since_an_earlier_version() {
     fx.reviews()
         .update_proposal(&frontend, p1, None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let stale = send(
         &fx,
@@ -331,6 +333,120 @@ async fn the_proposal_diff_reads_the_change_since_an_earlier_version() {
     assert_eq!(
         (answer.status, answer.code()),
         (StatusCode::NOT_FOUND, "proposal_not_found")
+    );
+}
+
+/// The worker syncs with a newer main between versions: the HTTP change since v1 holds only the worker's own edit, never the file main gained, and every read of it shares one carry of v1 onto the new base.
+#[tokio::test]
+async fn the_proposal_diff_since_an_earlier_version_leaves_out_what_main_gained() {
+    let fx = with_p1().await;
+    let (p1, p2) = (
+        fold_core::ProposalId::from_number(1).unwrap(),
+        fold_core::ProposalId::from_number(2).unwrap(),
+    );
+    fx.reviews()
+        .submit_review(
+            &human("tanim"),
+            p1,
+            1,
+            fold_core::reviews::Verdict::RequestChanges,
+            "add z",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let backend = fx.agent("backend").await;
+    fx.workspaces()
+        .create_workspace(&backend, t(2))
+        .await
+        .unwrap();
+    fx.write(2, "docs/guide.md", "guide\n");
+    fx.reviews()
+        .create_proposal(&backend, t(2), "Add a guide", None)
+        .await
+        .unwrap()
+        .detail()
+        .unwrap();
+    let review = fx.agent("review").await;
+    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    fx.reviews()
+        .submit_review(
+            &review,
+            p2,
+            1,
+            fold_core::reviews::Verdict::Approve,
+            "good",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    fx.reviews()
+        .integrate_proposal(&review, p2, None)
+        .await
+        .unwrap();
+    let frontend = fx.agent("frontend").await;
+    let synced = fx
+        .workspaces()
+        .sync_workspace(&frontend, fold_core::WorkspaceId::from_number(1).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(synced.base.to_string(), "r2");
+    fx.write(1, "src/lib.rs", "pub fn y() {}\npub fn z() {}\n");
+    fx.reviews()
+        .update_proposal(&frontend, p1, None)
+        .await
+        .unwrap()
+        .detail()
+        .unwrap();
+
+    let answer = send(&fx, Method::GET, "/proposals/P-1/diff?since=1", None, &[]).await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    let paths: Vec<&Value> = answer.body["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| &file["path"])
+        .collect();
+    assert_eq!(paths, [&json!("src/lib.rs")]);
+    assert_eq!(
+        answer.body["totals"],
+        json!({"files": 1, "added_lines": 1, "removed_lines": 0})
+    );
+    let answer = send(
+        &fx,
+        Method::GET,
+        "/proposals/P-1/diff?since=1&path=src/lib.rs",
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    let lines = &answer.body["hunks"][0]["lines"];
+    assert_eq!(lines.as_array().unwrap().len(), 2);
+    assert_eq!(
+        (&lines[1]["kind"], &lines[1]["new_no"]),
+        (&json!("added"), &json!(2))
+    );
+    let answer = send(
+        &fx,
+        Method::GET,
+        "/proposals/P-1/diff?since=1&path=docs/guide.md",
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::NOT_FOUND, "path_not_in_comparison")
+    );
+    assert_eq!(fx.handle.carries.misses(), 1);
+    assert_eq!(fx.handle.carries.hits(), 2);
+
+    let answer = send(&fx, Method::GET, "/proposals/P-1/diff?version=2", None, &[]).await;
+    assert_eq!(answer.body["from"]["id"], "r2");
+    assert_eq!(
+        answer.body["totals"],
+        json!({"files": 1, "added_lines": 2, "removed_lines": 1})
     );
 }
 
@@ -589,7 +705,7 @@ async fn human_integrates_through_the_route_with_the_fold_human_cookie() {
     assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
     assert_eq!(
         answer.body,
-        json!({"proposal": "P-1", "result": "succeeded", "revision": "r2"})
+        json!({"proposal": "P-1", "result": "succeeded", "revision": "r2", "run": null})
     );
     let detail = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
     assert_eq!(detail.body["summary"]["state"], "integrated");
@@ -883,4 +999,64 @@ fn the_openapi_document_declares_every_route_and_error_schema() {
     ] {
         assert!(schemas[name].is_object(), "{name} is missing");
     }
+}
+
+#[tokio::test]
+async fn a_check_run_is_read_with_its_logs_and_listed_on_its_proposal() {
+    let fx = Fixture::new().await;
+    let author = fx.agent("frontend").await;
+    fx.workspaces()
+        .create_workspace(&author, t(1))
+        .await
+        .unwrap();
+    fx.write(1, "src/lib.rs", "pub fn y() {}\n");
+    fx.write(
+        1,
+        "fold-checks.toml",
+        "[[check]]\nname = \"unit\"\nrun = \"echo fine\"\n",
+    );
+    let reviews = fx.reviews();
+    let started = reviews.run_checks(&author, t(1)).await.unwrap();
+    let fold_daemon::services::reviews::checks::Started::Running { run, .. } = started else {
+        panic!("expected a run");
+    };
+    let answer = fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
+        let answer = send(&fx, Method::GET, &format!("/check-runs/{run}"), None, &[]).await;
+        if answer.body["state"] == "running" {
+            Err(answer.body)
+        } else {
+            Ok(answer)
+        }
+    })
+    .await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    assert_eq!(answer.body["id"], "cr-1");
+    assert_eq!(answer.body["state"], "passed");
+    assert_eq!(answer.body["purpose"], "check");
+    let result = &answer.body["results"][0];
+    assert_eq!(result["name"], "unit");
+    assert_eq!(result["setup"], false);
+    assert_eq!(result["outcome"], "passed");
+    assert_eq!(result["log"], "fine\n");
+    assert_eq!(result["truncated"], false);
+    let missing = send(&fx, Method::GET, "/check-runs/cr-7", None, &[]).await;
+    assert_eq!(
+        (missing.status, missing.code()),
+        (StatusCode::NOT_FOUND, "check_run_not_found")
+    );
+
+    reviews
+        .create_proposal(&author, t(1), "Add checks", None)
+        .await
+        .unwrap()
+        .detail()
+        .unwrap();
+    let proposal = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    let checks = &proposal.body["checks"];
+    assert_eq!(checks.as_array().unwrap().len(), 1, "{checks}");
+    assert_eq!(checks[0]["id"], "cr-1");
+    assert_eq!(
+        checks[0]["results"][0]["log"], "",
+        "a proposal leaves the logs out"
+    );
 }

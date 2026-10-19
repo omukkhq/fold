@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use fold_core::Clock;
 use fold_store::StoreError;
-use fold_store::testing::{TestProject, assert_append_only, eventually};
+use fold_store::testing::{TestProject, assert_append_only, eventually, remove_dir_eventually};
 
 /// The version of every `.sql` file in `migrations/project`, the files sqlx loads, so the test follows the migrations as they are added.
 #[cfg(test)]
@@ -138,6 +138,41 @@ async fn eventually_returns_when_the_condition_holds_and_fails_on_timeout() {
     assert!(failed.is_panic());
     let message = failed.into_panic().downcast::<String>().unwrap();
     assert!(message.contains("last value: \"never ready\""), "{message}");
+}
+
+#[tokio::test]
+async fn remove_dir_eventually_removes_a_folder_that_a_writer_fills() {
+    let parent = tempfile::tempdir().unwrap();
+    let dir = parent.path().join("data");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    let writer = {
+        let sub = dir.join("sub");
+        // A bounded number of files, so a busy machine cannot keep the folder full past the deadline.
+        std::thread::spawn(move || {
+            for written in 0..200 {
+                if std::fs::write(sub.join(format!("f{written}")), b"x").is_err() {
+                    break;
+                }
+            }
+        })
+    };
+    remove_dir_eventually(&dir, Duration::from_secs(10)).await;
+    writer.join().unwrap();
+    assert!(!dir.exists());
+    remove_dir_eventually(&dir, Duration::from_secs(10)).await;
+
+    let file = parent.path().join("file");
+    std::fs::write(&file, b"x").unwrap();
+    // A runtime of its own, because the future of `eventually` with a borrowing closure is not `Send`.
+    let failed = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(remove_dir_eventually(&file, Duration::from_secs(10)));
+    })
+    .join();
+    assert!(failed.is_err());
 }
 
 #[tokio::test]

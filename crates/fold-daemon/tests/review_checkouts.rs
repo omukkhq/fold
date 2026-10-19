@@ -43,7 +43,7 @@ impl Fixture {
 
 #[tokio::test]
 async fn checkout_materialises_the_current_version_tree() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     fx.claimed().await;
     let before = fx.last_seq().await;
@@ -55,7 +55,7 @@ async fn checkout_materialises_the_current_version_tree() {
     assert_eq!(view.id, ws(2));
     assert_eq!(view.path, ".fold/ws/review-p-1");
     assert_eq!(view.kind, WorkspaceKind::Review);
-    assert_eq!(view.task, t(1));
+    assert_eq!(view.task, Some(t(1)));
     assert_eq!(view.proposal, Some(p(1)));
     assert_eq!(view.worker, Some(fx.backend.worker.name.clone()));
     assert_eq!(view.base, RevisionId::from_number(1).unwrap());
@@ -75,7 +75,11 @@ async fn checkout_materialises_the_current_version_tree() {
         .unwrap()
         .permissions()
         .mode();
-    assert_eq!(mode & 0o222, 0, "checkout files are read-only");
+    assert_ne!(
+        mode & 0o200,
+        0,
+        "the reviewer fixes what it finds in its checkout"
+    );
     assert!(!fx.project.paths().workspace_index(view.id).exists());
 
     let appended = fx.events_after(before).await;
@@ -95,6 +99,8 @@ async fn checkout_materialises_the_current_version_tree() {
     fx.reviews
         .update_proposal(&by(&fx.frontend.worker), p(1), None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let second = fx.checkout_by(&fx.backend.worker).await;
     assert_eq!(second.version, 2);
@@ -108,7 +114,7 @@ async fn checkout_materialises_the_current_version_tree() {
 
 #[tokio::test]
 async fn checkout_needs_the_review_claim() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     let backend = by(&fx.backend.worker);
 
@@ -156,7 +162,7 @@ async fn checkout_needs_the_review_claim() {
 
 #[tokio::test]
 async fn checkout_for_the_same_worker_and_version_is_idempotent() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     fx.claimed().await;
     let before = fx.last_seq().await;
@@ -185,7 +191,7 @@ async fn checkout_for_the_same_worker_and_version_is_idempotent() {
 
 #[tokio::test]
 async fn concurrent_checkouts_keep_one_row_and_remove_the_other_directory() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     fx.claimed().await;
     let backend = by(&fx.backend.worker);
@@ -219,7 +225,7 @@ async fn concurrent_checkouts_keep_one_row_and_remove_the_other_directory() {
 
 #[tokio::test]
 async fn checkout_does_not_move_the_task() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     fx.claimed().await;
     assert_eq!(fx.status(1).await, TaskStatus::Review);
@@ -252,7 +258,7 @@ async fn checkout_does_not_move_the_task() {
 
 #[tokio::test]
 async fn checkout_is_not_watched_and_takes_no_checkpoint() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     fx.claimed().await;
     let checkout = fx.checkout_by(&fx.backend.worker).await;
@@ -302,7 +308,7 @@ async fn checkout_is_not_watched_and_takes_no_checkpoint() {
             workspaces::insert_changeset(
                 tx,
                 id,
-                t(1),
+                Some(t(1)),
                 RevisionId::from_number(1).unwrap(),
                 tree,
                 "edit",
@@ -356,7 +362,7 @@ async fn checkout_is_not_watched_and_takes_no_checkpoint() {
 
 #[tokio::test]
 async fn closing_the_proposal_archives_the_checkout_and_keeps_the_directory() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     fx.claimed().await;
     let checkout = fx.checkout_by(&fx.backend.worker).await;
@@ -394,7 +400,7 @@ async fn closing_the_proposal_archives_the_checkout_and_keeps_the_directory() {
 
 #[tokio::test]
 async fn subagent_worker_gets_its_own_checkout_with_as() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     fx.claimed().await;
     let sub = fx.subagent(&fx.backend, "r1").await;
@@ -416,7 +422,7 @@ async fn subagent_worker_gets_its_own_checkout_with_as() {
 
 #[tokio::test]
 async fn checkout_directory_name_never_uses_the_worker_name() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     fx.claimed().await;
     assert!(WorkerName::parse("backend/..").is_err());
@@ -451,7 +457,7 @@ async fn checkout_directory_name_never_uses_the_worker_name() {
 
 #[tokio::test]
 async fn checkout_skips_a_name_a_directory_already_holds() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     fx.claimed().await;
     let stray = fx.project.paths().ws_dir().join("review-p-1");
@@ -469,7 +475,7 @@ async fn checkout_skips_a_name_a_directory_already_holds() {
 
 #[tokio::test]
 async fn checkout_failed_leaves_no_row_and_no_directory() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     fx.claimed().await;
     let ws_dir = fx.project.paths().ws_dir();
@@ -499,7 +505,7 @@ async fn checkout_failed_leaves_no_row_and_no_directory() {
 
 #[tokio::test]
 async fn checkout_never_gets_live_state_and_stays_out_of_the_overview() {
-    let fx = Fixture::new().await;
+    let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     fx.claimed().await;
     let checkout = fx.checkout_by(&fx.backend.worker).await;

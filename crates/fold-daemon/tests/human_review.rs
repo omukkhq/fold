@@ -128,13 +128,14 @@ impl Fixture {
         )
         .with_registry(project.registry().clone());
         for title in ["auth", "docs"] {
+            crate::common::roles::lead_work_areas(project.store()).await;
             tasks
                 .create_task(
                     &planner(),
                     CreateTask {
                         title: TaskTitle::parse(title).unwrap(),
                         description: TaskDescription::new(""),
-                        labels: Vec::new(),
+                        labels: crate::common::roles::work_labels(),
                     },
                 )
                 .await
@@ -155,6 +156,8 @@ impl Fixture {
         reviews
             .create_proposal(&author, t(1), "Add auth", None)
             .await
+            .unwrap()
+            .detail()
             .unwrap();
         Self {
             project,
@@ -462,7 +465,7 @@ async fn closed_task_is_refused_with_task_closed() {
             CreateTask {
                 title: TaskTitle::parse("old").unwrap(),
                 description: TaskDescription::new(""),
-                labels: Vec::new(),
+                labels: crate::common::roles::work_labels(),
             },
         )
         .await

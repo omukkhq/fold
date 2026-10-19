@@ -201,6 +201,35 @@ describe("connectProject", () => {
     handle.stop();
   });
 
+  it("hands project_not_found to the gone callback once", async () => {
+    const onProjectGone = vi.fn();
+    const handle = connectProject(
+      new QueryClient(),
+      "demo",
+      () => Promise.reject(new ApiError("project_not_found", "removed")),
+      createLiveStatusStore(),
+      Date.now,
+      () => undefined,
+      onProjectGone,
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(onProjectGone).toHaveBeenCalledOnce();
+    handle.stop();
+  });
+
+  it("ignores project_not_found without a gone callback", async () => {
+    const status = createLiveStatusStore();
+    const handle = connectProject(
+      new QueryClient(),
+      "demo",
+      () => Promise.reject(new ApiError("project_not_found", "removed")),
+      status,
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(status.getSnapshot().state).not.toBe("live");
+    handle.stop();
+  });
+
   it("ignores auth_required without a sign-in callback", async () => {
     const status = createLiveStatusStore();
     const handle = connectProject(

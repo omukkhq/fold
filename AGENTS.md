@@ -53,14 +53,14 @@ To run the tests of one file in `crates/<crate>/tests/`, select its module: `car
 4. **Library errors are `thiserror` enums; `FoldError` carries a stable `code` string.** Never change a shipped code. `anyhow` only in `fold-cli`'s `main`.
 5. **Blocking work never runs on the async runtime.** File I/O on workspaces, hashing, compression and merging go through `spawn_blocking`. Never hold a `std::sync::Mutex` guard across an `.await`.
 6. **Time and randomness are inputs.** `fold-core` takes `now` as an argument. `fold-core` defines the `Clock` trait and `ManualClock` for tests; `fold-daemon` provides `SystemClock`. Services and jobs read time only through a `Clock`. Timestamps are UTC milliseconds in the `Timestamp` newtype; never a local time.
-7. **Public ids are the prefixed numbers** (`T-12`, `P-3`, `C-40`, `r17`, `ws-9`, `ck-88`, `m-210`, `rc-5`, `i-7`, `ci-3`, `wt-4`, `RQ-12`, `rb-3`, `pq-2`), parsed and printed by the id types in `fold-core`. A SQLite row id never leaves the daemon.
+7. **Public ids are the prefixed numbers** (`T-12`, `P-3`, `C-40`, `r17`, `ws-9`, `ck-88`, `m-210`, `rc-5`, `i-7`, `ci-3`, `wt-4`, `RQ-12`, `rb-3`, `pq-2`, `cr-4`), parsed and printed by the id types in `fold-core`. A SQLite row id never leaves the daemon.
 8. **Pin the toolchain and version once.** `rust-toolchain.toml` pins the channel with the `minimal` profile, `rustfmt`, `clippy` and the `x86_64-unknown-linux-musl` target of the static release; move it in its own change with every check green. The workspace uses `resolver = "3"` and edition 2024. Every crate takes `version.workspace = true`, so one number versions the binary. The release profile sets `lto = true` and `codegen-units = 1`, and `make release` builds it for musl as a static binary; every other build uses the host target. Checks, tests and coverage build with the dev profile: `incremental = false`, `debug = "line-tables-only"` for fold's own crates, and unoptimized dependencies built without debug info, which keeps the build from empty short and the build folder small.
 
 ## Database
 
 1. **One SQLite file per project, WAL, `synchronous=FULL`, `foreign_keys=ON`.** All writes go through the project's single writer (`Store::write`); reads use the read pool.
 2. **Migrations are forward-only.** Never edit a migration that has been applied anywhere; add a new one.
-3. **Append-only tables get triggers that refuse `UPDATE` and `DELETE`** in the migration that creates them: events, revisions, changesets, proposal versions, reviews, review comments, integrations, completions, messages.
+3. **Append-only tables get triggers that refuse `UPDATE` and `DELETE`** in the migration that creates them: events, revisions, changesets, proposal versions, reviews, review comments, integrations, completions, messages, check results, review scope choices, review scopes.
 4. **Let the database hold the invariants it can.** One unreleased implementation claim per task, one unreleased review claim per proposal, one active task workspace per task, one open proposal per task, unique `(proposal, version)` versions, no self-dependency, one id number per kind per project: each is a constraint, not only a service check.
 5. **A column used to filter, join, constrain or decide is a real column,** never a key inside a JSON column.
 6. **`tasks.status` and `tasks.blocked` are caches.** Only `recompute` writes them, inside the transaction that changed their inputs.
@@ -81,7 +81,7 @@ To run the tests of one file in `crates/<crate>/tests/`, select its module: `car
 1. **Objects before references.** An object is written, flushed and renamed into place before any row or object refers to it. A hash never changes for the same content.
 2. **The main head moves only through the integration procedure,** under the project's integration mutex, by compare-and-swap. A published revision is never partial.
 3. **Done means a completion record,** written in the same transaction as the integration (or by the container rule in `recompute`, or by the complete command of a task without a proposal or of a human task, which only a human or the main agent marks Done). A failed integration never completes a task.
-4. **Proposal versions never change.** Approvals belong to the version they reviewed; a new version starts unapproved.
+4. **Proposal versions never change.** Approvals belong to the version they reviewed; a new version starts unapproved, except a version a human makes with the review edit, which keeps the reviewer agents' approvals of its source version until the human sends it for review again.
 5. **fold writes into a workspace only on create, sync and restore,** and never copies unrecorded changes between workspaces. Nothing deletes a workspace directory except `fld gc` after the retention period.
 6. **Messages never change task state,** never stand in for a dependency and never stand in for a claim.
 7. **Every path from an agent or a tree is checked** to be relative, normalised and inside its workspace before it is read or written. Symlinks are recorded, never followed.

@@ -18,7 +18,7 @@ export interface RevisionLines {
   meta: Segments;
 }
 
-/** What a revision row shows: a proposal integration names its proposal and task, a pull names the remote commit and the human. */
+/** What a revision row shows: a proposal integration names its proposal and task, a pull names the remote commit and the human, a record names the human who changed the project folder, the genesis is the start of the history, and a direct change of the main agent names its commit subject and the user's approval. */
 export function describeRevision(
   revision: Revision,
   now: number,
@@ -42,9 +42,19 @@ export function describeRevision(
         title: `pull · ${revision.pull ?? ""}`,
         meta: seg`${who} · ${at}`,
       };
+    case "direct":
+      return {
+        title: `direct · ${revision.title ?? revision.id}`,
+        meta: seg`${who} · approved by the user · ${at}`,
+      };
+    case "record":
+      return {
+        title: `record · ${revision.title ?? "changes of the project folder"}`,
+        meta: seg`${who} · ${at}`,
+      };
     case "initial":
       return {
-        title: revision.title ?? "Initial revision",
+        title: revision.title ?? "Genesis revision",
         meta: seg`${who} · ${at}`,
       };
   }
@@ -55,14 +65,25 @@ export function isOpenable(entry: Pick<TreeEntry, "name" | "path">): boolean {
   return !entry.name.includes("\uFFFD") && !entry.path.includes("\uFFFD");
 }
 
-/** The note under the tree, from main's head and the project folder as the repository route names them; null until that read arrives or while main has no revision. */
+/** Whether the project folder holds an older revision than main's head: it waits on changes of the human's that no revision records, or on the Git branch. */
+export function folderWaits(state: RepositoryState | undefined): boolean {
+  return (
+    state?.head != null && state.folder != null && state.folder !== state.head
+  );
+}
+
+/** The note under the tree, from main's head, the project folder and the revision it holds as the repository route names them; null until that read arrives or while main has no revision. */
 export function mainCopyText(
   state: RepositoryState | undefined,
 ): string | null {
   if (state?.head == null) {
     return null;
   }
-  return `The project folder ${state.main_path} shows ${state.head} while it has no changes that are not committed. Agents read it; builds run in workspaces.`;
+  const folder = state.folder ?? state.head;
+  if (folderWaits(state)) {
+    return `The project folder ${state.main_path} shows ${folder}, apart from your changes that are not recorded, and waits before ${state.head}; Needs you says why. Agents read it; builds run in workspaces.`;
+  }
+  return `The project folder ${state.main_path} shows ${state.head}, apart from your changes that are not recorded. Agents read it; builds run in workspaces.`;
 }
 
 /** `→ ../shared/config.ts` beside a symlink in the tree, or null when the entry carries no target. The target is never followed. */

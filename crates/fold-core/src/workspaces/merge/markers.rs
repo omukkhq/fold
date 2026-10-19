@@ -8,6 +8,7 @@ const THEIRS: &str = ">>>>>>>";
 const WORKSPACE_LABEL: &str = "workspace";
 const BASE_LABEL: &str = "base";
 const MAIN_LABEL: &str = "main";
+const STASH_LABEL: &str = "stash@{";
 
 /// The labels of a sync's markers, ours, base and theirs: `workspace`, `base r<n>` and `main r<n>`, the forms [`contains_marker_line`] recognises.
 pub fn sync_labels(base: RevisionId, main: RevisionId) -> [String; 3] {
@@ -18,11 +19,19 @@ pub fn sync_labels(base: RevisionId, main: RevisionId) -> [String; 3] {
     ]
 }
 
-/// Writes each conflict hunk with fold's diff3 markers. Marker lines end in `\n`; a side whose last line has no terminator gets one so a marker never shares a line with text. The labels are the caller's, for example `workspace`, `base r12` and `main r13`.
+/// The labels of an unstash's markers, ours and theirs: `main (r<n>)` for the project folder, which holds main's revision `folder` with the human's unrecorded changes, and `stash@{<position>}` for the entry, the forms [`contains_stash_marker_line`] recognises. An unstash writes no base section, as `git stash pop` does.
+pub fn stash_labels(folder: RevisionId, position: usize) -> [String; 2] {
+    [
+        format!("{MAIN_LABEL} ({folder})"),
+        format!("{STASH_LABEL}{position}}}"),
+    ]
+}
+
+/// Writes each conflict hunk with fold's markers: diff3 markers with a base section when `base_label` is given, otherwise the two-way form. Marker lines end in `\n`; a side whose last line has no terminator gets one so a marker never shares a line with text. The labels are the caller's, for example `workspace`, `base r12` and `main r13`.
 pub fn render_markers(
     merge: &Merge3,
     ours_label: &str,
-    base_label: &str,
+    base_label: Option<&str>,
     theirs_label: &str,
 ) -> String {
     let mut out = String::new();
@@ -32,8 +41,10 @@ pub fn render_markers(
             Segment::Conflict(hunk) => {
                 marker(&mut out, OURS, ours_label);
                 side(&mut out, &hunk.ours);
-                marker(&mut out, BASE, base_label);
-                side(&mut out, &hunk.base);
+                if let Some(base_label) = base_label {
+                    marker(&mut out, BASE, base_label);
+                    side(&mut out, &hunk.base);
+                }
                 marker(&mut out, SEPARATOR, "");
                 side(&mut out, &hunk.theirs);
                 marker(&mut out, THEIRS, theirs_label);
@@ -61,13 +72,32 @@ fn side(out: &mut String, lines: &[String]) {
     }
 }
 
-/// True when a line starts a fold marker with one of the [`sync_labels`]. A bare `=======` never counts because ordinary files contain it.
+/// True when a line starts a fold marker with one of the [`sync_labels`] or the [`stash_labels`]. A bare `=======` never counts because ordinary files contain it.
 pub fn contains_marker_line(text: &str) -> bool {
     text.lines().any(|line| {
         labelled(line, OURS, WORKSPACE_LABEL).is_some()
             || numbered(line, BASE, BASE_LABEL)
             || numbered(line, THEIRS, MAIN_LABEL)
+            || stash_marker(line)
     })
+}
+
+/// True when a line starts a marker of an unstash with one of the [`stash_labels`]: `<<<<<<< main (r<n>)` or `>>>>>>> stash@{<n>}`.
+pub fn contains_stash_marker_line(text: &str) -> bool {
+    text.lines().any(stash_marker)
+}
+
+fn stash_marker(line: &str) -> bool {
+    let digit_after = |rest: Option<&str>| {
+        rest.and_then(|rest| rest.chars().next())
+            .is_some_and(|c| c.is_ascii_digit())
+    };
+    digit_after(labelled(line, OURS, MAIN_LABEL).and_then(|rest| rest.strip_prefix(" (r")))
+        || digit_after(
+            line.strip_prefix(THEIRS)
+                .and_then(|rest| rest.strip_prefix(' '))
+                .and_then(|rest| rest.strip_prefix(STASH_LABEL)),
+        )
 }
 
 /// The rest of `line` after the marker and its label.
@@ -94,7 +124,7 @@ mod tests {
     fn renders_a_known_conflict() {
         let m = merge3("a\nb\nc\n", "a\nours\nc\n", "a\ntheirs\nc\n");
         assert_eq!(
-            render_markers(&m, "workspace", "base r12", "main r13"),
+            render_markers(&m, "workspace", Some("base r12"), "main r13"),
             "a\n<<<<<<< workspace\nours\n||||||| base r12\nb\n=======\ntheirs\n>>>>>>> main r13\nc\n"
         );
     }
@@ -103,7 +133,7 @@ mod tests {
     fn unterminated_sides_get_a_newline() {
         let m = merge3("a\nb", "a\nours", "a\ntheirs");
         assert_eq!(
-            render_markers(&m, "workspace", "base r1", "main r2"),
+            render_markers(&m, "workspace", Some("base r1"), "main r2"),
             "a\n<<<<<<< workspace\nours\n||||||| base r1\nb\n=======\ntheirs\n>>>>>>> main r2\n"
         );
     }
@@ -111,14 +141,14 @@ mod tests {
     #[test]
     fn clean_merge_renders_plain_text() {
         let m = merge3("a\nb\n", "A\nb\n", "a\nb\n");
-        assert_eq!(render_markers(&m, "w", "b", "m"), "A\nb\n");
+        assert_eq!(render_markers(&m, "w", Some("b"), "m"), "A\nb\n");
     }
 
     #[test]
     fn empty_sides_render_back_to_back_markers() {
         let m = merge3("a\n", "a\nx\n", "a\ny\n");
         assert_eq!(
-            render_markers(&m, "workspace", "base r1", "main r2"),
+            render_markers(&m, "workspace", Some("base r1"), "main r2"),
             "a\n<<<<<<< workspace\nx\n||||||| base r1\n=======\ny\n>>>>>>> main r2\n"
         );
     }
@@ -133,8 +163,36 @@ mod tests {
         );
         let m = merge3("a\n", "b\n", "c\n");
         assert!(contains_marker_line(&render_markers(
-            &m, &ours, &base, &theirs
+            &m,
+            &ours,
+            Some(&base),
+            &theirs
         )));
+    }
+
+    #[test]
+    fn an_unstash_writes_two_way_markers_with_its_labels_that_are_detected() {
+        let r = |n| RevisionId::from_number(n).unwrap();
+        let [ours, theirs] = stash_labels(r(8), 0);
+        assert_eq!([ours.as_str(), theirs.as_str()], ["main (r8)", "stash@{0}"]);
+        let m = merge3("a\nb\n", "a\nmain\n", "a\nmine\n");
+        let rendered = render_markers(&m, &ours, None, &theirs);
+        assert_eq!(
+            rendered,
+            "a\n<<<<<<< main (r8)\nmain\n=======\nmine\n>>>>>>> stash@{0}\n"
+        );
+        assert!(contains_stash_marker_line(&rendered));
+        assert!(contains_marker_line(&rendered));
+        assert!(contains_stash_marker_line("<<<<<<< main (r12)\n"));
+        assert!(contains_stash_marker_line(">>>>>>> stash@{3}"));
+        assert!(!contains_stash_marker_line("<<<<<<< main r12\n"));
+        assert!(!contains_stash_marker_line(
+            "<<<<<<< main (rx)\n>>>>>>> stash@{x}\n"
+        ));
+        assert!(!contains_stash_marker_line(
+            ">>>>>>> main r3\n<<<<<<< workspace\n"
+        ));
+        assert!(!contains_stash_marker_line(" >>>>>>> stash@{0}\n"));
     }
 
     #[test]

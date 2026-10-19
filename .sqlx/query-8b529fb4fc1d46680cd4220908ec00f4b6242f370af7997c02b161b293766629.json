@@ -1,0 +1,112 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT p.number AS \"proposal!: i64\",\n                  t.number AS \"task!: i64\",\n                  t.human_reviewer,\n                  t.human_review_reason,\n                  t.human_review_set_by,\n                  (p.conflicted OR p.checks_failed) AS \"conflicted: bool\",\n                  v.version,\n                  v.created_at AS version_at,\n                  (\n                      SELECT MAX(e.created_at) FROM events e\n                      WHERE e.task_id = t.number AND e.type = ?1\n                  ) AS \"marked_at?: i64\"\n           FROM proposals p\n           JOIN tasks t ON t.id = p.task_id\n           JOIN proposal_versions v ON v.proposal_id = p.id\n           WHERE p.state = 'open'\n             AND t.human_review = 1\n             AND v.version = (\n                     SELECT MAX(c.version) FROM proposal_versions c WHERE c.proposal_id = p.id\n                 )\n           ORDER BY p.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "proposal!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "task!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "human_reviewer",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "human_reviewer"
+          }
+        }
+      },
+      {
+        "name": "human_review_reason",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "human_review_reason"
+          }
+        }
+      },
+      {
+        "name": "human_review_set_by",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "human_review_set_by"
+          }
+        }
+      },
+      {
+        "name": "conflicted: bool",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "version",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "version_at",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "marked_at?: i64",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "8b529fb4fc1d46680cd4220908ec00f4b6242f370af7997c02b161b293766629"
+}

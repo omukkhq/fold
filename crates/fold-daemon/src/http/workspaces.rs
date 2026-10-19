@@ -53,8 +53,11 @@ pub struct RepositoryView {
     /// The revision `main` names; null only before `r1` exists.
     #[schema(value_type = Option<String>, required = true, example = "r17")]
     pub head: Option<RevisionId>,
-    /// The project folder, whose files follow main through its own Git repository.
+    /// The project folder, whose files follow main through fold's checkout of it.
     pub main_path: String,
+    /// The main revision the project folder holds, apart from the changes no revision records, such as `r16`: behind `head` while the folder waits on such a change on a path main changed, or on the Git branch. Null before fold first wrote the folder.
+    #[schema(value_type = Option<String>, required = true, example = "r16")]
+    pub folder: Option<RevisionId>,
     /// The newest 10 revisions, newest first.
     pub recent: Vec<RevisionView>,
 }
@@ -65,6 +68,10 @@ pub enum RevisionOriginView {
     Initial,
     Proposal,
     Pull,
+    /// A direct change of the main agent, which the user approved in the conversation.
+    Direct,
+    /// A change of the project folder by a human: what fld record read from the folder, or a Git commit the human made there.
+    Record,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -83,10 +90,10 @@ pub struct RevisionView {
     pub task: Option<TaskId>,
     #[schema(value_type = Option<String>, required = true, example = "P-3")]
     pub proposal: Option<ProposalId>,
-    /// The title of the integrated proposal.
+    /// The title of the integrated proposal, or the first line of a direct change's commit message.
     #[schema(required = true)]
     pub title: Option<String>,
-    /// The agent whose proposal was integrated, or the human who pulled.
+    /// The agent whose proposal was integrated, the human who pulled, or the main worker that made a direct change.
     #[schema(required = true)]
     pub author: Option<String>,
     /// The remote commit a pull brought in.
@@ -108,6 +115,8 @@ impl From<RevisionSummary> for RevisionView {
                 RevisionOrigin::Initial => RevisionOriginView::Initial,
                 RevisionOrigin::Proposal => RevisionOriginView::Proposal,
                 RevisionOrigin::Pull => RevisionOriginView::Pull,
+                RevisionOrigin::Direct => RevisionOriginView::Direct,
+                RevisionOrigin::Record => RevisionOriginView::Record,
             },
             task: summary.task,
             proposal: summary.proposal,
@@ -124,6 +133,7 @@ impl From<RepositoryState> for RepositoryView {
         Self {
             head: state.head,
             main_path: state.main_path.to_string_lossy().into_owned(),
+            folder: state.folder,
             recent: state.recent.into_iter().map(RevisionView::from).collect(),
         }
     }
@@ -354,7 +364,7 @@ pub struct FileContentView {
     pub text: Option<String>,
 }
 
-fn file_view(path: String, content: FileContent) -> FileContentView {
+pub(super) fn file_view(path: String, content: FileContent) -> FileContentView {
     let size = content.size;
     let text = if content.binary || content.too_large {
         None
@@ -378,6 +388,8 @@ pub enum WorkspaceKindView {
     Task,
     /// A read-only checkout of a proposal version for its reviewer.
     Review,
+    /// The main agent's workspace, which belongs to no task.
+    Main,
 }
 
 impl From<WorkspaceKind> for WorkspaceKindView {
@@ -385,6 +397,7 @@ impl From<WorkspaceKind> for WorkspaceKindView {
         match kind {
             WorkspaceKind::Task => Self::Task,
             WorkspaceKind::Review => Self::Review,
+            WorkspaceKind::Main => Self::Main,
         }
     }
 }
@@ -415,10 +428,12 @@ impl From<WorkspaceState> for WorkspaceStateView {
 pub struct WorkspaceEntryView {
     #[schema(value_type = String, example = "ws-9")]
     pub id: WorkspaceId,
-    #[schema(value_type = String, example = "T-12")]
-    pub task: TaskId,
-    /// The title of the task.
-    pub task_title: String,
+    /// Null for the main workspace, which belongs to no task.
+    #[schema(value_type = Option<String>, required = true, example = "T-12")]
+    pub task: Option<TaskId>,
+    /// The title of the task; null for the main workspace.
+    #[schema(required = true)]
+    pub task_title: Option<String>,
     /// The worker that owns the workspace, such as `frontend/ui`.
     #[schema(required = true)]
     pub owner: Option<String>,
@@ -460,7 +475,7 @@ impl From<WorkspaceEntry> for WorkspaceEntryView {
         Self {
             id: workspace.id,
             task: workspace.task,
-            task_title: entry.task_title.as_str().to_owned(),
+            task_title: entry.task_title.map(|title| title.as_str().to_owned()),
             owner: workspace.worker.map(|worker| worker.as_str().to_owned()),
             kind: workspace.kind.into(),
             path: workspace.path,
@@ -481,7 +496,7 @@ impl From<WorkspaceEntry> for WorkspaceEntryView {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct WorkspaceListView {
-    /// The active and missing task workspaces, by id.
+    /// The active and missing task workspaces and the live main workspace, by id.
     pub workspaces: Vec<WorkspaceEntryView>,
 }
 
@@ -550,7 +565,7 @@ impl From<WatchMode> for WatchModeView {
     }
 }
 
-/// The entries of one directory of an active task workspace as its files are now, for suggesting `@ws-N:` paths.
+/// The entries of one directory of an active task workspace or of the main workspace as its files are now, for suggesting `@ws-N:` paths.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/workspaces/{id}/tree",
@@ -581,7 +596,7 @@ pub async fn read_workspace_tree(
     Ok(Json(workspace_tree_view(path, entries)))
 }
 
-/// The working changes of an active task workspace, read after a full scan.
+/// The working changes of an active task workspace or of the main workspace, read after a full scan.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct WorkspaceChangesView {
     /// Always `working`.
@@ -748,14 +763,14 @@ pub async fn read_revision_file(
     Ok(Json(file_view(path, content)))
 }
 
-/// The project's active and missing task workspaces with their live states and the attention items of their tasks.
+/// The project's active and missing task workspaces and its live main workspace, with their live states and the attention items of their tasks.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/workspaces",
     operation_id = "list_workspaces",
     params(("slug" = String, Path, description = "The project slug")),
     responses(
-        (status = 200, description = "The live task workspaces", body = WorkspaceListView),
+        (status = 200, description = "The live task workspaces and the live main workspace", body = WorkspaceListView),
         (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -795,7 +810,7 @@ pub async fn get_workspace(
     Ok(Json(entry.into()))
 }
 
-/// The working changes of an active task workspace after a full scan, compared against its own base revision.
+/// The working changes of an active task workspace or of the main workspace after a full scan, compared against its own base revision.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/workspaces/{id}/changes",

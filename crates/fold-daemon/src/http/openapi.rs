@@ -24,7 +24,7 @@ const HOST_NOT_ALLOWED: &str = "`host_not_allowed`: the `Host`, or the `Origin` 
 const CLIENT_HEADER_REQUIRED: &str =
     "`client_header_required`: a write over TCP lacks the `x-fold-client` header";
 const SESSION_REFUSED: &str = "`auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked";
-const WORKER_PEER_REFUSED: &str = "`worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started";
+const WORKER_PEER_REFUSED: &str = "`worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs";
 /// Every route that takes a `Human` declares this code, which marks it for [`WORKER_PEER_REFUSED`].
 const HUMAN_NAME_REQUIRED: &str = "`human_name_required`";
 

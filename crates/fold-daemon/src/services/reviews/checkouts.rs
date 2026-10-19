@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use fold_core::events::types;
 use fold_core::{
-    Actor, AgentActor, EventActor, FoldError, IdKind, NewEvent, ProposalId, WorkspaceId, codes,
-    policy,
+    Actor, AgentActor, AgentName, EventActor, FoldError, IdKind, NewEvent, ProposalId, WorkspaceId,
+    codes, policy,
 };
 use fold_store::agents::WorkerRow;
 use fold_store::reviews::{self, ProposalRow, ReviewClaimRow};
@@ -43,7 +43,7 @@ enum Inserted {
 }
 
 impl ReviewService {
-    /// A read-only copy of the current version of an open proposal for the actor's worker, under `.fold/ws/review-p-<n>`, so a review worker can read, build and test it without a task workspace. `policy::can_create_review_checkout` admits any worker of the agent that holds the review claim, and the checkout belongs to that worker. A repeat call for the same version and worker returns the active checkout; any other checkout of the proposal takes the next directory name. A checkout is never recorded, synced or restored and never moves the task.
+    /// A copy of the current version of an open proposal for the actor's worker, under `.fold/ws/review-p-<n>`, so a review worker can read, build and test it without a task workspace, and fix what it finds there with `submit_review_fix`. `policy::can_create_review_checkout` admits any worker of the agent that holds the review claim, and the checkout belongs to that worker. A repeat call for the same version and worker returns the active checkout; any other checkout of the proposal takes the next directory name. A checkout is never synced or restored and never moves the task; fold only reads its files, when a fix in it becomes a version.
     ///
     /// The files are written and renamed into place before the transaction that inserts the row, so no row ever names a directory that is not complete; a failure to write them is `checkout_failed`. The transaction reads the current version again and refuses with `stale_version` when a version was added after the files were written, so a checkout never names a version that is not current when it is made. It looks for the active checkout again before it takes a workspace number, so a repeat that finished second takes none; the partial unique index on active checkouts backs that rule. When the transaction fails, or finds the checkout another call inserted first, the new directory is removed again: no row names it.
     pub async fn create_review_checkout(
@@ -152,6 +152,50 @@ impl ReviewService {
                 target: row.target,
             })
             .collect())
+    }
+
+    /// Why a Claude Code session of `agent` may not edit files in the workspace directory `path`, relative to the project root, or `None` when it may: `path` is an active review checkout of one proposal that a worker of `agent` owns, and `agent` holds that proposal's review claim, so the edit is a fix `submit_review_fix` can make a version. A batch checkout mixes every member's work and is never edited. It reads only.
+    pub async fn checkout_edit_refusal(
+        &self,
+        agent: &AgentName,
+        path: &str,
+    ) -> Result<Option<&'static str>, ReviewError> {
+        let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
+        let found = workspaces::list_active_review_checkouts(&mut tx)
+            .await?
+            .into_iter()
+            .find(|row| row.workspace.path == path);
+        let Some(row) = found else {
+            return Ok(Some(
+                "this is no active review checkout; edit only in the review checkout create_review_checkout gave you",
+            ));
+        };
+        let proposal = match row.target {
+            CheckoutTarget::Proposal { proposal, .. } => proposal,
+            CheckoutTarget::Batch { .. } => {
+                return Ok(Some(
+                    "a batch checkout mixes every member and never becomes a version; call create_review_checkout for the member and fix it there",
+                ));
+            }
+        };
+        let owned = row
+            .workspace
+            .worker
+            .as_ref()
+            .is_some_and(|worker| worker.belongs_to(agent));
+        if !owned {
+            return Ok(Some(
+                "this review checkout belongs to another reviewer; edit only in your own review checkout",
+            ));
+        }
+        let holder = reviews::unreleased_review_claim(&mut *tx, proposal).await?;
+        tx.commit().await.map_err(StoreError::from)?;
+        if !holder.is_some_and(|claim| claim.worker.belongs_to(agent)) {
+            return Ok(Some(
+                "your agent does not hold the review claim of this proposal; call claim_review, then create_review_checkout",
+            ));
+        }
+        Ok(None)
     }
 
     async fn checkout(

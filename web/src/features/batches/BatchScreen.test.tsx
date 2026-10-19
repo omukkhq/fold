@@ -46,7 +46,7 @@ const rb3 = batch({
 });
 
 const reviewer = workerProcess("review-b3", {
-  role: "batch_reviewer",
+  role: "reviewer",
   area: null,
   model: "sonnet",
   turns: 21,
@@ -191,7 +191,7 @@ describe("BatchScreen", () => {
     ).toBeTruthy();
     expect(within(checkout).getByText(".fold/ws/review-rb-3")).toBeTruthy();
     const card = await screen.findByRole("region", { name: "Reviewer" });
-    expect(within(card).getByText("Batch reviewer · sonnet")).toBeTruthy();
+    expect(within(card).getByText("Reviewer · sonnet")).toBeTruthy();
     expect(within(card).getByText(/21 turns/)).toBeTruthy();
     expect(screen.getByText("@review")).toBeTruthy();
     expect(screen.getByText(/2 proposals, one verdict each/)).toBeTruthy();
@@ -233,7 +233,7 @@ describe("BatchScreen", () => {
 
   it("offers Stop reviewer only to a named human", async () => {
     await setup(rb3, {}, { human: null, authenticated: true });
-    expect(await screen.findByText("Batch reviewer · sonnet")).toBeTruthy();
+    expect(await screen.findByText("Reviewer · sonnet")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Stop reviewer" })).toBeNull();
   });
 

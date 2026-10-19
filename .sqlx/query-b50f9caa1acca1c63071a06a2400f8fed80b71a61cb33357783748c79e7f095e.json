@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM projects WHERE slug = ? AND root = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "b50f9caa1acca1c63071a06a2400f8fed80b71a61cb33357783748c79e7f095e"
+}

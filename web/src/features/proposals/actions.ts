@@ -1,9 +1,14 @@
 import type { NewReview, ProposalDetail } from "@/api/proposals";
 import { reviewerSegment, seg, segmentsText } from "@/people/segments";
+import { canSendForReviewAgain } from "./edit";
 import { gateText, shownGates } from "./gates";
 import type { DetailView } from "./view";
 
-export type HumanAction = "approve" | "request_changes" | "integrate";
+export type HumanAction =
+  | "approve"
+  | "request_changes"
+  | "integrate"
+  | "review_again";
 
 /** The body an Approve sends: the daemon takes no verdict without a body or a comment, and the button has no text field. */
 export const APPROVE_BODY = "approved in the web interface";
@@ -27,14 +32,17 @@ export function humanVerdict(
 
 /**
  * The actions the signed-in human sees on the current version of an open proposal. The daemon decides whether each write holds and refuses with a code the screen shows on the action;
- * Integrate shows also after a `request_changes`, because an integrating human approves in the same action.
+ * Integrate shows also after a `request_changes`, because an integrating human approves in the same action. Send for review again shows on a human edit whose kept approvals still count.
  */
 export function visibleActions(
   proposal: ProposalDetail,
   human: string | null,
 ): HumanAction[] {
   if (human === null || proposal.summary.state !== "open") return [];
-  return ["approve", "request_changes", "integrate"];
+  const actions: HumanAction[] = ["approve", "request_changes", "integrate"];
+  return canSendForReviewAgain(proposal, human)
+    ? [...actions, "review_again"]
+    : actions;
 }
 
 /** The composer opens only on the current version of an open proposal, for a named human. */
@@ -50,6 +58,24 @@ export function canComment(
   );
 }
 
+/** The line under a disabled Approve and Integrate once the integration checks of the current version failed: the daemon refuses that version until its author sends a new one. */
+export const CHECKS_FAILED =
+  "The integration checks failed; the author sends a new version.";
+
+/** Whether the line under Approve shows. After failed integration checks Approve and Integrate share one line, which shows once under both buttons. */
+export function showsApproveLine(
+  approveBlock: string | null,
+  integrateBlock: string | null,
+  integrateShown: boolean,
+): boolean {
+  if (approveBlock === null) return false;
+  return !(
+    integrateShown &&
+    approveBlock === CHECKS_FAILED &&
+    integrateBlock === CHECKS_FAILED
+  );
+}
+
 /** The line under a disabled Approve on a task with the human review mark: the human reviews after a reviewer agent. */
 export const AGENT_APPROVES_FIRST = "A reviewer agent approves first.";
 
@@ -58,6 +84,7 @@ export const AGENT_APPROVES_FIRST = "A reviewer agent approves first.";
  * On a task with the human review mark the daemon takes a human's approval only after an agent with review rights approved the current version, which it reports as `agent_approved`.
  */
 export function approveBlock(proposal: ProposalDetail): string | null {
+  if (proposal.summary.checks_failed) return CHECKS_FAILED;
   return proposal.summary.human_review !== null && !proposal.agent_approved
     ? AGENT_APPROVES_FIRST
     : null;

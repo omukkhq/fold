@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::super::error::from_review;
 use super::super::parse;
-use super::{id, proposal_id, version};
+use super::{ScopeChoiceInput, id, proposal_id, scope_choices, version};
 use crate::services::reviews::{
     BatchComment, BatchLines, BatchVerdict, ReviewBatchView, ReviewService,
 };
@@ -25,6 +25,9 @@ pub const SUBMIT_BATCH_REVIEW: &str = "submit_batch_review";
 pub struct CreateReviewBatchInput {
     /// The open proposals to review together, such as ["P-3", "P-4"]: 2 to 20, none written by your agent. fold takes the review claim of each for you.
     pub proposals: Vec<String>,
+    /// For revised versions: the scope of your review of some proposals, each with its reason, when you do not follow fold's suggested_scope from get_proposal_diff. The other proposals follow the suggestion.
+    #[serde(default)]
+    pub scopes: Vec<ScopeChoiceInput>,
     /// The worker that makes this call, such as review/batch. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -68,7 +71,7 @@ pub struct RemoveFromBatchInput {
 pub struct BatchVerdictInput {
     /// The member, such as P-3.
     pub proposal: String,
-    /// comment, request_changes, approve or reject. Only the main agent, the review lead and the batch reviewers it starts can approve or reject; reject closes the proposal.
+    /// comment, request_changes, approve or reject. Only the main agent, the review lead and the reviewers it starts can approve or reject; reject closes the proposal.
     pub verdict: String,
     /// The review text for this member. An approval may leave it out; request_changes and comment need it or a comment on the member; reject needs it. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
@@ -113,7 +116,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             CREATE_REVIEW_BATCH,
-            "Review related open proposals together: fold takes the review claim of each and orders them by their task dependencies. Then call create_batch_checkout and submit_batch_review.",
+            "For a review of your own by the main agent or the review lead: review related open proposals together. fold takes the review claim of each and orders them by their task dependencies. A proposal whose task has the human review mark is refused with invalid_request: review it on its own. Then call create_batch_checkout and submit_batch_review. A reviewer gets its batch from the review lead's start_worker and gets worker_claim_denied here.",
             schema_for_type::<CreateReviewBatchInput>(),
         ),
         Tool::new(
@@ -234,8 +237,9 @@ async fn create_review_batch(
         .iter()
         .map(|text| proposal_id(text))
         .collect::<Result<Vec<_>, _>>()?;
+    let scopes = scope_choices(&input.scopes)?;
     let batch = reviews
-        .create_review_batch(actor, proposals)
+        .create_review_batch_with_scopes(actor, proposals, scopes)
         .await
         .map_err(from_review)?;
     Ok(batch_json(&batch))

@@ -15,6 +15,7 @@ use crate::support::lock;
 use questions::Waiter;
 use watch::watch_done;
 
+mod gate;
 mod launch;
 mod lines;
 mod questions;
@@ -26,6 +27,14 @@ mod stop;
 mod watch;
 
 pub use restart::{PAUSE_TURN, RESTART_TURN};
+
+/// The folder below a project's `.fold/` that, in a build for development, makes every worker of the project run fld's scripted stand-in for Claude Code instead of `claude`. It holds one script per agent, `<agent>.json`; the development seed writes it.
+#[cfg(feature = "dev-launcher")]
+pub const DEV_STUB_DIR: &str = "dev-stub";
+
+/// The fld subcommand of the stand-in, put before Claude Code's own arguments.
+#[cfg(feature = "dev-launcher")]
+pub const DEV_STUB_COMMAND: [&str; 2] = ["dev", "stub"];
 pub(super) use resume::StartWatch;
 
 /// The programs a worker process runs. The daemon reads no environment variable, so a test points `claude` at a stand-in here.
@@ -227,4 +236,22 @@ impl Supervisor {
             self.inner.requests.fetch_add(1, Ordering::SeqCst) + 1
         )
     }
+}
+
+/// The open batch that the reviewer of `row` holds, which fold made of its two or more proposals at its start, for a first turn built again. It is found by its holder, not by a member, because the reviewer may have taken any member out of it.
+pub(super) async fn reviewer_batch(
+    store: &Store,
+    row: &fold_store::agents::WorkerProcessRow,
+) -> Result<Option<fold_core::ReviewBatchId>, fold_store::StoreError> {
+    if row.role != fold_core::Role::Reviewer {
+        return Ok(None);
+    }
+    Ok(
+        fold_store::reviews::batches::list_batches(store.read(), true)
+            .await?
+            .into_iter()
+            .rev()
+            .find(|batch| batch.holder.belongs_to(&row.agent))
+            .map(|batch| batch.id),
+    )
 }

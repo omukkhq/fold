@@ -134,6 +134,25 @@ define_event_types! {
     PROJECT_RESUMED = "project.resumed",
     TASK_HOLD_SET = "task.hold_set",
     TASK_HOLD_CLEARED = "task.hold_cleared",
+    PROPOSAL_HUMAN_EDITED = "proposal.human_edited",
+    PROPOSAL_REVIEW_AGAIN_REQUESTED = "proposal.review_again_requested",
+    HUMAN_CHANGE_RECORDED = "human_change.recorded",
+    HUMAN_CHANGE_CONFLICTED = "human_change.conflicted",
+    HUMAN_CHANGE_RESOLVED = "human_change.resolved",
+    GIT_SYNC_ENABLED = "git.sync_enabled",
+    GIT_HEAD_MOVED = "git.head_moved",
+    HUMAN_CHANGE_WITHDRAWN = "human_change.withdrawn",
+    PROPOSAL_REVIEWER_FIXED = "proposal.reviewer_fixed",
+    STASH_PUSHED = "stash.pushed",
+    STASH_APPLIED = "stash.applied",
+    STASH_CONFLICTED = "stash.conflicted",
+    STASH_DROPPED = "stash.dropped",
+    CHECKS_STARTED = "checks.started",
+    CHECKS_FINISHED = "checks.finished",
+    INTEGRATION_QUEUED = "integration.queued",
+    INTEGRATION_UNQUEUED = "integration.unqueued",
+    INTEGRATION_HELD = "integration.held",
+    REVIEW_SCOPE_CHOSEN = "review.scope_chosen",
 }
 
 impl EventType {
@@ -310,9 +329,10 @@ impl NewEvent {
         })
     }
 
+    /// Takes an `Option` too, for a workspace or changeset that may belong to no task.
     #[must_use]
-    pub fn task(mut self, task: TaskId) -> Self {
-        self.task = Some(task);
+    pub fn task(mut self, task: impl Into<Option<TaskId>>) -> Self {
+        self.task = task.into();
         self
     }
 

@@ -1,0 +1,69 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.id AS \"workspace_id!: i64\", w.task_id AS \"task_id?: i64\",\n                  t.number AS \"task_number?: i64\",\n                  (SELECT id FROM revisions WHERE number = ?2) AS \"revision_id?: i64\",\n                  w.kind = 'review' AS \"review!: bool\"\n           FROM workspaces w LEFT JOIN tasks t ON t.id = w.task_id\n           WHERE w.number = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "workspace_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "task_id?: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "task_id"
+          }
+        }
+      },
+      {
+        "name": "task_number?: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "revision_id?: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "review!: bool",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "efba93d5ea9b8f521d0ebfc2b08d82ee1d2ba7cf65463031dbd85869d78bc2e7"
+}

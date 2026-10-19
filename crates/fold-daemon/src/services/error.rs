@@ -9,8 +9,12 @@ use super::reviews::ReviewError;
 use super::tasks::TaskError;
 use super::workspaces::WorkspaceError;
 
-/// The `FoldError` every transport answers with for a store failure. One without a stable code is internal: the caller gets `internal_error` and the log gets the cause, which names tables and constraints, never values.
+/// The `FoldError` every transport answers with for a store failure. One without a stable code is internal: the caller gets `internal_error` and the log gets the cause, which names tables and constraints, never values. A closed store is a project that the daemon closed under a session or request that still holds it, as when its folder, `.fold/` or database went away.
 pub fn from_store(error: StoreError) -> FoldError {
+    if error.closed() {
+        return FoldError::new(codes::PROJECT_UNAVAILABLE, "the project was closed")
+            .with_hint("the project folder, its .fold or its database went away; open the projects page or run `fld doctor` to see what to do, then start a new session");
+    }
     match error.code() {
         Some(code) => FoldError::new(code, error.to_string()),
         None => {

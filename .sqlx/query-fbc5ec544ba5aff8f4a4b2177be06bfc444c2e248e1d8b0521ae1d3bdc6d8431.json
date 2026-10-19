@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.id AS \"worker!: i64\", COUNT(*) AS \"count!: i64\"\n           FROM worker_processes w\n           JOIN workers k ON k.agent_id = w.agent_id\n           JOIN claims c ON c.worker_id = k.id AND c.released_at IS NULL\n           WHERE w.id IN (SELECT value FROM json_each(?1))\n           GROUP BY w.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "worker!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "count!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "fbc5ec544ba5aff8f4a4b2177be06bfc444c2e248e1d8b0521ae1d3bdc6d8431"
+}

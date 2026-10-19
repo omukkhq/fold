@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.tree_hash, r.number AS \"number!: i64\", c.human_change_id\n           FROM checkout c JOIN revisions r ON r.id = c.revision_id\n           WHERE c.id = 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "tree_hash",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "checkout",
+            "name": "tree_hash"
+          }
+        }
+      },
+      {
+        "name": "number!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "human_change_id",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "checkout",
+            "name": "human_change_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "d2de7c1c0404dfddff88e7d1f038dc5199b03ecd6269d7e32e1ebcbea6458312"
+}

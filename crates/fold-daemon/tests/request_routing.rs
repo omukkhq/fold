@@ -69,7 +69,7 @@ async fn until_stdin(fake: &FakeClaude, agent: &str, text: &str) -> Vec<String> 
 
 #[tokio::test]
 async fn only_the_main_agent_claims_once_there_is_one_and_card_labels_must_exist() {
-    let h = Harness::start().await;
+    let h = Harness::start_without_leads().await;
     let request = human_request(&h, "The board is slow").await;
     let claim = json!({"id": request.to_string(), "kind": "bug", "title": "Slow board"});
 
@@ -130,7 +130,7 @@ async fn only_the_main_agent_claims_once_there_is_one_and_card_labels_must_exist
 
 #[tokio::test]
 async fn an_agents_request_reaches_only_the_main_agent() {
-    let h = Harness::start().await;
+    let h = Harness::start_without_leads().await;
     make_main(&h, MAIN).await;
     let mut main = h.register_inbox(MAIN).await;
     let mut backend = h.register_inbox("backend").await;
@@ -152,7 +152,7 @@ async fn an_agents_request_reaches_only_the_main_agent() {
 
 #[tokio::test]
 async fn an_area_lead_hears_of_a_new_request_and_claims_it_when_it_is_relevant() {
-    let h = Harness::start().await;
+    let h = Harness::start_without_leads().await;
     make_main(&h, MAIN).await;
     crate::common::roles::give_role(
         &h.handle.store,
@@ -183,7 +183,7 @@ async fn an_area_lead_hears_of_a_new_request_and_claims_it_when_it_is_relevant()
 
 #[tokio::test]
 async fn a_hand_opened_session_neither_claims_a_request_nor_defines_an_area_without_a_main_agent() {
-    let h = Harness::start().await;
+    let h = Harness::start_without_leads().await;
     let request = human_request(&h, "Rename the board").await;
     let claim = json!({"id": request.to_string(), "kind": "feature", "title": "Rename"});
     for agent in ["frontend", "backend"] {

@@ -19,7 +19,7 @@ import {
 } from "./attachments";
 import { newRequestSchema, type NewRequestValues } from "./compose";
 import { describeFailure, type Failure } from "./errors";
-import { FailurePanel } from "./FailurePanel";
+import { FailurePanel } from "@/components/states/FailurePanel";
 import { formatSize } from "./present";
 
 interface NewRequestDialogProps {

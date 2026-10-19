@@ -108,13 +108,14 @@ impl Fixture {
         );
         let creator = agent("frontend");
         for _ in 0..2 {
+            crate::common::roles::lead_work_areas(project.store()).await;
             tasks
                 .create_task(
                     &creator,
                     CreateTask {
                         title: TaskTitle::parse("task").unwrap(),
                         description: TaskDescription::new("body"),
-                        labels: Vec::new(),
+                        labels: crate::common::roles::work_labels(),
                     },
                 )
                 .await
@@ -123,8 +124,7 @@ impl Fixture {
         let frontend = register(&agents, "frontend").await;
         let backend = register(&agents, "backend").await;
         register(&agents, "review").await;
-        // `backend` may not decide on a proposal; `review` does as the review lead.
-        give_role(project.store(), "backend", Role::TaskWorker, None).await;
+        // `backend` leads its area and may not decide on a proposal; `review` does as the review lead.
         give_role(project.store(), "review", Role::ReviewLead, None).await;
         Self {
             project,
@@ -169,6 +169,7 @@ impl Fixture {
         self.reviews
             .create_proposal(&by(worker), t(1), "Add the report", Some("tests pass"))
             .await
+            .map(|proposed| proposed.detail().unwrap())
     }
 
     async fn status(&self, task: u32) -> TaskStatus {
@@ -447,6 +448,8 @@ async fn create_proposal_records_a_changeset_only_when_the_tree_changed() {
         .reviews
         .update_proposal(&by(&fx.frontend), p(2), None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     assert_ne!(third.selected.changeset, first.selected.changeset);
     assert_eq!(list_changesets(store, ws(1)).await.unwrap().len(), 2);
@@ -616,6 +619,8 @@ async fn create_proposal_refuses_bad_input_and_a_closed_task() {
         .reviews
         .create_proposal(&by(&fx.frontend), t(1), "  Add it  ", Some("  "))
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     assert_eq!(detail.summary.title, "Add it");
     assert_eq!(detail.selected.evidence, None);
@@ -658,7 +663,7 @@ async fn two_concurrent_create_proposal_calls_give_one_proposal_exists() {
         (Ok(won), lost @ Err(_)) | (lost @ Err(_), Ok(won)) => (won, lost),
         other => panic!("expected one proposal and one refusal, got {other:?}"),
     };
-    assert_eq!(won.summary.id, p(1));
+    assert_eq!(won.detail().unwrap().summary.id, p(1));
     let error = refusal(lost);
     assert_eq!(error.code(), codes::PROPOSAL_EXISTS);
     assert_eq!(details(&error), json!({"task": "T-1", "proposal": "P-1"}));
@@ -689,6 +694,8 @@ async fn update_proposal_adds_v2_and_returns_task_to_review() {
         .reviews
         .update_proposal(&by(&fx.frontend), p(1), Some("fixed the review"))
         .await
+        .unwrap()
+        .detail()
         .unwrap();
 
     assert_eq!(detail.summary.current_version, 2);
@@ -752,6 +759,8 @@ async fn update_proposal_refuses_an_unchanged_version() {
         .reviews
         .update_proposal(&by(&fx.frontend), p(1), Some("more tests"))
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     assert_eq!(detail.selected.version, 2);
     assert_eq!(detail.selected.changeset, detail.versions[0].changeset);
@@ -999,6 +1008,8 @@ async fn list_proposals_filters_by_state_and_review_claim() {
     fx.reviews
         .create_proposal(&by(&fx.backend), t(2), "Add the API", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let renewed = fx.project.now().as_millis();
     fx.execute(&format!(
@@ -1079,6 +1090,8 @@ async fn retire_proposal_ends_a_proposal_for_reject_and_integration() {
     fx.reviews
         .create_proposal(&by(&fx.backend), t(2), "Add the API", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     fx.execute(&format!(
         "INSERT INTO workspaces (number, task_id, worker_id, kind, path, base_revision_id, proposal_id, state, created_at)

@@ -5,7 +5,7 @@ use fold_core::merge::{
     ConflictReport, HunkSide, ReportEntry, ReportEntryKind, ReportFile, ReportHunk, ReportKind,
 };
 use fold_core::policy::{Gate, GateState, GateStatus};
-use fold_core::reviews::{Side, Verdict};
+use fold_core::reviews::{ReviewScope, ReviewScopeRecord, ScopeRule, Side, Verdict};
 use fold_core::{
     FoldError, HumanName, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkspaceId,
 };
@@ -20,7 +20,9 @@ use super::actor::Human;
 use super::diff::{DiffView, comparison_view, file_view};
 use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use super::tasks::{HumanReviewMark, TaskStatus, TaskView, id, task_view};
-use super::workspaces::{ChangeSource, ComparedFile, ComparisonTotals};
+use super::workspaces::{
+    ChangeSource, ComparedFile, ComparisonTotals, FileContentView, file_view as content_view,
+};
 use crate::daemon::AppState;
 use crate::services::reviews::{
     self as service, ChangeRange, CheckoutTarget, CommentInput, CommentLocation,
@@ -29,10 +31,12 @@ use crate::services::reviews::{
 };
 
 pub mod batches;
+pub mod checks;
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .merge(batches::routes())
+        .merge(checks::routes())
         .routes(routes!(set_human_review, clear_human_review))
         .routes(routes!(list_proposals))
         .routes(routes!(get_proposal))
@@ -40,6 +44,9 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_review_comments, add_review_comment))
         .routes(routes!(submit_review))
         .routes(routes!(integrate_proposal))
+        .routes(routes!(read_proposal_file))
+        .routes(routes!(edit_proposal_file))
+        .routes(routes!(send_for_review_again))
         .routes(routes!(list_review_checkouts))
 }
 
@@ -246,6 +253,8 @@ pub struct ProposalSummary {
     pub state: ProposalStateView,
     /// The latest integration of the current version conflicted with main.
     pub conflicted: bool,
+    /// The integration checks of the current version failed on its merge with main, so the proposal is with its author until a new version.
+    pub checks_failed: bool,
     /// The highest version number.
     pub current_version: u32,
     /// Null once the proposal is no longer open.
@@ -256,6 +265,8 @@ pub struct ProposalSummary {
     pub latest_verdict: Option<ReviewVerdict>,
     /// The task's human review mark is met on the current version: a human it accepts approved it and no later `request_changes` withdrew that. True without a mark, so an approved proposal with this false is an agent's approval that waits for a human.
     pub human_approved: bool,
+    /// A request to integrate the current version waits in the integration queue; it ends when fold integrates, refuses or sends the proposal back.
+    pub integration_queued: bool,
     /// The worker that holds the review claim.
     #[schema(required = true)]
     pub review_claim: Option<String>,
@@ -283,10 +294,12 @@ impl From<service::ProposalSummary> for ProposalSummary {
             author: summary.author.to_string(),
             state: summary.state.into(),
             conflicted: summary.conflicted,
+            checks_failed: summary.checks_failed,
             current_version: summary.current_version,
             turn: summary.turn.map(ProposalTurn::from),
             latest_verdict: summary.latest_verdict.map(ReviewVerdict::from),
             human_approved: summary.human_approved,
+            integration_queued: summary.integration_queued,
             review_claim: summary.review_claim.map(|worker| worker.to_string()),
             human_review: summary.human_review.map(HumanReviewMark::from),
             close_reason: summary.close_reason,
@@ -321,9 +334,16 @@ pub struct ProposalVersion {
     /// The author's evidence that the work is done.
     #[schema(required = true)]
     pub evidence: Option<String>,
+    /// The worker, the reviewer's worker for a reviewer's fix, or `human:<name>` for a human edit.
     pub created_by: String,
     /// UTC milliseconds.
     pub created_at: i64,
+    /// A human made this version by editing the one before it in a human review. It keeps the agent approvals of that version until it is sent for review again; a human approves it again.
+    pub human_edit: bool,
+    /// A human sent this version for review again, so the approvals it kept no longer count.
+    pub review_again: bool,
+    /// The reviewer that holds the review claim made this version by fixing the one before it in its review checkout. It starts without approvals like every version.
+    pub reviewer_fix: bool,
 }
 
 impl From<service::VersionView> for ProposalVersion {
@@ -336,9 +356,87 @@ impl From<service::VersionView> for ProposalVersion {
             files_added: version.stats.files_added,
             files_modified: version.stats.files_modified,
             files_deleted: version.stats.files_deleted,
+            human_edit: version.human_edit,
             evidence: version.evidence,
             created_by: version.created_by,
             created_at: version.created_at.as_millis(),
+            review_again: version.review_again,
+            reviewer_fix: version.fixed_in_checkout.is_some(),
+        }
+    }
+}
+
+/// How much of a revised version a review reads: the change since the earlier version with a verdict and the code it touches, or the whole version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewScopeKind {
+    Change,
+    Full,
+}
+
+impl From<ReviewScope> for ReviewScopeKind {
+    fn from(scope: ReviewScope) -> Self {
+        match scope {
+            ReviewScope::Change => Self::Change,
+            ReviewScope::Full => Self::Full,
+        }
+    }
+}
+
+/// A fact fold checks that makes it suggest a full review of a revised version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewScopeRule {
+    /// The change touches a file that the earlier version did not change.
+    NewFiles,
+    /// The change has more added and removed lines than half of the earlier version's own change.
+    LargeDelta,
+    /// The author merged a newer main into files of the earlier version's change by hand.
+    BaseConflicts,
+    /// The version is the third or later.
+    #[serde(rename = "v3_or_later")]
+    V3OrLater,
+}
+
+impl From<ScopeRule> for ReviewScopeRule {
+    fn from(rule: ScopeRule) -> Self {
+        match rule {
+            ScopeRule::NewFiles => Self::NewFiles,
+            ScopeRule::LargeDelta => Self::LargeDelta,
+            ScopeRule::BaseConflicts => Self::BaseConflicts,
+            ScopeRule::ThirdVersion => Self::V3OrLater,
+        }
+    }
+}
+
+/// The scope a review of a revised version followed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ProposalReviewScope {
+    /// The scope the review followed: the review lead's choice when it made one, else fold's suggestion.
+    pub scope: ReviewScopeKind,
+    /// The earlier version with a verdict that the change is read since.
+    pub since: u32,
+    /// fold's suggestion from the change since that version.
+    pub suggested: ReviewScopeKind,
+    /// The rules that made fold suggest a full review, in their declared order; empty for a change review.
+    pub rules: Vec<ReviewScopeRule>,
+    /// Why the review lead chose this scope; null when the review followed the suggestion.
+    #[schema(required = true)]
+    pub reason: Option<String>,
+}
+
+impl From<ReviewScopeRecord> for ProposalReviewScope {
+    fn from(record: ReviewScopeRecord) -> Self {
+        Self {
+            scope: record.scope.into(),
+            since: record.since,
+            suggested: record.suggested.into(),
+            rules: record
+                .rules
+                .into_iter()
+                .map(ReviewScopeRule::from)
+                .collect(),
+            reason: record.reason,
         }
     }
 }
@@ -354,6 +452,12 @@ pub struct ProposalReview {
     pub comments: u32,
     /// UTC milliseconds.
     pub created_at: i64,
+    /// For an approval that a human edit kept, the version whose approval it copies.
+    #[schema(required = true)]
+    pub kept_from: Option<u32>,
+    /// The scope of an agent's review of a revised version; null for a version reviewed whole and for a human's review.
+    #[schema(required = true)]
+    pub scope: Option<ProposalReviewScope>,
 }
 
 impl From<service::ReviewView> for ProposalReview {
@@ -365,6 +469,8 @@ impl From<service::ReviewView> for ProposalReview {
             body: review.body,
             comments: review.comments,
             created_at: review.created_at.as_millis(),
+            kept_from: review.kept_from,
+            scope: review.scope.map(ProposalReviewScope::from),
         }
     }
 }
@@ -635,7 +741,7 @@ pub struct ProposalDetail {
     pub last_reviewed_version: Option<u32>,
     /// What stands between the requesting human and integrating the selected version.
     pub gates: Vec<ProposalGate>,
-    /// A reviewer agent (the main agent, the review lead or a batch reviewer) approved the current version and no request for changes came after it. On a task with the human review mark a human approves only then; otherwise the approval is `agent_approval_required`.
+    /// A reviewer agent (the main agent, the review lead or a reviewer) approved the current version and no request for changes came after it. On a task with the human review mark a human approves only then; otherwise the approval is `agent_approval_required`.
     pub agent_approved: bool,
     /// The latest conflict report of the selected version.
     #[schema(required = true)]
@@ -643,6 +749,8 @@ pub struct ProposalDetail {
     /// The files the selected version changes against its base, in path order.
     pub files: Vec<ComparedFile>,
     pub totals: ComparisonTotals,
+    /// The check runs of the selected version, newest first, without their logs: the proposal-stage runs of exactly its files, then its integration runs.
+    pub checks: Vec<checks::CheckRun>,
 }
 
 impl From<service::ProposalView> for ProposalDetail {
@@ -691,6 +799,11 @@ impl From<service::ProposalView> for ProposalDetail {
             conflict: detail.conflict.map(ConflictReportView::from),
             files: view.files.into_iter().map(ComparedFile::from).collect(),
             totals: view.totals.into(),
+            checks: view
+                .checks
+                .into_iter()
+                .map(checks::CheckRun::from)
+                .collect(),
         }
     }
 }
@@ -850,6 +963,34 @@ impl From<service::SubmittedReview> for SubmittedReview {
     }
 }
 
+/// A human's change of one text file of the version the human read, in a human review.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct EditFileBody {
+    /// The version the human read and edited. When the current version is another one, nothing is written and the answer is `stale_version`.
+    pub version: u32,
+    /// The file, such as `src/lib.rs`: a text file of that version.
+    pub path: String,
+    /// The whole new content of the file, as UTF-8 text.
+    pub content: String,
+}
+
+/// The human edit the human sends for review again.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ReviewAgainBody {
+    /// The version the human read. When the current version is another one, nothing is written and the answer is `stale_version`.
+    pub version: u32,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct VersionFileQuery {
+    /// A version number; left out, the current version.
+    #[serde(default)]
+    pub version: Option<u32>,
+    /// A file path relative to the version's root, such as `src/lib.rs`.
+    pub path: String,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct IntegrateBody {
     /// The version the human reviewed. When the current version is another one, nothing integrates and the answer is `stale_version`.
@@ -860,6 +1001,10 @@ pub struct IntegrateBody {
 #[serde(rename_all = "snake_case")]
 pub enum IntegrationResultKind {
     Succeeded,
+    /// The integration checks of the merged tree failed; the proposal went back to its author.
+    ChecksFailed,
+    /// The project has integration checks, so the integration waits its turn and runs in the background; its result comes as events.
+    Queued,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -867,9 +1012,12 @@ pub struct IntegrationResult {
     #[schema(example = "P-3")]
     pub proposal: String,
     pub result: IntegrationResultKind,
-    /// The new head of main.
-    #[schema(example = "r18")]
-    pub revision: String,
+    /// The new head of main, once the proposal integrated.
+    #[schema(example = "r18", required = true)]
+    pub revision: Option<String>,
+    /// The check run of failed integration checks.
+    #[schema(example = "cr-9", required = true)]
+    pub run: Option<String>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -975,7 +1123,7 @@ pub async fn get_proposal(
     Ok(Json(view.into()))
 }
 
-/// The change of a proposal version, calculated on request from stored trees: against its base revision, or with `since` only what changed after an earlier version. A version side is named by its changeset. On a change since an earlier version the new side's line numbers are the version's own, so a `new` line comment taken from them lands on the version.
+/// The change of a proposal version, calculated on request from stored trees: against its base revision, or with `since` only what changed after an earlier version. When the version has a newer base than the earlier one, the earlier version is carried onto that base first, so the change leaves out what main gained. A version side is named by its changeset. On a change since an earlier version the new side's line numbers are the version's own, so a `new` line comment taken from them lands on the version.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/proposals/{id}/diff",
@@ -1101,7 +1249,7 @@ pub async fn add_review_comment(
     request_body = ReviewBody,
     responses(
         (status = 201, description = "The review", body = SubmittedReview),
-        (status = 400, description = "`invalid_request` (`details.field` names the field), `invalid_path`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request` (`details.field` names the field, or `details.reason` is `checks_failed` for an approve of a version whose integration checks failed), `invalid_path`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
         (status = 409, description = "`stale_version` (`details.expected_version`, `details.current_version`), `agent_approval_required` (a human's approve on a task with the human review mark before a reviewer agent approved the version), `proposal_not_open` or `task_closed`", body = ErrorEnvelope),
@@ -1148,14 +1296,14 @@ pub async fn submit_review(
     ),
     request_body = IntegrateBody,
     responses(
-        (status = 200, description = "Integrated", body = IntegrationResult),
-        (status = 400, description = "`invalid_request`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
+        (status = 200, description = "Integrated, failed its integration checks, or queued behind other integrations when the project has integration checks", body = IntegrationResult),
+        (status = 400, description = "`invalid_request` (`details.reason` is `checks_failed` while the integration checks of the version failed, or `integration_queued` while an integration of the version waits in the queue), `invalid_id` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 403, description = "`author_cannot_integrate`: the caller's agent wrote the proposal", body = ErrorEnvelope),
         (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
         (status = 409, description = "A gate refusal: `stale_version` (`details.expected_version`, `details.current_version`), `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`); or `proposal_not_open`, `integration_conflicted` (`details.files`: path and kind), `head_moved`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`, or `integration_failed` (`details.cause`)", body = ErrorEnvelope),
-        (status = 500, description = "Internal error", body = ErrorEnvelope),
+        (status = 500, description = "Internal error, or `workspace_io` with `details.reason` `fold_failed` when fold itself could not run the integration checks: the version is not sent back, so integrate again once the fault is fixed", body = ErrorEnvelope),
     )
 )]
 pub async fn integrate_proposal(
@@ -1173,12 +1321,130 @@ pub async fn integrate_proposal(
         IntegrationOutcome::Succeeded { revision } => Ok(Json(IntegrationResult {
             proposal: proposal.to_string(),
             result: IntegrationResultKind::Succeeded,
-            revision: revision.to_string(),
+            revision: Some(revision.to_string()),
+            run: None,
         })),
         IntegrationOutcome::Conflicted(conflicts) => {
             Err(integration_conflicted(proposal, &conflicts).into())
         }
+        IntegrationOutcome::ChecksFailed { run } => Ok(Json(IntegrationResult {
+            proposal: proposal.to_string(),
+            result: IntegrationResultKind::ChecksFailed,
+            revision: None,
+            run: Some(run.to_string()),
+        })),
+        IntegrationOutcome::Queued => Ok(Json(IntegrationResult {
+            proposal: proposal.to_string(),
+            result: IntegrationResultKind::Queued,
+            revision: None,
+            run: None,
+        })),
     }
+}
+
+/// One file of a proposal version, the content a human edit starts from. A symlink gives its target text and is never followed.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/proposals/{id}/file",
+    operation_id = "read_proposal_file",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The proposal id, such as P-3"),
+        VersionFileQuery,
+    ),
+    responses(
+        (status = 200, description = "The file", body = FileContentView),
+        (status = 400, description = "`invalid_id`, `invalid_path` or `invalid_request`: the query string is not valid", body = ErrorEnvelope),
+        (status = 404, description = "`proposal_not_found`: no such proposal or version, `not_found`: the version has no file at the path, or `project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn read_proposal_file(
+    State(state): State<AppState>,
+    project: Project,
+    Path((_slug, id)): Path<(String, String)>,
+    ApiQuery(query): ApiQuery<VersionFileQuery>,
+) -> Result<Json<FileContentView>, ApiError> {
+    let content = service(&state, &project)
+        .version_file(proposal(&id)?, query.version, &query.path)
+        .await?;
+    Ok(Json(content_view(query.path, content)))
+}
+
+/// A human edits one text file of the version the human read, in a human review: only on a task with the human review mark, by the human the mark names or by any human when it names none. The edit becomes a new version under the human's name that keeps the agent approvals of the version it was made from, but no human approval; send it for review again to withdraw them. The task worker's next sync writes the edit into its workspace.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/proposals/{id}/edits",
+    operation_id = "edit_proposal_file",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The proposal id, such as P-3"),
+    ),
+    request_body = EditFileBody,
+    responses(
+        (status = 201, description = "The new version", body = ProposalVersion),
+        (status = 400, description = "`invalid_request`, `invalid_path`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 403, description = "`human_edit_denied`: the task has no human review mark, or the mark names another human (`details.reviewer`)", body = ErrorEnvelope),
+        (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`stale_version` (`details.expected_version`, `details.current_version`), `worker_busy` (`details.reason`: `working`, `unfinished_write` or `newer_work`), `version_unchanged`, `proposal_not_open`, `workspace_not_active`, `not_workspace_owner` or `task_closed`", body = ErrorEnvelope),
+        (status = 422, description = "`file_not_editable` (`details.reason`: `missing`, `not_a_file`, `binary` or `too_large`)", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn edit_proposal_file(
+    State(state): State<AppState>,
+    human: Human,
+    project: Project,
+    Path((_slug, id)): Path<(String, String)>,
+    ApiJson(body): ApiJson<EditFileBody>,
+) -> Result<(StatusCode, Json<ProposalVersion>), ApiError> {
+    let edit = service(&state, &project)
+        .edit_as_human(
+            &human.actor(),
+            proposal(&id)?,
+            body.version,
+            &body.path,
+            &body.content,
+        )
+        .await?;
+    Ok((StatusCode::CREATED, Json(edit.detail.selected.into())))
+}
+
+/// A human sends the current version, a human edit, for review again: the approvals it kept stop counting and the reviewers are told. Only in a human review, for the human the mark names or any human when it names none.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/proposals/{id}/review-again",
+    operation_id = "send_for_review_again",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The proposal id, such as P-3"),
+    ),
+    request_body = ReviewAgainBody,
+    responses(
+        (status = 200, description = "The proposal after the request", body = ProposalSummary),
+        (status = 400, description = "`invalid_request` (`details.reason`: `not_human_edit` or `already_sent`), `invalid_id` or `invalid_name`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 403, description = "`human_edit_denied`", body = ErrorEnvelope),
+        (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`stale_version` (`details.expected_version`, `details.current_version`), `proposal_not_open` or `task_closed`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn send_for_review_again(
+    State(state): State<AppState>,
+    human: Human,
+    project: Project,
+    Path((_slug, id)): Path<(String, String)>,
+    ApiJson(body): ApiJson<ReviewAgainBody>,
+) -> Result<Json<ProposalSummary>, ApiError> {
+    let detail = service(&state, &project)
+        .send_for_review_again(&human.actor(), proposal(&id)?, body.version)
+        .await?;
+    Ok(Json(detail.summary.into()))
 }
 
 /// A read-only checkout of a proposal version, or of a review batch, for its reviewer. The daemon records no command run in it.

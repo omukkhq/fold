@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { GitBranch } from "lucide-react";
 import type { ReactNode } from "react";
 import { gitQuery } from "@/api/queries";
+import { InlineCode } from "@/components/code/CodeText";
 import { CommitId } from "@/components/mono/CommitId";
 import { Mono } from "@/components/mono/Mono";
 import { gitSummary, type RemoteLine } from "@/format/git";
@@ -91,7 +92,7 @@ export function GitStatus({
             <Key>{null}</Key>
             <span className="flex items-center gap-6 text-bar text-text-muted">
               No remote. Add one:
-              <Mono className="text-meta text-text">{summary.addRemote}</Mono>
+              <InlineCode caption>{summary.addRemote}</InlineCode>
             </span>
           </Row>
         ) : null}

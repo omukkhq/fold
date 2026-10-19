@@ -276,7 +276,7 @@ describe("waitingSummary", () => {
         ),
       ),
     ).toBe(
-      "Waiting for @tanim. When @tanim approves v2, the main agent, the review lead or a batch reviewer integrates, or @tanim can integrate here.",
+      "Waiting for @tanim. When @tanim approves v2, the main agent, the review lead or a reviewer integrates, or @tanim can integrate here.",
     );
     expect(
       waitingSummary(
@@ -286,7 +286,7 @@ describe("waitingSummary", () => {
         ),
       ),
     ).toBe(
-      "Waiting for a human. When a human approves v2, the main agent, the review lead or a batch reviewer integrates, or a human can integrate here.",
+      "Waiting for a human. When a human approves v2, the main agent, the review lead or a reviewer integrates, or a human can integrate here.",
     );
   });
 
@@ -347,7 +347,7 @@ describe("waitingSummary", () => {
         ),
       ),
     ).toBe(
-      "Every gate is met. Next, the main agent, the review lead or a batch reviewer integrates, or a human can integrate here.",
+      "Every gate is met. Next, the main agent, the review lead or a reviewer integrates, or a human can integrate here.",
     );
   });
 });

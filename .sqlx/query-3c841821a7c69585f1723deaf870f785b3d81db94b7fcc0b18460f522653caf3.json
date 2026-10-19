@@ -1,0 +1,134 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.number AS \"number!: i64\", w.number AS \"workspace!: i64\",\n                  t.number AS \"task?: i64\", p.number AS \"parent?: i64\",\n                  r.number AS \"base_revision!: i64\", c.tree_hash, c.message, c.stats,\n                  c.created_by, c.created_at\n           FROM changesets c\n           JOIN workspaces w ON w.id = c.workspace_id\n           LEFT JOIN tasks t ON t.id = c.task_id\n           JOIN revisions r ON r.id = c.base_revision_id\n           LEFT JOIN changesets p ON p.id = c.parent_changeset_id\n           WHERE c.number = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "changesets",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "workspace!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "task?: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "parent?: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "changesets",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "base_revision!: i64",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "tree_hash",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "changesets",
+            "name": "tree_hash"
+          }
+        }
+      },
+      {
+        "name": "message",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "changesets",
+            "name": "message"
+          }
+        }
+      },
+      {
+        "name": "stats",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "changesets",
+            "name": "stats"
+          }
+        }
+      },
+      {
+        "name": "created_by",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "changesets",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "changesets",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3c841821a7c69585f1723deaf870f785b3d81db94b7fcc0b18460f522653caf3"
+}

@@ -398,17 +398,38 @@ async fn a_corrupt_project_is_unavailable_while_another_project_works() {
     let daemon = host.start().await;
     let state = daemon.state().clone();
 
-    for slug in ["bad", "missing"] {
-        let (status, body) = call(
-            router(state.clone()),
-            Method::GET,
-            &format!("/api/v1/projects/{slug}"),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{slug}");
-        assert_eq!(code(&body), "project_unavailable");
-    }
+    let (status, body) = call(
+        router(state.clone()),
+        Method::GET,
+        "/api/v1/projects/bad",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(code(&body), "project_unavailable");
+    // A `.fold/` without its database keeps the registration and says how to get the project back.
+    let (status, body) = call(
+        router(state.clone()),
+        Method::GET,
+        "/api/v1/projects/missing",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(code(&body), "project_unavailable");
+    assert_eq!(body["error"]["details"]["reason"], "database_missing");
+    assert!(
+        body["error"]["details"]["hint"]
+            .as_str()
+            .unwrap()
+            .starts_with("restore ")
+    );
+    assert!(
+        fold_store::projects::find_project(state.registry.read(), "missing")
+            .await
+            .unwrap()
+            .is_some()
+    );
     let (status, _) = call(
         router(state.clone()),
         Method::GET,

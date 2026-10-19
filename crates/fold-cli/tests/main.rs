@@ -26,9 +26,12 @@ mod daemon_client;
 mod daemon_lock;
 #[cfg(not(feature = "dev-seed"))]
 mod dev_command;
+#[cfg(feature = "dev-seed")]
+mod dev_stub;
 mod doctor;
 mod gc;
 mod git;
+mod git_identity;
 mod hook_session_start;
 mod hook_stop;
 mod init;
@@ -40,3 +43,4 @@ mod seed_dev;
 mod service_install;
 mod templates;
 mod token;
+mod with_git;

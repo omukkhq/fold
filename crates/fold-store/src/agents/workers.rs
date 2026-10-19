@@ -288,7 +288,7 @@ pub async fn bind_task(
     .await?)
 }
 
-/// Binds a batch reviewer to `proposal`. A proposal bound already stays bound and counts as bound, so a list that names a proposal twice binds it once; an unknown proposal binds nothing and returns false.
+/// Binds a reviewer to `proposal`. A proposal bound already stays bound and counts as bound, so a list that names a proposal twice binds it once; an unknown proposal binds nothing and returns false.
 pub async fn bind_proposal(
     tx: &mut WriteTx,
     worker_process_id: i64,
@@ -663,7 +663,7 @@ pub async fn task_workers_of_task(
         .collect()
 }
 
-/// The running batch reviewers bound to `proposal`. A `stopping` reviewer is left out with the ended ones: it takes no more work, so nothing waits for it.
+/// The running reviewers bound to `proposal`. A `stopping` reviewer is left out with the ended ones: it takes no more work, so nothing waits for it.
 pub async fn reviewers_of_proposal(
     executor: impl SqliteExecutor<'_>,
     proposal: ProposalId,
@@ -691,7 +691,7 @@ pub async fn reviewers_of_proposal(
         .collect()
 }
 
-/// How many bound tasks of each worker in `worker_process_ids` still wait for its work; every id has an entry. A task is finished when it is Done, when it is archived, when it has an integrated proposal (a proposal can integrate before fold looks), when it is a task without a proposal whose report waits for a lead check, or when it has an open proposal that is not conflicted and whose latest verdict on its newest version is not `request_changes`, read with the rule `reviews::get_proposal` uses. A requested change or a conflict therefore keeps the task worker bound until it sends the next version.
+/// How many bound tasks of each worker in `worker_process_ids` still wait for its work; every id has an entry. A task is finished when it is Done, when it is archived, when it has an integrated proposal (a proposal can integrate before fold looks), when it is a task without a proposal whose report waits for a lead check, or when it has an open proposal that is not conflicted, whose integration checks did not fail and whose latest verdict on its newest version is not `request_changes`, read with the rule `reviews::get_proposal` uses. A requested change, a conflict or failed integration checks therefore keep the task worker bound until it sends the next version.
 pub async fn tasks_awaiting_proposal(
     executor: impl SqliteExecutor<'_>,
     worker_process_ids: &[i64],
@@ -705,7 +705,7 @@ pub async fn tasks_awaiting_proposal(
              AND NOT EXISTS (SELECT 1 FROM task_reports r WHERE r.task_id = b.task_id AND r.resolution IS NULL)
              AND NOT EXISTS (
                  SELECT 1 FROM proposals p
-                 WHERE p.task_id = b.task_id AND p.state = 'open' AND NOT p.conflicted
+                 WHERE p.task_id = b.task_id AND p.state = 'open' AND NOT p.conflicted AND NOT p.checks_failed
                    AND COALESCE((
                        SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id
                    ), '') <> 'request_changes'
@@ -722,6 +722,30 @@ pub async fn tasks_awaiting_proposal(
     )
 }
 
+/// How many unreleased claims, of either kind, the workers of each worker process's agent in `worker_process_ids` hold; every id has an entry.
+pub async fn claims_held(
+    executor: impl SqliteExecutor<'_>,
+    worker_process_ids: &[i64],
+) -> Result<HashMap<i64, u64>, StoreError> {
+    let ids = id_list(worker_process_ids);
+    let rows = sqlx::query!(
+        r#"SELECT w.id AS "worker!: i64", COUNT(*) AS "count!: i64"
+           FROM worker_processes w
+           JOIN workers k ON k.agent_id = w.agent_id
+           JOIN claims c ON c.worker_id = k.id AND c.released_at IS NULL
+           WHERE w.id IN (SELECT value FROM json_each(?1))
+           GROUP BY w.id"#,
+        ids
+    )
+    .fetch_all(executor)
+    .await?;
+    counts_by_worker(
+        worker_process_ids,
+        rows.into_iter().map(|row| (row.worker, row.count)),
+        "claims",
+    )
+}
+
 /// The newest version of an open proposal that waits on its author, a task worker, for a change that task worker has not been started for since.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingResume {
@@ -732,9 +756,11 @@ pub struct PendingResume {
     pub changes: bool,
     /// The proposal is conflicted, by an integration of the version after the task worker last started.
     pub conflict: bool,
+    /// The integration checks of the version failed after the task worker last started.
+    pub checks: bool,
 }
 
-/// The requested changes and conflicts that no start of their author has served, for task workers in one of `states`: each start moves the row's `started_at`, so a change recorded later than `started_at` is still owed. A resume that the worker limits refused leaves the row as it was, so it stays here until a start succeeds. For a running task worker it is the change its current process has been running beside.
+/// The requested changes, conflicts and failed integration checks that no start of their author has served, for task workers in one of `states`: each start moves the row's `started_at`, so a change recorded later than `started_at` is still owed. A resume that the worker limits refused leaves the row as it was, so it stays here until a start succeeds. For a running task worker it is the change its current process has been running beside.
 pub async fn pending_resumes(
     executor: impl SqliteExecutor<'_>,
     states: &[WorkerState],
@@ -759,7 +785,12 @@ pub async fn pending_resumes(
                       p.conflicted AND EXISTS (
                           SELECT 1 FROM integrations i
                           WHERE i.version_id = v.id AND i.result = 'conflicted' AND i.created_at > w.started_at
-                      ) AS conflict
+                      ) AS conflict,
+                      p.checks_failed AND EXISTS (
+                          SELECT 1 FROM check_runs r
+                          WHERE r.version_id = v.id AND r.stage = 'integration' AND r.state = 'failed'
+                            AND r.finished_at > w.started_at
+                      ) AS checks
                FROM worker_processes w
                JOIN agents g ON g.id = w.agent_id
                JOIN worker_tasks b ON b.worker_process_id = w.id
@@ -770,8 +801,8 @@ pub async fn pending_resumes(
                  AND v.version = (SELECT MAX(x.version) FROM proposal_versions x WHERE x.proposal_id = p.id)
            )
            SELECT agent AS "agent!: String", proposal AS "proposal!: i64", version AS "version!: i64",
-                  changes AS "changes!: bool", conflict AS "conflict!: bool"
-           FROM owed WHERE changes OR conflict
+                  changes AS "changes!: bool", conflict AS "conflict!: bool", checks AS "checks!: bool"
+           FROM owed WHERE changes OR conflict OR checks
            ORDER BY worker, proposal"#,
         states
     )
@@ -787,6 +818,7 @@ pub async fn pending_resumes(
                 version: count(row.version, "proposal_versions.version")?,
                 changes: row.changes,
                 conflict: row.conflict,
+                checks: row.checks,
             })
         })
         .collect()

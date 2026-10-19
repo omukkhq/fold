@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO folder_stash_conflicts (stash_id, path, kind) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "1f15781229623971684aa91bedecbaf5483dbe32ab9ec78c9366503e1a5a457f"
+}

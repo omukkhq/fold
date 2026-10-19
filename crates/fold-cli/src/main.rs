@@ -1,6 +1,9 @@
 mod claude;
+mod claude_setup;
 mod commands;
 mod doctor;
+mod fold_name;
+mod git_identity;
 mod hook;
 mod init;
 mod mcp;
@@ -35,7 +38,7 @@ enum Command {
     Mcp(mcp::McpArgs),
     /// Check the host, the daemon and each project, and name the fix for every problem
     Doctor(doctor::DoctorArgs),
-    /// Install the service that starts the daemon at login, then start it: a systemd user unit on Linux, a launchd agent on macOS
+    /// Install the service that starts the daemon at login, then start it: a systemd user unit on Linux, a launchd agent on macOS. Then offer to add fold to Claude Code for your user
     Setup(service::SetupArgs),
     /// Delete unreferenced objects, prune checkpoints and remove closed workspace directories
     Gc(commands::gc::GcArgs),
@@ -47,19 +50,25 @@ enum Command {
     Subscribe(news::SubscribeArgs),
     /// Manage the tokens that sign humans in to the web interface off localhost
     Token(token::TokenArgs),
-    /// Link the project to a remote Git repository
+    /// Add, remove and list the remote Git repositories that fld push and fld pull sync main with
     Remote(commands::remote::RemoteArgs),
-    /// Push main's Git history, one commit per revision, to the Git remote, without force
+    /// Push main's Git history, one commit per revision, to a Git remote, without force; the remote's name can be left out when the project has only one
     Push(commands::remote::PushArgs),
-    /// Run a Claude Code hook; the generated .claude/settings.json calls these
+    /// Run a Claude Code hook; the settings that fld setup and fold's sessions get call these
     #[command(hide = true)]
     Hook(hook::HookArgs),
-    /// Bring the commits of the Git remote into main; a conflict becomes a sync task
+    /// Bring the commits of a Git remote into main; a conflict becomes a sync task. The remote's name can be left out when the project has only one
     Pull(commands::remote::PullArgs),
     /// Pause every agent of the project: fold stops each worker, keeps its session and starts none until fld resume
     Pause(commands::pause::PauseArgs),
     /// Resume the agents of a paused project: each stopped worker runs again in its own session
     Resume(commands::pause::PauseArgs),
+    /// Record your changes in the project folder on main as one change of yours; a conflict with the agents' work waits for the main agent
+    Record(commands::record::RecordArgs),
+    /// Put your changes in the project folder aside, so the folder follows main; fld stash list shows the stash, newest first
+    Stash(commands::stash::StashArgs),
+    /// Merge the newest stash entry into the project folder as it is now; a conflict writes conflict markers and keeps the entry until fld record
+    Unstash(commands::stash::UnstashArgs),
     /// Development helpers
     #[cfg(feature = "dev-seed")]
     #[command(hide = true)]
@@ -98,7 +107,7 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
             &args,
             &serve::Dirs::from_env(),
             std::env::current_dir(),
-            fold_cli::daemon_client::human_from_env().ok(),
+            fold_name::current(),
             out,
         )
         .map_err(Failure::Gc),
@@ -133,6 +142,15 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         }
         Some(Command::Resume(args)) => {
             commands::pause::run_resume(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Record(args)) => {
+            commands::record::run_record(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Stash(args)) => {
+            commands::stash::run_stash(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Unstash(args)) => {
+            commands::stash::run_unstash(&args, out).map_err(Failure::Remote)
         }
         #[cfg(feature = "dev-seed")]
         Some(Command::Dev(args)) => {
@@ -256,7 +274,7 @@ mod tests {
     fn no_subcommand_prints_the_version_line() {
         let (result, out) = run_with(&["fld"]);
         assert!(result.is_ok());
-        assert_eq!(out, "fld 0.1.0\n");
+        assert_eq!(out, "fld 0.2.0\n");
     }
 
     #[test]
@@ -266,7 +284,7 @@ mod tests {
             panic!("expected a parse failure, got {result:?}");
         };
         assert_eq!(error.kind(), ErrorKind::DisplayVersion);
-        assert_eq!(error.to_string().trim(), "fld 0.1.0");
+        assert_eq!(error.to_string().trim(), "fld 0.2.0");
         assert!(out.is_empty());
     }
 

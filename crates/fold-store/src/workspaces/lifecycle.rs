@@ -13,7 +13,7 @@ macro_rules! select_workspaces {
         sqlx::query_as!(
             RawWorkspace,
             r#"SELECT w.number AS "number!: i64",
-                      t.number AS "task!: i64",
+                      t.number AS "task?: i64",
                       w.worker_id,
                       k.name AS "worker?: String",
                       w.kind,
@@ -27,7 +27,7 @@ macro_rules! select_workspaces {
                       w.created_at,
                       w.closed_at
                FROM workspaces w
-               JOIN tasks t ON t.id = w.task_id
+               LEFT JOIN tasks t ON t.id = w.task_id
                JOIN revisions r ON r.id = w.base_revision_id
                LEFT JOIN workers k ON k.id = w.worker_id
                LEFT JOIN proposals p ON p.id = w.proposal_id
@@ -41,6 +41,8 @@ macro_rules! select_workspaces {
 pub enum WorkspaceKind {
     Task,
     Review,
+    /// The main agent's workspace, which belongs to no task: its changes reach main directly, on the user's word.
+    Main,
 }
 
 impl WorkspaceKind {
@@ -48,6 +50,7 @@ impl WorkspaceKind {
         match self {
             WorkspaceKind::Task => "task",
             WorkspaceKind::Review => "review",
+            WorkspaceKind::Main => "main",
         }
     }
 
@@ -55,6 +58,7 @@ impl WorkspaceKind {
         match text {
             "task" => Ok(WorkspaceKind::Task),
             "review" => Ok(WorkspaceKind::Review),
+            "main" => Ok(WorkspaceKind::Main),
             _ => Err(StoreError::Corrupt("workspaces.kind")),
         }
     }
@@ -114,7 +118,8 @@ impl ClosedState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceRow {
     pub id: WorkspaceId,
-    pub task: TaskId,
+    /// `None` for the main workspace only.
+    pub task: Option<TaskId>,
     pub worker_id: Option<i64>,
     pub worker: Option<WorkerName>,
     pub kind: WorkspaceKind,
@@ -235,6 +240,66 @@ pub async fn task_workspace_paths(
     Ok(paths)
 }
 
+#[derive(Debug, Clone)]
+pub struct NewMainWorkspace<'a> {
+    pub id: WorkspaceId,
+    pub worker_id: i64,
+    pub path: &'a str,
+    pub base: RevisionId,
+    pub now: Timestamp,
+}
+
+/// Inserts the active main workspace of `worker_id`, which belongs to no task. A second live main workspace fails on `workspaces.kind` and a reused directory on `workspaces.path`, so the unique indexes decide a race. A base revision that does not exist inserts nothing and fails with `StoreError::Invalid`.
+pub async fn insert_main_workspace(
+    tx: &mut WriteTx,
+    new: &NewMainWorkspace<'_>,
+) -> Result<(), StoreError> {
+    let (id, base, now) = (new.id.to_db(), new.base.to_db(), new.now.as_millis());
+    let inserted = sqlx::query!(
+        "INSERT INTO workspaces (number, task_id, worker_id, kind, path, base_revision_id, state, last_activity_at, created_at)
+         SELECT ?1, NULL, ?2, 'main', ?3, r.id, 'active', ?5, ?5
+         FROM revisions r
+         WHERE r.number = ?4",
+        id,
+        new.worker_id,
+        new.path,
+        base,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    if inserted == 1 {
+        Ok(())
+    } else {
+        Err(StoreError::Invalid("the base revision does not exist"))
+    }
+}
+
+/// The main workspace in state `active` or `missing`; the partial unique index allows at most one.
+pub async fn live_main_workspace(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Option<WorkspaceRow>, StoreError> {
+    one(select_workspaces!(
+        "WHERE w.kind = 'main' AND w.state IN ('active', 'missing')
+         ORDER BY w.number DESC
+         LIMIT 1"
+    )
+    .fetch_optional(executor)
+    .await?)
+}
+
+/// The directories of every main workspace the project has had, in any state, so a new one never takes the name of an earlier one.
+pub async fn main_workspace_paths(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<String>, StoreError> {
+    let paths =
+        sqlx::query_scalar!("SELECT path FROM workspaces WHERE kind = 'main' ORDER BY number")
+            .fetch_all(executor)
+            .await?;
+    Ok(paths)
+}
+
 /// Moves a live workspace to `state` and stamps `closed_at`. Only the row changes; the directory stays until garbage collection. False when the workspace is not live or does not exist, and then nothing changes.
 pub async fn close(
     tx: &mut WriteTx,
@@ -299,7 +364,7 @@ pub async fn set_worker(
 /// A workspace row as the reads select it, before its columns are checked.
 struct RawWorkspace {
     number: i64,
-    task: i64,
+    task: Option<i64>,
     worker_id: Option<i64>,
     worker: Option<String>,
     kind: String,
@@ -358,7 +423,7 @@ pub async fn list_active_review_checkouts(
 ) -> Result<Vec<ReviewCheckoutRow>, StoreError> {
     let rows = sqlx::query!(
         r#"SELECT w.number AS "number!: i64",
-                  t.number AS "task!: i64",
+                  t.number AS "task?: i64",
                   w.worker_id,
                   k.name AS "worker?: String",
                   w.kind,
@@ -445,7 +510,10 @@ pub async fn list_active_review_checkouts(
 fn workspace_row(row: RawWorkspace) -> Result<WorkspaceRow, StoreError> {
     Ok(WorkspaceRow {
         id: number(row.number, WorkspaceId::try_from_db, "workspaces.number")?,
-        task: number(row.task, TaskId::try_from_db, "tasks.number")?,
+        task: row
+            .task
+            .map(|value| number(value, TaskId::try_from_db, "tasks.number"))
+            .transpose()?,
         worker_id: row.worker_id,
         worker: row
             .worker
@@ -475,7 +543,7 @@ fn workspace_row(row: RawWorkspace) -> Result<WorkspaceRow, StoreError> {
     })
 }
 
-/// Moves a live task workspace between `active` and `missing` as its directory comes and goes: `present` moves a missing one to `active`, and an absent directory moves an active one to `missing`. Both states keep the workspace the task's live one, so nothing else changes. False, with nothing changed, when the workspace is not a task workspace in the other state.
+/// Moves a live task workspace or the main workspace between `active` and `missing` as its directory comes and goes: `present` moves a missing one to `active`, and an absent directory moves an active one to `missing`. Both states keep the workspace live, so nothing else changes. False, with nothing changed, when the workspace is neither a task workspace nor the main workspace in the other state.
 pub async fn set_directory_present(
     tx: &mut WriteTx,
     workspace: WorkspaceId,
@@ -495,7 +563,7 @@ pub async fn set_directory_present(
     };
     let changed = sqlx::query!(
         "UPDATE workspaces SET state = ?3
-         WHERE number = ?1 AND kind = 'task' AND state = ?2",
+         WHERE number = ?1 AND kind IN ('task', 'main') AND state = ?2",
         workspace,
         from,
         to
@@ -636,6 +704,32 @@ pub async fn active_review_checkout(
     found
         .map(|value| number(value, WorkspaceId::try_from_db, "workspaces.number"))
         .transpose()
+}
+
+/// Points the active review checkout `workspace` of the proposal at its `version`, whose tree its files hold once the reviewer's fix in it became that version. False, with nothing changed, when the checkout is not an active checkout of the proposal or the version does not exist.
+pub async fn move_review_checkout(
+    tx: &mut WriteTx,
+    workspace: WorkspaceId,
+    proposal: ProposalId,
+    version: u32,
+) -> Result<bool, StoreError> {
+    let (workspace, proposal, version) = (workspace.to_db(), proposal.to_db(), i64::from(version));
+    let moved = sqlx::query!(
+        "UPDATE workspaces
+         SET version_id = (SELECT v.id FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id
+                           WHERE p.number = ?2 AND v.version = ?3)
+         WHERE number = ?1 AND kind = 'review' AND state = 'active'
+           AND proposal_id = (SELECT id FROM proposals WHERE number = ?2)
+           AND EXISTS (SELECT 1 FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id
+                       WHERE p.number = ?2 AND v.version = ?3)",
+        workspace,
+        proposal,
+        version
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(moved == 1)
 }
 
 /// The directories of every review checkout the proposal has had, in any state. Their count gives the next checkout's directory name, and a create skips each of them, so a name is never handed out twice.

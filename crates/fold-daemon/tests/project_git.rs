@@ -12,9 +12,7 @@ use fold_core::revision::Revision;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{Actor, EventFilter, HumanName, ManualClock, RevisionId, Timestamp};
 use fold_daemon::projects::ProjectHandle;
-use fold_daemon::services::projects::{
-    ProjectAttention, PullOutcome, commit_main, init_project, pull,
-};
+use fold_daemon::services::projects::{ProjectAttention, commit_main, pull};
 use fold_store::projects::ProjectRow;
 use fold_store::testing::TestProject;
 use fold_store::workspaces::{self, advance_main, insert_revision};
@@ -83,6 +81,19 @@ async fn attention_events(fx: &Fixture) -> Vec<String> {
         .collect()
 }
 
+/// The paths the newest `git.uncommitted_changes` event names as holding the folder back.
+async fn last_held(fx: &Fixture) -> Option<serde_json::Value> {
+    let filter = EventFilter {
+        types: vec![types::GIT_UNCOMMITTED_CHANGES],
+        ..EventFilter::default()
+    };
+    fold_store::events::read_after(fx.project.store().read(), 0, &filter, 10)
+        .await
+        .unwrap()
+        .pop()
+        .map(|event| event.data["held"].clone())
+}
+
 /// `P-1` integrated as `r2`: it changes `src/lib.rs`, adds `src/new.rs` and the symlink `docs/readme`.
 async fn integrate(fx: &Fixture) {
     let review = approved(fx).await;
@@ -100,6 +111,7 @@ async fn a_commit_run_appends_git_committed_with_each_row_it_records() {
         fx.project.store(),
         fx.project.paths(),
         &Git::default(),
+        None,
         fx.project.clock(),
     )
     .await
@@ -182,72 +194,71 @@ async fn an_integration_moves_the_branch_and_the_folder_and_leaves_it_clean() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_folder_with_changes_waits_with_the_attention_item_and_catches_up_once_clean() {
+async fn a_change_main_does_not_touch_stays_and_the_folder_follows_around_it() {
+    let fx = Fixture::new().await;
+    let (_job, context) = start_watched_job(&fx, Git::default());
+    wait_for_rows(&fx, 1).await;
+    let root = fx.project.paths().root().to_owned();
+    std::fs::write(root.join("README.md"), "# mine\n").unwrap();
+
+    integrate(&fx).await;
+    wait_for_rows(&fx, 2).await;
+    let second = commit_of(&fx, 2).await;
+    until(async || branch(&root) == second).await;
+    assert!(root.join("src/new.rs").is_file());
+    assert_eq!(
+        std::fs::read_to_string(root.join("README.md")).unwrap(),
+        "# mine\n"
+    );
+    // The index follows main for the paths fold wrote, so Git shows only the human's change.
+    assert_eq!(git(&root, &["status", "--porcelain"]), " M README.md\n");
+    until(async || context.attention() == [ProjectAttention::UncommittedChanges]).await;
+    until(async || attention_events(&fx).await == ["git.uncommitted_changes"]).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_change_on_a_path_main_changed_holds_the_folder_and_the_branch_until_it_is_undone() {
     let fx = Fixture::new().await;
     let (job, context) = start_watched_job(&fx, Git::default());
     wait_for_rows(&fx, 1).await;
     let root = fx.project.paths().root().to_owned();
     let first = commit_of(&fx, 1).await;
-    std::fs::write(root.join("README.md"), "# mine\n").unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn mine() {}\n").unwrap();
 
     integrate(&fx).await;
     wait_for_rows(&fx, 2).await;
     until(async || context.attention() == [ProjectAttention::UncommittedChanges]).await;
     assert_eq!(branch(&root), first);
+    // The folder and the branch move together or not at all, so nothing of r2 is written.
     assert!(!root.join("src/new.rs").exists());
     assert_eq!(
-        std::fs::read_to_string(root.join("README.md")).unwrap(),
-        "# mine\n"
+        std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+        "pub fn mine() {}\n"
     );
-    // The event is stored after the attention changes in memory.
-    until(async || attention_events(&fx).await == ["git.uncommitted_changes"]).await;
+    // A run before the integration may have told of the change with no path held yet.
+    until(async || last_held(&fx).await == Some(serde_json::json!(["src/lib.rs"]))).await;
+    let told = attention_events(&fx).await;
+    assert!(
+        told.iter().all(|kind| kind == "git.uncommitted_changes"),
+        "{told:?}"
+    );
     drop(job);
 
     // The attention item is derived from the folder, so a restart shows it again.
     let (job, context) = start_watched_job(&fx, Git::default());
     until(async || context.attention() == [ProjectAttention::UncommittedChanges]).await;
-    until(async || attention_events(&fx).await.len() == 2).await;
+    until(async || attention_events(&fx).await.len() == told.len() + 1).await;
     assert_eq!(branch(&root), first);
     drop(job);
 
     // The human puts the change away; the next start brings the folder to main.
-    git(&root, &["checkout", "--quiet", "--", "README.md"]);
+    git(&root, &["checkout", "--quiet", "--", "src/lib.rs"]);
     let (_job, context) = start_watched_job(&fx, Git::default());
     let second = commit_of(&fx, 2).await;
     until(async || branch(&root) == second).await;
     assert!(root.join("src/new.rs").is_file());
     assert_eq!(git(&root, &["status", "--porcelain"]), "");
     until(async || context.attention().is_empty()).await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_outside_commit_stops_the_branch_and_raises_the_attention_item() {
-    let fx = Fixture::new().await;
-    let (_job, context) = start_watched_job(&fx, Git::default());
-    wait_for_rows(&fx, 1).await;
-    let root = fx.project.paths().root().to_owned();
-    std::fs::write(root.join("README.md"), "# mine\n").unwrap();
-    git(&root, &["commit", "--quiet", "-am", "mine"]);
-    let outside = branch(&root);
-
-    integrate(&fx).await;
-    wait_for_rows(&fx, 2).await;
-    until(async || context.attention() == [ProjectAttention::OutsideCommits]).await;
-    assert_eq!(branch(&root), outside);
-    until(async || attention_events(&fx).await == ["git.outside_commits"]).await;
-    let filter = EventFilter {
-        types: vec![types::GIT_OUTSIDE_COMMITS],
-        ..EventFilter::default()
-    };
-    let events = fold_store::events::read_after(fx.project.store().read(), 0, &filter, 10)
-        .await
-        .unwrap();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].actor.as_str(), "fold");
-    assert_eq!(
-        events[0].data,
-        serde_json::json!({"branch": "main", "commit": outside})
-    );
 }
 
 #[tokio::test]
@@ -297,13 +308,18 @@ impl Opened {
         let folder = dir.path().join("app");
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("a.txt"), "one\n").unwrap();
-        let made = init_project(&host, &folder, None, &clock).await.unwrap();
+        let made = crate::common::init_with_git(&host, &folder, &clock)
+            .await
+            .unwrap();
         let row = ProjectRow {
             slug: made.slug.clone(),
             name: made.name.clone(),
             root: made.root.to_string_lossy().into_owned(),
         };
-        let handle = Arc::new(ProjectHandle::open(&row, Arc::new(clock)).await.unwrap());
+        let handle = ProjectHandle::open(&row, Arc::new(clock))
+            .await
+            .unwrap()
+            .share();
         Self {
             _dir: dir,
             root: made.root,
@@ -311,8 +327,14 @@ impl Opened {
         }
     }
 
-    /// Records a revision on top of `main` holding `files`, as an integration would, and writes its commit as the Git job does after one.
+    /// Records a revision on top of `main` holding `files`, as an integration would, and runs the Git job as it does after one.
     async fn add_revision(&self, files: &[(&str, &[u8])]) {
+        self.add_revision_only(files).await;
+        self.commit().await;
+    }
+
+    /// [`Opened::add_revision`] without the Git job's run.
+    async fn add_revision_only(&self, files: &[(&str, &[u8])]) {
         let store = &self.handle.store;
         let head = workspaces::head(store.read()).await.unwrap().unwrap();
         let objects = ObjectStore::open(&self.handle.paths.fold_dir()).unwrap();
@@ -345,25 +367,14 @@ impl Opened {
             })
             .await
             .unwrap();
-        self.commit().await;
     }
 
     async fn commit(&self) -> fold_daemon::services::projects::Committed {
-        commit_main(
-            &self.handle.store,
-            &self.handle.paths,
-            &Git::default(),
-            self.handle.clock.as_ref(),
-        )
-        .await
-        .unwrap()
-    }
-
-    /// `fld pull` with no remote, by the human `ana`.
-    async fn pull(&self) -> PullOutcome {
-        let ana = Actor::human(HumanName::parse("ana").unwrap());
-        pull(&self.handle, &ana, &Git::default(), None)
+        let context = fold_daemon::services::projects::RemoteContext::of(&self.handle);
+        fold_daemon::services::projects::sync_folder(&context, &Git::default())
             .await
+            .unwrap()
+            .committed
             .unwrap()
     }
 
@@ -384,67 +395,39 @@ impl Opened {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fold_pull_brings_an_outside_commit_in_as_a_pull_by_the_human() {
+async fn a_commit_of_the_human_is_recorded_at_once_and_merged_with_main() {
     let opened = Opened::new().await;
     until(async || opened.committed_revisions().await == 1).await;
     let outside = opened.commit_outside("b.txt", "mine\n");
+    // An agent's revision lands meanwhile; the next run of the Git job records the human's commit on top of it.
     opened
         .add_revision(&[("a.txt", b"one\n"), ("c.txt", b"fold\n")])
         .await;
-    // The commit of r2 is written, and the branch stays on the human's commit.
+    let (kind, actor, remote): (String, String, Option<String>) = sqlx::query_as(
+        "SELECT kind, actor, remote_commit FROM integrations ORDER BY number DESC LIMIT 1",
+    )
+    .fetch_one(opened.handle.store.read())
+    .await
+    .unwrap();
     assert_eq!(
-        opened.commit().await.outside.map(|c| c.to_string()),
-        Some(outside.clone())
+        (kind.as_str(), actor.as_str(), remote.as_deref()),
+        ("record", "human:ana", Some(outside.as_str()))
     );
-    assert_eq!(branch(&opened.root), outside);
-    assert!(!opened.root.join("c.txt").exists());
-
-    // A pull that names a remote would not read the commits made here, so it is refused until they are in.
-    let ana = Actor::human(HumanName::parse("ana").unwrap());
-    let named = pull(&opened.handle, &ana, &Git::default(), Some("origin"))
-        .await
-        .unwrap_err();
-    assert_eq!(named.code(), Some("invalid_request"));
-    let fold_daemon::services::projects::ProjectError::Fold(named) = named else {
-        panic!("a fold error");
-    };
-    assert_eq!(named.details().unwrap()["reason"], "outside_commits");
-    assert!(named.hint().unwrap().contains("then fld pull origin"));
-    assert_eq!(branch(&opened.root), outside);
-
-    let pulled = opened.pull().await;
-    let PullOutcome::Integrated {
-        remote,
-        branch: pulled_branch,
-        remote_commit,
-        revision,
-    } = pulled
-    else {
-        panic!("a clean pull: {pulled:?}");
-    };
-    assert_eq!((remote.as_str(), pulled_branch.as_str()), (".git", "main"));
-    assert_eq!(remote_commit.as_str(), outside);
-    assert_eq!(revision.to_string(), "r3");
-    let (kind, actor): (String, String) =
-        sqlx::query_as("SELECT kind, actor FROM integrations ORDER BY number DESC LIMIT 1")
-            .fetch_one(opened.handle.store.read())
+    assert_eq!(
+        fold_store::workspaces::head(opened.handle.store.read())
             .await
-            .unwrap();
-    assert_eq!((kind.as_str(), actor.as_str()), ("pull", "human:ana"));
-
-    let committed = opened.commit().await;
-    assert_eq!(committed.outside, None);
+            .unwrap()
+            .unwrap()
+            .number
+            .to_string(),
+        "r3"
+    );
     until(async || opened.committed_revisions().await == 3).await;
+    // The revision's commit merges the human's commit, and the branch and the folder follow it.
     let merge = branch(&opened.root);
     let parents = git(&opened.root, &["log", "-1", "--format=%P", &merge]);
     let second = git(&opened.root, &["rev-parse", &format!("{merge}^1")]);
     assert_eq!(parents.trim(), format!("{} {outside}", second.trim()));
-    assert_eq!(
-        git(&opened.root, &["log", "-1", "--format=%B", second.trim()])
-            .lines()
-            .next(),
-        Some("fold r2")
-    );
     assert_eq!(
         std::fs::read_to_string(opened.root.join("c.txt")).unwrap(),
         "fold\n"
@@ -454,29 +437,44 @@ async fn fold_pull_brings_an_outside_commit_in_as_a_pull_by_the_human() {
         "mine\n"
     );
     assert_eq!(git(&opened.root, &["status", "--porcelain"]), "");
+
+    // fld pull only talks to a remote, and this project has none.
+    let ana = Actor::human(HumanName::parse("ana").unwrap());
+    let refused = pull(&opened.handle, &ana, &Git::default(), None)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Some("remote_not_set"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_conflicting_outside_commit_becomes_a_sync_task_and_nothing_is_forced() {
+async fn a_conflicting_commit_of_the_human_waits_for_the_main_agent_and_nothing_is_forced() {
     let opened = Opened::new().await;
     until(async || opened.committed_revisions().await == 1).await;
+    // Main moves first, so the human's commit, on top of r1, meets main's change of the same file.
+    opened.add_revision_only(&[("a.txt", b"fold\n")]).await;
     let outside = opened.commit_outside("a.txt", "mine\n");
-    opened.add_revision(&[("a.txt", b"fold\n")]).await;
-
-    let pulled = opened.pull().await;
-    let PullOutcome::Conflicted {
-        remote,
-        remote_commit,
-        created,
-        ..
-    } = pulled
-    else {
-        panic!("a conflict: {pulled:?}");
-    };
-    assert_eq!(remote, ".git");
-    assert_eq!(remote_commit.as_str(), outside);
-    assert!(created);
     opened.commit().await;
+    let waiting: (String, String) =
+        sqlx::query_as("SELECT state, commit_id FROM human_changes ORDER BY id DESC LIMIT 1")
+            .fetch_one(opened.handle.store.read())
+            .await
+            .unwrap();
+    assert_eq!(waiting, ("conflicted".to_owned(), outside.clone()));
+    // Another run records nothing twice, and the branch and the folder stay on the human's commit.
+    opened.commit().await;
+    let changes: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT state, commit_id FROM human_changes ORDER BY id")
+            .fetch_all(opened.handle.store.read())
+            .await
+            .unwrap();
+    // The first is init's: the folder's files as r1.
+    assert_eq!(
+        changes,
+        [
+            ("recorded".to_owned(), None),
+            ("conflicted".to_owned(), Some(outside.clone()))
+        ]
+    );
     assert_eq!(branch(&opened.root), outside);
     assert_eq!(
         std::fs::read_to_string(opened.root.join("a.txt")).unwrap(),

@@ -1,23 +1,42 @@
 use fold_core::roles::{Role, WorkerState};
-use fold_core::{AgentName, AreaName, LabelColor, LabelName, Timestamp};
+use fold_core::{
+    AgentName, AreaName, IdKind, LabelColor, LabelName, ProposalId, ReviewBatchId, TaskId,
+    Timestamp, WorkerName,
+};
 use fold_store::agents::{self, NewWorkerProcess};
+use fold_store::reviews::batches;
 use fold_store::{Store, StoreError, tasks};
 
 /// The area an area lead or task worker gets when the caller names none, made on first use over the label of the same name.
 const DEFAULT_AREA: &str = "work";
 
-/// Records a stopped worker process of `role` for the registered agent `agent`, as if fold had started it in `area`; nothing runs. An area lead or task worker always has an area, so without `area` it gets [`DEFAULT_AREA`], and an area lead becomes its area's lead. The rules that read an agent's role, such as the review rights and the archive rule, then see it.
+/// Records a stopped worker process of `role` for the registered agent `agent`, as if fold had started it in `area`; nothing runs. An agent that has that role in that area already keeps its row, and an agent that is not registered yet is made with its main worker, as `start_worker` makes it. An area lead or task worker always has an area, so without `area` it gets [`DEFAULT_AREA`], and an area lead becomes its area's lead. The rules that read an agent's role, such as the review rights and the archive rule, then see it.
 pub async fn give_role(store: &Store, agent: &str, role: Role, area: Option<&str>) {
     let name = AgentName::parse(agent).unwrap();
     let area = match role {
         Role::AreaLead | Role::TaskWorker => Some(area.unwrap_or(DEFAULT_AREA)),
-        Role::ReviewLead | Role::BatchReviewer => area,
+        Role::ReviewLead | Role::Reviewer => area,
     }
     .map(|area| AreaName::parse(area).unwrap());
     let now = Timestamp::from_millis(1).unwrap();
     store
         .write(async |tx| {
-            let agent_id = agents::find_agent(tx.conn(), &name).await?.unwrap().id;
+            if let Some(row) = agents::find_worker_process(tx.conn(), &name).await? {
+                assert_eq!(
+                    (row.role, row.area),
+                    (role, area.clone()),
+                    "{name} has a fold role already"
+                );
+                return Ok(());
+            }
+            let agent_id = match agents::find_agent(tx.conn(), &name).await? {
+                Some(row) => row.id,
+                None => {
+                    let id = agents::insert_agent(tx, &name, now).await?;
+                    agents::insert_worker(tx, id, &WorkerName::main(&name), None, now).await?;
+                    id
+                }
+            };
             let area_id = match &area {
                 Some(area) => match agents::find_area(tx.conn(), area).await? {
                     Some(row) => Some(row.id),
@@ -52,4 +71,90 @@ pub async fn give_role(store: &Store, agent: &str, role: Role, area: Option<&str
         })
         .await
         .unwrap();
+}
+
+/// The main worker row id of the registered agent `agent`.
+async fn main_worker_id(tx: &mut fold_store::WriteTx, agent: &str) -> i64 {
+    let name = AgentName::parse(agent).unwrap();
+    let agent_id = agents::find_agent(tx.conn(), &name)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    agents::find_worker(tx.conn(), agent_id, &WorkerName::main(&name))
+        .await
+        .unwrap()
+        .unwrap()
+        .id
+}
+
+/// Gives the main worker of `agent` the implementation claim on `task` and calculates the task's status, at `now`, as the lead's `start_worker` gives it to a worker that fold starts; for an agent whose worker process [`give_role`] recorded, which never claims itself.
+pub async fn give_claim(store: &Store, agent: &str, task: TaskId, now: Timestamp) {
+    store
+        .write(async |tx| {
+            let worker = main_worker_id(tx, agent).await;
+            tasks::claims::insert_implementation(tx, task, worker, now).await?;
+            fold_daemon::services::tasks::recompute(tx, &[task], now)
+                .await
+                .unwrap();
+            Ok::<_, StoreError>(())
+        })
+        .await
+        .unwrap();
+}
+
+/// Gives the main worker of `agent` the review claim on `proposal` at `now`, as the review lead's `start_worker` gives it to a reviewer that fold starts; for an agent whose worker process [`give_role`] recorded.
+pub async fn give_review_claim(store: &Store, agent: &str, proposal: ProposalId, now: Timestamp) {
+    store
+        .write(async |tx| {
+            let worker = main_worker_id(tx, agent).await;
+            fold_store::reviews::insert_review_claim(tx, proposal, worker, now).await
+        })
+        .await
+        .unwrap();
+}
+
+/// Makes a review batch of `proposals`, in the order given, for the main worker of `agent` with the review claim of each member at `now`, as the review lead's `start_worker` makes it for a reviewer that fold starts with two or more proposals; for an agent whose worker process [`give_role`] recorded.
+pub async fn give_batch(
+    store: &Store,
+    agent: &str,
+    proposals: &[ProposalId],
+    now: Timestamp,
+) -> ReviewBatchId {
+    store
+        .write(async |tx| {
+            let worker = main_worker_id(tx, agent).await;
+            let number = fold_store::counters::allocate(tx, IdKind::ReviewBatch).await?;
+            let batch = ReviewBatchId::from_number(number).unwrap();
+            batches::insert_batch(tx, batch, worker, now).await?;
+            for (position, proposal) in (1u32..).zip(proposals) {
+                let row = fold_store::reviews::get_proposal(tx.conn(), *proposal)
+                    .await?
+                    .unwrap();
+                fold_store::reviews::insert_review_claim(tx, *proposal, worker, now).await?;
+                batches::insert_member(tx, batch, *proposal, row.current_version, position).await?;
+            }
+            Ok::<_, StoreError>(batch)
+        })
+        .await
+        .unwrap()
+}
+
+/// The areas, each over the label of the same name, that `frontend` and `backend` lead in the fixtures where they do the task work, as if fold had started them: only a lead, or the main agent, claims a task.
+pub const WORK_AREAS: [(&str, &str); 2] =
+    [("frontend", "frontend-work"), ("backend", "backend-work")];
+
+/// The labels of [`WORK_AREAS`]: a task with them is in the area of either lead, so either claims it.
+pub fn work_labels() -> Vec<LabelName> {
+    WORK_AREAS
+        .iter()
+        .map(|(_, label)| LabelName::parse(label).unwrap())
+        .collect()
+}
+
+/// Makes each registered agent of [`WORK_AREAS`] the lead of its area.
+pub async fn lead_work_areas(store: &Store) {
+    for (agent, area) in WORK_AREAS {
+        give_role(store, agent, Role::AreaLead, Some(area)).await;
+    }
 }

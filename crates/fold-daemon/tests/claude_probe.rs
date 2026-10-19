@@ -133,6 +133,8 @@ struct Probe {
     project_5m: PathBuf,
     outside: PathBuf,
     mcp_config: PathBuf,
+    /// The permission rules and hooks, passed with `--settings` as fold passes a worker's.
+    settings: PathBuf,
     fixtures: BTreeMap<String, Vec<String>>,
     findings: Vec<String>,
     /// A flag the main run settles: `--permission-prompt-tool stdio` when Claude Code accepts it.
@@ -168,6 +170,7 @@ impl Probe {
         for root in [&project, &project_5m] {
             write_project(root, &dir);
         }
+        let settings = dir.join("settings.json");
         Self {
             claude,
             model,
@@ -176,6 +179,7 @@ impl Probe {
             project_5m,
             outside,
             mcp_config,
+            settings,
             fixtures: BTreeMap::new(),
             findings: Vec::new(),
             prompt_flags: vec!["--permission-prompt-tool".to_owned(), "stdio".to_owned()],
@@ -225,6 +229,8 @@ impl Probe {
             .arg("--mcp-config")
             .arg(&self.mcp_config)
             .arg("--strict-mcp-config")
+            .arg("--settings")
+            .arg(&self.settings)
             .args(extra)
             .current_dir(cwd)
             .env("CLAUDE_CODE_PROMPT_CACHE_TTL", ttl)
@@ -1010,7 +1016,7 @@ fn executable(path: &Path) {
         .expect("make the file executable");
 }
 
-/// A project with a note to read, `ask` rules that force a permission request, a `deny` rule, and SessionStart and Stop hooks that answer the way `fld hook` does: the Stop hook blocks once and lets every stop with `stop_hook_active` pass.
+/// A project with a note to read, and the settings file of the probe: `ask` rules that force a permission request, a `deny` rule, and SessionStart and Stop hooks that answer the way `fld hook` does: the Stop hook blocks once and lets every stop with `stop_hook_active` pass.
 #[cfg(test)]
 fn write_project(root: &Path, dir: &Path) {
     std::fs::write(
@@ -1056,7 +1062,7 @@ fn write_project(root: &Path, dir: &Path) {
         },
     });
     std::fs::write(
-        root.join(".claude/settings.json"),
+        dir.join("settings.json"),
         serde_json::to_string_pretty(&settings).expect("settings JSON"),
     )
     .expect("write the settings");

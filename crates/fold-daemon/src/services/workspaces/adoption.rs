@@ -10,7 +10,7 @@ use serde_json::json;
 use super::lifecycle::workspace_exists;
 use super::{WorkspaceError, WorkspaceService, WorkspaceView};
 use crate::services::events::EventBuffer;
-use crate::services::tasks::{TaskError, claim_in_tx, recompute, worker_row};
+use crate::services::tasks::{TaskError, check_claim_right, claim_in_tx, recompute, worker_row};
 
 /// Why a workspace changed owner, as `workspace.adopted` records it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +19,8 @@ pub enum AdoptReason {
     Released,
     /// `takeover_claim` moved the stale claim, and the workspace went with it.
     TakenOver,
+    /// The main tag moved to another session, and the new main agent took the main workspace.
+    MainAgent,
 }
 
 impl AdoptReason {
@@ -26,6 +28,7 @@ impl AdoptReason {
         match self {
             AdoptReason::Released => "released",
             AdoptReason::TakenOver => "taken_over",
+            AdoptReason::MainAgent => "main_agent",
         }
     }
 }
@@ -128,6 +131,7 @@ impl WorkspaceService {
                 {
                     return Ok(None);
                 }
+                check_claim_right(tx.conn(), claimant, task).await?;
                 let worker = worker_row(tx, claimant).await?;
                 claim_in_tx(tx, &mut buffer, &worker, task, now, lease_minutes).await?;
                 let adopted = adopt_if_orphaned(

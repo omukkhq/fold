@@ -776,14 +776,14 @@ async fn a_start_of_a_stopped_lead_whose_session_is_gone_starts_it_fresh() {
 }
 
 #[tokio::test]
-async fn a_daemon_start_that_finds_a_batch_reviewers_session_gone_starts_it_fresh() {
+async fn a_daemon_start_that_finds_a_reviewers_session_gone_starts_it_fresh() {
     let fake = FakeClaude::new("init").lost_sessions();
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
     let task = harness.create_task(MAIN, "Draw the page").await;
-    let work = harness.start_work("backend", &task).await;
+    let work = harness.start_work(MAIN, &task).await;
     work.write(&[("page.html", "<p>page</p>\n")]);
-    let proposal = harness.propose("backend", &work, "Draw the page").await;
+    let proposal = harness.propose(MAIN, &work, "Draw the page").await;
     harness
         .call(MAIN, "start_worker", json!({"role": "review_lead"}))
         .await;
@@ -792,10 +792,10 @@ async fn a_daemon_start_that_finds_a_batch_reviewers_session_gone_starts_it_fres
         .call(
             "review-lead",
             "start_worker",
-            json!({"role": "batch_reviewer", "proposals": [proposal]}),
+            json!({"role": "reviewer", "proposals": [proposal]}),
         )
         .await;
-    let reviewer = "batch-reviewer";
+    let reviewer = "reviewer";
     until_runs(&fake, reviewer, 1).await;
     let working = until_state(&harness, reviewer, WorkerState::Working).await;
     harness.stop().await;
@@ -809,7 +809,7 @@ async fn a_daemon_start_that_finds_a_batch_reviewers_session_gone_starts_it_fres
     assert_ne!(session, working.session_id);
     let turn = &fresh.stdin[1];
     for wanted in [
-        "batch reviewer for P-1",
+        "reviewer for P-1",
         "Your earlier session is gone",
         "give a verdict only to those that have none from you",
     ] {
@@ -954,4 +954,50 @@ async fn a_daemon_start_resumes_a_working_task_worker_once_its_socket_is_bound()
         "the resumed task worker found the daemon's socket"
     );
     daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn red_proposal_checks_resume_a_stopped_task_worker_with_the_failed_check() {
+    let fake = FakeClaude::new("result");
+    let harness = task_worker_for(&fake, &["Draw the page"], WorkerState::Idle).await;
+    let work = harness.start_work(TASK_WORKER, "T-1").await;
+    let outside = tempfile::tempdir().unwrap();
+    let gate = outside.path().join("go");
+    work.write(&[
+        ("page.html", "<p>page</p>\n"),
+        (
+            "fold-checks.toml",
+            &format!(
+                "[[check]]\nname = \"render\"\nrun = \"until [ -e '{}' ]; do sleep 0.05; done; exit 1\"\n",
+                gate.display()
+            ),
+        ),
+    ]);
+    let created = harness
+        .call(
+            TASK_WORKER,
+            "create_proposal",
+            json!({"task": "T-1", "title": "Draw the page"}),
+        )
+        .await;
+    assert_eq!(created["checks"], "running", "{created}");
+    harness
+        .call("web-lead", "stop_worker", json!({"name": TASK_WORKER}))
+        .await;
+    until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
+    std::fs::write(&gate, "").unwrap();
+
+    let runs = until_runs(&fake, TASK_WORKER, 2).await;
+    assert!(runs[1].has("--resume"));
+    let turn = &runs[1].stdin[1];
+    for wanted in [
+        "The checks of T-1 (cr-1) did not pass, so fold made no proposal: render failed.",
+        "call create_proposal again",
+    ] {
+        assert!(turn.contains(wanted), "{wanted} in {turn}");
+    }
+    let resumed = until_resumed(&harness, 1).await;
+    assert_eq!(resumed[0].1["reason"], "checks");
+    assert_eq!(resumed[0].1["stage"], "proposal");
+    assert_eq!(resumed[0].1["run"], "cr-1");
 }

@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT hc.id AS \"id!: i64\", hc.commit_id, hc.human, hc.base_tree_hash, hc.tree_hash, hc.state,\n                  i.number AS \"integration?: i64\", w.number AS \"workspace?: i64\",\n                  hc.created_at AS \"created_at!: i64\"\n           FROM human_changes hc\n           JOIN workspaces w ON w.id = hc.workspace_id\n           LEFT JOIN integrations i ON i.id = hc.integration_id\n           WHERE w.number = ?\n           ORDER BY hc.id DESC\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "human_changes",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "commit_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "human_changes",
+            "name": "commit_id"
+          }
+        }
+      },
+      {
+        "name": "human",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "human_changes",
+            "name": "human"
+          }
+        }
+      },
+      {
+        "name": "base_tree_hash",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "human_changes",
+            "name": "base_tree_hash"
+          }
+        }
+      },
+      {
+        "name": "tree_hash",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "human_changes",
+            "name": "tree_hash"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "human_changes",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "integration?: i64",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "integrations",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "workspace?: i64",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "created_at!: i64",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "human_changes",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "cbf9fc0b2a099b15902148a15a28cadca9ac9f2bb87976da7f738789ae827052"
+}

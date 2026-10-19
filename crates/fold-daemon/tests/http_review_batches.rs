@@ -9,7 +9,9 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use crate::common::roles::give_role;
 use crate::proposal_tools_support::{Fixture, t};
+use fold_core::roles::Role;
 use fold_daemon::services::reviews::BatchVerdict;
 
 async fn get(fx: &Fixture, path: &str) -> (StatusCode, Value) {
@@ -36,9 +38,12 @@ async fn batched() -> Fixture {
         fx.reviews()
             .create_proposal(&author, t(task), "Add a file", None)
             .await
+            .unwrap()
+            .detail()
             .unwrap();
     }
     let review = fx.agent("review").await;
+    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
     let proposals = [1, 2].map(|n| ProposalId::from_number(n).unwrap()).to_vec();
     let batch = fx
         .reviews()
@@ -104,6 +109,8 @@ async fn a_member_with_a_new_version_shows_the_change_since_the_reviewed_one() {
     fx.reviews()
         .update_proposal(&frontend, ProposalId::from_number(1).unwrap(), None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
 
     let (status, body) = get(&fx, "/reviews/batches/rb-1").await;

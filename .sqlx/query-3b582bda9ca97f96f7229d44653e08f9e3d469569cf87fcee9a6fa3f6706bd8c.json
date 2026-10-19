@@ -1,0 +1,129 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT v.version, r.number AS \"base!: i64\", v.tree_hash,\n                  c.number AS \"changeset!: i64\", c.stats, v.evidence, v.created_by, v.created_at,\n                  EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = v.id) AS \"review_again!: bool\",\n                  f.number AS \"fixed_in?: i64\"\n           FROM proposal_versions v\n           JOIN proposals p ON p.id = v.proposal_id\n           JOIN revisions r ON r.id = v.base_revision_id\n           JOIN changesets c ON c.id = v.head_changeset_id\n           LEFT JOIN workspaces f ON f.id = v.fixed_in_checkout_id\n           WHERE p.number = ?\n           ORDER BY v.version",
+  "describe": {
+    "columns": [
+      {
+        "name": "version",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "base!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "tree_hash",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "tree_hash"
+          }
+        }
+      },
+      {
+        "name": "changeset!: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "changesets",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "stats",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "changesets",
+            "name": "stats"
+          }
+        }
+      },
+      {
+        "name": "evidence",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "evidence"
+          }
+        }
+      },
+      {
+        "name": "created_by",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "review_again!: bool",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "fixed_in?: i64",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "3b582bda9ca97f96f7229d44653e08f9e3d469569cf87fcee9a6fa3f6706bd8c"
+}

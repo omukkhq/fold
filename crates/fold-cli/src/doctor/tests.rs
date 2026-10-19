@@ -8,9 +8,11 @@ use tempfile::TempDir;
 use super::*;
 use crate::platform::Probe;
 use fold_cli::claude_files::{
-    AGENTS_BEGIN, AGENTS_END, AGENTS_FILE, ALLOW_FOLD_TOOLS, HOOKS, MCP_FILE, MCP_SERVER_NAME,
-    MCP_SERVERS_KEY, SETTINGS_FILE,
+    AGENTS_BEGIN, AGENTS_END, AGENTS_FILE, ALLOW_FOLD_TOOLS, CLAUDE_FILE, MCP_FILE,
+    MCP_SERVER_NAME, MCP_SERVERS_KEY, SETTINGS_FILE, SKILL_FILE,
 };
+use fold_cli::claude_user::{UserFiles, allows_fold_tools, runs_hook};
+use fold_core::layout::HOOKS;
 
 const HOUR_MS: i64 = 60 * 60 * 1000;
 
@@ -71,6 +73,14 @@ impl Fixture {
                 file_modes: true,
             },
             probe: Probe::new(self.path("root")),
+            names: crate::fold_name::Environment {
+                user: Some("ana".into()),
+                ..crate::fold_name::Environment::default()
+            },
+            claude: Some(UserFiles {
+                config: self.path("home/.claude.json"),
+                settings: self.path("home/.claude/settings.json"),
+            }),
         }
     }
 
@@ -94,7 +104,29 @@ impl Fixture {
     }
 
     /// A project directory with a migrated database, the objects directory and every Claude Code file.
+    /// A project with Git sync on and its own repository.
     fn project(&self, name: &str) -> PathBuf {
+        let root = self.plain_project(name);
+        rt().block_on(async {
+            let store = Store::open_project(&ProjectPaths::new(&root))
+                .await
+                .unwrap();
+            store
+                .write::<_, StoreError>(async |tx| {
+                    fold_store::workspaces::enable_git_sync(tx, "human:ana", at(0)).await?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            store.close().await.unwrap();
+        });
+        git(&root, &["init", "--quiet"]);
+        fold_vcs::git_remote::exclude_fold_dir(&root.join(".git")).unwrap();
+        root
+    }
+
+    /// A project with Git sync off and no repository, as a plain `fld init` leaves it.
+    fn plain_project(&self, name: &str) -> PathBuf {
         let root = self.path(name);
         std::fs::create_dir_all(root.join(".fold/objects")).unwrap();
         rt().block_on(async {
@@ -103,11 +135,9 @@ impl Fixture {
                 .unwrap();
             store.close().await.unwrap();
         });
-        std::fs::create_dir_all(root.join(".claude")).unwrap();
-        std::fs::write(root.join(MCP_FILE), good_mcp()).unwrap();
-        std::fs::write(root.join(SETTINGS_FILE), good_settings()).unwrap();
+        std::fs::create_dir_all(root.join(".claude/skills/fold")).unwrap();
+        std::fs::write(root.join(SKILL_FILE), "# fold\n").unwrap();
         std::fs::write(root.join(AGENTS_FILE), good_agents()).unwrap();
-        git(&root, &["init", "--quiet"]);
         root
     }
 }
@@ -246,7 +276,7 @@ fn a_socket_with_mode_0644_fails_with_the_chmod_fix() {
     let check = socket_check(Some(&path), Some(state));
     assert_eq!(check.status, Status::Fail);
     assert!(check.message.contains("0644"));
-    assert_eq!(check.fix, Some(format!("chmod 600 {}", path.display())));
+    assert_eq!(check.fix, Some(format!("`chmod 600 {}`", path.display())));
     let no_modes = Platform {
         linux: false,
         macos: false,
@@ -287,7 +317,7 @@ fn a_missing_or_dead_socket_warns_with_fold_serve() {
     let missing = socket_check(Some(&path), Some(SocketState::Missing));
     assert_eq!(
         (missing.status, missing.fix.as_deref()),
-        (Status::Warn, Some("fld serve"))
+        (Status::Warn, Some("`fld serve`"))
     );
     drop(bind(&path));
     mode(&path, 0o600);
@@ -296,7 +326,7 @@ fn a_missing_or_dead_socket_warns_with_fold_serve() {
     let dead = socket_check(Some(&path), Some(state));
     assert_eq!(
         (dead.status, dead.fix.as_deref()),
-        (Status::Warn, Some("fld serve"))
+        (Status::Warn, Some("`fld serve`"))
     );
 }
 
@@ -322,7 +352,7 @@ fn no_socket_path_is_a_warning() {
     let check = socket_check(None, None);
     assert_eq!(check.status, Status::Warn);
     let fix = check.fix.unwrap();
-    assert!(fix.starts_with("export XDG_RUNTIME_DIR=") && fix.contains("--socket"));
+    assert!(fix.starts_with("`export XDG_RUNTIME_DIR=") && fix.contains("`--socket <path>`"));
 }
 
 #[test]
@@ -368,7 +398,7 @@ fn http_is_ok_with_a_listener_and_a_warning_without() {
     let check = http_check(addr);
     assert_eq!(
         (check.status, check.fix.as_deref()),
-        (Status::Warn, Some("fld serve"))
+        (Status::Warn, Some("`fld serve`"))
     );
 }
 
@@ -504,7 +534,7 @@ fn a_probe_with_no_proc_and_no_systemd_fails_nothing() {
     assert_eq!(service.message, "no service manager support");
     assert_eq!(
         service.fix.as_deref(),
-        Some("fld serve, started by the host's own supervisor")
+        Some("`fld serve`, started by the host's own supervisor")
     );
     for check in [linger_check(&host), inotify_limit_check(&host)] {
         assert_eq!(
@@ -604,7 +634,7 @@ fn linger_warns_only_for_an_installed_service() {
     fixture.install_unit();
     let off = linger_check(&host);
     assert_eq!(off.status, Status::Warn);
-    assert_eq!(off.fix.as_deref(), Some("loginctl enable-linger ana"));
+    assert_eq!(off.fix.as_deref(), Some("`loginctl enable-linger ana`"));
     std::fs::write(fixture.path("root/var/lib/systemd/linger/ana"), "").unwrap();
     assert_eq!(linger_check(&host).status, Status::Ok);
     let mut nobody = host;
@@ -629,6 +659,7 @@ fn a_healthy_project_is_all_ok_and_nothing_changes_on_disk() {
             "objects",
             "git history",
             "project folder",
+            "exclude file",
             "inotify watches",
             "claude files",
             "role prompts",
@@ -639,6 +670,30 @@ fn a_healthy_project_is_all_ok_and_nothing_changes_on_disk() {
         assert_eq!(check.status, Status::Ok, "{check:?}");
     }
     assert_eq!(snapshot(&root), before);
+}
+
+#[test]
+fn a_project_without_git_sync_gets_no_git_check() {
+    let fixture = Fixture::new();
+    let host = fixture.linux_host(524_288);
+    let root = fixture.plain_project("plain");
+    let checks = project_report(&host, &root, at(1_000));
+    let names: Vec<_> = checks.iter().map(|check| check.name).collect();
+    assert_eq!(
+        names,
+        [
+            "database",
+            "objects",
+            "git sync",
+            "inotify watches",
+            "claude files",
+            "role prompts",
+            "claude md"
+        ]
+    );
+    let sync = find(&checks, "git sync");
+    assert_eq!(sync.status, Status::Ok);
+    assert!(sync.message.contains("fld init --with-git"), "{sync:?}");
 }
 
 #[test]
@@ -762,9 +817,10 @@ fn a_project_folder_with_changes_that_are_not_committed_is_a_warning() {
     let check = folder(&host);
     assert_eq!(check.status, Status::Warn);
     assert!(
-        check.fix.as_deref().unwrap().contains("commit or stash"),
+        check.fix.as_deref().unwrap().contains("fld record"),
         "{check:?}"
     );
+    assert!(check.fix.as_deref().unwrap().contains("fld record"));
     // The check reads the folder and never writes the index.
     assert_eq!(std::fs::read(root.join(".git/index")).unwrap(), index);
     host.path = None;
@@ -840,6 +896,7 @@ fn the_database_facts_map_to_issues() {
         quick_check_problems: Some(0),
         quick_check_errored: false,
         degraded: Vec::new(),
+        git_sync: Some(true),
     };
     assert!(database_issues(&healthy).is_empty());
     let unknown_journal = DatabaseFacts {
@@ -991,7 +1048,7 @@ fn objects_checks_cover_missing_unwritable_and_low_space() {
     assert_eq!(locked.status, Status::Fail);
     assert_eq!(
         locked.fix.as_deref(),
-        Some("chmod -R u+rwX /p/.fold/objects")
+        Some("`chmod -R u+rwX /p/.fold/objects`")
     );
     let low = objects_verdict(
         path,
@@ -1034,49 +1091,133 @@ fn a_missing_project_directory_fails_alone() {
     assert!(checks[0].fix.as_deref().unwrap().contains("gone"));
 }
 
+#[test]
+fn a_project_folder_without_its_fold_data_fails_alone_with_the_init_that_replaces_it() {
+    let fixture = Fixture::new();
+    let host = fixture.linux_host(RECOMMENDED_WATCHES);
+    let root = fixture.project("my app");
+    std::fs::remove_dir_all(root.join(".fold")).unwrap();
+    let checks = project_report(&host, &root, at(0));
+    assert_eq!(checks.len(), 1);
+    let check = &checks[0];
+    assert_eq!((check.name, check.status), ("fold data", Status::Fail));
+    assert_eq!(
+        check.message,
+        format!(
+            "{} is missing: the fold data of the project was deleted",
+            root.join(".fold").display()
+        )
+    );
+    let quoted = output::shell_quote(&root);
+    assert_eq!(
+        check.fix.as_deref(),
+        Some(format!("`cd {quoted} && fld init --with-git`").as_str())
+    );
+    std::fs::remove_dir_all(root.join(".git")).unwrap();
+    let checks = project_report(&host, &root, at(0));
+    assert_eq!(
+        checks[0].fix.as_deref(),
+        Some(format!("`cd {quoted} && fld init`").as_str())
+    );
+}
+
 // Claude Code files
 
 #[test]
 fn the_claude_files_warn_for_each_missing_fold_entry() {
     let agents = &good_agents();
-    let mcp = &good_mcp();
-    let good = &good_settings();
-    assert!(claude_file_problems(Some(mcp), Some(good), Some(agents)).is_empty());
-
-    let none = claude_file_problems(None, None, None);
+    let named = (AGENTS_FILE, Some(agents.as_str()));
+    assert!(claude_file_problems(named, true, &[]).is_empty());
     assert_eq!(
-        none,
+        claude_file_problems((AGENTS_FILE, None), false, &[]),
         [
-            ".mcp.json is missing",
-            ".claude/settings.json is missing",
-            "AGENTS.md is missing"
+            "AGENTS.md is missing",
+            ".claude/skills/fold/SKILL.md is missing"
         ]
     );
-    let other_server = claude_file_problems(
-        Some(r#"{"mcpServers":{"other":{}}}"#),
-        Some(good),
-        Some(agents),
-    );
-    assert_eq!(other_server, [".mcp.json lacks the fold server"]);
-    let broken = claude_file_problems(Some("not json"), Some("not json"), Some("no markers"));
     assert_eq!(
-        broken,
-        [
-            ".mcp.json lacks the fold server",
-            ".claude/settings.json does not allow the fold tools",
-            ".claude/settings.json lacks the fold hooks",
-            "AGENTS.md lacks the fold section",
-        ]
-    );
-    let no_stop = settings(ALLOW_FOLD_TOOLS, &HOOKS[..1]);
-    assert_eq!(
-        claude_file_problems(Some(mcp), Some(&no_stop), Some(agents)),
-        [".claude/settings.json lacks the fold hooks"]
-    );
-    assert_eq!(
-        claude_file_problems(Some(mcp), Some(good), Some(AGENTS_BEGIN)),
+        claude_file_problems((AGENTS_FILE, Some("no markers")), true, &[]),
         ["AGENTS.md lacks the fold section"]
     );
+    assert_eq!(
+        claude_file_problems((AGENTS_FILE, Some(AGENTS_BEGIN)), true, &[]),
+        ["AGENTS.md lacks the fold section"]
+    );
+    assert_eq!(
+        claude_file_problems((CLAUDE_FILE, None), true, &[]),
+        ["CLAUDE.md is missing"]
+    );
+    assert_eq!(
+        claude_file_problems(named, true, &[MCP_FILE, SETTINGS_FILE]),
+        [
+            ".mcp.json holds fold entries, which belong in your Claude Code config",
+            ".claude/settings.json holds fold entries, which belong in your Claude Code config"
+        ]
+    );
+}
+
+#[test]
+fn fold_entries_left_in_the_project_files_name_the_refresh() {
+    let fixture = Fixture::new();
+    let root = fixture.project("demo");
+    let report = |root: &Path| project_report(&fixture.bare_host(), root, at(0));
+    std::fs::write(root.join(MCP_FILE), r#"{"mcpServers":{"pencil":{}}}"#).unwrap();
+    std::fs::write(root.join(SETTINGS_FILE), r#"{"model":"opus"}"#).unwrap();
+    assert_eq!(find(&report(&root), "claude files").status, Status::Ok);
+    std::fs::write(root.join(MCP_FILE), good_mcp()).unwrap();
+    std::fs::write(root.join(SETTINGS_FILE), good_settings()).unwrap();
+    let checks = report(&root);
+    let check = find(&checks, "claude files");
+    assert_eq!(check.status, Status::Warn);
+    assert_eq!(
+        check.message,
+        ".mcp.json holds fold entries, which belong in your Claude Code config; .claude/settings.json holds fold entries, which belong in your Claude Code config"
+    );
+    assert_eq!(check.fix.as_deref(), Some("`fld init --refresh`"));
+}
+
+#[test]
+fn the_claude_setup_check_reads_the_user_files_and_names_the_fix() {
+    let fixture = Fixture::new();
+    let host = fixture.bare_host();
+    let files = host.claude.clone().unwrap();
+    let check = |host: &Host| {
+        find(
+            &host_checks(None, &FileConfig::default(), host),
+            "claude setup",
+        )
+        .clone()
+    };
+    let missing = check(&host);
+    assert_eq!(missing.status, Status::Warn);
+    assert_eq!(
+        missing.message,
+        format!(
+            "{} lacks the fold server; {} does not allow the fold tools and lacks the fold hooks",
+            files.config.display(),
+            files.settings.display()
+        )
+    );
+    assert_eq!(missing.fix.as_deref(), Some("`fld setup --claude`"));
+    std::fs::create_dir_all(files.settings.parent().unwrap()).unwrap();
+    std::fs::write(&files.config, good_mcp()).unwrap();
+    std::fs::write(&files.settings, settings(ALLOW_FOLD_TOOLS, &HOOKS[..1])).unwrap();
+    assert_eq!(
+        check(&host).message,
+        format!("{} lacks the fold hooks", files.settings.display())
+    );
+    std::fs::write(&files.settings, good_settings()).unwrap();
+    let complete = check(&host);
+    assert_eq!(
+        (complete.status, complete.message.as_str()),
+        (Status::Ok, "fold is in your Claude Code config")
+    );
+    let declined = claude_setup_verdict(Some(UserSetup::Incomplete(vec!["x".into()])), true);
+    assert_eq!(declined.status, Status::Ok);
+    assert!(declined.message.ends_with("fld setup --claude adds it"));
+    let mut homeless = host;
+    homeless.claude = None;
+    assert_eq!(check(&homeless).message, NOT_APPLICABLE);
 }
 
 #[test]
@@ -1117,19 +1258,19 @@ fn a_role_prompt_under_a_name_of_no_role_is_named_with_the_roles() {
     }
     let checks = project_report(&fixture.bare_host(), &root, at(0));
     assert_eq!(find(&checks, "role prompts").status, Status::Ok);
-    std::fs::write(roles.join("reviewer.md"), "# prompt\n").unwrap();
+    std::fs::write(roles.join("batch_reviewer.md"), "# prompt\n").unwrap();
     std::fs::write(roles.join("area-lead.md"), "# prompt\n").unwrap();
     let checks = project_report(&fixture.bare_host(), &root, at(0));
     let check = find(&checks, "role prompts");
     assert_eq!(check.status, Status::Warn);
     assert_eq!(
         check.message,
-        "fold never reads area-lead.md, reviewer.md in .fold/roles, because no role has that name"
+        "fold never reads area-lead.md, batch_reviewer.md in .fold/roles, because no role has that name"
     );
     assert_eq!(
         check.fix.as_deref(),
         Some(
-            "rename each file to <role>.md, where the role is area_lead, review_lead, task_worker, batch_reviewer or main"
+            "rename each file to <role>.md, where the role is area_lead, review_lead, task_worker, reviewer or main"
         )
     );
 }
@@ -1143,7 +1284,7 @@ fn an_agents_file_without_the_markers_gives_the_claude_files_warning() {
     let check = find(&checks, "claude files");
     assert_eq!(check.status, Status::Warn);
     assert!(check.message.contains("AGENTS.md lacks the fold section"));
-    assert_eq!(check.fix.as_deref(), Some("fld init --refresh"));
+    assert_eq!(check.fix.as_deref(), Some("`fld init --refresh`"));
     assert_eq!(
         failed(&[Section {
             title: String::new(),
@@ -1157,7 +1298,7 @@ fn an_agents_file_without_the_markers_gives_the_claude_files_warning() {
 fn claude_md_files_in_the_root_and_a_parent_warn_once_per_path() {
     let fixture = Fixture::new();
     let root = fixture.project("demo");
-    std::fs::write(root.join("CLAUDE.md"), "rules").unwrap();
+    std::fs::write(root.join(".claude/CLAUDE.md"), "rules").unwrap();
     std::fs::write(fixture.path("CLAUDE.local.md"), "mine").unwrap();
     let checks = project_report(&fixture.bare_host(), &root, at(0));
     let shadows: Vec<_> = checks
@@ -1168,7 +1309,7 @@ fn claude_md_files_in_the_root_and_a_parent_warn_once_per_path() {
     for check in &shadows {
         assert_eq!(check.status, Status::Warn);
     }
-    let root_file = root.join("CLAUDE.md");
+    let root_file = root.join(".claude/CLAUDE.md");
     assert_eq!(
         shadows[0].message,
         format!("{} makes Claude Code skip AGENTS.md", root_file.display())
@@ -1192,6 +1333,59 @@ fn claude_md_files_in_the_root_and_a_parent_warn_once_per_path() {
             checks
         }]),
         0
+    );
+}
+
+/// The section belongs in a root `CLAUDE.md` file, which then hides nothing; a `CLAUDE.md` link to `AGENTS.md` hides nothing either, and a link to another file does.
+#[test]
+fn the_claude_files_check_reads_the_file_that_gets_the_section() {
+    let fixture = Fixture::new();
+    let root = fixture.project("demo");
+    let report = |root: &Path| project_report(&fixture.bare_host(), root, at(0));
+    let claude_md = |checks: &[Check]| {
+        let check = find(checks, "claude md");
+        (check.status, check.message.clone())
+    };
+
+    std::fs::write(root.join(CLAUDE_FILE), "# mine\n").unwrap();
+    let checks = report(&root);
+    let check = find(&checks, "claude files");
+    assert_eq!(check.status, Status::Warn);
+    assert_eq!(
+        check.message,
+        "CLAUDE.md lacks the fold section; AGENTS.md holds a second fold section, which belongs in CLAUDE.md"
+    );
+    assert_eq!(check.fix.as_deref(), Some("`fld init --refresh`"));
+    assert_eq!(
+        claude_md(&checks),
+        (Status::Ok, "no CLAUDE.md hides AGENTS.md".to_owned())
+    );
+
+    std::fs::write(root.join(CLAUDE_FILE), good_agents()).unwrap();
+    std::fs::write(root.join(AGENTS_FILE), "# shared\n").unwrap();
+    assert_eq!(find(&report(&root), "claude files").status, Status::Ok);
+
+    std::fs::remove_file(root.join(CLAUDE_FILE)).unwrap();
+    std::fs::write(root.join(AGENTS_FILE), good_agents()).unwrap();
+    std::os::unix::fs::symlink(AGENTS_FILE, root.join(CLAUDE_FILE)).unwrap();
+    let checks = report(&root);
+    assert_eq!(find(&checks, "claude files").status, Status::Ok);
+    assert_eq!(claude_md(&checks).0, Status::Ok);
+
+    std::fs::remove_file(root.join(CLAUDE_FILE)).unwrap();
+    std::fs::write(root.join("rules.md"), "# rules\n").unwrap();
+    std::os::unix::fs::symlink("rules.md", root.join(CLAUDE_FILE)).unwrap();
+    let checks = report(&root);
+    assert_eq!(find(&checks, "claude files").status, Status::Ok);
+    assert_eq!(
+        claude_md(&checks),
+        (
+            Status::Warn,
+            format!(
+                "{} makes Claude Code skip AGENTS.md",
+                root.join(CLAUDE_FILE).display()
+            )
+        )
     );
 }
 
@@ -1430,4 +1624,61 @@ fn a_database_in_use_by_a_daemon_is_read_through_its_wal() {
         assert_eq!(facts.degraded, [at(5)]);
         store.close().await.unwrap();
     });
+}
+
+#[test]
+fn an_info_exclude_that_is_not_the_link_names_the_refresh() {
+    let fixture = Fixture::new();
+    let root = fixture.project("demo");
+    let host = fixture.bare_host();
+    let check = |root: &Path| find(&project_report(&host, root, at(1_000)), "exclude file").clone();
+    assert_eq!(check(&root).status, Status::Ok);
+    std::fs::remove_file(root.join(".git/info/exclude")).unwrap();
+    std::fs::write(root.join(".git/info/exclude"), "*.log\n").unwrap();
+    let plain = check(&root);
+    assert_eq!(plain.status, Status::Warn);
+    assert!(plain.fix.as_deref().unwrap().contains("fld init --refresh"));
+    std::fs::remove_dir_all(root.join(".git")).unwrap();
+    assert_eq!(check(&root).message, NOT_APPLICABLE);
+}
+
+#[test]
+fn the_fold_name_shows_where_it_comes_from() {
+    let fixture = Fixture::new();
+    let mut host = fixture.bare_host();
+    let check = find(
+        &host_checks(None, &FileConfig::default(), &host),
+        "fold name",
+    )
+    .clone();
+    assert_eq!(
+        (check.status, check.message.as_str()),
+        (Status::Ok, "ana from USER")
+    );
+    let stored = fixture.path("config/fold/human.toml");
+    std::fs::create_dir_all(stored.parent().unwrap()).unwrap();
+    std::fs::write(&stored, "name = \"bo\"\n").unwrap();
+    let check = find(
+        &host_checks(None, &FileConfig::default(), &host),
+        "fold name",
+    )
+    .clone();
+    assert_eq!(check.message, format!("bo from {}", stored.display()));
+    host.names.fold_human = Some("Lead Dev".into());
+    let check = find(
+        &host_checks(None, &FileConfig::default(), &host),
+        "fold name",
+    )
+    .clone();
+    assert_eq!(check.status, Status::Warn);
+    assert_eq!(
+        check.message,
+        "Lead Dev from FOLD_HUMAN is not a name fold accepts"
+    );
+    assert!(check.fix.as_deref().unwrap().contains("FOLD_HUMAN"));
+    let none = fold_name_check(None);
+    assert_eq!(
+        (none.status, none.message.as_str()),
+        (Status::Warn, "fld cannot tell who you are")
+    );
 }

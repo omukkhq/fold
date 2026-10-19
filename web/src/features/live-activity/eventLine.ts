@@ -1,5 +1,7 @@
 import {
   Activity,
+  Archive,
+  ArchiveRestore,
   Bookmark,
   Bot,
   Check,
@@ -15,7 +17,9 @@ import {
   MessageSquare,
   Milestone,
   Pause,
+  Pencil,
   Play,
+  RotateCcw,
   Tag,
   TriangleAlert,
   Undo2,
@@ -24,6 +28,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { DurableEvent } from "../../api/events";
+import { codeData } from "../../format/codeText";
 import { COLUMNS } from "../board/columns";
 
 type EventType = DurableEvent["type"];
@@ -33,7 +38,7 @@ export type AnyEvent = Omit<DurableEvent, "type"> & { type: string };
 
 export interface EventLine {
   icon: LucideIcon;
-  /** The sentence after the actor, built from ids and counts only. */
+  /** The sentence after the actor. A command stands between backticks, and the event's data is escaped so that it never reads as a mark. */
   text: string;
   /** Integrations, approvals and main moves read in the full text colour. */
   emphasis: boolean;
@@ -52,12 +57,34 @@ interface Spec {
   look?: (event: DurableEvent) => Look;
 }
 
+/** A string of the event's data, escaped for a line that marks its commands. */
 function text(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? codeData(value) : null;
+}
+
+/** A daemon text of the event's data that marks its commands between backticks itself, as it is. */
+function marked(value: unknown): string | null {
   return typeof value === "string" && value !== "" ? value : null;
 }
 
 function count(value: unknown): number | null {
   return typeof value === "number" ? value : null;
+}
+
+/** The paths an event lists, joined, with the number the event left out; null when it lists none. */
+function heldText(listed: unknown, total: unknown): string | null {
+  const paths = Array.isArray(listed)
+    ? listed
+        .filter((path): path is string => typeof path === "string")
+        .map(codeData)
+    : [];
+  if (paths.length === 0) {
+    return null;
+  }
+  const more = (count(total) ?? paths.length) - paths.length;
+  return more > 0
+    ? `${paths.join(", ")} and ${String(more)} more`
+    : paths.join(", ");
 }
 
 function on(event: DurableEvent): string {
@@ -104,6 +131,23 @@ function approvedText(event: DurableEvent): string {
   return tasks.length === 0
     ? `approved ${request}`
     : `approved ${request} as ${tasks.join(", ")}`;
+}
+
+/** A direct change of the main agent says so, because the user's word in the conversation approved it instead of a review. */
+function integrationText(event: DurableEvent): string {
+  const done =
+    event.revision === null
+      ? "integration succeeded"
+      : `integration succeeded as ${event.revision}`;
+  if (text(event.data.kind) !== "direct") {
+    return done;
+  }
+  const changeset = text(event.data.changeset);
+  const change =
+    changeset === null ? "a direct change" : `direct change ${changeset}`;
+  return event.revision === null
+    ? `integrated ${change} with the user's OK`
+    : `integrated ${change} with the user's OK as ${event.revision}`;
 }
 
 /** A worker's agent name. */
@@ -155,10 +199,23 @@ function resumedText(event: DurableEvent): string {
   const why =
     event.data.reason === "conflict"
       ? `the conflict on ${proposal}`
-      : `changes to ${proposal}`;
+      : event.data.reason === "checks"
+        ? event.data.stage === "proposal"
+          ? `the failed checks of ${taskOf(event)}`
+          : `the failed integration checks of ${proposal}`
+        : `changes to ${proposal}`;
   return event.data.resumed === false
     ? `restarted ${worker} in a new session for ${why}`
     : `resumed ${worker} for ${why}`;
+}
+
+/** The number of files a stash event names, as words. */
+function filesText(event: DurableEvent): string {
+  const files = count(event.data.file_count);
+  if (files === null) {
+    return "changes";
+  }
+  return files === 1 ? "1 file" : `${String(files)} files`;
 }
 
 function fixed(line: string): (event: DurableEvent) => string {
@@ -424,6 +481,33 @@ const SPECS: Record<EventType, Spec> = {
         : `added v${String(version)} to ${proposalOf(e)}`;
     },
   },
+  "proposal.human_edited": {
+    icon: Pencil,
+    text: (e) => {
+      const version = count(e.data.version);
+      return version === null
+        ? `edited ${proposalOf(e)}`
+        : `edited ${proposalOf(e)} as v${String(version)}`;
+    },
+  },
+  "proposal.reviewer_fixed": {
+    icon: Pencil,
+    text: (e) => {
+      const version = count(e.data.version);
+      return version === null
+        ? `fixed ${proposalOf(e)} in review`
+        : `fixed ${proposalOf(e)} in review as v${String(version)}`;
+    },
+  },
+  "proposal.review_again_requested": {
+    icon: RotateCcw,
+    text: (e) => {
+      const version = count(e.data.version);
+      return version === null
+        ? `sent ${proposalOf(e)} for review again`
+        : `sent v${String(version)} of ${proposalOf(e)} for review again`;
+    },
+  },
   "proposal.author_changed": {
     icon: GitPullRequest,
     text: (e) => {
@@ -451,6 +535,20 @@ const SPECS: Record<EventType, Spec> = {
     text: (e) => `commented on ${proposalOf(e)}`,
   },
   "review.batch_created": { icon: ListChecks, text: batchCreatedText },
+  "review.scope_chosen": {
+    icon: ListChecks,
+    text: (e) => {
+      const scope = text(e.data.scope);
+      const version = count(e.data.version);
+      const of =
+        version === null
+          ? proposalOf(e)
+          : `${proposalOf(e)} v${String(version)}`;
+      return scope === null
+        ? `chose the review scope of ${of}`
+        : `chose a ${scope} review of ${of}`;
+    },
+  },
   "review.batch_submitted": {
     icon: Check,
     text: (e) => `reviewed ${batchOf(e)}`,
@@ -461,10 +559,7 @@ const SPECS: Record<EventType, Spec> = {
   },
   "integration.succeeded": {
     icon: GitMerge,
-    text: (e) =>
-      e.revision === null
-        ? "integration succeeded"
-        : `integration succeeded as ${e.revision}`,
+    text: integrationText,
     emphasis: true,
   },
   "integration.conflicted": {
@@ -507,20 +602,41 @@ const SPECS: Record<EventType, Spec> = {
   },
   "git.outside_commits": {
     icon: TriangleAlert,
-    text: fixed("the Git branch has commits fold did not write; run fld pull"),
+    text: fixed("the Git branch has commits fold did not write"),
   },
   "git.uncommitted_changes": {
     icon: TriangleAlert,
-    text: fixed(
-      "the project folder has changes that are not committed; commit or stash them",
-    ),
+    text: (e) => {
+      if (e.data.staged === true) {
+        return "the Git index holds a staged change on a file main changed; run `git restore --staged` on it";
+      }
+      const held = heldText(e.data.held, e.data.held_count);
+      return held === null
+        ? "the project folder has changes that are not recorded; run `fld record`"
+        : `the project folder waits on your changes to ${held} that are not recorded; run \`fld record\`, or take them back`;
+    },
+  },
+  "git.sync_enabled": {
+    icon: GitCommitHorizontal,
+    text: fixed("turned Git sync on: every revision gets its Git commit"),
+  },
+  "git.head_moved": {
+    icon: TriangleAlert,
+    text: (e) => {
+      const hint = marked(e.data.hint);
+      return hint === null
+        ? "the Git branch changed in a way fold did not make; the project folder waits"
+        : `the Git branch changed in a way fold did not make; ${hint}`;
+    },
   },
   "git.attention_cleared": {
     icon: GitCommitHorizontal,
     text: (e) =>
       e.data.kind === "outside_commits"
         ? "the Git branch has no commits fold did not write"
-        : "the project folder follows main again",
+        : e.data.kind === "head_moved"
+          ? "the Git branch is back where fold left it"
+          : "the project folder follows main again",
   },
   "message.sent": {
     icon: MessageSquare,
@@ -624,6 +740,88 @@ const SPECS: Record<EventType, Spec> = {
       const tool = text(e.data.tool) ?? "a tool";
       return `${verb} ${tool} for ${workerOf(e)}`;
     },
+  },
+  "human_change.recorded": {
+    icon: GitMerge,
+    emphasis: true,
+    text: (e) =>
+      e.revision === null
+        ? "recorded a change of the project folder"
+        : `recorded a change of the project folder as ${e.revision}`,
+  },
+  "human_change.conflicted": {
+    icon: TriangleAlert,
+    text: fixed(
+      "recorded a change of the project folder that conflicts with main; main did not move",
+    ),
+  },
+  "human_change.resolved": {
+    icon: GitMerge,
+    text: (e) =>
+      e.revision === null
+        ? "resolved the change of the project folder"
+        : `resolved the change of the project folder in ${e.revision}`,
+  },
+  "human_change.withdrawn": {
+    icon: Undo2,
+    text: fixed(
+      "took back the change of the project folder that waited for the main agent",
+    ),
+  },
+  "stash.pushed": {
+    icon: Archive,
+    text: (e) => `stashed ${filesText(e)} of the project folder`,
+  },
+  "stash.applied": {
+    icon: ArchiveRestore,
+    text: (e) => `unstashed ${filesText(e)} into the project folder`,
+  },
+  "stash.conflicted": {
+    icon: TriangleAlert,
+    text: (e) => {
+      const paths = heldText(e.data.conflicted, e.data.conflicted_count);
+      return paths === null
+        ? "unstashed changes that conflict with the project folder; the entry stays"
+        : `unstashed changes that conflict with the project folder in ${paths}; the entry stays`;
+    },
+  },
+  "stash.dropped": {
+    icon: Check,
+    text: (e) => {
+      // fold drops the entry itself when a Git commit put the markers on main, and names the task that fixes them.
+      const task = text(e.data.task);
+      return task === null
+        ? "fixed the conflict of the unstash; the stash entry is dropped"
+        : `recorded the conflict of the unstash on main; ${task} fixes it`;
+    },
+  },
+  "checks.started": {
+    icon: ListChecks,
+    text: (e) => `started the checks of ${taskOf(e)}`,
+  },
+  "checks.finished": {
+    icon: ListChecks,
+    text: (e) => {
+      const state = text(e.data.state);
+      return state === null
+        ? `ended the checks of ${taskOf(e)}`
+        : `ended the checks of ${taskOf(e)}: ${state.replaceAll("_", " ")}`;
+    },
+  },
+  "integration.queued": {
+    icon: ListChecks,
+    text: (e) => `queued the integration of ${proposalOf(e)}`,
+  },
+  "integration.unqueued": {
+    icon: ListChecks,
+    text: (e) => `took the integration of ${proposalOf(e)} out of the queue`,
+  },
+  "integration.held": {
+    icon: TriangleAlert,
+    text: (e) =>
+      e.revision === null
+        ? "held the integrations: fold-checks.toml on main is not valid"
+        : `held the integrations: fold-checks.toml on ${e.revision} is not valid`,
   },
 };
 

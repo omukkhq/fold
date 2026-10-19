@@ -62,25 +62,31 @@ async fn an_adapter_connects_to_the_socket_in_fold_socket() {
 }
 
 #[tokio::test]
-async fn an_adapter_outside_every_project_writes_one_line_and_exits_1() {
+async fn an_adapter_outside_every_project_serves_no_tools_quietly_and_starts_no_daemon() {
     let host = Host::new().await;
     let outside = host.dir.path().join("elsewhere");
     std::fs::create_dir_all(&outside).unwrap();
     let mut command = host.fold(&["mcp"], &outside);
     command.env("FOLD_AGENT", "frontend");
-    let output = command.output().await.unwrap();
-    let guard = DaemonGuard(daemons(&host.default_socket()));
-    assert_eq!(output.status.code(), Some(1));
-    assert!(
-        output.stdout.is_empty(),
-        "stdout carries protocol bytes only"
-    );
-    let stderr = String::from_utf8(output.stderr).unwrap();
+    let (client, mut child) = adapter(command).await;
+    let info = client.peer_info().unwrap();
+    assert!(info.capabilities.tools.is_none(), "no tools are offered");
     assert_eq!(
-        stderr,
-        "fld mcp: project_not_found: no registered project holds this directory (run the command inside a project directory, or fld init one)\n"
+        info.instructions.as_deref(),
+        Some(fold_daemon::mcp::OUTSIDE_INSTRUCTIONS)
     );
-    guard.stop().await;
+    assert!(daemons(&host.default_socket()).is_empty());
+    client.cancel().await.unwrap();
+    assert!(child.wait().await.unwrap().success());
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .await
+        .unwrap();
+    assert_eq!(stderr, "", "the user's other sessions show no error");
 }
 
 #[tokio::test]

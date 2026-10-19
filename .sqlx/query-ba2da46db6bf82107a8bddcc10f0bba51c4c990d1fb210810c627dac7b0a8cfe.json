@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO integration_requests (proposal_id, version, expected_version, actor, created_at)\n           SELECT p.id, ?2, ?3, ?4, ?5 FROM proposals p WHERE p.number = ?1\n           RETURNING id AS \"id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "integration_requests",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ba2da46db6bf82107a8bddcc10f0bba51c4c990d1fb210810c627dac7b0a8cfe"
+}

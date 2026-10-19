@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::common::roles::give_role;
+use crate::common::roles::{give_batch, give_role};
 use crate::proposal_tools_support::{Fixture, t};
 use fold_core::roles::Role;
 use fold_daemon::mcp::FoldServer;
@@ -12,6 +12,10 @@ use rmcp::{RoleClient, ServiceExt};
 use serde_json::{Value, json};
 
 type Client = RunningService<RoleClient, ()>;
+
+fn p(number: u32) -> fold_core::ProposalId {
+    fold_core::ProposalId::from_number(number).unwrap()
+}
 
 /// An adapter session over an in-memory stream, registered as `name`.
 async fn connect(fx: &Fixture, name: &str) -> Client {
@@ -87,33 +91,26 @@ async fn two_proposals(fx: &Fixture) {
         fx.reviews()
             .create_proposal(&author, t(task), "Add a file", None)
             .await
+            .unwrap()
+            .detail()
             .unwrap();
     }
 }
 
 #[tokio::test]
-async fn a_delegate_creates_its_own_batch_after_the_lead_releases_its_members() {
+async fn a_reviewer_never_makes_a_batch_and_reviews_the_one_its_lead_gives_it() {
     let fx = Fixture::new().await;
     two_proposals(&fx).await;
     let lead = connect(&fx, "lead").await;
     let delegate = connect(&fx, "delegate").await;
     give_role(&fx.handle.store, "lead", Role::ReviewLead, None).await;
-    give_role(&fx.handle.store, "delegate", Role::BatchReviewer, None).await;
+    give_role(&fx.handle.store, "delegate", Role::Reviewer, None).await;
     ok(
         &lead,
         "create_review_batch",
         json!({"proposals": ["P-1", "P-2"]}),
     )
     .await;
-    assert_eq!(
-        err(
-            &delegate,
-            "create_review_batch",
-            json!({"proposals": ["P-1", "P-2"]})
-        )
-        .await["code"],
-        "already_claimed"
-    );
     for proposal in ["P-1", "P-2"] {
         ok(
             &lead,
@@ -122,14 +119,28 @@ async fn a_delegate_creates_its_own_batch_after_the_lead_releases_its_members() 
         )
         .await;
     }
-    let created = ok(
+    let refused = err(
         &delegate,
         "create_review_batch",
         json!({"proposals": ["P-1", "P-2"]}),
     )
     .await;
-    assert_eq!(created["holder"], "delegate");
-    assert_eq!(created["id"], "rb-2");
+    assert_eq!(refused["code"], "worker_claim_denied");
+    assert!(refused["hint"].as_str().unwrap().contains("lead"));
+    assert_eq!(
+        err(&delegate, "claim_review", json!({"id": "P-1"})).await["code"],
+        "worker_claim_denied"
+    );
+    let batch = give_batch(
+        &fx.handle.store,
+        "delegate",
+        &[p(1), p(2)],
+        fx.handle.clock.now(),
+    )
+    .await;
+    assert_eq!(batch.to_string(), "rb-2");
+    let view = ok(&delegate, "get_review_batch", json!({"id": "rb-2"})).await;
+    assert_eq!(view["holder"], "delegate");
     ok(&delegate, "create_batch_checkout", json!({"id": "rb-2"})).await;
 }
 
@@ -138,11 +149,12 @@ async fn an_omitted_batch_version_gets_a_new_checkout_and_its_own_review() {
     let fx = Fixture::new().await;
     two_proposals(&fx).await;
     let delegate = connect(&fx, "delegate").await;
-    give_role(&fx.handle.store, "delegate", Role::BatchReviewer, None).await;
-    ok(
-        &delegate,
-        "create_review_batch",
-        json!({"proposals": ["P-1", "P-2"]}),
+    give_role(&fx.handle.store, "delegate", Role::Reviewer, None).await;
+    give_batch(
+        &fx.handle.store,
+        "delegate",
+        &[p(1), p(2)],
+        fx.handle.clock.now(),
     )
     .await;
     ok(&delegate, "create_batch_checkout", json!({"id": "rb-1"})).await;
@@ -154,6 +166,8 @@ async fn an_omitted_batch_version_gets_a_new_checkout_and_its_own_review() {
             Some("Checked new content"),
         )
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let submitted = ok(
         &delegate,
@@ -171,7 +185,6 @@ async fn an_omitted_batch_version_gets_a_new_checkout_and_its_own_review() {
         submitted["left_out"],
         json!([{"proposal": "P-2", "version": "v1", "reason": "new_version"}])
     );
-    ok(&delegate, "claim_review", json!({"id": "P-2"})).await;
     let checkout = ok(&delegate, "create_review_checkout", json!({"id": "P-2"})).await;
     assert_eq!(checkout["version"], "v2");
     assert_eq!(
@@ -284,6 +297,8 @@ async fn a_reviewer_batches_checks_out_and_reviews_two_proposals_through_the_too
             None,
         )
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let read = ok(&review, "get_review_batch", json!({"id": "rb-1"})).await;
     assert_eq!(read["members"][0]["since"], Value::Null);
@@ -293,11 +308,72 @@ async fn a_reviewer_batches_checks_out_and_reviews_two_proposals_through_the_too
     );
 }
 
+/// A member's worker syncs with a newer main before its next version: the member's change since the reviewed version holds only the worker's own edit, never the file main gained, and a second view reuses the carry of the earlier version onto the new base.
+#[tokio::test]
+async fn a_member_synced_with_a_newer_main_counts_only_its_own_change() {
+    let fx = Fixture::new().await;
+    two_proposals(&fx).await;
+    let review = connect(&fx, "review").await;
+    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    ok(
+        &review,
+        "create_review_batch",
+        json!({"proposals": ["P-1", "P-2"]}),
+    )
+    .await;
+    ok(
+        &review,
+        "submit_batch_review",
+        json!({
+            "id": "rb-1",
+            "verdicts": [
+                {"proposal": "P-1", "verdict": "approve"},
+                {"proposal": "P-2", "verdict": "request_changes", "body": "drop the second line"}
+            ]
+        }),
+    )
+    .await;
+    let integrated = ok(&review, "integrate_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(integrated["revision"], "r2");
+    let backend = fx.agent("backend").await;
+    let synced = fx
+        .workspaces()
+        .sync_workspace(&backend, fold_core::WorkspaceId::from_number(2).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(synced.base.to_string(), "r2");
+    assert_eq!(synced.conflicted, Vec::<String>::new());
+    fx.write(2, "src/two.rs", "first\n");
+    fx.reviews()
+        .update_proposal(
+            &backend,
+            fold_core::ProposalId::from_number(2).unwrap(),
+            None,
+        )
+        .await
+        .unwrap()
+        .detail()
+        .unwrap();
+
+    let since = json!({"version": "v1", "files": 1, "added": 0, "removed": 1});
+    let read = ok(&review, "get_review_batch", json!({"id": "rb-1"})).await;
+    assert_eq!(read["members"][0]["since"], Value::Null);
+    assert_eq!(read["members"][1]["since"], since);
+    assert_eq!(fx.handle.carries.misses(), 1);
+    let listed = ok(&review, "list_review_batches", json!({})).await;
+    assert_eq!(listed["batches"][0]["members"][1]["since"], since);
+    assert_eq!(
+        (fx.handle.carries.misses(), fx.handle.carries.hits()),
+        (1, 1)
+    );
+}
+
 #[tokio::test]
 async fn the_batch_tools_explain_their_refusals() {
     let fx = Fixture::new().await;
     two_proposals(&fx).await;
     let review = connect(&fx, "review").await;
+    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
 
     let id = err(&review, "get_review_batch", json!({"id": "P-1"})).await;
     assert_eq!(id["code"], "invalid_id");

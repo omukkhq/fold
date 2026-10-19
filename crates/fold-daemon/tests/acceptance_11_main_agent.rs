@@ -85,12 +85,21 @@ async fn start_task_worker(h: &mut Harness, task: &str) -> String {
         )
         .await;
     let task_worker = started["worker"]["name"].as_str().unwrap().to_owned();
+    let view = h.call(LEAD, "get_task", json!({"id": task})).await;
+    assert_eq!(
+        view["claim"]["holder"], task_worker,
+        "the start gives the new worker the claim"
+    );
     until_state(h, &task_worker, WorkerState::Idle).await;
     h.connect(&task_worker).await;
+    let refused = h
+        .refused(&task_worker, "claim_task", json!({"id": task}))
+        .await;
+    assert_eq!(refused["code"], codes::WORKER_CLAIM_DENIED);
     task_worker
 }
 
-/// The task worker builds `task` in its workspace and proposes it under `title`; fold then stops it.
+/// The task worker builds `task` in the workspace of the claim its lead gave it and proposes it under `title`; fold then stops it.
 async fn build(
     h: &Harness,
     task_worker: &str,
@@ -105,7 +114,7 @@ async fn build(
     (work, proposal)
 }
 
-/// Acceptance 11, the team: the main agent that `fld claude` starts defines an area, turns a human's request into three cards and starts the leads; the area lead starts task workers, the review lead reviews a batch, fold resumes the task worker whose proposal needs changes, integrates every approved proposal in dependency order with one Git commit each, sends the dependent task to the lead once it is ready, and stops every short-lived worker on its own.
+/// Acceptance 11, the team: the main agent that `fld claude` starts defines an area, turns a human's request into three cards and starts the leads; the area lead starts task workers and fold gives each the claim on its task, the review lead reviews a batch itself and gives the last proposal to a reviewer it starts with its review claim, fold resumes the task worker whose proposal needs changes, integrates every approved proposal in dependency order with one Git commit each, sends the dependent task to the lead once it is ready, and stops every short-lived worker on its own.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_commits() {
     let mut fake = FakeClaude::new("result");
@@ -349,12 +358,35 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
     )
     .await;
     assert_eq!(search, "P-3");
+    let reviewer = h
+        .call(
+            REVIEW_LEAD,
+            "start_worker",
+            json!({"role": "reviewer", "proposals": ["P-3"]}),
+        )
+        .await;
+    assert_eq!(reviewer["worker"]["name"], "reviewer", "{reviewer}");
+    let proposal = h
+        .call(REVIEW_LEAD, "get_proposal", json!({"id": "P-3"}))
+        .await;
+    assert_eq!(proposal["claim"]["holder"], "reviewer", "{proposal}");
+    until_state(&h, "reviewer", WorkerState::Idle).await;
+    h.connect("reviewer").await;
+    let refused = h
+        .refused("reviewer", "claim_review", json!({"id": "P-3"}))
+        .await;
+    assert_eq!(refused["code"], codes::WORKER_CLAIM_DENIED);
+    let checkout = h
+        .call("reviewer", "create_review_checkout", json!({"id": "P-3"}))
+        .await;
+    assert_eq!(checkout["version"], "v1", "{checkout}");
     h.call(
-        REVIEW_LEAD,
+        "reviewer",
         "submit_review",
         json!({"id": "P-3", "version": 1, "verdict": "approve", "body": "Searches both."}),
     )
     .await;
+    until_state(&h, "reviewer", WorkerState::Stopped).await;
 
     eventually(WAIT, async || match committed(&h).await {
         3 => Ok(()),
@@ -398,7 +430,7 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
     let workers = h.handle.agents().list_workers().await.unwrap();
     for row in &workers {
         match row.role {
-            Role::TaskWorker | Role::BatchReviewer => {
+            Role::TaskWorker | Role::Reviewer => {
                 assert_eq!(row.state, WorkerState::Stopped, "{}", row.agent);
                 assert_eq!(row.exit_code, Some(0), "{}", row.agent);
             }
@@ -427,6 +459,7 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
             (LEAD.to_owned(), json!("backend-worker")),
             (LEAD.to_owned(), json!("backend-worker-2")),
             (LEAD.to_owned(), json!("backend-worker-3")),
+            (REVIEW_LEAD.to_owned(), json!("reviewer")),
         ]
     );
     integrate.stop().await;

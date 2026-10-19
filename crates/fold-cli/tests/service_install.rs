@@ -165,7 +165,13 @@ fn no_start_on_macos_writes_the_launch_agent_and_runs_no_launchctl() {
         "<key>PATH</key>\n\t\t<string>{}</string>",
         bin.display()
     )));
-    assert_eq!(stdout(&output), format!("wrote {}\n", agent.display()));
+    assert_eq!(
+        stdout(&output),
+        format!(
+            "wrote {}\nfold is not in your Claude Code config; run fld setup --claude to add it\n",
+            agent.display()
+        )
+    );
     assert!(!log.exists());
     // The plist parser of macOS accepts the file.
     let lint = Command::new("/usr/bin/plutil")
@@ -210,4 +216,135 @@ fn setup_on_macos_loads_the_agent_through_launchctl() {
     assert_eq!(refused.status.code(), Some(1));
     assert!(stderr(&refused).contains("invalid_request: no service manager support"));
     assert!(!missing.path("home/Library").exists());
+}
+
+/// The Claude Code files of the sandbox's home, as JSON.
+#[cfg(test)]
+fn user_file(sandbox: &Sandbox, relative: &str) -> serde_json::Value {
+    serde_json::from_str(&std::fs::read_to_string(sandbox.path(relative)).unwrap()).unwrap()
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn setup_without_a_terminal_leaves_the_claude_config_and_names_the_command() {
+    let sandbox = Sandbox::new().unwrap();
+    let output = sandbox
+        .fold(&["setup", "--no-start"], Path::new(""), None)
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output).ends_with(
+            "fold is not in your Claude Code config; run fld setup --claude to add it\n"
+        )
+    );
+    assert!(!sandbox.path("home/.claude.json").exists());
+    assert!(!sandbox.path("home/.claude").exists());
+}
+
+#[test]
+fn setup_claude_merges_into_the_user_files_and_remove_takes_fold_out_again() {
+    let sandbox = Sandbox::new().unwrap();
+    let home = sandbox.path("home");
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    let config =
+        r#"{"numStartups": 3, "mcpServers": {"pencil": {"command": "pencil"}}, "projects": {}}"#;
+    std::fs::write(home.join(".claude.json"), config).unwrap();
+    std::fs::set_permissions(
+        home.join(".claude.json"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    let settings = r#"{"permissions": {"allow": ["mcp__pencil"]}, "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "say done"}]}]}, "theme": "light"}"#;
+    std::fs::write(home.join(".claude/settings.json"), settings).unwrap();
+
+    let output = sandbox
+        .fold(&["setup", "--claude"], Path::new(""), None)
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).starts_with("added fold to Claude Code in "));
+    assert!(!sandbox.path("home/.config/systemd").exists(), "no service");
+    let merged = user_file(&sandbox, "home/.claude.json");
+    let keys: Vec<_> = merged.as_object().unwrap().keys().cloned().collect();
+    assert_eq!(keys, ["numStartups", "mcpServers", "projects"]);
+    let servers: Vec<_> = merged["mcpServers"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    assert_eq!(servers, ["pencil", "fold"]);
+    assert_eq!(
+        merged["mcpServers"]["fold"],
+        serde_json::json!({"type": "stdio", "command": "fld", "args": ["mcp"], "env": {}})
+    );
+    let mode = std::fs::metadata(home.join(".claude.json"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600, "the file keeps its mode");
+    let user_settings = user_file(&sandbox, "home/.claude/settings.json");
+    assert_eq!(
+        user_settings["permissions"]["allow"],
+        serde_json::json!(["mcp__pencil", "mcp__fold"])
+    );
+    assert_eq!(user_settings["theme"], "light");
+    assert_eq!(user_settings["hooks"]["Stop"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        user_settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+        "fld hook pre-tool-use"
+    );
+    let bytes = std::fs::read(home.join(".claude/settings.json")).unwrap();
+    let again = sandbox
+        .fold(&["setup", "--claude"], Path::new(""), None)
+        .unwrap();
+    assert!(again.status.success());
+    assert_eq!(
+        std::fs::read(home.join(".claude/settings.json")).unwrap(),
+        bytes
+    );
+
+    let removed = sandbox
+        .fold(&["setup", "--remove"], Path::new(""), None)
+        .unwrap();
+    assert!(removed.status.success(), "{}", stderr(&removed));
+    assert!(stdout(&removed).starts_with("removed fold from Claude Code in "));
+    assert_eq!(
+        user_file(&sandbox, "home/.claude.json"),
+        serde_json::from_str::<serde_json::Value>(config).unwrap()
+    );
+    assert_eq!(
+        user_file(&sandbox, "home/.claude/settings.json"),
+        serde_json::from_str::<serde_json::Value>(settings).unwrap()
+    );
+    let declined = std::fs::read_to_string(sandbox.path("home/.config/fold/claude.toml")).unwrap();
+    assert_eq!(declined, "declined = true\n");
+}
+
+#[test]
+fn setup_claude_refuses_a_malformed_user_file_and_changes_neither() {
+    let sandbox = Sandbox::new().unwrap();
+    let home = sandbox.path("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join(".claude.json"), "[1]").unwrap();
+    let output = sandbox
+        .fold(&["setup", "--claude"], Path::new(""), None)
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let text = stderr(&output);
+    assert!(
+        text.contains(&format!(
+            "invalid_request: {} does not hold a JSON object\nhint: correct or move the file, then run `fld setup --claude`",
+            home.join(".claude.json").display()
+        )),
+        "{text}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join(".claude.json")).unwrap(),
+        "[1]"
+    );
+    assert!(!home.join(".claude").exists());
+    let conflict = sandbox
+        .fold(&["setup", "--claude", "--remove"], Path::new(""), None)
+        .unwrap();
+    assert_eq!(conflict.status.code(), Some(2));
 }

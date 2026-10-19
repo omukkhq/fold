@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO check_results (run_id, position, kind, name, required, outcome, exit_code,\n                                    duration_ms, log, log_bytes, truncated)\n         SELECT r.id, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11 FROM check_runs r WHERE r.number = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": []
+  },
+  "hash": "f5b0add9b542851b8d8945970c1d1da503227c0b82fec40fbfacc43c9d76d28b"
+}

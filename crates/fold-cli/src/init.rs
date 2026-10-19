@@ -1,41 +1,54 @@
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Args;
 use fold_cli::claude_files::{self, ClaudeFileError};
-use fold_cli::daemon_client::{self, ClientConfig, ClientError, DaemonClient, Response};
-use fold_core::{FoldError, HostPaths, ProjectPaths, codes};
+use fold_cli::daemon_client::{ClientConfig, ClientError, DaemonClient, Response};
+use fold_core::{FoldError, HostPaths, HumanName, ProjectPaths, codes};
 use fold_daemon::SystemClock;
 use fold_daemon::services::projects::{
-    FolderFiles, ProjectError, init_new_project, init_project_from_git, root_for_dir_on_host,
+    FolderFiles, ProjectError, RepositorySetup, deleted_project_slug, init_new_project,
+    init_project_from_git, root_for_dir_on_host,
 };
 use fold_vcs::git::Git;
+use fold_vcs::git_discovery::Discovery;
 use hyper::Method;
 use thiserror::Error;
 
-use crate::output;
 use crate::serve::{Dirs, current_thread_runtime, socket_path};
+use crate::{git_identity, output};
+
+/// The `git` program, limited as the user's environment limits how far up Git looks for a repository, so init finds the repository around a folder that `git` in the same shell finds, also when `git` is not on `PATH`.
+fn git() -> Git {
+    Git::default().with_discovery(Discovery::from_vars(|name| std::env::var_os(name)))
+}
 
 /// How long a daemon gets to accept the connection and answer the open request.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Args, Debug, Clone)]
 pub struct InitArgs {
-    /// A new directory for the project, which fold creates; without it the project is the working directory. With --from-git, an existing repository. With --refresh, a directory of the project, by default the working directory
+    /// A new directory for the project, which fold creates; without it the project is the working directory. With --with-git, also an existing Git repository or fold project. With --refresh, a directory of the project, by default the working directory
     pub(crate) dir: Option<PathBuf>,
     /// The project name; defaults to the directory name
     #[arg(long)]
     pub(crate) name: Option<String>,
-    /// Make a Git repository the project: its folder stays main, its history stays, and the commit at HEAD becomes the first revision. The tree must be clean, with a branch checked out
+    /// Turn Git on: fold writes a commit of every revision into the folder's .git and keeps its branch on main. In a Git repository the commit at HEAD becomes the genesis r0, which needs a clean tree with a branch checked out; in a fold project, and in a new folder, fold creates .git. Git sync stays on
     #[arg(long)]
-    pub(crate) from_git: bool,
+    pub(crate) with_git: bool,
     /// Unix socket of the running daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
     #[arg(long)]
     pub(crate) socket: Option<PathBuf>,
-    /// Rewrite the Claude Code files of an existing project, keeping every entry fold does not own, instead of creating a project
-    #[arg(long, conflicts_with_all = ["name", "from_git", "socket"])]
+    /// Rewrite fold's Claude Code files of an existing project, and remove the entries an earlier fold wrote into .mcp.json and .claude/settings.json, keeping every entry fold does not own, instead of creating a project
+    #[arg(long, conflicts_with_all = ["name", "with_git", "socket"])]
     pub(crate) refresh: bool,
+    /// The name for the project's own Git config, instead of asking for it; only a new Git repository gets one
+    #[arg(long, requires = "with_git", conflicts_with = "refresh")]
+    pub(crate) git_name: Option<String>,
+    /// The email for the project's own Git config, instead of asking for it; only a new Git repository gets one
+    #[arg(long, requires = "with_git", conflicts_with = "refresh")]
+    pub(crate) git_email: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -48,6 +61,18 @@ pub enum InitError {
     Project(#[from] ProjectError),
     #[error(transparent)]
     ClaudeFiles(#[from] ClaudeFileError),
+    #[error(transparent)]
+    Serve(#[from] crate::serve::ServeError),
+    #[error(transparent)]
+    Client(#[from] ClientError),
+    #[error("{message}")]
+    Daemon {
+        code: String,
+        message: String,
+        hint: Option<String>,
+    },
+    #[error("the daemon answered with a body fold cannot read")]
+    Answer,
     #[error("cannot read the directory: {0}")]
     Dir(io::Error),
     #[error("cannot start the async runtime: {0}")]
@@ -58,12 +83,16 @@ pub enum InitError {
 
 impl InitError {
     /// The stable code of the errors that have one.
-    pub fn code(&self) -> Option<&'static str> {
+    pub fn code(&self) -> Option<&str> {
         match self {
             Self::HostPaths(error) | Self::Refused(error) => Some(error.code()),
             Self::Project(error) => error.code(),
             Self::ClaudeFiles(error) => error.code(),
-            Self::Dir(_) | Self::Runtime(_) | Self::Write(_) => None,
+            Self::Serve(error) => error.code(),
+            Self::Daemon { code, .. } => Some(code),
+            Self::Client(_) | Self::Answer | Self::Dir(_) | Self::Runtime(_) | Self::Write(_) => {
+                None
+            }
         }
     }
 
@@ -71,6 +100,8 @@ impl InitError {
     pub fn hint(&self) -> Option<&str> {
         match self {
             Self::Refused(error) | Self::Project(ProjectError::Fold(error)) => error.hint(),
+            Self::ClaudeFiles(error) => error.hint(),
+            Self::Daemon { hint, .. } => hint.as_deref(),
             _ => None,
         }
     }
@@ -89,17 +120,18 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
     if args.refresh {
         return refresh(args.dir.as_deref(), dirs, out);
     }
+    git_identity::check_given(&given(args)).map_err(InitError::Refused)?;
     let Some(dir) = &args.dir else {
         let cwd = std::env::current_dir().map_err(InitError::Dir)?;
-        return initialise(&cwd, args, dirs, out).map(|_| ());
+        return start(&cwd, args, dirs, out);
     };
-    if args.from_git {
-        return initialise(dir, args, dirs, out).map(|_| ());
+    if args.with_git && (dir.join(".git").exists() || ProjectPaths::new(dir).db().is_file()) {
+        return start(dir, args, dirs, out);
     }
     if std::fs::symlink_metadata(dir).is_ok() {
-        return Err(InitError::Refused(dir_exists(dir)));
+        return Err(InitError::Refused(dir_exists(dir, args.with_git)));
     }
-    let initialised = initialise(dir, args, dirs, out);
+    let initialised = initialise(dir, args, Kind::New, dirs, out);
     if initialised.is_err() {
         // Init created the directory; an empty one would only make the next `fld init DIR` fail.
         let _ = std::fs::remove_dir(dir);
@@ -107,12 +139,46 @@ pub fn run(args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), Ini
     initialised.map(|_| ())
 }
 
-fn dir_exists(dir: &Path) -> FoldError {
+/// How `fld init` takes its folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    /// A folder that is no project and no Git repository; `--with-git` turns Git on in the new project.
+    New,
+    /// A Git repository with no fold project, whose `HEAD` becomes the genesis.
+    FromGit,
+}
+
+/// Init in an existing folder: with `--with-git`, a fold project gets Git turned on by its daemon and a Git repository becomes a project from its `HEAD`; anything else is a new project.
+fn start(dir: &Path, args: &InitArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), InitError> {
+    if args.with_git {
+        let absolute = std::path::absolute(dir).map_err(InitError::Dir)?;
+        if let Some(root) = project_root_at_or_above(&absolute) {
+            return enable_git(&root, args, dirs, out);
+        }
+        if dir.join(".git").exists() {
+            return initialise(dir, args, Kind::FromGit, dirs, out).map(|_| ());
+        }
+    }
+    initialise(dir, args, Kind::New, dirs, out).map(|_| ())
+}
+
+fn given(args: &InitArgs) -> git_identity::Given {
+    git_identity::Given {
+        name: args.git_name.clone(),
+        email: args.git_email.clone(),
+    }
+}
+
+fn dir_exists(dir: &Path, with_git: bool) -> FoldError {
+    let flag = if with_git { " --with-git" } else { "" };
     FoldError::new(
         codes::INVALID_REQUEST,
         format!("{} exists already", dir.display()),
     )
-    .with_hint(format!("cd {} && fld init", output::shell_quote(dir)))
+    .with_hint(format!(
+        "`cd {} && fld init{flag}`",
+        output::shell_quote(dir)
+    ))
     .with_details([("reason", serde_json::json!("dir_exists"))])
 }
 
@@ -120,6 +186,7 @@ fn dir_exists(dir: &Path) -> FoldError {
 pub(crate) fn initialise(
     dir: &Path,
     args: &InitArgs,
+    kind: Kind,
     dirs: &Dirs,
     out: &mut impl Write,
 ) -> Result<String, InitError> {
@@ -127,19 +194,67 @@ pub(crate) fn initialise(
     let socket = socket_path(args.socket.as_deref(), dirs);
     let runtime = current_thread_runtime().map_err(InitError::Runtime)?;
     let name = args.name.as_deref();
-    let project = runtime.block_on(async {
-        if args.from_git {
-            init_project_from_git(&host, dir, name, Git::default(), &SystemClock).await
-        } else {
-            let files: FolderFiles = Box::new(|root: &Path| new_claude_files(root));
-            init_new_project(&host, dir, name, Git::default(), Some(files), &SystemClock).await
+    if let Ok(Some(socket)) = &socket {
+        let deleted = runtime.block_on(deleted_project_slug(&host, dir))?;
+        if let Some(slug) = deleted {
+            // Asked to open a project whose database was deleted, the daemon closes it and ends its workers, and removes it when its `.fold/` is gone, so the old project is gone before init creates the new one there.
+            let _ = runtime.block_on(register(&client(socket.clone()), &slug));
         }
+    }
+    // The fold name comes first, so its question comes before the Git identity's. The folder's files become the change of this human.
+    let human = human_name()?;
+    // The question comes before the project exists, because every commit fold writes, `r1`'s first, takes the identity from the repository's config.
+    let identity = (args.with_git && kind == Kind::New).then(|| {
+        let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
+        git_identity::decide(
+            &git(),
+            git_identity::Plan {
+                given: &given(args),
+                env: &git_identity::Environment::from_env(),
+                interactive,
+                dir,
+            },
+            &mut io::stdin().lock(),
+            out,
+            &mut io::stderr(),
+        )
+    });
+    let project = runtime.block_on(async {
+        if kind == Kind::FromGit {
+            return init_project_from_git(&host, dir, name, &human, git(), &SystemClock).await;
+        }
+        let files: FolderFiles = Box::new(|root: &Path| new_claude_files(root));
+        let setup = identity.map(|identity| -> RepositorySetup {
+            Box::new(move |root: &Path| {
+                git_identity::store_in(&git(), root, &identity, &mut io::stderr());
+            })
+        });
+        init_new_project(
+            &host,
+            dir,
+            name,
+            &human,
+            git(),
+            Some(files),
+            setup,
+            &SystemClock,
+        )
+        .await
     })?;
     let root = project.root.display();
     output::line(
         out,
         &format!("initialised project {} at {root}", project.slug),
     )?;
+    if project.replaced {
+        output::line(
+            out,
+            &format!(
+                "replaced the registration of the project whose .fold was deleted; the slug {} stays",
+                project.slug
+            ),
+        )?;
+    }
     if project.resumed {
         output::line(
             out,
@@ -167,6 +282,19 @@ pub(crate) fn initialise(
     if let Some(commit) = &project.git_commit {
         output::line(out, &format!("{} is Git commit {commit}", project.revision))?;
     }
+    if let Some(revision) = &project.gitignore {
+        output::line(
+            out,
+            &format!("{revision} records the .gitignore that keeps .fold/ out of Git"),
+        )?;
+    }
+    if project.git_sync {
+        output::line(
+            out,
+            "Git sync is on: every revision gets its Git commit in .git",
+        )?;
+        output::line(out, ADD_REMOTE)?;
+    }
     write_claude_files(&project.root, dirs, out)?;
     let note = match socket {
         Ok(Some(socket)) => match runtime.block_on(register(&client(socket), &project.slug)) {
@@ -187,7 +315,97 @@ pub(crate) fn initialise(
     Ok(project.slug)
 }
 
-/// Rewrites the Claude Code files of the registered project that holds `dir`.
+/// What init prints while the project has no Git remote.
+const ADD_REMOTE: &str = "no Git remote yet: add one with fld remote add <name> <url> [<branch>]";
+
+/// Turns Git on in the fold project at `root` through its daemon, which `fld init --with-git` there starts when none runs, after the Git identity question: fold creates `.git`, records the `.gitignore` copy rule as a revision of yours and writes the commits of every revision.
+fn enable_git(
+    root: &Path,
+    args: &InitArgs,
+    dirs: &Dirs,
+    out: &mut impl Write,
+) -> Result<(), InitError> {
+    let host = host_paths(dirs).map_err(InitError::HostPaths)?;
+    let human = human_name()?;
+    let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
+    let identity = git_identity::decide(
+        &git(),
+        git_identity::Plan {
+            given: &given(args),
+            env: &git_identity::Environment::from_env(),
+            interactive,
+            dir: root,
+        },
+        &mut io::stdin().lock(),
+        out,
+        &mut io::stderr(),
+    );
+    let config = crate::serve::client_config(args.socket.as_deref(), dirs)?;
+    let client = DaemonClient::new(config, Some(human.as_str().to_owned()));
+    let runtime = current_thread_runtime().map_err(InitError::Runtime)?;
+    let body = serde_json::json!({ "git_name": identity.name, "git_email": identity.email });
+    let response = runtime.block_on(async {
+        let slug = fold_daemon::services::projects::slug_for_dir_on_host(&host, root).await?;
+        let path = format!("/api/v1/projects/{slug}/git");
+        Ok::<_, InitError>((
+            slug,
+            client.request(Method::POST, &path, Some(&body)).await?,
+        ))
+    })?;
+    let (slug, response) = response;
+    if !response.is_success() {
+        let refusal = response.refusal();
+        return Err(match (refusal.code, refusal.message) {
+            (Some(code), Some(message)) => InitError::Daemon {
+                code,
+                message,
+                hint: refusal.hint,
+            },
+            _ => InitError::Answer,
+        });
+    }
+    let text = |key: &str| response.body[key].as_str();
+    let revision = text("revision").ok_or(InitError::Answer)?;
+    let commit = text("commit")
+        .map(|commit| format!(", Git commit {}", commit.get(..7).unwrap_or(commit)))
+        .unwrap_or_default();
+    output::line(
+        out,
+        &format!("turned Git on in project {slug}: main is {revision}{commit}"),
+    )?;
+    if let Some(gitignore) = text("gitignore") {
+        output::line(
+            out,
+            &format!("{gitignore} records the .gitignore that keeps .fold/ out of Git"),
+        )?;
+    }
+    output::line(
+        out,
+        "Git sync is on: every revision gets its Git commit in .git",
+    )?;
+    let remotes = response.body["remotes"].as_array().map_or(0, Vec::len);
+    if remotes == 0 {
+        output::line(out, ADD_REMOTE)?;
+    }
+    Ok(())
+}
+
+/// The fold name of the human who runs init, whose change the folder's files become.
+fn human_name() -> Result<HumanName, InitError> {
+    let refused = || {
+        InitError::Refused(
+            FoldError::new(
+                codes::HUMAN_REQUIRED,
+                "cannot tell who you are, and the folder's files become your change",
+            )
+            .with_hint("set FOLD_HUMAN to your fold name, then run `fld init` again"),
+        )
+    };
+    let name = crate::fold_name::current().ok_or_else(refused)?;
+    HumanName::parse(&name).map_err(|_| refused())
+}
+
+/// Rewrites the Claude Code files of the registered project that holds `dir`, and makes `.git/info/exclude` the link to `.fold/exclude` again.
 fn refresh(dir: Option<&Path>, dirs: &Dirs, out: &mut impl Write) -> Result<(), InitError> {
     let dir = match dir {
         Some(dir) => std::fs::canonicalize(dir),
@@ -198,6 +416,10 @@ fn refresh(dir: Option<&Path>, dirs: &Dirs, out: &mut impl Write) -> Result<(), 
     let runtime = current_thread_runtime().map_err(InitError::Runtime)?;
     let root = runtime.block_on(root_for_dir_on_host(&host, &dir))?;
     write_claude_files(&root, dirs, out)?;
+    let repo = ProjectPaths::new(&root).git_dir();
+    if repo.is_dir() {
+        fold_vcs::git_remote::exclude_fold_dir(&repo).map_err(InitError::Refused)?;
+    }
     output::line(
         out,
         &format!("refreshed the Claude Code files at {}", root.display()),
@@ -208,10 +430,10 @@ fn refresh(dir: Option<&Path>, dirs: &Dirs, out: &mut impl Write) -> Result<(), 
 /// Writes the Claude Code files into a new project's folder before init records it, so they are part of `r1`, and returns the files and folders that did not exist before.
 fn new_claude_files(root: &Path) -> Result<Vec<PathBuf>, FoldError> {
     // A folder comes before the files below it, so only the topmost new path is recorded.
-    let written = [claude_files::MCP_FILE, claude_files::AGENTS_FILE]
+    let written = [claude_files::instructions_file(root)]
         .into_iter()
         .chain(claude_files::FOLDERS)
-        .chain([claude_files::SETTINGS_FILE, claude_files::SKILL_FILE]);
+        .chain([claude_files::SKILL_FILE]);
     let mut created: Vec<PathBuf> = Vec::new();
     for path in written.map(|relative| root.join(relative)) {
         if std::fs::symlink_metadata(&path).is_err()
@@ -222,7 +444,7 @@ fn new_claude_files(root: &Path) -> Result<Vec<PathBuf>, FoldError> {
     }
     match claude_files::write(root) {
         Ok(()) => Ok(created),
-        Err(ClaudeFileError::Malformed(error)) => Err(error),
+        Err(ClaudeFileError::Malformed(error) | ClaudeFileError::Link(error)) => Err(error),
         Err(ClaudeFileError::Io { source, .. }) => Err(FoldError::new(
             codes::WORKSPACE_IO,
             format!("cannot write the Claude Code files: {}", source.kind()),
@@ -245,10 +467,7 @@ fn write_claude_files(root: &Path, dirs: &Dirs, out: &mut impl Write) -> Result<
 
 /// Init uses a running daemon and never starts one.
 fn client(socket: PathBuf) -> DaemonClient {
-    DaemonClient::new(
-        ClientConfig::running(socket),
-        daemon_client::human_from_env().ok(),
-    )
+    DaemonClient::new(ClientConfig::running(socket), crate::fold_name::current())
 }
 
 /// The nearest directory at or above `dir` that holds a project database. The caller decides how `dir` is made absolute, because a symlink in it decides which project is found.
@@ -333,11 +552,12 @@ mod tests {
             Some(Path::new("/tmp/f.sock"))
         );
         let bare = Wrapper::try_parse_from(["fold", "dir"]).unwrap();
-        assert!(bare.args.name.is_none() && bare.args.socket.is_none() && !bare.args.from_git);
-        let git = Wrapper::try_parse_from(["fold", "--from-git"]).unwrap();
-        assert!(git.args.from_git && git.args.dir.is_none());
+        assert!(bare.args.name.is_none() && bare.args.socket.is_none() && !bare.args.with_git);
+        let git = Wrapper::try_parse_from(["fold", "--with-git"]).unwrap();
+        assert!(git.args.with_git && git.args.dir.is_none());
         assert!(Wrapper::try_parse_from(["fold", "dir", "--from", "a"]).is_err());
-        assert!(Wrapper::try_parse_from(["fold", "dir", "--from-git", "b"]).is_err());
+        assert!(Wrapper::try_parse_from(["fold", "dir", "--from-git"]).is_err());
+        assert!(Wrapper::try_parse_from(["fold", "dir", "--with-git", "b"]).is_err());
         assert!(
             Wrapper::try_parse_from(["fold"])
                 .unwrap()
@@ -353,7 +573,7 @@ mod tests {
                 "{flag}"
             );
         }
-        assert!(Wrapper::try_parse_from(["fold", "--refresh", "--from-git"]).is_err());
+        assert!(Wrapper::try_parse_from(["fold", "--refresh", "--with-git"]).is_err());
     }
 
     fn reply(status: u16, body: serde_json::Value) -> Result<Response, ClientError> {
@@ -428,9 +648,11 @@ mod tests {
         let args = InitArgs {
             dir: Some(dir.path().join("p")),
             name: None,
-            from_git: false,
+            with_git: false,
             socket: None,
             refresh: false,
+            git_name: None,
+            git_email: None,
         };
         let mut out = Vec::new();
         let error = run(&args, &Dirs::default(), &mut out).unwrap_err();
@@ -446,15 +668,17 @@ mod tests {
         let args = InitArgs {
             dir: Some(dir.path().to_owned()),
             name: None,
-            from_git: false,
+            with_git: false,
             socket: None,
             refresh: false,
+            git_name: None,
+            git_email: None,
         };
         let error = run(&args, &Dirs::default(), &mut Vec::new()).unwrap_err();
         assert_eq!(error.code(), Some("invalid_request"));
         assert_eq!(
             error.hint(),
-            Some(format!("cd {} && fld init", dir.path().display()).as_str())
+            Some(format!("`cd {} && fld init`", dir.path().display()).as_str())
         );
         assert!(matches!(error, InitError::Refused(_)));
         assert!(!dir.path().join(".fold").exists());
@@ -468,14 +692,16 @@ mod tests {
         let args = InitArgs {
             dir: Some(spaced.clone()),
             name: None,
-            from_git: false,
+            with_git: false,
             socket: None,
             refresh: false,
+            git_name: None,
+            git_email: None,
         };
         let error = run(&args, &Dirs::default(), &mut Vec::new()).unwrap_err();
         assert_eq!(
             error.hint(),
-            Some(format!("cd '{}' && fld init", spaced.display()).as_str())
+            Some(format!("`cd '{}' && fld init`", spaced.display()).as_str())
         );
     }
 

@@ -1,6 +1,6 @@
 use fold_core::object::ObjectHash;
 use fold_core::revision::{Revision, StoredRevision};
-use fold_core::{IdKind, IntegrationId, ProposalId, RevisionId, TaskId, Timestamp};
+use fold_core::{ChangesetId, IdKind, IntegrationId, ProposalId, RevisionId, TaskId, Timestamp};
 use sqlx::{Executor, Sqlite, SqlitePool};
 
 use super::refs;
@@ -18,7 +18,7 @@ pub struct RevisionRow {
     pub tree_hash: ObjectHash,
     pub parent: Option<RevisionId>,
     pub created_at: Timestamp,
-    /// Where `r1` came from; `None` on every other revision.
+    /// Where the first revision of a project that an older fold made came from; `None` on every revision fold makes now.
     pub import_source: Option<String>,
     pub integration: Option<IntegrationInfo>,
     /// The Git commit the revision became in the project folder's repository `.git`; `None` until it is written.
@@ -29,6 +29,10 @@ pub struct RevisionRow {
 pub enum IntegrationKind {
     Proposal,
     Pull,
+    /// A changeset of the main workspace that the main agent brought onto main on the user's word.
+    Direct,
+    /// A change of the project folder by a human: what `fld record` read from the folder, or a Git commit the human made there.
+    Record,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,9 +41,15 @@ pub struct IntegrationInfo {
     pub number: IntegrationId,
     pub kind: IntegrationKind,
     pub actor: String,
-    /// The Git commit a pull brought in.
+    /// The Git commit a pull brought in, a sync task resolved, or an integration merged as the waiting human change it resolved.
     pub remote_commit: Option<String>,
+    /// The Git commit of the human change the integration recorded or resolved; a pull that resolved one brought in another commit as well.
+    pub human_commit: Option<String>,
     pub proposal: Option<IntegratedProposal>,
+    /// The changeset a direct change brought onto main.
+    pub changeset: Option<ChangesetId>,
+    /// The Git commit message the main agent wrote for a direct change.
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,7 +64,18 @@ pub struct IntegratedProposal {
     pub worker: String,
 }
 
-/// The initial revision for `tree`: no parent, no integration. The caller stores it with `fold-vcs` before `create_initial_revision`.
+/// The genesis revision `r0` for `tree`, the start of every project: no parent, no integration. The caller stores it with `fold-vcs` before `create_initial_revision`.
+pub fn genesis_revision(tree: ObjectHash, now: Timestamp) -> Revision {
+    Revision {
+        tree,
+        parent: None,
+        number: RevisionId::GENESIS,
+        integration: None,
+        created_at: now,
+    }
+}
+
+/// A first revision numbered `r1`, as a project that an older fold made starts: no parent, no integration. The code reads it as the genesis, as it reads `r0`.
 pub fn initial_revision(tree: ObjectHash, now: Timestamp) -> Result<Revision, StoreError> {
     Ok(Revision {
         tree,
@@ -112,7 +133,12 @@ async fn insert(
             Some(id)
         }
     };
-    let allocated = counters::allocate(tx, IdKind::Revision).await?;
+    // The genesis takes no number from the counter, so the first revision after it is `r1`.
+    let allocated = if revision.number == RevisionId::GENESIS {
+        RevisionId::GENESIS.number()
+    } else {
+        counters::allocate(tx, IdKind::Revision).await?
+    };
     if allocated != revision.number.number() {
         return Err(StoreError::Invalid(
             "the revision number is not the next revision number",
@@ -140,7 +166,7 @@ async fn insert(
         .ok_or(StoreError::Corrupt("revisions.number"))
 }
 
-/// Creates `r1` and the `main` ref in one transaction. `stored` holds `initial_revision(..)`, and the caller wrote its tree and its object first. `import_source` is the canonical path of an imported directory or Git repository, `None` for a plain init.
+/// Creates the genesis and the `main` ref in one transaction. `stored` holds `genesis_revision(..)`, or `initial_revision(..)` for a project shaped as an older fold made it, and the caller wrote its tree and its object first. `import_source` names where such a first `r1` came from; fold passes `None`.
 pub async fn create_initial_revision(
     store: &Store,
     stored: &StoredRevision,
@@ -161,7 +187,20 @@ pub async fn create_initial_revision(
         .await
 }
 
-/// The revision the `main` ref names, or `None` before `r1` exists.
+/// The genesis: the one revision without a parent, `r0` in every project fold makes now. `None` before it exists.
+pub async fn genesis(pool: &SqlitePool) -> Result<Option<RevisionRow>, StoreError> {
+    let number = sqlx::query_scalar!(
+        r#"SELECT number AS "number!: i64" FROM revisions WHERE parent_id IS NULL ORDER BY number LIMIT 1"#
+    )
+    .fetch_optional(pool)
+    .await?;
+    match number {
+        None => Ok(None),
+        Some(number) => one(pool, revision_id(number)?).await,
+    }
+}
+
+/// The revision the `main` ref names, or `None` before the genesis exists.
 pub async fn head(pool: &SqlitePool) -> Result<Option<RevisionRow>, StoreError> {
     let number = sqlx::query_scalar!(
         r#"SELECT r.number AS "number!: i64"
@@ -253,6 +292,9 @@ struct RawRow {
     integration_kind: Option<String>,
     integration_actor: Option<String>,
     remote_commit: Option<String>,
+    human_commit: Option<String>,
+    changeset_number: Option<i64>,
+    integration_message: Option<String>,
     proposal_number: Option<i64>,
     proposal_title: Option<String>,
     version: Option<i64>,
@@ -289,7 +331,10 @@ where
         r#"SELECT r.number AS "number!: i64", r.hash AS "hash!", r.tree_hash AS "tree_hash!",
                   p.number AS "parent?: i64", r.created_at AS "created_at!: i64", r.import_source,
                   i.number AS "integration_number?: i64", i.kind AS "integration_kind?",
-                  i.actor AS "integration_actor?", i.remote_commit AS "remote_commit?",
+                  i.actor AS "integration_actor?",
+                  COALESCE(i.remote_commit, hc.commit_id) AS "remote_commit?: String",
+                  hc.commit_id AS "human_commit?: String",
+                  cs.number AS "changeset_number?: i64", i.message AS "integration_message?",
                   pr.number AS "proposal_number?: i64", pr.title AS "proposal_title?",
                   v.version AS "version?: i64", t.number AS "task_number?: i64",
                   t.title AS "task_title?", a.name AS "agent?", w.name AS "worker?",
@@ -303,6 +348,8 @@ where
            LEFT JOIN agents a ON a.id = w.agent_id
            LEFT JOIN proposal_versions v ON v.id = i.version_id
            LEFT JOIN revision_commits rc ON rc.revision_id = r.id
+           LEFT JOIN changesets cs ON cs.id = i.changeset_id
+           LEFT JOIN human_changes hc ON hc.integration_id = i.id
            WHERE r.number BETWEEN ?1 AND ?2
            ORDER BY r.number ASC
            LIMIT ?3"#,
@@ -328,7 +375,10 @@ where
         r#"SELECT r.number AS "number!: i64", r.hash AS "hash!", r.tree_hash AS "tree_hash!",
                   p.number AS "parent?: i64", r.created_at AS "created_at!: i64", r.import_source,
                   i.number AS "integration_number?: i64", i.kind AS "integration_kind?",
-                  i.actor AS "integration_actor?", i.remote_commit AS "remote_commit?",
+                  i.actor AS "integration_actor?",
+                  COALESCE(i.remote_commit, hc.commit_id) AS "remote_commit?: String",
+                  hc.commit_id AS "human_commit?: String",
+                  cs.number AS "changeset_number?: i64", i.message AS "integration_message?",
                   pr.number AS "proposal_number?: i64", pr.title AS "proposal_title?",
                   v.version AS "version?: i64", t.number AS "task_number?: i64",
                   t.title AS "task_title?", a.name AS "agent?", w.name AS "worker?",
@@ -342,6 +392,8 @@ where
            LEFT JOIN agents a ON a.id = w.agent_id
            LEFT JOIN proposal_versions v ON v.id = i.version_id
            LEFT JOIN revision_commits rc ON rc.revision_id = r.id
+           LEFT JOIN changesets cs ON cs.id = i.changeset_id
+           LEFT JOIN human_changes hc ON hc.integration_id = i.id
            WHERE r.number <= ?1
            ORDER BY r.number DESC
            LIMIT ?2"#,
@@ -361,12 +413,22 @@ fn row(raw: RawRow) -> Result<RevisionRow, StoreError> {
             kind: match kind.as_str() {
                 "proposal" => IntegrationKind::Proposal,
                 "pull" => IntegrationKind::Pull,
+                "direct" => IntegrationKind::Direct,
+                "record" => IntegrationKind::Record,
                 _ => return Err(StoreError::Corrupt("integrations.kind")),
             },
             actor: raw
                 .integration_actor
                 .ok_or(StoreError::Corrupt("integrations.actor"))?,
             remote_commit: raw.remote_commit,
+            human_commit: raw.human_commit,
+            changeset: raw
+                .changeset_number
+                .map(|number| {
+                    ChangesetId::try_from_db(number).ok_or(StoreError::Corrupt("changesets.number"))
+                })
+                .transpose()?,
+            message: raw.integration_message,
             proposal: match (
                 raw.proposal_number,
                 raw.proposal_title,

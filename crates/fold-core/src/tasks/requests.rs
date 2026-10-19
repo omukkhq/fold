@@ -1004,7 +1004,7 @@ mod tests {
         assert_eq!(deputy(Role::TaskWorker, "web-lead"), lead);
         assert_eq!(deputy(Role::TaskWorker, "web-lead/sub"), lead);
         assert_eq!(
-            deputy(Role::BatchReviewer, "human:ana"),
+            deputy(Role::Reviewer, "human:ana"),
             Requester::parse("human:ana")
         );
         assert_eq!(deputy(Role::AreaLead, "frontend"), None);

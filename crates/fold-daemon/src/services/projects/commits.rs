@@ -1,17 +1,17 @@
 use fold_core::events::types;
-use fold_core::reviews::standing_approvers;
-use fold_core::{
-    Actor, Clock, EventActor, FoldError, NewEvent, ProjectPaths, RevisionId, Timestamp, codes,
-};
+use fold_core::tree::empty_tree_hash;
+use fold_core::{Actor, Clock, FoldError, NewEvent, ProjectPaths, RevisionId, Timestamp, codes};
 use fold_store::workspaces::{
-    IntegrationKind, RevisionRow, get_by_number, head, insert_revision_commits, list_after,
-    uncommitted_revisions,
+    IntegrationKind, RevisionRow, genesis, get_by_number, git_sync, insert_revision_commits,
+    list_after, merged_commits, uncommitted_revisions,
 };
-use fold_store::{Store, StoreError, reviews};
+use fold_store::{Store, StoreError};
 use fold_vcs::git::{CommitId, Git};
-use fold_vcs::git_export::{ExportBase, ExportRevision, ExportTarget, Signature, write_commits};
+use fold_vcs::git_export::{
+    ExportBase, ExportRevision, ExportTarget, Signature, repository_identity, write_commits,
+};
 use fold_vcs::git_remote::{
-    FOLD_HEAD_REF, Followed, branch_ref, follow_main, index_to, is_ancestor, move_branch,
+    BranchState, FOLD_HEAD_REF, Moved, branch_state, is_ancestor, move_branch_and_index,
     project_repository, set_ref,
 };
 use fold_vcs::git_sync_map::SyncMap;
@@ -29,32 +29,49 @@ use crate::services::fired;
 pub struct Committed {
     /// The revisions it wrote commits for, oldest first.
     pub added: Vec<(RevisionId, CommitId)>,
-    /// The tip of the `[git]` branch when it holds commits fold did not write: the commits are recorded, the branch and the project folder stay. `fld pull` brings them in.
-    pub outside: Option<CommitId>,
-    /// The project folder has changes that are not committed, or an untracked file in the way, so the branch and the folder stay on the older commit until the next run finds the folder clean.
+    /// The index holds a change of the human on a path main changed, so the branch stays on the older commit until the change is recorded or undone.
     pub uncommitted: bool,
+    /// The branch or `HEAD` shows a change fold did not make, so the branch stays where it is.
+    pub moved: Option<Moved>,
     /// One `git.committed` per `revision_commits` row the run added, appended in the transaction that added the rows; the caller publishes them.
     pub events: EventBuffer,
 }
 
-/// Writes the commit of every main revision that `.fold/git-sync.map` does not name yet into the project's Git repository at [`ProjectPaths::git_dir`], records each in `revision_commits`, and brings the `[git]` branch and the project folder to the newest. The project's Git sync lock is held throughout, so this, a push and a pull run one after the other, in this process or another. Running it again with nothing new changes nothing.
+/// Writes the commit of every main revision that `.fold/git-sync.map` does not name yet into the project's Git repository at [`ProjectPaths::git_dir`], records each in `revision_commits`, and moves the `[git]` branch and the index to the commit of `folder_at`, the revision the project folder holds now, when fold wrote the folder there. The project's Git sync lock is held throughout, so this, a push and a pull run one after the other, in this process or another. Running it again with nothing new changes nothing, and so does a run while Git sync is off: nothing touches Git then.
 pub async fn commit_main(
     store: &Store,
     paths: &ProjectPaths,
     git: &Git,
+    folder_at: Option<RevisionId>,
     clock: &dyn Clock,
 ) -> Result<Committed, ProjectError> {
+    if git_sync(store.read()).await?.is_none() {
+        return Ok(Committed::default());
+    }
     let branch = load_config(paths).await?.git.branch;
     let fold_dir = paths.fold_dir();
     let (held, map) = blocking(move || SyncMap::lock(&fold_dir)).await?;
-    let (_held, _map, committed) =
-        commit_locked(store, paths, git, &branch, held, map, clock.now()).await?;
+    let (_held, _map, committed) = commit_locked(
+        store,
+        paths,
+        git,
+        &branch,
+        held,
+        map,
+        folder_at,
+        clock.now(),
+    )
+    .await?;
     Ok(committed)
 }
 
 /// [`commit_main`] for a caller that holds the Git sync lock (`held`) and read `map` under it; both come back for the caller's next step.
 ///
-/// The map is the record of which revision is which commit, so [`FOLD_HEAD_REF`] is first put on the map's last commit: a ref a stopped write moved past it is written again, to the same commits, because a commit's id depends only on the revision. `git fast-import` writes the new commits there, and the map gains their lines. The `[git]` branch is checked out in the project folder and moves only by fast-forward, after the map: an unborn branch is created on `r1`'s commit, whose tree the folder holds as `fld init` leaves it, with the index set to it, and then follows as any branch does; a tip that is not an ancestor of fold's newest commit holds commits someone made outside fold, so nothing moves and the tip is returned in [`Committed::outside`]; otherwise the folder follows as [`follow_main`] describes, or stays when it has changes of its own. A stop between the map and the move leaves a branch that the next run moves. Then one transaction adds a `revision_commits` row and a `git.committed` event for every mapped revision that has none, which also covers a map line whose row a stop cut off.
+/// The map is the record of which revision is which commit, so [`FOLD_HEAD_REF`] is first put on the map's last commit: a ref a stopped write moved past it is written again. A commit's id depends on its revision and on the Git identity the repository's config names when the commit is written, which is its author and committer, so the same identity writes the same commits again; once the map names a commit, it is that revision's commit for good, whatever the config says later. `git fast-import` writes the new commits there, and the map gains their lines. The `[git]` branch is checked out in the project folder and moves only by fast-forward, after the map, and only to the commit of `folder_at`, the revision fold's own checkout wrote into the folder, so the branch and the index tell the human's changes from main's: [`move_branch_and_index`] moves both, or neither when the index holds a change of the human on a path main changed, which [`Committed::uncommitted`] reports. An unborn branch is created there with the index set to it. A tip with commits of the human that main does not hold yet stays, and a branch or `HEAD` that shows a change fold did not make is returned in [`Committed::moved`] and stays too. A stop between the map and the move leaves a branch that the next run moves. Then one transaction adds a `revision_commits` row and a `git.committed` event for every mapped revision that has none, which also covers a map line whose row a stop cut off.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one input of the run, and the lock and the map move through it"
+)]
 pub(crate) async fn commit_locked<H: Send + 'static>(
     store: &Store,
     paths: &ProjectPaths,
@@ -62,6 +79,7 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
     branch: &str,
     held: H,
     map: SyncMap,
+    folder_at: Option<RevisionId>,
     now: Timestamp,
 ) -> Result<(H, SyncMap, Committed), ProjectError> {
     let last = map.last().cloned();
@@ -69,7 +87,11 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
     if rows.is_empty() && last.is_none() {
         return Ok((held, map, Committed::default()));
     }
-    let revisions = export_revisions(store, &rows).await?;
+    let merges = rows
+        .iter()
+        .map(merge_parents)
+        .collect::<Result<Vec<_>, _>>()?;
+    let merged = merged_commits(store.read()).await?;
     let (git, paths_owned, branch_owned) = (git.clone(), paths.clone(), branch.to_owned());
     let (held, map, mut committed) = blocking(move || {
         let (paths, branch) = (paths_owned, branch_owned);
@@ -84,11 +106,21 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
         {
             return Err(history_missing(*number, commit));
         }
+        let identity = if rows.is_empty() {
+            Signature::fold()
+        } else {
+            repository_identity(&git, &repo)?
+        };
+        let revisions: Vec<ExportRevision> = rows
+            .iter()
+            .zip(merges)
+            .map(|(row, merge)| export_revision(row, merge, &identity))
+            .collect();
         let wanted = base.as_ref().map(|base| &base.commit);
         if git.ref_commit(&repo, FOLD_HEAD_REF)?.as_ref() != wanted {
             set_ref(&git, &repo, FOLD_HEAD_REF, wanted)?;
         }
-        let objects = ObjectStore::open(&fold_dir).map_err(FoldError::from)?;
+        let objects = ObjectStore::open_existing(&fold_dir).map_err(FoldError::from)?;
         let target = ExportTarget {
             repo: &repo,
             refname: FOLD_HEAD_REF,
@@ -116,29 +148,31 @@ pub(crate) async fn commit_locked<H: Send + 'static>(
             added,
             ..Committed::default()
         };
-        let Some(newest) = newest else {
+        if newest.is_none() {
             return Ok((held, map, committed));
+        }
+        let known = |commit: &CommitId| {
+            map.revision_of(commit).is_some() || merged.contains(commit.as_str())
         };
-        let tip = match git.ref_commit(&repo, &branch_ref(&branch))? {
-            Some(tip) => tip,
-            None => {
-                // The folder's files are r1's when its branch is born, as `fld init` leaves them.
-                let first = map
-                    .entries()
-                    .first()
-                    .map_or_else(|| newest.clone(), |(_, commit)| commit.clone());
-                move_branch(&git, &repo, &branch, &first, None)?;
-                index_to(&git, &paths, &first)?;
-                first
+        let last = map.last().map(|(_, commit)| commit.clone());
+        match branch_state(&git, &paths, &branch, &known, last.as_ref())? {
+            BranchState::Moved(moved) => committed.moved = Some(moved),
+            // Commits of the human that wait for the main agent: the branch stays on them.
+            BranchState::Ahead { .. } => {}
+            BranchState::Fold { tip } => {
+                let target = folder_at.and_then(|at| map.commit_of(at).cloned());
+                if let Some(target) = target {
+                    let descends = match &tip {
+                        None => true,
+                        Some(tip) => tip == &target || is_ancestor(&git, &repo, tip, &target)?,
+                    };
+                    if descends
+                        && !move_branch_and_index(&git, &paths, &branch, tip.as_ref(), &target)?
+                    {
+                        committed.uncommitted = true;
+                    }
+                }
             }
-        };
-        match tip {
-            tip if tip == newest => {}
-            tip if is_ancestor(&git, &repo, &tip, &newest)? => {
-                committed.uncommitted =
-                    follow_main(&git, &paths, &branch, &tip, &newest)? == Followed::Dirty;
-            }
-            tip => committed.outside = Some(tip),
         }
         Ok((held, map, committed))
     })
@@ -186,14 +220,14 @@ fn history_missing(revision: RevisionId, commit: &CommitId) -> FoldError {
             "the project's Git repository does not hold {commit}, the commit of {revision}, so the commits of the revisions after it cannot be written"
         ),
     )
-    .with_hint("run fld remote set <name> <url> with a repository that holds that commit, such as one the project was pushed to, then fld pull <name>")
+    .with_hint("run `fld remote add <name> <url>` with a repository that holds that commit, such as one the project was pushed to, then `fld pull <name>`")
     .with_details([
         ("revision", json!(revision.to_string())),
         ("commit", json!(commit.as_str())),
     ])
 }
 
-/// The main revisions after `last`, the newest mapped revision and its commit, oldest first, with the base the first of them continues; every revision and no base when nothing is mapped, and none when main has no revision.
+/// The main revisions after `last`, the newest mapped revision and its commit, oldest first, with the base the first of them continues; every revision and no base when nothing is mapped, and none when main has no revision. A genesis with the empty tree gets no commit, so the Git history of a plain folder starts at `r1`, a commit without a parent.
 async fn unsynced(
     store: &Store,
     last: Option<&(RevisionId, CommitId)>,
@@ -208,98 +242,61 @@ async fn unsynced(
             Ok((list_after(pool, *number).await?, Some(base)))
         }
         None => {
-            if head(pool).await?.is_none() {
+            let Some(genesis) = genesis(pool).await? else {
                 return Ok((Vec::new(), None));
+            };
+            let after = list_after(pool, genesis.number).await?;
+            let mut rows = Vec::with_capacity(after.len() + 1);
+            if genesis.tree_hash != empty_tree_hash() {
+                rows.push(genesis);
             }
-            let first =
-                RevisionId::from_number(1).ok_or(StoreError::Corrupt("revision number 1"))?;
-            let mut rows = vec![get_by_number(pool, first).await?];
-            rows.extend(list_after(pool, first).await?);
+            rows.extend(after);
             Ok((rows, None))
         }
     }
 }
 
-/// Each revision as the commit it becomes, with the reviewers whose approval of the integrated version stands.
-async fn export_revisions(
-    store: &Store,
-    rows: &[RevisionRow],
-) -> Result<Vec<ExportRevision>, ProjectError> {
-    let mut revisions = Vec::with_capacity(rows.len());
-    for row in rows {
-        let reviewers = match row
-            .integration
-            .as_ref()
-            .and_then(|integration| integration.proposal.as_ref())
-        {
-            Some(proposal) => standing_approvers(
-                &reviews::review_facts(store.read(), proposal.number, proposal.version).await?,
-            ),
-            None => Vec::new(),
-        };
-        revisions.push(export_revision(row, &reviewers)?);
-    }
-    Ok(revisions)
-}
-
-/// The committer of every commit fold writes, and the author of every commit that no proposal wrote.
-fn fold_signature() -> Signature {
-    Signature {
-        name: "fold".to_owned(),
-        email: "fold@localhost".to_owned(),
-    }
-}
-
+/// A revision as the commit it becomes, with `merges`, from [`merge_parents`], as its parents after the first and `identity` as its author and committer.
 fn export_revision(
     row: &RevisionRow,
-    reviewers: &[EventActor],
-) -> Result<ExportRevision, StoreError> {
-    let proposal = row
-        .integration
-        .as_ref()
-        .and_then(|integration| integration.proposal.as_ref());
-    let author = match proposal {
-        Some(proposal) => author(&proposal.agent, &proposal.worker),
-        None => fold_signature(),
-    };
-    Ok(ExportRevision {
+    merges: Vec<CommitId>,
+    identity: &Signature,
+) -> ExportRevision {
+    ExportRevision {
         number: row.number,
         tree: row.tree_hash,
         created_at: row.created_at,
-        message: commit_message(row, reviewers),
-        author,
-        committer: fold_signature(),
-        merge: merge_parent(row)?,
-    })
-}
-
-/// The worker that wrote a proposal as a Git author: `frontend/ui` is `frontend/ui <frontend.ui@fold.local>` and the main worker `frontend` is `frontend <frontend.frontend@fold.local>`. A deeper worker such as `frontend/ui/forms` gives `frontend.ui.forms@fold.local`.
-fn author(agent: &str, worker: &str) -> Signature {
-    let local = match worker.split_once('/') {
-        Some((_, rest)) => rest.replace('/', "."),
-        None => worker.to_owned(),
-    };
-    Signature {
-        name: worker.to_owned(),
-        email: format!("{agent}.{local}@fold.local"),
+        message: commit_message(row),
+        author: identity.clone(),
+        committer: identity.clone(),
+        merges,
     }
 }
 
-/// The second parent of the commit a revision becomes: the remote commit its integration brought in, a pull or the proposal of a sync task.
-fn merge_parent(row: &RevisionRow) -> Result<Option<CommitId>, StoreError> {
-    row.integration
-        .as_ref()
-        .and_then(|integration| integration.remote_commit.as_deref())
-        .map(|commit| {
-            commit
-                .parse()
-                .map_err(|_| StoreError::Corrupt("integrations.remote_commit"))
-        })
-        .transpose()
+/// The parents after the first of the commit a revision becomes: the remote commit its integration brought in, a pull or the proposal of a sync task, and then the human's commit of a human change it brought onto main when that is another commit, as when a pull resolves a waiting human change. The remote commit comes first, as in the merge of every pull, and the human's commit is there so the project folder that holds the human's files can follow main through it.
+fn merge_parents(row: &RevisionRow) -> Result<Vec<CommitId>, StoreError> {
+    let Some(integration) = &row.integration else {
+        return Ok(Vec::new());
+    };
+    let mut parents: Vec<CommitId> = Vec::new();
+    let commits = [
+        (&integration.remote_commit, "integrations.remote_commit"),
+        (&integration.human_commit, "human_changes.commit_id"),
+    ];
+    for (commit, column) in commits {
+        let Some(commit) = commit else {
+            continue;
+        };
+        let commit: CommitId = commit.parse().map_err(|_| StoreError::Corrupt(column))?;
+        if !parents.contains(&commit) {
+            parents.push(commit);
+        }
+    }
+    Ok(parents)
 }
 
-/// The message of the commit a revision becomes, ending in Git trailers that name it by public ids. An integrated proposal gives its title as the subject and its task's title as the body, with `reviewers`, those whose approval of the integrated version stands, as `Reviewed-by`. A pull that merged a remote commit names that commit; an imported `r1` names its source; any other revision is `fold r<n>`.
-pub fn commit_message(row: &RevisionRow, reviewers: &[EventActor]) -> String {
+/// The message of the commit a revision becomes, ending in Git trailers that name it by public ids and never name an agent or a human: fold's names stay in fold. An integrated proposal gives its title as the subject and its task's title as the body. A direct change gives the message the main agent wrote, as it wrote it. A pull that merged a remote commit names that commit; an imported `r1` names its source; any other revision is `fold r<n>`.
+pub fn commit_message(row: &RevisionRow) -> String {
     let revision = row.number;
     let Some(integration) = &row.integration else {
         return match &row.import_source {
@@ -307,33 +304,46 @@ pub fn commit_message(row: &RevisionRow, reviewers: &[EventActor]) -> String {
             None => format!("fold {revision}\n\nFold-Revision: {revision}\n"),
         };
     };
-    let actor = &integration.actor;
     match (&integration.proposal, integration.kind) {
-        (Some(proposal), _) => {
-            let mut message = format!(
-                "{}\n\n{}\n\nFold-Proposal: {}\nFold-Version: {}\nFold-Task: {}\nFold-Revision: {revision}\n",
-                one_line(&proposal.title),
-                one_line(&proposal.task_title),
-                proposal.number,
-                proposal.version,
-                proposal.task,
-            );
-            for reviewer in reviewers {
-                message.push_str(&format!("Reviewed-by: {reviewer}\n"));
+        (Some(proposal), _) => format!(
+            "{}\n\n{}\n\nFold-Proposal: {}\nFold-Version: {}\nFold-Task: {}\nFold-Revision: {revision}\n",
+            one_line(&proposal.title),
+            one_line(&proposal.task_title),
+            proposal.number,
+            proposal.version,
+            proposal.task,
+        ),
+        (None, IntegrationKind::Direct) => {
+            let mut message = integration
+                .message
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map_or_else(|| format!("fold {revision}"), str::to_owned);
+            message.push_str("\n\n");
+            if let Some(changeset) = integration.changeset {
+                message.push_str(&format!("Fold-Changeset: {changeset}\n"));
             }
-            message.push_str(&format!("Integrated-by: {actor}\n"));
+            message.push_str(&format!("Fold-Revision: {revision}\n"));
             message
         }
         (None, IntegrationKind::Pull) => {
             let remote = integration.remote_commit.as_deref().unwrap_or_default();
             let short = remote.get(..12).unwrap_or(remote);
-            format!(
-                "Merge remote commit {short}\n\nFold-Revision: {revision}\nIntegrated-by: {actor}\n"
-            )
+            format!("Merge remote commit {short}\n\nFold-Revision: {revision}\n")
         }
         (None, IntegrationKind::Proposal) => {
-            format!("fold {revision}\n\nFold-Revision: {revision}\nIntegrated-by: {actor}\n")
+            format!("fold {revision}\n\nFold-Revision: {revision}\n")
         }
+        (None, IntegrationKind::Record) => match integration.remote_commit.as_deref() {
+            Some(commit) => {
+                let short = commit.get(..12).unwrap_or(commit);
+                format!("Merge commit {short} of the project folder\n\nFold-Revision: {revision}\n")
+            }
+            None => {
+                format!("Record the changes of the project folder\n\nFold-Revision: {revision}\n")
+            }
+        },
     }
 }
 
@@ -386,6 +396,7 @@ mod tests {
             kind,
             actor: "human:ana".to_owned(),
             remote_commit: remote_commit.map(str::to_owned),
+            human_commit: None,
             proposal: proposal.map(|(title, task)| IntegratedProposal {
                 number: ProposalId::from_number(4).unwrap(),
                 title: title.to_owned(),
@@ -395,15 +406,22 @@ mod tests {
                 agent: "backend".to_owned(),
                 worker: "backend/db".to_owned(),
             }),
+            changeset: None,
+            message: None,
+        }
+    }
+
+    fn direct(message: &str) -> IntegrationInfo {
+        IntegrationInfo {
+            actor: "main".to_owned(),
+            changeset: Some(fold_core::ChangesetId::from_number(40).unwrap()),
+            message: Some(message.to_owned()),
+            ..integration(IntegrationKind::Direct, None, None)
         }
     }
 
     #[test]
     fn messages_follow_where_the_revision_came_from() {
-        let reviewers = [
-            EventActor::parse("review").unwrap(),
-            EventActor::parse("human:bo").unwrap(),
-        ];
         let remote = "a".repeat(40);
         let cases = [
             (
@@ -416,8 +434,7 @@ mod tests {
                         None,
                     )),
                 ),
-                &reviewers[..],
-                "Add the reports schema\n\nReports for admins\n\nFold-Proposal: P-4\nFold-Version: 2\nFold-Task: T-12\nFold-Revision: r7\nReviewed-by: review\nReviewed-by: human:bo\nIntegrated-by: human:ana\n",
+                "Add the reports schema\n\nReports for admins\n\nFold-Proposal: P-4\nFold-Version: 2\nFold-Task: T-12\nFold-Revision: r7\n",
             ),
             (
                 row(
@@ -429,27 +446,20 @@ mod tests {
                         None,
                     )),
                 ),
-                &[][..],
-                "Two lines\n\nReports for admins\n\nFold-Proposal: P-4\nFold-Version: 2\nFold-Task: T-3\nFold-Revision: r8\nIntegrated-by: human:ana\n",
+                "Two lines\n\nReports for admins\n\nFold-Proposal: P-4\nFold-Version: 2\nFold-Task: T-3\nFold-Revision: r8\n",
             ),
             (
                 row(1, Some("/home/ana/src/app"), None),
-                &[][..],
                 "Import /home/ana/src/app\n\nFold-Revision: r1\n",
             ),
-            (
-                row(1, None, None),
-                &[][..],
-                "fold r1\n\nFold-Revision: r1\n",
-            ),
+            (row(1, None, None), "fold r1\n\nFold-Revision: r1\n"),
             (
                 row(
                     6,
                     None,
                     Some(integration(IntegrationKind::Pull, None, Some(&remote))),
                 ),
-                &[][..],
-                "Merge remote commit aaaaaaaaaaaa\n\nFold-Revision: r6\nIntegrated-by: human:ana\n",
+                "Merge remote commit aaaaaaaaaaaa\n\nFold-Revision: r6\n",
             ),
             (
                 row(
@@ -457,17 +467,34 @@ mod tests {
                     None,
                     Some(integration(IntegrationKind::Proposal, None, None)),
                 ),
-                &[][..],
-                "fold r9\n\nFold-Revision: r9\nIntegrated-by: human:ana\n",
+                "fold r9\n\nFold-Revision: r9\n",
+            ),
+            (
+                row(
+                    10,
+                    None,
+                    Some(direct(
+                        "Add the AGENTS.md rules\n\nTaken from the parent folder.\n",
+                    )),
+                ),
+                "Add the AGENTS.md rules\n\nTaken from the parent folder.\n\nFold-Changeset: C-40\nFold-Revision: r10\n",
+            ),
+            (
+                row(11, None, Some(direct("  "))),
+                "fold r11\n\nFold-Changeset: C-40\nFold-Revision: r11\n",
             ),
         ];
-        for (row, reviewers, expected) in cases {
-            assert_eq!(commit_message(&row, reviewers), expected);
+        for (row, expected) in cases {
+            assert_eq!(commit_message(&row), expected);
         }
     }
 
     #[test]
-    fn a_proposal_is_authored_by_its_worker_and_committed_by_fold() {
+    fn every_commit_is_authored_and_committed_by_the_given_identity() {
+        let ana = Signature {
+            name: "Ana Lima".to_owned(),
+            email: "ana@example.com".to_owned(),
+        };
         let integrated = row(
             7,
             None,
@@ -477,58 +504,65 @@ mod tests {
                 Some(&"b".repeat(40)),
             )),
         );
-        let revision = export_revision(&integrated, &[]).unwrap();
+        let merges = merge_parents(&integrated).unwrap();
+        let revision = export_revision(&integrated, merges, &ana);
+        assert_eq!((&revision.author, &revision.committer), (&ana, &ana));
+        assert!(!revision.message.contains("backend") && !revision.message.contains("ana"));
         assert_eq!(
-            (
-                revision.author.name.as_str(),
-                revision.author.email.as_str()
-            ),
-            ("backend/db", "backend.db@fold.local")
+            revision
+                .merges
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["b".repeat(40)]
         );
-        assert_eq!(revision.committer, fold_signature());
+        let plain = row(1, None, None);
+        let plain = export_revision(&plain, merge_parents(&plain).unwrap(), &Signature::fold());
         assert_eq!(
-            revision.merge.map(|commit| commit.to_string()),
-            Some("b".repeat(40))
+            (&plain.author, &plain.committer),
+            (&Signature::fold(), &Signature::fold())
         );
-        let plain = export_revision(&row(1, None, None), &[]).unwrap();
-        assert_eq!(plain.author, fold_signature());
-        assert_eq!(plain.merge, None);
+        assert!(plain.merges.is_empty());
         let corrupt = row(
             2,
             None,
             Some(integration(IntegrationKind::Pull, None, Some("nope"))),
         );
-        assert!(export_revision(&corrupt, &[]).is_err());
+        assert!(merge_parents(&corrupt).is_err());
+        let changed = export_revision(
+            &row(3, None, Some(direct("Initial setup"))),
+            Vec::new(),
+            &ana,
+        );
+        assert_eq!((&changed.author, &changed.committer), (&ana, &ana));
+        assert!(!changed.message.contains("main"));
     }
 
     #[test]
-    fn the_author_email_joins_the_agent_and_the_worker_below_it() {
-        let cases = [
-            (
-                "frontend",
-                "frontend/ui",
-                "frontend/ui",
-                "frontend.ui@fold.local",
-            ),
-            (
-                "frontend",
-                "frontend",
-                "frontend",
-                "frontend.frontend@fold.local",
-            ),
-            (
-                "frontend",
-                "frontend/ui/forms",
-                "frontend/ui/forms",
-                "frontend.ui.forms@fold.local",
-            ),
-        ];
-        for (agent, worker, name, email) in cases {
-            let signature = author(agent, worker);
-            assert_eq!(
-                (signature.name.as_str(), signature.email.as_str()),
-                (name, email)
-            );
-        }
+    fn a_pull_that_resolves_a_human_change_merges_the_pulled_commit_then_the_humans() {
+        let (pulled, human) = ("c".repeat(40), "d".repeat(40));
+        let resolving = IntegrationInfo {
+            human_commit: Some(human.clone()),
+            ..integration(IntegrationKind::Pull, None, Some(&pulled))
+        };
+        let merges = merge_parents(&row(5, None, Some(resolving))).unwrap();
+        assert_eq!(
+            merges.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            [pulled.clone(), human.clone()]
+        );
+        // A record brings in the human's own commit, which is the pulled commit too.
+        let recorded = IntegrationInfo {
+            human_commit: Some(pulled.clone()),
+            ..integration(IntegrationKind::Pull, None, Some(&pulled))
+        };
+        assert_eq!(
+            merge_parents(&row(6, None, Some(recorded))).unwrap().len(),
+            1
+        );
+        let corrupt = IntegrationInfo {
+            human_commit: Some("nope".to_owned()),
+            ..integration(IntegrationKind::Pull, None, Some(&pulled))
+        };
+        assert!(merge_parents(&row(7, None, Some(corrupt))).is_err());
     }
 }

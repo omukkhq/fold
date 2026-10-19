@@ -99,18 +99,8 @@ pub fn human_from(
         .ok_or(ClientError::HumanUnknown)
 }
 
-/// The human from the environment, else the account name of this process's user.
-pub fn human_from_env() -> Result<String, ClientError> {
-    human_from(
-        std::env::var_os("FOLD_HUMAN"),
-        std::env::var_os("USER"),
-        std::env::var_os("LOGNAME"),
-    )
-    .or_else(|error| os_account().ok_or(error))
-}
-
 /// The `/etc/passwd` entry of this process's user, else, on macOS, the account the directory service knows: macOS keeps people's accounts there and only system accounts in `/etc/passwd`.
-fn os_account() -> Option<String> {
+pub fn os_account() -> Option<String> {
     let uid = rustix::process::getuid().as_raw();
     std::fs::read_to_string("/etc/passwd")
         .ok()

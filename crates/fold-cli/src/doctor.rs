@@ -8,22 +8,26 @@ use std::time::Duration;
 
 use clap::Args;
 use fold_core::events::types;
-use fold_core::{Clock, FoldError, ProjectPaths, Role, Timestamp, codes};
+use fold_core::{Clock, FoldError, HumanName, ProjectPaths, Role, Timestamp, codes};
 use fold_daemon::SystemClock;
+use fold_daemon::projects::database_missing_hint;
 use fold_daemon::services::agents::claude::{AuthStatus, ClaudeVersion, MIN_CLAUDE_VERSION};
+use fold_daemon::services::projects::remove_deleted_on_host;
 use fold_vcs::git::Git;
-use fold_vcs::git_remote::folder_has_changes;
+use fold_vcs::git_remote::{EXCLUDE_LINK, folder_has_changes};
 use fold_vcs::git_sync_map::{SYNC_MAP_FILE, SyncMap};
 use fold_vcs::watch::DegradedReason;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, Row, SqliteConnection};
 use thiserror::Error;
 
+use crate::claude_setup;
 use crate::init::host_paths;
 use crate::output;
 use crate::platform::{Host, Platform, on_path};
 use crate::serve::{self, DEFAULT_LISTEN, Dirs, FileConfig, read_file_config};
 use fold_cli::claude_files::{self, shadowing_files};
+use fold_cli::claude_user::{self, UserSetup};
 use fold_daemon::config::{LOCK_FILE, SOCKET_FILE};
 
 const NOT_APPLICABLE: &str = "not applicable on this platform";
@@ -38,7 +42,8 @@ const SQLITE_MAGIC: &[u8] = b"SQLite format 3\0";
 const CLAUDE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long `run_briefly` still reads the output of a command that ended at its deadline.
 const OUTPUT_GRACE: Duration = Duration::from_millis(200);
-const CLAUDE_INSTALL: &str = "install Claude Code: curl -fsSL https://claude.ai/install.sh | bash";
+const CLAUDE_INSTALL: &str =
+    "install Claude Code: `curl -fsSL https://claude.ai/install.sh | bash`";
 
 #[derive(Args, Debug)]
 pub struct DoctorArgs {
@@ -196,6 +201,7 @@ pub(crate) fn collect(
             vec![(root.display().to_string(), root)]
         }
         None => {
+            remove_deleted_projects(args.socket.as_deref(), host, runtime);
             let (projects, registry_check) = registered_projects(&host.dirs, runtime)?;
             sections[0].checks.extend(registry_check);
             projects
@@ -235,13 +241,20 @@ fn daemon_file(dirs: &Dirs) -> (FileConfig, Option<Check>) {
     }
 }
 
-fn host_checks(socket_flag: Option<&Path>, file: &FileConfig, host: &Host) -> Vec<Check> {
-    // An unreadable daemon.toml is already a failed check, so the runtime directory stands in.
-    let runtime = serve::runtime_dir(&host.dirs).ok();
-    let socket = serve::socket_path(socket_flag, &host.dirs)
+/// An unreadable daemon.toml is already a failed check, so the runtime directory stands in.
+fn daemon_socket(socket_flag: Option<&Path>, dirs: &Dirs) -> Option<PathBuf> {
+    serve::socket_path(socket_flag, dirs)
         .ok()
         .flatten()
-        .or_else(|| runtime.as_ref().map(|dir| dir.join(SOCKET_FILE)));
+        .or_else(|| {
+            serve::runtime_dir(dirs)
+                .ok()
+                .map(|dir| dir.join(SOCKET_FILE))
+        })
+}
+
+fn host_checks(socket_flag: Option<&Path>, file: &FileConfig, host: &Host) -> Vec<Check> {
+    let socket = daemon_socket(socket_flag, &host.dirs);
     let state = socket
         .as_deref()
         .map(|path| inspect_socket(path, host.platform));
@@ -256,7 +269,19 @@ fn host_checks(socket_flag: Option<&Path>, file: &FileConfig, host: &Host) -> Ve
         lock_check(lock.as_deref(), answers),
         http_check(listen),
         git_check(host),
+        fold_name_check(
+            crate::fold_name::resolve(
+                &host.names,
+                crate::fold_name::file(&host.dirs).as_deref(),
+                false,
+                &mut io::empty(),
+                &mut io::sink(),
+            )
+            .ok()
+            .as_ref(),
+        ),
         claude_check(host),
+        claude_setup_check(host),
         service_manager_check(host),
         linger_check(host),
         inotify_limit_check(host),
@@ -307,7 +332,7 @@ fn socket_check(path: Option<&Path>, state: Option<SocketState>) -> Check {
         return Check::warn(
             "socket",
             "no socket path: XDG_RUNTIME_DIR is not set",
-            "export XDG_RUNTIME_DIR=/run/user/$(id -u), or pass --socket <path> to fld serve and fld doctor",
+            "`export XDG_RUNTIME_DIR=/run/user/$(id -u)`, or pass `--socket <path>` to `fld serve` and `fld doctor`",
         );
     };
     let shown = path.display();
@@ -316,17 +341,17 @@ fn socket_check(path: Option<&Path>, state: Option<SocketState>) -> Check {
         SocketState::WrongMode { mode, .. } => Check::fail(
             "socket",
             format!("{shown} has mode {mode:04o}, not 0600"),
-            format!("chmod 600 {shown}"),
+            format!("`chmod 600 {shown}`"),
         ),
         SocketState::Missing => Check::warn(
             "socket",
             format!("no daemon socket at {shown}"),
-            "fld serve",
+            "`fld serve`",
         ),
         SocketState::Dead => Check::warn(
             "socket",
             format!("the daemon does not answer on {shown}"),
-            "fld serve",
+            "`fld serve`",
         ),
     }
 }
@@ -358,7 +383,7 @@ fn lock_check(path: Option<&Path>, socket_answers: bool) -> Check {
             "locks",
             format!("{} is held and the socket is dead", path.display()),
             format!(
-                "stop the process that holds it (fuser {}), then rm {}",
+                "stop the process that holds it (`fuser {}`), then `rm {}`",
                 path.display(),
                 path.display()
             ),
@@ -379,7 +404,7 @@ fn http_check(listen: std::net::SocketAddr) -> Check {
         Err(_) => Check::warn(
             "http",
             format!("{listen} does not accept connections"),
-            "fld serve",
+            "`fld serve`",
         ),
     }
 }
@@ -390,9 +415,28 @@ fn git_check(host: &Host) -> Check {
     } else {
         Check::warn(
             "git",
-            "git is not on PATH; fold needs it for fld init, the Git commit of every integration, which the project folder follows, fld remote, fld push and fld pull",
+            "git is not on PATH; fold needs it only in a project whose Git sync is on: for fld init --with-git, the Git commit of every revision, fld remote, fld push and fld pull",
             "install git",
         )
+    }
+}
+
+/// The name fld sends as the human, and where it comes from. The daemon refuses a name outside the fold name rules, so such a name is a warning.
+pub(crate) fn fold_name_check(found: Option<&crate::fold_name::Found>) -> Check {
+    const FIX: &str = "run `fld claude` on a terminal to choose a fold name, or set FOLD_HUMAN to 1 to 32 characters of a-z, 0-9, - and _";
+    match found {
+        Some(found) if HumanName::parse(&found.name).is_ok() => {
+            Check::ok("fold name", format!("{} from {}", found.name, found.source))
+        }
+        Some(found) => Check::warn(
+            "fold name",
+            format!(
+                "{} from {} is not a name fold accepts",
+                found.name, found.source
+            ),
+            FIX,
+        ),
+        None => Check::warn("fold name", "fld cannot tell who you are", FIX),
     }
 }
 
@@ -446,6 +490,35 @@ pub(crate) fn claude_verdict(facts: ClaudeFacts) -> Check {
             "claude auth login",
         ),
     }
+}
+
+/// Whether the user's Claude Code configuration holds fold's server, permission and hooks. A user who declined them gets no warning: `fld claude` gives its sessions the same entries by flags.
+pub(crate) fn claude_setup_verdict(setup: Option<UserSetup>, declined: bool) -> Check {
+    const NAME: &str = "claude setup";
+    match setup {
+        None => Check::not_applicable(NAME),
+        Some(UserSetup::Complete) => Check::ok(NAME, "fold is in your Claude Code config"),
+        Some(UserSetup::Incomplete(_)) if declined => Check::ok(
+            NAME,
+            format!(
+                "you chose to keep fold out of your Claude Code config; {} adds it",
+                claude_setup::ADD_COMMAND
+            ),
+        ),
+        Some(UserSetup::Incomplete(problems)) => Check::warn(
+            NAME,
+            problems.join("; "),
+            format!("`{}`", claude_setup::ADD_COMMAND),
+        ),
+    }
+}
+
+/// Doctor reads only the two files that hold the user-scope MCP servers and the user settings.
+fn claude_setup_check(host: &Host) -> Check {
+    claude_setup_verdict(
+        host.claude.as_ref().map(claude_user::state),
+        claude_setup::declined(&host.dirs),
+    )
 }
 
 /// Doctor asks Claude Code itself; it never reads Claude Code's credential files.
@@ -532,7 +605,7 @@ fn service_manager_check(host: &Host) -> Check {
         Check::warn(
             "service manager",
             "no service manager support",
-            "fld serve, started by the host's own supervisor",
+            "`fld serve`, started by the host's own supervisor",
         )
     }
 }
@@ -574,7 +647,7 @@ fn linger_check(host: &Host) -> Check {
         LingerVerdict::Off => Check::warn(
             "linger",
             "linger is off, so the daemon stops at logout",
-            format!("loginctl enable-linger {}", user.unwrap_or_default()),
+            format!("`loginctl enable-linger {}`", user.unwrap_or_default()),
         ),
     }
 }
@@ -614,6 +687,36 @@ fn inotify_limit_check(host: &Host) -> Check {
             sysctl_fix(),
         ),
     }
+}
+
+/// A project whose folder is there without `.fold/` leaves the registry before the project checks, so doctor reports nothing for it: a running daemon removes it, and closes its workers, when it lists its projects, and without a daemon doctor removes it from the host registry itself. A failure leaves the row, and its project checks report the missing data.
+fn remove_deleted_projects(
+    socket_flag: Option<&Path>,
+    host: &Host,
+    runtime: &tokio::runtime::Runtime,
+) {
+    let listed =
+        daemon_socket(socket_flag, &host.dirs).is_some_and(|socket| lists_projects(&socket));
+    if listed {
+        return;
+    }
+    if let Ok(paths) = host_paths(&host.dirs) {
+        let _ = runtime.block_on(remove_deleted_on_host(&paths));
+    }
+}
+
+/// Reads the daemon's whole answer to the project list, since the daemon removes deleted projects while it makes that answer.
+fn lists_projects(socket: &Path) -> bool {
+    let Ok(mut stream) = UnixStream::connect(socket) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(CONNECT_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(CONNECT_TIMEOUT));
+    let request = b"GET /api/v1/projects HTTP/1.1\r\nHost: fold\r\nConnection: close\r\n\r\n";
+    let mut reply = Vec::new();
+    stream.write_all(request).is_ok()
+        && stream.read_to_end(&mut reply).is_ok()
+        && reply.starts_with(b"HTTP/1.1 200")
 }
 
 /// A project's slug and root.
@@ -677,22 +780,42 @@ fn project_checks(
     if !root.is_dir() {
         return vec![Check::fail(
             "directory",
-            format!("{} does not exist", root.display()),
-            format!("restore {} from a backup", root.display()),
+            format!(
+                "{} does not exist; fold keeps the project and opens it again when the folder is back",
+                root.display()
+            ),
+            format!(
+                "mount the disk that holds {} or restore the folder from a backup",
+                root.display()
+            ),
         )];
     }
     let paths = ProjectPaths::new(root);
+    if std::fs::symlink_metadata(paths.fold_dir()).is_err() {
+        return vec![fold_data_check(&paths)];
+    }
     let watch_applicable =
         watch_limit_verdict(host.platform.linux, host.probe.inotify_max_watches())
             != WatchLimit::NotApplicable;
     let events_now = watch_applicable.then_some(now);
     let facts = runtime.block_on(inspect_database(&paths.db(), events_now));
     let mut checks = vec![
-        database_check(&paths.db(), &facts),
+        database_check(&paths, &facts),
         objects_check(&paths.objects()),
-        git_history_check(&paths, host),
-        folder_check(&paths, host),
     ];
+    if facts.git_sync == Some(false) {
+        // A plain folder has no Git repository, so fold reads no Git state of it.
+        checks.push(Check::ok(
+            "git sync",
+            "Git sync is off; fld init --with-git turns Git on",
+        ));
+    } else {
+        checks.extend([
+            git_history_check(&paths, host),
+            folder_check(&paths, host),
+            exclude_check(&paths),
+        ]);
+    }
     checks.push(if watch_applicable {
         degraded_check(&facts, now)
     } else {
@@ -705,6 +828,23 @@ fn project_checks(
     checks
 }
 
+/// A project folder without `.fold/` holds no project, and `fld init` there makes a new one in place of the registration. A folder that keeps its Git repository takes `--with-git`, as init refuses a plain init of a repository.
+fn fold_data_check(paths: &ProjectPaths) -> Check {
+    let init = if paths.git_dir().is_dir() {
+        "fld init --with-git"
+    } else {
+        "fld init"
+    };
+    Check::fail(
+        "fold data",
+        format!(
+            "{} is missing: the fold data of the project was deleted",
+            paths.fold_dir().display()
+        ),
+        format!("`cd {} && {init}`", output::shell_quote(paths.root())),
+    )
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct DatabaseFacts {
     pub(crate) exists: bool,
@@ -714,6 +854,8 @@ pub(crate) struct DatabaseFacts {
     /// The pragma itself returned an error, which SQLite does for a damaged page it cannot read.
     pub(crate) quick_check_errored: bool,
     pub(crate) degraded: Vec<Timestamp>,
+    /// Whether the project's Git sync is on; `None` when the database cannot tell.
+    pub(crate) git_sync: Option<bool>,
 }
 
 /// SQLite sets bytes 18 and 19 of the header to 2 in WAL mode. Reading the header avoids the journal-mode pragma, which a connection may try to change.
@@ -755,6 +897,11 @@ async fn inspect_database(path: &Path, events_now: Option<Timestamp>) -> Databas
     {
         facts.degraded = degraded_events(&mut conn, now).await.unwrap_or_default();
     }
+    facts.git_sync = sqlx::query_scalar!(r#"SELECT COUNT(*) AS "count!: i64" FROM git_sync"#)
+        .fetch_one(&mut conn)
+        .await
+        .ok()
+        .map(|rows| rows > 0);
     let _ = conn.close().await;
     facts
 }
@@ -801,15 +948,20 @@ pub(crate) fn database_issues(facts: &DatabaseFacts) -> Vec<String> {
     issues
 }
 
-fn database_check(path: &Path, facts: &DatabaseFacts) -> Check {
+fn database_check(paths: &ProjectPaths, facts: &DatabaseFacts) -> Check {
     let issues = database_issues(facts);
     if issues.is_empty() {
         return Check::ok("database", "quick_check is ok and journal_mode is wal");
     }
+    let fix = if facts.exists {
+        format!("restore {} from a backup", paths.db().display())
+    } else {
+        database_missing_hint(paths)
+    };
     Check::fail(
         "database",
-        format!("{}: {}", path.display(), issues.join("; ")),
-        format!("restore {} from a backup", path.display()),
+        format!("{}: {}", paths.db().display(), issues.join("; ")),
+        fix,
     )
 }
 
@@ -865,7 +1017,7 @@ pub(crate) fn objects_verdict(path: &Path, facts: ObjectsFacts) -> Check {
         return Check::fail(
             "objects",
             format!("{shown} is not writable"),
-            format!("chmod -R u+rwX {shown}"),
+            format!("`chmod -R u+rwX {shown}`"),
         );
     }
     match facts.free_bytes {
@@ -885,67 +1037,31 @@ fn objects_check(path: &Path) -> Check {
     objects_verdict(path, inspect_objects(path))
 }
 
-/// The problems with the Claude Code files the project root should hold: the fold MCP server, the allowed fold tools, the fold hooks and the marked section of `AGENTS.md`.
+/// The problems with fold's Claude Code files in the project root: the marked section of the instructions file, which `instructions` names with its text, the fold skill, and the project files in `old` that still hold entries an earlier fold wrote there.
 pub(crate) fn claude_file_problems(
-    mcp: Option<&str>,
-    settings: Option<&str>,
-    agents: Option<&str>,
+    instructions: (&str, Option<&str>),
+    skill: bool,
+    old: &[&str],
 ) -> Vec<String> {
-    use claude_files::{AGENTS_BEGIN, AGENTS_END, AGENTS_FILE, MCP_FILE, SETTINGS_FILE};
-    let json = |text: &str| serde_json::from_str::<serde_json::Value>(text).unwrap_or_default();
+    use claude_files::{AGENTS_BEGIN, AGENTS_END, SKILL_FILE};
     let mut problems = Vec::new();
-    match mcp.map(json) {
-        None => problems.push(format!("{MCP_FILE} is missing")),
-        Some(value) => {
-            if !value[claude_files::MCP_SERVERS_KEY][claude_files::MCP_SERVER_NAME].is_object() {
-                problems.push(format!("{MCP_FILE} lacks the fold server"));
-            }
-        }
-    }
-    match settings.map(json) {
-        None => problems.push(format!("{SETTINGS_FILE} is missing")),
-        Some(value) => {
-            if !allows_fold_tools(&value) {
-                problems.push(format!("{SETTINGS_FILE} does not allow the fold tools"));
-            }
-            if !claude_files::HOOKS
-                .iter()
-                .all(|(event, command)| runs_hook(&value, event, command))
-            {
-                problems.push(format!("{SETTINGS_FILE} lacks the fold hooks"));
-            }
-        }
-    }
-    match agents {
-        None => problems.push(format!("{AGENTS_FILE} is missing")),
+    let (name, text) = instructions;
+    match text {
+        None => problems.push(format!("{name} is missing")),
         Some(text) if !text.contains(AGENTS_BEGIN) || !text.contains(AGENTS_END) => {
-            problems.push(format!("{AGENTS_FILE} lacks the fold section"));
+            problems.push(format!("{name} lacks the fold section"));
         }
         Some(_) => {}
     }
+    if !skill {
+        problems.push(format!("{SKILL_FILE} is missing"));
+    }
+    for file in old {
+        problems.push(format!(
+            "{file} holds fold entries, which belong in your Claude Code config"
+        ));
+    }
     problems
-}
-
-fn allows_fold_tools(settings: &serde_json::Value) -> bool {
-    let all = claude_files::ALLOW_FOLD_TOOLS;
-    let wildcard = format!("{all}__*");
-    settings["permissions"]["allow"]
-        .as_array()
-        .is_some_and(|rules| {
-            rules
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .any(|rule| rule == all || rule == wildcard)
-        })
-}
-
-/// A hook command may name the binary by its full path, so only its end is compared.
-fn runs_hook(settings: &serde_json::Value, event: &str, command: &str) -> bool {
-    let groups = settings["hooks"][event].as_array().into_iter().flatten();
-    groups
-        .flat_map(|group| group["hooks"].as_array().into_iter().flatten())
-        .filter_map(|hook| hook["command"].as_str())
-        .any(|run| run.trim().ends_with(command))
 }
 
 /// Every integration continues the commit `.fold/git-sync.map` names last, so a project repository without that commit leaves each new revision without its Git commit.
@@ -955,7 +1071,7 @@ fn git_history_check(paths: &ProjectPaths, host: &Host) -> Check {
         return Check::warn(
             NAME,
             "the project folder has no Git repository in .git, so new revisions get no Git commit",
-            "re-create the project with fld init",
+            "re-create the project with `fld init`",
         );
     }
     let fold_dir = paths.fold_dir();
@@ -982,12 +1098,12 @@ fn git_history_check(paths: &ProjectPaths, host: &Host) -> Check {
             format!(
                 ".git does not hold {commit}, the commit of {revision}, so new revisions get no Git commit"
             ),
-            "run fld remote set <name> <url> with a repository that holds that commit, then fld pull <name>",
+            "run `fld remote add <name> <url>` with a repository that holds that commit, then `fld pull <name>`",
         ),
     }
 }
 
-/// The project folder follows main only while its index and tracked files match its branch, as Git's `updateInstead` requires, so changes that are not committed hold it back.
+/// While Git sync is on, the project folder and its branch follow main together, so a change of the human on a file main changes holds both back until `fld record` records it.
 fn folder_check(paths: &ProjectPaths, host: &Host) -> Check {
     const NAME: &str = "project folder";
     let Some(program) = on_path("git", host.path.as_deref()) else {
@@ -997,7 +1113,7 @@ fn folder_check(paths: &ProjectPaths, host: &Host) -> Check {
         return Check::warn(
             NAME,
             "the project folder has no Git repository in .git, so it cannot follow main",
-            "re-create the project with fld init",
+            "re-create the project with `fld init`",
         );
     }
     match folder_has_changes(&Git::new(program), paths) {
@@ -1007,28 +1123,54 @@ fn folder_check(paths: &ProjectPaths, host: &Host) -> Check {
         ),
         Ok(true) => Check::warn(
             NAME,
-            "the project folder has changes that are not committed, so it does not follow main",
-            "commit or stash the changes; fold brings the folder to main at the next integration or daemon start",
+            "the project folder has changes that are not committed; on a file main changes they hold the folder and its branch back",
+            "run `fld record` in the project folder to record them on main, or undo what you staged with `git restore --staged`; fold brings the folder to main at the next integration or daemon start",
         ),
         Err(_) => Check::warn(
             NAME,
             "git cannot read the state of the project folder",
-            "run git status in the project folder",
+            "run `git status` in the project folder",
+        ),
+    }
+}
+
+/// Git reads `.git/info/exclude` and fold reads `.fold/exclude`; only while the first is a link to the second do they leave out the same paths.
+fn exclude_check(paths: &ProjectPaths) -> Check {
+    const NAME: &str = "exclude file";
+    let link = paths.git_dir().join("info").join("exclude");
+    if !paths.git_dir().is_dir() {
+        return Check::not_applicable(NAME);
+    }
+    match std::fs::read_link(&link) {
+        Ok(target) if target == Path::new(EXCLUDE_LINK) => Check::ok(
+            NAME,
+            ".git/info/exclude links to .fold/exclude, so Git and fold leave out the same paths",
+        ),
+        _ => Check::warn(
+            NAME,
+            ".git/info/exclude is not the link to .fold/exclude, so Git and fold can leave out different paths",
+            "`fld init --refresh`, which moves its lines into .fold/exclude and makes the link",
         ),
     }
 }
 
 fn claude_files_check(root: &Path) -> Check {
     let read = |relative: &str| std::fs::read_to_string(root.join(relative)).ok();
-    let problems = claude_file_problems(
-        read(claude_files::MCP_FILE).as_deref(),
-        read(claude_files::SETTINGS_FILE).as_deref(),
-        read(claude_files::AGENTS_FILE).as_deref(),
+    let instructions = claude_files::instructions_file(root);
+    let mut problems = claude_file_problems(
+        (instructions, read(instructions).as_deref()),
+        root.join(claude_files::SKILL_FILE).is_file(),
+        &claude_files::old_entries(root),
     );
+    if let Some(stale) = claude_files::stale_section(root) {
+        problems.push(format!(
+            "{stale} holds a second fold section, which belongs in {instructions}"
+        ));
+    }
     if problems.is_empty() {
         Check::ok("claude files", "the fold entries are in place")
     } else {
-        Check::warn("claude files", problems.join("; "), "fld init --refresh")
+        Check::warn("claude files", problems.join("; "), "`fld init --refresh`")
     }
 }
 

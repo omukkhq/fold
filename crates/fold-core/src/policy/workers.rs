@@ -15,7 +15,7 @@ pub enum Starter {
     Unsupervised,
     AreaLead(AreaName),
     ReviewLead,
-    /// A task worker or a batch reviewer.
+    /// A task worker or a reviewer.
     ShortLived,
     /// A child worker of any agent.
     Subagent,
@@ -34,7 +34,7 @@ impl Starter {
                 None => Starter::Unsupervised,
                 Some((Role::AreaLead, Some(area))) => Starter::AreaLead(area),
                 Some((Role::ReviewLead, _)) => Starter::ReviewLead,
-                Some((Role::AreaLead, None) | (Role::TaskWorker | Role::BatchReviewer, _)) => {
+                Some((Role::AreaLead, None) | (Role::TaskWorker | Role::Reviewer, _)) => {
                     Starter::ShortLived
                 }
             },
@@ -98,12 +98,12 @@ pub fn can_set_worker_limits(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
-/// The main agent or a named human starts the leads; an area lead starts the task workers of its own area; the review lead starts the batch reviewers. A subagent worker, a short-lived worker and a lead of another kind start nothing.
+/// The main agent or a named human starts the leads; an area lead starts the task workers of its own area; the review lead starts the reviewers. A subagent worker, a short-lived worker and a lead of another kind start nothing.
 pub fn can_start_worker(starter: &Starter, role: Role) -> Result<(), PolicyDenied> {
     match (role, starter) {
         (Role::AreaLead | Role::ReviewLead, Starter::Human | Starter::MainAgent)
         | (Role::TaskWorker, Starter::AreaLead(_))
-        | (Role::BatchReviewer, Starter::ReviewLead) => Ok(()),
+        | (Role::Reviewer, Starter::ReviewLead) => Ok(()),
         (Role::AreaLead | Role::ReviewLead, Starter::Unsupervised) => Err(not_the_main_agent(
             "ask the main agent to call start_worker",
         )),
@@ -117,15 +117,15 @@ pub fn can_start_worker(starter: &Starter, role: Role) -> Result<(), PolicyDenie
             message: "only an area lead can start a task worker",
             hint: "ask the lead of the task's area to call start_worker",
         }),
-        (Role::BatchReviewer, _) => Err(PolicyDenied {
+        (Role::Reviewer, _) => Err(PolicyDenied {
             code: codes::WORKER_START_DENIED,
-            message: "only the review lead can start a batch reviewer",
+            message: "only the review lead can start a reviewer",
             hint: "ask the review lead to call start_worker",
         }),
     }
 }
 
-/// Whoever may start a worker may stop it: the main agent, a named human or the daemon stops any worker, an area lead the task workers of its area, the review lead the batch reviewers. `area` is the target worker's area.
+/// Whoever may start a worker may stop it: the main agent, a named human or the daemon stops any worker, an area lead the task workers of its area, the review lead the reviewers. `area` is the target worker's area.
 pub fn can_stop_worker(
     starter: &Starter,
     role: Role,
@@ -134,7 +134,7 @@ pub fn can_stop_worker(
     let allowed = match starter {
         Starter::Human | Starter::MainAgent | Starter::System => true,
         Starter::AreaLead(own) => role == Role::TaskWorker && area == Some(own),
-        Starter::ReviewLead => role == Role::BatchReviewer,
+        Starter::ReviewLead => role == Role::Reviewer,
         Starter::Unsupervised | Starter::ShortLived | Starter::Subagent => false,
     };
     if allowed {
@@ -253,6 +253,26 @@ pub fn can_complete_human_task(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
+/// A direct change reaches main without a task, a proposal or a review: the user's word in the conversation is its approval. Only the main agent talks with the user, so it alone opens the main workspace and submits a direct change. A lead, a worker, a subagent and the daemon are refused, and so is a human, who changes the files of the project folder and records them with `fld record`.
+pub fn can_change_main_directly(starter: &Starter) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::MainAgent => Ok(()),
+        Starter::Unsupervised => Err(not_the_main_agent(
+            "plan the change as a task, or ask the user to make it through the main agent",
+        )),
+        Starter::Human => Err(PolicyDenied {
+            code: codes::MAIN_AGENT_REQUIRED,
+            message: "only the main agent makes a direct change to main",
+            hint: "change the files in the project folder and run `fld record`, or ask the main agent",
+        }),
+        _ => Err(PolicyDenied {
+            code: codes::MAIN_AGENT_REQUIRED,
+            message: "only the main agent makes a direct change to main",
+            hint: "record the work in a task workspace and open a proposal",
+        }),
+    }
+}
+
 /// An agent that fold does not supervise leaves the plan of the whole project to the main agent, which `fld claude` starts, whether or not it runs now. `hint` names the call the main agent makes instead.
 fn not_the_main_agent(hint: &'static str) -> PolicyDenied {
     PolicyDenied {
@@ -333,6 +353,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn only_the_main_agent_changes_main_directly() {
+        assert!(can_change_main_directly(&Starter::MainAgent).is_ok());
+        assert_eq!(
+            can_change_main_directly(&Starter::Unsupervised)
+                .unwrap_err()
+                .code(),
+            codes::ORCHESTRATOR_REQUIRED
+        );
+        let human = can_change_main_directly(&Starter::Human).unwrap_err();
+        assert_eq!(human.code(), codes::MAIN_AGENT_REQUIRED);
+        assert!(human.hint().contains("fld record"));
+        for starter in [
+            Starter::AreaLead(area("web")),
+            Starter::ReviewLead,
+            Starter::ShortLived,
+            Starter::Subagent,
+            Starter::System,
+        ] {
+            let denied = can_change_main_directly(&starter).unwrap_err();
+            assert_eq!(denied.code(), codes::MAIN_AGENT_REQUIRED);
+            assert!(denied.hint().contains("proposal"));
+        }
+    }
+
     fn tagged(worker: &str, tag: &str) -> Actor {
         let Actor::Agent(mut agent) = agent(worker) else {
             unreachable!()
@@ -367,7 +412,7 @@ mod tests {
             of(&agent("review-lead"), Some((Role::ReviewLead, None))),
             Starter::ReviewLead
         );
-        for role in [Role::TaskWorker, Role::BatchReviewer] {
+        for role in [Role::TaskWorker, Role::Reviewer] {
             assert_eq!(of(&agent("w"), Some((role, None))), Starter::ShortLived);
         }
         assert_eq!(
@@ -484,9 +529,9 @@ mod tests {
     }
 
     #[test]
-    fn task_workers_come_from_area_leads_and_batch_reviewers_from_the_review_lead() {
+    fn task_workers_come_from_area_leads_and_reviewers_from_the_review_lead() {
         assert!(can_start_worker(&Starter::AreaLead(area("web")), Role::TaskWorker).is_ok());
-        assert!(can_start_worker(&Starter::ReviewLead, Role::BatchReviewer).is_ok());
+        assert!(can_start_worker(&Starter::ReviewLead, Role::Reviewer).is_ok());
         for starter in [Starter::ReviewLead, Starter::ShortLived, Starter::Subagent] {
             assert_eq!(
                 can_start_worker(&starter, Role::TaskWorker)
@@ -496,7 +541,7 @@ mod tests {
             );
         }
         assert_eq!(
-            can_start_worker(&Starter::AreaLead(area("web")), Role::BatchReviewer)
+            can_start_worker(&Starter::AreaLead(area("web")), Role::Reviewer)
                 .unwrap_err()
                 .code(),
             codes::WORKER_START_DENIED
@@ -511,7 +556,7 @@ mod tests {
         assert!(can_stop_worker(&lead, Role::TaskWorker, Some(&web)).is_ok());
         assert!(can_stop_worker(&lead, Role::TaskWorker, Some(&api)).is_err());
         assert!(can_stop_worker(&lead, Role::AreaLead, Some(&web)).is_err());
-        assert!(can_stop_worker(&Starter::ReviewLead, Role::BatchReviewer, None).is_ok());
+        assert!(can_stop_worker(&Starter::ReviewLead, Role::Reviewer, None).is_ok());
         assert!(can_stop_worker(&Starter::ReviewLead, Role::TaskWorker, Some(&web)).is_err());
         for starter in [Starter::Human, Starter::MainAgent, Starter::System] {
             assert!(can_stop_worker(&starter, Role::AreaLead, Some(&web)).is_ok());

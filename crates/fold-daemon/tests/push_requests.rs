@@ -20,18 +20,6 @@ async fn nothing_before_a_message(h: &Harness, inbox: &mut FakeInbox, agent: &st
     expect(inbox, &message_notice(&message)).await;
 }
 
-/// Makes `agent` the lead of an area, as if the main agent had started it as one.
-#[cfg(test)]
-async fn lead_an_area(h: &Harness, agent: &str) {
-    crate::common::roles::give_role(
-        &h.handle.store,
-        agent,
-        fold_core::roles::Role::AreaLead,
-        None,
-    )
-    .await;
-}
-
 #[cfg(test)]
 fn cards() -> Value {
     json!([
@@ -48,7 +36,6 @@ fn draft(id: &str) -> Value {
 #[tokio::test]
 async fn each_request_step_pushes_the_agent_that_acts_next() {
     let h = Harness::start().await;
-    lead_an_area(&h, "backend").await;
     let mut frontend = h.register_inbox("frontend").await;
     let mut backend = h.register_inbox("backend").await;
     let mut review = h.register_inbox("review").await;
@@ -117,9 +104,9 @@ async fn each_request_step_pushes_the_agent_that_acts_next() {
 
 #[tokio::test]
 async fn a_human_request_reaches_the_main_agent_and_every_area_lead_and_own_steps_push_nothing() {
-    let h = Harness::start().await;
+    let mut h = Harness::start_without_leads().await;
+    h.lead_area("backend").await;
     h.make_main("frontend").await;
-    lead_an_area(&h, "backend").await;
     let mut frontend = h.register_inbox("frontend").await;
     let mut backend = h.register_inbox("backend").await;
     let mut review = h.register_inbox("review").await;

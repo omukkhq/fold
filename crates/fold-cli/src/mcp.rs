@@ -4,9 +4,11 @@ use std::path::PathBuf;
 use clap::Args;
 use fold_cli::claude_files::{AGENT_ENV, AGENT_TAGS_ENV};
 use fold_cli::daemon_client::{self, ClientConfig, ClientError, HandshakeError};
+use fold_daemon::mcp::OutsideProject;
 use fold_daemon::mcp::handshake::{Hello, PROTOCOL_VERSION};
 use thiserror::Error;
 
+use crate::init::project_root_at_or_above;
 use crate::serve;
 
 #[derive(Args)]
@@ -34,12 +36,21 @@ pub enum McpError {
     DaemonClosed,
 }
 
-/// Connects this session to the daemon and copies MCP bytes between stdio and the socket until either side closes. One process is one session.
+/// Connects this session to the daemon and copies MCP bytes between stdio and the socket until either side closes. One process is one session. A session in a folder outside every fold project gets [`OutsideProject`] instead, without a daemon: the user's Claude Code configuration starts `fld mcp` in every folder, and there it serves no tools and writes nothing to stderr.
 pub fn run(args: &McpArgs) -> Result<(), McpError> {
-    let config = serve::client_config(args.socket.as_deref(), &serve::Dirs::from_env())?;
     let cwd = std::env::current_dir()
         .and_then(|dir| dir.canonicalize())
         .map_err(McpError::Cwd)?;
+    if project_root_at_or_above(&cwd).is_none() {
+        let runtime = serve::current_thread_runtime().map_err(McpError::Runtime)?;
+        runtime.block_on(OutsideProject::serve(
+            tokio::io::stdin(),
+            tokio::io::stdout(),
+        ));
+        runtime.shutdown_background();
+        return Ok(());
+    }
+    let config = serve::client_config(args.socket.as_deref(), &serve::Dirs::from_env())?;
     let agent = std::env::var_os(AGENT_ENV)
         .filter(|name| !name.is_empty())
         .map(|name| name.to_string_lossy().into_owned());

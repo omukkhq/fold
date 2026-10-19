@@ -15,9 +15,7 @@ use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::socket_router;
 use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::events::BusMessage;
-use fold_daemon::services::projects::{
-    PushOutcome, commit_main, commit_message, init_project, init_project_from_git, push,
-};
+use fold_daemon::services::projects::{PushOutcome, commit_message, init_project_from_git, push};
 use fold_daemon::{Daemon, DaemonConfig};
 use fold_store::StoreError;
 use fold_store::projects::ProjectRow;
@@ -66,7 +64,7 @@ impl Host {
     }
 
     async fn plain_project(&self) -> Project {
-        let project = init_project(&self.paths, &self.path("app"), None, &self.clock)
+        let project = crate::common::init_with_git(&self.paths, &self.path("app"), &self.clock)
             .await
             .unwrap();
         Project::open(&project.slug, &project.root, &self.clock).await
@@ -98,7 +96,7 @@ impl Project {
         }
     }
 
-    /// Adds `remote` as the remote `origin`, as `fld remote set` does.
+    /// Adds `remote` as the remote `origin`, as `fld remote add` does.
     fn set_remote(&self, remote: &Path) {
         let config = self.paths.config();
         let mut text = fs::read_to_string(&config).unwrap();
@@ -194,18 +192,18 @@ impl Project {
         )
         .await
         .unwrap();
-        commit_message(&row, &[])
+        commit_message(&row)
     }
 
-    /// Writes the commits the project's job may not have written yet, so a test starts from a known map.
+    /// Runs the project's Git job once: the folder follows main and the commits the job may not have written yet are written, so a test starts from a known map.
     async fn committed(&self) {
-        commit_main(
-            &self.handle.store,
-            &self.paths,
+        fold_daemon::services::projects::sync_folder(
+            &fold_daemon::services::projects::RemoteContext::of(&self.handle),
             &Git::default(),
-            self.handle.clock.as_ref(),
         )
         .await
+        .unwrap()
+        .committed
         .unwrap();
     }
 }
@@ -258,18 +256,28 @@ INSERT INTO workspaces (id, number, task_id, worker_id, kind, path, base_revisio
 INSERT INTO changesets (id, number, workspace_id, task_id, base_revision_id, tree_hash, message, created_by, created_at) VALUES (1, 1, 1, 1, 1, 't', 'm', 'frontend/ui', 0);
 INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 4, 1, 2, 'Login form', 0, 0);
 INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at) VALUES (1, 1, 1, 1, 't', 1, 'frontend', 0);
-INSERT INTO integrations (id, number, kind, proposal_id, version_id, result, actor, created_at) VALUES (1, 1, 'proposal', 1, 1, 'succeeded', 'human:ana', 0);
+INSERT INTO integrations (id, number, kind, proposal_id, version_id, result, actor, created_at) VALUES (2, 2, 'proposal', 1, 1, 'succeeded', 'human:ana', 0);
 ";
 
 #[tokio::test]
 async fn three_revisions_become_three_commits_and_later_ones_go_on_top() {
     let host = Host::new();
     let project = host.plain_project().await;
+    // Every commit fold writes after this takes the identity of the repository's own config, whatever agent or human made its revision.
+    git(
+        &project.paths.git_dir(),
+        &["config", "user.name", "Ana Lima"],
+    );
+    git(
+        &project.paths.git_dir(),
+        &["config", "user.email", "ana@example.com"],
+    );
     let remote = host.remote("remote.git");
     project.set_remote(&remote);
     project.seed(PROPOSAL).await;
     project
-        .add_revision(&[("a.txt", b"one\n")], IntegrationId::from_number(1))
+        // `i-1` recorded the folder's files as `r1`.
+        .add_revision(&[("a.txt", b"one\n")], IntegrationId::from_number(2))
         .await;
     project
         .add_revision(&[("a.txt", b"two\n"), ("src/b.rs", b"fn b() {}\n")], None)
@@ -314,14 +322,12 @@ async fn three_revisions_become_three_commits_and_later_ones_go_on_top() {
             &["log", "-1", "--format=%an <%ae>|%cn <%ce>", commit],
         )
     };
-    assert_eq!(
-        people(&commits[1]),
-        "frontend/ui <frontend.ui@fold.local>|fold <fold@localhost>\n"
-    );
-    assert_eq!(
-        people(&commits[0]),
-        "fold <fold@localhost>|fold <fold@localhost>\n"
-    );
+    for commit in &commits[..2] {
+        assert_eq!(
+            people(commit),
+            "Ana Lima <ana@example.com>|Ana Lima <ana@example.com>\n"
+        );
+    }
     let map = project.map();
     assert_eq!(map.lines().count(), 3);
     assert!(map.ends_with(&format!("r3 {}\n", commits[0])));
@@ -356,11 +362,12 @@ async fn three_revisions_become_three_commits_and_later_ones_go_on_top() {
     assert_eq!(after[2..], commits[..]);
     assert_eq!(project.map().lines().count(), 5);
     assert_eq!(project.pushed_events().await.len(), 2);
-    // The project's repository is the folder's own, and the folder shows main.
+    // The project's repository is the folder's own, and the folder shows main once the Git job ran.
     assert_eq!(
         git(&mirror, &["rev-parse", "--is-bare-repository"]),
         "false\n"
     );
+    project.committed().await;
     assert_eq!(
         fs::read(project.paths.root().join("a.txt")).unwrap(),
         b"four\n"
@@ -571,9 +578,16 @@ async fn a_project_made_from_a_git_repository_pushes_on_top_of_its_head() {
     );
     let source = host.path("source.git");
     let head = log(&source)[0].clone();
-    let imported = init_project_from_git(&host.paths, &work, None, Git::default(), &host.clock)
-        .await
-        .unwrap();
+    let imported = init_project_from_git(
+        &host.paths,
+        &work,
+        None,
+        &crate::common::ana(),
+        Git::default(),
+        &host.clock,
+    )
+    .await
+    .unwrap();
     let project = Project::open(&imported.slug, &imported.root, &host.clock).await;
     project.set_remote(&source);
     assert_eq!(
@@ -581,7 +595,7 @@ async fn a_project_made_from_a_git_repository_pushes_on_top_of_its_head() {
         PushOutcome::UpToDate {
             remote: "origin".to_owned(),
             branch: "main".to_owned(),
-            last: Some(id(1)),
+            last: Some(RevisionId::GENESIS),
         }
     );
     project
@@ -592,6 +606,7 @@ async fn a_project_made_from_a_git_repository_pushes_on_top_of_its_head() {
         .await;
     let outcome = project.push().await.unwrap();
     assert!(matches!(outcome, PushOutcome::Synced { commits: 2, .. }));
+    project.committed().await;
     let commits = log(&source);
     assert_eq!(commits.len(), 3);
     assert_eq!(commits[2], head);
@@ -635,7 +650,7 @@ fn log_is_empty(repo: &Path) -> bool {
 #[tokio::test]
 async fn the_push_route_is_socket_only_and_names_the_human() {
     let host = Host::new();
-    let project = init_project(&host.paths, &host.path("app"), None, &host.clock)
+    let project = crate::common::init_with_git(&host.paths, &host.path("app"), &host.clock)
         .await
         .unwrap();
     let remote = host.remote("remote.git");
@@ -713,7 +728,7 @@ async fn the_push_route_is_socket_only_and_names_the_human() {
         body["error"]["details"]["hint"]
             .as_str()
             .unwrap()
-            .contains("fld remote set")
+            .contains("fld remote add")
     );
     daemon.shutdown().await;
 }

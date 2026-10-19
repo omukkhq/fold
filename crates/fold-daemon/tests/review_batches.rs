@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::common::roles::give_role;
+use crate::common::roles::{give_review_claim, give_role};
 use crate::proposal_tools_support::{Fixture, human, t};
 use fold_core::reviews::{Side, Verdict};
 use fold_core::roles::Role;
@@ -52,7 +52,9 @@ struct Scene {
 impl Scene {
     async fn new() -> Self {
         let fx = Fixture::new().await;
+        // Each author leads the area of its own task, as only a lead claims a task.
         for title in ["docs", "extra"] {
+            give_role(&fx.handle.store, title, Role::AreaLead, Some(title)).await;
             fx.handle
                 .tasks
                 .create_task(
@@ -60,7 +62,7 @@ impl Scene {
                     CreateTask {
                         title: TaskTitle::parse(title).unwrap(),
                         description: TaskDescription::new("what to build"),
-                        labels: Vec::new(),
+                        labels: vec![fold_core::LabelName::parse(title).unwrap()],
                     },
                 )
                 .await
@@ -94,6 +96,8 @@ impl Scene {
             fx.reviews()
                 .create_proposal(&author, t(task), "Change", Some("tests pass"))
                 .await
+                .unwrap()
+                .detail()
                 .unwrap();
             authors.push(author);
         }
@@ -590,6 +594,8 @@ async fn a_member_that_gets_a_new_version_keeps_no_approval_from_the_batch() {
     reviews
         .update_proposal(&scene.authors[1], p(2), None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     let submitted = reviews
         .submit_batch_review(
@@ -634,6 +640,8 @@ async fn a_member_that_gets_a_new_version_keeps_no_approval_from_the_batch() {
     reviews
         .update_proposal(&scene.authors[0], p(1), None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
     assert_eq!(scene.summary(p(1)).await.latest_verdict, None);
 }
@@ -712,14 +720,35 @@ async fn batch_commands_refuse_what_the_rules_forbid() {
     );
     assert_eq!(twice.code(), codes::ALREADY_IN_BATCH);
     assert_eq!(details(&twice)["batch"], "rb-1");
+    let no_role = refusal(
+        reviews
+            .create_review_batch(&scene.authors[3], vec![p(2), p(3)])
+            .await,
+    );
+    assert_eq!(no_role.code(), codes::INTEGRATOR_REQUIRED);
+    give_role(&scene.fx.handle.store, "checker", Role::Reviewer, None).await;
+    let checker = scene.fx.agent("checker").await;
+    let worker = refusal(
+        reviews
+            .create_review_batch(&checker, vec![p(1), p(3)])
+            .await,
+    );
+    assert_eq!(worker.code(), codes::WORKER_CLAIM_DENIED);
+    give_review_claim(
+        &scene.fx.handle.store,
+        "checker",
+        p(3),
+        scene.fx.handle.clock.now(),
+    )
+    .await;
     let other = refusal(
         reviews
-            .create_review_batch(&scene.authors[3], vec![p(1), p(3)])
+            .create_review_batch(&scene.review, vec![p(3), p(4)])
             .await,
     );
     assert_eq!(other.code(), codes::ALREADY_CLAIMED);
     assert_eq!(
-        scene.summary(p(3)).await.review_claim,
+        scene.summary(p(4)).await.review_claim,
         None,
         "a refused batch takes no claim"
     );

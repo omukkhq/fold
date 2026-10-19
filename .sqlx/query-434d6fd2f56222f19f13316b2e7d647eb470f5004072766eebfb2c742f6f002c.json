@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE human_changes SET state = 'superseded', closed_at = ? WHERE state = 'conflicted'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "434d6fd2f56222f19f13316b2e7d647eb470f5004072766eebfb2c742f6f002c"
+}

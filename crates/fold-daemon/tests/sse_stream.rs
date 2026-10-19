@@ -64,6 +64,8 @@ impl Fixture {
             },
         );
         let tree = write_initial_tree(&objects, tree).unwrap();
+        // The project folder holds r1's file, so the folder has no change of its own to report.
+        std::fs::write(project.paths().root().join("README.md"), b"# demo\n").unwrap();
         let revision = initial_revision(tree, project.now()).unwrap();
         let stored = write_revision(&objects, &revision).unwrap();
         create_initial_revision(project.store(), &stored, None)
@@ -210,7 +212,7 @@ fn new_event(event_type: EventType) -> NewEvent {
 fn live_workspace(number: u32, summary: &str) -> LiveWorkspace {
     LiveWorkspace {
         workspace: WorkspaceId::from_number(number).unwrap(),
-        task: TaskId::from_number(number).unwrap(),
+        task: Some(TaskId::from_number(number).unwrap()),
         worker: "frontend".to_owned(),
         base: RevisionId::from_number(1).unwrap(),
         files: vec![ChangedFile {
@@ -537,6 +539,7 @@ async fn a_workspace_state_queued_before_the_snapshot_is_left_to_the_snapshot() 
 async fn the_snapshot_and_the_live_frames_carry_the_real_workspace_state() {
     let fx = Fixture::new().await;
     let creator = agent("frontend");
+    crate::common::roles::lead_work_areas(&fx.handle.store).await;
     fx.handle
         .tasks
         .create_task(
@@ -544,7 +547,7 @@ async fn the_snapshot_and_the_live_frames_carry_the_real_workspace_state() {
             CreateTask {
                 title: TaskTitle::parse("task").unwrap(),
                 description: TaskDescription::new("body"),
-                labels: Vec::new(),
+                labels: crate::common::roles::work_labels(),
             },
         )
         .await

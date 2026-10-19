@@ -671,7 +671,7 @@ fn write_merge_uses_the_caller_s_labels() {
     let merge = merge_trees(&base, &ours, &main, &blob).unwrap();
     let labels = MarkerLabels {
         ours: "sync workspace".into(),
-        base: "export".into(),
+        base: Some("export".into()),
         theirs: "remote".into(),
     };
     let conflicted = write_merge(
@@ -703,7 +703,7 @@ fn sidecar_names_append_the_suffix() {
         MarkerLabels::sync(r(4), r(9)),
         MarkerLabels {
             ours: "workspace".into(),
-            base: "base r4".into(),
+            base: Some("base r4".into()),
             theirs: "main r9".into(),
         }
     );

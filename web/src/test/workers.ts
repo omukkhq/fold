@@ -94,6 +94,8 @@ export function needsItem(fields: Partial<NeedsYouItem> = {}): NeedsYouItem {
     header: null,
     title: null,
     reason: null,
+    commit: null,
+    paths: [],
     ...fields,
   };
 }
@@ -146,12 +148,14 @@ export function proposalSummary(
     review_claim: null,
     turn: "with_reviewer",
     conflicted: false,
+    checks_failed: false,
     human_review: null,
     human_approved: true,
     close_reason: null,
     closed_at: null,
     created_at: 1_760_000_000_000,
     updated_at: 1_760_000_000_000,
+    integration_queued: false,
     ...fields,
   };
 }

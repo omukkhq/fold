@@ -2,22 +2,25 @@ import type { NeedsYouItem, NeedsYouKind } from "@/api/workers";
 import { taskPath } from "@/features/board/card";
 import { messagesHref } from "@/features/messages/search";
 import { asksText } from "@/features/workers/permission";
+import { codeData } from "@/format/codeText";
 import { projectPath, withQuery } from "@/routes/paths";
 
-/** A line of the list: a person who asks, or an item chip, then the words and the screen it opens. */
+/** A line of the list: a person who asks, or an item chip, then the words and the screen it opens, if any. */
 export interface NeedsYouLine {
   key: string;
   kind: NeedsYouKind;
   /** The agent that asks; null for an item the line names by its chip. */
   person: string | null;
   chip: string | null;
+  /** The words, with each command between backticks and the item's data escaped, for `CodeText`. */
   text: string;
   task: string | null;
-  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker. */
+  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker, the conflicting files of a human change or of an unstash, the files that hold the project folder back, the file, line and problem of main's checks file, the command that brings the Git branch back. Marked and escaped as `text` is. */
   title: string | null;
   since: number;
-  hint: string;
-  href: string;
+  /** What the line opens; null for a line that opens nothing, with `href`. */
+  hint: string | null;
+  href: string | null;
 }
 
 export interface NeedsYouGroup {
@@ -33,6 +36,11 @@ const GROUPS: readonly { kind: NeedsYouKind; title: string }[] = [
   { kind: "request_draft", title: "Request drafts" },
   { kind: "human_task", title: "Human tasks" },
   { kind: "blocker", title: "Blockers" },
+  { kind: "human_change", title: "Your changes" },
+  { kind: "head_moved", title: "Git branch" },
+  { kind: "folder_held", title: "Project folder" },
+  { kind: "unstash_conflicted", title: "Unstash conflict" },
+  { kind: "checks_file_invalid_on_main", title: "Checks file" },
 ];
 
 /** The items for this human: an item that waits for another named human is theirs. Before a name, every item shows. */
@@ -45,23 +53,40 @@ export function itemsFor(
   );
 }
 
-/** The title as the second line shows it, trimmed; null for a blank or missing title. The line cuts a long one to its width. */
+/** The title as the second line shows it, trimmed and escaped as data; null for a blank or missing title. The line cuts a long one to its width. */
 export function titleText(title: string | null): string | null {
-  const text = title?.trim() ?? "";
-  return text === "" ? null : text;
+  const text = markedText(title);
+  return text === null ? null : codeData(text);
+}
+
+/** A daemon text that marks its commands between backticks, trimmed; null for a blank or missing text. */
+function markedText(text: string | null): string | null {
+  const trimmed = text?.trim() ?? "";
+  return trimmed === "" ? null : trimmed;
+}
+
+/** The files an item names, such as the conflicting files of a human change, for the second line, which holds one short path: the first file, and how many more there are; null when none is named. */
+export function pathsText(paths: readonly string[]): string | null {
+  const [first] = paths;
+  if (first === undefined) {
+    return null;
+  }
+  return paths.length === 1
+    ? codeData(first)
+    : `${codeData(first)} and ${String(paths.length - 1)} more`;
 }
 
 /** `asks about Chart library` with the question's header, else what kind of answer it wants. */
 export function questionText(
   item: Pick<NeedsYouItem, "header" | "choices">,
 ): string {
-  if (item.header !== null) return `asks about ${item.header}`;
+  if (item.header !== null) return `asks about ${codeData(item.header)}`;
   return item.choices.length > 0 ? "asks you to choose" : "asks a question";
 }
 
 function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
   const base = {
-    key: `${item.kind}:${item.message ?? item.question ?? item.proposal ?? item.request ?? item.task ?? String(index)}`,
+    key: `${item.kind}:${item.message ?? item.question ?? item.proposal ?? item.request ?? item.task ?? item.commit ?? String(index)}`,
     kind: item.kind,
     task: item.task,
     title:
@@ -109,11 +134,66 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         ...base,
         person: item.agent,
         chip: null,
-        text: asksText(item.tool ?? "a tool"),
+        text: asksText(codeData(item.tool ?? "a tool")),
         hint: "opens the permission panel",
         href: withQuery(projectPath(slug, "agents"), {
           question: item.question ?? "",
         }),
+      };
+    case "human_change":
+      return {
+        ...base,
+        person: null,
+        chip: item.commit === null ? null : item.commit.slice(0, 7),
+        task: null,
+        title: pathsText(item.paths),
+        text: "conflicts with main; the main agent explains it",
+        hint: "opens the history of main",
+        href: projectPath(slug, "repository"),
+      };
+    case "head_moved":
+      return {
+        ...base,
+        person: null,
+        chip: null,
+        task: null,
+        title: markedText(item.reason),
+        text: "fold does not update the project folder until the Git branch is back",
+        hint: "opens the history of main",
+        href: projectPath(slug, "repository"),
+      };
+    case "folder_held":
+      return {
+        ...base,
+        person: null,
+        chip: null,
+        task: null,
+        title: pathsText(item.paths),
+        text: "Changes were made in your project. Undo the changes or save them using `fld record`",
+        hint: "opens the history of main",
+        href: projectPath(slug, "repository"),
+      };
+    case "unstash_conflicted":
+      return {
+        ...base,
+        person: null,
+        chip: null,
+        task: null,
+        title: pathsText(item.paths),
+        text: "Unstash conflicts. Fix the files and run `fld record`",
+        hint: null,
+        href: null,
+      };
+    case "checks_file_invalid_on_main":
+      return {
+        ...base,
+        person: null,
+        chip: null,
+        task: null,
+        title: titleText(item.title),
+        text: "Integrations wait until the checks file on main is fixed",
+        hint: null,
+        href: null,
       };
     case "human_review":
       return {
@@ -136,7 +216,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
   }
 }
 
-/** The list in group order: questions, permissions, reviews, request drafts, human tasks, blockers; a group without items is left out. */
+/** The list in group order: questions, permissions, reviews, request drafts, human tasks, blockers, human changes, the Git branch, the project folder, an unstash conflict, main's checks file; a group without items is left out. */
 export function needsYouGroups(
   slug: string,
   items: readonly NeedsYouItem[],

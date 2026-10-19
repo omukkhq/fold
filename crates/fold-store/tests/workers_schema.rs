@@ -209,7 +209,7 @@ async fn a_worker_process_keeps_its_role_area_and_session_and_binds_its_own_kind
     );
     let lead = process(&store, 1, Role::AreaLead, Some(1), "s1").await;
     let task_worker = process(&store, 2, Role::TaskWorker, Some(1), "s2").await;
-    let reviewer = process(&store, 4, Role::BatchReviewer, None, "s4").await;
+    let reviewer = process(&store, 4, Role::Reviewer, None, "s4").await;
     let twice = exec(
         &store,
         "INSERT INTO worker_processes (agent_id, role, area_id, session_id, state, started_by, started_at) VALUES (1, 'area_lead', 1, 's9', 'starting', 'main', 0)",
@@ -491,7 +491,7 @@ async fn a_project_has_one_review_lead() {
         second.constraint().as_deref(),
         Some("worker_processes.role")
     );
-    process(&store, 5, Role::BatchReviewer, None, "s3").await;
+    process(&store, 5, Role::Reviewer, None, "s3").await;
 }
 
 #[tokio::test]
@@ -602,7 +602,7 @@ async fn a_stored_task_coder_becomes_a_task_worker_and_keeps_its_rows() {
         [
             (1, "area_lead".to_owned()),
             (2, "task_worker".to_owned()),
-            (3, "batch_reviewer".to_owned()),
+            (3, "reviewer".to_owned()),
             (4, "task_worker".to_owned())
         ]
     );
@@ -690,4 +690,105 @@ async fn a_stored_task_coder_becomes_a_task_worker_and_keeps_its_rows() {
     .await
     .unwrap_err();
     assert!(second_lead.to_string().contains("UNIQUE"), "{second_lead}");
+}
+
+/// A reviewer stored with the role name `batch_reviewer`, bound to a proposal, beside a task worker.
+const BATCH_REVIEWERS: &str = "
+INSERT INTO agents (id, name, created_at) VALUES (1, 'web-worker', 0), (2, 'batch-reviewer', 0), (3, 'author', 0);
+INSERT INTO workers (id, agent_id, name, created_at) VALUES (3, 3, 'author', 0);
+INSERT INTO labels (id, name, color, created_at) VALUES (1, 'ui', 'sage', 0);
+INSERT INTO areas (id, name, label_id, created_by, created_at) VALUES (1, 'web', 1, 'main', 0);
+INSERT INTO tasks (id, number, title, created_by, created_at, updated_at) VALUES (1, 1, 'one', 'fold', 0, 0), (2, 2, 'two', 'fold', 0, 0);
+INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 1, 1, 3, 'p', 0, 0), (2, 2, 2, 3, 'q', 0, 0);
+INSERT INTO worker_processes (id, agent_id, role, area_id, session_id, state, started_by, started_at, stopped_at, idle_since, turns) VALUES (1, 1, 'task_worker', 1, 's1', 'stopped', 'web-lead', 10, 20, NULL, 3), (2, 2, 'batch_reviewer', NULL, 's2', 'idle', 'review-lead', 10, NULL, 30, 4);
+INSERT INTO worker_proposals (worker_process_id, proposal_id) VALUES (2, 1);
+";
+
+#[tokio::test]
+async fn a_stored_batch_reviewer_becomes_a_reviewer_and_keeps_its_rows() {
+    use sqlx::Connection;
+    let dir = tempfile::TempDir::new().unwrap();
+    let paths = fold_core::ProjectPaths::new(dir.path().join("project"));
+    std::fs::create_dir_all(paths.db().parent().unwrap()).unwrap();
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(paths.db())
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let mut conn = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .unwrap();
+    let mut before: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/project");
+    let rename = before
+        .migrations
+        .iter()
+        .position(|migration| migration.description == "reviewer role")
+        .unwrap();
+    before.migrations = std::borrow::Cow::Owned(before.migrations[..rename].to_vec());
+    before.run(&mut conn).await.unwrap();
+    sqlx::raw_sql(BATCH_REVIEWERS)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    conn.close().await.unwrap();
+
+    let store = Store::open_project(&paths).await.unwrap();
+    let mut read = store.read().acquire().await.unwrap();
+    let row = agents::find_worker_process(&mut read, &AgentName::parse("batch-reviewer").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (row.role, row.state, row.turns),
+        (Role::Reviewer, WorkerState::Idle, 4)
+    );
+    assert_eq!(row.proposals.len(), 1);
+    drop(read);
+    let broken = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(store.read())
+        .await
+        .unwrap();
+    assert!(broken.is_empty());
+
+    exec(
+        &store,
+        "INSERT INTO agents (id, name, created_at) VALUES (9, 'late', 0)",
+    )
+    .await
+    .unwrap();
+    let old_role = exec(
+        &store,
+        "INSERT INTO worker_processes (agent_id, role, session_id, state, started_by, started_at) VALUES (9, 'batch_reviewer', 's9', 'working', 'review-lead', 40)",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        old_role
+            .to_string()
+            .contains("worker_processes_role_values"),
+        "{old_role}"
+    );
+    let task_binding = exec(
+        &store,
+        "INSERT INTO worker_proposals (worker_process_id, proposal_id) VALUES (1, 2)",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        task_binding
+            .to_string()
+            .contains("worker_proposals_reviewer_only")
+    );
+    exec(
+        &store,
+        "INSERT INTO worker_proposals (worker_process_id, proposal_id) VALUES (2, 2)",
+    )
+    .await
+    .unwrap();
+    let moved = exec(
+        &store,
+        "UPDATE worker_processes SET role = 'task_worker' WHERE id = 2",
+    )
+    .await
+    .unwrap_err();
+    assert!(moved.to_string().contains("worker_processes_fixed"));
 }

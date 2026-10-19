@@ -13,7 +13,7 @@ use fold_core::{FoldError, codes};
 use thiserror::Error;
 
 use crate::lock;
-use crate::platform::sync_dir;
+use crate::platform::{create_dir_below, sync_dir};
 
 const FORMAT_VERSION: u8 = 1;
 const COMPRESSION_NONE: u8 = 0;
@@ -103,11 +103,17 @@ pub struct ObjectStore {
 }
 
 impl ObjectStore {
-    /// `dir` is the project's `.fold` directory.
+    /// `dir` is the project's `.fold` directory, which is created when missing.
     pub fn open(dir: &Path) -> Result<Self, ObjectError> {
+        fs::create_dir_all(dir)?;
+        Self::open_existing(dir)
+    }
+
+    /// [`ObjectStore::open`] for an open project: a missing `dir` is `NotFound` and is not created, so a project whose `.fold/` was deleted never gets it back from its object writes.
+    pub fn open_existing(dir: &Path) -> Result<Self, ObjectError> {
         let objects = dir.join("objects");
         let scratch = objects.join("tmp");
-        fs::create_dir_all(&scratch)?;
+        create_dir_below(dir, &scratch)?;
         Ok(Self {
             objects,
             scratch,
@@ -392,7 +398,7 @@ impl ObjectStore {
     fn publish(&self, tmp: &Path, hash: &ObjectHash) -> Result<(), ObjectError> {
         let dest = self.path(hash);
         let fan = dest.parent().unwrap_or(&self.objects);
-        fs::create_dir_all(fan)?;
+        create_dir_below(&self.objects, fan)?;
         if let Err(error) = fs::rename(tmp, &dest) {
             // Where rename refuses an existing target, a concurrent writer of the same hash got there first with identical content.
             if self.touch_existing(hash)? {

@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT q.id AS \"id!: i64\", p.number AS \"proposal!: i64\", q.version, q.expected_version, q.actor\n           FROM integration_requests q JOIN proposals p ON p.id = q.proposal_id\n           WHERE q.ended_at IS NULL\n           ORDER BY q.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "integration_requests",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "proposal!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "version",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "integration_requests",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "expected_version",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "integration_requests",
+            "name": "expected_version"
+          }
+        }
+      },
+      {
+        "name": "actor",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integration_requests",
+            "name": "actor"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "dd0f5c0423ce695b260fd23691446bccc106c0da166f956f45cfb853f6d831b8"
+}

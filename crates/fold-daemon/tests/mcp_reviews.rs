@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 /// The fixed count always puts the unread part on the footer line; real counts can add to it.
 const FOOTER: &str = "fold: ";
 
-const REVIEW_TOOLS: [&str; 13] = [
+const REVIEW_TOOLS: [&str; 18] = [
     "create_proposal",
     "list_proposals",
     "get_proposal",
@@ -33,6 +33,11 @@ const REVIEW_TOOLS: [&str; 13] = [
     "get_review_comments",
     "integrate_proposal",
     "require_human_review",
+    "submit_main_change",
+    "submit_review_fix",
+    "run_checks",
+    "get_check_run",
+    "set_review_scope",
 ];
 
 #[cfg(test)]
@@ -189,7 +194,7 @@ async fn create_proposal_opens_v1_and_moves_the_task_to_review() {
 async fn list_proposals_shows_turn_claim_and_mark() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = connect(&fx, "review").await;
+    let review = review_lead(&fx).await;
     open_p1(&fx, &frontend).await;
     ok(&review, "claim_review", json!({"id": "P-1"})).await;
     ok(
@@ -294,7 +299,7 @@ async fn get_proposal_shows_versions_gates_and_files() {
     assert_eq!(error["code"], "invalid_id");
 }
 
-/// After `request_changes` on v1 the reviewer reads only what v2 changed, and a `new` comment on those lines lands on v2. Another agent, such as a new batch reviewer, reads the same earlier verdict.
+/// After `request_changes` on v1 the reviewer reads only what v2 changed, and a `new` comment on those lines lands on v2. Another agent, such as a new reviewer, reads the same earlier verdict.
 #[tokio::test]
 async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
     let fx = Fixture::new().await;
@@ -335,8 +340,19 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
         since["files"],
         json!([{"path": "src/lib.rs", "change": "modified", "added": 1, "removed": 0}])
     );
+    assert_eq!(
+        since["earlier"],
+        json!({"files": 2, "added": 2, "removed": 2})
+    );
+    assert_eq!(since["new_files"], json!([]));
+    assert_eq!(since["base_moved"], false);
+    assert_eq!(since["base_conflicts"], json!([]));
+    assert_eq!(since["suggested_scope"], "change", "one line of four");
+    assert_eq!(since["scope_rules"], json!([]));
     let full = ok(&review, "get_proposal_diff", json!({"id": "P-1"})).await;
     assert_eq!(full["since"], Value::Null);
+    assert_eq!(full.get("earlier"), None);
+    assert_eq!(full.get("suggested_scope"), None);
     assert_eq!(full["from"], "r1");
     assert_eq!(
         full["totals"],
@@ -379,7 +395,7 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
     );
     assert_eq!(comment["outdated"], false);
 
-    let next = connect(&fx, "batch-reviewer-2").await;
+    let next = connect(&fx, "reviewer-2").await;
     let view = ok(&next, "get_proposal", json!({"id": "P-1"})).await;
     assert_eq!(view["last_reviewed"], "v1");
     let stale = err(
@@ -425,6 +441,165 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
     )
     .await;
     assert_eq!(error["code"], "proposal_not_found");
+}
+
+/// Opens `P-2` for `T-2` with `files` written by `backend`, approves it and integrates it as `r2`, so main moves under the frontend's workspace.
+#[cfg(test)]
+async fn integrate_p2(fx: &Fixture, backend: &Client, review: &Client, files: &[(&str, &str)]) {
+    ok(backend, "create_workspace", json!({"task": "T-2"})).await;
+    for (path, content) in files {
+        fx.write(2, path, content);
+    }
+    ok(
+        backend,
+        "create_proposal",
+        json!({"task": "T-2", "title": "Export"}),
+    )
+    .await;
+    ok(
+        review,
+        "submit_review",
+        json!({"id": "P-2", "version": 1, "verdict": "approve", "body": "good"}),
+    )
+    .await;
+    let integrated = ok(review, "integrate_proposal", json!({"id": "P-2"})).await;
+    assert_eq!(integrated["revision"], "r2");
+}
+
+/// The worker syncs with a newer main between versions: the change since v1 holds only the worker's own edits, never the files main gained, and names the file the earlier version did not change.
+#[tokio::test]
+async fn a_change_since_an_earlier_version_leaves_out_what_main_gained() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    let backend = connect(&fx, "backend").await;
+    let review = review_lead(&fx).await;
+    open_p1(&fx, &frontend).await;
+    ok(
+        &review,
+        "submit_review",
+        json!({"id": "P-1", "version": 1, "verdict": "request_changes", "body": "add z"}),
+    )
+    .await;
+    integrate_p2(
+        &fx,
+        &backend,
+        &review,
+        &[
+            ("README.md", "# demo from main\n"),
+            ("docs/guide.md", "guide\n"),
+        ],
+    )
+    .await;
+    let synced = ok(&frontend, "sync_workspace", json!({"ws": "ws-1"})).await;
+    assert_eq!(synced["base"], "r2");
+    assert_eq!(synced["conflicted"], json!([]));
+    fx.write(1, "src/lib.rs", "pub fn y() {}\npub fn z() {}\n");
+    fx.write(1, "src/extra.rs", "pub fn extra() {}\n");
+    ok(&frontend, "update_proposal", json!({"id": "P-1"})).await;
+    let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(view["base"], "r2");
+
+    let since = ok(
+        &review,
+        "get_proposal_diff",
+        json!({"id": "P-1", "since": 1}),
+    )
+    .await;
+    assert_eq!(
+        since["files"],
+        json!([
+            {"path": "src/extra.rs", "change": "added", "added": 1, "removed": 0},
+            {"path": "src/lib.rs", "change": "modified", "added": 1, "removed": 0},
+        ])
+    );
+    assert_eq!(
+        since["totals"],
+        json!({"files": 2, "added": 2, "removed": 0})
+    );
+    assert_eq!(
+        since["earlier"],
+        json!({"files": 1, "added": 1, "removed": 1})
+    );
+    assert_eq!(since["new_files"], json!(["src/extra.rs"]));
+    assert_eq!(since["base_moved"], true);
+    assert_eq!(since["base_conflicts"], json!([]));
+    assert_eq!(since["suggested_scope"], "full");
+    assert_eq!(since["scope_rules"], json!(["new_files", "large_delta"]));
+    let hunks = ok(
+        &review,
+        "get_proposal_diff",
+        json!({"id": "P-1", "since": 1, "path": "src/lib.rs"}),
+    )
+    .await;
+    assert_eq!(
+        hunks["hunks"],
+        json!([{"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 2, "lines": [
+            {"kind": "context", "old_no": 1, "new_no": 1, "text": "pub fn y() {}\n"},
+            {"kind": "added", "old_no": null, "new_no": 2, "text": "pub fn z() {}\n"},
+        ]}])
+    );
+    let error = err(
+        &review,
+        "get_proposal_diff",
+        json!({"id": "P-1", "since": 1, "path": "README.md"}),
+    )
+    .await;
+    assert_eq!(error["code"], "path_not_in_comparison");
+    let full = ok(&review, "get_proposal_diff", json!({"id": "P-1"})).await;
+    assert_eq!(full["from"], "r2");
+    assert_eq!(
+        full["totals"],
+        json!({"files": 2, "added": 3, "removed": 1})
+    );
+}
+
+/// When the earlier version and main changed the same lines, the worker merged main by hand: the change since v1 names that file, and shows it against the earlier version's own content.
+#[tokio::test]
+async fn a_change_since_an_earlier_version_names_the_files_merged_by_hand() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    let backend = connect(&fx, "backend").await;
+    let review = review_lead(&fx).await;
+    open_p1(&fx, &frontend).await;
+    ok(
+        &review,
+        "submit_review",
+        json!({"id": "P-1", "version": 1, "verdict": "request_changes", "body": "rebase"}),
+    )
+    .await;
+    integrate_p2(
+        &fx,
+        &backend,
+        &review,
+        &[("src/lib.rs", "pub fn w() {}\n"), ("README.md", "# main\n")],
+    )
+    .await;
+    let synced = ok(&frontend, "sync_workspace", json!({"ws": "ws-1"})).await;
+    assert_eq!(synced["conflicted"], json!(["src/lib.rs"]));
+    fx.write(1, "src/lib.rs", "pub fn w() {}\npub fn y() {}\n");
+    ok(
+        &frontend,
+        "record_changes",
+        json!({"ws": "ws-1", "message": "Keep both functions"}),
+    )
+    .await;
+    ok(&frontend, "update_proposal", json!({"id": "P-1"})).await;
+
+    let since = ok(
+        &review,
+        "get_proposal_diff",
+        json!({"id": "P-1", "since": 1}),
+    )
+    .await;
+    assert_eq!(
+        since["files"],
+        json!([{"path": "src/lib.rs", "change": "modified", "added": 1, "removed": 0}])
+    );
+    assert_eq!(since["new_files"], json!([]));
+    assert_eq!(since["base_moved"], true);
+    assert_eq!(since["base_conflicts"], json!(["src/lib.rs"]));
+    assert_eq!(since["suggested_scope"], "full");
+    assert_eq!(since["scope_rules"], json!(["base_conflicts"]));
 }
 
 #[tokio::test]
@@ -474,7 +649,7 @@ async fn close_proposal_closes_it() {
 async fn claim_review_names_the_holder_and_release_review_gives_it_up() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = connect(&fx, "review").await;
+    let review = review_lead(&fx).await;
     open_p1(&fx, &frontend).await;
     let error = err(&frontend, "claim_review", json!({"id": "P-1"})).await;
     assert_eq!(error["code"], "author_cannot_review");
@@ -499,7 +674,7 @@ async fn claim_review_names_the_holder_and_release_review_gives_it_up() {
 async fn create_review_checkout_gives_the_path_and_version() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = connect(&fx, "review").await;
+    let review = review_lead(&fx).await;
     open_p1(&fx, &frontend).await;
     let error = err(&review, "create_review_checkout", json!({"id": "P-1"})).await;
     assert_eq!(error["code"], "review_claim_required");
@@ -514,6 +689,58 @@ async fn create_review_checkout_gives_the_path_and_version() {
         .root()
         .join(".fold/ws/review-p-1/src/lib.rs");
     assert_eq!(std::fs::read_to_string(copied).unwrap(), "pub fn y() {}\n");
+}
+
+#[tokio::test]
+async fn submit_review_fix_makes_the_reviewers_version_and_the_reviewer_approves_it() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    let review = review_lead(&fx).await;
+    open_p1(&fx, &frontend).await;
+    ok(&review, "claim_review", json!({"id": "P-1"})).await;
+    ok(&review, "create_review_checkout", json!({"id": "P-1"})).await;
+    let file = fx
+        .project
+        .paths()
+        .root()
+        .join(".fold/ws/review-p-1/src/lib.rs");
+    std::fs::write(file, "pub fn y() -> u8 { 1 }\n").unwrap();
+    let arguments = json!({
+        "id": "P-1",
+        "version": 1,
+        "fixes": [{"path": "src/lib.rs", "reason": "y returns 1 as the task asks"}],
+        "checks": "cargo test: 1 passed",
+    });
+    let error = err(&frontend, "submit_review_fix", arguments.clone()).await;
+    assert_eq!(error["code"], "author_cannot_review");
+    assert!(error["hint"].as_str().unwrap().contains("update_proposal"));
+
+    let fixed = ok(&review, "submit_review_fix", arguments.clone()).await;
+    assert_eq!(fixed["id"], "P-1");
+    assert_eq!(fixed["version"], "v2");
+    assert_eq!(fixed["from_version"], "v1");
+    assert_eq!(fixed["checkout"], "ws-2");
+    assert_eq!(fixed["status"], "review");
+    assert!(fixed["changeset"].as_str().unwrap().starts_with("C-"));
+    let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(view["versions"][1]["created_by"], "review");
+    assert_eq!(view["versions"][1]["reviewer_fix"], true);
+    assert_eq!(view["versions"][0].get("reviewer_fix"), None);
+    assert!(
+        view["evidence"]
+            .as_str()
+            .unwrap()
+            .starts_with("Review fixes by review on v1:")
+    );
+    let error = err(&review, "submit_review_fix", arguments).await;
+    assert_eq!(error["code"], "stale_version");
+
+    ok(
+        &review,
+        "submit_review",
+        json!({"id": "P-1", "version": 2, "verdict": "approve", "body": "Fix: src/lib.rs (y returns 1). cargo test: 1 passed"}),
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -638,7 +865,6 @@ async fn integrate_proposal_publishes_the_next_revision() {
         json!({"id": "P-1", "version": 1, "verdict": "approve", "body": "good"}),
     )
     .await;
-    grant_role(&fx, "frontend", Role::BatchReviewer).await;
     let error = err(&frontend, "integrate_proposal", json!({"id": "P-1"})).await;
     assert_eq!(error["code"], "author_cannot_integrate");
     let error = err(
@@ -739,6 +965,16 @@ async fn every_result_ends_with_the_footer() {
             "require_human_review" => json!({"task": "T-1", "reason": "check"}),
             "list_proposals" => json!({}),
             "close_proposal" => json!({"id": "P-1", "reason": "done"}),
+            "submit_main_change" => json!({"changeset": "C-1", "message": "m"}),
+            "submit_review_fix" => json!({
+                "id": "P-1",
+                "version": 1,
+                "fixes": [{"path": "src/lib.rs", "reason": "r"}],
+                "checks": "ok",
+            }),
+            "set_review_scope" => {
+                json!({"id": "P-1", "version": 1, "scope": "full", "reason": "r"})
+            }
             _ => json!({"id": "P-1"}),
         };
         let result = call_raw(&frontend, tool, arguments).await;
@@ -796,7 +1032,7 @@ async fn errors_carry_code_message_and_hint() {
 async fn as_acts_for_a_subagent_worker() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = connect(&fx, "review").await;
+    let review = review_lead(&fx).await;
     open_p1(&fx, &frontend).await;
     ok(&review, "register_worker", json!({"name": "checker"})).await;
     let claim = ok(
@@ -918,4 +1154,112 @@ async fn proposal_tools_need_a_review_service() {
         .call_tool(CallToolRequestParams::new("list_proposals").with_arguments(arguments))
         .await;
     assert!(refused.is_err());
+}
+
+/// The result of `get_check_run` once the run has ended.
+#[cfg(test)]
+async fn ended_run(client: &Client, run: &Value) -> Value {
+    fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
+        let value = ok(client, "get_check_run", json!({"run": run})).await;
+        if value["state"] == "running" {
+            Err(value)
+        } else {
+            Ok(value)
+        }
+    })
+    .await
+}
+
+#[tokio::test]
+async fn run_checks_answers_at_once_and_get_check_run_reads_the_result() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    ok(&frontend, "create_workspace", json!({"task": "T-1"})).await;
+    let none = ok(&frontend, "run_checks", json!({"task": "T-1"})).await;
+    assert_eq!(none, json!({"task": "T-1", "checks": "none"}));
+    fx.write(
+        1,
+        "fold-checks.toml",
+        "[[check]]\nname = \"unit\"\nrun = \"echo nope; exit 2\"\n",
+    );
+    let started = ok(&frontend, "run_checks", json!({"task": "T-1"})).await;
+    assert_eq!(started["checks"], "running");
+    assert_eq!(started["run"], "cr-1");
+    assert_eq!(started["workspace"], "ws-1");
+    let run = ended_run(&frontend, &started["run"]).await;
+    assert_eq!(run["state"], "failed");
+    assert_eq!(run["reason"], "check_failed");
+    assert_eq!(run["stage"], "proposal");
+    assert_eq!(run["failed"], json!(["unit"]));
+    assert_eq!(run["results"][0]["exit_code"], 2);
+    assert_eq!(run["results"][0]["log_tail"], "nope");
+    let missing = err(&frontend, "get_check_run", json!({"run": "cr-9"})).await;
+    assert_eq!(missing["code"], "check_run_not_found");
+    let bad = err(&frontend, "get_check_run", json!({"run": "P-1"})).await;
+    assert_eq!(bad["code"], "invalid_id");
+    let review = connect(&fx, "review").await;
+    let other = err(&review, "run_checks", json!({"task": "T-1"})).await;
+    assert_eq!(other["code"], "not_workspace_owner");
+}
+
+#[tokio::test]
+async fn get_proposal_lists_the_check_runs_of_the_version() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    ok(&frontend, "create_workspace", json!({"task": "T-1"})).await;
+    fx.write(1, "src/lib.rs", "pub fn y() {}\n");
+    fx.write(
+        1,
+        "fold-checks.toml",
+        "[[check]]\nname = \"unit\"\nrun = \"true\"\n",
+    );
+    let started = ok(&frontend, "run_checks", json!({"task": "T-1"})).await;
+    ended_run(&frontend, &started["run"]).await;
+    ok(
+        &frontend,
+        "create_proposal",
+        json!({"task": "T-1", "title": "Add checks"}),
+    )
+    .await;
+    let review = connect(&fx, "review").await;
+    let proposal = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(
+        proposal["checks"],
+        json!([{"run": "cr-1", "stage": "proposal", "state": "passed", "reason": null, "failed": []}])
+    );
+}
+
+#[tokio::test]
+async fn create_proposal_answers_with_the_run_and_wait_for_events_wakes_on_its_end() {
+    let fx = Fixture::new().await;
+    let frontend = connect(&fx, "frontend").await;
+    ok(&frontend, "create_workspace", json!({"task": "T-1"})).await;
+    fx.write(1, "src/lib.rs", "pub fn y() {}\n");
+    fx.write(
+        1,
+        "fold-checks.toml",
+        "[[check]]\nname = \"unit\"\nrun = \"true\"\n",
+    );
+    let created = ok(
+        &frontend,
+        "create_proposal",
+        json!({"task": "T-1", "title": "Add checks"}),
+    )
+    .await;
+    assert_eq!(
+        created,
+        json!({"task": "T-1", "workspace": "ws-1", "checks": "running", "run": "cr-1"})
+    );
+    let woke = ok(
+        &frontend,
+        "wait_for_events",
+        json!({"types": ["checks.finished"], "task": "T-1", "timeout_s": 60}),
+    )
+    .await;
+    let events = woke["events"].as_array().unwrap();
+    assert_eq!(events[0]["type"], "checks.finished", "{woke}");
+    assert_eq!(events[0]["data"]["state"], "passed");
+    let proposal = ok(&frontend, "get_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(proposal["version"], "v1");
+    assert_eq!(proposal["human_review"]["set_by"], "fold");
 }

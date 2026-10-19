@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.kind, t.number AS \"task!: i64\", p.number AS \"proposal?: i64\",\n                  c.worker_id, w.name AS worker\n           FROM claims c\n           JOIN workers w ON w.id = c.worker_id\n           LEFT JOIN proposals p ON p.id = c.proposal_id\n           JOIN tasks t ON t.id = COALESCE(c.task_id, p.task_id)\n           WHERE w.agent_id = ? AND c.released_at IS NULL\n           ORDER BY c.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "kind",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "task!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "proposal?: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "worker_id",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "worker_id"
+          }
+        }
+      },
+      {
+        "name": "worker",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "844d63ea0ab8b4821c71e9b1460b81c0f3e9ec907f9b0754fa3098e1da7df625"
+}

@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.scope, c.reason, c.chosen_by, c.chosen_at\n           FROM review_scope_choices c\n           JOIN proposal_versions v ON v.id = c.version_id\n           JOIN proposals p ON p.id = v.proposal_id\n           WHERE p.number = ?1 AND v.version = ?2\n           ORDER BY c.id DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "scope",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_scope_choices",
+            "name": "scope"
+          }
+        }
+      },
+      {
+        "name": "reason",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_scope_choices",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "name": "chosen_by",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_scope_choices",
+            "name": "chosen_by"
+          }
+        }
+      },
+      {
+        "name": "chosen_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_scope_choices",
+            "name": "chosen_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1edccf0367dcd484a6a05320056b1f93ad8ed0a7663bb90b55c270644f7866a4"
+}

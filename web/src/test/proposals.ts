@@ -23,6 +23,7 @@ export function proposalSummary(
     author: "backend/db",
     state: "open",
     conflicted: false,
+    checks_failed: false,
     current_version: 1,
     turn: "with_reviewer",
     latest_verdict: null,
@@ -30,6 +31,7 @@ export function proposalSummary(
     review_claim: null,
     human_review: null,
     close_reason: null,
+    integration_queued: false,
     created_at: T0,
     updated_at: T0,
     closed_at: null,
@@ -52,6 +54,9 @@ export function proposalVersion(
     evidence: null,
     created_by: "backend/db",
     created_at: T0 + version * 60_000,
+    human_edit: false,
+    review_again: false,
+    reviewer_fix: false,
     ...fields,
   };
 }
@@ -69,6 +74,8 @@ export function review(
     body: "",
     comments: 0,
     created_at: T0 + version * 60_000 + 30_000,
+    kept_from: null,
+    scope: null,
     ...fields,
   };
 }
@@ -135,6 +142,7 @@ export function proposalDetail(
     conflict: null,
     files: [],
     totals: { files: 2, added_lines: 10, removed_lines: 2 },
+    checks: [],
     ...fields,
   };
 }

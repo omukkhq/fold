@@ -338,7 +338,7 @@ describe("AgentsScreen", () => {
     );
     expect(within(dialog).queryByText("Area")).toBeNull();
     expect(
-      within(dialog).getByText(/groups open proposals into review batches/),
+      within(dialog).getByText(/gives one proposal or a group of related ones/),
     ).toBeTruthy();
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Start lead" }),

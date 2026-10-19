@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 
-const FOLD_TOOLS: [&str; 83] = [
+const FOLD_TOOLS: [&str; 90] = [
     "register_agent",
     "register_worker",
     "list_agents",
@@ -87,13 +87,20 @@ const FOLD_TOOLS: [&str; 83] = [
     "approve_request_draft",
     "close_request",
     "write_handoff",
+    "open_main_workspace",
+    "submit_main_change",
+    "add_exclude_patterns",
+    "submit_review_fix",
+    "run_checks",
+    "get_check_run",
+    "set_review_scope",
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 150] = [
+const FOLD_ERROR_CODES: [&str; 157] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -244,13 +251,20 @@ const FOLD_ERROR_CODES: [&str; 150] = [
     "task_hold_denied",
     "checklist_denied",
     "checklist_ambiguous",
+    "human_edit_denied",
+    "worker_busy",
+    "file_not_editable",
+    "checks_file_invalid",
+    "checks_running",
+    "check_run_not_found",
+    "worker_claim_denied",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
 const PENDING_ERROR_CODES: [&str; 1] = ["too_large"];
 
 /// The `invalid_request` reasons that have a name.
-const INVALID_REQUEST_REASONS: [&str; 9] = [
+const INVALID_REQUEST_REASONS: [&str; 12] = [
     "self_dependency",
     "checklist_origin",
     "linked_item",
@@ -260,10 +274,14 @@ const INVALID_REQUEST_REASONS: [&str; 9] = [
     "no_service_manager",
     "too_many_attachments",
     "attachment_too_large",
+    "human_change_superseded",
+    "checks_failed",
+    "integration_queued",
 ];
 
-const NON_TOOL_NAMES: [&str; 26] = [
+const NON_TOOL_NAMES: [&str; 36] = [
     "human_review",
+    "fold_failed",
     "left_out",
     "stall_minutes",
     "lease_minutes",
@@ -279,7 +297,7 @@ const NON_TOOL_NAMES: [&str; 26] = [
     "area_lead",
     "review_lead",
     "task_worker",
-    "batch_reviewer",
+    "reviewer",
     "idle_minutes",
     "handoff_at",
     "clear_max_per_area",
@@ -289,6 +307,15 @@ const NON_TOOL_NAMES: [&str; 26] = [
     "clear_model",
     "clear_mcp",
     "no_proposal",
+    "human_change",
+    "new_files",
+    "base_moved",
+    "base_conflicts",
+    "suggested_scope",
+    "scope_rules",
+    "large_delta",
+    "v3_or_later",
+    "review_scope",
 ];
 
 const SECTIONS: [&str; 14] = [
@@ -538,6 +565,18 @@ fn the_skill_has_the_frontmatter_keys_and_every_section() {
         .filter_map(|line| line.strip_prefix("## "))
         .collect();
     assert_eq!(headings, SECTIONS);
+}
+
+#[test]
+fn the_skill_maps_existing_code_into_areas_before_planning() {
+    for rule in [
+        "map the code before you plan",
+        "Derive the areas from that map",
+        "with the folders each area owns",
+        "name the folders it owns",
+    ] {
+        assert!(SKILL.contains(rule), "{rule}");
+    }
 }
 
 #[test]

@@ -35,6 +35,9 @@ const DOMAINS = new Set([
   "message",
   "request",
   "project",
+  "human_change",
+  "stash",
+  "checks",
 ]);
 
 export function domainOf(type: string): string | null {
@@ -395,22 +398,61 @@ function invalidationKeys(
             keys.reviewBatches(slug),
             keys.needsYou(slug),
           ];
+    case "checks": {
+      const run = typeof event.data.run === "string" ? event.data.run : null;
+      return [
+        keys.proposals(slug),
+        ...proposalKey,
+        ...taskKey,
+        board,
+        ...(run === null ? [] : [keys.checkRun(slug, run)]),
+      ];
+    }
     case "integration":
       return [
         ...(proposal === null ? [] : [keys.proposals(slug), ...proposalKey]),
         ...taskKey,
         repository,
         board,
+        // Needs you lists main's invalid checks file from the first integration it holds.
+        ...(event.type === "integration.held" ? [keys.needsYou(slug)] : []),
       ];
     case "main":
-      return [repository, board];
+      // Needs you lists main's invalid checks file only while main stays on the revision that holds the integrations.
+      return [repository, board, keys.needsYou(slug)];
     case "remote":
       return [repository, keys.git(slug)];
+    case "human_change":
+      // Needs you lists a conflicted human change until an integration brings it onto main or a newer one replaces it.
+      return [
+        repository,
+        board,
+        keys.git(slug),
+        keys.project(slug),
+        keys.needsYou(slug),
+      ];
     case "git":
-      // `git.committed` names the revision whose commit the revision, proposal and task reads show.
+      // `git.committed` names the revision whose commit the revision, proposal and task reads show; Needs you lists a Git branch that fold did not move and a project folder that waits on the human's changes.
       return type === "git.committed"
         ? [repository, keys.git(slug), keys.proposals(slug), keys.tasks(slug)]
-        : [repository, keys.git(slug), keys.project(slug)];
+        : type === "git.head_moved" ||
+            type === "git.uncommitted_changes" ||
+            type === "git.attention_cleared"
+          ? [
+              repository,
+              keys.git(slug),
+              keys.project(slug),
+              keys.needsYou(slug),
+            ]
+          : [repository, keys.git(slug), keys.project(slug)];
+    case "stash":
+      // Needs you lists an unstash whose conflict markers wait in the project folder.
+      return [
+        repository,
+        keys.git(slug),
+        keys.project(slug),
+        keys.needsYou(slug),
+      ];
     case "project":
       return [keys.project(slug), keys.workers(slug), keys.agents(slug)];
     case "request":

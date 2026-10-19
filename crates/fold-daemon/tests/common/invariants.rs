@@ -43,7 +43,7 @@ async fn offenders(store: &Store, problems: &mut Vec<String>, rule: &str, sql: &
     }
 }
 
-/// `main` names the highest revision, and every revision after `r1` is the one revision of a succeeded integration. Integration numbers may leave gaps: a number is allocated before the transaction that would use it.
+/// `main` names the highest revision, and every revision after the genesis, the first one, which has no parent, is the one revision of a succeeded integration. Integration numbers may leave gaps: a number is allocated before the transaction that would use it.
 async fn revisions(store: &Store, problems: &mut Vec<String>) {
     offenders(
         store,
@@ -58,10 +58,10 @@ async fn revisions(store: &Store, problems: &mut Vec<String>) {
     offenders(
         store,
         problems,
-        "a revision after r1 without a succeeded integration",
+        "a revision after the genesis without a succeeded integration",
         "SELECT 'r' || r.number FROM revisions r LEFT JOIN integrations i ON i.id = r.integration_id
-         WHERE r.number > 1
-           AND (i.id IS NULL OR i.result <> 'succeeded' OR i.kind NOT IN ('proposal', 'pull')
+         WHERE r.parent_id IS NOT NULL
+           AND (i.id IS NULL OR i.result <> 'succeeded' OR i.kind NOT IN ('proposal', 'pull', 'direct', 'record')
                 OR i.revision_id IS NOT r.id)",
     )
     .await;
@@ -75,7 +75,7 @@ async fn revisions(store: &Store, problems: &mut Vec<String>) {
     .await;
 }
 
-/// Each revision object holds what its row says, its tree, its parent's hash, its number and its integration, and its parent is the revision numbered just before it, so `main` is one chain of whole revisions.
+/// Each revision object holds what its row says, its tree, its parent's hash, its number and its integration, and its parent is the revision numbered just before it, so `main` is one chain of whole revisions from the genesis, the first revision.
 async fn revision_objects(store: &Store, paths: &ProjectPaths, problems: &mut Vec<String>) {
     type Row = (
         i64,
@@ -95,8 +95,9 @@ async fn revision_objects(store: &Store, paths: &ProjectPaths, problems: &mut Ve
     .await
     .unwrap();
     let objects = ObjectStore::open(&paths.fold_dir()).unwrap();
+    let first = rows.first().map(|row| row.0);
     for (number, hash, tree, parent_hash, parent_number, integration) in rows {
-        if parent_number != Some(number - 1).filter(|before| *before > 0) {
+        if parent_number != (Some(number) != first).then_some(number - 1) {
             problems.push(format!(
                 "a revision whose parent is not the one before it: r{number}"
             ));
@@ -124,7 +125,7 @@ async fn revision_objects(store: &Store, paths: &ProjectPaths, problems: &mut Ve
     }
 }
 
-/// Done means a completion: an `integration` completion belongs to the task of a succeeded proposal integration, a succeeded proposal integration completes exactly one task, and a pull completes none.
+/// Done means a completion: an `integration` completion belongs to the task of a succeeded proposal integration, a succeeded proposal integration completes exactly one task, and a pull or a direct change completes none.
 async fn completions(store: &Store, problems: &mut Vec<String>) {
     offenders(
         store,

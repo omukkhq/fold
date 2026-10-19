@@ -16,7 +16,7 @@ function cursorsOf(queryClient: QueryClient): Map<string, number> {
   return map;
 }
 
-/** Opens the stream of one project: events go to the Query cache and the connection state goes to the status store. `onAuthRequired` runs once when the daemon ends the stream with `auth_required`. */
+/** Opens the stream of one project: events go to the Query cache and the connection state goes to the status store. `onAuthRequired` runs once when the daemon ends the stream with `auth_required`, and `onProjectGone` once when it answers `project_not_found`. */
 export function connectProject(
   queryClient: QueryClient,
   slug: string,
@@ -24,6 +24,7 @@ export function connectProject(
   status: LiveStatusStore,
   now: () => number = Date.now,
   onAuthRequired: () => void = () => undefined,
+  onProjectGone: () => void = () => undefined,
 ): StreamHandle {
   status.reset();
   const saved = cursorsOf(queryClient);
@@ -54,6 +55,7 @@ export function connectProject(
         invalidateProject(queryClient, slug);
       },
       onAuthRequired,
+      onProjectGone,
     },
   });
   return {

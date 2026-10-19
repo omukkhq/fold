@@ -28,6 +28,8 @@ pub const RESTORE_CHECKPOINT: &str = "restore_checkpoint";
 pub const RECORD_CHANGES: &str = "record_changes";
 pub const SYNC_WORKSPACE: &str = "sync_workspace";
 pub const ABANDON_WORKSPACE: &str = "abandon_workspace";
+pub const OPEN_MAIN_WORKSPACE: &str = "open_main_workspace";
+pub const ADD_EXCLUDE_PATTERNS: &str = "add_exclude_patterns";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -163,6 +165,24 @@ pub struct AbandonWorkspaceInput {
     pub as_worker: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct OpenMainWorkspaceInput {
+    /// The worker that makes this call. Only the main agent's main worker opens the main workspace, so leave it out.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct AddExcludePatternsInput {
+    /// The patterns to add to .fold/exclude, each one line of .gitignore syntax, such as build/ or *.log. A pattern the file lists already is left out.
+    pub patterns: Vec<String>,
+    /// The worker that makes this call. Only the main agent's main worker adds patterns, so leave it out.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
 pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
@@ -182,7 +202,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CREATE_WORKSPACE,
-            "Create the task workspace for a task: a copy of main under .fold/ws/ where you make your changes. It claims the task for your worker and moves it to In Progress. A workspace left by a worker that released the task is adopted instead, with its files as they are, and adopted is true.",
+            "Create the task workspace for a task: a copy of main under .fold/ws/ where you make your changes. It claims the task for your worker, unless your worker holds the claim already, and moves it to In Progress; the claim follows the rules of claim_task, so a worker that fold started gets worker_claim_denied for a task its lead did not give it. A workspace left by a worker that released the task is adopted instead, with its files as they are, and adopted is true.",
             schema_for_type::<CreateWorkspaceInput>(),
         ),
         Tool::new(
@@ -224,6 +244,16 @@ pub fn tools() -> Vec<Tool> {
             ABANDON_WORKSPACE,
             "Give up your workspace: it closes, and the task goes back to Todo or Backlog. Its files and your claim stay.",
             schema_for_type::<AbandonWorkspaceInput>(),
+        ),
+        Tool::new(
+            OPEN_MAIN_WORKSPACE,
+            "Main agent only. Open the main workspace: a copy of main under .fold/ws/ that belongs to no task, for a change the user asks you to make yourself, such as the initial setup or a small docs change. Edit, build and test there, then call record_changes, show the user the diff and a summary, and call submit_main_change only after the user's explicit OK. While the main workspace is open this returns it with reused true. When a human change from the project folder conflicts with main, human_change names it; a new main workspace then holds the human's files with main merged in and conflict markers, which you resolve with the user before you record.",
+            schema_for_type::<OpenMainWorkspaceInput>(),
+        ),
+        Tool::new(
+            ADD_EXCLUDE_PATTERNS,
+            "Main agent only, when the user asks. Add patterns to .fold/exclude, the project's local ignore rules: paths that are never recorded, imported or proposed and that Git leaves out too, without a change to .gitignore or .foldignore. A ! line in .gitignore or .foldignore brings a path back.",
+            schema_for_type::<AddExcludePatternsInput>(),
         ),
     ]
 }
@@ -455,7 +485,7 @@ pub async fn call(
                 "workspace": view.id.to_string(),
                 "path": view.path,
                 "base": view.base.to_string(),
-                "task": view.task.to_string(),
+                "task": view.task.map(|task| task.to_string()),
                 "adopted": created.adopted,
             })
         }
@@ -483,7 +513,7 @@ pub async fn call(
                 "state": view.state.as_str(),
                 "path": view.path,
                 "base": view.base.to_string(),
-                "task": view.task.to_string(),
+                "task": view.task.map(|task| task.to_string()),
                 "worker": view.worker.as_ref().map(WorkerName::as_str),
                 "conflicted": details.conflicted,
                 "changed_files": view.changed_files,
@@ -590,8 +620,43 @@ pub async fn call(
                 .map_err(from_workspace)?;
             json!({
                 "workspace": abandoned.workspace.id.to_string(),
-                "task_status": abandoned.task_status.as_str(),
+                "task_status": abandoned.task_status.map(|status| status.as_str()),
             })
+        }
+        OPEN_MAIN_WORKSPACE => {
+            let _: OpenMainWorkspaceInput = parse(arguments)?;
+            let actor = server.actor(as_worker).await?;
+            let opened = server
+                .workspaces
+                .open_main_workspace(&actor)
+                .await
+                .map_err(from_workspace)?;
+            let view = opened.workspace;
+            let mut value = json!({
+                "workspace": view.id.to_string(),
+                "path": view.path,
+                "base": view.base.to_string(),
+                "reused": opened.reused,
+            });
+            if let Some(change) = opened.human_change {
+                value["human_change"] = json!({
+                    "commit": change.commit,
+                    "human": change.human,
+                    "held": change.held,
+                    "conflicted": change.conflicted,
+                });
+            }
+            value
+        }
+        ADD_EXCLUDE_PATTERNS => {
+            let input: AddExcludePatternsInput = parse(arguments)?;
+            let actor = server.actor(as_worker).await?;
+            let added = server
+                .workspaces
+                .add_exclude_patterns(&actor, input.patterns)
+                .await
+                .map_err(from_workspace)?;
+            json!({"file": ".fold/exclude", "added": added})
         }
         _ => return Ok(None),
     };

@@ -101,13 +101,14 @@ impl Fixture {
                 .unwrap();
         }
         for _ in 0..2 {
+            crate::common::roles::lead_work_areas(project.store()).await;
             tasks
                 .create_task(
                     &human("ana"),
                     CreateTask {
                         title: TaskTitle::parse("task").unwrap(),
                         description: TaskDescription::new(""),
-                        labels: Vec::new(),
+                        labels: crate::common::roles::work_labels(),
                     },
                 )
                 .await

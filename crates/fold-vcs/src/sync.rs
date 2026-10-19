@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use fold_core::merge::{
     Conflict, ConflictKind, TreeMerge, contains_marker_line, merge_trees, merge3, render_markers,
-    sync_labels,
+    stash_labels, sync_labels,
 };
 use fold_core::object::{ObjectHash, ObjectKind, hash_object};
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
@@ -22,6 +22,9 @@ use crate::scan::{Reading, hash_stable};
 
 /// Main's side of a conflict is written beside the conflicted path under this suffix.
 pub const SIDECAR_SUFFIX: &[u8] = b".fold-main";
+
+/// An unstash writes the stash's side of a conflict that takes no markers beside the conflicted path under this suffix.
+pub const STASH_SIDECAR_SUFFIX: &[u8] = b".fold-stash";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncInput {
@@ -52,25 +55,44 @@ pub struct ConflictedPath {
     pub kind: ConflictKind,
 }
 
-/// The three labels of the conflict markers. [`contains_marker_line`] recognises the lines `<<<<<<< workspace…`, `||||||| base r<n>` and `>>>>>>> main r<n>`, so [`unresolved`] sees a marker only when at least one label keeps that form.
+/// The labels of the conflict markers; without a base label the markers take the two-way form. [`contains_marker_line`] recognises the lines `<<<<<<< workspace…`, `||||||| base r<n>`, `>>>>>>> main r<n>`, `<<<<<<< main (r<n>)` and `>>>>>>> stash@{<n>}`, so [`unresolved`] sees a marker only when at least one label keeps that form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkerLabels {
     pub ours: String,
-    pub base: String,
+    pub base: Option<String>,
     pub theirs: String,
 }
 
 impl MarkerLabels {
     pub fn sync(base: RevisionId, main: RevisionId) -> Self {
         let [ours, base, theirs] = sync_labels(base, main);
-        Self { ours, base, theirs }
+        Self {
+            ours,
+            base: Some(base),
+            theirs,
+        }
+    }
+
+    /// The labels of an unstash into a project folder that holds main's revision `folder`, of the entry `stash@{position}`.
+    pub fn unstash(folder: RevisionId, position: usize) -> Self {
+        let [ours, theirs] = stash_labels(folder, position);
+        Self {
+            ours,
+            base: None,
+            theirs,
+        }
     }
 }
 
 /// `<path>.fold-main`, where main's side of a conflict at `path` is written.
 pub fn sidecar(path: &RepoPath) -> Result<RepoPath, WorkspaceError> {
+    sidecar_with(path, SIDECAR_SUFFIX)
+}
+
+/// `path` with `suffix` appended, where the other side of a conflict at `path` is written.
+pub fn sidecar_with(path: &RepoPath, suffix: &[u8]) -> Result<RepoPath, WorkspaceError> {
     let mut bytes = path.as_bytes().to_vec();
-    bytes.extend_from_slice(SIDECAR_SUFFIX);
+    bytes.extend_from_slice(suffix);
     RepoPath::parse(&bytes)
 }
 
@@ -95,7 +117,7 @@ pub fn sync(
     let blob = |hash: &ObjectHash| read_blob(objects, hash);
     let merge = merge_trees(&base, &ours, &main, &blob)?;
     let labels = MarkerLabels::sync(input.base_number, input.main_number);
-    let applied = apply(objects, root, index, &merge, &ours, &labels)?;
+    let applied = apply(objects, root, index, &merge, &ours, &labels, SIDECAR_SUFFIX)?;
     Ok(SyncOutcome {
         new_base: input.main_number,
         conflicted: applied.conflicted,
@@ -113,8 +135,29 @@ pub fn write_merge(
     ours_tree: &ObjectHash,
     labels: &MarkerLabels,
 ) -> Result<Vec<ConflictedPath>, FoldError> {
+    write_merge_with(
+        objects,
+        root,
+        index,
+        merge,
+        ours_tree,
+        labels,
+        SIDECAR_SUFFIX,
+    )
+}
+
+/// [`write_merge`], with the other side of a conflict that takes no markers written as `<path><suffix>`.
+pub fn write_merge_with(
+    objects: &ObjectStore,
+    root: &Path,
+    index: &mut StatIndex,
+    merge: &TreeMerge,
+    ours_tree: &ObjectHash,
+    labels: &MarkerLabels,
+    suffix: &[u8],
+) -> Result<Vec<ConflictedPath>, FoldError> {
     let ours = load_flat(objects, ours_tree)?;
-    Ok(apply(objects, root, index, merge, &ours, labels)?.conflicted)
+    Ok(apply(objects, root, index, merge, &ours, labels, suffix)?.conflicted)
 }
 
 /// The conflicted paths that still hold a marker line or whose `<path>.fold-main` still exists, in the order given.
@@ -154,11 +197,12 @@ fn apply(
     merge: &TreeMerge,
     ours: &FlatTree,
     labels: &MarkerLabels,
+    suffix: &[u8],
 ) -> Result<Applied, FoldError> {
     for (_, bytes) in &merge.new_blobs {
         objects.write(ObjectKind::Blob, bytes)?;
     }
-    let plan = plan(objects, merge, ours, labels)?;
+    let plan = plan(objects, merge, ours, labels, suffix)?;
     check(root, index, ours, &plan)?;
 
     let opts = MaterialiseOptions {
@@ -202,6 +246,7 @@ fn plan(
     merge: &TreeMerge,
     ours: &FlatTree,
     labels: &MarkerLabels,
+    suffix: &[u8],
 ) -> Result<Plan, FoldError> {
     let conflict_paths: BTreeSet<&[u8]> =
         merge.conflicts.iter().map(|c| c.path.as_slice()).collect();
@@ -234,7 +279,7 @@ fn plan(
             plan.writes.push((path, entry));
             continue;
         }
-        let side = sidecar(&path)?;
+        let side = sidecar_with(&path, suffix)?;
         if let Some(theirs) = conflict.theirs {
             plan.sidecars.push(side.clone());
             plan.sidecar_writes.push((side, theirs));
@@ -271,7 +316,12 @@ fn render(
         &text(conflict.ours)?,
         &text(conflict.theirs)?,
     );
-    let rendered = render_markers(&merged, &labels.ours, &labels.base, &labels.theirs);
+    let rendered = render_markers(
+        &merged,
+        &labels.ours,
+        labels.base.as_deref(),
+        &labels.theirs,
+    );
     let hash = objects.write(ObjectKind::Blob, rendered.as_bytes())?;
     Ok(FlatEntry {
         kind: merged_mode(conflict),

@@ -141,9 +141,9 @@ async fn a_human_task_blocks_its_dependents_until_a_human_marks_it_done_and_no_a
     assert!(graph["tasks"][0].get("blocker").is_none(), "{graph}");
 
     for (agent, tool, arguments) in [
-        (SOLO, "claim_task", json!({"id": "T-1"})),
-        (SOLO, "takeover_claim", json!({"id": "T-1"})),
-        (SOLO, "create_workspace", json!({"task": "T-1"})),
+        (LEAD, "claim_task", json!({"id": "T-1"})),
+        (LEAD, "takeover_claim", json!({"id": "T-1"})),
+        (LEAD, "create_workspace", json!({"task": "T-1"})),
         (
             SOLO,
             "create_proposal",
@@ -257,9 +257,9 @@ async fn a_task_with_a_blocker_is_not_ready_and_is_neither_claimed_nor_given_to_
     );
 
     for (agent, tool, arguments) in [
-        (SOLO, "claim_task", json!({"id": "T-3"})),
-        (SOLO, "takeover_claim", json!({"id": "T-3"})),
-        (SOLO, "create_workspace", json!({"task": "T-3"})),
+        (LEAD, "claim_task", json!({"id": "T-3"})),
+        (LEAD, "takeover_claim", json!({"id": "T-3"})),
+        (LEAD, "create_workspace", json!({"task": "T-3"})),
         (
             LEAD,
             "start_worker",
@@ -345,7 +345,7 @@ async fn a_planned_blocker_is_set_before_the_lead_hears_of_the_task() {
     until_stdin(&fake, LEAD, "fold: T-4 is ready in your area").await;
     assert!(!ready(&harness).await.contains(&"T-5".to_owned()));
     let refused = harness
-        .refused(SOLO, "claim_task", json!({"id": "T-5"}))
+        .refused(LEAD, "claim_task", json!({"id": "T-5"}))
         .await;
     assert_eq!(refused["code"], codes::TASK_ON_HOLD, "{refused}");
 
@@ -390,9 +390,10 @@ async fn only_a_human_or_the_main_agent_clears_a_blocker_and_completes_a_human_t
         .await;
     until_state(&harness, TASK_WORKER, WorkerState::Idle).await;
     harness.connect(TASK_WORKER).await;
-    harness
-        .call(TASK_WORKER, "claim_task", json!({"id": "T-3"}))
+    let refused = harness
+        .refused(TASK_WORKER, "claim_task", json!({"id": "T-3"}))
         .await;
+    assert_eq!(refused["code"], codes::WORKER_CLAIM_DENIED, "{refused}");
     let claimed = harness
         .refused(
             LEAD,

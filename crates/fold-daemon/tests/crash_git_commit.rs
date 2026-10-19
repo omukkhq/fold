@@ -8,7 +8,6 @@ use crate::git_support::{
 use crate::reviews_support::{Fixture, p};
 use fold_core::events::types;
 use fold_daemon::services::events::BusMessage;
-use fold_daemon::services::projects::commit_main;
 use fold_vcs::git::Git;
 use fold_vcs::git_remote::FOLD_HEAD_REF;
 use fold_vcs::git_sync_map::SYNC_MAP_FILE;
@@ -23,15 +22,10 @@ async fn integrated(fx: &Fixture) {
 }
 
 async fn commit(fx: &Fixture) -> Result<usize, Option<&'static str>> {
-    commit_main(
-        fx.project.store(),
-        fx.project.paths(),
-        &Git::default(),
-        fx.project.clock(),
-    )
-    .await
-    .map(|committed| committed.added.len())
-    .map_err(|error| error.code())
+    crate::git_support::sync(fx)
+        .await
+        .map(|committed| committed.added.len())
+        .map_err(|error| error.code())
 }
 
 /// The `git.committed` events that name a `revision_commits` row's revision and commit.
@@ -122,7 +116,7 @@ async fn a_stop_before_the_rows_fills_them_from_the_map() {
     scenario.teardown();
 }
 
-/// The map has the commit and the branch never moved: the next run moves the branch and the project folder with it.
+/// The map has the commit and the branch never moved, while fold's checkout wrote the folder already: the next run moves the branch and the index to it.
 #[tokio::test]
 async fn a_stop_before_the_branch_move_is_finished_by_the_next_run() {
     let scenario = fail::FailScenario::setup();
@@ -137,7 +131,7 @@ async fn a_stop_before_the_branch_move_is_finished_by_the_next_run() {
     fail::remove("git_commit_before_branch");
     assert_eq!(map(&fx).lines().count(), 2);
     assert_eq!(git(&root, &["rev-parse", "main"]).trim(), first);
-    assert!(!root.join("src/new.rs").exists());
+    assert!(root.join("src/new.rs").is_file());
 
     fx.restart().await;
     assert_eq!(commit(&fx).await, Ok(0));

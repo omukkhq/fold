@@ -1,6 +1,7 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
-import { isApiError } from "../api/errors";
 import { projectQuery } from "../api/queries";
+import { isProjectGone } from "../app/projectGone";
+import { ProjectNotFound } from "../app/ProjectNotFound";
 import { Shell } from "../app/Shell";
 import { LiveProvider } from "../live/LiveProvider";
 import { parseSlug } from "./params";
@@ -18,13 +19,14 @@ export const Route = createFileRoute("/p/$slug")({
         staleTime: "static",
       });
     } catch (error) {
-      if (isApiError(error, "project_not_found")) {
+      if (isProjectGone(error)) {
         notFound({ throw: true });
       }
       throw error;
     }
   },
   component: ProjectLayout,
+  notFoundComponent: ProjectNotFound,
 });
 
 function ProjectLayout() {

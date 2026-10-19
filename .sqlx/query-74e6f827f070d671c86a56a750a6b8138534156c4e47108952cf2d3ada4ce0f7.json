@@ -1,0 +1,129 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.position, s.kind, s.name, s.required AS \"required: bool\", s.outcome, s.exit_code,\n                  s.duration_ms, CASE WHEN ?2 THEN s.log ELSE x'' END AS \"log!: Vec<u8>\",\n                  s.log_bytes, s.truncated AS \"truncated: bool\"\n           FROM check_results s JOIN check_runs c ON c.id = s.run_id\n           WHERE c.number = ?1\n           ORDER BY s.position",
+  "describe": {
+    "columns": [
+      {
+        "name": "position",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "check_results",
+            "name": "position"
+          }
+        }
+      },
+      {
+        "name": "kind",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "check_results",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "check_results",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "required: bool",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "check_results",
+            "name": "required"
+          }
+        }
+      },
+      {
+        "name": "outcome",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "check_results",
+            "name": "outcome"
+          }
+        }
+      },
+      {
+        "name": "exit_code",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "check_results",
+            "name": "exit_code"
+          }
+        }
+      },
+      {
+        "name": "duration_ms",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "check_results",
+            "name": "duration_ms"
+          }
+        }
+      },
+      {
+        "name": "log!: Vec<u8>",
+        "ordinal": 7,
+        "type_info": "Blob",
+        "origin": "Expression"
+      },
+      {
+        "name": "log_bytes",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "check_results",
+            "name": "log_bytes"
+          }
+        }
+      },
+      {
+        "name": "truncated: bool",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "check_results",
+            "name": "truncated"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "74e6f827f070d671c86a56a750a6b8138534156c4e47108952cf2d3ada4ce0f7"
+}

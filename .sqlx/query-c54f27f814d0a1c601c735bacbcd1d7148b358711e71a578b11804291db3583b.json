@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO human_change_conflicts (human_change_id, path, kind) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "c54f27f814d0a1c601c735bacbcd1d7148b358711e71a578b11804291db3583b"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE human_changes SET workspace_id = (SELECT id FROM workspaces WHERE number = ?)\n         WHERE state = 'conflicted'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "a6e7735ea379e73bdb4bdbd845c2802357c504b3c97eea4524d08ada004f9e0b"
+}

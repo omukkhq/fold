@@ -29,7 +29,7 @@ const WAIT: Duration = Duration::from_secs(20);
 const SLUG: &str = "crash";
 const HUMAN: &str = "tanim";
 
-/// `fld init` in a folder `crash` with one file, which becomes `r1`, then, in this process, the agent `frontend` takes `T-1`, adds `src/new.rs` in its workspace and opens `P-1`.
+/// `fld init` in a folder `crash` with one file, which becomes `r1`, then, in this process, the main agent `frontend` takes `T-1` on the user's word, adds `src/new.rs` in its workspace and opens `P-1`.
 async fn project(host: &Host) -> ProjectPaths {
     let root = host.dir.path().join(SLUG);
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -44,7 +44,11 @@ async fn project(host: &Host) -> ProjectPaths {
     let agents = AgentService::new(store.clone(), bus.clone(), clock.clone());
     let mut ctx = agents.start_session(std::process::id()).await.unwrap();
     agents
-        .register_agent(&mut ctx, &AgentName::parse("frontend").unwrap(), &[])
+        .register_agent(
+            &mut ctx,
+            &AgentName::parse("frontend").unwrap(),
+            &[fold_core::Tag::parse(fold_core::MAIN_TAG).unwrap()],
+        )
         .await
         .unwrap();
     let author = agents.actor(&ctx, None).await.unwrap();
@@ -73,6 +77,8 @@ async fn project(host: &Host) -> ProjectPaths {
     )
     .create_proposal(&author, task, "Add the page", None)
     .await
+    .unwrap()
+    .detail()
     .unwrap();
     store.close().await.unwrap();
     paths
@@ -210,8 +216,16 @@ async fn a_daemon_killed_inside_the_integration_transaction_shows_none_of_it() {
 
     let mut daemon = serve(&host, &socket, None).await;
     assert_eq!(head(&store).await, RevisionId::from_number(1).unwrap());
-    assert_eq!(count(&store, "SELECT COUNT(*) FROM revisions").await, 1);
-    assert_eq!(count(&store, "SELECT COUNT(*) FROM integrations").await, 0);
+    // The genesis `r0` and `r1`, the folder's files that init recorded through its own `record` integration.
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM revisions").await, 2);
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM integrations WHERE kind <> 'record'"
+        )
+        .await,
+        0
+    );
     assert_eq!(count(&store, "SELECT COUNT(*) FROM completions").await, 0);
     let detail = proposal(&socket).await;
     assert_eq!(detail["summary"]["state"], "open");
@@ -222,15 +236,15 @@ async fn a_daemon_killed_inside_the_integration_transaction_shows_none_of_it() {
     assert_eq!(answer.status, 200, "{}", answer.body);
     assert_eq!(
         answer.body,
-        json!({"proposal": "P-1", "result": "succeeded", "revision": "r2"})
+        json!({"proposal": "P-1", "result": "succeeded", "revision": "r2", "run": null})
     );
     assert_eq!(
         count(
             &store,
-            "SELECT number FROM integrations WHERE result = 'succeeded'"
+            "SELECT number FROM integrations WHERE kind = 'proposal' AND result = 'succeeded'"
         )
         .await,
-        2
+        3
     );
     assert_store_consistent(&store, &paths).await;
     store.close().await.unwrap();

@@ -41,6 +41,15 @@ const MAIN_HANDSHAKE_PID: u32 = 900_000;
 pub const SLUG: &str = "demo";
 /// The three sessions of the acceptance scenarios, in registration order.
 pub const AGENTS: [&str; 3] = ["frontend", "backend", "review"];
+/// A launcher whose Claude Code is a program that does not exist, so a scenario without a stand-in never runs the real `claude`.
+fn no_claude() -> Launcher {
+    Launcher {
+        claude: std::path::PathBuf::from("/nonexistent/fold-tests-run-no-claude"),
+        ..Launcher::default()
+    }
+}
+
+pub use crate::common::roles::WORK_AREAS as WORK;
 /// The human behind the CLI requests: `FOLD_HUMAN`.
 pub const HUMAN: &str = "ana";
 /// `CLAUDE_CODE_MESSAGING_TOKEN` of every fake inbox.
@@ -54,7 +63,7 @@ pub struct Session {
     server: JoinHandle<()>,
 }
 
-/// Project `demo` open in daemon state, with `r1` holding `README.md` and the project folder holding it as `fld init` leaves it, and one adapter session for each of [`AGENTS`], connected over in-memory streams through the same handshake `fld mcp` performs with `FOLD_AGENT` set. `review` is the review lead, as if fold had started it, and [`HUMAN`] is a known human.
+/// Project `demo` open in daemon state, with `r1` holding `README.md` and the project folder holding it as `fld init` leaves it, and one adapter session for each of [`AGENTS`], connected over in-memory streams through the same handshake `fld mcp` performs with `FOLD_AGENT` set. `review` is the review lead and `frontend` and `backend` lead the areas of [`WORK`], as if fold had started them, and [`HUMAN`] is a known human.
 pub struct Harness {
     pub project: TestProject,
     /// Holds the fake inbox sockets.
@@ -64,12 +73,21 @@ pub struct Harness {
     pub handle: Arc<ProjectHandle>,
     sessions: BTreeMap<String, Session>,
     next_pid: u32,
+    /// The labels [`Harness::create_task`] gives each task: those of the areas of [`WORK`] that have their lead.
+    work_labels: Vec<&'static str>,
     /// The programs the project's worker processes run, kept for [`Harness::start_again`].
     launcher: Launcher,
 }
 
 impl Harness {
     pub async fn start() -> Self {
+        let mut harness = Self::start_without_leads().await;
+        harness.lead_the_work_area().await;
+        harness
+    }
+
+    /// [`Harness::start`] without the area leads: `frontend` and `backend` have no fold role, so neither claims a task, and either may become the main agent.
+    pub async fn start_without_leads() -> Self {
         let harness = Self::start_without_roles().await;
         crate::common::roles::give_role(&harness.handle.store, "review", Role::ReviewLead, None)
             .await;
@@ -85,12 +103,31 @@ impl Harness {
 
     /// The same project and sessions with no worker role and no main agent, so no session may approve, reject or integrate.
     pub async fn start_without_roles() -> Self {
-        Self::start_with_launcher(Launcher::default()).await
+        Self::start_with_launcher(no_claude()).await
     }
 
     /// [`Harness::start_without_roles`] with the programs the project's worker processes run, such as a stand-in for Claude Code.
     pub async fn start_with_launcher(launcher: Launcher) -> Self {
-        let project = TestProject::new().await;
+        Self::start_on(TestProject::new().await, launcher).await
+    }
+
+    /// [`Harness::start`] in a plain project: no Git repository, and Git sync off.
+    pub async fn start_plain() -> Self {
+        let mut harness = Self::start_on(TestProject::plain().await, no_claude()).await;
+        crate::common::roles::give_role(&harness.handle.store, "review", Role::ReviewLead, None)
+            .await;
+        harness.lead_the_work_area().await;
+        fold_daemon::services::projects::ensure_human(
+            harness.project.registry(),
+            harness.project.clock(),
+            &fold_core::HumanName::parse(HUMAN).unwrap(),
+        )
+        .await
+        .unwrap();
+        harness
+    }
+
+    async fn start_on(project: TestProject, launcher: Launcher) -> Self {
         let objects = ObjectStore::open(&project.paths().fold_dir()).unwrap();
         let mut tree = FlatTree::new();
         tree.insert(
@@ -132,6 +169,7 @@ impl Harness {
             handle,
             sessions: BTreeMap::new(),
             next_pid: 4000,
+            work_labels: Vec::new(),
             launcher,
         };
         for agent in AGENTS {
@@ -145,7 +183,9 @@ impl Harness {
         let mut initialized = None;
         let project = TestProject::initialized(async |root, host, clock| {
             copy_dir(source, root);
-            let made = init_project(host, root, Some("Demo"), clock).await.unwrap();
+            let made = init_project(host, root, Some("Demo"), &crate::common::ana(), clock)
+                .await
+                .unwrap();
             initialized = Some(made);
         })
         .await;
@@ -156,7 +196,7 @@ impl Harness {
             name: initialized.name.clone(),
             root: initialized.root.to_string_lossy().into_owned(),
         };
-        let launcher = Launcher::default();
+        let launcher = no_claude();
         let (state, handle) = open(&project, &row, &launcher).await;
         let mut harness = Self {
             project,
@@ -166,12 +206,35 @@ impl Harness {
             handle,
             sessions: BTreeMap::new(),
             next_pid: 4000,
+            work_labels: Vec::new(),
             launcher,
         };
         for agent in AGENTS {
             harness.connect(agent).await;
         }
         (harness, initialized)
+    }
+
+    /// Makes `frontend` and `backend` the leads of their areas of [`WORK`], as if fold had started them, so each claims the tasks that [`Harness::create_task`] labels: only a lead claims a task.
+    pub async fn lead_the_work_area(&mut self) {
+        crate::common::roles::lead_work_areas(&self.handle.store).await;
+        self.work_labels = WORK.map(|(_, label)| label).to_vec();
+    }
+
+    /// Makes `agent`, `frontend` or `backend`, the lead of its area of [`WORK`] alone, for a scenario where the other one has no fold role, such as one that becomes the main agent.
+    pub async fn lead_area(&mut self, agent: &str) {
+        let (_, area) = WORK
+            .into_iter()
+            .find(|(name, _)| *name == agent)
+            .expect("an agent of WORK");
+        crate::common::roles::give_role(&self.handle.store, agent, Role::AreaLead, Some(area))
+            .await;
+        self.work_labels.push(area);
+    }
+
+    /// The labels [`Harness::create_task`] gives a task, for a test that creates one with its own arguments.
+    pub fn work_labels() -> Value {
+        json!(WORK.map(|(_, label)| label))
     }
 
     /// The canonical project root: the `cwd` of every session and hook.
@@ -543,16 +606,22 @@ impl Harness {
 
     /// `create_task` by `agent`; returns the new task id.
     pub async fn create_task(&self, agent: &str, title: &str) -> String {
-        let created = self
-            .call(agent, "create_task", json!({"title": title}))
-            .await;
+        let arguments = if self.work_labels.is_empty() {
+            json!({"title": title})
+        } else {
+            json!({"title": title, "labels": self.work_labels})
+        };
+        let created = self.call(agent, "create_task", arguments).await;
         created["id"].as_str().unwrap().to_owned()
     }
 
-    /// `agent` claims `task` and creates its workspace.
+    /// `agent` claims `task` and creates its workspace. A worker that fold started holds the claim from its lead's `start_worker` and never claims, so it only creates the workspace.
     pub async fn start_work(&self, agent: &str, task: &str) -> Work {
-        let claimed = self.call(agent, "claim_task", json!({"id": task})).await;
-        assert_eq!(claimed["holder"], agent);
+        let view = self.call(agent, "get_task", json!({"id": task})).await;
+        if view["claim"]["holder"] != agent {
+            let claimed = self.call(agent, "claim_task", json!({"id": task})).await;
+            assert_eq!(claimed["holder"], agent);
+        }
         let created = self
             .call(agent, "create_workspace", json!({"task": task}))
             .await;
@@ -806,6 +875,11 @@ pub fn wire(token: &str, text: &str) -> String {
 /// The notice text for a newly opened proposal.
 pub fn proposal_notice(proposal: &str, task: &str) -> String {
     format!("fold: {proposal} opened for {task}. Call claim_review.")
+}
+
+/// The notice text a lead gets when a task of its area is ready and nobody holds it.
+pub fn ready_notice(task: &str) -> String {
+    format!("fold: {task} is ready in your area. Call start_worker.")
 }
 
 /// The notice text for a new message.

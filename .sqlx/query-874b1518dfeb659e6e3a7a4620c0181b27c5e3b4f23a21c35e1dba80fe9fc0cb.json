@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM integration_requests q JOIN proposals p ON p.id = q.proposal_id\n               WHERE p.number = ?1 AND q.version = ?2 AND q.ended_at IS NULL\n           ) AS \"queued!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "queued!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "874b1518dfeb659e6e3a7a4620c0181b27c5e3b4f23a21c35e1dba80fe9fc0cb"
+}

@@ -34,12 +34,13 @@ pub use events::{
     concerns,
 };
 pub use ids::{
-    ChangesetId, ChecklistItemId, CheckpointId, CommentId, IdKind, IdParseError, IntegrationId,
-    MessageId, PermissionQuestionId, ProposalId, RequestId, ReviewBatchId, RevisionId, TaskId,
-    WebTokenId, WorkspaceId,
+    ChangesetId, CheckRunId, ChecklistItemId, CheckpointId, CommentId, IdKind, IdParseError,
+    IntegrationId, MessageId, PermissionQuestionId, ProposalId, RequestId, ReviewBatchId,
+    RevisionId, TaskId, WebTokenId, WorkspaceId,
 };
 pub use layout::{
-    HostPaths, ProjectPaths, review_batch_checkout_path, review_checkout_path, task_workspace_path,
+    HostPaths, ProjectPaths, main_workspace_path, review_batch_checkout_path, review_checkout_path,
+    task_workspace_path,
 };
 pub use messages::{
     Address, AddressError, AddressedAs, Choice, Directory, DirectoryAgent, MessageBody,

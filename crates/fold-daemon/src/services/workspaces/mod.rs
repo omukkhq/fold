@@ -24,12 +24,18 @@ mod auto;
 mod changes;
 mod changesets;
 mod checkpoints;
+mod checks;
 mod compare;
+mod direct;
+mod exclude;
 mod files;
+mod human_change;
+mod human_edit;
 mod integration;
 mod lifecycle;
 mod reconcile;
 mod repository;
+mod review_fix;
 mod stalls;
 mod sync;
 mod sync_task;
@@ -43,16 +49,26 @@ pub use changes::{WorkspaceChanges, WorkspaceEntry};
 pub(crate) use changesets::ProposalSnapshot;
 pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};
-pub use compare::{ResolvedState, StateComparison, StateKind, StateRef, StateSummary};
+pub(crate) use compare::CARRY_CACHE_ENTRIES;
+pub use compare::{
+    CarriedComparison, Carry, CarryCache, ResolvedState, StateComparison, StateKind, StateRef,
+    StateSummary,
+};
+pub use direct::OpenedMainWorkspace;
+pub(crate) use direct::{main_agent, main_agent_in_tx};
+pub(crate) use files::checkpoint_in_tx;
+pub use human_change::TouchedTask;
 pub use lifecycle::{
     Abandoned, ArchiveReason, CreatedWorkspace, WorkspaceDetails, WorkspaceRef, WorkspaceView,
     archive_in_tx,
 };
 pub use reconcile::{Reconciled, Reconciliation};
+pub(crate) use repository::file_path;
 pub use repository::{
     DEFAULT_REVISION_PAGE, RECENT_REVISIONS, RepositoryState, RevisionDetail, RevisionOrigin,
     RevisionPage, RevisionSummary,
 };
+pub(crate) use review_fix::ReviewFixTree;
 pub use stalls::check_stalls;
 pub use sync::Synced;
 pub use sync_task::{SyncTaskCreated, SyncWorkspace, short_commit};
@@ -111,6 +127,8 @@ pub struct WorkspaceService {
     objects: Arc<RwLock<()>>,
     ops: Arc<WorkspaceLocks>,
     live: Option<LiveState>,
+    /// The project's carried states (`ProjectHandle::carries`), so every request's reads of one revised proposal share one merge.
+    carries: Arc<CarryCache>,
 }
 
 impl std::fmt::Debug for WorkspaceService {
@@ -140,6 +158,7 @@ impl WorkspaceService {
             objects: Arc::new(RwLock::new(())),
             ops: Arc::new(WorkspaceLocks::default()),
             live: None,
+            carries: Arc::new(CarryCache::default()),
         }
     }
 
@@ -156,6 +175,7 @@ impl WorkspaceService {
         .with_locks(handle.objects.clone(), handle.workspace_locks.clone())
         .with_capabilities(handle.capabilities.clone())
         .with_live(handle.live.clone())
+        .with_carries(handle.carries.clone())
     }
 
     /// Reads the claim lease from the service's project `config.toml` on every command that takes a claim; an invalid file fails that command with `invalid_config`.
@@ -174,6 +194,13 @@ impl WorkspaceService {
     #[must_use]
     pub fn with_capabilities(mut self, caps: Arc<OnceLock<Capabilities>>) -> Self {
         self.caps = caps;
+        self
+    }
+
+    /// Shares one cache of carried states with every other service of the project.
+    #[must_use]
+    pub fn with_carries(mut self, carries: Arc<CarryCache>) -> Self {
+        self.carries = carries;
         self
     }
 
@@ -309,7 +336,7 @@ pub(crate) fn capabilities(
 
 /// Opening creates the store's directories, so it runs inside the blocking work.
 fn open_objects(paths: &ProjectPaths) -> Result<ObjectStore, FoldError> {
-    ObjectStore::open(&paths.fold_dir()).map_err(FoldError::from)
+    ObjectStore::open_existing(&paths.fold_dir()).map_err(FoldError::from)
 }
 
 async fn blocking<T: Send + 'static>(

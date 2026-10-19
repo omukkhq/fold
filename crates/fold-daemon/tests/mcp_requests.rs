@@ -42,13 +42,6 @@ fn assert_footer(result: &CallToolResult, tool: &str) {
 async fn harness() -> Harness {
     let h = Harness::start().await;
     // `backend` leads an area, so it may claim a request it finds relevant.
-    crate::common::roles::give_role(
-        &h.handle.store,
-        "backend",
-        fold_core::roles::Role::AreaLead,
-        None,
-    )
-    .await;
     h.send("review", &["frontend", "backend"], "hello").await;
     h.send("frontend", &["review"], "hello").await;
     h

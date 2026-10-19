@@ -7,9 +7,9 @@ use fold_core::{RevisionId, Timestamp, codes};
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_export::{ExportBase, ExportRevision, ExportTarget, Signature, write_commits};
 use fold_vcs::git_remote::{
-    branch_ref, checked_out_branch, create_local_remote, default_branch, exclude_fold_dir,
-    fetch_branch, is_ancestor, merge_base, prepare_mirror, push_branch, remote_ref, remove_remote,
-    set_ref,
+    EXCLUDE_LINK, add_exclude_patterns, branch_ref, checked_out_branch, create_local_remote,
+    default_branch, exclude_fold_dir, fetch_branch, is_ancestor, merge_base, prepare_mirror,
+    push_branch, remote_ref, remove_remote, set_ref,
 };
 use fold_vcs::git_sync_map::SYNC_MAP_FILE;
 use fold_vcs::objects::ObjectStore;
@@ -90,7 +90,7 @@ impl Fixture {
             message: format!("fold r{number}\n"),
             author: fold.clone(),
             committer: fold,
-            merge: None,
+            merges: Vec::new(),
         }
     }
 
@@ -430,7 +430,7 @@ fn a_pulled_commit_is_the_second_parent_and_the_remote_takes_the_merge_without_f
         tree: fixture.revision(1, b"one\n").tree,
     };
     let merged = ExportRevision {
-        merge: Some(theirs.clone()),
+        merges: vec![theirs.clone()],
         ..fixture.revision(2, b"two\n")
     };
     let written = fixture.write(Some(&base), &[merged]);
@@ -610,19 +610,78 @@ fn only_exit_one_of_symbolic_ref_means_a_detached_head() {
 }
 
 #[test]
-fn the_fold_line_is_appended_to_info_exclude_once_and_keeps_what_was_there() {
+fn info_exclude_becomes_a_link_to_the_fold_exclude_file_and_keeps_its_lines() {
     let fixture = Fixture::new();
-    let repo = fixture.path("repo");
+    let root = fixture.path("project");
+    let repo = root.join(".git");
     let exclude = repo.join("info/exclude");
+    let file = root.join(".fold/exclude");
+    std::fs::create_dir_all(repo.join("info")).unwrap();
+    std::fs::write(&exclude, "# the template's comment\n*.log\n").unwrap();
+    std::fs::create_dir_all(root.join(".fold")).unwrap();
+    std::fs::write(&file, "secrets/\n*.log\n").unwrap();
     exclude_fold_dir(&repo).unwrap();
-    assert_eq!(std::fs::read_to_string(&exclude).unwrap(), "/.fold/\n");
-    for (before, after) in [
-        ("*.log\n", "*.log\n/.fold/\n"),
-        ("*.log", "*.log\n/.fold/\n"),
-    ] {
-        std::fs::write(&exclude, before).unwrap();
-        exclude_fold_dir(&repo).unwrap();
-        exclude_fold_dir(&repo).unwrap();
-        assert_eq!(std::fs::read_to_string(&exclude).unwrap(), after);
-    }
+    exclude_fold_dir(&repo).unwrap();
+    assert_eq!(
+        std::fs::read_link(&exclude).unwrap(),
+        std::path::Path::new(EXCLUDE_LINK)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "secrets/\n*.log\n# the template's comment\n/.fold/\n"
+    );
+    // Git reads the same file through the link.
+    assert_eq!(
+        std::fs::read_to_string(&exclude).unwrap(),
+        std::fs::read_to_string(&file).unwrap()
+    );
+
+    // A project with neither file gets fold's line alone, and one whose .fold was deleted does not get it back.
+    let bare = fixture.path("bare");
+    std::fs::create_dir_all(bare.join(".git")).unwrap();
+    assert!(exclude_fold_dir(&bare.join(".git")).is_err());
+    assert!(!bare.join(".fold").exists());
+    std::fs::create_dir(bare.join(".fold")).unwrap();
+    exclude_fold_dir(&bare.join(".git")).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(bare.join(".fold/exclude")).unwrap(),
+        "/.fold/\n"
+    );
+
+    let added = add_exclude_patterns(
+        &root.join(".fold"),
+        &["build/".to_owned(), "*.log".to_owned()],
+    )
+    .unwrap();
+    assert_eq!(added, ["build/"]);
+    assert!(
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .ends_with("/.fold/\nbuild/\n")
+    );
+    // A file without fold's line gets it back with the new patterns.
+    std::fs::write(&file, "a\n").unwrap();
+    add_exclude_patterns(&root.join(".fold"), &["b".to_owned()]).unwrap();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "a\n/.fold/\nb\n");
+}
+
+#[test]
+fn git_follows_the_fold_exclude_file() {
+    let fixture = Fixture::new();
+    let root = fixture.path("project");
+    std::fs::create_dir_all(root.join(".fold")).unwrap();
+    fixture.git.init_checkout(&root, "main").unwrap();
+    exclude_fold_dir(&root.join(".git")).unwrap();
+    add_exclude_patterns(&root.join(".fold"), &["local/".to_owned()]).unwrap();
+    std::fs::create_dir_all(root.join("local")).unwrap();
+    std::fs::write(root.join("local/notes.md"), "mine\n").unwrap();
+    std::fs::write(root.join("kept.md"), "kept\n").unwrap();
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8(status.stdout).unwrap(), "?? kept.md\n");
 }

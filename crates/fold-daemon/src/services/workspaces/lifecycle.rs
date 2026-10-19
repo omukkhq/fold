@@ -23,15 +23,15 @@ use fold_vcs::index::StatIndex;
 use fold_vcs::materialise::{MaterialiseOptions, materialise};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::WorkspaceError as VcsError;
-use fold_vcs::platform::sync_dir;
+use fold_vcs::platform::{create_dir_below, sync_dir};
 use serde_json::json;
 
 use super::sync::path_text;
 use super::{WorkspaceError, WorkspaceService, blocking, capabilities};
 use crate::services::events::EventBuffer;
 use crate::services::tasks::{
-    agent_refusal, already_claimed, claim_in_tx, closed_refusal, proposal_kind_refusal, recompute,
-    task_not_found, worker_row,
+    agent_refusal, already_claimed, check_claim_right, claim_in_tx, closed_refusal,
+    proposal_kind_refusal, recompute, task_not_found, worker_row,
 };
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -42,18 +42,19 @@ const MAX_NAME_ATTEMPTS: u32 = 64;
 /// The longest abandon reason, in characters.
 const MAX_REASON_CHARS: usize = 500;
 
-/// An abandoned workspace and the status its task went back to, read in the transaction that abandoned it.
+/// An abandoned workspace and the status its task went back to, read in the transaction that abandoned it; `None` for the main workspace, which has no task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Abandoned {
     pub workspace: WorkspaceView,
-    pub task_status: TaskStatus,
+    pub task_status: Option<TaskStatus>,
 }
 
 /// A workspace with public ids only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceView {
     pub id: WorkspaceId,
-    pub task: TaskId,
+    /// `None` for the main workspace only.
+    pub task: Option<TaskId>,
     pub worker: Option<WorkerName>,
     pub kind: WorkspaceKind,
     /// Relative to the project root.
@@ -148,16 +149,16 @@ enum CreatePlan {
     /// The task's live workspace, which no claim holder owns.
     Adopt(WorkspaceRow),
     Create {
-        base: workspaces::RevisionRow,
+        base: Box<workspaces::RevisionRow>,
         taken: Vec<String>,
     },
 }
 
 /// The directory a create renamed into place, with the index of what it wrote.
-struct Placed {
-    path: String,
-    dir: PathBuf,
-    index: StatIndex,
+pub(super) struct Placed {
+    pub(super) path: String,
+    pub(super) dir: PathBuf,
+    pub(super) index: StatIndex,
 }
 
 impl WorkspaceService {
@@ -213,6 +214,7 @@ impl WorkspaceService {
         let written = self
             .store
             .write(async |tx| {
+                check_claim_right(tx.conn(), claimant, task).await?;
                 let worker = worker_row(tx, claimant).await?;
                 insert_in_tx(
                     tx,
@@ -259,7 +261,7 @@ impl WorkspaceService {
         })
     }
 
-    /// Abandons a live workspace of the actor's worker, which `policy::can_abandon_workspace` requires to be the owner: it becomes `abandoned` and `closed_at` is set, and the task goes back to Todo or Backlog. The directory and the claim stay. Refused while the task has an open proposal; the author closes it first, and nothing closes it on the worker's behalf. `reason` is the worker's short explanation, which `workspace.abandoned` carries.
+    /// Abandons a live workspace of the actor's worker, which `policy::can_abandon_workspace` requires to be the owner: it becomes `abandoned` and `closed_at` is set, and the task goes back to Todo or Backlog. The directory and the claim stay. Refused while the task has an open proposal; the author closes it first, and nothing closes it on the worker's behalf. The main workspace has no task, so abandoning it only closes it and discards its unsubmitted change. `reason` is the worker's short explanation, which `workspace.abandoned` carries.
     pub async fn abandon_workspace(
         &self,
         actor: &Actor,
@@ -350,6 +352,9 @@ impl WorkspaceService {
         let row = tasks::get_by_number(read, task)
             .await?
             .ok_or_else(|| task_not_found(task))?;
+        let mut conn = read.acquire().await.map_err(StoreError::from)?;
+        check_claim_right(&mut conn, claimant, task).await?;
+        drop(conn);
         if let Some(refusal) = closed_refusal(&row)
             .or_else(|| proposal_kind_refusal(&row))
             .or_else(|| agent_refusal(&row).map(Into::into))
@@ -371,10 +376,13 @@ impl WorkspaceService {
         }
         let base = workspaces::head(read).await?.ok_or_else(|| {
             FoldError::new(codes::REVISION_NOT_FOUND, "main has no revision")
-                .with_hint("run fld init to create the first revision")
+                .with_hint("run `fld init` to create the first revision")
         })?;
         let taken = workspaces::task_workspace_paths(read, task).await?;
-        Ok(CreatePlan::Create { base, taken })
+        Ok(CreatePlan::Create {
+            base: Box::new(base),
+            taken,
+        })
     }
 
     /// Step 2 of a create: materialises `tree` into a staging directory under `.fold/ws/` and renames it to the task's next directory name. A name that `taken` lists for an earlier workspace of the task, or that some directory already holds, such as one left by a create that stopped before its row, is skipped, so a name is never shared.
@@ -388,7 +396,7 @@ impl WorkspaceService {
         self.place_named(name, taken, tree, false).await
     }
 
-    /// Materialises `tree` read-only into the proposal's next review checkout directory, by the naming rules of a task workspace's create, and returns the directory relative to the project root with its full path. Nothing scans a checkout, so its stat index is not kept.
+    /// Materialises `tree` writable into the proposal's next review checkout directory, by the naming rules of a task workspace's create, and returns the directory relative to the project root with its full path. The reviewer fixes what it finds there, and `submit_review_fix` records the files; no stat index is kept until that record makes one.
     pub(crate) async fn place_review_checkout(
         &self,
         proposal: ProposalId,
@@ -396,11 +404,11 @@ impl WorkspaceService {
         tree: ObjectHash,
     ) -> Result<(String, PathBuf), WorkspaceError> {
         let name = move |earlier| review_checkout_path(proposal, earlier);
-        let placed = self.place_named(name, taken, tree, true).await?;
+        let placed = self.place_named(name, taken, tree, false).await?;
         Ok((placed.path, placed.dir))
     }
 
-    /// Materialises `tree` read-only into the batch's next checkout directory, by the naming rules of a proposal's checkout, and returns the directory relative to the project root with its full path.
+    /// Materialises `tree` read-only into the batch's next checkout directory, by the naming rules of a proposal's checkout, and returns the directory relative to the project root with its full path. Its files mix every member's work, so no fix is made there.
     pub(crate) async fn place_review_batch_checkout(
         &self,
         batch: ReviewBatchId,
@@ -412,7 +420,7 @@ impl WorkspaceService {
         Ok((placed.path, placed.dir))
     }
 
-    async fn place_named(
+    pub(super) async fn place_named(
         &self,
         name: impl Fn(u32) -> String + Send + 'static,
         taken: Vec<String>,
@@ -424,8 +432,8 @@ impl WorkspaceService {
         let root = self.paths.root().to_path_buf();
         let probed = Arc::clone(&self.caps);
         blocking(move || {
-            fs::create_dir_all(&ws_dir).map_err(io_error)?;
-            let objects = ObjectStore::open(&paths.fold_dir()).map_err(FoldError::from)?;
+            create_dir_below(&paths.fold_dir(), &ws_dir).map_err(io_error)?;
+            let objects = ObjectStore::open_existing(&paths.fold_dir()).map_err(FoldError::from)?;
             let caps = capabilities(&probed, &paths)?;
             let staging = staging_dir(&ws_dir)?;
             let opts = MaterialiseOptions { read_only, caps };
@@ -530,7 +538,7 @@ async fn abandon_in_tx(
     workspace: WorkspaceId,
     reason: &str,
     now: Timestamp,
-) -> Result<(WorkspaceRow, TaskStatus), WorkspaceError> {
+) -> Result<(WorkspaceRow, Option<TaskStatus>), WorkspaceError> {
     let row = workspaces::get_workspace(tx.conn(), workspace)
         .await?
         .ok_or_else(|| {
@@ -561,21 +569,23 @@ async fn abandon_in_tx(
             ])
             .into());
     }
-    let open_proposal = tasks::load_facts(tx.conn(), &[row.task])
-        .await?
-        .pop()
-        .is_some_and(|loaded| loaded.facts.proposal != ProposalFact::None);
-    if open_proposal {
-        return Err(FoldError::new(
-            codes::INVALID_REQUEST,
-            format!("{} has an open proposal", row.task),
-        )
-        .with_details([
-            ("reason", json!("proposal_open")),
-            ("task", json!(row.task.to_string())),
-        ])
-        .with_hint("call close_proposal first, then abandon_workspace")
-        .into());
+    if let Some(task) = row.task {
+        let open_proposal = tasks::load_facts(tx.conn(), &[task])
+            .await?
+            .pop()
+            .is_some_and(|loaded| loaded.facts.proposal != ProposalFact::None);
+        if open_proposal {
+            return Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                format!("{task} has an open proposal"),
+            )
+            .with_details([
+                ("reason", json!("proposal_open")),
+                ("task", json!(task.to_string())),
+            ])
+            .with_hint("call close_proposal first, then abandon_workspace")
+            .into());
+        }
     }
     workspaces::close(tx, workspace, ClosedState::Abandoned, now).await?;
     let event = NewEvent::new(types::WORKSPACE_ABANDONED, actor.event_actor())?
@@ -583,20 +593,29 @@ async fn abandon_in_tx(
         .workspace(workspace)
         .data(json!({"reason": reason}))?;
     buffer.append(tx, &event, now).await?;
-    buffer.extend(recompute(tx, &[row.task], now).await?.events);
-    let task = tasks::fetch(tx.conn(), row.task)
-        .await?
-        .ok_or_else(|| task_not_found(row.task))?;
+    let status = match row.task {
+        Some(task) => {
+            buffer.extend(recompute(tx, &[task], now).await?.events);
+            let fetched = tasks::fetch(tx.conn(), task)
+                .await?
+                .ok_or_else(|| task_not_found(task))?;
+            Some(fetched.status)
+        }
+        None => None,
+    };
     let closed = workspaces::get_workspace(tx.conn(), workspace)
         .await?
         .ok_or(StoreError::Corrupt("workspaces.number"))?;
-    Ok((closed, task.status))
+    Ok((closed, status))
 }
 
 pub(super) fn workspace_exists(live: &WorkspaceRow) -> FoldError {
+    let owner = live
+        .task
+        .map_or_else(|| "main".to_owned(), |task| task.to_string());
     FoldError::new(
         codes::WORKSPACE_EXISTS,
-        format!("{} already has the workspace {}", live.task, live.id),
+        format!("{owner} already has the workspace {}", live.id),
     )
     .with_details([
         ("workspace", json!(live.id.to_string())),

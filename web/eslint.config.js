@@ -67,7 +67,13 @@ export default defineConfig(
     },
   },
   {
-    files: ["src/api/client.ts", "**/*.test.ts"],
+    // The highlighter fetches its engine, a file of the bundle; the test setup serves that file from node_modules.
+    files: [
+      "src/api/client.ts",
+      "src/syntax/shiki.ts",
+      "src/vitest.setup.ts",
+      "**/*.test.ts",
+    ],
     rules: {
       "no-restricted-globals": "off",
       "no-restricted-properties": "off",

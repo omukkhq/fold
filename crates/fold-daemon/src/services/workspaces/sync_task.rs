@@ -13,7 +13,7 @@ use fold_store::workspaces::{self, ConflictRow, NewTaskWorkspace};
 use fold_store::{StoreError, counters};
 use fold_vcs::materialise::{MaterialiseOptions, materialise};
 use fold_vcs::objects::ObjectStore;
-use fold_vcs::platform::sync_dir;
+use fold_vcs::platform::{create_dir_below, sync_dir};
 use fold_vcs::sync::{ConflictedPath, MarkerLabels, write_merge};
 use serde_json::json;
 
@@ -67,14 +67,14 @@ impl WorkspaceService {
         let probed = Arc::clone(&self.caps);
         let labels = MarkerLabels {
             ours: "workspace".to_owned(),
-            base: sync.base_label.clone(),
+            base: Some(sync.base_label.clone()),
             theirs: format!("main {}", sync.head),
         };
         let (remote_tree, merge) = (sync.remote_tree, sync.merge.clone());
         let (staging, mut index, conflicted) = blocking(move || {
             let ws_dir = paths.ws_dir();
-            fs::create_dir_all(&ws_dir).map_err(io_error)?;
-            let objects = ObjectStore::open(&paths.fold_dir()).map_err(FoldError::from)?;
+            create_dir_below(&paths.fold_dir(), &ws_dir).map_err(io_error)?;
+            let objects = ObjectStore::open_existing(&paths.fold_dir()).map_err(FoldError::from)?;
             let caps = capabilities(&probed, &paths)?;
             let staging = staging_dir(&ws_dir)?;
             let opts = MaterialiseOptions {
@@ -215,7 +215,7 @@ fn sync_title(remote: &str, branch: &str, commit: &str) -> Result<TaskTitle, Fol
             codes::INVALID_CONFIG,
             "the branch name does not make a task title",
         )
-        .with_hint("set a branch name without control characters with fld remote set")
+        .with_hint("set a branch name without control characters with `fld remote add`")
     })
 }
 

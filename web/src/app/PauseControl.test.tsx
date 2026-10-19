@@ -10,6 +10,7 @@ import { PausedBanner } from "./PausedBanner";
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 const AT = new Date(2026, 9, 17, 23, 40).getTime();
@@ -45,6 +46,9 @@ function renderBar() {
 
 describe("PauseControl", () => {
   it("pauses, waits for the daemon's state, then offers the resume and shows the banner", async () => {
+    // The banner gives only the clock time for a pause of the same day.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(AT + 5 * 60_000);
     let paused: number | null = null;
     let release = () => {};
     const answered = new Promise<void>((resolve) => {

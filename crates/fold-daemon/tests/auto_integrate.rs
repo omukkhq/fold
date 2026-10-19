@@ -19,7 +19,7 @@ use fold_store::events;
 use fold_store::workspaces;
 use tokio::sync::watch;
 
-use crate::common::roles::give_role;
+use crate::common::roles::{give_batch, give_role};
 use crate::proposal_tools_support::{Fixture, human, t};
 
 const WAIT: Duration = Duration::from_secs(20);
@@ -131,6 +131,8 @@ async fn propose(fx: &Fixture, author: &Actor, task: u32, path: &str, content: &
     fx.reviews()
         .create_proposal(author, t(task), "Change it", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap();
 }
 
@@ -447,7 +449,7 @@ async fn with_automatic_off_nothing_integrates_on_its_own() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_batch_reviewers_batch_integrates_its_approved_members_in_dependency_order() {
+async fn a_reviewers_batch_integrates_its_approved_members_in_dependency_order() {
     let fx = Fixture::new().await;
     fx.handle
         .tasks
@@ -456,14 +458,14 @@ async fn a_batch_reviewers_batch_integrates_its_approved_members_in_dependency_o
             CreateTask {
                 title: TaskTitle::parse("docs").unwrap(),
                 description: TaskDescription::new("what to build"),
-                labels: Vec::new(),
+                labels: crate::common::roles::work_labels(),
             },
         )
         .await
         .unwrap();
     let author = fx.agent("backend").await;
-    // A batch reviewer that the review lead started decides by its role.
-    let review = with_role(&fx, "reviewer-1", Role::BatchReviewer).await;
+    // A reviewer that the review lead started decides by its role.
+    let review = with_role(&fx, "reviewer-1", Role::Reviewer).await;
     fx.reviews()
         .require_human_review(&review, t(3), None, "touches the public API")
         .await
@@ -479,12 +481,14 @@ async fn a_batch_reviewers_batch_integrates_its_approved_members_in_dependency_o
     let job = Running::start(&fx.state);
     job.runs(1).await;
 
-    let batch = fx
-        .reviews()
-        .create_review_batch(&review, vec![p(1), p(2), p(3)])
-        .await
-        .unwrap()
-        .id;
+    // The review lead's start of the reviewer made the batch, in dependency order: T-1 needs T-2.
+    let batch = give_batch(
+        &fx.handle.store,
+        "reviewer-1",
+        &[p(2), p(1), p(3)],
+        fx.handle.clock.now(),
+    )
+    .await;
     let approve_all = [1, 2, 3]
         .map(|number| BatchVerdict {
             proposal: p(number),
@@ -541,4 +545,35 @@ async fn a_batch_reviewers_batch_integrates_its_approved_members_in_dependency_o
     .expect("the marked member integrates after the human approves");
     assert_eq!(integrated_in_order(&fx).await, [2, 1, 3]);
     job.stop().await;
+}
+
+#[tokio::test]
+async fn a_project_opened_again_under_its_slug_gets_a_new_listener() {
+    let fx = Fixture::new().await;
+    let job = Running::start(&fx.state);
+    job.runs(1).await;
+
+    // Another database file at the path makes the next open close the handle, which ends its listener, and open the folder again under the same slug.
+    fx.handle.store.close().await.unwrap();
+    let db = fx.handle.paths.db();
+    let copy = db.with_extension("copy");
+    std::fs::copy(&db, &copy).unwrap();
+    std::fs::rename(&copy, &db).unwrap();
+    let row = fold_store::projects::ProjectRow {
+        slug: fx.handle.slug.clone(),
+        name: fx.handle.name.clone(),
+        root: fx.handle.paths.root().to_string_lossy().into_owned(),
+    };
+    let reopened = fx
+        .state
+        .projects
+        .open(&row, std::sync::Arc::new(fx.project.clock().clone()))
+        .await
+        .unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&fx.handle, &reopened));
+
+    // Only a new listener runs again with no event: it checks once as it starts.
+    job.runs(2).await;
+    job.stop().await;
+    reopened.store.close().await.unwrap();
 }

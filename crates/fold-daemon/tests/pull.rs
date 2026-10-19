@@ -19,9 +19,7 @@ use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::socket_router;
 use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::events::BusMessage;
-use fold_daemon::services::projects::{
-    PullOutcome, PushOutcome, git_status, init_project, pull, push,
-};
+use fold_daemon::services::projects::{PullOutcome, PushOutcome, git_status, pull, push};
 use fold_daemon::services::reviews::{IntegrationOutcome, ReviewService};
 use fold_daemon::services::tasks::CreateTask;
 use fold_daemon::services::workspaces::{WorkspaceError, WorkspaceRef, WorkspaceService};
@@ -80,7 +78,7 @@ impl Host {
     }
 
     async fn project(&self) -> Project {
-        let project = init_project(&self.paths, &self.path("app"), None, &self.clock)
+        let project = crate::common::init_with_git(&self.paths, &self.path("app"), &self.clock)
             .await
             .unwrap();
         let row = ProjectRow {
@@ -108,7 +106,7 @@ struct Project {
 }
 
 impl Project {
-    /// Adds `remote` as the remote `origin`, as `fld remote set` does.
+    /// Adds `remote` as the remote `origin`, as `fld remote add` does.
     fn set_remote(&self, remote: &Path, push_on_integrate: bool) {
         let config = self.paths.config();
         let mut text = fs::read_to_string(&config).unwrap();
@@ -248,6 +246,7 @@ impl Project {
     /// `frontend` creates a task, writes `files` into its workspace and opens a proposal, which `ana` integrates.
     async fn integrate_task(&self, files: &[(&str, &str)]) -> RevisionId {
         let author = self.agent("frontend").await;
+        crate::common::roles::lead_work_areas(&self.handle.store).await;
         let task = self
             .handle
             .tasks
@@ -256,7 +255,7 @@ impl Project {
                 CreateTask {
                     title: TaskTitle::parse("Change files").unwrap(),
                     description: TaskDescription::new(""),
-                    labels: Vec::new(),
+                    labels: crate::common::roles::work_labels(),
                 },
             )
             .await
@@ -275,6 +274,8 @@ impl Project {
             .reviews()
             .create_proposal(&author, task, "Change files", None)
             .await
+            .unwrap()
+            .detail()
             .unwrap()
             .summary
             .id;
@@ -295,6 +296,7 @@ fn integrated(outcome: IntegrationOutcome) -> RevisionId {
     match outcome {
         IntegrationOutcome::Succeeded { revision } => revision,
         IntegrationOutcome::Conflicted(conflicts) => panic!("conflicted: {conflicts:?}"),
+        other => panic!("expected an integration, got {other:?}"),
     }
 }
 
@@ -398,7 +400,12 @@ async fn an_unchanged_remote_is_up_to_date_and_records_nothing() {
             remote_commit: Some(tip.parse().unwrap()),
         }
     );
-    assert_eq!(project.count("SELECT COUNT(*) FROM integrations").await, 0);
+    assert_eq!(
+        project
+            .count("SELECT COUNT(*) FROM integrations WHERE kind = 'pull'")
+            .await,
+        0
+    );
     assert_eq!(project.head().await, r(2));
     assert_eq!(project.map(), map);
     assert!(
@@ -460,12 +467,19 @@ async fn a_fast_forward_records_the_remote_tree_and_the_map_line() {
         .iter()
         .map(|event| event.event_type.as_str())
         .collect();
+    // The first two record the folder's files as `r1`.
     assert_eq!(
         names,
-        ["integration.succeeded", "main.advanced", "remote.pulled"]
+        [
+            "integration.succeeded",
+            "main.advanced",
+            "integration.succeeded",
+            "main.advanced",
+            "remote.pulled"
+        ]
     );
     assert_eq!(
-        events[2].data,
+        events[4].data,
         json!({"remote": "origin", "branch": "main", "remote_commit": tip, "revision": "r3"})
     );
     assert!(project.map().ends_with(&format!("r3 {tip}\n")));
@@ -491,6 +505,15 @@ async fn a_fast_forward_records_the_remote_tree_and_the_map_line() {
 async fn both_sides_moved_cleanly_and_the_next_push_is_a_merge() {
     let host = Host::new();
     let project = host.project().await;
+    // The merge commit of the pull takes the repository's Git identity, never the pulling human's name.
+    git(
+        &project.paths.git_dir(),
+        &["config", "user.name", "Ana Lima"],
+    );
+    git(
+        &project.paths.git_dir(),
+        &["config", "user.email", "ana@example.com"],
+    );
     let remote = host.remote();
     project.set_remote(&remote, false);
     project.add_revision(&[("a.txt", b"one\n")]).await;
@@ -516,6 +539,16 @@ async fn both_sides_moved_cleanly_and_the_next_push_is_a_merge() {
     let parents: Vec<&str> = merges.split_whitespace().collect();
     assert_eq!(parents.len(), 2);
     assert_eq!(parents[1], tip);
+    assert_eq!(
+        git(
+            &remote,
+            &["log", "-1", "--format=%an <%ae>|%cn <%ce>|%B", "main"]
+        ),
+        format!(
+            "Ana Lima <ana@example.com>|Ana Lima <ana@example.com>|Merge remote commit {}\n\nFold-Revision: r4\n\n",
+            &tip[..12]
+        )
+    );
     assert_eq!(git(&remote, &["show", "main:a.txt"]), "two\n");
     assert_eq!(
         project.pull().await.unwrap(),
@@ -643,8 +676,18 @@ async fn a_conflict_becomes_a_sync_task_that_reaches_the_remote() {
     assert_eq!(project.count("SELECT COUNT(*) FROM tasks").await, 1);
     assert_eq!(project.count("SELECT COUNT(*) FROM workspaces").await, 1);
 
-    // An agent adopts the workspace with the claim, resolves the markers and integrates.
-    let agent = project.agent("frontend").await;
+    // The main agent, on the user's word, adopts the workspace with the claim of the task, which has no area, resolves the markers and integrates.
+    let agents = project.handle.agents();
+    let mut ctx = agents.start_session(1).await.unwrap();
+    agents
+        .register_agent(
+            &mut ctx,
+            &AgentName::parse("main").unwrap(),
+            &[fold_core::Tag::parse("main").unwrap()],
+        )
+        .await
+        .unwrap();
+    let agent = agents.actor(&ctx, None).await.unwrap();
     let claimed = project.handle.tasks.claim_task(&agent, task).await.unwrap();
     assert!(claimed.adopted);
     let id = workspace.unwrap();
@@ -671,6 +714,8 @@ async fn a_conflict_becomes_a_sync_task_that_reaches_the_remote() {
         .reviews()
         .create_proposal(&agent, task, "Sync with the remote", None)
         .await
+        .unwrap()
+        .detail()
         .unwrap()
         .summary
         .id;

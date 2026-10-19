@@ -1,13 +1,13 @@
 use fold_core::claims::is_stale;
 use fold_core::events::types;
 use fold_core::{
-    Actor, AgentActor, EventActor, FoldError, NewEvent, TaskId, TaskStatus, Timestamp, WorkerName,
-    WorkspaceId, codes, policy,
+    Actor, AgentActor, AgentName, EventActor, FoldError, LabelName, NewEvent, Role, TaskId,
+    TaskStatus, Timestamp, WorkerName, WorkspaceId, codes, policy,
 };
-use fold_store::agents::WorkerRow;
+use fold_store::agents::{self, WorkerRow};
 use fold_store::tasks::TaskRow;
 use fold_store::tasks::claims::{self, ClaimRow, ReleaseReason};
-use fold_store::{StoreError, WriteTx, tasks, workspaces};
+use fold_store::{SqliteConnection, StoreError, WriteTx, tasks, workspaces};
 use serde_json::json;
 use tokio::sync::OwnedMutexGuard;
 
@@ -45,9 +45,9 @@ fn claim_view_of(row: ClaimRow, now: Timestamp, lease_minutes: u64) -> ClaimView
     }
 }
 
-/// Implementation claims. `policy::can_claim` admits only an agent, and the claim belongs to the agent's acting worker; the lease is the project's `lease_minutes`, read before the command's transaction. A human task and a task on hold take no new claim.
+/// Implementation claims. `policy::can_claim` admits only an agent, and the claim belongs to the agent's acting worker; `policy::can_claim_task` refuses a worker that fold started, which gets its claims from its lead at its start (see [`assign_in_tx`]), and an area lead outside its area. The lease is the project's `lease_minutes`, read before the command's transaction. A human task and a task on hold take no new claim.
 impl TaskService {
-    /// Takes the implementation claim on `task` for the actor's worker. A repeat call by the holder renews the claim and returns it without a second `claim.acquired`. A live workspace of the task that no claim holder owns, left by a worker that released the claim, is adopted with `workspace.adopted`. The command runs `recompute` after the claim and any adoption: it moves a task without a proposal to In Progress, and a task with a proposal moves only for an adopted workspace.
+    /// Takes the implementation claim on `task` for the actor's worker, as [`policy::can_claim_task`] admits it. A repeat call by the holder renews the claim and returns it without a second `claim.acquired`. A live workspace of the task that no claim holder owns, left by a worker that released the claim, is adopted with `workspace.adopted`. The command runs `recompute` after the claim and any adoption: it moves a task without a proposal to In Progress, and a task with a proposal moves only for an adopted workspace.
     pub async fn claim_task(&self, actor: &Actor, task: TaskId) -> Result<Claimed, TaskError> {
         let claimant = policy::can_claim(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
@@ -58,6 +58,7 @@ impl TaskService {
             .store
             .write(async |tx| {
                 let worker = worker_row(tx, claimant).await?;
+                task_claimant(tx.conn(), actor, task).await?;
                 let claim = claim_in_tx(tx, &mut buffer, &worker, task, now, lease_minutes).await?;
                 let adopted = match &candidate {
                     Some((workspace, _)) => {
@@ -169,11 +170,13 @@ impl TaskService {
             .store
             .write(async |tx| {
                 let worker = worker_row(tx, claimant).await?;
+                task_claimant(tx.conn(), actor, task).await?;
                 let step = Takeover {
                     task,
                     workspace,
                     now,
                     lease_minutes,
+                    stale_only: true,
                 };
                 takeover_in_tx(tx, &mut buffer, &worker, step).await
             })
@@ -255,6 +258,124 @@ pub(crate) async fn claim_in_tx(
     })
 }
 
+/// Checks the actor's right to claim `task` with [`policy::can_claim_task`], from the standing, the area and the task's labels read on `conn`. A task that does not exist is `task_not_found`.
+async fn task_claimant(
+    conn: &mut SqliteConnection,
+    actor: &Actor,
+    task: TaskId,
+) -> Result<(), TaskError> {
+    if tasks::fetch(&mut *conn, task).await?.is_none() {
+        return Err(task_not_found(task));
+    }
+    let standing = agents::standing_of(&mut *conn, actor).await?;
+    let lead_label = match actor {
+        Actor::Agent(agent) if standing.role == Some(Role::AreaLead) => {
+            match agents::find_worker_process(&mut *conn, &agent.agent)
+                .await?
+                .and_then(|row| row.area)
+            {
+                Some(area) => agents::find_area(&mut *conn, &area)
+                    .await?
+                    .map(|area| area.label),
+                None => None,
+            }
+        }
+        _ => None,
+    };
+    let task_labels: Vec<LabelName> = tasks::labels_for_conn(&mut *conn, task)
+        .await?
+        .into_iter()
+        .map(|label| label.name)
+        .collect();
+    policy::can_claim_task(actor, standing, lead_label.as_ref(), &task_labels).map_err(
+        |denied| FoldError::from(denied).with_details([("task", json!(task.to_string()))]),
+    )?;
+    Ok(())
+}
+
+/// A command that takes the implementation claim on its way, such as the create of a task workspace, checks the claimant's right to claim as `claim_task` does, unless its worker already holds the claim: a worker that its lead gave the claim creates its workspace, and one without it gets `worker_claim_denied`.
+pub(crate) async fn check_claim_right(
+    conn: &mut SqliteConnection,
+    claimant: &AgentActor,
+    task: TaskId,
+) -> Result<(), TaskError> {
+    let holder = claims::unreleased_for_task(&mut *conn, task).await?;
+    if holder.is_some_and(|holder| holder.worker == claimant.worker) {
+        return Ok(());
+    }
+    task_claimant(conn, &Actor::Agent(claimant.clone()), task).await
+}
+
+/// One task of a start: the task, its live workspace whose operation lock the start holds, and the starting lead's agent.
+pub(crate) struct Assign<'a> {
+    pub task: TaskId,
+    pub workspace: Option<WorkspaceId>,
+    pub starter: Option<&'a AgentName>,
+}
+
+/// Gives the new worker `worker` the implementation claim on `task` inside the caller's write, for the lead `starter` that starts it with `start_worker`: a task nobody holds is claimed as by `claim_task`, with the adoption of its released live workspace `workspace`. A claim is taken over as by `takeover_claim`, with its workspace and proposal, when the starter's own agent holds it, when its holder is a worker that has ended, or when its lease ran out; a running holder of another agent with a valid lease refuses the start with `already_claimed`. It runs `recompute` for the task.
+pub(crate) async fn assign_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    worker: &WorkerRow,
+    assign: Assign<'_>,
+    now: Timestamp,
+    lease_minutes: u64,
+) -> Result<Claimed, TaskError> {
+    let Assign {
+        task,
+        workspace,
+        starter,
+    } = assign;
+    if let Some(holder) = claims::unreleased_for_task(tx.conn(), task).await? {
+        let movable = starter.is_some_and(|agent| holder.worker.belongs_to(agent))
+            || is_stale(holder.renewed_at, now, lease_minutes)
+            || holder_has_ended(tx.conn(), &holder.worker).await?;
+        if !movable {
+            return Err(match already_claimed(&holder, now, lease_minutes) {
+                TaskError::Fold(error) => error
+                    .with_hint("the holder is running with a valid lease: send_message to the holder, or start the worker again once it ends or its lease runs out")
+                    .into(),
+                other => other,
+            });
+        }
+        let step = Takeover {
+            task,
+            workspace,
+            now,
+            lease_minutes,
+            stale_only: false,
+        };
+        return takeover_in_tx(tx, buffer, worker, step).await;
+    }
+    let claim = claim_in_tx(tx, buffer, worker, task, now, lease_minutes).await?;
+    let adopted = match workspace {
+        Some(workspace) => {
+            let reason = AdoptReason::Released;
+            adopt_if_orphaned(tx, buffer, task, workspace, worker, reason, now).await?
+        }
+        None => None,
+    };
+    buffer.extend(recompute(tx, &[task], now).await?.events);
+    let was_adopted = adopted.is_some();
+    let workspace = holder_workspace(tx, task, worker, adopted).await?;
+    Ok(Claimed {
+        claim,
+        workspace,
+        adopted: was_adopted,
+    })
+}
+
+/// Whether `worker` belongs to an agent whose worker process fold started and that has ended, stopped or failed: such a holder never renews its claims or uses them again. A session that fold does not supervise has not ended.
+pub(crate) async fn holder_has_ended(
+    conn: &mut SqliteConnection,
+    worker: &WorkerName,
+) -> Result<bool, StoreError> {
+    Ok(agents::find_worker_process(conn, &worker.agent())
+        .await?
+        .is_some_and(|process| !process.state.is_running()))
+}
+
 /// The worker row of the claimant, read in the command's transaction. A worker that does not exist is `worker_not_found`.
 pub(crate) async fn worker_row(
     tx: &mut WriteTx,
@@ -299,12 +420,13 @@ pub(crate) fn already_claimed(holder: &ClaimRow, now: Timestamp, lease_minutes: 
     .into()
 }
 
-/// The inputs of a takeover's transaction. `workspace` is the live workspace whose operation lock the command holds.
+/// The inputs of a takeover's transaction. `workspace` is the live workspace whose operation lock the command holds. With `stale_only`, as for `takeover_claim`, a claim whose lease has not run out is refused; a start decides by itself which claims it takes over.
 struct Takeover {
     task: TaskId,
     workspace: Option<WorkspaceId>,
     now: Timestamp,
     lease_minutes: u64,
+    stale_only: bool,
 }
 
 async fn takeover_in_tx(
@@ -318,6 +440,7 @@ async fn takeover_in_tx(
         workspace,
         now,
         lease_minutes,
+        stale_only,
     } = step;
     let row = tasks::fetch(tx.conn(), task)
         .await?
@@ -342,7 +465,7 @@ async fn takeover_in_tx(
         .with_hint("the claim is yours; call get_task to see it")
         .into());
     }
-    if !is_stale(holder.renewed_at, now, lease_minutes) {
+    if stale_only && !is_stale(holder.renewed_at, now, lease_minutes) {
         return Err(FoldError::new(
             codes::CLAIM_NOT_STALE,
             format!("the claim of {} on {task} is not stale", holder.worker),

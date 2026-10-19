@@ -10,7 +10,7 @@ import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { useNow } from "@/live/useNow";
 import { describeFailure } from "./errors";
-import { FailurePanel } from "./FailurePanel";
+import { FailurePanel } from "@/components/states/FailurePanel";
 import {
   KINDS,
   STATES,

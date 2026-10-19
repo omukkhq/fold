@@ -60,6 +60,31 @@ pub fn restore_tree(
     target_tree: &ObjectHash,
     opts: &RestoreOptions<'_>,
 ) -> Result<Restored, FoldError> {
+    bring_to_tree(objects, root, index, index_path, target_tree, opts, true)
+}
+
+/// Makes the tracked files of a directory that holds nobody's work equal `target_tree`, as [`restore_tree`] does but without its refusal of unrecorded content: fold's own check directory, where the checks of each integration ran, holds only what fold wrote and what the checks produced. Ignored files, such as installed dependencies, stay. A missing directory is created.
+pub fn reset_tree(
+    objects: &ObjectStore,
+    root: &Path,
+    index: &mut StatIndex,
+    index_path: &Path,
+    target_tree: &ObjectHash,
+    opts: &RestoreOptions<'_>,
+) -> Result<Restored, FoldError> {
+    fs::create_dir_all(root).map_err(WorkspaceError::from)?;
+    bring_to_tree(objects, root, index, index_path, target_tree, opts, false)
+}
+
+fn bring_to_tree(
+    objects: &ObjectStore,
+    root: &Path,
+    index: &mut StatIndex,
+    index_path: &Path,
+    target_tree: &ObjectHash,
+    opts: &RestoreOptions<'_>,
+    keep_unrecorded: bool,
+) -> Result<Restored, FoldError> {
     let target = load_flat(objects, target_tree)?;
     let scanned = scan(root, index, &opts.scan)?;
 
@@ -90,7 +115,11 @@ pub fn restore_tree(
             return Err(WorkspaceError::from(ObjectError::Missing(entry.hash)).into());
         }
     }
-    let lost = unrecorded(objects, root, &scanned.entries, &removals, &writes)?;
+    let lost = if keep_unrecorded {
+        unrecorded(objects, root, &scanned.entries, &removals, &writes)?
+    } else {
+        Vec::new()
+    };
     if !lost.is_empty() {
         let paths = lost.iter().map(ToString::to_string).collect();
         return Err(WorkspaceError::Unrecorded(paths).into());

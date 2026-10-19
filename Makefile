@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup build fmt dev dev-daemon dev-web seed-dev fmt-check-rust fmt-check-web fmt-check web-install web-build check-web-sources check-inner-allow clippy test test-fast test-default-features test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api release release-tools bench bench-smoke
+.PHONY: help setup build fmt dev dev-daemon dev-web seed-dev fmt-check-rust fmt-check-web fmt-check web-install web-build check-web-sources check-inner-allow clippy test test-fast test-default-features test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api gen-languages release release-tools bench bench-smoke
 
 help: ## List the targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-18s %s\n", $$1, $$2}'
@@ -31,11 +31,11 @@ DEV_DIR := $(CURDIR)/target/dev
 dev: ## Run the daemon on :7420 and the Vite dev server on :5173; Ctrl-C stops both
 	$(MAKE) -j2 dev-daemon dev-web
 
-dev-daemon: ## Run the daemon on 127.0.0.1:7420, rebuilt on every change; its data lives under target/dev/
+dev-daemon: ## Run the daemon on 127.0.0.1:7420, rebuilt on every change; its data lives under target/dev/, and the workers of a seeded project run the scripted stub
 	mkdir -p $(DEV_DIR)/data $(DEV_DIR)/config $(DEV_DIR)/runtime
 	chmod 700 $(DEV_DIR)/runtime
 	XDG_DATA_HOME=$(DEV_DIR)/data XDG_CONFIG_HOME=$(DEV_DIR)/config XDG_RUNTIME_DIR=$(DEV_DIR)/runtime \
-		cargo watch -w crates -w Cargo.toml -w Cargo.lock -x 'run -p fold-cli -- serve --listen 127.0.0.1:7420'
+		cargo watch -w crates -w Cargo.toml -w Cargo.lock -x 'run -p fold-cli --features dev-seed -- serve --listen 127.0.0.1:7420'
 
 # The seed registers its project in the dev daemon's registry and acts on the dev daemon's socket, so it takes the same directories as dev-daemon.
 seed-dev: ## Development only: build a throwaway demo project in .dev/projects/demo through the running dev daemon
@@ -148,6 +148,9 @@ gen-api: ## Regenerate web/src/api/schema.d.ts from the daemon's OpenAPI documen
 	mkdir -p $(GEN_DIR)
 	cargo run -q -p fold-daemon --example openapi > $(GEN_DIR)/openapi.json
 	cd web && bunx openapi-typescript ../$(GEN_DIR)/openapi.json -o src/api/schema.d.ts
+
+gen-languages: web-install ## Regenerate web/src/syntax/catalog.gen.ts, the language names and file types, from the installed Shiki
+	cd web && bun scripts/gen-languages.ts && bunx biome format --write src/syntax/catalog.gen.ts
 
 check-api: ## Fail when web/src/api/schema.d.ts differs from the daemon's OpenAPI document
 	mkdir -p $(GEN_DIR)

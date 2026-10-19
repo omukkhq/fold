@@ -121,4 +121,94 @@ describe("NeedsYou", () => {
     expect(within(list).getByText("RQ-5")).toBeTruthy();
     expect(within(list).getByText("needs your review")).toBeTruthy();
   });
+
+  it("shows an unstash conflict as a line that opens nothing and counts it", async () => {
+    await renderBadge(
+      [
+        permission,
+        needsItem({
+          kind: "unstash_conflicted",
+          screen: "repository",
+          paths: ["src/forms/index.ts", "a.ts", "b.ts"],
+        }),
+      ],
+      null,
+    );
+    const badge = await screen.findByRole("button", { name: /Needs you/ });
+    expect(badge.textContent).toBe("Needs you2");
+    await userEvent.click(badge);
+    const list = screen.getByRole("dialog", { name: "Needs you" });
+    const group = within(list).getByRole("region", {
+      name: "Unstash conflict",
+    });
+    expect(within(group).getByText("fld record").tagName).toBe("CODE");
+    expect(group.textContent).toContain(
+      "Unstash conflicts. Fix the files and run fld record",
+    );
+    expect(
+      within(group).getByText("src/forms/index.ts and 2 more"),
+    ).toBeTruthy();
+    expect(within(group).queryByRole("link")).toBeNull();
+    expect(within(list).getAllByRole("link")).toHaveLength(1);
+  });
+
+  it("shows the command that brings the Git branch back as caption code, and the paths of an item as plain words", async () => {
+    await renderBadge(
+      [
+        needsItem({
+          kind: "head_moved",
+          screen: "repository",
+          reason: "run `git switch main` in the project folder",
+        }),
+        needsItem({
+          kind: "folder_held",
+          screen: "repository",
+          paths: ["a`b`.md"],
+        }),
+      ],
+      null,
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Needs you/ }),
+    );
+    const list = screen.getByRole("dialog", { name: "Needs you" });
+    const branch = within(list).getByRole("region", { name: "Git branch" });
+    const command = within(branch).getByText("git switch main");
+    expect(command.tagName).toBe("CODE");
+    expect(command.className).toContain("text-caption");
+    const folder = within(list).getByRole("region", { name: "Project folder" });
+    expect(within(folder).getByText("a`b`.md").tagName).toBe("SPAN");
+  });
+
+  it("shows main's invalid checks file as a line that opens nothing and counts it", async () => {
+    await renderBadge(
+      [
+        permission,
+        needsItem({
+          kind: "checks_file_invalid_on_main",
+          screen: "repository",
+          title: "fold-checks.toml line 12: unknown field `tiemout`",
+          paths: ["fold-checks.toml"],
+        }),
+      ],
+      null,
+    );
+    const badge = await screen.findByRole("button", { name: /Needs you/ });
+    expect(badge.textContent).toBe("Needs you2");
+    await userEvent.click(badge);
+    const list = screen.getByRole("dialog", { name: "Needs you" });
+    expect(within(list).getByText("2 waiting")).toBeTruthy();
+    const group = within(list).getByRole("region", { name: "Checks file" });
+    expect(
+      within(group).getByText(
+        "Integrations wait until the checks file on main is fixed",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(group).getByText(
+        "fold-checks.toml line 12: unknown field `tiemout`",
+      ),
+    ).toBeTruthy();
+    expect(within(group).queryByRole("link")).toBeNull();
+  });
 });

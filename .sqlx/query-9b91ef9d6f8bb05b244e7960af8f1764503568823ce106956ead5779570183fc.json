@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE workspaces SET state = ?3\n         WHERE number = ?1 AND kind IN ('task', 'main') AND state = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "9b91ef9d6f8bb05b244e7960af8f1764503568823ce106956ead5779570183fc"
+}

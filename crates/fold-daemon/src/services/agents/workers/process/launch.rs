@@ -5,11 +5,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use fold_core::config::RoleSettings;
 use fold_core::events::types;
-use fold_core::layout::{AGENT_ENV, AGENT_TAGS_ENV, MCP_COMMAND, MCP_SERVER_NAME, MCP_SERVERS_KEY};
+use fold_core::layout::{
+    AGENT_ENV, AGENT_TAGS_ENV, MCP_COMMAND, MCP_SERVER_NAME, MCP_SERVERS_KEY, session_settings,
+};
 use fold_core::roles::area_prompt;
 use fold_core::{AgentName, AreaName, EventActor, NewEvent, ProjectPaths, WorkerState, codes};
 use fold_store::StoreError;
 use fold_store::agents::{self, WorkerProcessRow};
+use fold_store::tasks::claims::{self, ClaimTarget, ReleaseReason};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{ChildStderr, ChildStdin, Command};
@@ -21,15 +24,7 @@ use crate::services::agents::AgentError;
 use crate::services::agents::claude::{ClaudeInput, OutgoingRequest};
 use crate::services::events::EventBuffer;
 use crate::services::projects::load_config;
-
-/// Session-specific variables of a Claude Code session that started the daemon; a worker is a session of its own.
-const SESSION_ENV: [&str; 5] = [
-    "CLAUDECODE",
-    "CLAUDE_CODE_ENTRYPOINT",
-    "CLAUDE_CODE_MESSAGING_SOCKET",
-    "CLAUDE_CODE_MESSAGING_TOKEN",
-    "CLAUDE_CODE_SSE_PORT",
-];
+use crate::support::SESSION_ENV;
 
 impl Supervisor {
     /// Runs Claude Code for the row, which a committed command left in state `starting`: a new session, or `--resume` of the row's session. `turn` is the first user turn; without one a resumed worker waits idle for its next notice. A process that cannot start, for an unreadable configuration, files that cannot be written, a failed spawn or a process that cannot be recorded, leaves the row `failed` with `worker.failed` and gives no [`StartWatch`], so no `starting` row holds a place under the limits.
@@ -72,7 +67,13 @@ impl Supervisor {
             area_instructions,
         )
         .await;
-        let (mcp, prompt) = match files {
+        let WorkerFiles {
+            mcp,
+            settings: own_settings,
+            prompt,
+            program,
+            program_args,
+        } = match files {
             Ok(files) => files,
             Err(_) => {
                 tracing::warn!(agent = %row.agent, "could not write the worker's files");
@@ -80,8 +81,8 @@ impl Supervisor {
                 return Ok(None);
             }
         };
-        let mut command = Command::new(&launcher.claude);
-        command.args([
+        let mut command = Command::new(&program);
+        command.args(program_args).args([
             "-p",
             "--input-format",
             "stream-json",
@@ -105,7 +106,9 @@ impl Supervisor {
                 "stdio",
             ])
             .arg("--mcp-config")
-            .arg(&mcp);
+            .arg(&mcp)
+            .arg("--settings")
+            .arg(&own_settings);
         if settings.mcp.is_some() {
             command.arg("--strict-mcp-config");
         }
@@ -255,14 +258,19 @@ impl Supervisor {
             .store
             .write(async |tx| {
                 let current = agents::find_worker_process(tx.conn(), agent).await?;
-                if !current.is_some_and(|current| current.id == id && current.state.is_running()) {
+                let Some(current) =
+                    current.filter(|current| current.id == id && current.state.is_running())
+                else {
                     return Ok(());
-                }
+                };
                 agents::record_exit(tx, id, WorkerState::Failed, None, now).await?;
                 agents::close_open_questions(tx, id, now).await?;
                 let event = NewEvent::new(types::WORKER_FAILED, EventActor::fold())?
                     .data(json!({"agent": agent.as_str(), "reason": reason}))?;
                 buffer.append(tx, &event, now).await?;
+                if current.turns == 0 {
+                    give_back_claims(tx, &mut buffer, &current, now).await?;
+                }
                 Ok::<_, AgentError>(())
             })
             .await?;
@@ -313,15 +321,26 @@ async fn drain(mut stderr: ChildStderr) {
     }
 }
 
-/// Writes the worker's MCP configuration and its prompt under the worker's folder. The prompt is the role's text, shipped or the project's override, then the shared rules, then the area's instructions when there are any; the override file itself is never passed, because it lacks the shared rules. Returns the two paths Claude Code reads.
+/// The files a worker process reads and the program that reads them.
+struct WorkerFiles {
+    mcp: PathBuf,
+    settings: PathBuf,
+    prompt: PathBuf,
+    program: PathBuf,
+    /// The arguments before Claude Code's own: the subcommand of fld's stand-in, else none.
+    program_args: &'static [&'static str],
+}
+
+/// Writes the worker's MCP configuration, its settings and its prompt under the worker's folder. The settings allow the fold tools and run fold's hooks, so a worker never depends on the user's own Claude Code settings. The prompt is the role's text, shipped or the project's override, then the shared rules, then the area's instructions when there are any; the override file itself is never passed, because it lacks the shared rules. Returns the three paths Claude Code reads, with the program to run.
 async fn write_files(
     paths: &ProjectPaths,
     launcher: &Launcher,
     row: &WorkerProcessRow,
     settings: &RoleSettings,
     area_instructions: Option<(AreaName, String)>,
-) -> std::io::Result<(PathBuf, PathBuf)> {
+) -> std::io::Result<WorkerFiles> {
     let dir = paths.worker_dir(&row.agent);
+    let fold_dir = paths.fold_dir();
     let override_prompt = paths.role_prompt(row.role);
     let project_mcp = paths.mcp_json();
     let fold = match &launcher.fold {
@@ -331,11 +350,15 @@ async fn write_files(
     let agent = row.agent.clone();
     let prompt_text = row.role.prompt();
     let limit = settings.mcp.clone();
+    let claude = launcher.claude.clone();
     tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(&dir)?;
+        let (program, program_args) = worker_program(&fold_dir, claude, &fold);
+        fold_vcs::platform::create_dir_below(&fold_dir, &dir)?;
         let config = mcp_config(&fold, &agent, limit.as_deref(), &project_mcp);
         let mcp = dir.join("mcp.json");
         std::fs::write(&mcp, config.to_string())?;
+        let own_settings = dir.join("settings.json");
+        std::fs::write(&own_settings, session_settings().to_string())?;
         let role_prompt = if override_prompt.is_file() {
             fold_core::with_shared_rules(&std::fs::read_to_string(&override_prompt)?)
         } else {
@@ -353,10 +376,40 @@ async fn write_files(
                 prompt
             }
         };
-        Ok((mcp, prompt))
+        Ok(WorkerFiles {
+            mcp,
+            settings: own_settings,
+            prompt,
+            program,
+            program_args,
+        })
     })
     .await
     .map_err(std::io::Error::other)?
+}
+
+/// Claude Code, or, in a build for development whose project holds [`super::DEV_STUB_DIR`] as a real folder, never a symlink, the fld binary of the worker's MCP server as `fld dev stub`, which runs the agent's script from that folder through the same tools. Blocking.
+#[cfg(feature = "dev-launcher")]
+fn worker_program(
+    fold_dir: &Path,
+    claude: PathBuf,
+    fold: &Path,
+) -> (PathBuf, &'static [&'static str]) {
+    let stub_dir = std::fs::symlink_metadata(fold_dir.join(super::DEV_STUB_DIR));
+    if stub_dir.is_ok_and(|meta| meta.is_dir()) {
+        (fold.to_owned(), &super::DEV_STUB_COMMAND)
+    } else {
+        (claude, &[])
+    }
+}
+
+#[cfg(not(feature = "dev-launcher"))]
+fn worker_program(
+    _fold_dir: &Path,
+    claude: PathBuf,
+    _fold: &Path,
+) -> (PathBuf, &'static [&'static str]) {
+    (claude, &[])
 }
 
 /// The `fold` server with the worker's agent name, plus, when the role limits its servers, each named server of the project's `.mcp.json`. Servers of the user's own configuration are never copied, because their entries can hold credentials; without a limit Claude Code loads them itself.
@@ -395,9 +448,85 @@ fn mcp_config(
     json!({ MCP_SERVERS_KEY: servers })
 }
 
+/// Releases every claim of a worker that failed before its first turn, which its lead gave it at its start, and closes its open batches inside the caller's write, so the lead can give the work to another worker at once.
+async fn give_back_claims(
+    tx: &mut fold_store::WriteTx,
+    buffer: &mut EventBuffer,
+    row: &WorkerProcessRow,
+    now: fold_core::Timestamp,
+) -> Result<(), AgentError> {
+    let by = EventActor::fold();
+    let reason = ReleaseReason::WorkerFailed;
+    crate::services::reviews::close_batches_of(tx, buffer, &by, &row.agent, now).await?;
+    let mut tasks = Vec::new();
+    for held in claims::unreleased_of_agent(tx.conn(), row.agent_id).await? {
+        let event = match held.target {
+            ClaimTarget::Task(task) => {
+                claims::release(tx, task, held.worker_id, reason, now).await?;
+                tasks.push(task);
+                NewEvent::new(types::CLAIM_RELEASED, by.clone())?
+                    .task(task)
+                    .data(json!({
+                        "kind": "implementation",
+                        "worker": held.worker.as_str(),
+                        "reason": reason.as_str(),
+                    }))?
+            }
+            ClaimTarget::Review { proposal, task } => {
+                fold_store::reviews::release_review_claim(tx, proposal, reason.as_str(), now)
+                    .await?;
+                NewEvent::new(types::CLAIM_RELEASED, by.clone())?
+                    .task(task)
+                    .proposal(proposal)
+                    .data(json!({
+                        "kind": "review",
+                        "proposal": proposal.to_string(),
+                        "worker": held.worker.as_str(),
+                        "reason": reason.as_str(),
+                    }))?
+            }
+        };
+        buffer.append(tx, &event, now).await?;
+    }
+    buffer.extend(
+        crate::services::tasks::recompute(tx, &tasks, now)
+            .await?
+            .events,
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "dev-launcher")]
+    #[test]
+    fn a_project_with_the_stub_folder_runs_the_stub_of_its_fld() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let fold_dir = temp.path().join(".fold");
+        std::fs::create_dir(&fold_dir).unwrap();
+        let fold = Path::new("/bin/fld");
+        let claude = PathBuf::from("claude");
+        assert_eq!(
+            worker_program(&fold_dir, claude.clone(), fold),
+            (claude.clone(), &[][..])
+        );
+        let elsewhere = temp.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let stub_dir = fold_dir.join(super::super::DEV_STUB_DIR);
+        std::os::unix::fs::symlink(&elsewhere, &stub_dir).unwrap();
+        assert_eq!(
+            worker_program(&fold_dir, claude.clone(), fold),
+            (claude.clone(), &[][..])
+        );
+        std::fs::remove_file(&stub_dir).unwrap();
+        std::fs::create_dir(&stub_dir).unwrap();
+        assert_eq!(
+            worker_program(&fold_dir, claude, fold),
+            (PathBuf::from("/bin/fld"), &["dev", "stub"][..])
+        );
+    }
 
     #[test]
     fn a_limited_config_copies_only_named_project_servers() {

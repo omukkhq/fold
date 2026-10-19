@@ -15,17 +15,22 @@ use crate::store::WriteTx;
 use crate::workspaces::parse_stats;
 
 pub mod batches;
+pub mod checks;
 mod claims;
+mod human_edits;
 mod integrations;
+mod scopes;
 mod summaries;
 
 pub use claims::{
     ReviewClaimRow, insert_review_claim, integrated_review_claim_holder, unreleased_review_claim,
 };
+pub use human_edits::{keep_approvals, request_review_again};
 pub use integrations::{
     IntegrationFacts, IntegrationSubject, NewIntegration, conflict_report, insert_conflicted,
-    insert_refused, insert_succeeded, integration_facts, mark_conflicted,
+    insert_refused, insert_succeeded, integration_facts, mark_checks_failed, mark_conflicted,
 };
+pub use scopes::{ScopeChoiceRow, insert_review_scope, insert_scope_choice, latest_scope_choice};
 pub use summaries::{
     IntegrationRecord, ProposalSummary, ReviewEntry, proposal_summaries, review_entries,
 };
@@ -82,6 +87,10 @@ pub struct ProposalRow {
     pub title: String,
     pub state: ProposalState,
     pub conflicted: bool,
+    /// The integration checks of the current version failed, so the proposal is with its author until a new version.
+    pub checks_failed: bool,
+    /// A request to integrate the current version waits in the integration queue.
+    pub integration_queued: bool,
     pub close_reason: Option<String>,
     /// The highest version number.
     pub current_version: u32,
@@ -109,6 +118,10 @@ pub struct VersionRow {
     pub evidence: Option<String>,
     pub created_by: String,
     pub created_at: Timestamp,
+    /// A human sent this version for review again, so the approvals it kept from an earlier version no longer count.
+    pub review_again: bool,
+    /// The review checkout whose files the reviewer fixed to make this version; `None` for the author's versions and human edits.
+    pub fixed_in_checkout: Option<WorkspaceId>,
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +140,8 @@ pub struct NewVersion<'a> {
     pub head_changeset: ChangesetId,
     pub evidence: Option<&'a str>,
     pub created_by: &'a str,
+    /// The review checkout a reviewer's fix came from; it must be a review checkout of the same proposal.
+    pub fixed_in_checkout: Option<WorkspaceId>,
 }
 
 /// Inserts an open proposal and its version 1 in the caller's write. A second open proposal for the task fails on `proposals.task_id`, so the partial unique index decides a race. A task, base revision or changeset that does not exist is refused.
@@ -155,7 +170,7 @@ pub async fn open_proposal(
     insert_version(tx, new.id, 1, first, now).await
 }
 
-/// Adds version `version` to an open proposal and clears its conflict flag, in the caller's write: a new version answers the conflict report it was made for. Earlier versions are never touched; the unique `(proposal, version)` index refuses a number that exists.
+/// Adds version `version` to an open proposal and clears its conflict and failed-checks flags, in the caller's write: a new version answers the conflict report or the failed integration checks it was made for. Earlier versions are never touched; the unique `(proposal, version)` index refuses a number that exists.
 pub async fn add_version(
     tx: &mut WriteTx,
     proposal: ProposalId,
@@ -165,7 +180,7 @@ pub async fn add_version(
 ) -> Result<(), StoreError> {
     let (number, now_ms) = (proposal.to_db(), now.as_millis());
     let updated = sqlx::query!(
-        "UPDATE proposals SET conflicted = 0, updated_at = ?2 WHERE number = ?1 AND state = 'open'",
+        "UPDATE proposals SET conflicted = 0, checks_failed = 0, updated_at = ?2 WHERE number = ?1 AND state = 'open'",
         number,
         now_ms
     )
@@ -192,12 +207,16 @@ async fn insert_version(
         now.as_millis(),
     );
     let tree = new.tree.to_string();
+    let checkout = new.fixed_in_checkout.map(WorkspaceId::to_db);
     let inserted = sqlx::query!(
         "INSERT INTO proposal_versions (proposal_id, version, base_revision_id, tree_hash,
-                                        head_changeset_id, evidence, created_by, created_at)
-         SELECT p.id, ?2, r.id, ?4, c.id, ?6, ?7, ?8
+                                        head_changeset_id, evidence, created_by, created_at,
+                                        fixed_in_checkout_id)
+         SELECT p.id, ?2, r.id, ?4, c.id, ?6, ?7, ?8,
+                (SELECT w.id FROM workspaces w WHERE w.number = ?9)
          FROM proposals p, revisions r, changesets c
-         WHERE p.number = ?1 AND r.number = ?3 AND c.number = ?5",
+         WHERE p.number = ?1 AND r.number = ?3 AND c.number = ?5
+           AND (?9 IS NULL OR EXISTS (SELECT 1 FROM workspaces w WHERE w.number = ?9))",
         proposal,
         version,
         base,
@@ -205,7 +224,8 @@ async fn insert_version(
         changeset,
         new.evidence,
         new.created_by,
-        now
+        now,
+        checkout
     )
     .execute(tx.conn())
     .await?
@@ -214,7 +234,7 @@ async fn insert_version(
         Ok(())
     } else {
         Err(StoreError::Invalid(
-            "the proposal, base revision or changeset does not exist",
+            "the proposal, base revision, changeset or checkout does not exist",
         ))
     }
 }
@@ -379,6 +399,8 @@ struct RawProposal {
     title: String,
     state: String,
     conflicted: bool,
+    checks_failed: bool,
+    integration_queued: bool,
     close_reason: Option<String>,
     current_version: Option<i64>,
     verdict: Option<String>,
@@ -411,6 +433,8 @@ impl RawProposal {
             state: ProposalState::parse(&row.state)
                 .ok_or(StoreError::Corrupt("proposals.state"))?,
             conflicted: row.conflicted,
+            checks_failed: row.checks_failed,
+            integration_queued: row.integration_queued,
             close_reason: row.close_reason,
             current_version,
             changes_requested: row.verdict.as_deref() == Some("request_changes"),
@@ -444,6 +468,12 @@ macro_rules! select_proposals {
                       p.title,
                       p.state,
                       p.conflicted AS "conflicted: bool",
+                      p.checks_failed AS "checks_failed: bool",
+                      EXISTS (
+                          SELECT 1 FROM integration_requests q
+                          WHERE q.proposal_id = p.id AND q.ended_at IS NULL
+                            AND q.version = (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id)
+                      ) AS "integration_queued!: bool",
                       p.close_reason,
                       (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id) AS "current_version?: i64",
                       (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) AS "verdict?: String",
@@ -511,11 +541,14 @@ pub async fn list_versions(
     let number = proposal.to_db();
     let rows = sqlx::query!(
         r#"SELECT v.version, r.number AS "base!: i64", v.tree_hash,
-                  c.number AS "changeset!: i64", c.stats, v.evidence, v.created_by, v.created_at
+                  c.number AS "changeset!: i64", c.stats, v.evidence, v.created_by, v.created_at,
+                  EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = v.id) AS "review_again!: bool",
+                  f.number AS "fixed_in?: i64"
            FROM proposal_versions v
            JOIN proposals p ON p.id = v.proposal_id
            JOIN revisions r ON r.id = v.base_revision_id
            JOIN changesets c ON c.id = v.head_changeset_id
+           LEFT JOIN workspaces f ON f.id = v.fixed_in_checkout_id
            WHERE p.number = ?
            ORDER BY v.version"#,
         number
@@ -539,6 +572,14 @@ pub async fn list_versions(
                 evidence: row.evidence,
                 created_by: row.created_by,
                 created_at: time(row.created_at, "proposal_versions.created_at")?,
+                review_again: row.review_again,
+                fixed_in_checkout: row
+                    .fixed_in
+                    .map(|value| {
+                        WorkspaceId::try_from_db(value)
+                            .ok_or(StoreError::Corrupt("workspaces.number"))
+                    })
+                    .transpose()?,
             })
         })
         .collect()
@@ -745,7 +786,7 @@ pub async fn comment_proposal(
         .transpose()
 }
 
-/// The reviews of one version of the proposal. `seq` is each review's place in `(created_at, id)` order, counted from 1: the order the status cache reads the latest verdict in, so `fold_core::reviews::latest_verdict` over these facts and the board never disagree. Each approver's weight comes from the agent's `main` tag and worker role at the time of this read.
+/// The reviews of one version of the proposal. `seq` is each review's place in `(created_at, id)` order, counted from 1: the order the status cache reads the latest verdict in, so `fold_core::reviews::latest_verdict` over these facts and the board never disagree. Each approver's weight comes from the agent's `main` tag and worker role at the time of this read. The approvals a human edit kept count as the version's own until a human sends the version for review again.
 pub async fn review_facts(
     executor: impl SqliteExecutor<'_>,
     proposal: ProposalId,
@@ -764,6 +805,8 @@ pub async fn review_facts(
            JOIN proposals p ON p.id = v.proposal_id
            LEFT JOIN workers w ON w.id = r.reviewer_worker_id
            WHERE p.number = ?1 AND v.version = ?2
+             AND (r.kept_from_review_id IS NULL
+                 OR NOT EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = r.version_id))
            ORDER BY r.created_at, r.id"#,
         number,
         version
@@ -914,9 +957,13 @@ pub struct ReviewRow {
     pub body: String,
     pub comments: u32,
     pub created_at: Timestamp,
+    /// For an approval a human edit kept, the version whose approval it copies.
+    pub kept_from: Option<u32>,
+    /// The scope of an agent's review of a revised version; `None` for a review of a version with no earlier verdict, for every review by a human, and for an approval a human edit kept.
+    pub scope: Option<fold_core::reviews::ReviewScopeRecord>,
 }
 
-/// The reviews of every version of the proposal, in the `(created_at, id)` order that `review_facts` counts in.
+/// The reviews of every version of the proposal, in the `(created_at, id)` order that `review_facts` counts in. The kept approvals of a version sent for review again are left out, as `review_facts` leaves them out.
 pub async fn list_reviews(
     executor: impl SqliteExecutor<'_>,
     proposal: ProposalId,
@@ -925,12 +972,20 @@ pub async fn list_reviews(
     let rows = sqlx::query!(
         r#"SELECT v.version, r.verdict, w.name AS "worker?: String", r.reviewer_human, r.body,
                   r.created_at,
-                  (SELECT COUNT(*) FROM review_comments c WHERE c.review_id = r.id) AS "comments!: i64"
+                  (SELECT COUNT(*) FROM review_comments c WHERE c.review_id = r.id) AS "comments!: i64",
+                  (SELECT kv.version FROM reviews kept JOIN proposal_versions kv ON kv.id = kept.version_id
+                   WHERE kept.id = r.kept_from_review_id) AS "kept_from?: i64",
+                  s.since_version AS "scope_since?: i64", s.suggested AS "scope_suggested?: String",
+                  s.rules AS "scope_rules?: String", s.scope AS "scope?: String",
+                  s.reason AS "scope_reason?: String"
            FROM reviews r
            JOIN proposal_versions v ON v.id = r.version_id
            JOIN proposals p ON p.id = v.proposal_id
            LEFT JOIN workers w ON w.id = r.reviewer_worker_id
+           LEFT JOIN review_scopes s ON s.review_id = r.id
            WHERE p.number = ?
+             AND (r.kept_from_review_id IS NULL
+                 OR NOT EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = r.version_id))
            ORDER BY r.created_at, r.id"#,
         number
     )
@@ -951,6 +1006,20 @@ pub async fn list_reviews(
                 comments: u32::try_from(row.comments)
                     .map_err(|_| StoreError::Corrupt("review_comments.review_id"))?,
                 created_at: time(row.created_at, "reviews.created_at")?,
+                kept_from: row
+                    .kept_from
+                    .map(|version| {
+                        u32::try_from(version)
+                            .map_err(|_| StoreError::Corrupt("proposal_versions.version"))
+                    })
+                    .transpose()?,
+                scope: scopes::stored_scope(
+                    row.scope_since,
+                    row.scope_suggested.as_deref(),
+                    row.scope_rules.as_deref(),
+                    row.scope.as_deref(),
+                    row.scope_reason,
+                )?,
             })
         })
         .collect()

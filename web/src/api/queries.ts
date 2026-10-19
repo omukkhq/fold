@@ -8,10 +8,12 @@ import { getProject, listProjects } from "./projects";
 import {
   getProposal,
   getProposalChanges,
+  getProposalFile,
   getProposalFileDiff,
   listComments,
   listProposals,
   type ChangeRange,
+  getCheckRun,
 } from "./proposals";
 import { getRequest, getThread, listRequests } from "./requests";
 import { getReviewBatch, listReviewBatches } from "./reviews";
@@ -105,6 +107,14 @@ export const proposalQuery = (slug: string, id: string) =>
     staleTime: Infinity,
   });
 
+/** A check run with its logs; the event stream refreshes it when the run ends. */
+export const checkRunQuery = (slug: string, run: string) =>
+  queryOptions({
+    queryKey: keys.checkRun(slug, run),
+    queryFn: () => getCheckRun(slug, run),
+    staleTime: Infinity,
+  });
+
 export const proposalChangesQuery = (
   slug: string,
   id: string,
@@ -125,6 +135,18 @@ export const proposalFileDiffQuery = (
   queryOptions({
     queryKey: keys.proposalFileDiff(slug, id, range.version, range.since, path),
     queryFn: () => getProposalFileDiff(slug, id, range, path),
+    staleTime: Infinity,
+  });
+
+export const proposalFileQuery = (
+  slug: string,
+  id: string,
+  version: number,
+  path: string,
+) =>
+  queryOptions({
+    queryKey: keys.proposalFile(slug, id, version, path),
+    queryFn: () => getProposalFile(slug, id, version, path),
     staleTime: Infinity,
   });
 

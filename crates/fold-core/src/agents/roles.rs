@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentName, AreaName};
 use crate::error::{FoldError, codes};
-use crate::ids::{ProposalId, TaskId};
+use crate::ids::{ProposalId, ReviewBatchId, TaskId};
 use crate::tasks::{LabelName, define_names};
 
 mod answers;
@@ -27,21 +27,21 @@ define_names!(
         AreaLead = "area_lead",
         ReviewLead = "review_lead",
         TaskWorker = "task_worker",
-        BatchReviewer = "batch_reviewer",
+        Reviewer = "reviewer",
     }
 );
 
 impl Role {
-    /// A lead lives until someone stops it; a task worker or batch reviewer is bound to its work and stops when it is done or idle.
+    /// A lead lives until someone stops it; a task worker or reviewer is bound to its work and stops when it is done or idle.
     pub fn is_long_lived(self) -> bool {
         matches!(self, Role::AreaLead | Role::ReviewLead)
     }
 
-    /// Leads and batch reviewers keep long gaps between turns (a batch reviewer runs long tests), so their prompt cache lives an hour; a task worker works in short bursts.
+    /// Leads and reviewers keep long gaps between turns (a reviewer runs long tests), so their prompt cache lives an hour; a task worker works in short bursts.
     pub fn default_cache_ttl(self) -> CacheTtl {
         match self {
             Role::TaskWorker => CacheTtl::FiveMinutes,
-            Role::AreaLead | Role::ReviewLead | Role::BatchReviewer => CacheTtl::OneHour,
+            Role::AreaLead | Role::ReviewLead | Role::Reviewer => CacheTtl::OneHour,
         }
     }
 
@@ -63,8 +63,8 @@ impl Role {
                 "\n",
                 include_str!("roles/shared.md")
             ),
-            Role::BatchReviewer => concat!(
-                include_str!("roles/batch_reviewer.md"),
+            Role::Reviewer => concat!(
+                include_str!("roles/reviewer.md"),
                 "\n",
                 include_str!("roles/shared.md")
             ),
@@ -153,7 +153,7 @@ pub fn check_model(model: &str) -> Result<(), FoldError> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkerLimits {
     pub task_worker: u64,
-    pub batch_reviewer: u64,
+    pub reviewer: u64,
     /// `None`: an area has no limit of its own.
     pub max_per_area: Option<u64>,
 }
@@ -163,7 +163,7 @@ impl WorkerLimits {
     pub fn of(self, role: Role) -> Option<u64> {
         match role {
             Role::TaskWorker => Some(self.task_worker),
-            Role::BatchReviewer => Some(self.batch_reviewer),
+            Role::Reviewer => Some(self.reviewer),
             Role::AreaLead | Role::ReviewLead => None,
         }
     }
@@ -182,7 +182,7 @@ pub enum AreaLimitChange {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct WorkerLimitsChange {
     pub task_worker: Option<u64>,
-    pub batch_reviewer: Option<u64>,
+    pub reviewer: Option<u64>,
     pub max_per_area: AreaLimitChange,
 }
 
@@ -190,7 +190,7 @@ impl WorkerLimitsChange {
     /// The change a request asks for; a value together with a clear of the same limit is refused.
     pub fn from_request(
         task_worker: Option<u64>,
-        batch_reviewer: Option<u64>,
+        reviewer: Option<u64>,
         max_per_area: Option<u64>,
         clear_max_per_area: bool,
     ) -> Result<Self, FoldError> {
@@ -210,7 +210,7 @@ impl WorkerLimitsChange {
         };
         Ok(Self {
             task_worker,
-            batch_reviewer,
+            reviewer,
             max_per_area,
         })
     }
@@ -218,14 +218,14 @@ impl WorkerLimitsChange {
     /// Refuses a change that sets nothing. A limit has no upper bound, because how many workers a machine and a token budget carry is the user's choice, and a limit of 0 lets no worker of that role start.
     pub fn check(&self) -> Result<(), FoldError> {
         if self.task_worker.is_none()
-            && self.batch_reviewer.is_none()
+            && self.reviewer.is_none()
             && self.max_per_area == AreaLimitChange::Keep
         {
             return Err(FoldError::new(
                 codes::INVALID_REQUEST,
                 "set_worker_limits needs at least one limit",
             )
-            .with_hint("pass task_worker, batch_reviewer, max_per_area or clear_max_per_area"));
+            .with_hint("pass task_worker, reviewer, max_per_area or clear_max_per_area"));
         }
         Ok(())
     }
@@ -234,7 +234,7 @@ impl WorkerLimitsChange {
     pub fn apply(&self, limits: WorkerLimits) -> WorkerLimits {
         WorkerLimits {
             task_worker: self.task_worker.unwrap_or(limits.task_worker),
-            batch_reviewer: self.batch_reviewer.unwrap_or(limits.batch_reviewer),
+            reviewer: self.reviewer.unwrap_or(limits.reviewer),
             max_per_area: match self.max_per_area {
                 AreaLimitChange::Keep => limits.max_per_area,
                 AreaLimitChange::Set(value) => Some(value),
@@ -314,7 +314,7 @@ pub fn outside_area(label: &LabelName, tasks: &[(TaskId, Vec<LabelName>)]) -> Op
         .map(|(task, _)| *task)
 }
 
-/// The name fold gives a worker started without one: `<area>-lead`, `review-lead`, `<area>-worker` or `batch-reviewer`, with `-<n>` from the second name on. The area part is shortened so the name fits the agent name limit.
+/// The name fold gives a worker started without one: `<area>-lead`, `review-lead`, `<area>-worker` or `reviewer`, with `-<n>` from the second name on. The area part is shortened so the name fits the agent name limit.
 pub fn default_worker_name(role: Role, area: Option<&AreaName>, attempt: u32) -> Option<AgentName> {
     let suffix = match attempt {
         0 | 1 => String::new(),
@@ -326,7 +326,7 @@ pub fn default_worker_name(role: Role, area: Option<&AreaName>, attempt: u32) ->
         (Role::AreaLead, None) => (None, "area-lead"),
         (Role::TaskWorker, None) => (None, "task-worker"),
         (Role::ReviewLead, _) => (None, "review-lead"),
-        (Role::BatchReviewer, _) => (None, "batch-reviewer"),
+        (Role::Reviewer, _) => (None, "reviewer"),
     };
     let tail = format!("{base}{suffix}");
     let name = match prefix {
@@ -364,6 +364,8 @@ pub struct StartFacts<'a> {
     pub area: Option<(&'a AreaName, &'a LabelName)>,
     pub tasks: &'a [TaskId],
     pub proposals: &'a [ProposalId],
+    /// The batch fold made of a reviewer's proposals when the lead gave it two or more.
+    pub batch: Option<ReviewBatchId>,
     pub instructions: Option<&'a str>,
 }
 
@@ -377,19 +379,27 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
         ),
         (Role::AreaLead, None) => format!("fold started you as {}, an area lead.", facts.name),
         (Role::ReviewLead, _) => format!(
-            "fold started you as {}, the review lead. Review the open proposals yourself or start a batch reviewer for related proposals with start_worker.",
+            "fold started you as {}, the review lead. Review the open proposals yourself, or give one proposal or a group of related proposals to a reviewer with start_worker.",
             facts.name
         ),
         (Role::TaskWorker, _) => format!(
-            "fold started you as {}, a task worker for {}. Read each task with get_task, claim it with claim_task and reuse its workspace when present. For a proposal task, work only in its task workspace and send create_proposal or update_proposal. For a no_proposal task, create no workspace and send report_task with verifiable evidence.",
+            "fold started you as {}, a task worker for {}, and gave you the claim on each of them. Read each task with get_task and reuse its workspace when present. For a proposal task, work only in its task workspace and send create_proposal or update_proposal. For a no_proposal task, create no workspace and send report_task with verifiable evidence.",
             facts.name,
             ids(facts.tasks.iter().map(ToString::to_string).collect())
         ),
-        (Role::BatchReviewer, _) => format!(
-            "fold started you as {}, a batch reviewer for {}. Review only these proposals. Review a single proposal or a proposal with a human review mark on its own. For related unmarked proposals, create your own batch with create_review_batch, check it out and submit each verdict. Read current claims and versions before starting.",
-            facts.name,
-            ids(facts.proposals.iter().map(ToString::to_string).collect())
-        ),
+        (Role::Reviewer, _) => {
+            let proposals = ids(facts.proposals.iter().map(ToString::to_string).collect());
+            match facts.batch {
+                Some(batch) => format!(
+                    "fold started you as {}, a reviewer for {proposals}, and gave you their review claims in batch {batch}. Review only these proposals: check out the batch with create_batch_checkout and submit each verdict with submit_batch_review. Read current versions before starting.",
+                    facts.name
+                ),
+                None => format!(
+                    "fold started you as {}, a reviewer for {proposals}, and gave you its review claim. Review only this proposal: check it out with create_review_checkout and submit its verdict with submit_review. Read its current version before starting.",
+                    facts.name
+                ),
+            }
+        }
     };
     match facts
         .instructions
@@ -425,7 +435,7 @@ mod tests {
         assert!(area.check().is_ok());
         let none = WorkerLimits {
             task_worker: 0,
-            batch_reviewer: 50,
+            reviewer: 50,
             max_per_area: None,
         };
         let zero = check_limits(none, Role::TaskWorker, 0, None).unwrap_err();
@@ -436,7 +446,7 @@ mod tests {
                 "ask the main agent or a human to raise the task_worker limit with set_worker_limits"
             )
         );
-        assert!(check_limits(none, Role::BatchReviewer, 49, None).is_ok());
+        assert!(check_limits(none, Role::Reviewer, 49, None).is_ok());
         let web = AreaName::parse("web").unwrap();
         let closed = WorkerLimits {
             task_worker: 4,
@@ -467,7 +477,7 @@ mod tests {
     fn a_limits_change_keeps_what_it_leaves_out() {
         let limits = WorkerLimits {
             task_worker: 4,
-            batch_reviewer: 3,
+            reviewer: 3,
             max_per_area: Some(2),
         };
         let change = WorkerLimitsChange::from_request(Some(9), None, None, false).unwrap();
@@ -482,7 +492,7 @@ mod tests {
         assert_eq!(
             change.apply(limits),
             WorkerLimits {
-                batch_reviewer: 5,
+                reviewer: 5,
                 max_per_area: None,
                 ..limits
             }
@@ -522,13 +532,13 @@ mod tests {
     }
 
     #[test]
-    fn leads_and_batch_reviewers_cache_for_an_hour_and_task_workers_for_five_minutes() {
+    fn leads_and_reviewers_cache_for_an_hour_and_task_workers_for_five_minutes() {
         assert_eq!(Role::AreaLead.default_cache_ttl(), CacheTtl::OneHour);
         assert_eq!(Role::ReviewLead.default_cache_ttl(), CacheTtl::OneHour);
-        assert_eq!(Role::BatchReviewer.default_cache_ttl(), CacheTtl::OneHour);
+        assert_eq!(Role::Reviewer.default_cache_ttl(), CacheTtl::OneHour);
         assert_eq!(Role::TaskWorker.default_cache_ttl(), CacheTtl::FiveMinutes);
         assert!(Role::AreaLead.is_long_lived() && Role::ReviewLead.is_long_lived());
-        assert!(!Role::TaskWorker.is_long_lived() && !Role::BatchReviewer.is_long_lived());
+        assert!(!Role::TaskWorker.is_long_lived() && !Role::Reviewer.is_long_lived());
     }
 
     #[test]
@@ -558,12 +568,19 @@ mod tests {
         assert!(prompt.starts_with("# Main agent\n"));
         assert!(prompt.contains("`AskUserQuestion`"));
         assert!(prompt.contains("explicit OK"));
-        assert!(prompt.contains("Never edit code and never build a task yourself"));
+        assert!(prompt.contains("Never build a task yourself"));
+        assert!(prompt.contains("Wait for the user's explicit OK to that diff"));
+        assert!(prompt.contains("call `submit_main_change`"));
+        assert!(prompt.contains("Delegate whenever a task fits"));
+        assert!(prompt.contains("Never use a back door"));
+        assert!(prompt.contains("map the code first"));
+        assert!(prompt.contains("names the folders the area owns"));
         assert!(prompt.contains("`pause_project` or `resume_project` only when the user asks"));
         assert!(prompt.contains("`start_worker` fails with `project_paused`"));
         assert!(prompt.contains("only when the user tells you in this conversation"));
+        assert!(prompt.contains("or claim a task or a review, only when the user tells you"));
         assert!(
-            prompt.split_whitespace().count() < 1500,
+            prompt.split_whitespace().count() < 1650,
             "the prompt stays in context every turn"
         );
     }
@@ -592,23 +609,86 @@ mod tests {
 
     #[test]
     fn reviewer_prompts_require_current_evidence_and_handle_omitted_verdicts() {
-        for role in [Role::ReviewLead, Role::BatchReviewer] {
+        for role in [Role::ReviewLead, Role::Reviewer] {
             let prompt = role.prompt();
             assert!(prompt.contains("acceptance criteria"));
-            assert!(prompt.contains("Do not edit source files or tests"));
+            assert!(prompt.contains("`submit_review_fix`"));
+            assert!(prompt.contains("The kind of fix decides, not its size."));
+            assert!(prompt.contains("never resolve it yourself"));
+            assert!(prompt.contains("Never edit a batch checkout."));
+            assert!(prompt.contains("still waits for the human after your approval"));
             assert!(prompt.contains("stale_version"));
             assert!(prompt.contains("left_out"));
+            assert!(prompt.contains("`suggested_scope`"));
+            assert!(prompt.contains("`base_conflicts`"));
+            assert!(prompt.contains("do not run the same checks again"));
+            assert!(prompt.contains("`get_check_run`"));
+            assert!(
+                prompt
+                    .contains("public API, a schema, a migration, or security or permission code")
+            );
+            assert!(!prompt.contains("Change review:"), "{role:?}");
+            assert!(!prompt.contains("Full review:"), "{role:?}");
         }
+        let worker = Role::TaskWorker.prompt();
+        assert!(worker.contains("call `run_checks` for the task before `create_proposal`"));
+        assert!(worker.contains("Wait for `checks.finished` with `wait_for_events`"));
         let lead = Role::ReviewLead.prompt();
         assert!(lead.contains("before taking claims or creating a batch"));
-        assert!(lead.contains("that reviewer creates its own batch"));
+        assert!(lead.contains("You decide the scope when you assign the review"));
+        assert!(lead.contains("`set_review_scope`"));
+        assert!(
+            Role::Reviewer
+                .prompt()
+                .contains("Follow the scope you get.")
+        );
+        assert!(lead.contains("makes a batch of the group for it, in the same step"));
+    }
+
+    #[test]
+    fn workers_get_their_claims_from_their_lead_and_never_claim() {
+        for role in [Role::TaskWorker, Role::Reviewer] {
+            let prompt = role.prompt();
+            assert!(prompt.contains("`worker_claim_denied`"), "{role:?}");
+            assert!(prompt.contains("gave you"), "{role:?}");
+        }
+        assert!(!Role::TaskWorker.prompt().contains("Claim each task"));
+        assert!(!Role::Reviewer.prompt().contains("make a batch with"));
+        assert!(Role::TaskWorker.prompt().contains("When your task is Done"));
+        assert!(
+            Role::AreaLead
+                .prompt()
+                .contains("Do not call `claim_task` yourself")
+        );
+    }
+
+    #[test]
+    fn an_area_lead_and_a_task_worker_leave_reviews_to_the_review_lead() {
+        for role in [Role::AreaLead, Role::TaskWorker] {
+            let prompt = role.prompt();
+            assert!(
+                prompt.contains("Do not claim or review proposals"),
+                "{role:?}"
+            );
+            assert!(
+                prompt.contains("tell the review lead with `send_message`"),
+                "{role:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_task_worker_syncs_to_continue_from_a_reviewer_version() {
+        let prompt = Role::TaskWorker.prompt();
+        assert!(prompt.contains("A reviewer may fix your proposal itself"));
+        assert!(prompt.contains("call `sync_workspace`: it writes that version into your files"));
     }
 
     #[test]
     fn limits_count_each_short_lived_role_and_never_a_lead() {
         let limits = WorkerLimits {
             task_worker: 4,
-            batch_reviewer: 3,
+            reviewer: 3,
             max_per_area: None,
         };
         let web = area("web");
@@ -622,14 +702,9 @@ mod tests {
         assert_eq!(full.details().unwrap()["max"], serde_json::json!(4));
         assert!(full.hint().unwrap().contains("task_worker limit is 4"));
         assert!(full.hint().unwrap().contains("set_worker_limits"));
-        assert!(check_limits(limits, Role::BatchReviewer, 2, None).is_ok());
-        let reviewers = check_limits(limits, Role::BatchReviewer, 3, None).unwrap_err();
-        assert!(
-            reviewers
-                .hint()
-                .unwrap()
-                .contains("batch_reviewer limit is 3")
-        );
+        assert!(check_limits(limits, Role::Reviewer, 2, None).is_ok());
+        let reviewers = check_limits(limits, Role::Reviewer, 3, None).unwrap_err();
+        assert!(reviewers.hint().unwrap().contains("reviewer limit is 3"));
         for lead in [Role::AreaLead, Role::ReviewLead] {
             assert!(check_limits(limits, lead, 100, Some((&web, 100))).is_ok());
         }
@@ -668,7 +743,7 @@ mod tests {
         assert_eq!(name(Role::AreaLead, Some(&web), 1), "web-lead");
         assert_eq!(name(Role::TaskWorker, Some(&web), 2), "web-worker-2");
         assert_eq!(name(Role::ReviewLead, None, 1), "review-lead");
-        assert_eq!(name(Role::BatchReviewer, None, 3), "batch-reviewer-3");
+        assert_eq!(name(Role::Reviewer, None, 3), "reviewer-3");
         assert_eq!(name(Role::AreaLead, None, 0), "area-lead");
         assert_eq!(name(Role::TaskWorker, None, 0), "task-worker");
         let long = area(&"a".repeat(32));
@@ -703,6 +778,7 @@ mod tests {
             area: Some((&web, &label)),
             tasks: &[],
             proposals: &[],
+            batch: None,
             instructions: Some("  Start with the board.  "),
         });
         assert!(lead_turn.contains("area lead of area web"));
@@ -714,19 +790,37 @@ mod tests {
             area: Some((&web, &label)),
             tasks: &[task],
             proposals: &[],
+            batch: None,
             instructions: Some(" "),
         });
         assert!(task_worker_turn.contains("task worker for T-4"));
         assert!(!task_worker_turn.contains("\n\n"));
         let reviewer_turn = first_turn(&StartFacts {
-            role: Role::BatchReviewer,
+            role: Role::Reviewer,
             name: &task_worker,
             area: None,
             tasks: &[],
             proposals: &[proposal],
+            batch: None,
             instructions: None,
         });
-        assert!(reviewer_turn.contains("batch reviewer for P-2"));
+        assert!(reviewer_turn.contains("reviewer for P-2"));
+        assert!(reviewer_turn.contains("create_review_checkout"));
+        let other = ProposalId::from_number(3).unwrap();
+        let batch_turn = first_turn(&StartFacts {
+            role: Role::Reviewer,
+            name: &task_worker,
+            area: None,
+            tasks: &[],
+            proposals: &[proposal, other],
+            batch: ReviewBatchId::from_number(7),
+            instructions: None,
+        });
+        assert!(batch_turn.contains("reviewer for P-2, P-3"));
+        assert!(batch_turn.contains("in batch rb-7"));
+        assert!(!batch_turn.contains("create_review_batch"));
+        assert!(task_worker_turn.contains("gave you the claim"));
+        assert!(!task_worker_turn.contains("claim_task"));
         for role in [Role::ReviewLead, Role::AreaLead] {
             let turn = first_turn(&StartFacts {
                 role,
@@ -734,6 +828,7 @@ mod tests {
                 area: None,
                 tasks: &[],
                 proposals: &[],
+                batch: None,
                 instructions: None,
             });
             assert!(turn.starts_with("fold started you as web-lead"));

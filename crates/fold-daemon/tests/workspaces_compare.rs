@@ -81,7 +81,7 @@ fn state_refs_parse_their_four_public_forms_only() {
     assert_eq!(r(1).kind(), StateKind::Revision);
     assert_eq!(ws(1).kind().as_str(), "workspace");
     for bad in [
-        "", "T-3", "P-1", "r0", "r01", "C-", "ck-x", "ws--1", "17", "R1",
+        "", "T-3", "P-1", "r00", "r01", "C-", "ck-x", "ws--1", "17", "R1",
     ] {
         let error = StateRef::parse(bad).unwrap_err();
         assert_eq!(error.code(), "invalid_state_ref", "{bad}");

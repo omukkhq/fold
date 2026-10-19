@@ -10,14 +10,8 @@ use tokio::net::UnixStream;
 
 use super::SeedError;
 
-/// What a refused tool call reports.
-pub struct Refusal {
-    pub code: String,
-}
-
 /// An MCP session over the daemon socket, opened with the same handshake as `fld mcp`.
 pub struct Agent {
-    name: &'static str,
     client: RunningService<RoleClient, ()>,
 }
 
@@ -49,13 +43,9 @@ impl Agent {
             ().serve((read, write))
                 .await
                 .map_err(|_| SeedError::Transport { tool: "connect" })?;
-        let agent = Self { name, client };
+        let agent = Self { client };
         agent.call("register_agent", json!({"name": name})).await?;
         Ok(agent)
-    }
-
-    pub fn name(&self) -> &'static str {
-        self.name
     }
 
     /// The JSON of a successful call.
@@ -68,22 +58,6 @@ impl Agent {
             });
         }
         Ok(body)
-    }
-
-    /// A call that must fail: the error code, or an error when the call succeeds.
-    pub async fn refused(
-        &self,
-        tool: &'static str,
-        arguments: Value,
-    ) -> Result<Refusal, SeedError> {
-        let (failed, body) = self.raw(tool, arguments).await?;
-        if failed {
-            Ok(Refusal {
-                code: error_code(&body),
-            })
-        } else {
-            Err(SeedError::Unexpected { tool })
-        }
     }
 
     async fn raw(&self, tool: &'static str, arguments: Value) -> Result<(bool, Value), SeedError> {

@@ -3,6 +3,7 @@ import type { FileView, Revision } from "../../api/repository";
 import {
   describeRevision,
   fileState,
+  folderWaits,
   formatSize,
   isOpenable,
   mainCopyText,
@@ -72,6 +73,25 @@ describe("describeRevision", () => {
     });
   });
 
+  it("names the commit subject, the main agent and the user's approval for a direct change", () => {
+    expect(
+      describeRevision(
+        revision({
+          origin: "direct",
+          title: "Add the AGENTS.md rules",
+          author: "main",
+        }),
+        NOW,
+      ),
+    ).toEqual({
+      title: "direct · Add the AGENTS.md rules",
+      meta: [{ actor: "main" }, " · approved by the user · 14:06:00"],
+    });
+    expect(describeRevision(revision({ origin: "direct" }), NOW).title).toBe(
+      "direct · r8",
+    );
+  });
+
   it("shows the title of the first revision, or a name when it has none", () => {
     expect(
       describeRevision(
@@ -84,8 +104,17 @@ describe("describeRevision", () => {
       ).title,
     ).toBe("Imported");
     expect(describeRevision(revision({ origin: "initial" }), NOW).title).toBe(
-      "Initial revision",
+      "Genesis revision",
     );
+  });
+
+  it("names the human who changed the project folder for a record", () => {
+    const lines = describeRevision(
+      revision({ origin: "record", author: "human:tanim" }),
+      NOW,
+    );
+    expect(lines.title).toBe("record · changes of the project folder");
+    expect(lines.meta).toEqual([{ actor: "human:tanim" }, " · 14:06:00"]);
   });
 });
 
@@ -165,17 +194,58 @@ describe("symlinkLabel", () => {
 
 describe("mainCopyText", () => {
   it("names the head and the folder the repository route sends", () => {
+    for (const folder of ["r17", null]) {
+      expect(
+        mainCopyText({
+          head: "r17",
+          main_path: "/srv/demo",
+          folder,
+          recent: [],
+        }),
+      ).toBe(
+        "The project folder /srv/demo shows r17, apart from your changes that are not recorded. Agents read it; builds run in workspaces.",
+      );
+    }
+  });
+
+  it("names the revision a waiting folder holds and the head it waits before", () => {
     expect(
-      mainCopyText({ head: "r17", main_path: "/srv/demo", recent: [] }),
+      mainCopyText({
+        head: "r17",
+        main_path: "/srv/demo",
+        folder: "r15",
+        recent: [],
+      }),
     ).toBe(
-      "The project folder /srv/demo shows r17 while it has no changes that are not committed. Agents read it; builds run in workspaces.",
+      "The project folder /srv/demo shows r15, apart from your changes that are not recorded, and waits before r17; Needs you says why. Agents read it; builds run in workspaces.",
     );
   });
 
   it("says nothing before the read arrives or while main has no revision", () => {
     expect(mainCopyText(undefined)).toBeNull();
     expect(
-      mainCopyText({ head: null, main_path: "/srv/demo/main", recent: [] }),
+      mainCopyText({
+        head: null,
+        main_path: "/srv/demo/main",
+        folder: null,
+        recent: [],
+      }),
     ).toBeNull();
+  });
+});
+
+describe("folderWaits", () => {
+  it("is true only while the folder holds a revision older than the head", () => {
+    const state = (head: string | null, folder: string | null) => ({
+      head,
+      main_path: "/srv/demo",
+      folder,
+      recent: [],
+    });
+    expect(folderWaits(state("r8", "r7"))).toBe(true);
+    expect(folderWaits(state("r8", "r8"))).toBe(false);
+    expect(folderWaits(state("r8", null))).toBe(false);
+    expect(folderWaits(state(null, null))).toBe(false);
+    expect(folderWaits(undefined)).toBe(false);
   });
 });

@@ -122,7 +122,7 @@ export function gateText(
 
 /** The review claim holder may be an agent without the right to integrate, so the line names the roles that have it. */
 const INTEGRATORS: Segment[] = [
-  "the main agent, the review lead or a batch reviewer integrates",
+  "the main agent, the review lead or a reviewer integrates",
 ];
 
 /**

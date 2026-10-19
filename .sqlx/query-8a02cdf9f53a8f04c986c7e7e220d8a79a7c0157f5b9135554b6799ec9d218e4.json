@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO git_sync (id, enabled_by, enabled_at) VALUES (1, ?, ?) ON CONFLICT (id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "8a02cdf9f53a8f04c986c7e7e220d8a79a7c0157f5b9135554b6799ec9d218e4"
+}

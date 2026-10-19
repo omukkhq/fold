@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE human_changes\n           SET state = 'resolved', closed_at = ?,\n               integration_id = (SELECT id FROM integrations WHERE number = ?)\n           WHERE state = 'conflicted' AND id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "b0bbe751fe39b9cc106b715a7cac2b9ed3ff499e13b29ae50f69a529c76e0fbc"
+}

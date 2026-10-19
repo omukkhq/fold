@@ -50,6 +50,40 @@ describe("describeFailure", () => {
     }
   });
 
+  it("words each refusal of a human edit by its reason", () => {
+    const text = (code: string, details: Record<string, unknown> = {}) =>
+      describeFailure(refusal(code, details));
+    expect(
+      text("human_edit_denied", { reviewer: "ana", proposal: "P-1" }),
+    ).toEqual({
+      place: "inline",
+      text: "Only @ana can change this proposal in the human review.",
+      mapped: true,
+    });
+    expect(text("human_edit_denied", { reviewer: null }).text).toBe(
+      "You can change a proposal only in a human review.",
+    );
+    expect(text("worker_busy", { reason: "working" }).text).toBe(
+      "The task worker is working in its workspace now. Try again when it stops.",
+    );
+    expect(text("worker_busy", { reason: "unfinished_write" }).text).toBe(
+      "The task workspace waits for its worker to sync an earlier change. Try again after that.",
+    );
+    expect(text("worker_busy", { reason: "newer_work" }).text).toBe(
+      "The task worker has work that this version does not hold. Ask for changes instead.",
+    );
+    expect(text("file_not_editable", { reason: "missing" }).text).toBe(
+      "This version does not have that file.",
+    );
+    expect(text("file_not_editable", { reason: "too_large" }).text).toBe(
+      "The file is too large to edit here.",
+    );
+    expect(text("file_not_editable", { reason: "binary" }).text).toBe(
+      "Only a text file can be edited here.",
+    );
+    expect(text("version_unchanged").place).toBe("inline");
+  });
+
   it("reads the gate details it names", () => {
     expect(
       describeFailure(refusal("human_approval_missing", { reviewer: "ana" }))

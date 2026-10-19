@@ -57,7 +57,7 @@ fn sample_event() -> Event {
 fn sample_workspace() -> LiveWorkspace {
     LiveWorkspace {
         workspace: WorkspaceId::from_number(9).unwrap(),
-        task: TaskId::from_number(12).unwrap(),
+        task: Some(TaskId::from_number(12).unwrap()),
         worker: "frontend/ui".to_owned(),
         base: RevisionId::from_number(17).unwrap(),
         files: vec![ChangedFile {

@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/v1/hooks/edit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The Claude Code edit guard of an agent, for a file in a review checkout: an agent edits only in an active review checkout of one proposal that its own worker owns, while its agent holds the proposal's review claim. Socket only. A process under a worker names only that worker's own agent. */
+        post: operations["hook_edit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/hooks/session-start": {
         parameters: {
             query?: never;
@@ -62,10 +79,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every registered project and whether the daemon has it open. */
+        /** Every registered project and whether the daemon has it open. A project whose `.fold/` was deleted is removed from fold before the list is read, so it is not in the list. */
         get: operations["list_projects"];
         put?: never;
-        /** Opens a project that was registered after the daemon started. Socket only; an open project answers the same again. */
+        /** Opens a project that was registered after the daemon started. Socket only; an open project answers the same again, unless its database was replaced: the daemon then closes it and opens the folder as it is now. A folder that is there without `.fold/`, as after its fold data was deleted, is removed from fold and answers `project_not_found`; a missing folder or a `.fold/` without its database keeps the project and answers `project_unavailable` with `details.reason` `folder_missing` or `database_missing`. */
         post: operations["open_project"];
         delete?: never;
         options?: never;
@@ -150,6 +167,23 @@ export interface paths {
         };
         /** The board read model. */
         get: operations["get_board"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/check-runs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One check run with the stored end of each command's output. */
+        get: operations["get_check_run"];
         put?: never;
         post?: never;
         delete?: never;
@@ -271,7 +305,8 @@ export interface paths {
         /** The Git repository of one open project, its branch and its remotes with the last push of each. */
         get: operations["show_project_git"];
         put?: never;
-        post?: never;
+        /** Turns Git on in a project whose Git sync is off, as `fld init --with-git` asks in its folder: fold creates `.git` when it is missing, writes the identity into its config, records the `.gitignore` copy rule as the human's revision, turns Git sync on with `git.sync_enabled` and writes the commit of every revision after the empty genesis, with the branch and the index on the newest. Git sync never goes off again. Socket only; the human comes from `x-fold-human`. */
+        post: operations["enable_project_git"];
         delete?: never;
         options?: never;
         head?: never;
@@ -320,7 +355,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval and card drafts waiting for their human requester. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*` and `request.*`. */
+        /** Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, and an unstash whose conflict markers wait in the folder, which stands for the folder too. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted` and `stash.dropped`. */
         get: operations["list_needs_you"];
         put?: never;
         post?: never;
@@ -406,8 +441,42 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The change of a proposal version, calculated on request from stored trees: against its base revision, or with `since` only what changed after an earlier version. A version side is named by its changeset. On a change since an earlier version the new side's line numbers are the version's own, so a `new` line comment taken from them lands on the version. */
+        /** The change of a proposal version, calculated on request from stored trees: against its base revision, or with `since` only what changed after an earlier version. When the version has a newer base than the earlier one, the earlier version is carried onto that base first, so the change leaves out what main gained. A version side is named by its changeset. On a change since an earlier version the new side's line numbers are the version's own, so a `new` line comment taken from them lands on the version. */
         get: operations["get_proposal_diff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/proposals/{id}/edits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A human edits one text file of the version the human read, in a human review: only on a task with the human review mark, by the human the mark names or by any human when it names none. The edit becomes a new version under the human's name that keeps the agent approvals of the version it was made from, but no human approval; send it for review again to withdraw them. The task worker's next sync writes the edit into its workspace. */
+        post: operations["edit_proposal_file"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/proposals/{id}/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One file of a proposal version, the content a human edit starts from. A symlink gives its target text and is never followed. */
+        get: operations["read_proposal_file"];
         put?: never;
         post?: never;
         delete?: never;
@@ -427,6 +496,23 @@ export interface paths {
         put?: never;
         /** A named human integrates the current version onto main and approves it in the same action. A conflicting merge publishes nothing: the answer is `integration_conflicted` with each conflicting path and its kind in `details.files`, and the full report is on the proposal. */
         post: operations["integrate_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/proposals/{id}/review-again": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A human sends the current version, a human edit, for review again: the approvals it kept stop counting and the reviewers are told. Only in a human review, for the human the mark names or any human when it names none. */
+        post: operations["send_for_review_again"];
         delete?: never;
         options?: never;
         head?: never;
@@ -478,6 +564,23 @@ export interface paths {
         put?: never;
         /** Pushes the main revisions not yet on the Git remote of the project, without force. Socket only; the human comes from `x-fold-human`. */
         post: operations["push_project"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/record": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Records the human's changes in the project folder on main, as `fld record` asks: what the folder holds against the entries fold last wrote there is one change of the human's, which a clean merge integrates with no review, and the folder follows main; a conflict leaves main as it is and waits in Needs you while the main agent prepares the merge. While Git sync is on, the human's Git commits on the branch are recorded first, and a project whose branch or HEAD shows a change fold did not make is refused until the human undoes it. Socket only; the human comes from `x-fold-human`, and a process under a worker fold started is refused. */
+        post: operations["record_project"];
         delete?: never;
         options?: never;
         head?: never;
@@ -757,6 +860,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/stash": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The stash of the project folder, newest entry first, as `fld stash list` shows it. Socket only. */
+        get: operations["list_project_stash"];
+        put?: never;
+        /** Puts the human's changes in the project folder aside, as `fld stash` asks: what the folder holds against the entries fold last wrote there becomes the newest entry of fold's own stash, those paths go back to fold's entries, and the folder follows main. While Git sync is on, the index entries of those paths go back too; no Git stash is made. A conflicted human change from an earlier `fld record` that waits for the main agent is closed with `human_change.withdrawn`, since the entry holds its changes. A project whose branch or HEAD shows a change fold did not make is refused, and so is one whose unstash conflict waits or that holds a file fold tracks and cannot read. Socket only; the human comes from `x-fold-human`. */
+        post: operations["stash_project"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/tasks": {
         parameters: {
             query?: never;
@@ -967,6 +1088,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/unstash": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Merges the newest entry of the stash into the project folder as it is now, as `fld unstash` asks, with the human's newer unrecorded changes. A clean merge writes the files, which are changes that no revision records again, and removes the entry. A conflict writes conflict markers labelled `main (r<n>)` and `stash@{0}`, or the stash's side as `<path>.fold-stash`, keeps the entry, and holds the folder until `fld record` finds the files fixed. Socket only; the human comes from `x-fold-human`. */
+        post: operations["unstash_project"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/worker-limits": {
         parameters: {
             query?: never;
@@ -1060,7 +1198,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The project's active and missing task workspaces with their live states and the attention items of their tasks. */
+        /** The project's active and missing task workspaces and its live main workspace, with their live states and the attention items of their tasks. */
         get: operations["list_workspaces"];
         put?: never;
         post?: never;
@@ -1094,7 +1232,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The working changes of an active task workspace after a full scan, compared against its own base revision. */
+        /** The working changes of an active task workspace or of the main workspace after a full scan, compared against its own base revision. */
         get: operations["get_workspace_changes"];
         put?: never;
         post?: never;
@@ -1111,7 +1249,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The entries of one directory of an active task workspace as its files are now, for suggesting `@ws-N:` paths. */
+        /** The entries of one directory of an active task workspace or of the main workspace as its files are now, for suggesting `@ws-N:` paths. */
         get: operations["read_workspace_tree"];
         put?: never;
         post?: never;
@@ -1395,6 +1533,83 @@ export interface components {
             /** Format: int32 */
             removed_lines: number;
         };
+        /**
+         * @description What one command did.
+         * @enum {string}
+         */
+        CheckOutcome: "passed" | "failed" | "timed_out" | "skipped" | "not_run";
+        /**
+         * @description What asked for a run.
+         * @enum {string}
+         */
+        CheckPurpose: "check" | "create_proposal" | "update_proposal" | "integrate" | "review_fix";
+        /** @description One command of a run. */
+        CheckResult: {
+            /** Format: int64 */
+            duration_ms: number;
+            /** Format: int32 */
+            exit_code: number | null;
+            /** @description The stored end of the output, as text. Empty on a proposal view, which leaves the logs out. */
+            log: string;
+            /**
+             * Format: int64
+             * @description The size of the command's whole output.
+             */
+            log_bytes: number;
+            /** @description The check's name, or `setup` for the setup command. */
+            name: string;
+            outcome: components["schemas"]["CheckOutcome"];
+            /** @description A required command that fails fails the run; one that is not required only shows. */
+            required: boolean;
+            setup: boolean;
+            /** @description The stored log is the end of a longer output. */
+            truncated: boolean;
+        };
+        /** @description One run of a project's checks by fold. */
+        CheckRun: {
+            /**
+             * @description The revision the checked tree is based on: the workspace's base, or main's head for an integration.
+             * @example r17
+             */
+            base: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            created_at: number;
+            /** Format: int64 */
+            finished_at: number | null;
+            /** @example cr-4 */
+            id: string;
+            purpose: components["schemas"]["CheckPurpose"];
+            reason: components["schemas"]["CheckRunReason"] | null;
+            /** @description In run order: the setup first, then each check of the stage. */
+            results: components["schemas"]["CheckResult"][];
+            stage: components["schemas"]["CheckStage"];
+            state: components["schemas"]["CheckRunState"];
+            /** @example T-12 */
+            task: string;
+            /**
+             * Format: int32
+             * @description The version an integration run checks.
+             */
+            version: number | null;
+        };
+        /**
+         * @description Why a run failed or stopped.
+         * @enum {string}
+         */
+        CheckRunReason: "check_failed" | "setup_failed" | "checks_file_invalid" | "files_changed" | "workspace_changed" | "refused" | "daemon_stopped" | "superseded" | "fold_failed";
+        /**
+         * @description Where a run stands.
+         * @enum {string}
+         */
+        CheckRunState: "running" | "passed" | "failed" | "stopped";
+        /**
+         * @description When a check runs.
+         * @enum {string}
+         */
+        CheckStage: "proposal" | "integration";
         Checklist: {
             items: components["schemas"]["ChecklistItem"][];
             name: string;
@@ -1783,7 +1998,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -1794,12 +2009,51 @@ export interface components {
          * @enum {string}
          */
         EdgeOrigin: "direct" | "checklist";
+        EditDecision: {
+            /** @description The agent may edit files in the directory. */
+            allowed: boolean;
+            /** @description Why the edit is refused and what to do instead; `null` when it is allowed. */
+            reason: string | null;
+        };
         EditDraftBody: {
             /** @description 1 to 20 cards. */
             cards: components["schemas"]["DraftCardView"][];
             edges?: components["schemas"]["DraftEdgeView"][];
             /** @description A note about this version. `#` names a fold item and `@` names a file; the daemon parses nothing. */
             note?: string | null;
+        };
+        /** @description A human's change of one text file of the version the human read, in a human review. */
+        EditFileBody: {
+            /** @description The whole new content of the file, as UTF-8 text. */
+            content: string;
+            /** @description The file, such as `src/lib.rs`: a text file of that version. */
+            path: string;
+            /**
+             * Format: int32
+             * @description The version the human read and edited. When the current version is another one, nothing is written and the answer is `stale_version`.
+             */
+            version: number;
+        };
+        EditHook: {
+            /** @description `FOLD_AGENT` of the session. */
+            agent: string;
+            /** @description The session's canonical working directory. */
+            cwd: string;
+            /** @description The review checkout directory that holds the file to edit, relative to the project root, such as `.fold/ws/review-p-3`. */
+            workspace: string;
+        };
+        /** @description The Git identity for the project's own Git config, as `fld init --with-git` settled it; a value left out is not written. */
+        EnableGit: {
+            /**
+             * @description `user.email` for the repository's own config; no control character, `<` or `>`.
+             * @example ana@example.com
+             */
+            git_email?: string | null;
+            /**
+             * @description `user.name` for the repository's own config; no control character, `<` or `>`.
+             * @example Ana Lima
+             */
+            git_name?: string | null;
         };
         ErrorBody: {
             /** @description A stable code; branch on it, never on the message. */
@@ -1942,6 +2196,23 @@ export interface components {
             /** @description Count what a run would remove and change nothing. */
             dry_run?: boolean;
         };
+        /** @description What turning Git on did. */
+        GitEnabledView: {
+            /** @description The commit the Git branch points to; null while main holds only the empty genesis. */
+            commit: string | null;
+            /**
+             * @description The revision that records the `.gitignore` fold wrote or changed; null when it changed none.
+             * @example r4
+             */
+            gitignore: string | null;
+            /** @description The configured remotes, by name. */
+            remotes: string[];
+            /**
+             * @description Main's head.
+             * @example r4
+             */
+            revision: string;
+        };
         GitPushFailed: {
             /**
              * Format: int64
@@ -2043,13 +2314,18 @@ export interface components {
             proposal: string;
             result: components["schemas"]["IntegrationResultKind"];
             /**
-             * @description The new head of main.
+             * @description The new head of main, once the proposal integrated.
              * @example r18
              */
-            revision: string;
+            revision: string | null;
+            /**
+             * @description The check run of failed integration checks.
+             * @example cr-9
+             */
+            run: string | null;
         };
         /** @enum {string} */
-        IntegrationResultKind: "succeeded";
+        IntegrationResultKind: "succeeded" | "checks_failed" | "queued";
         Label: {
             /**
              * @description One of sage, slate, teal, ink, gold, moss, plum, stone.
@@ -2066,16 +2342,16 @@ export interface components {
         LimitsEntry: {
             /**
              * Format: int64
-             * @description The most batch reviewers that run at once.
-             * @example 3
-             */
-            batch_reviewer: number;
-            /**
-             * Format: int64
              * @description The most task workers that run at once in one area; null when an area has no limit of its own.
              * @example 2
              */
             max_per_area: number | null;
+            /**
+             * Format: int64
+             * @description The most reviewers that run at once.
+             * @example 3
+             */
+            reviewer: number;
             /**
              * Format: int64
              * @description The most task workers that run at once.
@@ -2103,8 +2379,11 @@ export interface components {
             stalled: boolean;
             /** @description A one-line change summary, such as `3 files: 2 modified, 1 added (+40 -5)`, or `no changes`. */
             summary: string;
-            /** @example T-12 */
-            task: string;
+            /**
+             * @description The workspace's task; null for the main workspace, which belongs to no task.
+             * @example T-12
+             */
+            task: string | null;
             /**
              * @description The worker label, `agent` or `agent/worker`.
              * @example frontend/ui
@@ -2178,12 +2457,17 @@ export interface components {
             /** @description The options of a `question` with choices; empty otherwise. */
             choices: components["schemas"]["MessageChoice"][];
             /**
+             * @description The human's Git commit of a `human_change`.
+             * @example 9f2c4e1a7b3d5f6e8a0c2b4d6f8e0a1c3b5d7f9e
+             */
+            commit: string | null;
+            /**
              * @description The short header of a `question`, such as `Chart library`.
              * @example Chart library
              */
             header: string | null;
             /**
-             * @description The human a `human_review` or `request_draft` waits for; null when any human may answer.
+             * @description The human a `human_review` or `request_draft` waits for, or whose change a `human_change` is; null when any human may answer.
              * @example tanim
              */
             human: string | null;
@@ -2193,6 +2477,8 @@ export interface components {
              * @example m-31
              */
             message: string | null;
+            /** @description The files of a `human_change` that conflict with main, those of a `folder_held` that keep the project folder where it is, or those of an `unstash_conflicted` that hold the conflict, in path order; empty otherwise. */
+            paths: string[];
             /** @example P-3 */
             proposal: string | null;
             /**
@@ -2201,7 +2487,7 @@ export interface components {
              */
             question: string | null;
             /**
-             * @description The reason of a `blocker`.
+             * @description The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, or ends the conflict for `unstash_conflicted`.
              * @example Wait until the design is signed off
              */
             reason: string | null;
@@ -2221,7 +2507,7 @@ export interface components {
              */
             thread: string | null;
             /**
-             * @description The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`.
+             * @description The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`.
              * @example Database schema for reports
              */
             title: string | null;
@@ -2235,16 +2521,16 @@ export interface components {
          * @description Why an item waits for a human.
          * @enum {string}
          */
-        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker";
+        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main";
         /** @description Every item that waits for a human, oldest first. */
         NeedsYouList: {
             items: components["schemas"]["NeedsYouEntry"][];
         };
         /**
-         * @description The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request and `task` the task.
+         * @description The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task and `repository` the history of main.
          * @enum {string}
          */
-        NeedsYouScreen: "messages" | "worker" | "proposal" | "request" | "task";
+        NeedsYouScreen: "messages" | "worker" | "proposal" | "request" | "task" | "repository";
         /** @description Exactly one of `text` and `linked_task`. */
         NewChecklistItemBody: {
             /** @description The checklist name. Left out, a plain step goes to the task's only checklist, or to `Subtasks` when the task has none; with two or more checklists the request is refused with `checklist_ambiguous`. A new name creates the checklist. */
@@ -2288,10 +2574,10 @@ export interface components {
             presence: components["schemas"]["PresenceState"];
         };
         /**
-         * @description Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `outside_commits`: the Git branch of main has commits fold did not write, so the project folder stops following main until a human runs `fld pull`. `uncommitted_changes`: the project folder has changes that are not committed, so it follows main again once the human commits or stashes them.
+         * @description Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `uncommitted_changes`: the project folder has changes that no revision records, which the human records with `fld record` or puts aside with `fld stash`; such a change on a path main changed, or the conflict markers of `fld unstash`, keep the whole folder where it is until then. `head_moved`: the Git branch or HEAD shows a change fold did not make, such as another branch checked out, a reset or a stash, so the project folder stops following main until the human brings the branch back.
          * @enum {string}
          */
-        ProjectAttentionKind: "outside_commits" | "uncommitted_changes";
+        ProjectAttentionKind: "uncommitted_changes" | "head_moved";
         /** @description The project's Git repository and the state of its remotes. */
         ProjectGit: {
             /** @description The branch every integration is committed to. */
@@ -2339,8 +2625,10 @@ export interface components {
         };
         /** @description A proposal as the requesting human sees it. */
         ProposalDetail: {
-            /** @description A reviewer agent (the main agent, the review lead or a batch reviewer) approved the current version and no request for changes came after it. On a task with the human review mark a human approves only then; otherwise the approval is `agent_approval_required`. */
+            /** @description A reviewer agent (the main agent, the review lead or a reviewer) approved the current version and no request for changes came after it. On a task with the human review mark a human approves only then; otherwise the approval is `agent_approval_required`. */
             agent_approved: boolean;
+            /** @description The check runs of the selected version, newest first, without their logs: the proposal-stage runs of exactly its files, then its integration runs. */
+            checks: components["schemas"]["CheckRun"][];
             comments: components["schemas"]["CommentCounts"];
             conflict: components["schemas"]["ConflictReportView"] | null;
             /** @description The files the selected version changes against its base, in path order. */
@@ -2390,11 +2678,33 @@ export interface components {
              * @description UTC milliseconds.
              */
             created_at: number;
+            /**
+             * Format: int32
+             * @description For an approval that a human edit kept, the version whose approval it copies.
+             */
+            kept_from: number | null;
             /** @description The worker, or `human:<name>`. */
             reviewer: string;
+            scope: components["schemas"]["ProposalReviewScope"] | null;
             verdict: components["schemas"]["ReviewVerdict"];
             /** Format: int32 */
             version: number;
+        };
+        /** @description The scope a review of a revised version followed. */
+        ProposalReviewScope: {
+            /** @description Why the review lead chose this scope; null when the review followed the suggestion. */
+            reason: string | null;
+            /** @description The rules that made fold suggest a full review, in their declared order; empty for a change review. */
+            rules: components["schemas"]["ReviewScopeRule"][];
+            /** @description The scope the review followed: the review lead's choice when it made one, else fold's suggestion. */
+            scope: components["schemas"]["ReviewScopeKind"];
+            /**
+             * Format: int32
+             * @description The earlier version with a verdict that the change is read since.
+             */
+            since: number;
+            /** @description fold's suggestion from the change since that version. */
+            suggested: components["schemas"]["ReviewScopeKind"];
         };
         /**
          * @description Where a proposal stands, as the pill on a card and the block of a task draw it.
@@ -2409,6 +2719,8 @@ export interface components {
         ProposalSummary: {
             /** @description The worker that opened the proposal, `agent` or `agent/worker`. */
             author: string;
+            /** @description The integration checks of the current version failed on its merge with main, so the proposal is with its author until a new version. */
+            checks_failed: boolean;
             /** @description Why a closed proposal closed. */
             close_reason: string | null;
             /**
@@ -2433,6 +2745,8 @@ export interface components {
             human_review: components["schemas"]["HumanReviewMark"] | null;
             /** @example P-3 */
             id: string;
+            /** @description A request to integrate the current version waits in the integration queue; it ends when fold integrates, refuses or sends the proposal back. */
+            integration_queued: boolean;
             latest_verdict: components["schemas"]["ReviewVerdict"] | null;
             /** @description The worker that holds the review claim. */
             review_claim: string | null;
@@ -2478,6 +2792,7 @@ export interface components {
              * @description UTC milliseconds.
              */
             created_at: number;
+            /** @description The worker, the reviewer's worker for a reviewer's fix, or `human:<name>` for a human edit. */
             created_by: string;
             /** @description The author's evidence that the work is done. */
             evidence: string | null;
@@ -2487,6 +2802,12 @@ export interface components {
             files_deleted: number;
             /** Format: int32 */
             files_modified: number;
+            /** @description A human made this version by editing the one before it in a human review. It keeps the agent approvals of that version until it is sent for review again; a human approves it again. */
+            human_edit: boolean;
+            /** @description A human sent this version for review again, so the approvals it kept no longer count. */
+            review_again: boolean;
+            /** @description The reviewer that holds the review claim made this version by fixing the one before it in its review checkout. It starts without approvals like every version. */
+            reviewer_fix: boolean;
             /** @description The proposed tree's hash. */
             tree: string;
             /** Format: int32 */
@@ -2577,6 +2898,39 @@ export interface components {
             /** @example frontend/ui */
             name: string;
         };
+        RecordResult: {
+            /** @description The Git commit of the new revision while Git sync is on; null otherwise. */
+            commit: string | null;
+            /** @description In path order; empty unless conflicted. */
+            conflicted: components["schemas"]["PullConflict"][];
+            /** @description False when the same conflicted change waited already and nothing was written. */
+            created: boolean;
+            /** @description The files the human changed, in path order; empty unless recorded. */
+            files: string[];
+            outcome: components["schemas"]["RecordState"];
+            /**
+             * @description Main's head: the new revision of a recorded change, else the head main stays on.
+             * @example r18
+             */
+            revision: string;
+            skipped: components["schemas"]["RecordSkipped"][];
+            touched: components["schemas"]["RecordTouched"][];
+        };
+        /** @description A file of the project folder that fold leaves out, as an import does. */
+        RecordSkipped: {
+            path: string;
+            /** @description Why it is left out, such as `too_large`. */
+            reason: string;
+        };
+        /** @enum {string} */
+        RecordState: "up_to_date" | "recorded" | "conflicted";
+        /** @description An open task workspace whose own changes touch a file the human changed. */
+        RecordTouched: {
+            /** @example T-12 */
+            task: string;
+            /** @example ws-9 */
+            workspace: string;
+        };
         /**
          * @description How a lead check answered a report.
          * @enum {string}
@@ -2584,11 +2938,16 @@ export interface components {
         ReportResolution: "completed" | "sent_back";
         RepositoryView: {
             /**
+             * @description The main revision the project folder holds, apart from the changes no revision records, such as `r16`: behind `head` while the folder waits on such a change on a path main changed, or on the Git branch. Null before fold first wrote the folder.
+             * @example r16
+             */
+            folder: string | null;
+            /**
              * @description The revision `main` names; null only before `r1` exists.
              * @example r17
              */
             head: string | null;
-            /** @description The project folder, whose files follow main through its own Git repository. */
+            /** @description The project folder, whose files follow main through fold's checkout of it. */
             main_path: string;
             /** @description The newest 10 revisions, newest first. */
             recent: components["schemas"]["RevisionView"][];
@@ -2715,6 +3074,14 @@ export interface components {
             last_at: number;
             /** Format: int32 */
             messages: number;
+        };
+        /** @description The human edit the human sends for review again. */
+        ReviewAgainBody: {
+            /**
+             * Format: int32
+             * @description The version the human read. When the current version is another one, nothing is written and the answer is `stale_version`.
+             */
+            version: number;
         };
         /** @description Related proposals one reviewer reviews together, with one verdict per member. */
         ReviewBatch: {
@@ -2935,6 +3302,16 @@ export interface components {
             /** Format: int32 */
             version: number;
         };
+        /**
+         * @description How much of a revised version a review reads: the change since the earlier version with a verdict and the code it touches, or the whole version.
+         * @enum {string}
+         */
+        ReviewScopeKind: "change" | "full";
+        /**
+         * @description A fact fold checks that makes it suggest a full review of a revised version.
+         * @enum {string}
+         */
+        ReviewScopeRule: "new_files" | "large_delta" | "base_conflicts" | "v3_or_later";
         /** @enum {string} */
         ReviewVerdict: "comment" | "request_changes" | "approve" | "reject";
         RevisionDetailView: {
@@ -2944,7 +3321,7 @@ export interface components {
             totals: components["schemas"]["ComparisonTotals"];
         };
         /** @enum {string} */
-        RevisionOriginView: "initial" | "proposal" | "pull";
+        RevisionOriginView: "initial" | "proposal" | "pull" | "direct" | "record";
         RevisionPageView: {
             /**
              * @description Pass it as `before` for the next page; null once the page reaches `r1`.
@@ -2955,7 +3332,7 @@ export interface components {
             revisions: components["schemas"]["RevisionView"][];
         };
         RevisionView: {
-            /** @description The agent whose proposal was integrated, or the human who pulled. */
+            /** @description The agent whose proposal was integrated, the human who pulled, or the main worker that made a direct change. */
             author: string | null;
             /** @description The Git commit the revision became in the project folder's repository `.git`; null until it is written, just after the integration. */
             commit: string | null;
@@ -2975,7 +3352,7 @@ export interface components {
             pull: string | null;
             /** @example T-12 */
             task: string | null;
-            /** @description The title of the integrated proposal. */
+            /** @description The title of the integrated proposal, or the first line of a direct change's commit message. */
             title: string | null;
             /** @description The hash of the revision's root tree. */
             tree: string;
@@ -3025,11 +3402,6 @@ export interface components {
         };
         /** @description A change of the worker limits; a limit left out stays as it is. */
         SetWorkerLimitsBody: {
-            /**
-             * Format: int64
-             * @description The most batch reviewers that run at once, a whole number with no upper bound; 0 lets none start.
-             */
-            batch_reviewer?: number | null;
             /** @description True removes the limit of one area. */
             clear_max_per_area?: boolean;
             /**
@@ -3037,6 +3409,11 @@ export interface components {
              * @description The most task workers that run at once in one area, a whole number with no upper bound; 0 lets none start.
              */
             max_per_area?: number | null;
+            /**
+             * Format: int64
+             * @description The most reviewers that run at once, a whole number with no upper bound; 0 lets none start.
+             */
+            reviewer?: number | null;
             /**
              * Format: int64
              * @description The most task workers that run at once, a whole number with no upper bound; 0 lets none start.
@@ -3064,6 +3441,53 @@ export interface components {
             name?: string | null;
             role: components["schemas"]["WorkerRole"];
         };
+        /** @description One entry of the stash. */
+        StashEntryView: {
+            /** @description Who stashed, such as `human:ana`. */
+            actor: string;
+            /**
+             * @description The main revision the project folder held then.
+             * @example r8
+             */
+            base: string;
+            /** @description The paths whose unstash conflict waits in the folder; empty otherwise. */
+            conflicted: string[];
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the stash.
+             */
+            created_at: number;
+            /** @description The paths of the entry, in path order. */
+            files: string[];
+            /**
+             * @description Its name on the stack: `stash@{0}` is the newest.
+             * @example stash@{0}
+             */
+            stash: string;
+        };
+        StashList: {
+            /** @description Newest first. */
+            entries: components["schemas"]["StashEntryView"][];
+        };
+        StashResult: {
+            /**
+             * Format: int32
+             * @description The entries on the stack now.
+             */
+            entries: number;
+            /** @description The paths of the new entry, in path order; empty when nothing was stashed. */
+            files: string[];
+            outcome: components["schemas"]["StashState"];
+            /**
+             * @description The main revision the project folder holds now.
+             * @example r18
+             */
+            revision: string;
+            /** @description New files the read of the folder left out, such as one over the size limit: they stay in the folder and are not in the entry. */
+            skipped: components["schemas"]["RecordSkipped"][];
+        };
+        /** @enum {string} */
+        StashState: "nothing" | "stashed";
         /** @enum {string} */
         StateKindView: "revision" | "changeset" | "checkpoint" | "workspace" | "tree";
         StopHook: {
@@ -3396,6 +3820,36 @@ export interface components {
             /** @description The directory listed; empty for the root. */
             path: string;
         };
+        /** @description One path where the unstash conflicted with the project folder. */
+        UnstashConflictView: {
+            /** @description `both_modified_text`, `both_modified_binary`, `modify_delete`, `add_add` or `type_change`. */
+            kind: string;
+            path: string;
+            /**
+             * @description The file or directory beside the path that holds the stash's side of a conflict that takes no markers; null for a text conflict, which holds markers.
+             * @example logo.png.fold-stash
+             */
+            sidecar: string | null;
+        };
+        UnstashResult: {
+            /** @description In path order; empty unless conflicted. */
+            conflicted: components["schemas"]["UnstashConflictView"][];
+            /**
+             * Format: int32
+             * @description The entries on the stack now.
+             */
+            entries: number;
+            /** @description The paths of the entry, in path order. */
+            files: string[];
+            outcome: components["schemas"]["UnstashState"];
+            /**
+             * @description The main revision the project folder holds, which the conflict markers name; null when the merge was clean.
+             * @example r18
+             */
+            revision: string | null;
+        };
+        /** @enum {string} */
+        UnstashState: "applied" | "conflicted";
         /** @description A change of an area's profile; a field left out and not cleared stays as it is. */
         UpdateAreaBody: {
             /** @description True removes the instructions. */
@@ -3476,7 +3930,7 @@ export interface components {
          */
         WorkerProcessEntry: {
             /**
-             * @description Null for the review lead and batch reviewers.
+             * @description Null for the review lead and reviewers.
              * @example web
              */
             area: string | null;
@@ -3511,7 +3965,7 @@ export interface components {
              * @example web-worker
              */
             name: string;
-            /** @description The proposals a batch reviewer is bound to. */
+            /** @description The proposals a reviewer is bound to. */
             proposals: string[];
             role: components["schemas"]["WorkerRole"];
             /**
@@ -3568,7 +4022,7 @@ export interface components {
          * @description The kinds of worker fold runs.
          * @enum {string}
          */
-        WorkerRole: "area_lead" | "review_lead" | "task_worker" | "batch_reviewer";
+        WorkerRole: "area_lead" | "review_lead" | "task_worker" | "reviewer";
         WorkerWorkspace: {
             /**
              * @description The revision the workspace is based on.
@@ -3598,7 +4052,7 @@ export interface components {
          * @enum {string}
          */
         WorkerWorkspaceState: "active" | "missing";
-        /** @description The working changes of an active task workspace, read after a full scan. */
+        /** @description The working changes of an active task workspace or of the main workspace, read after a full scan. */
         WorkspaceChangesView: components["schemas"]["LiveWorkspace"] & {
             /** @description Always `working`. */
             source: components["schemas"]["ChangeSource"];
@@ -3656,16 +4110,19 @@ export interface components {
             /** @example P-3 */
             proposal: string | null;
             state: components["schemas"]["WorkspaceStateView"];
-            /** @example T-12 */
-            task: string;
-            /** @description The title of the task. */
-            task_title: string;
+            /**
+             * @description Null for the main workspace, which belongs to no task.
+             * @example T-12
+             */
+            task: string | null;
+            /** @description The title of the task; null for the main workspace. */
+            task_title: string | null;
             watch: components["schemas"]["WatchModeView"] | null;
         };
         /** @enum {string} */
-        WorkspaceKindView: "task" | "review";
+        WorkspaceKindView: "task" | "review" | "main";
         WorkspaceListView: {
-            /** @description The active and missing task workspaces, by id. */
+            /** @description The active and missing task workspaces and the live main workspace, by id. */
             workspaces: components["schemas"]["WorkspaceEntryView"][];
         };
         /** @enum {string} */
@@ -3691,6 +4148,84 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    hook_edit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditHook"];
+            };
+        };
+        responses: {
+            /** @description Whether the agent may edit files in the directory */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EditDecision"];
+                };
+            };
+            /** @description The body or the agent name is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or no registered project holds `cwd` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     hook_session_start: {
         parameters: {
             query?: never;
@@ -3731,7 +4266,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `worker_peer_refused`: a process under a worker names another agent; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            /** @description `worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3809,7 +4344,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `worker_peer_refused`: a process under a worker names another agent; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            /** @description `worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4219,7 +4754,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4311,7 +4846,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4417,6 +4952,85 @@ export interface operations {
             };
         };
     };
+    get_check_run: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The check run id, such as cr-4 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckRun"];
+                };
+            };
+            /** @description `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `check_run_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     remove_checklist_item: {
         parameters: {
             query?: never;
@@ -4456,7 +5070,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4548,7 +5162,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4893,7 +5507,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5089,6 +5703,96 @@ export interface operations {
             };
         };
     };
+    enable_project_git: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnableGit"];
+            };
+        };
+        responses: {
+            /** @description Git sync is on */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitEnabledView"];
+                };
+            };
+            /** @description Git sync is on already (`reason` `git_sync_on`), the folder holds a `.git` with commits of its own (`reason` `git_history`) or a `.git` that is no directory (`reason` `git_dir_elsewhere`), or `git_name` or `git_email` cannot go into an author line */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A Git command failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open, or git is not on PATH */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     list_labels: {
         parameters: {
             query?: never;
@@ -5200,7 +5904,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5435,7 +6139,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5599,7 +6303,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5773,7 +6477,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5915,6 +6619,191 @@ export interface operations {
             };
         };
     };
+    edit_proposal_file: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The proposal id, such as P-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditFileBody"];
+            };
+        };
+        responses: {
+            /** @description The new version */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalVersion"];
+                };
+            };
+            /** @description `invalid_request`, `invalid_path`, `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_edit_denied`: the task has no human review mark, or the mark names another human (`details.reviewer`); `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `stale_version` (`details.expected_version`, `details.current_version`), `worker_busy` (`details.reason`: `working`, `unfinished_write` or `newer_work`), `version_unchanged`, `proposal_not_open`, `workspace_not_active`, `not_workspace_owner` or `task_closed` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `file_not_editable` (`details.reason`: `missing`, `not_a_file`, `binary` or `too_large`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    read_proposal_file: {
+        parameters: {
+            query: {
+                /** @description A version number; left out, the current version. */
+                version?: number;
+                /** @description A file path relative to the version's root, such as `src/lib.rs`. */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The proposal id, such as P-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileContentView"];
+                };
+            };
+            /** @description `invalid_id`, `invalid_path` or `invalid_request`: the query string is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_found`: no such proposal or version, `not_found`: the version has no file at the path, or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     integrate_proposal: {
         parameters: {
             query?: never;
@@ -5933,7 +6822,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Integrated */
+            /** @description Integrated, failed its integration checks, or queued behind other integrations when the project has integration checks */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5942,7 +6831,7 @@ export interface operations {
                     "application/json": components["schemas"]["IntegrationResult"];
                 };
             };
-            /** @description `invalid_request`, `invalid_id` or `invalid_name` */
+            /** @description `invalid_request` (`details.reason` is `checks_failed` while the integration checks of the version failed, or `integration_queued` while an integration of the version waits in the queue), `invalid_id` or `invalid_name` */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -5960,7 +6849,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `author_cannot_integrate`: the caller's agent wrote the proposal; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `author_cannot_integrate`: the caller's agent wrote the proposal; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5987,7 +6876,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Internal error */
+            /** @description Internal error, or `workspace_io` with `details.reason` `fold_failed` when fold itself could not run the integration checks: the version is not sent back, so integrate again once the fault is fixed */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -5997,6 +6886,98 @@ export interface operations {
                 };
             };
             /** @description `project_unavailable`, or `integration_failed` (`details.cause`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    send_for_review_again: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The proposal id, such as P-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewAgainBody"];
+            };
+        };
+        responses: {
+            /** @description The proposal after the request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalSummary"];
+                };
+            };
+            /** @description `invalid_request` (`details.reason`: `not_human_edit` or `already_sent`), `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_edit_denied`; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `stale_version` (`details.expected_version`, `details.current_version`), `proposal_not_open` or `task_closed` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -6034,7 +7015,7 @@ export interface operations {
                     "application/json": components["schemas"]["SubmittedReview"];
                 };
             };
-            /** @description `invalid_request` (`details.field` names the field), `invalid_path`, `invalid_id` or `invalid_name` */
+            /** @description `invalid_request` (`details.field` names the field, or `details.reason` is `checks_failed` for an approve of a version whose integration checks failed), `invalid_path`, `invalid_id` or `invalid_name` */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -6052,7 +7033,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6150,7 +7131,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6248,7 +7229,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6294,6 +7275,101 @@ export interface operations {
                 };
             };
             /** @description The project failed to open, or git is not on PATH */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    record_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Main holds the human change, or it waits for the main agent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordResult"];
+                };
+            };
+            /** @description The human name is not valid, the branch or HEAD shows a change fold did not make (`reason` `head_moved`), or files still hold the conflict of `fld unstash` (`reason` `stash_markers`, the files in `paths`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Main moved during every attempt, or the config or sync map is invalid */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A Git command failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open, git is not on PATH, or the objects of the change could not be stored */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -6499,7 +7575,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6668,7 +7744,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `requester_required`: the human is not the requester; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `requester_required`: the human is not the requester; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6841,7 +7917,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `requester_required`: the human is not the requester; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `requester_required`: the human is not the requester; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6933,7 +8009,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `requester_required`: the human is not the requester; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `requester_required`: the human is not the requester; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7025,7 +8101,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `requester_required`: the human is not the requester; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `requester_required`: the human is not the requester; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7102,7 +8178,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7692,6 +8768,169 @@ export interface operations {
             };
         };
     };
+    list_project_stash: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StashList"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    stash_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The changes are stashed, or there were none */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StashResult"];
+                };
+            };
+            /** @description The human name is not valid; the branch or HEAD shows a change fold did not make (`reason` `head_moved`); the human's Git commits wait for the main agent (`reason` `git_commits_wait`); an unstash conflict waits, or a stop left an unstash's markers in the files, which keeps its entry as conflicted (`reason` `stash_conflicted`); a file fold tracks is too large or unreadable to stash (`reason` `skipped_tracked`, the files in `paths`); or files changed while fold stashed them (`reason` `changed_during_stash`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The config or sync map is invalid */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A Git command failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open, git is not on PATH, or the objects of the entry could not be stored */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     list_tasks: {
         parameters: {
             query?: never;
@@ -7803,7 +9042,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7977,7 +9216,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8060,7 +9299,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8146,7 +9385,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8238,7 +9477,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `task_hold_denied` with the detail reason `started`: the task has a claim, a task workspace or an open proposal, or is past Todo; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `task_hold_denied` with the detail reason `started`: the task has a claim, a task workspace or an open proposal, or is past Todo; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8326,7 +9565,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8418,7 +9657,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8506,7 +9745,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8596,7 +9835,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8684,7 +9923,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8767,7 +10006,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8855,7 +10094,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8945,7 +10184,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9035,7 +10274,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9127,7 +10366,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9253,6 +10492,101 @@ export interface operations {
             };
         };
     };
+    unstash_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entry is applied, or it conflicted and stays */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnstashResult"];
+                };
+            };
+            /** @description The human name is not valid; the stash is empty (`reason` `stash_empty`); an unstash conflict waits (`reason` `stash_conflicted`); files still hold the markers of an earlier unstash (`reason` `stash_markers`), which keeps the entry as conflicted; the folder holds a file fold leaves out, such as an ignored one, where the unstash writes (`reason` `unstash_path_occupied`, the files in `paths`); files changed while fold read them (`reason` `changed_during_unstash`); the branch or HEAD shows a change fold did not make (`reason` `head_moved`); or the human's Git commits wait (`reason` `git_commits_wait`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The config or sync map is invalid */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A Git command failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open, or git is not on PATH */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     set_worker_limits: {
         parameters: {
             query?: never;
@@ -9296,7 +10630,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9456,7 +10790,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9614,7 +10948,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `worker_start_denied`: a human starts only leads; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `worker_start_denied`: a human starts only leads; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9702,7 +11036,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started */
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9752,7 +11086,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The live task workspaces */
+            /** @description The live task workspaces and the live main workspace */
             200: {
                 headers: {
                     [name: string]: unknown;

@@ -34,8 +34,11 @@ async fn next_event(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_proposal_integration_becomes_one_commit_with_its_identity_and_trailers() {
+async fn a_proposal_integration_becomes_one_commit_with_the_git_identity_and_trailers() {
     let fx = Fixture::new().await;
+    let root = fx.project.paths().root();
+    git(root, &["config", "user.name", "Ana Lima"]);
+    git(root, &["config", "user.email", "ana@example.com"]);
     let _job = start_job(&fx, Git::default());
     wait_for_rows(&fx, 1).await;
     let review = approved(&fx).await;
@@ -55,7 +58,7 @@ async fn a_proposal_integration_becomes_one_commit_with_its_identity_and_trailer
     );
     assert_eq!(
         git(&mirror, &["log", "-1", "--format=%B", &second]),
-        "Add the report\n\ntask\n\nFold-Proposal: P-1\nFold-Version: 1\nFold-Task: T-1\nFold-Revision: r2\nReviewed-by: review\nIntegrated-by: review\n\n"
+        "Add the report\n\ntask\n\nFold-Proposal: P-1\nFold-Version: 1\nFold-Task: T-1\nFold-Revision: r2\n\n"
     );
     let created = fx
         .count("SELECT created_at FROM revisions WHERE number = 2")
@@ -66,9 +69,7 @@ async fn a_proposal_integration_becomes_one_commit_with_its_identity_and_trailer
             &mirror,
             &["log", "-1", "--format=%an <%ae>|%cn <%ce>|%at|%ct", &second]
         ),
-        format!(
-            "frontend <frontend.frontend@fold.local>|fold <fold@localhost>|{created}|{created}\n"
-        )
+        format!("Ana Lima <ana@example.com>|Ana Lima <ana@example.com>|{created}|{created}\n")
     );
     // The trailers are Git trailers, so Git reads them back.
     assert_eq!(
@@ -135,4 +136,60 @@ async fn a_failed_commit_is_recorded_and_the_next_start_writes_it_on_the_configu
             .as_deref(),
         Some("trunk")
     );
+}
+
+/// `git` that reads no global or system config, so only the repository's own config can name an identity.
+fn isolated_git(dir: &std::path::Path) -> Git {
+    use std::os::unix::fs::PermissionsExt;
+    let script = dir.join("git-isolated");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nGIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null exec git \"$@\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    Git::new(script)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn without_an_identity_fold_signs_and_a_later_identity_keeps_the_written_commits() {
+    let fx = Fixture::new().await;
+    let bin = tempfile::tempdir().unwrap();
+    let job = start_job(&fx, isolated_git(bin.path()));
+    wait_for_rows(&fx, 1).await;
+    let mirror = fx.project.paths().git_dir();
+    let first = commit_of(&fx, 1).await;
+    let people = |commit: &str| {
+        git(
+            &mirror,
+            &["log", "-1", "--format=%an <%ae>|%cn <%ce>", commit],
+        )
+    };
+    assert_eq!(
+        people(&first),
+        "fold <fold@localhost>|fold <fold@localhost>\n"
+    );
+    drop(job);
+
+    let root = fx.project.paths().root();
+    git(root, &["config", "user.name", "Ana Lima"]);
+    git(root, &["config", "user.email", "ana@example.com"]);
+    let _job = start_job(&fx, isolated_git(bin.path()));
+    let review = approved(&fx).await;
+    fx.reviews
+        .integrate_proposal(&review, p(1), Some(1))
+        .await
+        .unwrap();
+    wait_for_rows(&fx, 2).await;
+    let second = commit_of(&fx, 2).await;
+    assert_eq!(
+        people(&second),
+        "Ana Lima <ana@example.com>|Ana Lima <ana@example.com>\n"
+    );
+    assert_eq!(commit_of(&fx, 1).await, first);
+    assert_eq!(
+        git(&mirror, &["log", "-1", "--format=%P", &second]).trim(),
+        first
+    );
+    assert_map_matches_rows(&fx, 2).await;
 }

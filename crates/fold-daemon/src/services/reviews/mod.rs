@@ -9,17 +9,22 @@ use super::messages::MessageError;
 use super::projects::ProjectError;
 use super::tasks::TaskError;
 use super::workspaces::{WorkspaceError, WorkspaceService};
+use checks::CheckRunner;
 
 mod batches;
 mod changes;
 mod checkouts;
+pub mod checks;
 mod claims;
 mod comments;
 mod conflicts;
+mod human_edits;
 mod human_review;
 mod integrate;
 mod notify;
 mod proposals;
+mod review_fixes;
+mod scopes;
 mod verdicts;
 mod views;
 
@@ -28,20 +33,29 @@ pub use batches::{
     BatchVerdict, BatchVerdictView, LeftOut, LeftOutReason, MemberSince, ReviewBatchView,
     SubmittedBatch,
 };
-pub use changes::{ChangeRange, ProposalChange};
+pub(crate) use batches::{close_batches_of, free_reviews_for_start};
+pub use changes::{ChangeRange, ProposalChange, SinceChange};
 pub use checkouts::{CheckoutTarget, ListedCheckout, ReviewCheckout};
 pub use claims::ReviewClaimView;
+pub(crate) use claims::{Assignment, assign_reviews_in_tx};
 pub use comments::{CommentInput, CommentLocation, CommentView};
+pub use human_edits::HumanEdit;
 pub use human_review::{AwaitingHumanReview, awaiting_human_review, awaiting_human_review_in};
-pub use integrate::{AutomaticIntegration, IntegrationOutcome, PullIntegration, PullOutcome};
+pub use integrate::{
+    AutomaticIntegration, DirectChange, DirectOutcome, HumanRecord, IntegrationOutcome,
+    PullIntegration, PullOutcome, RecordIntegration,
+};
 pub(crate) use proposals::proposal_missing;
 pub use proposals::{
     DEFAULT_PROPOSAL_LIST, MAX_PROPOSAL_LIST, ProposalDetail, ProposalFilter, ProposalSummary,
-    Retirement, Turn, VersionView, retire_proposal,
+    Proposed, Retirement, Turn, VersionView, retire_proposal,
 };
+pub use review_fixes::{FixOutcome, FixedVersion, MAX_CHECKS_CHARS, MAX_FIXES, ReviewFix};
+pub use scopes::{SuggestedScope, scope_suggestion};
 pub use verdicts::SubmittedReview;
 pub use views::{
-    CommentCounts, ProposalView, ReviewView, TaskRequirements, integration_conflicted,
+    CommentCounts, ProposalView, ReviewView, TaskRequirements, direct_conflicted,
+    integration_conflicted,
 };
 
 #[derive(Debug, Error)]
@@ -117,6 +131,8 @@ pub struct ReviewService {
     workspaces: WorkspaceService,
     registry: Option<Store>,
     integration: Arc<tokio::sync::Mutex<()>>,
+    /// The project's background check runs and the machine-wide permits they take.
+    checks: CheckRunner,
 }
 
 impl std::fmt::Debug for ReviewService {
@@ -145,7 +161,15 @@ impl ReviewService {
             workspaces,
             registry: None,
             integration,
+            checks: CheckRunner::default(),
         }
+    }
+
+    /// Runs the project's checks through `checks` (`ProjectHandle::checks`), so every review service of the project shares its runs and the machine-wide permits.
+    #[must_use]
+    pub fn with_checks(mut self, checks: CheckRunner) -> Self {
+        self.checks = checks;
+        self
     }
 
     /// The review claim follows the same lease as the implementation claims of `workspaces`, which in the daemon reads the project's `config.toml` on each use.

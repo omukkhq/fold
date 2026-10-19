@@ -103,6 +103,7 @@ impl Fixture {
             .await
             .unwrap();
         for number in 1..=8 {
+            crate::common::roles::lead_work_areas(&handle.store).await;
             handle
                 .tasks
                 .create_task(
@@ -110,7 +111,7 @@ impl Fixture {
                     CreateTask {
                         title: TaskTitle::parse(&format!("Task {number}")).unwrap(),
                         description: TaskDescription::new(""),
-                        labels: Vec::new(),
+                        labels: crate::common::roles::work_labels(),
                     },
                 )
                 .await
@@ -335,15 +336,20 @@ async fn the_stop_route_counts_unread_messages_and_refuses_a_directory_outside_t
 }
 
 #[tokio::test]
-async fn both_hook_routes_are_not_found_on_the_tcp_router() {
+async fn every_hook_route_is_not_found_on_the_tcp_router() {
     let fixture = Fixture::new().await;
     let body = json!({
         "cwd": fixture.root,
         "agent": "frontend",
         "socket": "/run/a.sock",
         "token": "t0k",
+        "workspace": ".fold/ws/review-p-1",
     });
-    for path in ["/api/v1/hooks/session-start", "/api/v1/hooks/stop"] {
+    for path in [
+        "/api/v1/hooks/session-start",
+        "/api/v1/hooks/stop",
+        "/api/v1/hooks/edit",
+    ] {
         let (status, answer) = post(router(fixture.state.clone()), path, &body).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
         assert_eq!(answer["error"]["code"], codes::NOT_FOUND, "{path}");

@@ -110,8 +110,15 @@ impl ReviewService {
                     target: Target::Worker(row.author.clone()),
                     addressed_as: AddressedAs::Worker,
                 };
-                send_from_fold_in_tx(tx, &mut buffer, vec![author], (task, proposal), &body, now)
-                    .await?;
+                send_from_fold_in_tx(
+                    tx,
+                    &mut buffer,
+                    vec![author],
+                    (task, Some(proposal)),
+                    &body,
+                    now,
+                )
+                .await?;
                 buffer.extend(recompute(tx, &[task], now).await?.events);
                 Ok::<_, ReviewError>(Some((integration, report.files.len())))
             })

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE integration_requests SET ended_at = ?2 WHERE id = ?1 AND ended_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "7a220fb36b01aa376d0410cbd3a515954d4a351f8e050c99088e57496977d7ca"
+}

@@ -153,3 +153,10 @@ task_needs_human
 task_hold_denied
 checklist_denied
 checklist_ambiguous
+human_edit_denied
+worker_busy
+file_not_editable
+checks_file_invalid
+checks_running
+check_run_not_found
+worker_claim_denied

@@ -3,6 +3,7 @@ import { needsItem } from "@/test/workers";
 import {
   itemsFor,
   needsYouGroups,
+  pathsText,
   questionText,
   titleText,
   waitingText,
@@ -178,6 +179,133 @@ describe("needsYouGroups", () => {
     });
     const [human] = needsYouGroups("demo", [needsItem({ kind: "human_task" })]);
     expect(human?.lines[0]?.href).toBe("/p/demo/t/");
+  });
+
+  it("links a conflicting human change to the history of main", () => {
+    const [group] = needsYouGroups("demo", [
+      needsItem({
+        kind: "human_change",
+        screen: "repository",
+        human: "ana",
+        commit: "9f2c4e1a7b3d5f6e8a0c2b4d6f8e0a1c3b5d7f9e",
+        paths: ["README.md", "src/lib.rs"],
+      }),
+    ]);
+    expect(group?.title).toBe("Your changes");
+    expect(group?.lines[0]).toMatchObject({
+      key: "human_change:9f2c4e1a7b3d5f6e8a0c2b4d6f8e0a1c3b5d7f9e",
+      chip: "9f2c4e1",
+      person: null,
+      title: "README.md and 1 more",
+      text: "conflicts with main; the main agent explains it",
+      href: "/p/demo/repository",
+    });
+    const [bare] = needsYouGroups("demo", [
+      needsItem({ kind: "human_change" }),
+    ]);
+    expect(bare?.lines[0]).toMatchObject({ chip: null, title: null });
+    expect(pathsText([])).toBeNull();
+    expect(pathsText(["src/forms/index.ts"])).toBe("src/forms/index.ts");
+    expect(pathsText(["a.md", "b.md", "c.md"])).toBe("a.md and 2 more");
+    expect(pathsText(["a`b.md", "c.md"])).toBe("a\\`b.md and 1 more");
+    expect(titleText(" Wait for `x` ")).toBe("Wait for \\`x\\`");
+    expect(questionText({ header: "Use `pnpm`?", choices: [] })).toBe(
+      "asks about Use \\`pnpm\\`?",
+    );
+  });
+
+  it("links a Git branch that fold did not move to the history of main with the command that brings it back", () => {
+    const [group] = needsYouGroups("demo", [
+      needsItem({
+        kind: "head_moved",
+        screen: "repository",
+        reason: "run `git switch main` in the project folder",
+      }),
+    ]);
+    expect(group?.title).toBe("Git branch");
+    expect(group?.lines[0]).toMatchObject({
+      person: null,
+      chip: null,
+      title: "run `git switch main` in the project folder",
+      text: "fold does not update the project folder until the Git branch is back",
+      href: "/p/demo/repository",
+    });
+  });
+
+  it("links a project folder that waits on the human's changes to the history of main with the files that hold it back", () => {
+    const [group] = needsYouGroups("demo", [
+      needsItem({
+        kind: "folder_held",
+        screen: "repository",
+        reason: "run `fld record`, or take the changes back",
+        paths: ["README.md", "src/app.ts"],
+      }),
+    ]);
+    expect(group?.title).toBe("Project folder");
+    expect(group?.lines[0]).toMatchObject({
+      person: null,
+      chip: null,
+      title: "README.md and 1 more",
+      text: "Changes were made in your project. Undo the changes or save them using `fld record`",
+      hint: "opens the history of main",
+      href: "/p/demo/repository",
+    });
+  });
+
+  it("shows an unstash whose conflict markers wait with the conflicted files, opening nothing", () => {
+    const [group] = needsYouGroups("demo", [
+      needsItem({
+        kind: "unstash_conflicted",
+        screen: "repository",
+        reason:
+          "fix the conflict markers in these files, then run `fld record`",
+        paths: ["src/forms/index.ts", "src/forms/a.ts", "src/forms/b.ts"],
+      }),
+    ]);
+    expect(group?.title).toBe("Unstash conflict");
+    expect(group?.lines[0]).toMatchObject({
+      person: null,
+      chip: null,
+      task: null,
+      title: "src/forms/index.ts and 2 more",
+      text: "Unstash conflicts. Fix the files and run `fld record`",
+      hint: null,
+      href: null,
+    });
+  });
+
+  it("shows main's invalid checks file with its file, line and problem, opening nothing", () => {
+    const [group] = needsYouGroups("demo", [
+      needsItem({
+        kind: "checks_file_invalid_on_main",
+        screen: "repository",
+        title: "fold-checks.toml line 12: unknown field `tiemout`",
+        paths: ["fold-checks.toml"],
+      }),
+    ]);
+    expect(group?.title).toBe("Checks file");
+    expect(group?.lines[0]).toMatchObject({
+      person: null,
+      chip: null,
+      task: null,
+      title: "fold-checks.toml line 12: unknown field \\`tiemout\\`",
+      text: "Integrations wait until the checks file on main is fixed",
+      hint: null,
+      href: null,
+    });
+  });
+
+  it("puts an unstash conflict, then main's checks file, last of the groups", () => {
+    const groups = needsYouGroups("demo", [
+      needsItem({ kind: "checks_file_invalid_on_main", paths: ["a.toml"] }),
+      needsItem({ kind: "unstash_conflicted", paths: ["a.md"] }),
+      needsItem({ kind: "blocker", task: "T-3" }),
+    ]);
+    expect(groups.map((group) => group.kind)).toEqual([
+      "blocker",
+      "unstash_conflicted",
+      "checks_file_invalid_on_main",
+    ]);
   });
 
   it("counts what waits", () => {

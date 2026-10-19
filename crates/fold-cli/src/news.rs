@@ -52,8 +52,8 @@ impl NewsError {
     pub fn hint(&self) -> Option<&str> {
         match self {
             Self::InvalidAddress => Some("give an address such as ana@example.com"),
-            Self::NotInteractive => Some("run fld subscribe ana@example.com"),
-            Self::Send(_) => Some("check the network and run fld subscribe again"),
+            Self::NotInteractive => Some("run `fld subscribe ana@example.com`"),
+            Self::Send(_) => Some("check the network and run `fld subscribe` again"),
             Self::Endpoint => Some("unset FOLD_NEWS_URL, or point it at https"),
             Self::Config(_) | Self::Record { .. } | Self::Write(_) => None,
         }

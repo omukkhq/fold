@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT remote_commit AS \"commit!: String\" FROM integrations\n           WHERE result = 'succeeded' AND remote_commit IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "commit!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integrations",
+            "name": "remote_commit"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "5c91469fddc367c433b47104573204961cc8210d3b188b9aa138fa349b574652"
+}

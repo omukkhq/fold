@@ -453,6 +453,49 @@ describe("invalidation rules", () => {
     }
   });
 
+  it("refreshes Needs you when the Git branch moves or comes back, or the project folder waits", () => {
+    for (const type of [
+      "git.head_moved",
+      "git.uncommitted_changes",
+      "git.attention_cleared",
+    ]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type));
+      expect(hit(keys.needsYou(slug))).toBe(true);
+      expect(hit(keys.project(slug))).toBe(true);
+    }
+    invalidated = [];
+    applyEvent(client, slug, ev("git.outside_commits"));
+    expect(hit(keys.needsYou(slug))).toBe(false);
+  });
+
+  it("refreshes Needs you when an integration is held by main's checks file and when main moves, and not for other integration events", () => {
+    for (const type of ["integration.held", "main.advanced"]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type));
+      expect(hit(keys.needsYou(slug)), type).toBe(true);
+    }
+    invalidated = [];
+    applyEvent(client, slug, ev("integration.queued", { proposal: "P-3" }));
+    expect(hit(keys.needsYou(slug))).toBe(false);
+    expect(hit(keys.proposal(slug, "P-3"))).toBe(true);
+  });
+
+  it("refreshes Needs you and the project for each step of a stash", () => {
+    for (const type of [
+      "stash.pushed",
+      "stash.applied",
+      "stash.conflicted",
+      "stash.dropped",
+    ]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type));
+      expect(hit(keys.needsYou(slug))).toBe(true);
+      expect(hit(keys.project(slug))).toBe(true);
+      expect(hit(keys.board(slug))).toBe(false);
+    }
+  });
+
   it("invalidates repository and board, and no proposal key, for a pull integration", () => {
     for (const type of [
       "integration.succeeded",
@@ -634,6 +677,8 @@ describe("invalidation rules", () => {
       ["proposal.opened", { proposal: "P-3" }],
       ["request.draft_submitted", { data: { request: "RQ-4" } }],
       ["request.approved", { data: { request: "RQ-4", tasks: [] } }],
+      ["human_change.conflicted", {}],
+      ["human_change.resolved", {}],
     ];
     for (const [type, extra] of cases) {
       invalidated = [];

@@ -30,10 +30,10 @@ const PREFIXES: readonly (readonly [string, IdKind])[] = [
   ["r", "revision"],
 ];
 
-// A number has no leading zero and fits the daemon's 32-bit counters. The guards on both sides keep an id
+// A number has no leading zero and fits the daemon's 32-bit counters; only a revision can be 0, the genesis `r0`. The guards on both sides keep an id
 // inside a longer word (`xT-12`, `T-12a`, `rc-3`, `a-T-12`, `T-12-a`) from counting as one.
 const ID = new RegExp(
-  `(?<![A-Za-z0-9_-])(${PREFIXES.map(([prefix]) => prefix).join("|")})([1-9][0-9]{0,9})(?![A-Za-z0-9_]|-[A-Za-z0-9_])`,
+  `(?<![A-Za-z0-9_-])(${PREFIXES.map(([prefix]) => prefix).join("|")})([1-9][0-9]{0,9}|0)(?![A-Za-z0-9_]|-[A-Za-z0-9_])`,
   "g",
 );
 
@@ -47,7 +47,7 @@ function toFound(match: RegExpExecArray): FoundId | null {
     return null;
   }
   const number = Number(digits);
-  if (number > MAX_NUMBER) {
+  if (number > MAX_NUMBER || (number === 0 && entry[1] !== "revision")) {
     return null;
   }
   return {

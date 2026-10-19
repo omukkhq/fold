@@ -19,6 +19,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(session_start))
         .routes(routes!(stop))
+        .routes(routes!(edit))
 }
 
 /// Not `Debug`: `token` must never reach a log line.
@@ -63,7 +64,7 @@ pub struct StopUnread {
     responses(
         (status = 200, description = "The session's context", body = SessionStartContext),
         (status = 400, description = "The body, the agent name or the push target is not valid", body = ErrorEnvelope),
-        (status = 403, description = "`worker_peer_refused`: a process under a worker names another agent", body = ErrorEnvelope),
+        (status = 403, description = "`worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, or no registered project holds `cwd`", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -98,7 +99,7 @@ pub async fn session_start(
     responses(
         (status = 200, description = "The agent's unread count", body = StopUnread),
         (status = 400, description = "The body or the agent name is not valid", body = ErrorEnvelope),
-        (status = 403, description = "`worker_peer_refused`: a process under a worker names another agent", body = ErrorEnvelope),
+        (status = 403, description = "`worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, no registered project holds `cwd`, or the agent is not registered (`agent_not_registered`)", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -115,6 +116,59 @@ pub async fn stop(
     peers::require_peer_agent(&state.projects, pid(peer), &handle.slug, &agent).await?;
     let unread = handle.agents().unread_of(&agent).await?;
     Ok(Json(StopUnread { unread }))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct EditHook {
+    /// The session's canonical working directory.
+    pub cwd: String,
+    /// `FOLD_AGENT` of the session.
+    pub agent: String,
+    /// The review checkout directory that holds the file to edit, relative to the project root, such as `.fold/ws/review-p-3`.
+    pub workspace: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EditDecision {
+    /// The agent may edit files in the directory.
+    pub allowed: bool,
+    /// Why the edit is refused and what to do instead; `null` when it is allowed.
+    #[schema(required = true)]
+    pub reason: Option<String>,
+}
+
+/// The Claude Code edit guard of an agent, for a file in a review checkout: an agent edits only in an active review checkout of one proposal that its own worker owns, while its agent holds the proposal's review claim. Socket only. A process under a worker names only that worker's own agent.
+#[utoipa::path(
+    post,
+    path = "/api/v1/hooks/edit",
+    operation_id = "hook_edit",
+    request_body = EditHook,
+    responses(
+        (status = 200, description = "Whether the agent may edit files in the directory", body = EditDecision),
+        (status = 400, description = "The body or the agent name is not valid", body = ErrorEnvelope),
+        (status = 403, description = "`worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket, or no registered project holds `cwd`", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn edit(
+    _socket: SocketOnly,
+    State(state): State<AppState>,
+    peer: Option<Extension<SocketPeer>>,
+    ApiJson(request): ApiJson<EditHook>,
+) -> Result<Json<EditDecision>, ApiError> {
+    let agent = AgentName::parse(&request.agent).map_err(FoldError::from)?;
+    let handle = projects::open_for_dir(&state, Path::new(&request.cwd)).await?;
+    peers::require_peer_agent(&state.projects, pid(peer), &handle.slug, &agent).await?;
+    let refusal = handle
+        .reviews(&state.registry)
+        .checkout_edit_refusal(&agent, &request.workspace)
+        .await?;
+    Ok(Json(EditDecision {
+        allowed: refusal.is_none(),
+        reason: refusal.map(str::to_owned),
+    }))
 }
 
 fn pid(peer: Option<Extension<SocketPeer>>) -> Option<u32> {

@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT enabled_by, enabled_at AS \"enabled_at!: i64\" FROM git_sync WHERE id = 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "enabled_by",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "git_sync",
+            "name": "enabled_by"
+          }
+        }
+      },
+      {
+        "name": "enabled_at!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "git_sync",
+            "name": "enabled_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "154cc380c1581ef9d72cbfe10502e0cabe0309a166598be7d979933b3f6ba5a5"
+}

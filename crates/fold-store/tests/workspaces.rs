@@ -196,7 +196,7 @@ async fn reads_map_the_row_with_public_ids() {
         row,
         WorkspaceRow {
             id: ws(1),
-            task: t(1),
+            task: Some(t(1)),
             worker_id: Some(1),
             worker: Some(WorkerName::parse("backend").unwrap()),
             kind: WorkspaceKind::Task,
