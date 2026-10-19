@@ -165,13 +165,6 @@ impl Session {
                 .as_array()
                 .into_iter()
                 .flatten()
-                .chain(
-                    listed["agents"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .flat_map(|agent| agent["workers"].as_array().into_iter().flatten()),
-                )
                 .find(|worker| worker["name"] == name)
                 .cloned();
             if let Some(worker) = found.filter(|worker| ready(worker)) {

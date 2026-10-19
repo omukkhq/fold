@@ -1,4 +1,4 @@
-mod script;
+pub mod script;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
@@ -922,9 +922,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_step_ends_the_turn_with_an_error_and_stops_the_stub() {
-        let dir = tempfile::tempdir().unwrap();
+        let outer = tempfile::tempdir().unwrap();
+        let dir = outer.path().join("project");
+        std::fs::create_dir(&dir).unwrap();
         let script = json!({"turns": [{"steps": [{"write": {"path": "../out.txt", "text": ""}}]}]});
-        let mut stub = stub(dir.path(), &script, false, &[user("Go.")]);
+        let mut stub = stub(&dir, &script, false, &[user("Go.")]);
         let error = stub.serve(false).await.unwrap_err();
         assert!(
             matches!(
@@ -939,9 +941,9 @@ mod tests {
         );
         let messages = output(&stub);
         assert!(matches!(messages.last(), Some(ClaudeMessage::Result(result)) if result.is_error));
-        let log = std::fs::read_to_string(dir.path().join(LOG_FILE)).unwrap();
+        let log = std::fs::read_to_string(dir.join(LOG_FILE)).unwrap();
         assert!(log.contains("turn 0, step 0"), "{log}");
-        assert!(!dir.path().parent().unwrap().join("out.txt").exists());
+        assert!(!outer.path().join("out.txt").exists());
     }
 
     #[tokio::test]

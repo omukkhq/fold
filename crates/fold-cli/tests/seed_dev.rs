@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::sync::Arc;
 
@@ -7,6 +7,7 @@ use axum::http::{Method, Request, StatusCode};
 use fold_core::ManualClock;
 use fold_daemon::daemon::AppState;
 use fold_daemon::http::router;
+use fold_daemon::services::agents::Launcher;
 use fold_daemon::{Daemon, DaemonConfig, RunningDaemon};
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -29,16 +30,32 @@ impl Host {
         let dir = TempDir::new().unwrap();
         let runtime = dir.path().join("run");
         std::fs::create_dir_all(&runtime).unwrap();
-        let daemon = Daemon::start(
+        let socket = runtime.join("fold.sock");
+        let env =
+            |name: &str, path: PathBuf| (name.to_owned(), path.to_string_lossy().into_owned());
+        // The workers run the stub of the fld under test, and their `fld mcp` reaches this daemon only.
+        let launcher = Launcher {
+            claude: dir.path().join("no-claude"),
+            fold: Some(PathBuf::from(env!("CARGO_BIN_EXE_fld"))),
+            env: vec![
+                env("FOLD_SOCKET", socket.clone()),
+                env("HOME", dir.path().to_owned()),
+                env("XDG_DATA_HOME", dir.path().join("data")),
+                env("XDG_CONFIG_HOME", dir.path().join("config")),
+                env("XDG_RUNTIME_DIR", runtime.clone()),
+            ],
+        };
+        let daemon = Daemon::start_with(
             DaemonConfig {
                 listen: "127.0.0.1:0".parse().unwrap(),
-                socket: runtime.join("fold.sock"),
+                socket,
                 data_dir: dir.path().join("data").join("fold"),
                 runtime_dir: runtime,
                 web_dir: None,
                 session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
             },
             Arc::new(ManualClock::new()),
+            launcher,
         )
         .await
         .unwrap();
@@ -220,6 +237,43 @@ async fn the_seed_fills_every_column_and_every_state_of_the_review_screens() {
     assert_eq!(ranges, 1, "one comment on a range of lines");
     assert!(sides.iter().any(|side| side == "old"));
     assert!(sides.iter().any(|side| side == "new"));
+
+    // Every agent but the main agent is a worker that fold started for its lead, with its role and the stub's model.
+    let workers = host.get("/workers").await;
+    let workers = workers["workers"].as_array().unwrap();
+    let started = |role: &str, by: &str| {
+        workers
+            .iter()
+            .filter(|worker| worker["role"] == role && worker["started_by"] == by)
+            .count()
+    };
+    assert_eq!(started("review_lead", "main"), 1);
+    assert_eq!(started("area_lead", "main"), 2);
+    assert_eq!(started("task_worker", "api-lead"), 4);
+    assert_eq!(started("task_worker", "web-lead"), 4);
+    assert_eq!(started("reviewer", "review-lead"), 6);
+    assert_eq!(workers.len(), 17);
+    assert!(
+        workers
+            .iter()
+            .all(|worker| worker["model"] == "fold-dev-stub" && worker["state"] != "failed")
+    );
+    let task_workers: Vec<&str> = workers
+        .iter()
+        .filter(|worker| worker["role"] == "task_worker")
+        .map(|worker| worker["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        proposals
+            .iter()
+            .all(|proposal| task_workers.contains(&proposal["author"].as_str().unwrap())),
+        "each proposal comes from the task worker its lead started"
+    );
+    let routes = cards
+        .iter()
+        .find(|card| card["title"] == "Add the user routes")
+        .unwrap();
+    assert_eq!(routes["status"], "in_progress");
 }
 
 #[tokio::test]
