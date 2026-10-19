@@ -19,6 +19,9 @@ pub struct RestartArgs {
     /// Unix socket of the daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
     #[arg(long)]
     socket: Option<PathBuf>,
+    /// Stop the daemon and start none; the uninstaller runs it before it removes fld
+    #[arg(long, hide = true)]
+    stop: bool,
 }
 
 /// How long the old daemon gets to stop. Its shutdown waits for each job, the workers and the open connections in turn, each up to the daemon's drain timeout.
@@ -202,7 +205,23 @@ pub fn run(args: &RestartArgs, out: &mut impl Write) -> Result<(), RestartError>
         stop_timeout: STOP_TIMEOUT,
         start_timeout: START_TIMEOUT,
     };
+    if args.stop {
+        return stop(&daemons, out);
+    }
     restart(&host, &daemons, &daemons.config.socket, out)
+}
+
+/// The same clean stop as a restart's, and nothing after it. A daemon under a service manager stays stopped: its SIGTERM shutdown exits 0, and neither fold's unit nor its agent restarts a daemon that exited 0.
+fn stop(daemons: &impl Daemons, out: &mut impl Write) -> Result<(), RestartError> {
+    let line = match daemons.running()? {
+        Some(old) => {
+            daemons.stop(&old)?;
+            format!("stopped the fold daemon {}", version(&old))
+        }
+        None => "no fold daemon was running".to_owned(),
+    };
+    output::line(out, &line)?;
+    Ok(())
 }
 
 /// The old daemon always stops through its own SIGTERM, also under a service manager: a manager's stop signals every process of the service at once, and a worker that dies before the daemon lets go of it counts as failed instead of resuming. The manager then starts the new daemon, so it keeps supervising it.
@@ -727,6 +746,32 @@ mod tests {
         let error = restarted(&host, &Fake::new(None, "0.3.0")).unwrap_err();
         assert_eq!(error.code(), Some("service_install_failed"));
         assert!(error.to_string().contains("bootstrap gui/501"));
+    }
+
+    #[test]
+    fn stop_ends_the_running_daemon_and_starts_none() {
+        let fake = Fake::new(Some("0.2.0"), "0.3.0");
+        let mut out = Vec::new();
+        stop(&fake, &mut out).unwrap();
+        assert_eq!(fake.calls(), ["running", "stop"]);
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "stopped the fold daemon 0.2.0\n"
+        );
+
+        let fake = Fake::new(None, "0.3.0");
+        let mut out = Vec::new();
+        stop(&fake, &mut out).unwrap();
+        assert_eq!(fake.calls(), ["running"]);
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "no fold daemon was running\n"
+        );
+
+        let mut fake = Fake::new(Some("0.2.0"), "0.3.0");
+        fake.stop_fails = true;
+        let error = stop(&fake, &mut Vec::new()).unwrap_err();
+        assert!(matches!(error, RestartError::StopTimeout { .. }));
     }
 
     #[test]

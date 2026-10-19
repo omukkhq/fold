@@ -111,6 +111,38 @@ async fn restart_stops_the_running_daemon_cleanly_and_starts_a_new_one() {
     guard.stop().await;
 }
 
+/// The uninstaller's stop: the daemon shuts down cleanly and no other starts.
+#[tokio::test]
+async fn restart_stop_stops_the_daemon_and_starts_none() {
+    let host = Host::new().await;
+    let socket = host.default_socket();
+    let mut old = serve(&host, &socket).await;
+    let mut command = host.fold(
+        &["restart", "--stop", "--socket", socket.to_str().unwrap()],
+        &host.root,
+    );
+    command.stdin(Stdio::null());
+    let output = tokio::time::timeout(WAIT * 4, command.output())
+        .await
+        .expect("fld restart --stop ends")
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        stdout(&output),
+        format!("stopped the fold daemon {VERSION}\n")
+    );
+    assert!(old.wait().await.unwrap().success());
+    assert!(daemons(&socket).is_empty());
+    assert!(!socket.exists(), "the clean shutdown removed the socket");
+
+    let again = tokio::time::timeout(WAIT, command.output())
+        .await
+        .expect("fld restart --stop ends")
+        .unwrap();
+    assert_eq!(stdout(&again), "no fold daemon was running\n");
+    assert!(daemons(&socket).is_empty());
+}
+
 /// A `systemctl` stand-in whose `restart` starts the daemon the way the unit's `ExecStart` would.
 #[cfg(target_os = "linux")]
 #[tokio::test]

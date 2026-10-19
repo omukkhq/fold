@@ -1,6 +1,7 @@
 #!/bin/sh
-# Installs fld, or updates it when it is already installed.
+# Installs fld, or updates it when it is already installed; --uninstall removes it.
 #   curl -fsSL <url>/install.sh | sh
+#   curl -fsSL <url>/install.sh | sh -s -- --uninstall
 # FOLD_VERSION=v0.x.y picks a release, FOLD_INSTALL_DIR picks the folder (default ~/.local/bin).
 # Everything that acts runs from main, called on the last line, so a download cut short by `curl | sh` runs nothing.
 set -eu
@@ -65,6 +66,218 @@ get_from() {
   fi && fetch "$1/SHA256SUMS" "$tmp/SHA256SUMS" 2>/dev/null
 }
 
+# An XDG variable counts only when it holds an absolute path, as fld reads it.
+xdg_or() {
+  case "$1" in
+  /*) printf '%s\n' "$1" ;;
+  *) printf '%s\n' "$2" ;;
+  esac
+}
+
+# The folders fld uses: settings, data with the project registry, and the runtime folder of the socket and the locks.
+host_paths() {
+  config_dir=$(xdg_or "${XDG_CONFIG_HOME:-}" "$HOME/.config")
+  data_dir=$(xdg_or "${XDG_DATA_HOME:-}" "$HOME/.local/share")/fold
+  runtime_dir=$(xdg_or "${XDG_RUNTIME_DIR:-}" "")
+  if [ -n "$runtime_dir" ]; then
+    runtime_dir=$runtime_dir/fold
+  elif [ "$os" = Darwin ]; then
+    runtime_dir="$HOME/Library/Application Support/fold/run"
+  fi
+}
+
+# The pids of this user's `<fld> serve` processes; a script stand-in runs under its interpreter, so the binary may follow another word. The path goes through the environment and is matched as text, so a path with spaces or backslashes matches too.
+daemon_pids() {
+  ps -A -o pid= -o uid= -o args= 2>/dev/null |
+    FOLD_EXE="$1" awk -v uid="$(id -u)" '$2 == uid {
+      args = $0
+      sub(/^[ \t]*[0-9]+[ \t]+[0-9]+[ \t]+/, "", args)
+      if (index(" " args " ", " " ENVIRON["FOLD_EXE"] " serve ") > 0) print $1
+    }'
+}
+
+# A daemon that `fld claude` started stays a zombie of that session after it exits, so a zombie counts as gone.
+alive() {
+  state=$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' ')
+  case "$state" in
+  '' | Z*) return 1 ;;
+  *) return 0 ;;
+  esac
+}
+
+daemon_running() {
+  [ -n "$(daemon_pids "$1")" ] || { [ -n "$runtime_dir" ] && [ -S "$runtime_dir/fold.sock" ]; }
+}
+
+# ask <question> <default y or n>: yes or no from the terminal on fd 3. Enter takes the default; the end of the input or two answers that are neither count as no.
+ask() {
+  tries=0
+  while [ "$tries" -lt 2 ]; do
+    tries=$((tries + 1))
+    if [ "$2" = y ]; then printf '%s [Y/n] ' "$1"; else printf '%s [y/N] ' "$1"; fi
+    if ! IFS= read -r answer <&3; then
+      say ""
+      return 1
+    fi
+    case $(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]') in
+    '') [ "$2" = y ] && return 0 || return 1 ;;
+    y | yes) return 0 ;;
+    n | no) return 1 ;;
+    esac
+  done
+  return 1
+}
+
+# Stops the daemon through fld's own clean stop, so its workers keep their sessions; when that stop fails, fld says why on stderr. An fld without that stop, or a daemon that is still there after it, gets SIGTERM from here, which fld serve takes the same way. Returns 1 when a daemon may still run.
+stop_daemon() {
+  stop_failed=
+  if [ -x "$target" ] && "$target" restart --help </dev/null >/dev/null 2>&1; then
+    if "$target" restart --stop </dev/null; then
+      return 0
+    fi
+    stop_failed=y
+  fi
+  pids=$(daemon_pids "$target")
+  if [ -z "$pids" ]; then
+    if [ -n "$stop_failed" ]; then
+      return 1
+    fi
+    return 0
+  fi
+  # shellcheck disable=SC2086 # one pid per word
+  kill -TERM $pids 2>/dev/null || true
+  waited=0
+  still_running=
+  for pid in $pids; do
+    while alive "$pid" && [ "$waited" -lt 30 ]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+    if alive "$pid"; then
+      say "The fold daemon (pid $pid) did not stop within 30 seconds of the SIGTERM; stop it with \`kill $pid\`."
+      still_running=y
+    else
+      say "Stopped the fold daemon (pid $pid)"
+    fi
+  done
+  if [ -n "$still_running" ]; then
+    return 1
+  fi
+  return 0
+}
+
+# Removes the systemd user unit or the launchd agent that `fld setup` installed.
+remove_service() {
+  if [ "$os" = Darwin ]; then
+    agent="$HOME/Library/LaunchAgents/dev.omukk.fold.plist"
+    [ -e "$agent" ] || return 0
+    if command -v launchctl >/dev/null 2>&1; then
+      launchctl bootout "gui/$(id -u)/dev.omukk.fold" >/dev/null 2>&1 || true
+    fi
+    rm -f "$agent"
+    say "Removed the launchd agent $agent"
+    return 0
+  fi
+  unit="$config_dir/systemd/user/fold.service"
+  [ -e "$unit" ] || return 0
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user disable --now fold.service >/dev/null 2>&1 || true
+  fi
+  rm -f "$unit" "$config_dir/systemd/user/default.target.wants/fold.service"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+  fi
+  say "Removed the systemd user unit $unit"
+}
+
+# fld removes its own entries from Claude Code's user configuration and keeps every other entry; an fld older than that command leaves them.
+remove_claude() {
+  claude_files="$HOME/.claude.json and $HOME/.claude/settings.json"
+  case "${CLAUDE_CONFIG_DIR:-}" in
+  /*) claude_files="$CLAUDE_CONFIG_DIR/.claude.json and $CLAUDE_CONFIG_DIR/settings.json" ;;
+  esac
+  if [ -x "$target" ] && removed=$("$target" setup --remove </dev/null 2>/dev/null); then
+    say "$removed"
+  else
+    say "fld could not remove fold from Claude Code: remove the fold MCP server, the mcp__fold permission and the fld hook commands from $claude_files yourself."
+  fi
+}
+
+# remove_dir <path> <what>
+remove_dir() {
+  [ -n "$1" ] && [ -e "$1" ] || return 0
+  case "$1" in
+  /?*) ;;
+  *) return 0 ;;
+  esac
+  rm -rf "${1:?}"
+  say "Removed $2 $1"
+}
+
+uninstall() {
+  [ -n "${HOME:-}" ] || die "HOME is not set."
+  os=${FOLD_UNAME_S:-$(uname -s)}
+  host_paths
+  target="$install_dir/fld"
+  # Without FOLD_INSTALL_DIR, an fld that is not in the default folder is the one on PATH.
+  if [ -z "${FOLD_INSTALL_DIR:-}" ] && [ ! -e "$target" ]; then
+    on_path=$(command -v fld 2>/dev/null || true)
+    case "$on_path" in
+    /*)
+      target=$on_path
+      install_dir=$(dirname "$on_path")
+      ;;
+    esac
+  fi
+  remove_bin=y
+  remove_conf=
+  remove_data=
+  # FOLD_TTY exists so the tests can answer the questions; `curl | sh` gives the script on stdin, so the answers come from the terminal.
+  tty=${FOLD_TTY:-/dev/tty}
+  if (exec 3<"$tty") 2>/dev/null; then
+    exec 3<"$tty"
+    ask "Stop the fold daemon, remove its service and remove fld from $install_dir?" y || remove_bin=
+    ask "Remove fold from your Claude Code configuration (the fold MCP server, the fold tools' permission and fold's hooks)?" y && remove_conf=y
+    ask "Remove fold's settings in $config_dir/fold and fold's data with the project registry in $data_dir?" n && remove_data=y
+    exec 3<&-
+  else
+    say "No terminal to ask on: removing only fld and its service. fold's entries in your Claude Code configuration and fold's settings and data stay; run the uninstaller on a terminal to choose them too."
+  fi
+
+  [ -n "$remove_conf" ] && remove_claude
+  # The daemon holds the socket and the locks in the runtime folder and the registry in the data folder, so it stops before either goes, also when fld stays.
+  daemon_stopped=y
+  if [ -n "$remove_bin" ] || [ -n "$remove_data" ]; then
+    stop_daemon || daemon_stopped=
+  fi
+  if [ -n "$remove_bin" ]; then
+    remove_service
+    if [ -e "$target" ]; then
+      rm -f "$target"
+      say "Removed $target"
+    else
+      say "No fld in $install_dir"
+    fi
+  fi
+  if [ -n "$remove_data" ]; then
+    remove_dir "$config_dir/fold" "fold's settings"
+    if [ -z "$daemon_stopped" ]; then
+      say "A fold daemon may still run, so fold's data in $data_dir and its runtime folder stay. Stop the daemon, then run the uninstaller again to remove them."
+    else
+      remove_dir "$data_dir" "fold's data"
+      remove_dir "$runtime_dir" "fold's runtime folder"
+      if [ "$os" = Darwin ]; then
+        rmdir "$HOME/Library/Application Support/fold" 2>/dev/null || true
+        if [ -e "$HOME/Library/Logs/fold.log" ]; then
+          rm -f "$HOME/Library/Logs/fold.log"
+          say "Removed the daemon log $HOME/Library/Logs/fold.log"
+        fi
+      fi
+    fi
+  fi
+  say "Each project's .fold folder stays with the project; delete it yourself to remove that project's fold data."
+}
+
 main() {
   download_base=${FOLD_DOWNLOAD_BASE:-$DEFAULT_DOWNLOAD_BASE}
   github_base=${FOLD_GITHUB_BASE:-$SOURCE_URL}
@@ -76,6 +289,15 @@ main() {
   else
     die "HOME is not set; set FOLD_INSTALL_DIR."
   fi
+
+  case "${1:-}" in
+  '') ;;
+  --uninstall)
+    uninstall
+    exit 0
+    ;;
+  *) die "unknown option $1; the only option is --uninstall." ;;
+  esac
 
   trap cleanup EXIT
   trap 'exit 1' HUP INT TERM
@@ -177,14 +399,11 @@ main() {
 
   if [ -n "$current" ]; then
     say "Updated fld $current -> $version in $install_dir"
-    if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet fold.service 2>/dev/null; then
-      if systemctl --user restart fold.service; then
-        say "Restarted fold.service"
-      else
-        say "Could not restart fold.service; run: systemctl --user restart fold.service"
+    if [ -n "${HOME:-}" ]; then
+      host_paths
+      if daemon_running "$target"; then
+        say "A fold daemon is running: run \`fld restart\` to use the new version."
       fi
-    else
-      say "Restart a running fold daemon to use the new version."
     fi
   else
     say "Installed fld $version in $install_dir"

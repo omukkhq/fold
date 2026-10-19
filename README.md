@@ -34,7 +34,15 @@ Install fold on **Linux AMD64 (x86_64)**, **Linux ARM64 (aarch64)**, or **macOS 
 curl -fsSL https://omukk.dev/fold/install.sh | sh
 ```
 
-The script installs `fld` into `~/.local/bin`. Run it again to update fold. To choose another folder or a specific release, set `FOLD_INSTALL_DIR` or `FOLD_VERSION`, for example `FOLD_VERSION=v0.1.0`.
+The script installs `fld` into `~/.local/bin`. Run it again to update fold, then run `fld restart` so a running daemon uses the new version. To choose another folder or a specific release, set `FOLD_INSTALL_DIR` or `FOLD_VERSION`, for example `FOLD_VERSION=v0.1.0`.
+
+To uninstall fold, run:
+
+```bash
+curl -fsSL https://omukk.dev/fold/install.sh | sh -s -- --uninstall
+```
+
+On a terminal, the script asks before it removes each part: `fld` with the daemon's service, fold's entries in your Claude Code configuration, and fold's settings and data. Without a terminal, it removes only `fld` and the service. Each project's `.fold` folder stays. The script looks for `fld` in `~/.local/bin`, then on your `PATH`. If you installed it into another folder, set `FOLD_INSTALL_DIR` for the uninstaller too, for example `curl -fsSL https://omukk.dev/fold/install.sh | FOLD_INSTALL_DIR=/opt/fold/bin sh -s -- --uninstall`.
 
 Check [Releases](https://github.com/omukkhq/fold/releases) for published binaries. You can also [build fold from source](CONTRIBUTING.md#build-from-source).
 
