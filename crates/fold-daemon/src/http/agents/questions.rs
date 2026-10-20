@@ -146,6 +146,8 @@ pub enum NeedsYouItemKind {
     WorkerUnreachable,
     /// The worker `agent` failed several turns in a row before any token reached the model, so it does no work until a human fixes what Claude Code needs, such as its sign-in, its model or its usage limit: `title` holds Claude Code's error and `reason` what to check. The item ends when a turn of the worker reaches the model, with or without an error, or when the worker is stopped. A worker whose process failed cannot be stopped, so it keeps the item until `resume_worker` runs it again and a turn reaches the model; a start that runs a stopped worker again shows the item again until then.
     WorkerModelUnreachable,
+    /// The worker `agent` failed because the daemon found no `claude` on the `PATH` it gives workers, which it reads from the user's login shell at its start. `reason` says what the human does; a daemon start resumes the worker, and the item ends when the worker runs again.
+    ClaudeNotFound,
 }
 
 /// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task and `repository` the history of main.
@@ -226,6 +228,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::ChecksFileInvalidOnMain => NeedsYouItemKind::ChecksFileInvalidOnMain,
             NeedsYouKind::WorkerUnreachable => NeedsYouItemKind::WorkerUnreachable,
             NeedsYouKind::WorkerModelUnreachable => NeedsYouItemKind::WorkerModelUnreachable,
+            NeedsYouKind::ClaudeNotFound => NeedsYouItemKind::ClaudeNotFound,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,

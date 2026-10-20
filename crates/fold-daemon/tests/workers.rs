@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use axum::http::{Method, StatusCode};
 use fold_core::{Actor, AgentActor, AgentName, Clock, HumanName, WorkerName, WorkerState, codes};
-use fold_daemon::services::agents::{MCP_RETRY_TURN, PAUSE_TURN, RESTART_TURN};
+use fold_daemon::services::agents::{Launcher, MCP_RETRY_TURN, PAUSE_TURN, RESTART_TURN};
 use fold_daemon::services::events::BusMessage;
 use fold_store::agents::WorkerProcessRow;
 use fold_store::testing::{eventually, remove_dir_eventually};
@@ -2051,6 +2051,58 @@ async fn a_worker_whose_fold_server_failed_ends_failed_and_asks_for_a_restart() 
         process_of(MAIN),
         Value::Null,
         "fold does not run the main agent"
+    );
+}
+
+#[tokio::test]
+async fn a_worker_whose_claude_is_missing_fails_with_the_reason_and_the_fix() {
+    let fake = FakeClaude::new("result");
+    let missing = tempfile::TempDir::new().unwrap();
+    let launcher = Launcher {
+        claude: missing.path().join("bin/claude"),
+        ..fake.launcher.clone()
+    };
+    let harness = Harness::start_with_launcher(launcher).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let mut inbox = harness.register_inbox(MAIN).await;
+    let started = harness
+        .call(
+            MAIN,
+            "start_worker",
+            json!({"role": "area_lead", "area": "web"}),
+        )
+        .await;
+    assert_eq!(started["worker"]["state"], "failed", "{started}");
+    let row = worker(&harness, "web-lead").await;
+    assert_eq!(row.failed_reason.as_deref(), Some("claude_not_found"));
+    let notice = loop {
+        let post = inbox.next().await;
+        if post.contains("worker web-lead failed") {
+            break post;
+        }
+    };
+    assert!(
+        notice.contains("the daemon finds no claude") && notice.contains("`fld restart`"),
+        "{notice}"
+    );
+    let (status, list) = harness
+        .http(Method::GET, "/api/v1/projects/demo/needs-you", None, "ana")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let items: Vec<&Value> = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["agent"] == "web-lead")
+        .collect();
+    assert_eq!(items.len(), 1, "{list}");
+    assert_eq!(items[0]["kind"], "claude_not_found");
+    assert_eq!(items[0]["screen"], "worker");
+    let reason = items[0]["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("fld restart") && reason.contains("fld doctor"),
+        "{reason}"
     );
 }
 

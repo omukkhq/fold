@@ -15,7 +15,7 @@ export interface NeedsYouLine {
   /** The words, with each command between backticks and the item's data escaped, for `CodeText`. */
   text: string;
   task: string | null;
-  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker, the conflicting files of a human change or of an unstash, the files that hold the project folder back, the file, line and problem of main's checks file, the command that brings the Git branch back or lets a worker reach fold again, Claude Code's error of a worker that cannot reach the model. Marked and escaped as `text` is. */
+  /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker, the conflicting files of a human change or of an unstash, the files that hold the project folder back, the file, line and problem of main's checks file, the command that brings the Git branch back, lets a worker reach fold again or lets the daemon find claude, Claude Code's error of a worker that cannot reach the model. Marked and escaped as `text` is. */
   title: string | null;
   since: number;
   /** What the line opens; null for a line that opens nothing, with `href`. */
@@ -43,6 +43,7 @@ const GROUPS: readonly { kind: NeedsYouKind; title: string }[] = [
   { kind: "checks_file_invalid_on_main", title: "Checks file" },
   { kind: "worker_unreachable", title: "Worker connection" },
   { kind: "worker_model_unreachable", title: "Model access" },
+  { kind: "claude_not_found", title: "Claude Code" },
 ];
 
 /** The items for this human: an item that waits for another named human is theirs. Before a name, every item shows. */
@@ -205,6 +206,17 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         task: null,
         title: markedText(item.reason),
         text: "cannot reach fold and stopped",
+        hint: "opens the agents",
+        href: projectPath(slug, "agents"),
+      };
+    case "claude_not_found":
+      return {
+        ...base,
+        person: item.agent,
+        chip: null,
+        task: null,
+        title: markedText(item.reason),
+        text: "cannot start: the daemon finds no claude",
         hint: "opens the agents",
         href: projectPath(slug, "agents"),
       };

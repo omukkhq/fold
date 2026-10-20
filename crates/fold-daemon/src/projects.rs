@@ -14,6 +14,7 @@ use crate::daemon::DRAIN_TIMEOUT;
 use crate::jobs::{self, AutoCommit};
 use crate::live::{LiveConfig, LiveState};
 use crate::push::{self, PushTargets, PushTask};
+use crate::services::agents::environment::WorkerEnvironment;
 use crate::services::agents::{AgentService, Launcher, SeenPresence, Supervisor, code_of};
 use crate::services::events::EventBus;
 use crate::services::messages::MessageService;
@@ -432,6 +433,8 @@ pub struct Projects {
     opening: tokio::sync::Mutex<()>,
     /// The programs every project's worker processes run.
     launcher: Launcher,
+    /// What the daemon found at its start about the environment of the workers.
+    environment: WorkerEnvironment,
     /// The host registry, whose humans a worker's `AskUserQuestion` call reaches, and from which a project whose `.fold/` is gone is removed.
     registry: Option<Store>,
     /// The runs of checks that may go at once across every project.
@@ -449,6 +452,20 @@ impl Projects {
     pub fn with_launcher(mut self, launcher: Launcher) -> Self {
         self.launcher = launcher;
         self
+    }
+
+    #[must_use]
+    pub fn with_environment(mut self, environment: WorkerEnvironment) -> Self {
+        self.environment = environment;
+        self
+    }
+
+    pub fn launcher(&self) -> &Launcher {
+        &self.launcher
+    }
+
+    pub fn environment(&self) -> &WorkerEnvironment {
+        &self.environment
     }
 
     #[must_use]

@@ -23,6 +23,8 @@ use crate::services::workspaces::WorkspaceLocks;
 /// Claude Code's headless stream-json protocol as fold reads and writes it, the oldest Claude Code fold drives, and the sign-in answer of `claude auth status`. It is public because `fld doctor` checks the installed Claude Code with the same version and sign-in types.
 pub mod claude;
 mod context;
+/// The environment of the workers: which variables of the login shell they take, and what the daemon found about it at its start.
+pub mod environment;
 mod needs_you;
 mod overview;
 /// The kernel's view of a socket peer: whether a worker that fold started is the peer or one of its ancestors.

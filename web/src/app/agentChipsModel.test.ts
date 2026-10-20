@@ -131,6 +131,9 @@ describe("agentStateText of a supervised agent", () => {
     expect(agentStateText(supervised("failed", {}, "fld_missing"))).toBe(
       "failed: fld not found",
     );
+    expect(agentStateText(supervised("failed", {}, "claude_not_found"))).toBe(
+      "failed: claude not found",
+    );
     expect(agentStateText(supervised("failed", {}, "exited"))).toBe("failed");
     expect(failedText(null)).toBe("failed");
   });

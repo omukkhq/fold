@@ -8,7 +8,7 @@ use fold_core::events::types;
 use fold_core::layout::{
     AGENT_ENV, AGENT_TAGS_ENV, MCP_COMMAND, MCP_SERVER_NAME, MCP_SERVERS_KEY, session_settings,
 };
-use fold_core::roles::{FLD_MISSING, area_prompt, needs_restart};
+use fold_core::roles::{CLAUDE_NOT_FOUND, FLD_MISSING, area_prompt, needs_restart};
 use fold_core::{AgentName, AreaName, EventActor, NewEvent, ProjectPaths, WorkerState, codes};
 use fold_store::StoreError;
 use fold_store::agents::{self, ProcessEnd, WorkerProcessRow};
@@ -148,6 +148,11 @@ impl Supervisor {
         fail::fail_point!("worker_launch_before_spawn");
         let mut child = match command.spawn() {
             Ok(child) => child,
+            Err(error) if claude_missing(&error, &program, &launcher) => {
+                tracing::warn!(agent = %row.agent, "found no claude on the PATH the daemon gives workers");
+                self.fail(row.id, &row.agent, CLAUDE_NOT_FOUND).await?;
+                return Ok(None);
+            }
             Err(_) => {
                 tracing::warn!(agent = %row.agent, "could not start Claude Code for a worker");
                 self.fail(row.id, &row.agent, "spawn").await?;
@@ -348,6 +353,13 @@ impl Supervisor {
             }
         }
     }
+}
+
+/// Whether a failed spawn of `program` means that Claude Code is not installed where the daemon looks: the program is the launcher's `claude`, the system found no such file, and no file is at that path either, which tells it apart from a script whose interpreter is missing. Blocking, for one `stat`.
+fn claude_missing(error: &std::io::Error, program: &Path, launcher: &Launcher) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound
+        && program == launcher.claude
+        && !(program.is_absolute() && program.is_file())
 }
 
 /// Why a worker's files were not written.

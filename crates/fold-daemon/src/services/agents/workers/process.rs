@@ -41,7 +41,7 @@ pub(super) use resume::StartWatch;
 /// The programs a worker process runs. The daemon reads no environment variable, so a test points `claude` at a stand-in here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launcher {
-    /// Claude Code; `claude` is looked up on `PATH`.
+    /// Claude Code: the absolute path that `fld serve` found on the `PATH` of the workers' environment, else `claude`, looked up on `PATH`.
     pub claude: PathBuf,
     /// The fld binary that the worker's MCP configuration starts with the argument `mcp`; `None` is the running daemon's own binary, which [`Launcher::with_own_binary`] reads once at the daemon's start.
     pub fold: Option<PathBuf>,

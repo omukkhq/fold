@@ -64,7 +64,7 @@ impl Sandbox {
 #[cfg(target_os = "linux")]
 fn golden(exe: &str) -> String {
     format!(
-        "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\nExecStart={exe} serve\nRestart=on-failure\nRestartSec=2\nKillMode=mixed\nTimeoutStopSec=90\n\n[Install]\nWantedBy=default.target\n"
+        "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\nEnvironment=FOLD_SERVICE=systemd\nExecStart={exe} serve\nRestart=on-failure\nRestartSec=2\nKillMode=mixed\nTimeoutStopSec=90\n\n[Install]\nWantedBy=default.target\n"
     )
 }
 

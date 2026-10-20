@@ -235,7 +235,7 @@ pub struct WorkerEntry {
     /// The exit code of the last process; a signal counts as 128 plus its number.
     #[schema(required = true)]
     pub exit_code: Option<i64>,
-    /// Why the worker's latest process failed, such as `exited`, `spawn`, `mcp_unavailable` (its fold MCP server did not connect) or `fld_missing` (the fld binary of that server is gone); null unless `state` is `failed`, and for a worker that failed before fold stored the reason.
+    /// Why the worker's latest process failed, such as `exited`, `spawn`, `mcp_unavailable` (its fold MCP server did not connect), `fld_missing` (the fld binary of that server is gone) or `claude_not_found` (the daemon found no `claude` on the `PATH` it gives workers); null unless `state` is `failed`, and for a worker that failed before fold stored the reason.
     #[schema(required = true, example = "mcp_unavailable")]
     pub failed_reason: Option<String>,
     /// Claude Code's error text of the worker's latest failed turn, or the last stderr lines of its latest process that exited with an error, at most 1000 characters; null once a turn ends without an error.

@@ -103,6 +103,8 @@ impl Host {
             .env("XDG_CONFIG_HOME", self.config_home())
             .env("XDG_DATA_HOME", self.data_home())
             .env("XDG_RUNTIME_DIR", self.runtime_base())
+            // A daemon started here reads this shell's environment at its start, never the user's own shell.
+            .env("SHELL", "/bin/sh")
             .env_remove("CLAUDE_CONFIG_DIR")
             .env_remove("FOLD_AGENT")
             .env_remove("FOLD_HUMAN")

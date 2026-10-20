@@ -26,8 +26,8 @@ pub struct RestartArgs {
 
 /// How long the old daemon gets to stop. Its shutdown waits for each job, the workers and the open connections in turn, each up to the daemon's drain timeout.
 pub(crate) const STOP_TIMEOUT: Duration = Duration::from_secs(60);
-/// How long the new daemon gets to hold the lock and answer on the socket once it is started.
-const START_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long the new daemon gets to hold the lock and answer on the socket once it is started, which includes the 10 seconds it may give the login shell.
+const START_TIMEOUT: Duration = Duration::from_secs(20);
 const FIRST_POLL: Duration = Duration::from_millis(20);
 const MAX_POLL: Duration = Duration::from_millis(250);
 
@@ -179,12 +179,17 @@ impl Manager {
         }
     }
 
-    /// Brings an installed unit that starts `exe` to the text `fld setup` would write for it and has systemd read it again, so a unit from an older fld gets the current lines before the daemon of the new one starts; a unit that starts another fld is kept, with a line that names `fld setup`. The launchd agent keeps its file.
-    fn refresh(&self, exe: &Path, out: &mut impl Write) -> Result<(), RestartError> {
+    /// Brings an installed unit that starts `exe` to the text `fld setup` would write for it with `env`, the environment of this restart, and has systemd read it again, so a unit from an older fld gets the current lines and the current `PATH` before the daemon of the new one starts; drop-in files of the unit stay as they are; a unit that starts another fld is kept, with a line that names `fld setup`. The launchd agent keeps its file.
+    fn refresh(
+        &self,
+        exe: &Path,
+        env: &[(&str, String)],
+        out: &mut impl Write,
+    ) -> Result<(), RestartError> {
         let Self::Systemd { systemctl, unit } = self else {
             return Ok(());
         };
-        let line = match service::refresh_unit(unit, exe, systemctl)? {
+        let line = match service::refresh_unit(unit, exe, env, systemctl)? {
             Refreshed::Current => return Ok(()),
             Refreshed::Wrote => format!("wrote {}", unit.display()),
             Refreshed::Kept(Some(started)) => format!(
@@ -261,7 +266,7 @@ fn restart(
 ) -> Result<(), RestartError> {
     let manager = Manager::of(host);
     if let Some(manager) = &manager {
-        manager.refresh(exe, out)?;
+        manager.refresh(exe, &service::agent_env(host), out)?;
     }
     let old = daemons.running()?;
     if let Some(old) = &old {
@@ -562,8 +567,14 @@ mod tests {
     /// The unit an older fld wrote for `/usr/bin/fld`, the fld that [`restarted`] runs the restart as.
     fn older_unit(path: &Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let text = service::render_unit(Path::new("/usr/bin/fld")).replace("KillMode=mixed\n", "");
+        let text =
+            service::render_unit(Path::new("/usr/bin/fld"), &[]).replace("KillMode=mixed\n", "");
         std::fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn the_new_daemon_gets_longer_than_its_login_shell_to_start() {
+        assert!(START_TIMEOUT > crate::shell_env::SHELL_TIMEOUT);
     }
 
     fn restarted(host: &Host, fake: &Fake) -> Result<String, RestartError> {
@@ -629,7 +640,7 @@ mod tests {
         );
         assert_eq!(
             std::fs::read_to_string(host.unit_path().unwrap()).unwrap(),
-            service::render_unit(Path::new("/usr/bin/fld"))
+            service::render_unit(Path::new("/usr/bin/fld"), &service::agent_env(&host))
         );
         assert_eq!(
             shown,
@@ -660,7 +671,7 @@ mod tests {
         let host = host(dir.path(), true);
         let unit = host.unit_path().unwrap();
         std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
-        let other = service::render_unit(Path::new("/opt/fold/fld"));
+        let other = service::render_unit(Path::new("/opt/fold/fld"), &[]);
         std::fs::write(&unit, &other).unwrap();
         let fake = Fake::new(Some("0.2.0"), "0.3.0");
         let shown = restarted(&host, &fake).unwrap();
@@ -906,7 +917,7 @@ mod tests {
         };
         assert_eq!(
             start.to_string(),
-            "no daemon answered on /s within 15 seconds of the start"
+            "no daemon answered on /s within 20 seconds of the start"
         );
         assert!(start.hint().unwrap().contains("fld doctor"));
         let missing = RestartError::NoProcess {

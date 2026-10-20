@@ -8,6 +8,7 @@ use std::time::Duration;
 use clap::Args;
 use fold_cli::daemon_client::{ClientConfig, ClientError};
 use fold_daemon::config::{LOCK_FILE, SOCKET_FILE};
+use fold_daemon::services::agents::Launcher;
 use fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME;
 use fold_daemon::{Daemon, DaemonConfig, DaemonError, SystemClock, shutdown_signal};
 use serde::Deserialize;
@@ -241,13 +242,30 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
     let dirs = Dirs::from_env();
     let file = read_file_config(&dirs.config_file()?)?;
     let config = build_config(args, &dirs, &file)?;
+    let chosen = crate::shell_env::from_host();
+    crate::shell_env::log(&chosen.environment);
+    if let Some(path) = &chosen.path {
+        // SAFETY: no other thread runs yet: the tokio runtime is built below, and neither the log subscriber nor the failpoints start one, so nothing reads the environment while it changes.
+        unsafe { std::env::set_var("PATH", path) };
+    }
+    let launcher = Launcher {
+        claude: chosen
+            .environment
+            .claude
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("claude")),
+        fold: None,
+        env: chosen.workers,
+    };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(ServeError::Runtime)?;
     runtime.block_on(async {
         let signals = shutdown_signal().map_err(ServeError::Signals)?;
-        let daemon = Daemon::start(config, Arc::new(SystemClock)).await?;
+        let daemon =
+            Daemon::start_on_host(config, Arc::new(SystemClock), launcher, chosen.environment)
+                .await?;
         signals.await;
         tracing::info!("shutting down");
         daemon.shutdown().await;

@@ -14,6 +14,7 @@ import {
   Hand,
   Inbox,
   MessagesSquare,
+  SearchX,
   ShieldAlert,
   Unplug,
   UserRound,
@@ -50,6 +51,7 @@ const ICONS: Record<NeedsYouKind, LucideIcon> = {
   checks_file_invalid_on_main: FileX,
   worker_unreachable: Unplug,
   worker_model_unreachable: CloudOff,
+  claude_not_found: SearchX,
 };
 
 const MINUTE_MS = 60_000;

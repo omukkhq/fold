@@ -134,9 +134,12 @@ pub const MCP_UNAVAILABLE: &str = "mcp_unavailable";
 /// The `worker.failed` reason of a worker whose MCP configuration would start an fld binary that is not there.
 pub const FLD_MISSING: &str = "fld_missing";
 
-/// A worker that failed for `reason` cannot reach fold, and starting it again fails the same way until the daemon runs the installed fld. Such a worker keeps its claims, as in a pause, and a daemon start resumes it in its own session: its cause lies outside the agent, and a start of the installed fld removes it.
+/// The `worker.failed` reason of a worker whose `claude` the daemon did not find on the `PATH` it gives workers. The daemon reads that `PATH` from the user's login shell once at its start, so a restart is what makes a newly installed Claude Code or a changed shell file count.
+pub const CLAUDE_NOT_FOUND: &str = "claude_not_found";
+
+/// A worker that failed for `reason` cannot reach fold or cannot run Claude Code, and starting it again fails the same way until the daemon starts again. Such a worker keeps its claims, as in a pause, and a daemon start resumes it in its own session: its cause lies outside the agent, and a start of the installed fld, which reads the shell's `PATH` again, removes it.
 pub fn needs_restart(reason: &str) -> bool {
-    reason == MCP_UNAVAILABLE || reason == FLD_MISSING
+    reason == MCP_UNAVAILABLE || reason == FLD_MISSING || reason == CLAUDE_NOT_FOUND
 }
 
 /// What a human does about a failure that [`needs_restart`] accepts; `None` for any other reason.
@@ -145,6 +148,9 @@ pub fn restart_hint(reason: &str) -> Option<&'static str> {
         MCP_UNAVAILABLE => Some("run `fld restart`; the daemon then resumes the worker"),
         FLD_MISSING => Some(
             "install fld and run `fld restart`; the daemon then resumes the worker, or an agent resumes it with `resume_worker`",
+        ),
+        CLAUDE_NOT_FOUND => Some(
+            "install Claude Code or add its folder to PATH in your shell's startup files, then run `fld restart`; the daemon then resumes the worker, and `fld doctor` shows where it looks for claude",
         ),
         _ => None,
     }
@@ -488,6 +494,7 @@ mod tests {
     fn only_a_worker_that_cannot_reach_fold_waits_for_a_restart() {
         assert!(needs_restart(MCP_UNAVAILABLE));
         assert!(needs_restart(FLD_MISSING));
+        assert!(needs_restart(CLAUDE_NOT_FOUND));
         for reason in ["exited", "spawn", "daemon_restart"] {
             assert!(!needs_restart(reason), "{reason}");
         }
@@ -500,6 +507,10 @@ mod tests {
             Some(
                 "install fld and run `fld restart`; the daemon then resumes the worker, or an agent resumes it with `resume_worker`"
             )
+        );
+        assert!(
+            restart_hint(CLAUDE_NOT_FOUND)
+                .is_some_and(|hint| hint.contains("fld restart") && hint.contains("fld doctor"))
         );
         assert_eq!(restart_hint("exited"), None);
     }

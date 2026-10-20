@@ -2553,7 +2553,7 @@ export interface components {
          * @description Why an item waits for a human.
          * @enum {string}
          */
-        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable" | "worker_model_unreachable";
+        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable" | "worker_model_unreachable" | "claude_not_found";
         /** @description Every item that waits for a human, oldest first. */
         NeedsYouList: {
             items: components["schemas"]["NeedsYouEntry"][];
@@ -4003,7 +4003,7 @@ export interface components {
              */
             exit_code: number | null;
             /**
-             * @description Why the worker's latest process failed, such as `exited`, `spawn`, `mcp_unavailable` (its fold MCP server did not connect) or `fld_missing` (the fld binary of that server is gone); null unless `state` is `failed`, and for a worker that failed before fold stored the reason.
+             * @description Why the worker's latest process failed, such as `exited`, `spawn`, `mcp_unavailable` (its fold MCP server did not connect), `fld_missing` (the fld binary of that server is gone) or `claude_not_found` (the daemon found no `claude` on the `PATH` it gives workers); null unless `state` is `failed`, and for a worker that failed before fold stored the reason.
              * @example mcp_unavailable
              */
             failed_reason: string | null;

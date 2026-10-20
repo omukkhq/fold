@@ -19,6 +19,7 @@ use crate::jobs::{self, Job};
 use crate::mcp;
 use crate::projects::{Projects, resume_workers};
 use crate::services::agents::Launcher;
+use crate::services::agents::environment::WorkerEnvironment;
 use crate::socket::SocketServer;
 
 /// How long the open connections of the HTTP listener and of the socket get to finish after shutdown starts, and the jobs to stop.
@@ -102,11 +103,21 @@ impl Daemon {
         Self::start_with(config, clock, Launcher::default()).await
     }
 
-    /// Takes the host lock, opens the registry, binds the HTTP listener, opens every registered project through its start-up sequence, binds the socket, starts the jobs and the HTTP server, and only then resumes the workers of the projects, so a resumed worker's adapter finds the socket. A failed bind leaves no socket file, no worker and no open project database behind. `clock` goes to every project handle; `launcher` names the programs every worker process runs.
+    /// [`Daemon::start_on_host`] with nothing known about the workers' environment.
     pub async fn start_with(
         config: DaemonConfig,
         clock: Arc<dyn Clock>,
         launcher: Launcher,
+    ) -> Result<RunningDaemon, DaemonError> {
+        Self::start_on_host(config, clock, launcher, WorkerEnvironment::default()).await
+    }
+
+    /// Takes the host lock, opens the registry, binds the HTTP listener, opens every registered project through its start-up sequence, binds the socket, starts the jobs and the HTTP server, and only then resumes the workers of the projects, so a resumed worker's adapter finds the socket. A failed bind leaves no socket file, no worker and no open project database behind. `clock` goes to every project handle; `launcher` names the programs every worker process runs, and `environment` what the caller found about the environment they run in.
+    pub async fn start_on_host(
+        config: DaemonConfig,
+        clock: Arc<dyn Clock>,
+        launcher: Launcher,
+        environment: WorkerEnvironment,
     ) -> Result<RunningDaemon, DaemonError> {
         let launcher = launcher.with_own_binary();
         let lock = {
@@ -139,6 +150,7 @@ impl Daemon {
         let state: AppState = Arc::new(DaemonState {
             projects: Projects::default()
                 .with_launcher(launcher)
+                .with_environment(environment)
                 .with_registry(registry.clone())
                 .with_push_files(config.push_dir()),
             registry,

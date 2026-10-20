@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::agents::roles::{FLD_MISSING, MCP_UNAVAILABLE};
+use crate::agents::roles::{CLAUDE_NOT_FOUND, FLD_MISSING, MCP_UNAVAILABLE};
 use crate::agents::{AgentName, AreaName};
 use crate::events::{Event, types};
 use crate::ids::{MessageId, RequestId, TaskId};
@@ -513,6 +513,9 @@ fn unreachable_worker_rule(
         ),
         FLD_MISSING => format!(
             "worker {agent} failed: its fld is gone; ask the human to install fld and run `fld restart`, which resumes it, or call resume_worker once fld is back"
+        ),
+        CLAUDE_NOT_FOUND => format!(
+            "worker {agent} failed: the daemon finds no claude; ask the human to install Claude Code or fix PATH, then run `fld restart`, which resumes it"
         ),
         _ => return None,
     };
@@ -1175,8 +1178,14 @@ mod tests {
             missing[0].text,
             "fold: worker backend-worker failed: its fld is gone; ask the human to install fld and run `fld restart`, which resumes it, or call resume_worker once fld is back. Call list_workers."
         );
+        let no_claude = notice_for(&failed(CLAUDE_NOT_FOUND), &ctx);
+        assert_eq!(no_claude.len(), 2);
+        assert_eq!(
+            no_claude[0].text,
+            "fold: worker backend-worker failed: the daemon finds no claude; ask the human to install Claude Code or fix PATH, then run `fld restart`, which resumes it. Call list_workers."
+        );
         let longest = "w".repeat(32);
-        for reason in [MCP_UNAVAILABLE, FLD_MISSING] {
+        for reason in [MCP_UNAVAILABLE, FLD_MISSING, CLAUDE_NOT_FOUND] {
             let event = with_data(
                 event(types::WORKER_FAILED, "fold"),
                 serde_json::json!({"agent": longest, "reason": reason}),

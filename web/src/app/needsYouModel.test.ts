@@ -367,6 +367,37 @@ describe("needsYouGroups", () => {
     });
   });
 
+  it("shows a worker whose claude the daemon cannot find with the fix, after the worker connections", () => {
+    const groups = needsYouGroups("demo", [
+      needsItem({
+        kind: "claude_not_found",
+        screen: "worker",
+        agent: "web-worker",
+        reason: "install Claude Code, then run `fld restart`",
+      }),
+      needsItem({
+        kind: "worker_unreachable",
+        screen: "worker",
+        agent: "backend-lead",
+        reason: "run `fld restart`",
+      }),
+    ]);
+    expect(groups.map((group) => group.kind)).toEqual([
+      "worker_unreachable",
+      "claude_not_found",
+    ]);
+    expect(groups[1]?.title).toBe("Claude Code");
+    expect(groups[1]?.lines[0]).toMatchObject({
+      person: "web-worker",
+      chip: null,
+      task: null,
+      title: "install Claude Code, then run `fld restart`",
+      text: "cannot start: the daemon finds no claude",
+      hint: "opens the agents",
+      href: "/p/demo/agents",
+    });
+  });
+
   it("counts what waits", () => {
     expect(waitingText(4)).toBe("4 waiting");
   });

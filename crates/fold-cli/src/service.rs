@@ -128,9 +128,11 @@ fn install(
     };
     let exe = exe.to_str().ok_or(ServiceError::ExeNotUtf8)?;
     let unit = host.unit_path().ok_or(ServiceError::NoHome)?;
-    write_unit(&unit, &render_unit(Path::new(exe))).map_err(|source| ServiceError::WriteUnit {
-        path: unit.clone(),
-        source,
+    write_unit(&unit, &render_unit(Path::new(exe), &agent_env(host))).map_err(|source| {
+        ServiceError::WriteUnit {
+            path: unit.clone(),
+            source,
+        }
     })?;
     output::line(out, &format!("wrote {}", unit.display()))?;
     if let Some(systemctl) = systemctl {
@@ -175,7 +177,10 @@ pub(crate) fn systemctl_user(program: &Path, args: &[&str]) -> Result<(), Servic
 const BOOTSTRAP_TRIES: u32 = 5;
 const BOOTSTRAP_RETRY: Duration = Duration::from_millis(200);
 
-/// The variables the agent's daemon takes from the environment of `fld setup`. launchd starts an agent with a bare `PATH` and no XDG variable, so without them the daemon would not find `claude` or `git` where the user's shell does, and would open other folders and another socket than the commands of that shell.
+/// The variable that the service of `fld setup` sets for its daemon, with the service manager's name, so the daemon can tell that its own environment is the one `fld setup` saved.
+pub(crate) const SERVICE_ENV: &str = "FOLD_SERVICE";
+
+/// The variables the service's daemon takes from the environment of `fld setup`. launchd starts an agent with a bare `PATH` and no XDG variable, and a systemd user manager gives a `PATH` without the user's own folders, so without them the daemon would not find `claude` or `git` where the user's shell does when it cannot read that shell, and on macOS it would open other folders and another socket than the commands of that shell.
 const AGENT_ENV: [&str; 4] = [
     "PATH",
     "XDG_CONFIG_HOME",
@@ -232,7 +237,7 @@ fn install_launch_agent(
     Ok(())
 }
 
-fn agent_env(host: &Host) -> Vec<(&'static str, String)> {
+pub(crate) fn agent_env(host: &Host) -> Vec<(&'static str, String)> {
     let dirs = &host.dirs;
     let values = [
         host.path.as_deref(),
@@ -299,17 +304,16 @@ pub fn render_launch_agent(exe: &Path, log: &Path, env: &[(&str, String)]) -> St
         string(&exe.to_string_lossy()),
         string("serve")
     ));
-    if !env.is_empty() {
-        text.push_str("\t<key>EnvironmentVariables</key>\n\t<dict>\n");
-        for (name, value) in env {
-            text.push_str(&format!(
-                "\t\t<key>{}</key>\n\t\t{}\n",
-                xml_text(name),
-                string(value)
-            ));
-        }
-        text.push_str("\t</dict>\n");
+    text.push_str("\t<key>EnvironmentVariables</key>\n\t<dict>\n");
+    let marker = (SERVICE_ENV, "launchd".to_owned());
+    for (name, value) in std::iter::once(&marker).chain(env) {
+        text.push_str(&format!(
+            "\t\t<key>{}</key>\n\t\t{}\n",
+            xml_text(name),
+            string(value)
+        ));
     }
+    text.push_str("\t</dict>\n");
     text.push_str("\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n\t<key>ThrottleInterval</key>\n\t<integer>2</integer>\n");
     text.push_str(&format!(
         "\t<key>StandardOutPath</key>\n\t{}\n\t<key>StandardErrorPath</key>\n\t{}\n",
@@ -330,12 +334,33 @@ fn xml_text(value: &str) -> String {
 /// How long systemd waits for the daemon's own stop before it sends SIGKILL: longer than the 60 seconds `fld restart` gives that stop, which ends every worker in turn.
 pub(crate) const UNIT_STOP_TIMEOUT_SECS: u64 = 90;
 
-/// The unit file for a daemon started from `exe`. `KillMode=mixed` sends the stop's SIGTERM to the daemon alone, so a stop, a logout or a reboot ends the workers through the daemon's clean shutdown, which keeps each one resumable; the default would signal every worker at the same time, and a worker that exits before the daemon lets go of it counts as failed. What still runs after `TimeoutStopSec` gets SIGKILL.
-pub fn render_unit(exe: &Path) -> String {
+/// The unit file for a daemon started from `exe`, with `env` from the environment of `fld setup` and the [`SERVICE_ENV`] marker as its `Environment=` lines; a variable whose value holds a control character is left out. `KillMode=mixed` sends the stop's SIGTERM to the daemon alone, so a stop, a logout or a reboot ends the workers through the daemon's clean shutdown, which keeps each one resumable; the default would signal every worker at the same time, and a worker that exits before the daemon lets go of it counts as failed. What still runs after `TimeoutStopSec` gets SIGKILL.
+pub fn render_unit(exe: &Path, env: &[(&str, String)]) -> String {
+    let marker = (SERVICE_ENV, "systemd".to_owned());
+    let environment: String = std::iter::once(&marker)
+        .chain(env)
+        .filter_map(|(name, value)| environment_line(name, value))
+        .collect();
     format!(
-        "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\nExecStart={} serve\nRestart=on-failure\nRestartSec=2\nKillMode=mixed\nTimeoutStopSec={UNIT_STOP_TIMEOUT_SECS}\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\n{environment}ExecStart={} serve\nRestart=on-failure\nRestartSec=2\nKillMode=mixed\nTimeoutStopSec={UNIT_STOP_TIMEOUT_SECS}\n\n[Install]\nWantedBy=default.target\n",
         exec_word(&exe.to_string_lossy())
     )
+}
+
+/// One `Environment=` line. systemd expands `%` specifiers there, so each `%` is doubled, but it expands no `$` variable, so a `$` stays as it is; an assignment whose value holds whitespace, a quote, a backslash or an equals sign is quoted, with C escapes for the backslash and the double quote.
+fn environment_line(name: &str, value: &str) -> Option<String> {
+    if value.chars().any(char::is_control) {
+        return None;
+    }
+    let assignment = format!("{name}={}", value.replace('%', "%%"));
+    if value.contains(|c: char| c.is_whitespace() || "\"'\\=".contains(c)) {
+        Some(format!(
+            "Environment=\"{}\"\n",
+            assignment.replace('\\', "\\\\").replace('"', "\\\"")
+        ))
+    } else {
+        Some(format!("Environment={assignment}\n"))
+    }
 }
 
 /// What [`refresh_unit`] did with an installed unit.
@@ -353,10 +378,11 @@ pub(crate) enum Refreshed {
 pub(crate) fn refresh_unit(
     unit: &Path,
     exe: &Path,
+    env: &[(&str, String)],
     systemctl: &Path,
 ) -> Result<Refreshed, ServiceError> {
     let exe = exe.to_str().ok_or(ServiceError::ExeNotUtf8)?;
-    let text = render_unit(Path::new(exe));
+    let text = render_unit(Path::new(exe), env);
     let installed = std::fs::read_to_string(unit).ok();
     let refreshed = match installed.as_deref() {
         Some(installed) if installed == text => Refreshed::Current,
@@ -438,11 +464,41 @@ mod tests {
         args: SetupArgs,
     }
 
-    const GOLDEN: &str = "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\nExecStart=/usr/bin/fld serve\nRestart=on-failure\nRestartSec=2\nKillMode=mixed\nTimeoutStopSec=90\n\n[Install]\nWantedBy=default.target\n";
+    const GOLDEN: &str = "[Unit]\nDescription=fold daemon\nAfter=default.target\n\n[Service]\nType=simple\nEnvironment=FOLD_SERVICE=systemd\nEnvironment=PATH=/home/ana/.local/bin:/usr/bin\nEnvironment=XDG_RUNTIME_DIR=/run/user/1000\nExecStart=/usr/bin/fld serve\nRestart=on-failure\nRestartSec=2\nKillMode=mixed\nTimeoutStopSec=90\n\n[Install]\nWantedBy=default.target\n";
+
+    /// The environment of the `fld setup` that [`GOLDEN`] was written by.
+    fn golden_env() -> Vec<(&'static str, String)> {
+        vec![
+            ("PATH", "/home/ana/.local/bin:/usr/bin".to_owned()),
+            ("XDG_RUNTIME_DIR", "/run/user/1000".to_owned()),
+        ]
+    }
 
     #[test]
     fn the_unit_matches_the_golden_text() {
-        assert_eq!(render_unit(Path::new("/usr/bin/fld")), GOLDEN);
+        assert_eq!(
+            render_unit(Path::new("/usr/bin/fld"), &golden_env()),
+            GOLDEN
+        );
+    }
+
+    #[test]
+    fn an_environment_line_doubles_percent_signs_keeps_dollars_and_quotes_what_systemd_would_split()
+    {
+        let unit =
+            |value: &str| render_unit(Path::new("/usr/bin/fld"), &[("PATH", value.to_owned())]);
+        assert!(
+            unit("/opt/100%/bin:/usr/bin").contains("\nEnvironment=PATH=/opt/100%%/bin:/usr/bin\n")
+        );
+        assert!(unit("/opt/$HOME/bin").contains("\nEnvironment=PATH=/opt/$HOME/bin\n"));
+        assert!(unit("/opt/my apps/bin").contains("\nEnvironment=\"PATH=/opt/my apps/bin\"\n"));
+        assert!(unit("/opt/a\"b\\c/bin").contains("\nEnvironment=\"PATH=/opt/a\\\"b\\\\c/bin\"\n"));
+        assert!(unit("/opt/it's/bin").contains("\nEnvironment=\"PATH=/opt/it's/bin\"\n"));
+        assert!(unit("/opt/a=b").contains("\nEnvironment=\"PATH=/opt/a=b\"\n"));
+        let broken = unit("/bin\nExecStartPre=/bin/evil");
+        assert!(!broken.contains("PATH"), "{broken}");
+        assert!(!broken.contains("evil"), "{broken}");
+        assert!(broken.contains("Environment=FOLD_SERVICE=systemd\n"));
     }
 
     #[test]
@@ -477,6 +533,24 @@ mod tests {
     }
 
     #[test]
+    fn a_refresh_keeps_the_drop_ins_of_the_unit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (systemctl, _) = fake_systemctl(dir.path(), 0);
+        let unit = dir.path().join("systemd/user/fold.service");
+        let drop_in = dir.path().join("systemd/user/fold.service.d/path.conf");
+        std::fs::create_dir_all(drop_in.parent().unwrap()).unwrap();
+        std::fs::write(&unit, older()).unwrap();
+        let own = "[Service]\nEnvironment=PATH=%h/.local/bin:/usr/bin\n";
+        std::fs::write(&drop_in, own).unwrap();
+        assert_eq!(
+            refresh_unit(&unit, Path::new("/usr/bin/fld"), &golden_env(), &systemctl).unwrap(),
+            Refreshed::Wrote
+        );
+        assert_eq!(std::fs::read_to_string(&unit).unwrap(), GOLDEN);
+        assert_eq!(std::fs::read_to_string(&drop_in).unwrap(), own);
+    }
+
+    #[test]
     fn a_unit_that_starts_this_fld_is_written_again_and_reloaded_and_a_current_one_is_left() {
         let dir = tempfile::TempDir::new().unwrap();
         let (systemctl, log) = fake_systemctl(dir.path(), 0);
@@ -485,7 +559,7 @@ mod tests {
         std::fs::write(&unit, older()).unwrap();
         let exe = Path::new("/usr/bin/fld");
         assert_eq!(
-            refresh_unit(&unit, exe, &systemctl).unwrap(),
+            refresh_unit(&unit, exe, &golden_env(), &systemctl).unwrap(),
             Refreshed::Wrote
         );
         assert_eq!(std::fs::read_to_string(&unit).unwrap(), GOLDEN);
@@ -494,7 +568,7 @@ mod tests {
             "--user daemon-reload\n"
         );
         assert_eq!(
-            refresh_unit(&unit, exe, &systemctl).unwrap(),
+            refresh_unit(&unit, exe, &golden_env(), &systemctl).unwrap(),
             Refreshed::Current
         );
         assert_eq!(std::fs::read_to_string(&unit).unwrap(), GOLDEN);
@@ -506,12 +580,12 @@ mod tests {
 
         let (failing, _) = fake_systemctl(&dir.path().join("broken"), 1);
         std::fs::write(&unit, older()).unwrap();
-        let error = refresh_unit(&unit, exe, &failing).unwrap_err();
+        let error = refresh_unit(&unit, exe, &golden_env(), &failing).unwrap_err();
         assert_eq!(error.code(), Some("service_install_failed"));
         assert_eq!(std::fs::read_to_string(&unit).unwrap(), GOLDEN);
         std::fs::remove_file(&log).unwrap();
         assert_eq!(
-            refresh_unit(&unit, exe, &systemctl).unwrap(),
+            refresh_unit(&unit, exe, &golden_env(), &systemctl).unwrap(),
             Refreshed::Current
         );
         assert_eq!(
@@ -522,7 +596,7 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         let bad = Path::new(std::ffi::OsStr::from_bytes(b"/fold-\xff"));
         assert!(matches!(
-            refresh_unit(&unit, bad, &systemctl),
+            refresh_unit(&unit, bad, &[], &systemctl),
             Err(ServiceError::ExeNotUtf8)
         ));
     }
@@ -537,6 +611,7 @@ mod tests {
             refresh_unit(
                 &unit,
                 Path::new("/home/ana/fold/target/debug/fld"),
+                &[],
                 &systemctl
             )
             .unwrap(),
@@ -553,7 +628,7 @@ mod tests {
         ] {
             std::fs::write(&unit, text).unwrap();
             assert_eq!(
-                refresh_unit(&unit, Path::new("/usr/bin/fld"), &systemctl).unwrap(),
+                refresh_unit(&unit, Path::new("/usr/bin/fld"), &[], &systemctl).unwrap(),
                 Refreshed::Kept(None),
                 "{text:?}"
             );
@@ -563,6 +638,7 @@ mod tests {
             refresh_unit(
                 &dir.path().join("missing"),
                 Path::new("/usr/bin/fld"),
+                &[],
                 &systemctl
             )
             .unwrap(),
@@ -583,16 +659,27 @@ mod tests {
         let units = dir.path().join("units");
         std::fs::create_dir_all(&units).unwrap();
         let unit = units.join("fold.service");
-        std::fs::write(&unit, render_unit(&link).replace("KillMode=mixed\n", "")).unwrap();
+        std::fs::write(
+            &unit,
+            render_unit(&link, &[]).replace("KillMode=mixed\n", ""),
+        )
+        .unwrap();
         assert_eq!(
-            refresh_unit(&unit, &exe, &systemctl).unwrap(),
+            refresh_unit(&unit, &exe, &[], &systemctl).unwrap(),
             Refreshed::Wrote
         );
-        assert_eq!(std::fs::read_to_string(&unit).unwrap(), render_unit(&exe));
+        assert_eq!(
+            std::fs::read_to_string(&unit).unwrap(),
+            render_unit(&exe, &[])
+        );
 
-        std::fs::write(&unit, render_unit(&link).replace("KillMode=mixed\n", "")).unwrap();
+        std::fs::write(
+            &unit,
+            render_unit(&link, &[]).replace("KillMode=mixed\n", ""),
+        )
+        .unwrap();
         std::fs::set_permissions(&units, std::fs::Permissions::from_mode(0o555)).unwrap();
-        let error = refresh_unit(&unit, &exe, &systemctl).unwrap_err();
+        let error = refresh_unit(&unit, &exe, &[], &systemctl).unwrap_err();
         std::fs::set_permissions(&units, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(matches!(error, ServiceError::WriteUnit { .. }), "{error}");
     }
@@ -608,7 +695,7 @@ mod tests {
             "/opt/back\\slash/fld",
         ] {
             assert_eq!(
-                unit_exe(&render_unit(Path::new(path))),
+                unit_exe(&render_unit(Path::new(path), &[])),
                 Some(PathBuf::from(path)),
                 "{path}"
             );
@@ -619,13 +706,13 @@ mod tests {
 
     #[test]
     fn a_path_with_spaces_is_quoted_and_percent_signs_are_doubled() {
-        let unit = render_unit(Path::new("/opt/my apps/fld"));
+        let unit = render_unit(Path::new("/opt/my apps/fld"), &[]);
         assert!(unit.contains("ExecStart=\"/opt/my apps/fld\" serve\n"));
-        let unit = render_unit(Path::new("/opt/100%/fld"));
+        let unit = render_unit(Path::new("/opt/100%/fld"), &[]);
         assert!(unit.contains("ExecStart=/opt/100%%/fld serve\n"));
-        let unit = render_unit(Path::new("/opt/$HOME/fld"));
+        let unit = render_unit(Path::new("/opt/$HOME/fld"), &[]);
         assert!(unit.contains("ExecStart=/opt/$$HOME/fld serve\n"));
-        let unit = render_unit(Path::new("/opt/a b/50%/fo\"ld"));
+        let unit = render_unit(Path::new("/opt/a b/50%/fo\"ld"), &[]);
         assert!(unit.contains("ExecStart=\"/opt/a b/50%%/fo\\\"ld\" serve\n"));
     }
 
@@ -684,7 +771,7 @@ mod tests {
         log
     }
 
-    const AGENT_GOLDEN: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>dev.omukk.fold</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>/usr/local/bin/fld</string>\n\t\t<string>serve</string>\n\t</array>\n\t<key>EnvironmentVariables</key>\n\t<dict>\n\t\t<key>PATH</key>\n\t\t<string>/opt/homebrew/bin:/usr/bin</string>\n\t</dict>\n\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n\t<key>ThrottleInterval</key>\n\t<integer>2</integer>\n\t<key>StandardOutPath</key>\n\t<string>/Users/ana/Library/Logs/fold.log</string>\n\t<key>StandardErrorPath</key>\n\t<string>/Users/ana/Library/Logs/fold.log</string>\n</dict>\n</plist>\n";
+    const AGENT_GOLDEN: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>dev.omukk.fold</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>/usr/local/bin/fld</string>\n\t\t<string>serve</string>\n\t</array>\n\t<key>EnvironmentVariables</key>\n\t<dict>\n\t\t<key>FOLD_SERVICE</key>\n\t\t<string>launchd</string>\n\t\t<key>PATH</key>\n\t\t<string>/opt/homebrew/bin:/usr/bin</string>\n\t</dict>\n\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n\t<key>ThrottleInterval</key>\n\t<integer>2</integer>\n\t<key>StandardOutPath</key>\n\t<string>/Users/ana/Library/Logs/fold.log</string>\n\t<key>StandardErrorPath</key>\n\t<string>/Users/ana/Library/Logs/fold.log</string>\n</dict>\n</plist>\n";
 
     #[test]
     fn the_launch_agent_matches_the_golden_text_and_escapes_xml() {
@@ -699,7 +786,9 @@ mod tests {
         );
         let odd = render_launch_agent(Path::new("/opt/a & <b>/fld"), Path::new("/l"), &[]);
         assert!(odd.contains("<string>/opt/a &amp; &lt;b&gt;/fld</string>"));
-        assert!(!odd.contains("EnvironmentVariables"));
+        assert!(odd.contains(
+            "<key>EnvironmentVariables</key>\n\t<dict>\n\t\t<key>FOLD_SERVICE</key>\n\t\t<string>launchd</string>\n\t</dict>"
+        ));
     }
 
     #[test]
@@ -874,7 +963,18 @@ mod tests {
         let mut out = Vec::new();
         install(&host, Path::new("/usr/bin/fld"), true, &mut out).unwrap();
         let unit = dir.path().join("systemd/user/fold.service");
-        assert_eq!(std::fs::read_to_string(&unit).unwrap(), GOLDEN);
+        let written = std::fs::read_to_string(&unit).unwrap();
+        assert_eq!(
+            written,
+            render_unit(Path::new("/usr/bin/fld"), &agent_env(&host))
+        );
+        assert!(
+            written.contains(&format!(
+                "Environment=FOLD_SERVICE=systemd\nEnvironment=XDG_CONFIG_HOME={}\nExecStart=",
+                dir.path().display()
+            )),
+            "{written}"
+        );
         let text = String::from_utf8(out).unwrap();
         assert!(text.starts_with(&format!("wrote {}\n", unit.display())));
         assert!(text.contains("loginctl enable-linger ana"));
