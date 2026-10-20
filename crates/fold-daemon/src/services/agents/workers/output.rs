@@ -57,7 +57,7 @@ impl Step {
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum RowChange {
     None,
-    /// `system/init` starts every user turn and names the model in use.
+    /// `system/init` starts every user turn and names the model in use; empty when it names none, or one that [`real_model`] refuses.
     TurnStarted {
         model: String,
     },
@@ -117,7 +117,7 @@ pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
         ClaudeMessage::System(SystemMessage::Init(init)) => LineEffect {
             step: Step::kind("init"),
             change: RowChange::TurnStarted {
-                model: init.model.clone(),
+                model: real_model(&init.model).unwrap_or_default().to_owned(),
             },
             reply: None,
             permission: None,
@@ -139,14 +139,18 @@ pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
                 .content
                 .first()
                 .map_or_else(|| Step::kind("assistant"), block_step);
-            let change =
-                assistant
-                    .message
-                    .usage
-                    .map_or(RowChange::None, |usage| RowChange::Context {
-                        tokens: context(&usage),
-                        model: assistant.message.model.clone(),
-                    });
+            let made_up = assistant
+                .message
+                .model
+                .as_deref()
+                .is_some_and(|model| real_model(model).is_none());
+            let change = match assistant.message.usage {
+                Some(usage) if !made_up => RowChange::Context {
+                    tokens: context(&usage),
+                    model: assistant.message.model.clone(),
+                },
+                _ => RowChange::None,
+            };
             LineEffect {
                 step,
                 change,
@@ -180,6 +184,7 @@ pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
                 windows: result
                     .model_usage
                     .iter()
+                    .filter(|(model, _)| real_model(model).is_some())
                     .map(|(model, usage)| (model.clone(), usage.context_window))
                     .collect(),
                 error: result.is_error.then(|| turn_error(result)),
@@ -219,6 +224,11 @@ pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
         ClaudeMessage::ControlResponse(_) => plain("control_response"),
         ClaudeMessage::Other => plain("other"),
     }
+}
+
+/// `model` when it names a model. Claude Code writes the messages it makes itself, such as `Not logged in · Please run /login`, with the model `<synthetic>` and no request behind them; such a name is never stored, never sized as a context and never passed back as `--model`, where it would make every later turn fail the same way.
+pub(super) fn real_model(model: &str) -> Option<&str> {
+    (!model.is_empty() && !model.starts_with('<')).then_some(model)
 }
 
 /// Whether the line is a `system/init` whose `fold` MCP server failed to connect, so the turn it starts has no fold tool. Only `failed` counts: a server that is still `pending` can connect during the turn, and an init without a `fold` entry names no server fold configured.
@@ -490,6 +500,54 @@ mod tests {
                 reached_model: false,
             }))
         );
+    }
+
+    #[test]
+    fn a_model_claude_code_made_up_is_never_reported() {
+        let all = effects("synthetic_error");
+        let changes: Vec<&RowChange> = all.iter().map(|effect| &effect.change).collect();
+        assert_eq!(
+            changes[..2],
+            [
+                &RowChange::TurnStarted {
+                    model: "claude-haiku-5-5".to_owned()
+                },
+                &RowChange::None,
+            ],
+            "the synthetic message neither names the model nor sizes the context"
+        );
+        assert_eq!(
+            turn_error_of(&all),
+            Some(Some(TurnError {
+                text: "Not logged in · Please run /login".to_owned(),
+                reached_model: false,
+            }))
+        );
+        let init = effect_of(
+            &ClaudeMessage::parse(
+                r#"{"type":"system","subtype":"init","session_id":"s","model":"<synthetic>"}"#,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            init.change,
+            RowChange::TurnStarted {
+                model: String::new()
+            }
+        );
+        let windows = effect_of(
+            &ClaudeMessage::parse(
+                r#"{"type":"result","subtype":"success","is_error":true,"session_id":"s","modelUsage":{"<synthetic>":{"contextWindow":5},"opus":{"contextWindow":9}}}"#,
+            )
+            .unwrap(),
+        );
+        assert!(matches!(
+            windows.change,
+            RowChange::TurnEnded { ref windows, .. } if windows == &[("opus".to_owned(), 9)]
+        ));
+        assert_eq!(real_model("opus"), Some("opus"));
+        assert_eq!(real_model("<synthetic>"), None);
+        assert_eq!(real_model(""), None);
     }
 
     #[test]

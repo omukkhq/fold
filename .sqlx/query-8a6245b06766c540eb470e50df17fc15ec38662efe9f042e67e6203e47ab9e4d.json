@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE worker_processes SET model = NULL WHERE id = ? AND model LIKE '<%'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "8a6245b06766c540eb470e50df17fc15ec38662efe9f042e67e6203e47ab9e4d"
+}

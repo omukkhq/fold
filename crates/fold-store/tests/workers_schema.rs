@@ -914,3 +914,30 @@ async fn a_failed_turn_keeps_its_error_until_a_turn_ends_without_one() {
         assert!(exec(&store, &change).await.is_err(), "{change}");
     }
 }
+
+#[tokio::test]
+async fn a_made_up_model_is_forgotten_and_a_real_one_kept() {
+    let (_dir, store) = seeded().await;
+    let lead = process(&store, 1, Role::ReviewLead, None, "s1").await;
+    let model = async |set: &str| {
+        exec(
+            &store,
+            &format!("UPDATE worker_processes SET model = {set} WHERE id = {lead}"),
+        )
+        .await
+        .unwrap();
+        store
+            .write(async |tx| agents::forget_made_up_model(tx, lead).await)
+            .await
+            .unwrap();
+        let mut conn = store.read().acquire().await.unwrap();
+        agents::find_worker_process(&mut conn, &AgentName::parse("web-lead").unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .model
+    };
+    assert_eq!(model("'<synthetic>'").await, None);
+    assert_eq!(model("'opus'").await.as_deref(), Some("opus"));
+    assert_eq!(model("NULL").await, None);
+}

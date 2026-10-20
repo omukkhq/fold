@@ -41,7 +41,7 @@ pub use workers::{
     tasks_awaiting_proposal,
 };
 pub use workers::{PendingResume, pending_resumes};
-pub use workers::{clear_turn_error, record_turn_error, set_exit_error};
+pub use workers::{clear_turn_error, forget_made_up_model, record_turn_error, set_exit_error};
 
 /// Row ids of these tables stay inside the daemon; the public handles are the names.
 #[derive(Debug, Clone, PartialEq, Eq)]

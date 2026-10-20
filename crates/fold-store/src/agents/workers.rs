@@ -587,6 +587,17 @@ pub async fn set_worker_context(
     Ok(())
 }
 
+/// Forgets a model name that Claude Code made up, such as `<synthetic>`, which no start asked for; a real name stays.
+pub async fn forget_made_up_model(tx: &mut WriteTx, id: i64) -> Result<(), StoreError> {
+    sqlx::query!(
+        "UPDATE worker_processes SET model = NULL WHERE id = ? AND model LIKE '<%'",
+        id
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
 /// Counts one finished turn and makes the worker idle.
 pub async fn record_turn(
     tx: &mut WriteTx,

@@ -2374,3 +2374,81 @@ async fn a_process_that_exits_with_an_error_leaves_its_last_stderr_lines() {
     );
     assert!(listed["workers"][0].get("hint").is_none());
 }
+
+#[tokio::test]
+async fn a_synthetic_error_message_never_becomes_the_workers_model() {
+    let fake = FakeClaude::new("synthetic_error");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    let failed = eventually(WAIT, async || {
+        let row = worker(&harness, &lead).await;
+        if row.failed_turns == 1 && row.state == WorkerState::Idle {
+            Ok(row)
+        } else {
+            Err((row.failed_turns, row.state))
+        }
+    })
+    .await;
+    assert_eq!(failed.model.as_deref(), Some("claude-haiku-5-5"));
+    assert_eq!(
+        failed.last_error.as_deref(),
+        Some("Not logged in · Please run /login")
+    );
+    harness
+        .call(MAIN, "stop_worker", json!({"name": lead}))
+        .await;
+    until_state(&harness, &lead, WorkerState::Stopped).await;
+    harness
+        .call(
+            MAIN,
+            "start_worker",
+            json!({"role": "area_lead", "area": "web"}),
+        )
+        .await;
+    let runs = until_runs(&fake, &lead, 2, 2).await;
+    assert_eq!(runs[1].flag("--model"), Some("claude-haiku-5-5"));
+}
+
+#[tokio::test]
+async fn a_row_that_holds_a_synthetic_model_launches_without_it_and_forgets_it() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    until_state(&harness, &lead, WorkerState::Idle).await;
+    harness
+        .call(MAIN, "stop_worker", json!({"name": lead}))
+        .await;
+    until_state(&harness, &lead, WorkerState::Stopped).await;
+    fold_store::testing::execute(
+        &harness.handle.store,
+        "UPDATE worker_processes SET model = '<synthetic>'",
+    )
+    .await;
+    harness
+        .call(
+            MAIN,
+            "start_worker",
+            json!({"role": "area_lead", "area": "web"}),
+        )
+        .await;
+    let runs = until_runs(&fake, &lead, 2, 2).await;
+    assert!(!runs[1].has("--model"), "{:?}", runs[1].args);
+    let healed = eventually(WAIT, async || {
+        let row = worker(&harness, &lead).await;
+        if row.state == WorkerState::Idle && row.turns == 2 {
+            Ok(row)
+        } else {
+            Err((row.state, row.turns))
+        }
+    })
+    .await;
+    assert_eq!(
+        healed.model.as_deref(),
+        Some("claude-haiku-5-5"),
+        "the row holds the model that answered"
+    );
+}

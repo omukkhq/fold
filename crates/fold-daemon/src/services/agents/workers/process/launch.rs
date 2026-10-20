@@ -18,6 +18,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::{ChildStdin, Command};
 use tokio::sync::{mpsc, watch};
 
+use super::super::output::real_model;
 use super::stderr::StderrTail;
 use super::{Input, Launcher, Process, Running, StartWatch, Supervisor, lock, own_binary};
 use crate::push::StdinSink;
@@ -101,7 +102,13 @@ impl Supervisor {
         } else {
             command.arg("--session-id").arg(&row.session_id);
         }
-        if let Some(model) = &row.model {
+        // A row can hold a model Claude Code made up, which no start asked for; the area's or role's model stands in for it.
+        let model = row
+            .model
+            .as_deref()
+            .and_then(real_model)
+            .or_else(|| row.model.as_ref().and(settings.model.as_deref()));
+        if let Some(model) = model {
             command.arg("--model").arg(model);
         }
         command
@@ -199,6 +206,7 @@ impl Supervisor {
                 let paused = agents::pause_state(tx.conn()).await?.is_paused();
                 if starting && !paused {
                     agents::set_worker_pid(tx, row.id, pid).await?;
+                    agents::forget_made_up_model(tx, row.id).await?;
                     if idle {
                         agents::set_worker_state(tx, row.id, WorkerState::Idle, now).await?;
                     }
