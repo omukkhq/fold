@@ -11,6 +11,7 @@ import type {
   WorkerState,
 } from "@/api/workers";
 import type { WorkerSteps } from "@/live/apply";
+import { type SessionView, sessionView } from "./session";
 
 /** The look of a state pill; each tone has its soft fill, dot and text colour. */
 export type PillTone =
@@ -185,6 +186,8 @@ export interface TeamRow {
   restart: boolean;
   /** The ids of the sessions the worker had before its current one, oldest first. */
   previousSessions: string[];
+  /** The worker's Claude Code session; null for the main agent, whose session fold does not run. */
+  session: SessionView | null;
 }
 
 export interface TeamGroup {
@@ -459,6 +462,7 @@ function runningRow(
     stop: stopControl(worker.state),
     restart: canRestart(worker.state),
     previousSessions: worker.previous_sessions.map((s) => s.session_id),
+    session: sessionView(worker),
   };
 }
 
@@ -496,6 +500,7 @@ function mainRow(agent: AgentView, human: string | null): TeamRow {
     stop: null,
     restart: false,
     previousSessions: [],
+    session: null,
   };
 }
 

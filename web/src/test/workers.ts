@@ -36,9 +36,10 @@ export function workerProcess(
     model_unreachable: false,
     hint: null,
     cache_ttl: "1h",
-    session_id: "00000000-0000-4000-8000-000000000001",
+    session_id: "0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a13",
     previous_sessions: [],
-    transcript: null,
+    transcript:
+      "/home/tanim/.claude/projects/-home-tanim-ledger/0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a13.jsonl",
     ...fields,
   };
 }

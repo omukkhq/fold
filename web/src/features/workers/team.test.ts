@@ -403,6 +403,7 @@ describe("teamGroups", () => {
       bound: { kind: "person", name: "human:tanim" },
       stop: null,
       model: "-",
+      session: null,
     });
     expect(web?.label).toEqual({ name: "frontend", color: "slate" });
     expect(web?.owned).toBe(2);
@@ -418,6 +419,7 @@ describe("teamGroups", () => {
       model: "-",
       bound: { kind: "ids", text: "T-12 · ws-7, T-13", batch: null },
       step: { tool: "Edit", text: "", faint: false },
+      session: { short: "0f8e2c1a" },
     });
     expect(api?.label).toEqual({ name: "api", color: "stone" });
     expect(api?.rows).toEqual([]);

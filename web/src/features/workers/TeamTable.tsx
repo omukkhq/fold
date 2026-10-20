@@ -9,6 +9,7 @@ import { PersonName } from "@/people/PersonName";
 import { projectPath } from "@/routes/paths";
 import { RowErrorText, StatePill, StepText } from "./parts";
 import { RestartWorker } from "./RestartWorker";
+import { SessionLine } from "./SessionLine";
 import { StopWorker } from "./StopWorker";
 import { areaNote, type TeamGroup, type TeamRow } from "./team";
 
@@ -122,6 +123,9 @@ function Row({
               className="leading-snug"
             />
             <span className="text-meta text-text-muted">{row.roleLine}</span>
+            {row.session === null ? null : (
+              <SessionLine session={row.session} />
+            )}
           </div>
         </div>
       </td>
