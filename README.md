@@ -145,6 +145,7 @@ Run these commands inside your project:
 | `fld setup` | Start the daemon at login. |
 | `fld restart` | Restart the daemon after an update, so the new version takes over. Workers continue in their sessions. |
 | `fld doctor` | Check the installation, daemon, and projects, with suggested fixes. |
+| `fld transcript` | Find an agent's Claude Code transcript: `fld transcript <agent>` prints the path of the file of its current session, and `fld transcript <agent> --tail N` prints the file's last N lines. |
 | `fld gc` | Delete objects that nothing refers to, prune old automatic checkpoints, and remove the folders of workspaces closed for longer than `closed_workspace_days` (14 days by default). The daemon also runs it every day; `fld gc` needs a running daemon. `fld gc --dry-run` counts what a run would remove and changes nothing. |
 | `fld token` | Manage the tokens that sign a person in to the web interface off localhost: `fld token create`, `fld token list`, and `fld token revoke`. |
 | `fld --help` | See the command reference. |

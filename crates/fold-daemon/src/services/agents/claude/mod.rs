@@ -1,6 +1,8 @@
+mod transcript;
 mod version;
 mod wire;
 
+pub use transcript::{LOCATION_ENV, env_value, transcript_path};
 pub use version::{AuthStatus, ClaudeVersion, MIN_CLAUDE_VERSION};
 pub use wire::{
     ASK_USER_QUESTION, ApiEvent, ApiMessage, ApiRetry, AskUserQuestion, AssistantMessage,

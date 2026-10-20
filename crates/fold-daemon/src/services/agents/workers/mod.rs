@@ -296,6 +296,20 @@ impl AgentService {
         load_config(self.config_paths()?).await.ok()
     }
 
+    /// The transcript path of each row's session, in the order of `rows`; all `None` for a service that runs no worker processes. See [`Supervisor::transcripts`].
+    pub async fn worker_transcripts(&self, rows: &[WorkerProcessRow]) -> Vec<Option<String>> {
+        let Some(supervisor) = &self.workers else {
+            return vec![None; rows.len()];
+        };
+        let ids = rows.iter().map(|row| row.session_id.clone()).collect();
+        supervisor
+            .transcripts(ids)
+            .await
+            .into_iter()
+            .map(|path| path.map(|path| path.to_string_lossy().into_owned()))
+            .collect()
+    }
+
     pub async fn list_workers(&self) -> Result<Vec<WorkerProcessRow>, AgentError> {
         let mut conn = self
             .store

@@ -78,6 +78,8 @@ enum Command {
     ShellEnv,
     /// Manage the workers that fold runs: fld worker restart <name> starts one again in a new Claude Code session
     Worker(commands::worker::WorkerArgs),
+    /// Print the path of an agent's Claude Code transcript, the file of its current session; --tail N prints the file's last N lines instead
+    Transcript(commands::transcript::TranscriptArgs),
     /// Development helpers
     #[cfg(feature = "dev-seed")]
     #[command(hide = true)]
@@ -167,6 +169,9 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
             shell_env::print(std::env::vars_os(), out).map_err(Failure::Write)
         }
         Some(Command::Worker(args)) => commands::worker::run(&args, out).map_err(Failure::Remote),
+        Some(Command::Transcript(args)) => {
+            commands::transcript::run_transcript(&args, out).map_err(Failure::Remote)
+        }
         #[cfg(feature = "dev-seed")]
         Some(Command::Dev(args)) => {
             seed::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Seed)

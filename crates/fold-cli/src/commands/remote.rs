@@ -139,7 +139,7 @@ pub(crate) fn find_project(start: &Path) -> PathBuf {
     init::project_root_at_or_above(&absolute).unwrap_or(absolute)
 }
 
-fn project_paths(project: Option<&Path>) -> Result<ProjectPaths, FoldError> {
+pub(crate) fn project_paths(project: Option<&Path>) -> Result<ProjectPaths, FoldError> {
     let paths = ProjectPaths::new(find_project(project.unwrap_or_else(|| Path::new("."))));
     if !paths.db().is_file() {
         return Err(FoldError::new(

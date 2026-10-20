@@ -4146,6 +4146,11 @@ export interface components {
             /** @description The tasks a task worker is bound to. */
             tasks: string[];
             /**
+             * @description The path of the current session's transcript file, which Claude Code writes from the session's first message on; fold never reads it. Null when fold cannot tell where Claude Code keeps it, such as when `CLAUDE_CODE_PROJECT_DIR_NAME` renames the project folder, or when a long project path ends in a hash and no folder holds the file yet.
+             * @example /home/tanim/.claude/projects/-home-tanim-ledger/0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a13.jsonl
+             */
+            transcript: string | null;
+            /**
              * Format: int64
              * @description Finished turns.
              */

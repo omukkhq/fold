@@ -163,6 +163,7 @@ mod worker_limits;
 mod worker_questions;
 mod worker_restart;
 mod worker_resume;
+mod worker_transcript;
 mod workers;
 #[cfg(feature = "failpoints")]
 mod workers_failpoints;

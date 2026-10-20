@@ -265,6 +265,12 @@ pub struct WorkerEntry {
     pub session_id: String,
     /// The sessions the worker had before its current one, oldest first.
     pub previous_sessions: Vec<PreviousSessionEntry>,
+    /// The path of the current session's transcript file, which Claude Code writes from the session's first message on; fold never reads it. Null when fold cannot tell where Claude Code keeps it, such as when `CLAUDE_CODE_PROJECT_DIR_NAME` renames the project folder, or when a long project path ends in a hash and no folder holds the file yet.
+    #[schema(
+        required = true,
+        example = "/home/tanim/.claude/projects/-home-tanim-ledger/0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a13.jsonl"
+    )]
+    pub transcript: Option<String>,
 }
 
 /// Why a worker left a session for a new one: `handoff` (a fresh context after its hand-off note), `lost` (Claude Code no longer had the session) or `requested` (a human or the main agent asked for a new session).
@@ -313,6 +319,7 @@ impl WorkerEntry {
         row: WorkerProcessRow,
         config: Option<&ProjectConfig>,
         previous: Vec<PreviousSessionRow>,
+        transcript: Option<String>,
     ) -> Self {
         let cache_ttl = config.map(|config| config.role(row.role).cache_ttl.as_str().to_owned());
         let model_unreachable =
@@ -344,6 +351,7 @@ impl WorkerEntry {
             cache_ttl,
             session_id: row.session_id,
             previous_sessions: previous.into_iter().map(Into::into).collect(),
+            transcript,
         }
     }
 }
@@ -449,14 +457,16 @@ pub async fn list_workers(project: Project) -> Result<Json<WorkerList>, ApiError
             })
             .collect()
     });
+    let transcripts = agents.worker_transcripts(&workers).await;
     Ok(Json(WorkerList {
         areas: areas.into_iter().map(AreaEntry::from).collect(),
         main_label: fold_core::MAIN_AREA.to_owned(),
         workers: workers
             .into_iter()
-            .map(|row| {
+            .zip(transcripts)
+            .map(|(row, transcript)| {
                 let sessions = previous.remove(&row.agent).unwrap_or_default();
-                WorkerEntry::new(row, config.as_ref(), sessions)
+                WorkerEntry::new(row, config.as_ref(), sessions, transcript)
             })
             .collect(),
         roles,
@@ -540,7 +550,7 @@ pub async fn stop_worker(
     Ok(Json(entry(&agents, worker).await?))
 }
 
-/// The answer for one worker, with its previous sessions.
+/// The answer for one worker, with its previous sessions and its transcript path.
 async fn entry(
     agents: &crate::services::agents::AgentService,
     worker: WorkerProcessRow,
@@ -551,7 +561,17 @@ async fn entry(
         .remove(&worker.agent)
         .unwrap_or_default();
     let config = agents.worker_config().await;
-    Ok(WorkerEntry::new(worker, config.as_ref(), previous))
+    let transcript = agents
+        .worker_transcripts(std::slice::from_ref(&worker))
+        .await
+        .pop()
+        .flatten();
+    Ok(WorkerEntry::new(
+        worker,
+        config.as_ref(),
+        previous,
+        transcript,
+    ))
 }
 
 /// What a human adds to the first turn of a worker's new session.

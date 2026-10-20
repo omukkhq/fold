@@ -1,15 +1,18 @@
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use fold_core::transcript::claude_config_dir;
 use fold_core::{AgentName, Clock, ProjectPaths};
 use fold_store::Store;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::push::PushTargets;
+use crate::services::agents::claude::{LOCATION_ENV, env_value, transcript_path};
 use crate::services::events::EventBus;
 use crate::support::lock;
 use questions::Waiter;
@@ -66,6 +69,20 @@ impl Launcher {
     pub fn with_own_binary(mut self) -> Self {
         if self.fold.is_none() {
             self.fold = own_binary();
+        }
+        self
+    }
+
+    /// The launcher with the variables of [`LOCATION_ENV`] that `var` sets and its own environment leaves out. A worker inherits them from the daemon anyway, with the same values; the launcher holds them so that the daemon, which reads no environment variable, knows where its workers' Claude Code keeps their transcripts. A value that is not UTF-8 is left out.
+    #[must_use]
+    pub fn with_claude_location(mut self, var: impl Fn(&str) -> Option<OsString>) -> Self {
+        for name in LOCATION_ENV {
+            if self.env.iter().any(|(key, _)| key == name) {
+                continue;
+            }
+            if let Some(value) = var(name).and_then(|value| value.into_string().ok()) {
+                self.env.push((name.to_owned(), value));
+            }
         }
         self
     }
@@ -234,6 +251,26 @@ impl Supervisor {
         *lock(&self.inner.launcher) = launcher;
     }
 
+    /// Where the workers' Claude Code keeps the transcript of each session of `ids`, in the order of `ids`: the folder of the launcher's environment, a relative one in the project folder, where every worker runs, which is followed to its real path as Claude Code names it. Each is `None` when fold cannot tell; see [`transcript_path`].
+    pub async fn transcripts(&self, ids: Vec<String>) -> Vec<Option<PathBuf>> {
+        let env = lock(&self.inner.launcher).env.clone();
+        let root = self.inner.paths.root().to_owned();
+        let count = ids.len();
+        tokio::task::spawn_blocking(move || {
+            let root = root.canonicalize().unwrap_or(root);
+            let config = claude_config_dir(|name| env_value(&env, name)).map(|dir| root.join(dir));
+            ids.iter()
+                .map(|id| {
+                    config
+                        .as_deref()
+                        .and_then(|dir| transcript_path(dir, &root, id))
+                })
+                .collect()
+        })
+        .await
+        .unwrap_or_else(|_| vec![None; count])
+    }
+
     pub fn set_registry(&self, registry: Store) {
         *lock(&self.inner.registry) = Some(registry);
     }
@@ -329,5 +366,27 @@ mod tests {
         );
         let own = Launcher::default().with_own_binary().fold.unwrap();
         assert!(own.is_file(), "{}", own.display());
+    }
+
+    #[test]
+    fn a_launcher_takes_the_claude_location_it_does_not_set_itself() {
+        use std::os::unix::ffi::OsStringExt;
+        let set = Launcher {
+            env: vec![("CLAUDE_CONFIG_DIR".to_owned(), "/etc/cc".to_owned())],
+            ..Launcher::default()
+        };
+        let launcher = set.with_claude_location(|name| match name {
+            "CLAUDE_CONFIG_DIR" => Some(OsString::from("/home/ana/cc")),
+            "HOME" => Some(OsString::from("/home/ana")),
+            "CLAUDE_CODE_PROJECT_DIR_NAME" => Some(OsString::from_vec(vec![0xff])),
+            _ => None,
+        });
+        assert_eq!(
+            launcher.env,
+            [
+                ("CLAUDE_CONFIG_DIR".to_owned(), "/etc/cc".to_owned()),
+                ("HOME".to_owned(), "/home/ana".to_owned()),
+            ]
+        );
     }
 }

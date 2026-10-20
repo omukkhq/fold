@@ -152,6 +152,7 @@ Work in the project folder:
 - `fld unstash`: merge the newest stash entry back into the folder; a conflict writes conflict markers and keeps the entry until `fld record`.
 - `fld pause` and `fld resume`: stop every worker of the project, keeping its session and claims, and run them again.
 - `fld worker restart NAME [--instructions TEXT]`: start the worker `NAME` of any role again in a new Claude Code session, for example when its session is broken; it keeps its name, claims and workers, and its old session id stays in its previous sessions.
+- `fld transcript AGENT [--tail N]`: print the path of the agent's Claude Code transcript, the file of its current session: the main agent's recorded session, or the session fold runs for a worker. `--tail N` prints the file's last N lines instead; fld reads them itself, and the daemon never opens a transcript.
 
 Maintenance and access:
 

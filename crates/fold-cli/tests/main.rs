@@ -45,4 +45,5 @@ mod service_install;
 mod shell_env;
 mod templates;
 mod token;
+mod transcript;
 mod with_git;
