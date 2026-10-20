@@ -1,15 +1,16 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::messages::resolve;
 use fold_core::{
-    Actor, Address, AddressedAs, AgentActor, Choice, Clock, EventError, FoldError, HumanName,
-    IdKind, MessageBody, MessageChoices, MessageId, NewEvent, ProposalId, Recipient, RequestId,
-    Sender, Target, TaskId, Timestamp, WorkerName, codes, policy,
+    Actor, Address, AddressedAs, AgentActor, AgentName, Choice, Clock, EventError, FoldError,
+    HumanName, IdKind, MessageBody, MessageChoices, MessageId, NewEvent, ProposalId, Recipient,
+    RequestId, Sender, Target, TaskId, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::messages::{self, MessageHead, MessageRow, NewMessage, RecipientRow};
 use fold_store::tasks::claims;
-use fold_store::{Store, StoreError, WriteTx, counters, projects, reviews, tasks};
+use fold_store::{Store, StoreError, WriteTx, agents, counters, projects, reviews, tasks};
 use serde_json::json;
 use thiserror::Error;
 
@@ -71,7 +72,7 @@ pub struct RecipientView {
     pub addressed_as: AddressedAs,
     pub delivered_at: Option<Timestamp>,
     pub acknowledged_at: Option<Timestamp>,
-    /// Whether a notice to the recipient's agent would reach one of its sessions now; `None` for a human, and for every recipient of a service without the project's push targets.
+    /// Whether a notice to the recipient's agent would reach one of its sessions now; `None` for a human, for an agent without a connected session, and for every recipient of a service without the project's push targets.
     pub reachable: Option<bool>,
 }
 
@@ -157,8 +158,23 @@ impl MessageService {
         self
     }
 
-    /// Sets `reachable` of every agent recipient from the push targets as they are now.
-    fn mark_reach(&self, messages: &mut [MessageView]) {
+    /// The agents with a connected session, read only when the service has push targets to judge them by.
+    async fn connected(
+        &self,
+        conn: &mut fold_store::SqliteConnection,
+    ) -> Result<BTreeSet<AgentName>, MessageError> {
+        if self.push.is_none() {
+            return Ok(BTreeSet::new());
+        }
+        Ok(agents::open_bound_sessions(conn)
+            .await?
+            .into_iter()
+            .map(|session| session.agent)
+            .collect())
+    }
+
+    /// Sets `reachable` of every agent recipient with a connected session from the push targets as they are now. An agent without one, such as a supervised worker between its turns, is left `None`: no session of it could take a notice, and nothing is wrong with that.
+    fn mark_reach(&self, messages: &mut [MessageView], connected: &BTreeSet<AgentName>) {
         let Some(push) = &self.push else {
             return;
         };
@@ -166,7 +182,9 @@ impl MessageService {
             .iter_mut()
             .flat_map(|message| message.recipients.iter_mut())
         {
-            if let Target::Worker(worker) = &recipient.name {
+            if let Target::Worker(worker) = &recipient.name
+                && connected.contains(&worker.agent())
+            {
                 recipient.reachable = Some(push.reach(&worker.agent()).reachable());
             }
         }

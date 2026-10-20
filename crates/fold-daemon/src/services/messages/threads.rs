@@ -86,13 +86,14 @@ impl MessageService {
         let ids: Vec<MessageId> = heads.iter().map(|head| head.thread).collect();
         let rows = messages::threads(&mut tx, &ids).await?;
         let awaiting = messages::threads_awaiting_human(&mut *tx).await?;
+        let connected = self.connected(&mut tx).await?;
         tx.commit().await.map_err(StoreError::from)?;
         let mut items: Vec<ThreadView> = group(rows)
             .into_iter()
             .map(|(thread, rows)| thread_view(thread, rows, &awaiting))
             .collect();
         for item in &mut items {
-            self.mark_reach(&mut item.messages);
+            self.mark_reach(&mut item.messages, &connected);
         }
         items.sort_by_key(|thread| std::cmp::Reverse(last_number(thread)));
         let next = more.then(|| heads.last().map(|head| head.last)).flatten();
@@ -111,9 +112,10 @@ impl MessageService {
             .ok_or_else(|| message_not_found(message))?;
         let rows = messages::thread(&mut tx, head.thread).await?;
         let awaiting = awaiting_set(&mut tx, head.thread).await?;
+        let connected = self.connected(&mut tx).await?;
         tx.commit().await.map_err(StoreError::from)?;
         let mut view = thread_view(head.thread, rows, &awaiting);
-        self.mark_reach(&mut view.messages);
+        self.mark_reach(&mut view.messages, &connected);
         Ok(view)
     }
 
@@ -173,9 +175,10 @@ impl MessageService {
         };
         let rows = messages::thread(&mut tx, thread).await?;
         let awaiting = awaiting_set(&mut tx, thread).await?;
+        let connected = self.connected(&mut tx).await?;
         tx.commit().await.map_err(StoreError::from)?;
         let mut view = thread_view(thread, rows, &awaiting);
-        self.mark_reach(&mut view.messages);
+        self.mark_reach(&mut view.messages, &connected);
         Ok(Some(view))
     }
 

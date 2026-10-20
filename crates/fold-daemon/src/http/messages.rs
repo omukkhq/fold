@@ -33,7 +33,7 @@ pub struct RecipientView {
     /// UTC milliseconds; null until the recipient acknowledged it.
     #[schema(required = true)]
     pub acknowledged_at: Option<i64>,
-    /// For an agent recipient, whether fold can post a notice into one of the agent's sessions now; false means the agent learns of the message only when it reads its inbox. Null for a human.
+    /// For an agent recipient, whether fold can post a notice into one of the agent's sessions now; false means the agent learns of the message only when it reads its inbox. Null for a human and for an agent without a connected session.
     #[schema(required = true)]
     pub reachable: Option<bool>,
 }

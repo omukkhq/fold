@@ -2920,7 +2920,7 @@ export interface components {
             delivered_at: number | null;
             /** @example frontend/ui */
             name: string;
-            /** @description For an agent recipient, whether fold can post a notice into one of the agent's sessions now; false means the agent learns of the message only when it reads its inbox. Null for a human. */
+            /** @description For an agent recipient, whether fold can post a notice into one of the agent's sessions now; false means the agent learns of the message only when it reads its inbox. Null for a human and for an agent without a connected session. */
             reachable: boolean | null;
         };
         RecordResult: {

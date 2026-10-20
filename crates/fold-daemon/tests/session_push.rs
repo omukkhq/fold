@@ -1169,6 +1169,8 @@ async fn a_restored_socket_counts_from_the_newest_session_that_registered_it() {
 async fn the_agents_and_their_messages_show_who_a_notice_can_reach() {
     let fixture = Fixture::keeping_files().await;
     let _backend = fixture.inbox("backend", "backend.sock").await;
+    let gone = register(&fixture.agents, "gone", &[]).await;
+    fixture.agents.end_session(&gone).await.unwrap();
     let blocked = Inbox::bind(fixture.path("blocked.sock"));
     set_mode(&blocked.path, 0o000);
     fixture
@@ -1187,7 +1189,7 @@ async fn the_agents_and_their_messages_show_who_a_notice_can_reach() {
         .send(
             &actor("frontend"),
             SendMessage {
-                to: Address::parse_all(&["backend", "docs", "lead", "human:ana"]).unwrap(),
+                to: Address::parse_all(&["backend", "docs", "lead", "gone", "human:ana"]).unwrap(),
                 body: MessageBody::parse("who hears this").unwrap(),
                 task: None,
                 proposal: None,
@@ -1215,6 +1217,7 @@ async fn the_agents_and_their_messages_show_who_a_notice_can_reach() {
             ("backend".to_owned(), Some(true)),
             ("docs".to_owned(), Some(false)),
             ("lead".to_owned(), Some(false)),
+            ("gone".to_owned(), None),
             ("human:ana".to_owned(), None),
         ]
     );
@@ -1234,6 +1237,7 @@ async fn the_agents_and_their_messages_show_who_a_notice_can_reach() {
             ("backend".to_owned(), push::PushReach::Socket),
             ("docs".to_owned(), push::PushReach::Unreachable),
             ("lead".to_owned(), push::PushReach::Failing),
+            ("gone".to_owned(), push::PushReach::Unreachable),
         ]
     );
 }
