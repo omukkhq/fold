@@ -840,3 +840,70 @@ async fn a_stored_batch_reviewer_becomes_a_reviewer_and_keeps_its_rows() {
     .unwrap_err();
     assert!(moved.to_string().contains("worker_processes_fixed"));
 }
+
+#[tokio::test]
+async fn a_failed_turn_keeps_its_error_until_a_turn_ends_without_one() {
+    let (_dir, store) = seeded().await;
+    let lead = process(&store, 1, Role::ReviewLead, None, "s1").await;
+    let row = async || {
+        let mut conn = store.read().acquire().await.unwrap();
+        agents::find_worker_process(&mut conn, &AgentName::parse("web-lead").unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    let failed = async |error: &'static str, reached: bool, now: i64| {
+        store
+            .write(async |tx| agents::record_turn_error(tx, lead, error, reached, at(now)).await)
+            .await
+            .unwrap()
+    };
+    assert_eq!((row().await.last_error, row().await.failed_turns), (None, 0));
+    assert_eq!(failed("Not signed in", false, 20).await, Some(1));
+    assert_eq!(failed("Not signed in", false, 30).await, Some(2));
+    let kept = row().await;
+    assert_eq!(kept.last_error.as_deref(), Some("Not signed in"));
+    assert_eq!((kept.last_error_at, kept.failed_turns), (Some(at(30)), 2));
+    assert_eq!(
+        failed("Reached max turns", true, 40).await,
+        Some(0),
+        "a turn that reached the model starts the count again"
+    );
+    assert_eq!(row().await.last_error.as_deref(), Some("Reached max turns"));
+    store
+        .write(async |tx| agents::clear_turn_error(tx, lead).await)
+        .await
+        .unwrap();
+    let cleared = row().await;
+    assert_eq!(
+        (cleared.last_error, cleared.last_error_at, cleared.failed_turns),
+        (None, None, 0)
+    );
+    store
+        .write(async |tx| agents::set_worker_state(tx, lead, WorkerState::Stopping, at(50)).await)
+        .await
+        .unwrap();
+    assert_eq!(
+        failed("interrupted", false, 60).await,
+        None,
+        "the interrupt of a stop counts no failed turn"
+    );
+    store
+        .write(async |tx| agents::set_exit_error(tx, lead, "fatal: no access", at(70)).await)
+        .await
+        .unwrap();
+    let exited = row().await;
+    assert_eq!(exited.last_error.as_deref(), Some("fatal: no access"));
+    assert_eq!(exited.last_error_at, Some(at(70)));
+    for change in [
+        format!("UPDATE worker_processes SET last_error = '' WHERE id = {lead}"),
+        format!(
+            "UPDATE worker_processes SET last_error = '{}' WHERE id = {lead}",
+            "a".repeat(1001)
+        ),
+        format!("UPDATE worker_processes SET last_error_at = NULL WHERE id = {lead}"),
+        format!("UPDATE worker_processes SET failed_turns = -1 WHERE id = {lead}"),
+    ] {
+        assert!(exec(&store, &change).await.is_err(), "{change}");
+    }
+}

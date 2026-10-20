@@ -38,7 +38,7 @@ pub struct PushContext {
     pub main_agents: BTreeSet<AgentName>,
     /// No agent can take the event's task now: it is a human task or on hold, or, for `task.hold_cleared` and `task.updated`, it is not an unclaimed Todo task.
     pub held_from_agents: bool,
-    /// For `worker.failed`, the agent that started the failed worker; `None` for a human.
+    /// For `worker.failed` and `worker.model_unreachable`, the agent that started the worker; `None` for a human.
     pub starter: Option<AgentName>,
 }
 
@@ -79,6 +79,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::PROPOSAL_REVIEWER_FIXED,
         types::INTEGRATION_HELD,
         types::WORKER_FAILED,
+        types::WORKER_MODEL_UNREACHABLE,
     ]
     .contains(&event.event_type)
 }
@@ -471,6 +472,9 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
     if kind == types::WORKER_FAILED {
         return unreachable_worker_rule(event, ctx);
     }
+    if kind == types::WORKER_MODEL_UNREACHABLE {
+        return model_unreachable_rule(event, ctx);
+    }
     if let Some(rule) = request_rule(event, ctx) {
         return Some(rule);
     }
@@ -512,6 +516,29 @@ fn unreachable_worker_rule(
         ),
         _ => return None,
     };
+    let agents = ctx
+        .main_agents
+        .iter()
+        .chain(&ctx.starter)
+        .filter(|starter| starter.as_str() != agent)
+        .cloned()
+        .collect();
+    Some((agents, text, "list_workers"))
+}
+
+/// A worker whose turns keep failing before any token reached the model reaches the main agent and the agent that started it, so they ask the human to fix what Claude Code needs instead of sending the worker more work. Its error is on its row, which `list_workers` shows; the notice holds only the hint.
+fn model_unreachable_rule(
+    event: &Event,
+    ctx: &PushContext,
+) -> Option<(Vec<AgentName>, String, &'static str)> {
+    let agent = event
+        .data
+        .get("agent")
+        .and_then(serde_json::Value::as_str)?;
+    let text = format!(
+        "worker {agent} cannot reach the model; ask the human to {}",
+        crate::agents::turn_errors::MODEL_UNREACHABLE_HINT
+    );
     let agents = ctx
         .main_agents
         .iter()
@@ -1174,6 +1201,43 @@ mod tests {
             ["main"]
         );
         let bare = event(types::WORKER_FAILED, "fold");
+        assert!(notice_for(&bare, &ctx).is_empty());
+    }
+
+    #[test]
+    fn a_worker_that_cannot_reach_the_model_tells_the_main_agent_and_its_starter() {
+        let mut ctx = ctx();
+        ctx.main_agents = [name("main")].into_iter().collect();
+        ctx.starter = Some(name("backend-lead"));
+        let unreachable = |agent: &str| {
+            with_data(
+                event(types::WORKER_MODEL_UNREACHABLE, "fold"),
+                serde_json::json!({"agent": agent, "turns": 3}),
+            )
+        };
+        assert!(is_pushed(&unreachable("backend-worker")));
+        let text = "fold: worker backend-worker cannot reach the model; ask the human to check the Claude Code sign-in, model and usage limit, or run `fld doctor`. Call list_workers.";
+        assert_eq!(
+            sent(&notice_for(&unreachable("backend-worker"), &ctx)),
+            vec![
+                row("main", text, "list_workers"),
+                row("backend-lead", text, "list_workers"),
+            ]
+        );
+        assert_eq!(
+            sent(&notice_for(&unreachable("backend-lead"), &ctx))
+                .into_iter()
+                .map(|(agent, _, _)| agent)
+                .collect::<Vec<_>>(),
+            ["main"]
+        );
+        let longest = "w".repeat(32);
+        assert!(
+            notice_for(&unreachable(&longest), &ctx)
+                .iter()
+                .all(|notice| notice.text.len() <= MAX_NOTICE_LEN)
+        );
+        let bare = event(types::WORKER_MODEL_UNREACHABLE, "fold");
         assert!(notice_for(&bare, &ctx).is_empty());
     }
 

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE worker_processes SET last_error = NULL, last_error_at = NULL, failed_turns = 0\n         WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "e9a8f2795f79d02e6c6e0196509faee2de17d8d106c782a1fcf082fa83aaa84b"
+}

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE worker_processes\n           SET last_error = ?2, last_error_at = ?3,\n               failed_turns = CASE WHEN ?4 THEN 0 ELSE failed_turns + 1 END\n           WHERE id = ?1 AND state IN ('starting', 'working', 'idle')\n           RETURNING failed_turns AS \"failed_turns!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "failed_turns!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "failed_turns"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "dfbeb706b2f97b6735476cf2af59ed6d9eb3a5ae4d63e71d8a66228d46cfa99d"
+}
