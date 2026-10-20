@@ -9,7 +9,7 @@ autotests = false
 [dependencies]
 blake3 = "1.8.7"
 fail = { version = "0.5.1", optional = true }
-fold-core = { version = "0.2.1", path = "../fold-core" }
+fold-core = { version = "0.3.0", path = "../fold-core" }
 ignore = "0.4.33"
 notify = "8.2.0"
 rustix = { version = "1.1.5", features = ["fs"] }

@@ -281,7 +281,7 @@ mod tests {
     fn no_subcommand_prints_the_version_line() {
         let (result, out) = run_with(&["fld"]);
         assert!(result.is_ok());
-        assert_eq!(out, "fld 0.2.1\n");
+        assert_eq!(out, "fld 0.3.0\n");
     }
 
     #[test]
@@ -291,7 +291,7 @@ mod tests {
             panic!("expected a parse failure, got {result:?}");
         };
         assert_eq!(error.kind(), ErrorKind::DisplayVersion);
-        assert_eq!(error.to_string().trim(), "fld 0.2.1");
+        assert_eq!(error.to_string().trim(), "fld 0.3.0");
         assert!(out.is_empty());
     }
 
