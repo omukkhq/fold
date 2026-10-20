@@ -1,16 +1,21 @@
 import type { CheckpointSummary, LiveWorkspace, TaskDetail } from "@/api/tasks";
-import { hasKind } from "@/features/board/attention";
+import {
+  sentText,
+  sentVersion,
+  showsStall,
+  waitText,
+} from "@/features/board/sentVersion";
 import { formatQuiet, formatSince } from "@/format/time";
 
 type ChangeKind = LiveWorkspace["files"][number]["change"];
 
 export interface LiveStrip {
   worker: string;
-  /** `is editing`, or `no edits for 7 min` while the daemon reports the worker stalled. */
+  /** `is editing`; `sent P-1 v1` while the workspace files are the open proposal's newest version; or `no edits for 7 min` while the daemon reports the worker stalled and no sent version waits on others. */
   verb: string;
-  /** The file being edited; null while stalled or unless exactly one file changed. */
+  /** The file being edited; null after a sent version, while stalled or unless exactly one file changed. */
   file: string | null;
-  /** `· 4 files · ck-31 3 min ago · base r7`. */
+  /** `· 4 files · ck-31 3 min ago · base r7`, after what a sent version waits for: `· waits for review · 4 files · …`. */
   rest: string;
   stalled: boolean;
 }
@@ -50,9 +55,9 @@ export function baseText(workspace: { base: string; main?: string }): string {
 }
 
 /**
- * Who is editing what, the files changed, the latest checkpoint and the base. The task payload names the workspace,
- * and its details, activity and checkpoints; the event stream's frame fills in the rest.
- * Null without a workspace.
+ * Who is editing what, or which version the holder sent and what it waits for, then the files changed, the latest checkpoint and the base.
+ * The task payload names the workspace, and its details, activity, checkpoints and proposal; the event stream's frame fills in the rest.
+ * The stall wording shows while no sent version waits on others. Null without a workspace.
  */
 export function liveStrip(
   task: Pick<
@@ -61,6 +66,8 @@ export function liveStrip(
     | "attention"
     | "checkpoints"
     | "claims"
+    | "edits_after_version"
+    | "proposal"
     | "workspace"
     | "workspace_info"
   >,
@@ -75,13 +82,19 @@ export function liveStrip(
   if (worker === null) {
     return null;
   }
-  const stalled = hasKind(task.attention, "stalled");
+  const sent = sentVersion(
+    task.proposal,
+    task.edits_after_version,
+    live,
+    task.attention,
+  );
+  const stalled = showsStall(sent, task.attention);
   const activity = task.activity ?? null;
   const lastEdit = Math.max(
     activity?.at ?? Number.NEGATIVE_INFINITY,
     live?.last_activity_at ?? Number.NEGATIVE_INFINITY,
   );
-  const parts: string[] = [];
+  const parts: string[] = sent === null ? [] : [waitText(sent.waits)];
   if (live) {
     parts.push(files(live.files.length));
   }
@@ -95,13 +108,16 @@ export function liveStrip(
   }
   const [only, ...others] = live?.files ?? [];
   const liveFile = only !== undefined && others.length === 0 ? only.path : null;
+  let verb = "is editing";
+  if (stalled && Number.isFinite(lastEdit)) {
+    verb = formatQuiet(now, lastEdit);
+  } else if (sent !== null) {
+    verb = sentText(sent);
+  }
   return {
     worker,
-    verb:
-      stalled && Number.isFinite(lastEdit)
-        ? formatQuiet(now, lastEdit)
-        : "is editing",
-    file: stalled ? null : (activity?.path ?? liveFile),
+    verb,
+    file: sent !== null || stalled ? null : (activity?.path ?? liveFile),
     rest: parts.length > 0 ? `· ${parts.join(" · ")}` : "",
     stalled,
   };

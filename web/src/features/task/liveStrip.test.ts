@@ -42,6 +42,7 @@ function live(extra: Partial<LiveWorkspace> = {}): LiveWorkspace {
     checkpoints: [],
     proposal: null,
     stalled: false,
+    edits_after_version: null,
     ...extra,
   };
 }
@@ -69,6 +70,8 @@ type StripTask = Pick<
   | "attention"
   | "claims"
   | "checkpoints"
+  | "edits_after_version"
+  | "proposal"
   | "workspace"
   | "workspace_info"
 >;
@@ -87,6 +90,8 @@ function task(extra: Partial<StripTask> = {}): StripTask {
       },
     ],
     checkpoints: [ck("ck-31", 3 * MINUTE)],
+    edits_after_version: null,
+    proposal: null,
     workspace: "ws-2",
     workspace_info: workspace(),
     ...extra,
@@ -145,6 +150,64 @@ describe("liveStrip", () => {
     expect(strip?.verb).toBe("is editing");
   });
 
+  it("says the holder sent the version and what it waits for, never the stall, while the files are that version", () => {
+    const proposal = {
+      id: "P-1",
+      state: "open" as const,
+      version: 1,
+      checks_failed: false,
+      reviews: [],
+    };
+    const sent = task({
+      attention: [{ kind: "stalled" }],
+      proposal,
+      edits_after_version: false,
+    });
+    expect(liveStrip(sent, null, NOW)).toEqual({
+      worker: "frontend/ui",
+      verb: "sent P-1 v1",
+      file: null,
+      rest: "· waits for review · ck-31 3 min ago · base r7 (main r8)",
+      stalled: false,
+    });
+    const frame = live({ proposal: "P-1", edits_after_version: true });
+    expect(liveStrip(sent, frame, NOW)).toMatchObject({
+      verb: "no edits for 12 s",
+      stalled: true,
+    });
+    expect(
+      liveStrip(
+        task({ proposal, edits_after_version: true }),
+        live({ proposal: "P-1", edits_after_version: false }),
+        NOW,
+      )?.rest,
+    ).toBe("· waits for review · 1 file · ck-31 3 min ago · base r7 (main r8)");
+  });
+
+  it("says the stall and the wait while a sent version is back with its author", () => {
+    const back = task({
+      attention: [{ kind: "stalled" }],
+      proposal: {
+        id: "P-1",
+        state: "conflict",
+        version: 1,
+        checks_failed: false,
+        reviews: [],
+      },
+      edits_after_version: false,
+    });
+    expect(liveStrip(back, null, NOW)).toMatchObject({
+      verb: "no edits for 12 s",
+      file: null,
+      rest: "· conflicts with main · ck-31 3 min ago · base r7 (main r8)",
+      stalled: true,
+    });
+    expect(
+      liveStrip({ ...back, activity: null }, null, NOW)?.verb,
+      "without a recorded edit the sent text stays",
+    ).toBe("sent P-1 v1");
+  });
+
   it("is null without a workspace or without anyone working in it", () => {
     expect(liveStrip(task({ workspace: null }), null, NOW)).toBeNull();
     expect(liveStrip(task({ claims: [] }), null, NOW)).toBeNull();
@@ -175,6 +238,8 @@ describe("liveStrip without the task details", () => {
       claims: task().claims,
       workspace: "ws-2",
       workspace_info: null,
+      proposal: null,
+      edits_after_version: null,
     };
     expect(liveStrip(bare, live(), NOW)).toEqual({
       worker: "frontend/ui",

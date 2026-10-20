@@ -42,6 +42,7 @@ export function boardCard(
     attention: [],
     proposal: null,
     activity: null,
+    edits_after_version: null,
     ...over,
   };
 }
@@ -93,6 +94,7 @@ export function taskView(
       "Calculated: no workspace yet and every prerequisite is Done",
     workspace_info: null,
     activity: null,
+    edits_after_version: null,
     changesets: [],
     checkpoints: [],
     proposal: null,
@@ -124,6 +126,7 @@ export function liveWorkspace(
     checkpoints: [],
     proposal: null,
     stalled: false,
+    edits_after_version: null,
     ...over,
   };
 }

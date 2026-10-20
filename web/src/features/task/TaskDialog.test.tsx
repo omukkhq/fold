@@ -667,6 +667,7 @@ describe("the task dialog route", () => {
         id: "P-3",
         state: "open",
         version: 2,
+        checks_failed: false,
         reviews: [{ reviewer: "review", verdict: "approve", version: 2, at }],
       },
       integration: {

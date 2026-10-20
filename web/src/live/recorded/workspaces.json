@@ -34,7 +34,8 @@
         "last_activity_at": 1760000060000,
         "checkpoints": [],
         "proposal": null,
-        "stalled": true
+        "stalled": true,
+        "edits_after_version": null
       },
       "watch": "watching",
       "attention": [
@@ -68,7 +69,8 @@
         "last_activity_at": 1760000030000,
         "checkpoints": [],
         "proposal": null,
-        "stalled": false
+        "stalled": false,
+        "edits_after_version": null
       },
       "watch": "watching",
       "attention": [

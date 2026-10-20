@@ -682,20 +682,32 @@ async fn a_worker_whose_files_are_its_sent_version_never_stalls() {
         .summary
         .id;
     fx.advance(STALL);
-    assert_eq!(fx.check().await, 0, "the version waits, the worker does not stall");
+    assert_eq!(
+        fx.check().await,
+        0,
+        "the version waits, the worker does not stall"
+    );
     assert!(!fx.stalled(id));
     assert!(fx.attention("T-1").await.is_empty());
 
     fs::write(dir.join("README.md"), "# demo\nedited after\n").unwrap();
     fx.handle.live.rescan(id).await.unwrap();
     fx.advance(STALL);
-    assert_eq!(fx.check().await, 1, "an edit after the version counts again");
+    assert_eq!(
+        fx.check().await,
+        1,
+        "an edit after the version counts again"
+    );
     assert!(fx.stalled(id));
     assert_eq!(fx.attention("T-1").await, ["stalled"]);
 
     fs::write(dir.join("README.md"), "# demo\nsent\n").unwrap();
     fx.handle.live.rescan(id).await.unwrap();
-    assert_eq!(fx.check().await, 0, "the scan that found the change cleared it");
+    assert_eq!(
+        fx.check().await,
+        0,
+        "the scan that found the change cleared it"
+    );
     assert!(!fx.stalled(id));
     assert_eq!(
         fx.handle.live.get(id).unwrap().view.proposal,

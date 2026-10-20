@@ -18,7 +18,8 @@
               "last_activity_at": 1760000040000,
               "checkpoints": [],
               "proposal": null,
-              "stalled": false
+              "stalled": false,
+              "edits_after_version": null
             },
             {
               "workspace": "ws-2",
@@ -39,7 +40,8 @@
               "last_activity_at": 1760000030000,
               "checkpoints": [],
               "proposal": null,
-              "stalled": false
+              "stalled": false,
+              "edits_after_version": null
             },
             {
               "workspace": "ws-3",
@@ -51,7 +53,8 @@
               "last_activity_at": 1760000020000,
               "checkpoints": [],
               "proposal": null,
-              "stalled": false
+              "stalled": false,
+              "edits_after_version": null
             }
           ]
         }
@@ -78,7 +81,8 @@
           "last_activity_at": 1760000041500,
           "checkpoints": [],
           "proposal": null,
-          "stalled": false
+          "stalled": false,
+          "edits_after_version": null
         }
       },
       {
@@ -175,7 +179,8 @@
                 }
               ],
               "proposal": null,
-              "stalled": false
+              "stalled": false,
+              "edits_after_version": null
             },
             {
               "workspace": "ws-3",
@@ -187,7 +192,8 @@
               "last_activity_at": 1760000020000,
               "checkpoints": [],
               "proposal": null,
-              "stalled": false
+              "stalled": false,
+              "edits_after_version": null
             }
           ]
         }
@@ -229,7 +235,8 @@
             }
           ],
           "proposal": null,
-          "stalled": false
+          "stalled": false,
+          "edits_after_version": null
         }
       },
       {
@@ -272,7 +279,8 @@
           "last_activity_at": 1760000048500,
           "checkpoints": [],
           "proposal": null,
-          "stalled": false
+          "stalled": false,
+          "edits_after_version": null
         }
       }
     ]

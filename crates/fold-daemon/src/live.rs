@@ -11,8 +11,8 @@ use fold_core::{
     CheckpointId, Clock, EventActor, FoldError, LiveEvent, NewEvent, ProjectConfig, ProjectPaths,
     ProposalId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId, codes,
 };
-use fold_store::{Store, reviews};
 use fold_store::workspaces::{self, Checkpoint, CheckpointKind, WorkspaceKind, WorkspaceState};
+use fold_store::{Store, reviews};
 use fold_vcs::compare::{self as vcs, FileChange, LineCache, State};
 use fold_vcs::ignore::IgnoreRules;
 use fold_vcs::index::StatIndex;
@@ -1299,7 +1299,10 @@ impl Version {
         match vcs::load_flat(objects, tree) {
             Ok(flat) => Self::Tree(flat),
             Err(error) => {
-                tracing::warn!(code = error.code(), "the version tree was not read; the working files count as edited");
+                tracing::warn!(
+                    code = error.code(),
+                    "the version tree was not read; the working files count as edited"
+                );
                 Self::Unreadable
             }
         }
