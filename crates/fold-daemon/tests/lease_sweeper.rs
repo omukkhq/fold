@@ -667,11 +667,12 @@ async fn a_stalled_worker_that_keeps_calling_keeps_a_fresh_lease() {
 async fn a_worker_whose_files_are_its_sent_version_never_stalls() {
     let fx = Fixture::new().await;
     let (id, dir) = fx.create(&fx.frontend, 1).await;
+    fs::write(dir.join("README.md"), "# demo\nsent\n").unwrap();
+    fx.handle.live.rescan(id).await.unwrap();
     fx.advance(STALL);
     assert_eq!(fx.check().await, 1);
     assert!(fx.stalled(id));
 
-    fs::write(dir.join("README.md"), "# demo\nsent\n").unwrap();
     let reviews = fx.handle.reviews(fx.project.registry());
     let proposal = reviews
         .create_proposal(&by(&fx.frontend.worker), t(1), "Change the readme", None)
@@ -681,6 +682,12 @@ async fn a_worker_whose_files_are_its_sent_version_never_stalls() {
         .unwrap()
         .summary
         .id;
+    fx.handle.live.rescan(id).await.unwrap();
+    assert!(
+        !fx.stalled(id),
+        "the scan after the proposal clears it without a new edit"
+    );
+    assert!(fx.attention("T-1").await.is_empty());
     fx.advance(STALL);
     assert_eq!(
         fx.check().await,

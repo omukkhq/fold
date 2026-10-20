@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
+use fold_core::stall::{self, ProposalTurn, WorkspaceFact};
 use fold_core::tree::{ChangeKind as FileChangeKind, ChangeTally, FlatTree};
 use fold_core::{
     CheckpointId, Clock, EventActor, FoldError, LiveEvent, NewEvent, ProjectConfig, ProjectPaths,
@@ -511,6 +512,7 @@ impl LiveState {
             scanner: Some(opened),
             rebased: None,
             reversioned: None,
+            new_version: false,
             initial: LiveWorkspace {
                 workspace,
                 task,
@@ -834,6 +836,8 @@ struct Pipeline {
     rebased: Option<ObjectHash>,
     /// A version tree the open scanner has not loaded yet; `Some(None)` stops the comparison.
     reversioned: Option<Option<ObjectHash>>,
+    /// A proposal command gave a new version that the next applied scan has not seen yet.
+    new_version: bool,
     /// The state before the first scan.
     initial: LiveWorkspace,
     last_activity: Timestamp,
@@ -900,6 +904,7 @@ impl Pipeline {
         if let Some(tree) = round.version {
             self.seed.version = tree;
             self.reversioned = Some(tree);
+            self.new_version = tree.is_some();
         }
         let due = self
             .last_full
@@ -1024,7 +1029,11 @@ impl Pipeline {
         view.summary = tally.summary();
         view.last_activity_at = self.last_activity;
         view.edits_after_version = scanned.edits_after_version;
-        if scanned.moved {
+        // The scan after a new version clears the flag as the stall rule would. A proposal that came back to its author is the stall check's to decide, so only an edit clears the flag then.
+        let turn = std::mem::take(&mut self.new_version).then_some(ProposalTurn::Others);
+        if scanned.moved
+            || stall::present_workspace(view.edits_after_version, turn) == WorkspaceFact::Sent
+        {
             view.stalled = false;
         }
         let warned = current
