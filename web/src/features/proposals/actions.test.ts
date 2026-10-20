@@ -13,7 +13,6 @@ import {
   APPROVE_BODY,
   approveBlock,
   CHECKS_FAILED,
-  canComment,
   humanVerdict,
   integrateBlock,
   showsApproveLine,
@@ -74,16 +73,6 @@ describe("visibleActions", () => {
 
   it("never offers a reject", () => {
     expect(visibleActions(proposal(), "tanim")).not.toContain("reject");
-  });
-});
-
-describe("canComment", () => {
-  it("opens the composer only on the current version of an open proposal for a named human", () => {
-    expect(canComment(proposal(), "tanim", 2)).toBe(true);
-    expect(canComment(proposal(), "tanim", 1)).toBe(false);
-    expect(canComment(proposal(), "tanim", null)).toBe(false);
-    expect(canComment(proposal(), null, 2)).toBe(false);
-    expect(canComment(proposal({ state: "closed" }), "tanim", 2)).toBe(false);
   });
 });
 

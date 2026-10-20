@@ -41,12 +41,12 @@ import {
   actedVersion,
   APPROVE_BODY,
   approveBlock,
-  canComment,
   humanVerdict,
   integrateBlock,
   visibleActions,
   type HumanAction,
 } from "./actions";
+import { commentNote } from "./commentNote";
 import { canEdit, editableFile } from "./edit";
 import { describeFailure, reloadsProposal } from "./errors";
 import { FileEditor } from "./FileEditor";
@@ -57,8 +57,7 @@ import { SidePanel } from "./SidePanel";
 import { CommentComposer, ThreadBox } from "./Threads";
 import { buildThreads, heldLines, placeThreads } from "./threadsModel";
 import {
-  OLD_SIDE_NOTE,
-  commentsOnSide,
+  detailHref,
   emptyChangeText,
   resolveView,
   shownVersion,
@@ -160,7 +159,6 @@ function DiffArea({
     view.kind === "version",
     held,
   );
-  const composer = human !== null && canComment(proposal, human, version);
   const editable = canEdit(proposal, human, view) && editableFile(file);
 
   if (comparison.isPending) return <Skeleton className="min-w-0 flex-1" />;
@@ -228,29 +226,46 @@ function DiffArea({
               <ThreadBox slug={slug} thread={thread} now={now} />
             ) : null;
           }}
-          renderComposer={
-            composer
-              ? (sel) =>
-                  !commentsOnSide(view, sel.side) ? (
-                    <p className="text-code text-text-muted">{OLD_SIDE_NOTE}</p>
-                  ) : (
-                    <CommentComposer
-                      slug={slug}
-                      key={`${sel.path}:${sel.side}:${String(sel.start_line)}:${String(sel.end_line)}`}
-                      selection={sel}
-                      human={human}
-                      failureText={failureText}
-                      onCancel={() => {
-                        setSelection(null);
-                      }}
-                      onSubmit={async (body) => {
-                        await onComment({ ...sel, body });
-                        setSelection(null);
-                      }}
-                    />
-                  )
-              : undefined
-          }
+          renderComposer={(sel) => {
+            const note = commentNote(proposal, human, view, sel.side, sel.path);
+            if (note.kind === "note") {
+              return (
+                <p role="status" className="text-code text-text-muted">
+                  {note.text}
+                  {note.link ? (
+                    <>
+                      {" "}
+                      <HrefLink
+                        href={detailHref(slug, id, note.link.search)}
+                        className={cn(
+                          "rounded-s text-primary-text underline",
+                          focusRing,
+                        )}
+                      >
+                        {note.link.label}
+                      </HrefLink>
+                    </>
+                  ) : null}
+                </p>
+              );
+            }
+            return (
+              <CommentComposer
+                slug={slug}
+                key={`${sel.path}:${sel.side}:${String(sel.start_line)}:${String(sel.end_line)}`}
+                selection={sel}
+                human={note.human}
+                failureText={failureText}
+                onCancel={() => {
+                  setSelection(null);
+                }}
+                onSubmit={async (body) => {
+                  await onComment({ ...sel, body });
+                  setSelection(null);
+                }}
+              />
+            );
+          }}
         />
       )}
       {unplaced.length > 0 ? (

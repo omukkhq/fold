@@ -45,19 +45,6 @@ export function visibleActions(
     : actions;
 }
 
-/** The composer opens only on the current version of an open proposal, for a named human. */
-export function canComment(
-  proposal: ProposalDetail,
-  human: string | null,
-  shownVersion: number | null,
-): boolean {
-  return (
-    human !== null &&
-    proposal.summary.state === "open" &&
-    shownVersion === proposal.summary.current_version
-  );
-}
-
 /** The line under a disabled Approve and Integrate once the integration checks of the current version failed: the daemon refuses that version until its author sends a new one. */
 export const CHECKS_FAILED =
   "The integration checks failed; the author sends a new version.";
