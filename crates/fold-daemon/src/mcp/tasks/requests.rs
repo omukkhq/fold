@@ -110,7 +110,7 @@ pub struct CardInput {
     pub title: String,
     /// The task description in Markdown, in the task template. In message text `#` names a fold item and `@` names a file; the daemon parses nothing.
     pub description: String,
-    /// The label of the area that builds this card, such as backend; the main agent sets it. Approval gives the task this label, and fold sends the ready task to the area's lead. Create the label with create_label first. Leave it out for a task that the main agent routes itself.
+    /// The label of the area that builds this card, such as backend; the main agent sets it. Approval gives the task this label, and fold sends the ready task to the area's lead. Create the label with create_label first; main, the label of the main agent's own area, always exists, and its ready task goes to the main agent, which builds it. Leave it out for a task that the main agent routes itself.
     #[serde(default)]
     pub label: Option<String>,
 }

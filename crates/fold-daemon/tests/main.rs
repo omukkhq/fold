@@ -104,6 +104,7 @@ mod inbox_probe;
 mod integration;
 mod lease_sweeper;
 mod live_state;
+mod main_area;
 mod mcp_activity;
 mod mcp_footer;
 mod mcp_handshake;

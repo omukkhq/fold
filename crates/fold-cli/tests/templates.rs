@@ -100,7 +100,7 @@ const FOLD_TOOLS: [&str; 90] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 157] = [
+const FOLD_ERROR_CODES: [&str; 158] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -258,13 +258,14 @@ const FOLD_ERROR_CODES: [&str; 157] = [
     "checks_running",
     "check_run_not_found",
     "worker_claim_denied",
+    "main_area",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
 const PENDING_ERROR_CODES: [&str; 1] = ["too_large"];
 
 /// The `invalid_request` reasons that have a name.
-const INVALID_REQUEST_REASONS: [&str; 13] = [
+const INVALID_REQUEST_REASONS: [&str; 14] = [
     "self_dependency",
     "checklist_origin",
     "linked_item",
@@ -278,9 +279,10 @@ const INVALID_REQUEST_REASONS: [&str; 13] = [
     "checks_failed",
     "integration_queued",
     "two_areas",
+    "main_approves",
 ];
 
-const NON_TOOL_NAMES: [&str; 37] = [
+const NON_TOOL_NAMES: [&str; 38] = [
     "human_review",
     "fold_failed",
     "left_out",
@@ -318,6 +320,7 @@ const NON_TOOL_NAMES: [&str; 37] = [
     "v3_or_later",
     "review_scope",
     "areas_conflict",
+    "main_approves",
 ];
 
 const SECTIONS: [&str; 14] = [

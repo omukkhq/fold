@@ -672,9 +672,9 @@ async fn status_and_flags_are_checked_columns() {
 async fn label_links_go_with_their_task_or_their_label() {
     let (_dir, store) = seeded().await;
     for sql in [
-        "INSERT INTO labels (id, name, color, created_at) VALUES (1, 'a', 'sage', 0), (2, 'b', 'teal', 0)",
-        "INSERT INTO task_labels (task_id, label_id) VALUES (1, 1), (1, 2), (2, 1), (2, 2)",
-        "DELETE FROM labels WHERE id = 1",
+        "INSERT INTO labels (id, name, color, created_at) VALUES (11, 'a', 'sage', 0), (12, 'b', 'teal', 0)",
+        "INSERT INTO task_labels (task_id, label_id) VALUES (1, 11), (1, 12), (2, 11), (2, 12)",
+        "DELETE FROM labels WHERE id = 11",
     ] {
         exec(&store, sql).await.unwrap();
     }
@@ -685,7 +685,7 @@ async fn label_links_go_with_their_task_or_their_label() {
     assert_eq!(
         count(
             &store,
-            "SELECT COUNT(*) FROM task_labels WHERE task_id = 1 AND label_id = 2"
+            "SELECT COUNT(*) FROM task_labels WHERE task_id = 1 AND label_id = 12"
         )
         .await,
         1

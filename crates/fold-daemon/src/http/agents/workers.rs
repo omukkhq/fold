@@ -31,8 +31,11 @@ pub fn routes() -> OpenApiRouter<AppState> {
 /// The areas and every worker fold runs or ran.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct WorkerList {
-    /// In name order.
+    /// In name order, without the built-in area Main, which has no lead and no profile.
     pub areas: Vec<AreaEntry>,
+    /// The label of the built-in area Main: a task with it belongs to the main agent, which builds it itself, and a human approves its proposal.
+    #[schema(example = "main")]
+    pub main_label: String,
     /// In start order.
     pub workers: Vec<WorkerEntry>,
     /// Each role with the cache time a new worker of the role gets; empty when fold cannot read `.fold/config.toml`.
@@ -395,6 +398,7 @@ pub async fn list_workers(project: Project) -> Result<Json<WorkerList>, ApiError
     });
     Ok(Json(WorkerList {
         areas: areas.into_iter().map(AreaEntry::from).collect(),
+        main_label: fold_core::MAIN_AREA.to_owned(),
         workers: workers
             .into_iter()
             .map(|row| WorkerEntry::new(row, config.as_ref()))

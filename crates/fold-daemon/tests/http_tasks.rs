@@ -585,7 +585,10 @@ async fn reads_and_writes_return_the_declared_shapes() {
         .await;
     assert_eq!(patched["description"], "More tables");
     let labels = fx.ok(Method::GET, "/labels", None).await;
-    assert_eq!(labels, json!({"labels": []}));
+    assert_eq!(
+        labels,
+        json!({"labels": [{"name": "main", "color": "ink"}]})
+    );
 }
 
 #[tokio::test]
