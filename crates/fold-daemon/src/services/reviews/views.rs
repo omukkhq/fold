@@ -59,6 +59,8 @@ pub struct ProposalView {
     pub gates: Vec<GateState>,
     /// An agent that decides reviews, other than the author's, approved the current version and no request for changes came after it. On a task with the human review mark a human approves only then.
     pub agent_approved: bool,
+    /// The task is in the area Main: no review agent reviews it, and a human approves without a reviewer agent first.
+    pub main_task: bool,
     /// The files the selected version changes against its base, in path order.
     pub files: Vec<FileChange>,
     pub totals: Totals,
@@ -136,6 +138,7 @@ impl ReviewService {
             expected_version: Some(selected),
             reviews: &facts.reviews,
             human_review: facts.human_review.as_ref(),
+            main_task: facts.main_task,
             prerequisites: &facts.prerequisites,
         });
         let comparison = self
@@ -161,6 +164,7 @@ impl ReviewService {
             scope_choice,
             gates,
             agent_approved,
+            main_task: facts.main_task,
             files: comparison.files,
             totals: comparison.totals,
             checks,

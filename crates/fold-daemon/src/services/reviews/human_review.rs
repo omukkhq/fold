@@ -15,7 +15,7 @@ use serde_json::json;
 
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
-use crate::services::tasks::task_not_found;
+use crate::services::tasks::{task_in_main_area, task_not_found};
 
 /// An open proposal that is with the reviewer on a marked task whose current version an agent that decides reviews approved and no human the mark accepts approved.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,7 +134,7 @@ impl ReviewService {
     }
 }
 
-/// The open proposals on marked tasks that are with the reviewer and whose current version waits for the human: an agent that decides reviews approved it and no standing approval by a human the mark accepts exists. A human sees a marked proposal once such an agent has approved it; the automatic integration counts the human's approval whenever it was given. Read in one transaction of `read`'s read pool. It decides the `human_review` attention kind, so clients derive nothing.
+/// The open proposals on marked tasks that are with the reviewer and whose current version waits for the human: an agent that decides reviews approved it, or the task is in Main, which no review agent reviews, and no standing approval by a human the mark accepts exists. A human sees a marked proposal once such an agent has approved it; the automatic integration counts the human's approval whenever it was given. Read in one transaction of `read`'s read pool. It decides the `human_review` attention kind, so clients derive nothing.
 pub async fn awaiting_human_review(read: &Store) -> Result<Vec<AwaitingHumanReview>, StoreError> {
     let mut tx = read.read().begin().await?;
     let waiting = awaiting_human_review_in(&mut tx).await?;
@@ -160,8 +160,9 @@ pub async fn awaiting_human_review_in(
             .ok_or(StoreError::Corrupt("proposals.number"))?
             .author
             .agent();
-        let for_human = deciding_approval(&facts, &author)
-            && !human_approval_standing(Some(&row.mark), &facts, None);
+        let agent_first =
+            deciding_approval(&facts, &author) || task_in_main_area(&mut *tx, row.task).await?;
+        let for_human = agent_first && !human_approval_standing(Some(&row.mark), &facts, None);
         if !for_human {
             continue;
         }

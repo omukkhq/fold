@@ -5,7 +5,7 @@ use fold_core::roles::{
     AreaProfile, AreaProfileChange, StartFacts, check_model, default_worker_name, first_turn,
     outside_area, session_uuid,
 };
-use fold_core::tasks::areas::check_new_area;
+use fold_core::tasks::areas::{check_led_area, check_new_area};
 use fold_core::{
     Actor, AgentName, AreaName, FoldError, LabelName, NewEvent, ProjectConfig, ProposalId,
     ReviewBatchId, Role, TaskId, WorkerName, WorkspaceId, codes,
@@ -259,6 +259,7 @@ impl AgentService {
     ) -> Result<AreaRow, AgentError> {
         let starter = self.starter(actor).await?;
         policy::can_update_area(&starter).map_err(FoldError::from)?;
+        check_led_area(name)?;
         let now = self.clock.now();
         let by = actor.event_actor();
         let mut buffer = EventBuffer::new();
@@ -282,8 +283,11 @@ impl AgentService {
         Ok(area)
     }
 
+    /// The areas a lead owns, in name order: every area but Main, which has no lead or profile.
     pub async fn list_areas(&self) -> Result<Vec<AreaRow>, AgentError> {
-        Ok(agents::list_areas(self.store.read()).await?)
+        let mut areas = agents::list_areas(self.store.read()).await?;
+        areas.retain(|area| !area.name.is_main());
+        Ok(areas)
     }
 
     /// The project's worker settings from `.fold/config.toml`, or its defaults when there is no file; `None` when the service knows no project folder or the file does not parse, so a list still answers.
@@ -355,6 +359,9 @@ impl AgentService {
         let starter = self.starter(actor).await?;
         policy::can_start_worker(&starter, role).map_err(FoldError::from)?;
         let area = binding_area(role, &starter, &request)?;
+        if let Some(area) = &area {
+            check_led_area(area)?;
+        }
         if let Some(model) = &request.model {
             check_model(model)?;
         }

@@ -294,17 +294,23 @@ impl Supervisor {
             }
             Role::ReviewLead => {
                 let open = reviews::list_proposals(read, Some(ProposalState::Open), None).await?;
-                let proposals = open
-                    .into_iter()
-                    .filter(|proposal| {
-                        waits_for_review(proposal)
-                            && proposal
-                                .review_claim
-                                .as_ref()
-                                .is_none_or(|holder| !holds(holder))
-                    })
-                    .map(|proposal| proposal.id)
-                    .collect();
+                let mut proposals = Vec::new();
+                for proposal in open {
+                    let waits = waits_for_review(&proposal)
+                        && proposal
+                            .review_claim
+                            .as_ref()
+                            .is_none_or(|holder| !holds(holder));
+                    // A human or the main agent decides a proposal of a task of Main, never the review lead.
+                    if waits
+                        && !tasks::labels_for(read, proposal.task)
+                            .await?
+                            .iter()
+                            .any(|label| label.name.is_main())
+                    {
+                        proposals.push(proposal.id);
+                    }
+                }
                 (Vec::new(), proposals)
             }
             Role::TaskWorker | Role::Reviewer => return Ok(None),

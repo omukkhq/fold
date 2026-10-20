@@ -1050,6 +1050,10 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
         && let Some(row) = reviews::get_proposal(store.read(), proposal).await?
     {
         ctx.author = Some(row.author.agent());
+        ctx.main_task = tasks::labels_for(store.read(), row.task)
+            .await?
+            .iter()
+            .any(|label| label.name.is_main());
         ctx.review_claim = row.review_claim.map(|worker| worker.agent());
         ctx.retired = row.state != reviews::ProposalState::Open;
         if kind == fold_core::events::types::INTEGRATION_SUCCEEDED {

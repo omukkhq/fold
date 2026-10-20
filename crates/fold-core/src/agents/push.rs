@@ -40,6 +40,8 @@ pub struct PushContext {
     pub held_from_agents: bool,
     /// For `worker.failed` and `worker.model_unreachable`, the agent that started the worker; `None` for a human.
     pub starter: Option<AgentName>,
+    /// The event's proposal belongs to a task of the area Main, which no review agent reviews.
+    pub main_task: bool,
 }
 
 /// One line for one agent's Claude Code session. `text` holds public ids and the next tool only.
@@ -552,9 +554,16 @@ fn model_unreachable_rule(
     Some((agents, text, "list_workers"))
 }
 
-/// A ready task nobody claimed goes to whoever starts its builder. The lead of its area starts a task worker; while the area has no lead, the main agent starts one; a task in no area waits for the main agent to give it an area label. Both an approved request card and a dependent of an integrated task turn ready through `task.status_changed`, so this one rule routes them.
+/// A ready task nobody claimed goes to whoever starts its builder. A task of Main goes to the main agent, which claims and builds it itself; the lead of any other area starts a task worker; while the area has no lead, the main agent starts one; a task in no area waits for the main agent to give it an area label. Both an approved request card and a dependent of an integrated task turn ready through `task.status_changed`, so this one rule routes them.
 fn ready_route(task: TaskId, ctx: &PushContext) -> (Vec<AgentName>, String, &'static str) {
     let main = || ctx.main_agents.iter().cloned().collect();
+    if ctx.areas.iter().any(AreaName::is_main) {
+        return (
+            main(),
+            format!("{task} is ready in area main, for you to build"),
+            "claim_task",
+        );
+    }
     if !ctx.area_leads.is_empty() {
         return (
             ctx.area_leads.iter().cloned().collect(),
@@ -652,10 +661,11 @@ fn approved_text(request: RequestId, tasks: &[TaskId]) -> String {
     }
 }
 
-/// Every review lead but the author's agent, then the holder of the review claim.
+/// Every review lead but the author's agent, then the holder of the review claim. No review lead hears of a proposal of a task of Main.
 fn reviewers(ctx: &PushContext) -> Vec<AgentName> {
     ctx.review_leads
         .iter()
+        .filter(|_| !ctx.main_task)
         .filter(|agent| ctx.author.as_ref() != Some(*agent))
         .chain(&ctx.review_claim)
         .cloned()
@@ -719,6 +729,7 @@ mod tests {
             main_agents: BTreeSet::new(),
             held_from_agents: false,
             starter: None,
+            main_task: false,
         }
     }
 
@@ -756,6 +767,50 @@ mod tests {
                     "claim_review"
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn no_review_lead_hears_of_a_proposal_of_a_task_of_main() {
+        let main_task = PushContext {
+            main_task: true,
+            review_claim: None,
+            ..ctx()
+        };
+        for kind in [types::PROPOSAL_OPENED, types::PROPOSAL_VERSION_ADDED] {
+            let event = with_data(event(kind, "main"), json!({"version": 2}));
+            assert!(notice_for(&event, &main_task).is_empty(), "{kind}");
+        }
+        let again = with_data(
+            event(types::PROPOSAL_REVIEW_AGAIN_REQUESTED, "human:ana"),
+            json!({"version": 2}),
+        );
+        assert!(notice_for(&again, &main_task).is_empty());
+    }
+
+    #[test]
+    fn a_ready_task_of_main_goes_to_the_main_agent_to_build() {
+        let status = with_data(
+            event(types::TASK_STATUS_CHANGED, "fold"),
+            json!({"from": "backlog", "to": "todo"}),
+        );
+        let main_ready = ready(None, &[], &["main"]);
+        let expected = vec![row(
+            "lead",
+            "fold: T-12 is ready in area main, for you to build. Call claim_task.",
+            "claim_task",
+        )];
+        assert_eq!(sent(&notice_for(&status, &main_ready)), expected);
+        assert_eq!(
+            sent(&notice_for(&label_added(&["main"]), &main_ready)),
+            expected
+        );
+        assert_eq!(
+            sent(&notice_for(
+                &event(types::TASK_HOLD_CLEARED, "human:ana"),
+                &main_ready
+            )),
+            expected
         );
     }
 

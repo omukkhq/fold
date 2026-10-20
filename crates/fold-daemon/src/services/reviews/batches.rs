@@ -24,10 +24,10 @@ use super::claims::{TAKEN_OVER, already_claimed, take_review_claim};
 use super::comments::{CommentInput, CommentLocation, MAX_BODY_CHARS, check_ranges, check_shape};
 use super::proposals::require_open;
 use super::scopes::{SuggestedScope, check_choices, choose_scope_in_tx};
-use super::verdicts::{BatchCommentLink, ReviewRecord, record_review, verdict_gate};
+use super::verdicts::{BatchCommentLink, ReviewRecord, record_review, review_task, verdict_gate};
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
-use crate::services::tasks::{recompute, worker_row};
+use crate::services::tasks::{recompute, task_in_main_area, worker_row};
 use crate::services::workspaces::{
     ArchiveReason, CARRY_CACHE_ENTRIES, WorkspaceError, WorkspaceRef, WorkspaceView, archive_in_tx,
 };
@@ -417,14 +417,14 @@ impl ReviewService {
                 for &proposal in &proposals {
                     let row =
                         require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
-                    let agent = policy::can_claim_review(actor, standing, &row.author).map_err(
-                        |denied| {
-                            FoldError::from(denied).with_details([
-                                ("proposal", json!(proposal.to_string())),
-                                ("author", json!(row.author.as_str())),
-                            ])
-                        },
-                    )?;
+                    let main_task = task_in_main_area(tx.conn(), row.task).await?;
+                    let agent = policy::can_claim_review(actor, standing, &row.author, main_task)
+                        .map_err(|denied| {
+                        FoldError::from(denied).with_details([
+                            ("proposal", json!(proposal.to_string())),
+                            ("author", json!(row.author.as_str())),
+                        ])
+                    })?;
                     reviewer = Some(agent);
                     rows.push(row);
                 }
@@ -651,11 +651,14 @@ impl ReviewService {
             member_of(&members, batch, verdict.proposal)?;
         }
         let standing = agents::standing_of(read, actor).await?;
+        let mut conn = read.acquire().await.map_err(StoreError::from)?;
         for verdict in &verdicts {
-            if let Some(proposal) = reviews::get_proposal(read, verdict.proposal).await? {
-                verdict_gate(actor, standing, verdict.verdict, &proposal)?;
+            if let Some(proposal) = reviews::get_proposal(&mut *conn, verdict.proposal).await? {
+                let task = review_task(&mut conn, &proposal).await?;
+                verdict_gate(actor, standing, verdict.verdict, &proposal, task)?;
             }
         }
+        drop(conn);
         let checkout = batches::active_batch_checkout(read, batch).await?;
         let mut by_member: BTreeMap<ProposalId, Vec<CommentInput>> = BTreeMap::new();
         let mut notes: Vec<(String, BTreeSet<ProposalId>)> = Vec::new();

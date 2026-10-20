@@ -85,7 +85,7 @@ pub struct CreateTaskInput {
     /// The description in Markdown. Leave it out for an empty one. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub description: Option<String>,
-    /// Names of existing labels to attach. Call create_label first for a new one. At most one may be the label of an area (two_areas); leave the area label out to let the main agent choose the area.
+    /// Names of existing labels to attach. Call create_label first for a new one. At most one may be the label of an area (two_areas); leave the area label out to let the main agent choose the area, or give main for a task the main agent builds itself.
     #[serde(default)]
     pub labels: Vec<String>,
     /// Tasks the new task needs, such as T-3. Each adds one direct dependency.
@@ -166,7 +166,7 @@ pub struct PlannedTaskInput {
     pub title: String,
     /// The task template: summary, Refs, Scope, Out of scope and testable Acceptance.
     pub description: String,
-    /// Existing labels, including the one label of the area that owns this task. At most one may be the label of an area (two_areas).
+    /// Existing labels, including the one label of the area that owns this task, or main for a task the main agent builds itself. At most one may be the label of an area (two_areas).
     #[serde(default)]
     pub labels: Vec<String>,
     /// Prerequisites, each an existing task id such as T-3 or a key in this plan.
@@ -187,6 +187,9 @@ pub struct PlannedTaskInput {
     /// Plain checklist steps to create with the task, in order, so they exist before any worker sees it. Do not add them with add_checklist_item after the plan.
     #[serde(default)]
     pub checklist: Vec<PlannedChecklistItemInput>,
+    /// For a task with the label main only: true when the user said with this plan that you approve the task's proposal yourself. fold then leaves the task's human review mark off; without it a human approves every task of main. Never set it on your own judgement, and do not combine it with human_review.
+    #[serde(default)]
+    pub main_approves: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -749,6 +752,7 @@ async fn create_task_plan(
                         checklist: item.checklist,
                     })
                     .collect(),
+                main_approves: task.main_approves,
             })
         })
         .collect::<Result<Vec<_>, FoldError>>()?;

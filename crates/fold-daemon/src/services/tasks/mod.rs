@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use fold_core::events::types;
-use fold_core::tasks::areas::{areas_conflict, check_one_area};
+use fold_core::tasks::areas::{areas_conflict, check_one_area, in_main_area};
 use fold_core::{
     Actor, AreaName, ChecklistName, Clock, DependencyOrigin, EventError, FoldError, HoldMark,
     IdKind, LabelColor, LabelName, NewEvent, ProjectPaths, TaskDescription, TaskId, TaskKind,
@@ -508,8 +508,22 @@ async fn require_labels(tx: &mut WriteTx, names: &[LabelName]) -> Result<(), Tas
     ))
 }
 
-/// Creates a task of `kind` and its label links inside the caller's transaction and appends `task.created`, whose data names the kind of a task without a proposal or a human task. Task creation, request approval and the sync task of a conflicted pull call it, so each adds its edges and links in the same transaction. The caller runs `recompute` on the new task before it commits, once every edge is in place.
+/// Creates a task of `kind` and its label links inside the caller's transaction and appends `task.created`, whose data names the kind of a task without a proposal or a human task. A task created in Main gets fold's human review mark ([`mark_main_task`]). Task creation, request approval and the sync task of a conflicted pull call it, so each adds its edges and links in the same transaction. The caller runs `recompute` on the new task before it commits, once every edge is in place.
 pub(crate) async fn create_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    actor: &Actor,
+    input: &CreateTask,
+    kind: TaskKind,
+    now: Timestamp,
+) -> Result<TaskId, TaskError> {
+    let id = insert_in_tx(tx, buffer, actor, input, kind, now).await?;
+    mark_main_task(tx, buffer, id, in_main_area(&input.labels), now).await?;
+    Ok(id)
+}
+
+/// [`create_in_tx`] without the mark of Main, for a plan, which sets its own marks first.
+pub(crate) async fn insert_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
     actor: &Actor,
@@ -573,6 +587,7 @@ async fn update_in_tx(
         .as_ref()
         .filter(|description| **description != row.description);
     let mut labels_added: Vec<&str> = Vec::new();
+    let mut leaving_main = false;
     let new_labels = match &patch.labels {
         Some(names) => {
             let current: BTreeSet<LabelName> = tasks::labels_for_conn(tx.conn(), id)
@@ -581,6 +596,8 @@ async fn update_in_tx(
                 .map(|label| label.name)
                 .collect();
             let wanted: BTreeSet<LabelName> = names.iter().cloned().collect();
+            leaving_main =
+                current.iter().any(LabelName::is_main) && !wanted.iter().any(LabelName::is_main);
             labels_added = names
                 .iter()
                 .filter(|name| !current.contains(*name))
@@ -623,9 +640,84 @@ async fn update_in_tx(
     if let Some(names) = new_labels {
         tasks::replace_labels(tx, id, names).await?;
     }
+    let entering_main = labels_added.contains(&fold_core::MAIN_AREA);
     let event = NewEvent::new(types::TASK_UPDATED, actor.event_actor())?
         .task(id)
         .data(json!({"fields": fields, "labels_added": labels_added}))?;
     buffer.append(tx, &event, now).await?;
+    mark_main_task(tx, buffer, id, entering_main, now).await?;
+    unmark_main_task(tx, buffer, id, leaving_main, now).await?;
     Ok(())
+}
+
+/// Takes fold's own mark of Main off a task that leaves Main (`leaving`), with `task.human_review_cleared` by fold, so the review agents review it again; a mark a person set stays (`policy::main_area_unmark`).
+async fn unmark_main_task(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    task: TaskId,
+    leaving: bool,
+    now: Timestamp,
+) -> Result<(), TaskError> {
+    if !leaving {
+        return Ok(());
+    }
+    let current = tasks::fetch(tx.conn(), task)
+        .await?
+        .ok_or_else(|| task_not_found(task))?
+        .human_review;
+    if !policy::main_area_unmark(current.as_ref(), leaving) {
+        return Ok(());
+    }
+    tasks::clear_human_review(tx, task, now).await?;
+    let event = NewEvent::new(
+        types::TASK_HUMAN_REVIEW_CLEARED,
+        fold_core::EventActor::fold(),
+    )?
+    .task(task)
+    .data(json!({"reviewer": null, "reason": policy::MAIN_AREA_REASON}))?;
+    buffer.append(tx, &event, now).await?;
+    Ok(())
+}
+
+/// Gives a task that comes into Main (`entering`) fold's human review mark, with `task.human_review_set`, unless it has a mark: no review agent reviews a task of Main, so a human approves it until a human clears the mark (`policy::main_area_mark`).
+pub(crate) async fn mark_main_task(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    task: TaskId,
+    entering: bool,
+    now: Timestamp,
+) -> Result<(), TaskError> {
+    if !entering {
+        return Ok(());
+    }
+    let current = tasks::fetch(tx.conn(), task)
+        .await?
+        .ok_or_else(|| task_not_found(task))?
+        .human_review;
+    let Some(mark) = policy::main_area_mark(current.as_ref(), entering) else {
+        return Ok(());
+    };
+    tasks::set_human_review(tx, task, &mark, now).await?;
+    let event = NewEvent::new(types::TASK_HUMAN_REVIEW_SET, mark.set_by.clone())?
+        .task(task)
+        .data(json!({
+            "reviewer": null,
+            "reason": mark.reason,
+            "set_by": mark.set_by.as_str(),
+        }))?;
+    buffer.append(tx, &event, now).await?;
+    Ok(())
+}
+
+/// Whether `task` carries the label of Main, read inside the caller's snapshot.
+pub(crate) async fn task_in_main_area(
+    conn: &mut SqliteConnection,
+    task: TaskId,
+) -> Result<bool, StoreError> {
+    let labels: Vec<LabelName> = tasks::labels_for_conn(conn, task)
+        .await?
+        .into_iter()
+        .map(|label| label.name)
+        .collect();
+    Ok(in_main_area(&labels))
 }

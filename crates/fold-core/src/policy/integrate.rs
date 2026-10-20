@@ -5,7 +5,8 @@ use super::{AgentStanding, can_human_approve};
 use crate::agents::{AgentName, HumanName};
 use crate::error::{FoldError, codes};
 use crate::reviews::{
-    HumanReviewMark, ReviewFact, Verdict, counted_approval, human_approval_standing, latest_verdict,
+    HumanReviewMark, ReviewFact, Verdict, counted_approval, human_approval_standing,
+    latest_verdict, main_approval,
 };
 use crate::{TaskId, TaskStatus};
 
@@ -41,6 +42,8 @@ pub struct IntegrateInput<'a> {
     /// The reviews of the current version only, because approvals belong to the version they reviewed.
     pub reviews: &'a [ReviewFact],
     pub human_review: Option<&'a HumanReviewMark>,
+    /// The task is in the area Main: a human approves it without a reviewer agent first, and without the human review mark the main agent's approval of its own proposal counts.
+    pub main_task: bool,
     /// The status of each direct prerequisite.
     pub prerequisites: &'a [(TaskId, TaskStatus)],
 }
@@ -239,7 +242,10 @@ fn approval(input: &IntegrateInput<'_>) -> Option<GateRefusal> {
         Some(Verdict::RequestChanges) => Some(GateRefusal::ChangesRequested),
         Some(Verdict::Reject) => Some(GateRefusal::NotApproved),
         Some(Verdict::Approve | Verdict::Comment) | None
-            if counted_approval(input.reviews, &input.proposal.author) =>
+            if counted_approval(input.reviews, &input.proposal.author)
+                || (input.main_task
+                    && input.human_review.is_none()
+                    && main_approval(input.reviews)) =>
         {
             None
         }
@@ -250,7 +256,13 @@ fn approval(input: &IntegrateInput<'_>) -> Option<GateRefusal> {
 /// A human who integrates approves in the same action, so on a marked task the human integrates only after a reviewer agent approved the version, as [`can_human_approve`] decides for an approval.
 fn human_review(input: &IntegrateInput<'_>) -> Option<GateRefusal> {
     if matches!(input.caller, CallerFacts::Human(_))
-        && can_human_approve(input.human_review, input.reviews, &input.proposal.author).is_err()
+        && can_human_approve(
+            input.human_review,
+            input.reviews,
+            &input.proposal.author,
+            input.main_task,
+        )
+        .is_err()
     {
         return Some(GateRefusal::AgentApprovalRequired);
     }
@@ -375,6 +387,7 @@ mod tests {
         expected_version: Option<u32>,
         reviews: Vec<ReviewFact>,
         mark: Option<HumanReviewMark>,
+        main_task: bool,
         prerequisites: Vec<(TaskId, TaskStatus)>,
     }
 
@@ -387,6 +400,7 @@ mod tests {
                 expected_version: None,
                 reviews: vec![review(Verdict::Approve, "decider", 1)],
                 mark: None,
+                main_task: false,
                 prerequisites: vec![(task(2), TaskStatus::Done)],
             }
         }
@@ -403,6 +417,7 @@ mod tests {
                 expected_version: self.expected_version,
                 reviews: &self.reviews,
                 human_review: self.mark.as_ref(),
+                main_task: self.main_task,
                 prerequisites: &self.prerequisites,
             })
         }
@@ -824,6 +839,7 @@ mod tests {
             expected_version: Some(1),
             reviews: Vec::new(),
             mark: Some(mark(None)),
+            main_task: false,
             prerequisites: vec![(task(3), TaskStatus::Todo)],
         };
         assert_eq!(case.run(can_integrate), Err(GateRefusal::ProposalNotOpen));
@@ -1006,15 +1022,17 @@ mod tests {
             prop::option::of(1_u32..=3),
             reviews(),
             mark_strategy(),
+            prop::bool::weighted(0.3),
             prop::collection::vec(status(), 0..3),
         )
             .prop_map(
-                |(caller, open, expected_version, reviews, mark, statuses)| Case {
+                |(caller, open, expected_version, reviews, mark, main_task, statuses)| Case {
                     caller,
                     open,
                     expected_version,
                     reviews,
                     mark,
+                    main_task,
                     prerequisites: statuses
                         .into_iter()
                         .zip(2..)
@@ -1047,7 +1065,11 @@ mod tests {
             review.verdict == Verdict::Approve && last_request.is_none_or(|seq| review.seq > seq)
         };
         let counted = case.reviews.iter().filter(standing).any(|review| {
-            matches!(review.approver, Approver::Human(_)) || review.reviewer.as_str() == "review"
+            matches!(review.approver, Approver::Human(_))
+                || review.reviewer.as_str() == "review"
+                || (case.main_task
+                    && case.mark.is_none()
+                    && review.approver == Approver::DecidingAgent)
         });
         let mut latest: Option<&ReviewFact> = None;
         for review in &case.reviews {
@@ -1064,7 +1086,7 @@ mod tests {
             .any(|review| review.reviewer.as_str() == "review");
         let human_ok = match &case.mark {
             None => true,
-            Some(_) if human_caller.is_some() && !agent_approved => false,
+            Some(_) if human_caller.is_some() && !agent_approved && !case.main_task => false,
             Some(mark) => {
                 let accepts = |who: &str| mark.reviewer.as_ref().is_none_or(|r| r.as_str() == who);
                 human_caller.is_some_and(accepts)
@@ -1096,6 +1118,7 @@ mod tests {
                 expected_version: Some(2),
                 reviews,
                 human_review: Some(&marked),
+                main_task: false,
                 prerequisites: &[],
             })
         };
@@ -1112,6 +1135,67 @@ mod tests {
         let error = FoldError::from(GateRefusal::AgentApprovalRequired);
         assert_eq!(error.code(), codes::AGENT_APPROVAL_REQUIRED);
         assert!(error.hint().unwrap_or_default().contains("review lead"));
+    }
+
+    #[test]
+    fn a_task_of_main_takes_a_human_approval_alone_or_the_authors_on_the_users_word() {
+        use Verdict::Approve;
+        let main_case = |caller: CallerFacts, reviews: Vec<ReviewFact>, marked: bool| Case {
+            caller,
+            reviews,
+            mark: marked.then(|| mark(None)),
+            main_task: true,
+            ..Case::new()
+        };
+        assert_eq!(
+            main_case(human("tanim"), vec![], true).run(can_integrate),
+            Ok(())
+        );
+        assert_eq!(
+            main_case(
+                CallerFacts::Automatic,
+                vec![review(Approve, "human:tanim", 1)],
+                true
+            )
+            .run(can_integrate),
+            Ok(())
+        );
+        assert_eq!(
+            main_case(
+                CallerFacts::Automatic,
+                vec![review(Approve, "author-decider", 1)],
+                true
+            )
+            .run(can_integrate),
+            Err(GateRefusal::NotApproved)
+        );
+        assert_eq!(
+            main_case(
+                CallerFacts::Automatic,
+                vec![review(Approve, "author-decider", 1)],
+                false
+            )
+            .run(can_integrate),
+            Ok(())
+        );
+        assert_eq!(
+            main_case(
+                agent_caller(AUTHOR, None),
+                vec![review(Approve, "author-decider", 1)],
+                false
+            )
+            .run(can_integrate),
+            Err(GateRefusal::AuthorCannotIntegrate)
+        );
+        assert_eq!(
+            Case {
+                caller: CallerFacts::Automatic,
+                reviews: vec![review(Approve, "author-decider", 1)],
+                ..Case::new()
+            }
+            .run(can_integrate),
+            Err(GateRefusal::NotApproved)
+        );
     }
 
     proptest! {

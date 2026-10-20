@@ -851,6 +851,7 @@ async fn a_plan_links_existing_work_and_validates_named_human_review() {
         human_review: None,
         blocker: None,
         checklist: Vec::new(),
+        main_approves: false,
     };
     let base = fx
         .tasks

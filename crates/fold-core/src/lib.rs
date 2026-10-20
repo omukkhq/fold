@@ -25,7 +25,7 @@ pub use agents::presence::{ACTIVE_WINDOW_MS, Presence, SessionFact, presence_of}
 pub use agents::roles::{
     CacheTtl, Role, WorkerState, main_prompt, shared_prompt, with_shared_rules,
 };
-pub use agents::{AgentName, AreaName, HumanName, MAIN_TAG, NameError, Tag, WorkerName};
+pub use agents::{AgentName, AreaName, HumanName, MAIN_AREA, MAIN_TAG, NameError, Tag, WorkerName};
 pub use clock::{Clock, ManualClock};
 pub use config::{CONFIG_TEMPLATE, GitConfig, IntegrationConfig, ProjectConfig, RemoteConfig};
 pub use error::{FoldError, codes};

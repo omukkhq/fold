@@ -2775,6 +2775,59 @@ async fn a_review_lead_hears_at_a_daemon_start_of_the_proposals_that_wait_for_a_
 }
 
 #[tokio::test]
+async fn a_review_lead_catch_up_leaves_out_the_proposals_of_tasks_of_main() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let started = harness
+        .call(MAIN, "start_worker", json!({"role": "review_lead"}))
+        .await;
+    let review_lead = started["worker"]["name"].as_str().unwrap().to_owned();
+    until_state(&harness, &review_lead, WorkerState::Idle).await;
+    let lead = start_lead(&mut harness, "web").await;
+    harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    until_state(&harness, "web-worker", WorkerState::Idle).await;
+    harness.connect("web-worker").await;
+    let work = harness.start_work("web-worker", "T-1").await;
+    std::fs::write(work.dir.join("page.html"), "<p>page</p>\n").unwrap();
+    let proposal = harness.propose("web-worker", &work, "Draw the page").await;
+    until_state(&harness, "web-worker", WorkerState::Stopped).await;
+    let notes = harness
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Write the agent notes", "labels": ["main"]}),
+        )
+        .await;
+    let notes = notes["id"].as_str().unwrap().to_owned();
+    let work = harness.start_work(MAIN, &notes).await;
+    std::fs::write(work.dir.join("AGENTS.md"), "# Notes\n").unwrap();
+    let main_proposal = harness.propose(MAIN, &work, "Write the agent notes").await;
+    until_state(&harness, &review_lead, WorkerState::Idle).await;
+    let review_runs = fake.runs_of(&review_lead).len();
+
+    harness.restart().await;
+    let runs = until_runs(&fake, &review_lead, review_runs + 1, 2).await;
+    let caught_up = user_turns(&runs[review_runs]);
+    assert_eq!(caught_up.len(), 1, "{caught_up:?}");
+    assert!(
+        caught_up[0].contains(&format!(
+            "These open proposals wait for a review: {proposal}."
+        )),
+        "{}",
+        caught_up[0]
+    );
+    assert!(!caught_up[0].contains(&main_proposal), "{}", caught_up[0]);
+}
+
+#[tokio::test]
 async fn a_catch_up_names_in_ready_order_only_the_ready_tasks_of_the_area_that_no_live_worker_holds()
  {
     let fake = FakeClaude::new("result");

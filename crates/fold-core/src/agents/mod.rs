@@ -22,6 +22,9 @@ const RESERVED_AGENT_NAMES: &[&str] = &[
 /// The tag of the main agent: the user's own interactive session, which `fld claude` starts. Only the agent with this tag does the main agent's work, and fold sends it the new requests and the ready tasks no area lead owns.
 pub const MAIN_TAG: &str = "main";
 
+/// The name of the built-in area Main and of the label that puts a task in it. Main is the main agent's own: it has no lead, no task worker and no profile, and no review agent reviews its tasks.
+pub const MAIN_AREA: &str = "main";
+
 /// The messages never repeat the rejected text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum NameError {
@@ -105,6 +108,17 @@ segment_newtype!(
 impl Tag {
     pub fn is_main(&self) -> bool {
         self.0 == MAIN_TAG
+    }
+}
+
+impl AreaName {
+    /// The built-in area Main, which every project has.
+    pub fn main() -> Self {
+        Self(MAIN_AREA.to_owned())
+    }
+
+    pub fn is_main(&self) -> bool {
+        self.0 == MAIN_AREA
     }
 }
 

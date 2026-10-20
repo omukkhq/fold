@@ -19,8 +19,8 @@ mod workers;
 
 pub use batches::can_review_batch;
 pub use human_review::{
-    CHECKS_FILE_REASON, MarkChange, can_clear_human_review, can_edit_as_human, can_human_approve,
-    can_set_human_review, checks_file_mark,
+    CHECKS_FILE_REASON, MAIN_AREA_REASON, MarkChange, can_clear_human_review, can_edit_as_human,
+    can_human_approve, can_set_human_review, checks_file_mark, main_area_mark, main_area_unmark,
 };
 pub use integrate::{
     CallerFacts, Gate, GateRefusal, GateState, GateStatus, IntegrateInput, ProposalFacts,
@@ -62,6 +62,22 @@ impl AgentStanding {
     /// Approving, rejecting and integrating decide a proposal's fate. The main agent and the review lead act for the user, and a reviewer reviews for the review lead that started it; an area lead and a task worker only comment and ask for changes.
     pub fn decides_reviews(self) -> bool {
         self.is_main_agent() || matches!(self.role, Some(Role::ReviewLead | Role::Reviewer))
+    }
+}
+
+/// The facts of a proposal's task that decide who reviews it. A task in the built-in area Main is the main agent's own preparation work, so no review agent reviews it: a human approves its proposal, and the main agent approves only while the task has no human review mark. fold puts the mark on every task that comes into Main and only a human takes it off, so its absence is the user's word for that task; a plan the user agreed to can leave it off with `main_approves`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ReviewTask {
+    /// The task carries the label of Main.
+    pub main: bool,
+    /// The task has the human review mark.
+    pub marked: bool,
+}
+
+impl ReviewTask {
+    /// The main agent decides the proposal of this task itself.
+    pub fn main_approves(self) -> bool {
+        self.main && !self.marked
     }
 }
 
@@ -327,12 +343,13 @@ pub fn can_send_message(actor: &Actor) -> Result<(), PolicyDenied> {
     }
 }
 
-/// A reviewer judges someone else's work, so no worker of the author's agent reviews it, whatever its role. `comment` and `request_changes` are open to every other agent and to any human; `approve` and `reject` decide the proposal's fate, so they need an agent that [decides reviews](AgentStanding::decides_reviews) or a human. The system never reviews. `standing` is the acting agent's. It returns the admitted reviewer.
+/// A reviewer judges someone else's work, so no worker of the author's agent reviews it, whatever its role. `comment` and `request_changes` are open to every other agent and to any human; `approve` and `reject` decide the proposal's fate, so they need an agent that [decides reviews](AgentStanding::decides_reviews) or a human. The system never reviews. On a task of Main (`task`) only a human decides, or the main agent while the task has no human review mark, [its own proposal](ReviewTask::main_approves) included; every other agent is refused with `main_area`. `standing` is the acting agent's. It returns the admitted reviewer.
 pub fn can_submit_verdict<'a>(
     actor: &'a Actor,
     standing: AgentStanding,
     verdict: Verdict,
     author: &WorkerName,
+    task: ReviewTask,
 ) -> Result<Reviewer<'a>, PolicyDenied> {
     let agent = match actor {
         Actor::Human { name } => return Ok(Reviewer::Human(name)),
@@ -345,7 +362,18 @@ pub fn can_submit_verdict<'a>(
         }
         Actor::Agent(agent) => agent,
     };
+    let main_decides = task.main_approves() && standing.is_main_agent();
     if author.belongs_to(&agent.agent) {
+        if main_decides && verdict == Verdict::Approve {
+            return Ok(Reviewer::Agent(agent));
+        }
+        if task.main {
+            return Err(PolicyDenied {
+                code: codes::AUTHOR_CANNOT_REVIEW,
+                message: "the main agent approves its own proposal of a task of main only when the task has no human review mark",
+                hint: "a human approves it, or clears the task's human review mark when you may approve it yourself; call wait_for_events for the review",
+            });
+        }
         return Err(PolicyDenied {
             code: codes::AUTHOR_CANNOT_REVIEW,
             message: "the author's agent cannot review its own proposal",
@@ -354,6 +382,8 @@ pub fn can_submit_verdict<'a>(
     }
     match verdict {
         Verdict::Comment | Verdict::RequestChanges => Ok(Reviewer::Agent(agent)),
+        Verdict::Approve | Verdict::Reject if main_decides => Ok(Reviewer::Agent(agent)),
+        Verdict::Approve | Verdict::Reject if task.main => Err(main_review_denied()),
         Verdict::Approve | Verdict::Reject if standing.decides_reviews() => {
             Ok(Reviewer::Agent(agent))
         }
@@ -365,11 +395,12 @@ pub fn can_submit_verdict<'a>(
     }
 }
 
-/// A review is a second agent's look at the work, so the author's agent never claims its own proposal through any of its workers. A claim lets its holder check out, fix and verdict the proposal for the user, so only the main agent and the review lead claim one, for a review of their own; the review lead gives a reviewer its claims when it starts it, and the reviewer never claims. An area lead or a task worker asks the review lead instead. Only an agent's worker holds a claim. `standing` is the acting agent's. It returns the admitted agent, which becomes the reviewer.
+/// A review is a second agent's look at the work, so the author's agent never claims its own proposal through any of its workers. A claim lets its holder check out, fix and verdict the proposal for the user, so only the main agent and the review lead claim one, for a review of their own; the review lead gives a reviewer its claims when it starts it, and the reviewer never claims. An area lead or a task worker asks the review lead instead. Nobody claims the review of a task of Main (`main_task`), as [`can_assign_review`] says. Only an agent's worker holds a claim. `standing` is the acting agent's. It returns the admitted agent, which becomes the reviewer.
 pub fn can_claim_review<'a>(
     actor: &'a Actor,
     standing: AgentStanding,
     author: &WorkerName,
+    main_task: bool,
 ) -> Result<&'a AgentActor, PolicyDenied> {
     match actor {
         Actor::Agent(agent) if author.belongs_to(&agent.agent) => Err(PolicyDenied {
@@ -378,6 +409,7 @@ pub fn can_claim_review<'a>(
             hint: "ask another agent to call claim_review",
         }),
         Actor::Agent(_) if standing.role == Some(Role::Reviewer) => Err(worker_claim_denied()),
+        Actor::Agent(_) if main_task => Err(main_review_denied()),
         Actor::Agent(agent) if standing.decides_reviews() => Ok(agent),
         Actor::Agent(_) => Err(PolicyDenied {
             code: codes::INTEGRATOR_REQUIRED,
@@ -389,6 +421,23 @@ pub fn can_claim_review<'a>(
             message: "only an agent's worker can claim a review",
             hint: "ask an agent to claim the review with claim_review",
         }),
+    }
+}
+
+/// A task of Main is the main agent's own preparation work, such as the project's checks or its agent notes, so no review agent reviews it: the review lead claims no review of it and starts no reviewer for it, and a human approves it. `main_task` is whether the proposal's task is in Main.
+pub fn can_assign_review(main_task: bool) -> Result<(), PolicyDenied> {
+    if main_task {
+        Err(main_review_denied())
+    } else {
+        Ok(())
+    }
+}
+
+fn main_review_denied() -> PolicyDenied {
+    PolicyDenied {
+        code: codes::MAIN_AREA,
+        message: "a proposal of a task of main is approved by a human, or by the main agent when the user said so; no review agent reviews it",
+        hint: "leave this proposal to a human; call list_proposals and review the proposals of the other areas",
     }
 }
 
@@ -697,7 +746,8 @@ mod tests {
         ];
         for (case, actor, standing, may_comment, may_decide) in cases {
             for verdict in Verdict::ALL {
-                let result = can_submit_verdict(&actor, standing, verdict, &author);
+                let result =
+                    can_submit_verdict(&actor, standing, verdict, &author, ReviewTask::default());
                 let allowed = match verdict {
                     Verdict::Comment | Verdict::RequestChanges => may_comment,
                     Verdict::Approve | Verdict::Reject => may_decide,
@@ -711,7 +761,13 @@ mod tests {
             }
         }
         for verdict in Verdict::ALL {
-            let result = can_submit_verdict(&Actor::System, MAIN, verdict, &author);
+            let result = can_submit_verdict(
+                &Actor::System,
+                MAIN,
+                verdict,
+                &author,
+                ReviewTask::default(),
+            );
             assert_eq!(
                 outcome(result),
                 Some(codes::HUMAN_REQUIRED),
@@ -719,15 +775,114 @@ mod tests {
             );
         }
         let other = agent("frontend", &[]);
-        let admitted =
-            can_submit_verdict(&other, UNSUPERVISED, Verdict::RequestChanges, &author).unwrap();
+        let admitted = can_submit_verdict(
+            &other,
+            UNSUPERVISED,
+            Verdict::RequestChanges,
+            &author,
+            ReviewTask::default(),
+        )
+        .unwrap();
         assert!(matches!(admitted, Reviewer::Agent(agent) if agent.agent.as_str() == "frontend"));
         let tanim = human();
-        let admitted = can_submit_verdict(&tanim, UNSUPERVISED, Verdict::Reject, &author).unwrap();
+        let admitted = can_submit_verdict(
+            &tanim,
+            UNSUPERVISED,
+            Verdict::Reject,
+            &author,
+            ReviewTask::default(),
+        )
+        .unwrap();
         assert!(matches!(admitted, Reviewer::Human(name) if name.as_str() == "tanim"));
-        let denied =
-            can_submit_verdict(&other, UNSUPERVISED, Verdict::Approve, &author).unwrap_err();
+        let denied = can_submit_verdict(
+            &other,
+            UNSUPERVISED,
+            Verdict::Approve,
+            &author,
+            ReviewTask::default(),
+        )
+        .unwrap_err();
         assert!(denied.hint().contains("review lead"));
+    }
+
+    #[test]
+    fn on_a_task_of_main_only_a_human_or_the_main_agent_on_the_users_word_decides() {
+        let author = worker("main");
+        let marked = ReviewTask {
+            main: true,
+            marked: true,
+        };
+        let cleared = ReviewTask {
+            main: true,
+            marked: false,
+        };
+        let main = agent("main", &["main"]);
+        let denied =
+            can_submit_verdict(&main, MAIN, Verdict::Approve, &author, marked).unwrap_err();
+        assert_eq!(denied.code(), codes::AUTHOR_CANNOT_REVIEW);
+        assert!(denied.hint().contains("human"));
+        let admitted = can_submit_verdict(&main, MAIN, Verdict::Approve, &author, cleared).unwrap();
+        assert!(matches!(admitted, Reviewer::Agent(agent) if agent.agent.as_str() == "main"));
+        for verdict in [Verdict::Comment, Verdict::RequestChanges, Verdict::Reject] {
+            let result = can_submit_verdict(&main, MAIN, verdict, &author, cleared);
+            assert_eq!(
+                outcome(result),
+                Some(codes::AUTHOR_CANNOT_REVIEW),
+                "{verdict}"
+            );
+        }
+        let other_main =
+            can_submit_verdict(&main, MAIN, Verdict::Reject, &worker("web-worker"), cleared);
+        assert_eq!(outcome(other_main), None);
+        let review = agent("review", &[]);
+        for (standing, task) in [
+            (supervised(Role::ReviewLead), marked),
+            (supervised(Role::ReviewLead), cleared),
+            (supervised(Role::Reviewer), cleared),
+            (MAIN, marked),
+        ] {
+            for verdict in [Verdict::Approve, Verdict::Reject] {
+                let result = can_submit_verdict(&review, standing, verdict, &author, task);
+                assert_eq!(
+                    outcome(result),
+                    Some(codes::MAIN_AREA),
+                    "{standing:?} {verdict}"
+                );
+            }
+            let result =
+                can_submit_verdict(&review, standing, Verdict::RequestChanges, &author, task);
+            assert_eq!(outcome(result), None, "{standing:?}");
+        }
+        let tanim = human();
+        for task in [marked, cleared] {
+            let result = can_submit_verdict(
+                &tanim,
+                AgentStanding::NO_RIGHTS,
+                Verdict::Approve,
+                &author,
+                task,
+            );
+            assert_eq!(outcome(result), None);
+        }
+        assert!(!ReviewTask::default().main_approves());
+        assert!(!marked.main_approves());
+        assert!(cleared.main_approves());
+    }
+
+    #[test]
+    fn nobody_claims_or_assigns_the_review_of_a_task_of_main() {
+        let author = worker("main");
+        let review = agent("review", &[]);
+        let result = can_claim_review(&review, supervised(Role::ReviewLead), &author, true);
+        assert_eq!(outcome(result), Some(codes::MAIN_AREA));
+        let main = agent("main", &["main"]);
+        let result = can_claim_review(&main, MAIN, &author, true);
+        assert_eq!(outcome(result), Some(codes::AUTHOR_CANNOT_REVIEW));
+        let result = can_claim_review(&review, supervised(Role::Reviewer), &author, true);
+        assert_eq!(outcome(result), Some(codes::WORKER_CLAIM_DENIED));
+        assert!(can_claim_review(&review, supervised(Role::ReviewLead), &author, false).is_ok());
+        assert_eq!(outcome(can_assign_review(true)), Some(codes::MAIN_AREA));
+        assert_eq!(can_assign_review(false), Ok(()));
     }
 
     #[test]
@@ -754,7 +909,7 @@ mod tests {
             Some(codes::ACTOR_CANNOT_CLAIM),
         ];
         for ((case, actor), expected) in actors().into_iter().zip(expected) {
-            let result = can_claim_review(&actor, standing_of(case), &author);
+            let result = can_claim_review(&actor, standing_of(case), &author, false);
             assert_eq!(outcome(result), expected, "{case}");
         }
         let reviewer = agent("frontend", &[]);
@@ -769,18 +924,19 @@ mod tests {
             ),
             (UNSUPERVISED, Some(codes::INTEGRATOR_REQUIRED)),
         ] {
-            let result = can_claim_review(&reviewer, standing, &author);
+            let result = can_claim_review(&reviewer, standing, &author, false);
             assert_eq!(outcome(result), expected, "{standing:?}");
         }
-        let admitted = can_claim_review(&reviewer, MAIN, &author).unwrap();
+        let admitted = can_claim_review(&reviewer, MAIN, &author, false).unwrap();
         assert_eq!(admitted.worker, worker("frontend"));
-        let denied = can_claim_review(&reviewer, supervised(Role::AreaLead), &author).unwrap_err();
+        let denied =
+            can_claim_review(&reviewer, supervised(Role::AreaLead), &author, false).unwrap_err();
         assert!(denied.hint().contains("review lead"));
         // The author's agent is refused first, whatever its role.
         let author_agent = agent("backend", &[]);
-        let result = can_claim_review(&author_agent, supervised(Role::ReviewLead), &author);
+        let result = can_claim_review(&author_agent, supervised(Role::ReviewLead), &author, false);
         assert_eq!(outcome(result), Some(codes::AUTHOR_CANNOT_REVIEW));
-        let result = can_claim_review(&author_agent, MAIN, &author);
+        let result = can_claim_review(&author_agent, MAIN, &author, false);
         assert_eq!(outcome(result), Some(codes::AUTHOR_CANNOT_REVIEW));
     }
 
