@@ -1174,6 +1174,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/workers/{name}/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human starts a worker of any role again in a new Claude Code session, for example when its session is broken. A running worker's process ends first, and the worker keeps its place under the worker limits. The worker keeps its name, claims, bound tasks and proposals and the workers it started; its old session id stays in `previous_sessions`, and the new session gets the role's first turn. */
+        post: operations["restart_worker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/workers/{name}/stop": {
         parameters: {
             query?: never;
@@ -2620,6 +2637,17 @@ export interface components {
          * @enum {string}
          */
         PresenceState: "active" | "idle" | "offline";
+        /** @description A Claude Code session a worker had before its current one. */
+        PreviousSessionEntry: {
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the change to the next session.
+             */
+            ended_at: number;
+            reason: components["schemas"]["SessionEndReason"];
+            /** @description The session id, which names the session's Claude Code transcript. */
+            session_id: string;
+        };
         ProjectAgent: {
             name: string;
             presence: components["schemas"]["PresenceState"];
@@ -3130,6 +3158,11 @@ export interface components {
             /** Format: int32 */
             messages: number;
         };
+        /** @description What a human adds to the first turn of a worker's new session. */
+        RestartWorkerBody: {
+            /** @description Added to the first turn of the new session; it is never stored. */
+            instructions?: string | null;
+        };
         /** @description The human edit the human sends for review again. */
         ReviewAgainBody: {
             /**
@@ -3431,6 +3464,11 @@ export interface components {
             /** @description What to change: plain text, not empty. */
             note: string;
         };
+        /**
+         * @description Why a worker left a session for a new one: `handoff` (a fresh context after its hand-off note), `lost` (Claude Code no longer had the session) or `requested` (a human or the main agent asked for a new session).
+         * @enum {string}
+         */
+        SessionEndReason: "handoff" | "lost" | "requested";
         /** @description A token off loopback, a name on loopback. */
         SessionRequest: components["schemas"]["TokenSignIn"] | components["schemas"]["NameSignIn"];
         SessionStartContext: {
@@ -4085,9 +4123,13 @@ export interface components {
              * @example web-worker
              */
             name: string;
+            /** @description The sessions the worker had before its current one, oldest first. */
+            previous_sessions: components["schemas"]["PreviousSessionEntry"][];
             /** @description The proposals a reviewer is bound to. */
             proposals: string[];
             role: components["schemas"]["WorkerRole"];
+            /** @description The worker's current Claude Code session, whose transcript Claude Code keeps under this id. */
+            session_id: string;
             /**
              * Format: int64
              * @description UTC milliseconds of the newest process start.
@@ -11087,6 +11129,98 @@ export interface operations {
                 };
             };
             /** @description `area_has_lead`, `worker_exists`, `worker_limit_reached`, `project_paused` or `invalid_config` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    restart_worker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The worker's agent name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestartWorkerBody"];
+            };
+        };
+        responses: {
+            /** @description The worker in its new session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerProcessEntry"];
+                };
+            };
+            /** @description `invalid_request` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `worker_process_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `worker_exists`, `worker_busy` (a stop came first), `worker_limit_reached`, `project_paused` or `invalid_config` */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -215,8 +215,91 @@ describe("AgentsScreen", () => {
     await waitFor(() => {
       expect(within(row("web-lead")).getByText("stopped")).toBeTruthy();
     });
-    expect(within(row("web-lead")).queryByRole("button")).toBeNull();
+    expect(
+      within(row("web-lead")).queryByRole("button", { name: /^Stop/ }),
+    ).toBeNull();
+    expect(
+      within(row("web-lead")).getByRole("button", {
+        name: "Start web-lead in a new session",
+      }),
+    ).toBeTruthy();
     expect(within(row("web-lead")).getByText("exit code 0")).toBeTruthy();
+  });
+
+  it("starts a worker in a new session after the human confirms", async () => {
+    let restarted = false;
+    const calls = stubFetch(
+      routes({
+        [`POST ${BASE}/workers/web-lead/restart`]: () => {
+          restarted = true;
+          return { body: workerProcess("web-lead", { state: "starting" }) };
+        },
+        [`GET ${BASE}/workers`]: () => ({
+          body: restarted
+            ? workerList({
+                areas: team.areas,
+                workers: [
+                  workerProcess("web-lead", {
+                    previous_sessions: [
+                      { session_id: "s-1", reason: "requested", ended_at: 1 },
+                    ],
+                  }),
+                ],
+              })
+            : team,
+        }),
+      }),
+    );
+    await setup([], team);
+    await userEvent.click(
+      within(row("web-lead")).getByRole("button", {
+        name: "Start web-lead in a new session",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Start web-lead in a new session",
+    });
+    await userEvent.type(
+      within(dialog).getByLabelText("Instructions"),
+      "Plan again.",
+    );
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Start new session" }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    const sent = calls.find((call) => call.path.endsWith("/restart"));
+    expect(sent?.body).toEqual({ instructions: "Plan again." });
+    expect(
+      await within(row("web-lead")).findByText("Area lead · 1 earlier session"),
+    ).toBeTruthy();
+  });
+
+  it("shows a refused restart in the dialog with its code", async () => {
+    stubFetch(
+      routes({
+        [`POST ${BASE}/workers/web-lead/restart`]: errorReply(
+          409,
+          "project_paused",
+        ),
+      }),
+    );
+    await setup([], team);
+    await userEvent.click(
+      within(row("web-lead")).getByRole("button", {
+        name: "Start web-lead in a new session",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Start new session" }),
+    );
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toContain(
+      "The agents of this project are paused.",
+    );
+    expect(alert.textContent).toContain("code: project_paused");
   });
 
   it("shows a refused stop with its code", async () => {

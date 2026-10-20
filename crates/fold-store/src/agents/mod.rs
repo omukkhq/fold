@@ -16,6 +16,7 @@ use crate::workspaces::WorkspaceState;
 mod activity;
 mod handoffs;
 mod pause;
+mod previous_sessions;
 mod questions;
 mod workers;
 
@@ -26,6 +27,9 @@ pub use handoffs::{
     set_handoff_asked,
 };
 pub use pause::{PauseRow, pause_state, set_paused, set_resumed};
+pub use previous_sessions::{
+    PreviousSessionRow, SessionEnd, previous_sessions, record_previous_session,
+};
 pub use questions::{
     AnswerRow, NewQuestion, QuestionKind, QuestionRow, asked_among, asker_answered_by,
     close_open_questions, find_question, insert_answer, insert_question, insert_question_message,

@@ -144,6 +144,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "worker_permission_answers",
         "worker_permission_closures",
         "worker_permission_questions",
+        "worker_previous_sessions",
         "worker_processes",
         "worker_proposals",
         "worker_question_messages",

@@ -12,6 +12,7 @@ import {
   listNeedsYou,
   listWorkerQuestions,
   listWorkers,
+  restartWorker,
   startWorker,
   stopWorker,
 } from "./workers";
@@ -43,6 +44,19 @@ describe("workers", () => {
     expect(started.state).toBe("starting");
     expect(calls[1]?.body).toEqual({ role: "area_lead", area: "web" });
     expect((await stopWorker("demo", "web-lead")).state).toBe("stopping");
+  });
+
+  it("starts a worker in a new session with the instructions", async () => {
+    const calls = stubFetch({
+      [`POST ${BASE}/workers/web-lead/restart`]: {
+        body: workerProcess("web-lead", { state: "starting" }),
+      },
+    });
+    const restarted = await restartWorker("demo", "web-lead", {
+      instructions: "Plan again.",
+    });
+    expect(restarted.state).toBe("starting");
+    expect(calls[0]?.body).toEqual({ instructions: "Plan again." });
   });
 
   it("rejects a refused start with its code", async () => {

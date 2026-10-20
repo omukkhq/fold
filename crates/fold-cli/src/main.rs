@@ -76,6 +76,8 @@ enum Command {
     /// Print this process's environment for the daemon, which runs it through the user's login shell at its start
     #[command(hide = true, name = "shell-env")]
     ShellEnv,
+    /// Manage the workers that fold runs: fld worker restart <name> starts one again in a new Claude Code session
+    Worker(commands::worker::WorkerArgs),
     /// Development helpers
     #[cfg(feature = "dev-seed")]
     #[command(hide = true)]
@@ -164,6 +166,7 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::ShellEnv) => {
             shell_env::print(std::env::vars_os(), out).map_err(Failure::Write)
         }
+        Some(Command::Worker(args)) => commands::worker::run(&args, out).map_err(Failure::Remote),
         #[cfg(feature = "dev-seed")]
         Some(Command::Dev(args)) => {
             seed::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Seed)

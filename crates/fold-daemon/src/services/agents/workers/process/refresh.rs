@@ -6,7 +6,7 @@ use fold_core::roles::{
     handoff_overdue, refresh_turn,
 };
 use fold_core::{AgentName, AreaName, EventActor, NewEvent, WorkerState};
-use fold_store::agents::{self, ProcessEnd, WorkerProcessRow};
+use fold_store::agents::{self, ProcessEnd, SessionEnd, WorkerProcessRow};
 use fold_store::{StoreError, messages};
 use serde_json::json;
 
@@ -162,6 +162,7 @@ impl Supervisor {
                 let note = agents::session_handoff(tx.conn(), &current.session_id)
                     .await?
                     .map(|note| note.body);
+                agents::record_previous_session(tx, current.id, SessionEnd::Handoff, now).await?;
                 agents::refresh_session(tx, current.id, &session, now).await?;
                 let event =
                     NewEvent::new(types::WORKER_REFRESHED, EventActor::fold())?.data(json!({

@@ -191,3 +191,40 @@ async fn the_summary_reads_the_open_tasks_and_proposals_of_a_label() {
         .unwrap();
     assert_eq!((every.len(), total), (2, 2));
 }
+
+#[tokio::test]
+async fn each_left_session_is_kept_in_order_with_its_reason() {
+    let (_dir, store, id) = seeded().await;
+    assert!(
+        agents::previous_sessions(store.read())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for (reason, session, time) in [
+        (agents::SessionEnd::Handoff, "s-2", 20),
+        (agents::SessionEnd::Requested, "s-3", 30),
+    ] {
+        store
+            .write(async |tx| {
+                agents::record_previous_session(tx, id, reason, at(time)).await?;
+                agents::refresh_session(tx, id, session, at(time)).await
+            })
+            .await
+            .unwrap();
+    }
+    let lead = fold_core::AgentName::parse("web-lead").unwrap();
+    let sessions = agents::previous_sessions(store.read()).await.unwrap();
+    let kept: Vec<(&str, agents::SessionEnd, Timestamp)> = sessions[&lead]
+        .iter()
+        .map(|row| (row.session_id.as_str(), row.reason, row.ended_at))
+        .collect();
+    assert_eq!(
+        kept,
+        [
+            ("s-1", agents::SessionEnd::Handoff, at(20)),
+            ("s-2", agents::SessionEnd::Requested, at(30))
+        ]
+    );
+    fold_store::testing::assert_append_only(&store, "worker_previous_sessions").await;
+}

@@ -151,6 +151,7 @@ Work in the project folder:
 - `fld stash`: put the user's unrecorded changes aside, so the folder follows main again. `fld stash list` shows the entries, newest first.
 - `fld unstash`: merge the newest stash entry back into the folder; a conflict writes conflict markers and keeps the entry until `fld record`.
 - `fld pause` and `fld resume`: stop every worker of the project, keeping its session and claims, and run them again.
+- `fld worker restart NAME [--instructions TEXT]`: start the worker `NAME` of any role again in a new Claude Code session, for example when its session is broken; it keeps its name, claims and workers, and its old session id stays in its previous sessions.
 
 Maintenance and access:
 
@@ -175,7 +176,7 @@ The daemon serves the web app at `http://127.0.0.1:7420` by default. On loopback
 - Activity: live workspaces, review checkouts and the event stream.
 - Proposals: the list, and each proposal's diff (full or since the last review), its check runs and conflicts. A person comments on lines, approves the version, requests changes, integrates, edits a file into a new version and sends that version for review again. A batch page shows a review batch's members and stops its reviewer.
 - Requests: create a request with attachments; on a request, approve a draft, request changes, edit the draft into a new version, close it and answer its clarification thread.
-- Agents: the main agent, the leads and their workers with state, model, turns, cost and context. Start an area lead or the review lead, stop a worker, and allow or deny a worker's tool permission.
+- Agents: the main agent, the leads and their workers with state, model, turns, cost and context. Start an area lead or the review lead, stop a worker, start a worker in a new session, and allow or deny a worker's tool permission.
 - Messages: threads filtered by agent, task or proposal; reply, answer a question with its choices or free text, and send feedback.
 - Repository: revisions, the tree, files and a compare of two revisions.
 
@@ -186,7 +187,7 @@ The top bar switches project, pauses and resumes the agents, and opens Needs you
 Every fold tool by purpose; the skill holds their arguments and workflows.
 
 - Identity and agents: `register_agent`, `register_worker`, `list_agents`, `get_activity`.
-- Areas and workers: `define_area`, `update_area`, `start_worker`, `stop_worker`, `list_workers`, `set_worker_limits`, `write_handoff`, `pause_project`, `resume_project`.
+- Areas and workers: `define_area`, `update_area`, `start_worker`, `stop_worker`, `list_workers`, `set_worker_limits`, `write_handoff`, `restart_worker`, `pause_project`, `resume_project`.
 - Messages and events: `send_message`, `get_inbox`, `get_thread`, `acknowledge_message`, `get_events`, `wait_for_events`.
 - Tasks: `get_task_graph`, `get_ready_tasks`, `get_task`, `create_task`, `create_task_plan`, `update_task`, `delete_task`, `archive_task`, `add_dependency`, `remove_dependency`, `create_label`, `set_blocker`, `clear_blocker`, `require_human_review`.
 - Checklists: `add_checklist_item`, `update_checklist_item`, `move_checklist_item`, `remove_checklist_item`.

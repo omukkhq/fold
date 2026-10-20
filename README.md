@@ -138,6 +138,7 @@ Run these commands inside your project:
 | `fld new` | Start a fresh main agent session. |
 | `fld pause` | Stop project workers and keep their sessions. |
 | `fld resume` | Resume workers stopped by a project pause. |
+| `fld worker restart <name>` | Start a worker again in a new Claude Code session, for example when its session is broken. It keeps its name, claims and workers. |
 | `fld record` | Record your own changes in the project folder on main. |
 | `fld stash` | Put your unrecorded changes aside, so the project folder follows main. `fld stash list` shows the stash. |
 | `fld unstash` | Bring the newest stashed changes back into the project folder. If they conflict, fix the conflict markers, then run `fld record`. |

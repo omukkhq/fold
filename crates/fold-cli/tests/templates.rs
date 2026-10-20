@@ -4,7 +4,7 @@ const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 const REFERENCE: &str = include_str!("../templates/REFERENCE.md");
 
-const FOLD_TOOLS: [&str; 90] = [
+const FOLD_TOOLS: [&str; 91] = [
     "register_agent",
     "register_worker",
     "list_agents",
@@ -95,6 +95,7 @@ const FOLD_TOOLS: [&str; 90] = [
     "run_checks",
     "get_check_run",
     "set_review_scope",
+    "restart_worker",
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
@@ -283,7 +284,7 @@ const INVALID_REQUEST_REASONS: [&str; 14] = [
     "main_approves",
 ];
 
-const NON_TOOL_NAMES: [&str; 38] = [
+const NON_TOOL_NAMES: [&str; 39] = [
     "human_review",
     "fold_failed",
     "left_out",
@@ -322,6 +323,7 @@ const NON_TOOL_NAMES: [&str; 38] = [
     "review_scope",
     "areas_conflict",
     "main_approves",
+    "previous_sessions",
 ];
 
 const SECTIONS: [&str; 14] = [
@@ -445,6 +447,7 @@ fn every_tool_the_main_prompt_names_is_a_fold_tool() {
         "submit_request_draft",
         "pause_project",
         "resume_project",
+        "restart_worker",
         "clear_blocker",
         "complete_task",
     ] {

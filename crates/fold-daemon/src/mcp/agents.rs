@@ -6,7 +6,7 @@ use fold_core::turn_errors;
 use fold_core::{
     AgentName, AreaName, FoldError, LabelName, ProposalId, Role, Tag, TaskId, WorkerName, codes,
 };
-use fold_store::agents::{AreaRow, HandoffRow, WorkerProcessRow};
+use fold_store::agents::{AreaRow, HandoffRow, PreviousSessionRow, WorkerProcessRow};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -32,6 +32,7 @@ pub const SET_WORKER_LIMITS: &str = "set_worker_limits";
 pub const WRITE_HANDOFF: &str = "write_handoff";
 pub const PAUSE_PROJECT: &str = "pause_project";
 pub const RESUME_PROJECT: &str = "resume_project";
+pub const RESTART_WORKER: &str = "restart_worker";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -133,6 +134,19 @@ pub struct StopWorkerInput {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
+pub struct RestartWorkerInput {
+    /// The worker's agent name, such as web-lead. Any role: an area lead, the review lead, a task worker or a reviewer.
+    pub name: String,
+    /// What the user wants the worker to know in its new session; fold adds it to the first turn and never stores it.
+    #[serde(default)]
+    pub instructions: Option<String>,
+    /// The worker that makes this call. Leave it out: only the main agent's main worker restarts a worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 pub struct ListWorkersInput {
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
@@ -222,7 +236,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_WORKERS,
-            "List the areas with their leads and every worker fold runs, with its role, state, bound tasks or proposals, turns, cost, context size and newest hand-off note. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human.",
+            "List the areas with their leads and every worker fold runs, with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human.",
             schema_for_type::<ListWorkersInput>(),
         ),
         Tool::new(
@@ -244,6 +258,11 @@ pub fn tools() -> Vec<Tool> {
             WRITE_HANDOFF,
             "As an area lead or the review lead, store your hand-off note when fold asks for it; fold then starts you again with a fresh context whose first turn holds the note and the current fold state.",
             schema_for_type::<WriteHandoffInput>(),
+        ),
+        Tool::new(
+            RESTART_WORKER,
+            "As the main agent, and only when the user asks, start a worker of any role again in a new Claude Code session, for example when its session is broken. fold stops a running worker first. The worker keeps its name, claims, tasks, proposals and workers; list_workers shows its newest old session ids in previous_sessions with previous_session_count, and the new session gets the role's first turn. Refused with project_paused while paused and over the worker limits.",
+            schema_for_type::<RestartWorkerInput>(),
         ),
     ]
 }
@@ -395,6 +414,31 @@ fn started_json(started: &StartedWorker) -> Value {
     value
 }
 
+pub async fn restart_worker(
+    server: &FoldServer,
+    as_worker: Option<&WorkerName>,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: RestartWorkerInput = parse(arguments)?;
+    let name = AgentName::parse(&input.name)?;
+    let actor = server.actor(as_worker).await?;
+    let worker = server
+        .agents
+        .restart_worker(&actor, &name, input.instructions.as_deref())
+        .await
+        .map_err(from_agent)?;
+    let mut value = worker_process_json(&worker);
+    let previous = server
+        .agents
+        .previous_sessions()
+        .await
+        .map_err(from_agent)?
+        .remove(&worker.agent)
+        .unwrap_or_default();
+    add_previous_sessions(&mut value, &previous);
+    Ok(json!({ "worker": value }))
+}
+
 pub async fn stop_worker(
     server: &FoldServer,
     as_worker: Option<&WorkerName>,
@@ -483,6 +527,11 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
     let areas = server.agents.list_areas().await.map_err(from_agent)?;
     let workers = server.agents.list_workers().await.map_err(from_agent)?;
     let mut notes = server.agents.latest_handoffs().await.map_err(from_agent)?;
+    let mut previous = server
+        .agents
+        .previous_sessions()
+        .await
+        .map_err(from_agent)?;
     let config = server.agents.worker_config().await;
     let pause = server.agents.pause_state().await.map_err(from_agent)?;
     let mut listed = Vec::with_capacity(workers.len());
@@ -494,6 +543,9 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
         value["handoff"] = notes
             .remove(&worker.agent)
             .map_or(Value::Null, |note| handoff_json(&note));
+        if let Some(sessions) = previous.remove(&worker.agent) {
+            add_previous_sessions(&mut value, &sessions);
+        }
         listed.push(value);
     }
     Ok(json!({
@@ -502,6 +554,25 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
         "limits": config.as_ref().map_or(Value::Null, |config| limits_json(config.workers.limits())),
         "pause": pause_json(&pause),
     }))
+}
+
+/// How many of a worker's previous sessions an agent sees. Each hand-off refresh adds one, so a long-lived lead gathers many; the HTTP route and the web app list them all.
+const PREVIOUS_SESSIONS_SHOWN: usize = 3;
+
+/// Adds the newest [`PREVIOUS_SESSIONS_SHOWN`] sessions the worker left, oldest first, each id naming a Claude Code transcript, and the count of all of them.
+fn add_previous_sessions(value: &mut Value, sessions: &[PreviousSessionRow]) {
+    let shown = &sessions[sessions.len().saturating_sub(PREVIOUS_SESSIONS_SHOWN)..];
+    value["previous_sessions"] = shown
+        .iter()
+        .map(|session| {
+            json!({
+                "session": session.session_id,
+                "reason": session.reason.as_str(),
+                "ended_at": session.ended_at,
+            })
+        })
+        .collect();
+    value["previous_session_count"] = json!(sessions.len());
 }
 
 /// How much of a hand-off note `list_workers` shows. The whole note goes to the lead's next session; the list only lets the main agent see what each lead was doing.

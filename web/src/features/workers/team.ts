@@ -181,6 +181,10 @@ export interface TeamRow {
   step: Step;
   error: RowError | null;
   stop: StopControl;
+  /** A named human may start the worker again in a new session. */
+  restart: boolean;
+  /** The ids of the sessions the worker had before its current one, oldest first. */
+  previousSessions: string[];
 }
 
 export interface TeamGroup {
@@ -300,6 +304,20 @@ export function workerStep(
   }
 }
 
+/** A worker that fold is not stopping can start again in a new session; a running one is stopped first. */
+export function canRestart(state: WorkerState): boolean {
+  return state !== "stopping";
+}
+
+/** The role, then how many sessions the worker had before its current one. */
+export function roleLine(worker: WorkerProcess): string {
+  const earlier = worker.previous_sessions.length;
+  if (earlier === 0) return roleName(worker.role);
+  const sessions =
+    earlier === 1 ? "1 earlier session" : `${String(earlier)} earlier sessions`;
+  return `${roleName(worker.role)} · ${sessions}`;
+}
+
 export function stopControl(state: WorkerState): StopControl {
   if (state === "stopping") return "stopping";
   return state === "stopped" || state === "failed" ? null : "stop";
@@ -407,6 +425,7 @@ function workerRow(
       pill: PAUSED_PILL,
       step: faint("paused · resumes in its own session"),
       stop: null,
+      restart: false,
     };
   }
   return runningRow(worker, input, child);
@@ -421,7 +440,7 @@ function runningRow(
     name: worker.name,
     child,
     role: roleName(worker.role),
-    roleLine: roleName(worker.role),
+    roleLine: roleLine(worker),
     pill: workerPill(worker.state),
     asks: input.questions.some(
       (q) => q.worker === worker.name && q.answer === null,
@@ -438,6 +457,8 @@ function runningRow(
     ),
     error: rowError(worker),
     stop: stopControl(worker.state),
+    restart: canRestart(worker.state),
+    previousSessions: worker.previous_sessions.map((s) => s.session_id),
   };
 }
 
@@ -473,6 +494,8 @@ function mainRow(agent: AgentView, human: string | null): TeamRow {
     step: noticeStep(agent) ?? faint(NONE),
     error: null,
     stop: null,
+    restart: false,
+    previousSessions: [],
   };
 }
 

@@ -161,6 +161,7 @@ mod tasks_service;
 mod web_tokens;
 mod worker_limits;
 mod worker_questions;
+mod worker_restart;
 mod worker_resume;
 mod workers;
 #[cfg(feature = "failpoints")]

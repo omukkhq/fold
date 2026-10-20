@@ -172,6 +172,21 @@ pub fn can_publish_task_plan(
     }
 }
 
+/// A worker that starts again in a new session forgets what its old session knew, so only a named human or the main agent, on the user's word, asks for it, for a worker of any role.
+pub fn can_restart_worker(starter: &Starter) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::Human | Starter::MainAgent => Ok(()),
+        Starter::Unsupervised => Err(not_the_main_agent(
+            "ask the main agent to call restart_worker",
+        )),
+        _ => Err(PolicyDenied {
+            code: codes::MAIN_AGENT_REQUIRED,
+            message: "only the main agent or a human can start a worker again in a new session",
+            hint: "ask the user; the main agent calls restart_worker",
+        }),
+    }
+}
+
 /// A task without a proposal is done when a lead check or a person says so, so whoever plans the work decides at creation that it needs no proposal, for a `no_proposal` task and a `human` task alike: the main agent, a named human, or the lead of an area whose label the task carries. `task_areas` are the areas whose label the task carries.
 pub fn can_choose_no_proposal(
     starter: &Starter,
@@ -348,6 +363,31 @@ mod tests {
         ] {
             assert_eq!(
                 can_publish_task_plan(&starter, &[]).unwrap_err().code(),
+                codes::MAIN_AGENT_REQUIRED
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_human_or_the_main_agent_restarts_a_worker_in_a_new_session() {
+        for starter in [Starter::Human, Starter::MainAgent] {
+            assert!(can_restart_worker(&starter).is_ok());
+        }
+        assert_eq!(
+            can_restart_worker(&Starter::Unsupervised)
+                .unwrap_err()
+                .code(),
+            codes::ORCHESTRATOR_REQUIRED
+        );
+        for starter in [
+            Starter::AreaLead(area("web")),
+            Starter::ReviewLead,
+            Starter::ShortLived,
+            Starter::Subagent,
+            Starter::System,
+        ] {
+            assert_eq!(
+                can_restart_worker(&starter).unwrap_err().code(),
                 codes::MAIN_AGENT_REQUIRED
             );
         }

@@ -15,6 +15,7 @@ use crate::support::lock;
 use questions::Waiter;
 use watch::watch_done;
 
+mod fresh;
 mod gate;
 mod launch;
 mod lines;
@@ -148,7 +149,7 @@ struct Inner {
     generation: AtomicU64,
     requests: AtomicU64,
     watch: Mutex<Option<JoinHandle<()>>>,
-    /// The leads whose fresh start is under way, so a note and a turn end that both ask for it start one session.
+    /// The workers whose new session is under way, from a lead's hand-off refresh or a restart that a human or the main agent asked for, so two requests start one session.
     refreshing: Mutex<HashSet<AgentName>>,
     /// Held while a task worker is resumed, so two events that resume the same task worker start it once.
     resuming: tokio::sync::Mutex<()>,

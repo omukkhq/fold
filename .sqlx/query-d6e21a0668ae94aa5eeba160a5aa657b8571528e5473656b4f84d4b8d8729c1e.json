@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT g.name AS \"agent!: String\", s.session_id, s.reason, s.ended_at\n           FROM worker_previous_sessions s\n           JOIN worker_processes w ON w.id = s.worker_process_id\n           JOIN agents g ON g.id = w.agent_id\n           ORDER BY s.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "session_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "worker_previous_sessions",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "reason",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "worker_previous_sessions",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "name": "ended_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_previous_sessions",
+            "name": "ended_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d6e21a0668ae94aa5eeba160a5aa657b8571528e5473656b4f84d4b8d8729c1e"
+}

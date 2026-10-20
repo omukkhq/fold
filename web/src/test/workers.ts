@@ -36,6 +36,8 @@ export function workerProcess(
     model_unreachable: false,
     hint: null,
     cache_ttl: "1h",
+    session_id: "00000000-0000-4000-8000-000000000001",
+    previous_sessions: [],
     ...fields,
   };
 }

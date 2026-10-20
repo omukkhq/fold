@@ -718,10 +718,14 @@ const SPECS: Record<EventType, Spec> = {
   },
   "worker.refreshed": {
     icon: Bot,
-    text: (e) =>
-      e.data.handoff === true
+    text: (e) => {
+      if (e.data.requested === true) {
+        return `started ${workerOf(e)} again in a new session`;
+      }
+      return e.data.handoff === true
         ? `gave ${workerOf(e)} a fresh context with its hand-off note`
-        : `gave ${workerOf(e)} a fresh context`,
+        : `gave ${workerOf(e)} a fresh context`;
+    },
   },
   "worker.resumed": { icon: Bot, text: resumedText },
   "worker.permission_asked": {

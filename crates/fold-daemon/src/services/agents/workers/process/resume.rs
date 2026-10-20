@@ -218,7 +218,7 @@ impl Supervisor {
         turn: String,
         bind: &[TaskId],
     ) -> Result<Option<StartWatch>, AgentError> {
-        self.until_let_go_exited(agent).await?;
+        self.until_let_go_exited(agent, "resume_worker").await?;
         let config = load_config(&self.inner.paths).await?;
         let limits = config.workers.limits();
         let now = self.inner.clock.now();
@@ -665,6 +665,8 @@ impl Supervisor {
                     row.area_id.zip(row.area.as_ref()),
                 )
                 .await?;
+                agents::record_previous_session(tx, row.id, agents::SessionEnd::Lost, now)
+                    .await?;
                 agents::refresh_session(tx, row.id, &session, now).await?;
                 let event =
                     NewEvent::new(types::WORKER_STARTED, EventActor::fold())?.data(json!({

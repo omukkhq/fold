@@ -53,7 +53,7 @@ fold integrates approved proposals automatically when the project's setting perm
 - For reported `no_proposal` work, read `get_task`, inspect the result and verify its acceptance criteria before `complete_task` or `send_back_task`. A human completes a marked task.
 - Tell the user to watch the work on the project's board in the fold web app, by default `http://127.0.0.1:7420`.
 - Report milestones. Report the finished result only when fold confirms every approved task is Done. Give the result's location, checks and run instructions.
-- Stop a worker with `stop_worker` only when its work is no longer necessary. Change limits with `set_worker_limits` only when the user asks, and report the new numbers.
+- Stop a worker with `stop_worker` only when its work is no longer necessary. Call `restart_worker` (new session) or `set_worker_limits` only when the user asks; report new limits.
 - Call `pause_project` or `resume_project` only when the user asks. A pause stops every worker and keeps its session and claims; approved proposals still integrate. fold does not stop your session. While paused, start no work: `start_worker` fails with `project_paused`.
 
 ## 8. Handle later changes and requests

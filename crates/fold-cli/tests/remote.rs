@@ -563,3 +563,34 @@ fn pause_and_resume_go_through_the_daemon() {
         "the agents run: fold starts and resumes workers as usual\n"
     );
 }
+
+#[test]
+fn a_worker_restart_goes_through_the_daemon_and_names_its_refusal() {
+    let sandbox = Sandbox::new();
+    let project = sandbox.project();
+    let _daemon = sandbox.serve(&system_path());
+    let socket = sandbox.socket();
+    let run = |args: &[&str]| {
+        let mut all = vec!["worker", "restart"];
+        all.extend_from_slice(args);
+        all.extend([
+            "--socket",
+            socket.to_str().unwrap(),
+            "--project",
+            project.to_str().unwrap(),
+        ]);
+        sandbox.fold(&all)
+    };
+    let unknown = run(&["nobody", "--instructions", "Plan again."]);
+    assert!(!unknown.status.success(), "{unknown:?}");
+    assert!(
+        stderr(&unknown).contains("worker_process_not_found"),
+        "{unknown:?}"
+    );
+    let bad = run(&["web/lead"]);
+    assert!(!bad.status.success(), "{bad:?}");
+    assert!(stderr(&bad).contains("invalid_name"), "{bad:?}");
+    let flag = run(&["web-lead", "--fresh"]);
+    assert!(!flag.status.success(), "{flag:?}");
+    assert!(stderr(&flag).contains("--fresh"), "{flag:?}");
+}
