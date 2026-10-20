@@ -563,3 +563,38 @@ fn pause_and_resume_go_through_the_daemon() {
         "the agents run: fold starts and resumes workers as usual\n"
     );
 }
+
+#[test]
+fn message_and_area_go_through_the_daemon_and_name_what_is_missing() {
+    let sandbox = Sandbox::new();
+    let project = sandbox.project();
+    let _daemon = sandbox.serve(&system_path());
+    let socket = sandbox.socket();
+    let run = |args: &[&str]| {
+        let mut all = args.to_vec();
+        all.extend([
+            "--socket",
+            socket.to_str().unwrap(),
+            "--project",
+            project.to_str().unwrap(),
+        ]);
+        sandbox.fold(&all)
+    };
+    let chat = run(&["message", "web-lead"]);
+    assert!(!chat.status.success(), "{chat:?}");
+    assert!(stderr(&chat).contains("agent_not_found"), "{chat:?}");
+    let sent = run(&["message", "web-lead", "use", "the", "tokens"]);
+    assert!(!sent.status.success(), "{sent:?}");
+    assert!(stderr(&sent).contains("agent_not_found"), "{sent:?}");
+    let bad = run(&["message", "Web Lead", "hi"]);
+    assert!(stderr(&bad).contains("invalid_name"), "{bad:?}");
+    let shown = run(&["area", "web"]);
+    assert!(!shown.status.success(), "{shown:?}");
+    assert!(stderr(&shown).contains("area_not_found"), "{shown:?}");
+    let added = run(&["area", "web", "--add", "Use the tokens."]);
+    assert!(!added.status.success(), "{added:?}");
+    assert!(stderr(&added).contains("area_not_found"), "{added:?}");
+    let both = run(&["area", "web", "--add", "a", "--clear"]);
+    assert!(!both.status.success(), "{both:?}");
+    assert!(stderr(&both).contains("cannot be used with"), "{both:?}");
+}

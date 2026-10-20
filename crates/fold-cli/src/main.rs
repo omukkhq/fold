@@ -72,6 +72,10 @@ enum Command {
     Stash(commands::stash::StashArgs),
     /// Merge the newest stash entry into the project folder as it is now; a conflict writes conflict markers and keeps the entry until fld record
     Unstash(commands::stash::UnstashArgs),
+    /// Write to one agent in its direct chat, or show the chat when there is no text: a supervised lead gets the message as a turn, the main agent as a notice
+    Message(commands::message::MessageArgs),
+    /// Show an area's instructions, or add to, replace or clear them: the area's lead and task workers get them on their next start or turn
+    Area(commands::area::AreaArgs),
     /// Development helpers
     #[cfg(feature = "dev-seed")]
     #[command(hide = true)]
@@ -157,6 +161,10 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::Unstash(args)) => {
             commands::stash::run_unstash(&args, out).map_err(Failure::Remote)
         }
+        Some(Command::Message(args)) => {
+            commands::message::run_message(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Area(args)) => commands::area::run_area(&args, out).map_err(Failure::Remote),
         #[cfg(feature = "dev-seed")]
         Some(Command::Dev(args)) => {
             seed::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Seed)
