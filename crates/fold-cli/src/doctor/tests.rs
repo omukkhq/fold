@@ -663,6 +663,7 @@ fn a_healthy_project_is_all_ok_and_nothing_changes_on_disk() {
             "inotify watches",
             "claude files",
             "role prompts",
+            "models",
             "claude md"
         ]
     );
@@ -688,12 +689,60 @@ fn a_project_without_git_sync_gets_no_git_check() {
             "inotify watches",
             "claude files",
             "role prompts",
+            "models",
             "claude md"
         ]
     );
     let sync = find(&checks, "git sync");
     assert_eq!(sync.status, Status::Ok);
     assert!(sync.message.contains("fld init --with-git"), "{sync:?}");
+}
+
+#[test]
+fn a_role_model_that_claude_would_not_take_warns() {
+    let fixture = Fixture::new();
+    let host = fixture.linux_host(524_288);
+    let root = fixture.plain_project("models");
+    let config = ProjectPaths::new(&root).config();
+    let mut text = std::fs::read_to_string(&config).unwrap_or_default();
+    text.push_str("\n[roles.task_worker]\nmodel = \"gpt-5\"\n[roles.reviewer]\nmodel = \"opus\"\n");
+    std::fs::write(&config, text).unwrap();
+    rt().block_on(async {
+        use fold_core::roles::AreaProfile;
+        use fold_core::{AreaName, LabelName};
+        use fold_store::{agents, tasks};
+        let store = Store::open_project(&ProjectPaths::new(&root))
+            .await
+            .unwrap();
+        store
+            .write::<_, StoreError>(async |tx| {
+                for (name, model) in [("web", Some("sonet")), ("api", None)] {
+                    let label = LabelName::parse(name).unwrap();
+                    tasks::insert_label(tx, &label, fold_core::LabelColor::Sage, at(0)).await?;
+                    let label_id = agents::label_id(tx.conn(), &label).await?.unwrap();
+                    let area = AreaName::parse(name).unwrap();
+                    let id = agents::insert_area(tx, &area, label_id, "main", at(0)).await?;
+                    let profile = AreaProfile {
+                        model: model.map(str::to_owned),
+                        ..AreaProfile::default()
+                    };
+                    agents::set_area_profile(tx, id, &profile).await?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        store.close().await.unwrap();
+    });
+    let checks = project_report(&host, &root, at(1_000));
+    let models = find(&checks, "models");
+    assert_eq!(models.status, Status::Warn, "{models:?}");
+    assert!(
+        models
+            .message
+            .starts_with("gpt-5 (roles.task_worker), sonet (area web) is neither"),
+        "{models:?}"
+    );
 }
 
 #[test]
@@ -897,6 +946,7 @@ fn the_database_facts_map_to_issues() {
         quick_check_errored: false,
         degraded: Vec::new(),
         git_sync: Some(true),
+        area_models: Vec::new(),
     };
     assert!(database_issues(&healthy).is_empty());
     let unknown_journal = DatabaseFacts {

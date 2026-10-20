@@ -1,8 +1,13 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::Duration;
 
 use fold_core::layout::{AGENT_ENV, AGENT_TAGS_ENV};
+use tokio::process::Command;
 
+use super::Launcher;
+use super::claude::{AuthStatus, ClaudeVersion};
 use crate::support::SESSION_ENV;
 
 /// Where the environment that the daemon gives its workers came from.
@@ -135,6 +140,53 @@ pub fn sign_in_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String
     picked
 }
 
+/// How long each `claude` command of [`ask_claude`] may run.
+const CLAUDE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// What the launcher's `claude` answered when the daemon ran it as it runs a worker. A field is `None` when the command did not run, did not end in time or gave no answer fold can read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClaudeAnswers {
+    pub version: Option<ClaudeVersion>,
+    pub signed_in: Option<bool>,
+}
+
+/// Runs `claude --version` and `claude auth status --json` with the environment a worker gets, so a check sees the program, `PATH` and sign-in that the workers see. Neither command makes a model call; only the version and whether Claude Code is signed in are read from their output.
+pub async fn ask_claude(launcher: &Launcher) -> ClaudeAnswers {
+    let (version, status) = tokio::join!(
+        claude_output(launcher, &["--version"]),
+        claude_output(launcher, &["auth", "status", "--json"])
+    );
+    ClaudeAnswers {
+        version: version.as_deref().and_then(ClaudeVersion::parse),
+        signed_in: status
+            .as_deref()
+            .and_then(AuthStatus::parse)
+            .map(|status| status.logged_in),
+    }
+}
+
+/// The stdout of `claude <args>`, with the variables a worker process gets and loses; `None` when it cannot run, ends after [`CLAUDE_TIMEOUT`], which kills it, or prints text that is not UTF-8.
+async fn claude_output(launcher: &Launcher, args: &[&str]) -> Option<String> {
+    let mut command = Command::new(&launcher.claude);
+    command.args(args);
+    for name in SESSION_ENV {
+        command.env_remove(name);
+    }
+    command
+        .envs(launcher.env.iter().map(|(key, value)| (key, value)))
+        .env_remove(AGENT_TAGS_ENV)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let child = command.spawn().ok()?;
+    let output = tokio::time::timeout(CLAUDE_TIMEOUT, child.wait_with_output())
+        .await
+        .ok()?
+        .ok()?;
+    String::from_utf8(output.stdout).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +258,58 @@ mod tests {
             sign_in_names(["PATH", "HOME", "ANTHROPIC_API_KEY", "HOME"]),
             ["ANTHROPIC_API_KEY", "HOME"]
         );
+    }
+
+    /// A stand-in for Claude Code that answers the two commands from the variables it was given, and records the variables of a session around the daemon that it still sees.
+    fn fake_claude(dir: &std::path::Path) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("claude");
+        std::fs::write(
+            &path,
+            "#!/bin/sh\nenv | grep -q '^CLAUDECODE=' && exit 7\ncase \"$1\" in\n  --version) echo \"$FAKE_VERSION (Claude Code)\" ;;\n  auth) printf '{\"loggedIn\": %s, \"email\": \"ana@example.com\"}' \"$FAKE_SIGNED_IN\" ;;\nesac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn claude_answers_with_the_environment_of_a_worker() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let launcher = Launcher {
+            claude: fake_claude(dir.path()),
+            fold: None,
+            env: vec![
+                ("FAKE_VERSION".to_owned(), "2.1.301".to_owned()),
+                ("FAKE_SIGNED_IN".to_owned(), "true".to_owned()),
+            ],
+        };
+        assert_eq!(
+            ask_claude(&launcher).await,
+            ClaudeAnswers {
+                version: Some(ClaudeVersion::new(2, 1, 301)),
+                signed_in: Some(true),
+            }
+        );
+        let signed_out = Launcher {
+            env: vec![
+                ("FAKE_VERSION".to_owned(), "garbage".to_owned()),
+                ("FAKE_SIGNED_IN".to_owned(), "false".to_owned()),
+            ],
+            ..launcher.clone()
+        };
+        assert_eq!(
+            ask_claude(&signed_out).await,
+            ClaudeAnswers {
+                version: None,
+                signed_in: Some(false),
+            }
+        );
+        let missing = Launcher {
+            claude: dir.path().join("missing"),
+            ..launcher
+        };
+        assert_eq!(ask_claude(&missing).await, ClaudeAnswers::default());
     }
 
     #[test]

@@ -23,7 +23,7 @@ fn fake_shell(dir: &Path, bin: &Path) -> PathBuf {
     script(
         &shell,
         &format!(
-            "[ \"$1 $2 $3\" = '-l -i -c' ] || exit 9\necho 'Last login: today'\necho 'motd' >&2\nexport PATH='{}':\"$PATH\" FOLD_TEST_SECRET=hunter2-secret\nexec /bin/sh -c \"$4\"",
+            "[ \"$1 $2 $3\" = '-l -i -c' ] || exit 9\necho 'Last login: today'\necho 'motd' >&2\nexport PATH='{}':\"$PATH\" FOLD_TEST_SECRET=hunter2-secret CLAUDE_CODE_USE_BEDROCK=1\nexec /bin/sh -c \"$4\"",
             bin.display()
         ),
     );
@@ -90,4 +90,60 @@ async fn a_daemon_takes_the_login_shells_environment_and_logs_no_value() {
         !text.contains("motd") && !text.contains("Last login"),
         "{text}"
     );
+}
+
+/// A stand-in for Claude Code that answers the version and sign-in questions of a check, as a recent Claude Code that is signed in does.
+const FAKE_CLAUDE: &str = "case \"$1\" in\n  --version) echo '2.1.301 (Claude Code)' ;;\n  auth) echo '{\"loggedIn\": true}' ;;\n  *) exit 3 ;;\nesac";
+
+/// fld doctor asks the running daemon which claude its workers run, from which environment, and which sign-in variables they get, and compares those names with its own.
+#[tokio::test]
+async fn doctor_reports_the_claude_and_the_sign_in_variables_of_the_daemons_workers() {
+    let host = Host::new().await;
+    let bin = host.dir.path().join("shell-bin");
+    script(&bin.join("claude"), FAKE_CLAUDE);
+    let shell = fake_shell(host.dir.path(), &bin);
+    let socket = host.dir.path().join("doctor.sock");
+    let mut daemon = host
+        .fold(&["serve", "--socket", socket.to_str().unwrap()], &host.root)
+        .env("SHELL", &shell)
+        .env_remove("CLAUDE_CODE_USE_BEDROCK")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    eventually(WAIT, async || {
+        tokio::net::UnixStream::connect(&socket)
+            .await
+            .map(drop)
+            .map_err(|error| error.kind())
+    })
+    .await;
+    let output = host
+        .fold(
+            &["doctor", "--socket", socket.to_str().unwrap()],
+            &host.root,
+        )
+        .env("PATH", "")
+        .env_remove("CLAUDE_CODE_USE_BEDROCK")
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .unwrap();
+    daemon.start_kill().unwrap();
+    daemon.wait().await.unwrap();
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains(&format!(
+            "ok   daemon claude: workers run claude 2.1.301 at {}, signed in, with your login shell's environment",
+            bin.join("claude").display()
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains("warn daemon environment: ")
+            && text.contains("it sets CLAUDE_CODE_USE_BEDROCK, which this shell does not"),
+        "{text}"
+    );
+    assert!(!text.contains("hunter2-secret"), "{text}");
 }

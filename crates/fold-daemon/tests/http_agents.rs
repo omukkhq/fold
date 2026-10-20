@@ -595,3 +595,80 @@ async fn an_invalid_configuration_fails_the_overview_and_leaves_the_project_open
     let (status, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 }
+
+/// The worker environment is told only over the socket, also to a loopback client, and holds the names of the sign-in variables, never their values.
+#[tokio::test]
+async fn the_worker_environment_answers_only_on_the_socket_and_names_no_value() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use fold_daemon::services::agents::Launcher;
+    use fold_daemon::services::agents::environment::{EnvSource, WorkerEnvironment};
+
+    const SECRET: &str = "sk-ant-fold-test-secret";
+    let project = TestProject::new().await;
+    let bin = tempfile::TempDir::new().unwrap();
+    let claude = bin.path().join("claude");
+    std::fs::write(
+        &claude,
+        "#!/bin/sh\ncase \"$1\" in\n  --version) echo '2.1.301 (Claude Code)' ;;\n  auth) echo '{\"loggedIn\": true}' ;;\nesac\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let launcher = Launcher {
+        claude: claude.clone(),
+        fold: None,
+        env: vec![("ANTHROPIC_API_KEY".to_owned(), SECRET.to_owned())],
+    };
+    let environment = WorkerEnvironment {
+        source: EnvSource::Shell,
+        shell_problem: None,
+        claude: Some(claude.clone()),
+        git: None,
+        sign_in: vec!["ANTHROPIC_API_KEY".to_owned(), "HOME".to_owned()],
+    };
+    let state: AppState = Arc::new(DaemonState {
+        registry: project.registry().clone(),
+        projects: Projects::default()
+            .with_launcher(launcher)
+            .with_environment(environment),
+        clock: Arc::new(project.clock().clone()),
+        assets: AssetSource::Embedded,
+        listen: "127.0.0.1".parse().unwrap(),
+        session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
+    });
+    let request = || {
+        Request::builder()
+            .header(CLIENT_HEADER, "test")
+            .method(Method::GET)
+            .uri("/api/v1/worker-environment")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let response = socket_router(state.clone())
+        .oneshot(request())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(!text.contains(SECRET), "{text}");
+    let body: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        body,
+        json!({
+            "source": "shell",
+            "shell_problem": null,
+            "claude": claude.to_string_lossy(),
+            "git": null,
+            "version": "2.1.301",
+            "signed_in": true,
+            "sign_in_variables": ["ANTHROPIC_API_KEY", "HOME"],
+        })
+    );
+
+    let response = router(state).oneshot(request()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(!text.contains(SECRET) && !text.contains("claude"), "{text}");
+}

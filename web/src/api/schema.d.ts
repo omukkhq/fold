@@ -1278,6 +1278,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/worker-environment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The environment of the workers and the answers of their `claude`, which the daemon runs with `--version` and `auth status`, never with a prompt. Socket only, so the paths of the user's home never reach the network. */
+        get: operations["worker_environment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3456,6 +3473,11 @@ export interface components {
              */
             task_worker?: number | null;
         };
+        /**
+         * @description Why the daemon did not take the login shell's environment.
+         * @enum {string}
+         */
+        ShellProblemKind: "no_shell" | "failed" | "timed_out" | "no_claude";
         /** @description The newest durable sequence number and every live workspace, sent after a replay so a client starts from current state. */
         Snapshot: {
             /**
@@ -3932,6 +3954,26 @@ export interface components {
             proposals: components["schemas"]["AuthoredProposal"][];
             /** @description Workspaces in state `active` or `missing`. */
             workspaces: components["schemas"]["WorkerWorkspace"][];
+        };
+        /**
+         * @description Where the workers' environment came from.
+         * @enum {string}
+         */
+        WorkerEnvironmentSource: "shell" | "setup" | "daemon";
+        /** @description The environment in which the daemon starts Claude Code for its workers, as it found it at its start, with the answers of that `claude`. It names paths and variable names, never a variable's value. */
+        WorkerEnvironmentView: {
+            /** @description The absolute path of the `claude` that workers run; null when the `PATH` of the workers' environment holds none. */
+            claude?: string | null;
+            /** @description The absolute path of the `git` on that `PATH`; null when it holds none. */
+            git?: string | null;
+            shell_problem?: components["schemas"]["ShellProblemKind"] | null;
+            /** @description The sorted names of the variables of the workers' environment that decide how Claude Code signs in, such as `HOME`, `CLAUDE_CONFIG_DIR` and `ANTHROPIC_API_KEY`. */
+            sign_in_variables: string[];
+            /** @description Whether `claude auth status` says Claude Code is signed in; null when it gave no answer fold can read. */
+            signed_in?: boolean | null;
+            source: components["schemas"]["WorkerEnvironmentSource"];
+            /** @description The version that `claude --version` printed, such as `2.1.301`; null when it printed none fold can read. */
+            version?: string | null;
         };
         /** @description The areas and every worker fold runs or ran. */
         WorkerList: {
@@ -11598,6 +11640,53 @@ export interface operations {
             };
             /** @description Internal error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    worker_environment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The workers' environment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerEnvironmentView"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

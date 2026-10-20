@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use clap::Args;
 use fold_core::events::types;
-use fold_core::{Clock, FoldError, HumanName, ProjectPaths, Role, Timestamp, codes};
+use fold_core::{Clock, FoldError, HumanName, ProjectConfig, ProjectPaths, Role, Timestamp, codes};
 use fold_daemon::SystemClock;
 use fold_daemon::projects::database_missing_hint;
 use fold_daemon::services::agents::claude::{AuthStatus, ClaudeVersion, MIN_CLAUDE_VERSION};
@@ -195,6 +195,22 @@ pub(crate) fn collect(
     sections[0]
         .checks
         .extend(host_checks(args.socket.as_deref(), &file, host));
+    let report = daemon_socket(args.socket.as_deref(), &host.dirs)
+        .map_or(environment::DaemonReport::NotRunning, |socket| {
+            environment::ask_daemon(&socket, host.user.clone(), runtime)
+        });
+    sections[0]
+        .checks
+        .push(environment::daemon_claude_verdict(&report));
+    let names: Vec<String> = std::env::vars_os()
+        .filter_map(|(name, _)| name.into_string().ok())
+        .collect();
+    let shell = environment::sign_in_names(names.iter().map(String::as_str));
+    sections[0].checks.extend(environment::daemon_env_verdict(
+        &report,
+        &shell,
+        host.platform.linux,
+    ));
     let projects = match &args.project {
         Some(dir) => {
             let root = absolute_dir(dir);
@@ -834,6 +850,7 @@ fn project_checks(
     });
     checks.push(claude_files_check(root));
     checks.push(role_prompts_check(&paths));
+    checks.push(models_check(&paths, &facts));
     let home = host.dirs.home.as_deref().map(absolute_dir);
     checks.extend(shadowing_checks(root, home.as_deref()));
     checks
@@ -867,6 +884,8 @@ pub(crate) struct DatabaseFacts {
     pub(crate) degraded: Vec<Timestamp>,
     /// Whether the project's Git sync is on; `None` when the database cannot tell.
     pub(crate) git_sync: Option<bool>,
+    /// The model of each area profile that names one, as `(area, model)`.
+    pub(crate) area_models: Vec<(String, String)>,
 }
 
 /// SQLite sets bytes 18 and 19 of the header to 2 in WAL mode. Reading the header avoids the journal-mode pragma, which a connection may try to change.
@@ -913,6 +932,11 @@ async fn inspect_database(path: &Path, events_now: Option<Timestamp>) -> Databas
         .await
         .ok()
         .map(|rows| rows > 0);
+    facts.area_models =
+        sqlx::query_as("SELECT name, model FROM areas WHERE model IS NOT NULL ORDER BY name")
+            .fetch_all(&mut conn)
+            .await
+            .unwrap_or_default();
     let _ = conn.close().await;
     facts
 }
@@ -1225,6 +1249,26 @@ fn role_prompts_check(paths: &ProjectPaths) -> Check {
     )
 }
 
+/// The models that `.fold/config.toml` gives the roles and that the area profiles name. A configuration that cannot be read adds none: the daemon refuses it with its own error.
+fn models_check(paths: &ProjectPaths, facts: &DatabaseFacts) -> Check {
+    let config = std::fs::read_to_string(paths.config())
+        .ok()
+        .and_then(|text| ProjectConfig::from_toml(&text).ok())
+        .unwrap_or_default();
+    let models: Vec<(String, String)> = config
+        .roles
+        .iter()
+        .filter_map(|(role, settings)| Some((format!("roles.{role}"), settings.model.clone()?)))
+        .chain(
+            facts
+                .area_models
+                .iter()
+                .map(|(area, model)| (format!("area {area}"), model.clone())),
+        )
+        .collect();
+    environment::model_names_verdict(&models)
+}
+
 fn shadowing_checks(root: &Path, home: Option<&Path>) -> Vec<Check> {
     let files = shadowing_files(root, home);
     if files.is_empty() {
@@ -1243,6 +1287,7 @@ fn shadowing_checks(root: &Path, home: Option<&Path>) -> Vec<Check> {
         .collect()
 }
 
+mod environment;
 mod push;
 
 #[cfg(test)]
