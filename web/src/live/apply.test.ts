@@ -600,6 +600,14 @@ describe("invalidation rules", () => {
     expect(invalidated.some((k) => k?.includes('"request"'))).toBe(false);
   });
 
+  it("refreshes the notes and their unread count for a note event", () => {
+    expect(domainOf("note.added")).toBe("note");
+    applyEvent(client, slug, ev("note.added", { data: { note: "n-4" } }));
+    expect(hit(keys.notes(slug))).toBe(true);
+    expect(hit(keys.board(slug))).toBe(false);
+    expect(hit(keys.needsYou(slug))).toBe(false);
+  });
+
   it("puts the tasks an approval created on the board", () => {
     applyEvent(
       client,

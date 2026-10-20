@@ -198,6 +198,11 @@ describe("eventLine", () => {
       line("review.scope_chosen", { scope: "full", version: 3, reason: "API" }),
     ).toBe("chose a full review of P-4 v3");
     expect(line("review.scope_chosen")).toBe("chose the review scope of P-4");
+    expect(line("note.added", { note: "n-4", area: "web" })).toBe(
+      "noted n-4 in web",
+    );
+    expect(line("note.added", { note: "n-5", area: null })).toBe("noted n-5");
+    expect(line("note.added")).toBe("noted a decision");
     expect(line("proposal.review_again_requested", { version: 3 })).toBe(
       "sent v3 of P-4 for review again",
     );

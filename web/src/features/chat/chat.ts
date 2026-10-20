@@ -6,6 +6,7 @@ import type {
   WorkerProcess,
   WorkerRole,
 } from "@/api/workers";
+import { parseId } from "@/format/ids";
 import { charCount } from "@/format/text";
 
 /** The daemon's bound on an area's instructions, which go into every start of the area's workers. */
@@ -82,3 +83,21 @@ export const instructionsSchema = z.object({
 });
 
 export type InstructionsValues = z.infer<typeof instructionsSchema>;
+
+export interface ChatSearch {
+  /** A decision note the human answers about, such as `n-4`, which the message to write names. */
+  note?: string;
+}
+
+/** Keeps a well-formed note id; the URL is user input. */
+export function parseChatSearch(raw: Record<string, unknown>): ChatSearch {
+  const note = raw.note;
+  return typeof note === "string" && parseId(note)?.kind === "note"
+    ? { note }
+    : {};
+}
+
+/** The message a reply to a note starts with: the note's mention, so the agent reads which decision the human means. */
+export function noteDraft(note: string | undefined): string {
+  return note === undefined ? "" : `#${note} `;
+}

@@ -37,6 +37,7 @@ describe("idHref", () => {
     expect(idHref("demo", "message", "m-210")).toBe(
       "/p/demo/messages?thread=m-210",
     );
+    expect(idHref("demo", "note", "n-4")).toBe("/p/demo/notes?note=n-4");
     for (const kind of ["changeset", "workspace", "checkpoint"] as const) {
       expect(idHref("demo", kind, "X-1")).toBe("/p/demo/diff?to=X-1");
     }

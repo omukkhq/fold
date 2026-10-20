@@ -8,6 +8,8 @@ import {
   instructionsChange,
   instructionsSchema,
   ledArea,
+  noteDraft,
+  parseChatSearch,
 } from "./chat";
 
 function message(id: string, sender: string): MessageView {
@@ -93,5 +95,21 @@ describe("instructionsChange", () => {
       instructionsSchema.safeParse({ text: "x".repeat(MAX_INSTRUCTIONS + 1) })
         .success,
     ).toBe(false);
+  });
+});
+
+describe("parseChatSearch", () => {
+  it("keeps a note id and drops anything else", () => {
+    expect(parseChatSearch({ note: "n-4" })).toEqual({ note: "n-4" });
+    expect(parseChatSearch({ note: "T-4" })).toEqual({});
+    expect(parseChatSearch({ note: 4 })).toEqual({});
+    expect(parseChatSearch({})).toEqual({});
+  });
+});
+
+describe("noteDraft", () => {
+  it("starts a reply to a note with its mention", () => {
+    expect(noteDraft("n-4")).toBe("#n-4 ");
+    expect(noteDraft(undefined)).toBe("");
   });
 });

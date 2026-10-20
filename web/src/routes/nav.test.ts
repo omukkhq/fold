@@ -10,6 +10,7 @@ describe("NAV_ENTRIES", () => {
       "Requests",
       "Agents",
       "Messages",
+      "Notes",
       "Repository",
     ]);
   });
@@ -35,6 +36,7 @@ describe("activeNav", () => {
     ["/p/demo/requests/RQ-4", "requests"],
     ["/p/demo/agents", "agents"],
     ["/p/demo/messages", "messages"],
+    ["/p/demo/notes", "notes"],
     ["/p/demo/repository", "repository"],
   ])("%s selects %s", (path, id) => {
     expect(activeNav(path)).toBe(id);

@@ -16,6 +16,7 @@ import {
   ListChecks,
   MessageSquare,
   Milestone,
+  NotebookPen,
   Pause,
   Pencil,
   Play,
@@ -637,6 +638,14 @@ const SPECS: Record<EventType, Spec> = {
         : e.data.kind === "head_moved"
           ? "the Git branch is back where fold left it"
           : "the project folder follows main again",
+  },
+  "note.added": {
+    icon: NotebookPen,
+    text: (e) => {
+      const note = text(e.data.note) ?? "a decision";
+      const area = text(e.data.area);
+      return area === null ? `noted ${note}` : `noted ${note} in ${area}`;
+    },
   },
   "message.sent": {
     icon: MessageSquare,

@@ -32,6 +32,8 @@ export function idHref(slug: string, kind: IdKind, id: string): string {
       return withQuery(projectPath(slug, "repository"), { revision: id });
     case "message":
       return withQuery(projectPath(slug, "messages"), { thread: id });
+    case "note":
+      return withQuery(projectPath(slug, "notes"), { note: id });
     case "changeset":
     case "workspace":
     case "checkpoint":

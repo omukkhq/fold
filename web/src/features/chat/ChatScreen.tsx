@@ -31,12 +31,22 @@ import {
   instructionsChange,
   instructionsSchema,
   ledArea,
+  noteDraft,
   type InstructionsValues,
 } from "./chat";
 
 const MINUTE_MS = 60_000;
 
-export function ChatScreen({ slug, agent }: { slug: string; agent: string }) {
+export function ChatScreen({
+  slug,
+  agent,
+  note,
+}: {
+  slug: string;
+  agent: string;
+  /** A decision note the human answers about; the message to write starts with its mention. */
+  note?: string;
+}) {
   const chat = useQuery(chatQuery(slug, agent));
   const workers = useQuery(workersQuery(slug));
   const session = useQuery(sessionQuery());
@@ -153,7 +163,7 @@ export function ChatScreen({ slug, agent }: { slug: string; agent: string }) {
               Tell fold your name to write to {agent}.
             </p>
           ) : (
-            <ChatForm slug={slug} agent={agent} />
+            <ChatForm slug={slug} agent={agent} note={note} />
           )}
         </section>
         {area === null ? null : (
@@ -169,7 +179,15 @@ export function ChatScreen({ slug, agent }: { slug: string; agent: string }) {
   );
 }
 
-function ChatForm({ slug, agent }: { slug: string; agent: string }) {
+function ChatForm({
+  slug,
+  agent,
+  note,
+}: {
+  slug: string;
+  agent: string;
+  note: string | undefined;
+}) {
   const queryClient = useQueryClient();
   const send = useMutation({
     mutationFn: (body: string) => sendChat(slug, agent, body),
@@ -184,12 +202,12 @@ function ChatForm({ slug, agent }: { slug: string; agent: string }) {
     formState: { errors, isSubmitting },
   } = useForm<ReplyValues>({
     resolver: zodResolver(replySchema),
-    defaultValues: { body: "" },
+    defaultValues: { body: noteDraft(note) },
   });
   const submit = handleSubmit(async ({ body }) => {
     try {
       await send.mutateAsync(body.trim());
-      reset();
+      reset({ body: "" });
     } catch (error) {
       setError("root", { message: failureText(error) });
     }

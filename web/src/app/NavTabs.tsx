@@ -8,10 +8,11 @@ import {
   Inbox,
   Kanban,
   MessagesSquare,
+  NotebookPen,
   Plus,
   type LucideIcon,
 } from "lucide-react";
-import { awaitingHumanQuery } from "../api/queries";
+import { awaitingHumanQuery, notesUnreadQuery } from "../api/queries";
 import { HrefLink } from "./HrefLink";
 import { cn } from "../lib/cn";
 import { focusRing } from "../lib/focus";
@@ -27,6 +28,7 @@ const ICONS: Record<NavId, LucideIcon> = {
   requests: Inbox,
   agents: Bot,
   messages: MessagesSquare,
+  notes: NotebookPen,
   repository: History,
 };
 
@@ -34,6 +36,7 @@ export function NavTabs({ slug }: { slug: string }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const active = activeNav(pathname);
   const { data: awaiting = 0 } = useQuery(awaitingHumanQuery(slug));
+  const { data: unreadNotes = null } = useQuery(notesUnreadQuery(slug));
   return (
     <nav aria-label="Project" className={cn(TAB_LIST, "bg-surface px-24")}>
       {NAV_ENTRIES.map((entry) => {
@@ -55,6 +58,15 @@ export function NavTabs({ slug }: { slug: string }) {
                 className="rounded-s bg-ink px-6 py-2 text-caption leading-snug font-semibold text-on-ink"
               >
                 {awaiting}
+              </span>
+            ) : null}
+            {entry.id === "notes" && unreadNotes !== null && unreadNotes > 0 ? (
+              <span
+                role="status"
+                aria-label={`${String(unreadNotes)} unread notes`}
+                className="rounded-s bg-ink px-6 py-2 text-caption leading-snug font-semibold text-on-ink"
+              >
+                {unreadNotes}
               </span>
             ) : null}
           </HrefLink>

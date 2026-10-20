@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { MessageSquare } from "lucide-react";
 import { agentBarQuery } from "../api/agentBar";
 import { projectQuery } from "../api/queries";
 import { PresenceDot } from "../components/avatar/PresenceDot";
@@ -7,6 +8,7 @@ import { focusRing } from "../lib/focus";
 import { useLiveStatus } from "../live/status";
 import { useNow } from "../live/useNow";
 import { PersonName } from "../people/PersonName";
+import { agentChatPath } from "../routes/paths";
 import {
   agentBoardPath,
   chipAgents,
@@ -30,7 +32,7 @@ export function AgentChips({ slug }: { slug: string }) {
   return (
     <ul aria-label="Agents" className="flex items-center gap-6">
       {chipAgents(agents.data, paused).map((agent) => (
-        <li key={agent.name}>
+        <li key={agent.name} className="flex items-center gap-2">
           <HrefLink
             href={agentBoardPath(slug, agent.name)}
             className={cn(
@@ -43,6 +45,16 @@ export function AgentChips({ slug }: { slug: string }) {
             <span className="text-meta text-text-muted">
               {chipStateText(agent, status, now, paused)}
             </span>
+          </HrefLink>
+          <HrefLink
+            href={agentChatPath(slug, agent.name)}
+            aria-label={`Chat with ${agent.name}`}
+            className={cn(
+              "inline-flex items-center rounded-chip p-4 text-text-muted hover:bg-sunken hover:text-text",
+              focusRing,
+            )}
+          >
+            <MessageSquare aria-hidden="true" size={13} />
           </HrefLink>
         </li>
       ))}

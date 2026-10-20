@@ -18,6 +18,7 @@ import { Route as PSlugAgentsRouteImport } from './routes/p.$slug.agents'
 import { Route as PSlugBoardRouteImport } from './routes/p.$slug.board'
 import { Route as PSlugDiffRouteImport } from './routes/p.$slug.diff'
 import { Route as PSlugMessagesRouteImport } from './routes/p.$slug.messages'
+import { Route as PSlugNotesRouteImport } from './routes/p.$slug.notes'
 import { Route as PSlugProposalsRouteImport } from './routes/p.$slug.proposals'
 import { Route as PSlugRepositoryRouteImport } from './routes/p.$slug.repository'
 import { Route as PSlugRequestsRouteImport } from './routes/p.$slug.requests'
@@ -71,6 +72,11 @@ const PSlugDiffRoute = PSlugDiffRouteImport.update({
 const PSlugMessagesRoute = PSlugMessagesRouteImport.update({
   id: '/messages',
   path: '/messages',
+  getParentRoute: () => PSlugRoute,
+} as any)
+const PSlugNotesRoute = PSlugNotesRouteImport.update({
+  id: '/notes',
+  path: '/notes',
   getParentRoute: () => PSlugRoute,
 } as any)
 const PSlugProposalsRoute = PSlugProposalsRouteImport.update({
@@ -129,6 +135,7 @@ export interface FileRoutesByFullPath {
   '/p/$slug/board': typeof PSlugBoardRoute
   '/p/$slug/diff': typeof PSlugDiffRoute
   '/p/$slug/messages': typeof PSlugMessagesRoute
+  '/p/$slug/notes': typeof PSlugNotesRoute
   '/p/$slug/proposals': typeof PSlugProposalsRoute
   '/p/$slug/repository': typeof PSlugRepositoryRoute
   '/p/$slug/requests': typeof PSlugRequestsRoute
@@ -149,6 +156,7 @@ export interface FileRoutesByTo {
   '/p/$slug/board': typeof PSlugBoardRoute
   '/p/$slug/diff': typeof PSlugDiffRoute
   '/p/$slug/messages': typeof PSlugMessagesRoute
+  '/p/$slug/notes': typeof PSlugNotesRoute
   '/p/$slug/proposals': typeof PSlugProposalsRoute
   '/p/$slug/repository': typeof PSlugRepositoryRoute
   '/p/$slug/requests': typeof PSlugRequestsRoute
@@ -170,6 +178,7 @@ export interface FileRoutesById {
   '/p/$slug/board': typeof PSlugBoardRoute
   '/p/$slug/diff': typeof PSlugDiffRoute
   '/p/$slug/messages': typeof PSlugMessagesRoute
+  '/p/$slug/notes': typeof PSlugNotesRoute
   '/p/$slug/proposals': typeof PSlugProposalsRoute
   '/p/$slug/repository': typeof PSlugRepositoryRoute
   '/p/$slug/requests': typeof PSlugRequestsRoute
@@ -192,6 +201,7 @@ export interface FileRouteTypes {
     | '/p/$slug/board'
     | '/p/$slug/diff'
     | '/p/$slug/messages'
+    | '/p/$slug/notes'
     | '/p/$slug/proposals'
     | '/p/$slug/repository'
     | '/p/$slug/requests'
@@ -212,6 +222,7 @@ export interface FileRouteTypes {
     | '/p/$slug/board'
     | '/p/$slug/diff'
     | '/p/$slug/messages'
+    | '/p/$slug/notes'
     | '/p/$slug/proposals'
     | '/p/$slug/repository'
     | '/p/$slug/requests'
@@ -232,6 +243,7 @@ export interface FileRouteTypes {
     | '/p/$slug/board'
     | '/p/$slug/diff'
     | '/p/$slug/messages'
+    | '/p/$slug/notes'
     | '/p/$slug/proposals'
     | '/p/$slug/repository'
     | '/p/$slug/requests'
@@ -315,6 +327,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PSlugMessagesRouteImport
       parentRoute: typeof PSlugRoute
     }
+    '/p/$slug/notes': {
+      id: '/p/$slug/notes'
+      path: '/notes'
+      fullPath: '/p/$slug/notes'
+      preLoaderRoute: typeof PSlugNotesRouteImport
+      parentRoute: typeof PSlugRoute
+    }
     '/p/$slug/proposals': {
       id: '/p/$slug/proposals'
       path: '/proposals'
@@ -387,6 +406,7 @@ interface PSlugRouteChildren {
   PSlugBoardRoute: typeof PSlugBoardRoute
   PSlugDiffRoute: typeof PSlugDiffRoute
   PSlugMessagesRoute: typeof PSlugMessagesRoute
+  PSlugNotesRoute: typeof PSlugNotesRoute
   PSlugProposalsRoute: typeof PSlugProposalsRoute
   PSlugRepositoryRoute: typeof PSlugRepositoryRoute
   PSlugRequestsRoute: typeof PSlugRequestsRoute
@@ -404,6 +424,7 @@ const PSlugRouteChildren: PSlugRouteChildren = {
   PSlugBoardRoute: PSlugBoardRoute,
   PSlugDiffRoute: PSlugDiffRoute,
   PSlugMessagesRoute: PSlugMessagesRoute,
+  PSlugNotesRoute: PSlugNotesRoute,
   PSlugProposalsRoute: PSlugProposalsRoute,
   PSlugRepositoryRoute: PSlugRepositoryRoute,
   PSlugRequestsRoute: PSlugRequestsRoute,

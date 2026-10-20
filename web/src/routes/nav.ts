@@ -7,6 +7,7 @@ export type NavId =
   | "requests"
   | "agents"
   | "messages"
+  | "notes"
   | "repository";
 
 export interface NavEntry {
@@ -24,6 +25,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   { id: "requests", label: "Requests", segment: "requests" },
   { id: "agents", label: "Agents", segment: "agents" },
   { id: "messages", label: "Messages", segment: "messages" },
+  { id: "notes", label: "Notes", segment: "notes" },
   { id: "repository", label: "Repository", segment: "repository" },
 ];
 

@@ -38,6 +38,7 @@ const DOMAINS = new Set([
   "human_change",
   "stash",
   "checks",
+  "note",
 ]);
 
 export function domainOf(type: string): string | null {
@@ -455,6 +456,8 @@ function invalidationKeys(
       ];
     case "project":
       return [keys.project(slug), keys.workers(slug), keys.agents(slug)];
+    case "note":
+      return [keys.notes(slug)];
     case "request":
       return type === "request.approved"
         ? [

@@ -4,6 +4,7 @@ import { RECENT_EVENTS, listAgents } from "./agents";
 import { getProjectGit } from "./git";
 import { keys } from "./keys";
 import { countAwaitingHuman, getChat, listThreads } from "./messages";
+import { countUnreadNotes, listNotes } from "./notes";
 import { getProject, listProjects } from "./projects";
 import {
   getProposal,
@@ -97,6 +98,20 @@ export const awaitingHumanQuery = (slug: string) =>
   queryOptions({
     queryKey: keys.messagesAwaiting(slug),
     queryFn: () => countAwaitingHuman(slug),
+    staleTime: Infinity,
+  });
+
+export const notesQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.notes(slug),
+    queryFn: () => listNotes(slug),
+    staleTime: Infinity,
+  });
+
+export const notesUnreadQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.notesUnread(slug),
+    queryFn: () => countUnreadNotes(slug),
     staleTime: Infinity,
   });
 

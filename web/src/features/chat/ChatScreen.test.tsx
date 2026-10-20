@@ -71,7 +71,7 @@ function routes(extra: Routes = {}): Routes {
   };
 }
 
-function setup(agent = "web-lead") {
+function setup(agent = "web-lead", note?: string) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -79,7 +79,7 @@ function setup(agent = "web-lead") {
   const index = createRoute({
     getParentRoute: () => root,
     path: "/",
-    component: () => <ChatScreen slug="demo" agent={agent} />,
+    component: () => <ChatScreen slug="demo" agent={agent} note={note} />,
   });
   const router = createRouter({
     routeTree: root.addChildren([index]),
@@ -135,6 +135,28 @@ describe("ChatScreen", () => {
     expect(await within(chat).findByText("Use the tokens.")).toBeTruthy();
     const post = calls.find((call) => call.method === "POST");
     expect(post?.body).toEqual({ body: "Use the tokens." });
+  });
+
+  it("starts a reply to a note with the note's mention", async () => {
+    const calls = stubFetch(
+      routes({
+        [`POST ${BASE}/agents/web-lead/chat`]: {
+          status: 201,
+          body: message("m-14", "human:tanim", "#n-4 Why?"),
+        },
+      }),
+    );
+    setup("web-lead", "n-4");
+    const chat = await screen.findByRole("region", { name: "Chat" });
+    const box = await within(chat).findByLabelText("Message");
+    expect((box as HTMLTextAreaElement).value).toBe("#n-4 ");
+    await userEvent.type(box, "Why?");
+    await userEvent.click(within(chat).getByRole("button", { name: "Send" }));
+    await waitFor(() => {
+      expect((box as HTMLTextAreaElement).value).toBe("");
+    });
+    const post = calls.find((call) => call.method === "POST");
+    expect(post?.body).toEqual({ body: "#n-4 Why?" });
   });
 
   it("shows the options of a question the agent asks in the chat", async () => {

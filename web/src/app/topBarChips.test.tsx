@@ -135,13 +135,18 @@ describe("AgentChips", () => {
     expect(screen.queryByText("2 working")).toBeNull();
   });
 
-  it("opens the board filtered to the agent of the chip", async () => {
+  it("opens the board filtered to the agent of the chip and links its chat", async () => {
     liveStatusStore.set({ state: "live" });
     const client = cacheOnly();
     client.setQueryData(keys.agentBar("demo"), [frontend]);
     const router = await renderChips(client);
-    const chip = screen.getByRole("link", { name: /frontend/ });
+    const [chip, chat] = screen.getAllByRole("link");
+    if (chip === undefined || chat === undefined) {
+      throw new Error("the chip and its chat link");
+    }
     expect(chip.getAttribute("href")).toBe("/p/demo/board?agent=frontend");
+    expect(chat.getAttribute("aria-label")).toBe("Chat with frontend");
+    expect(chat.getAttribute("href")).toBe("/p/demo/agents/frontend/chat");
     await userEvent.click(chip);
     expect(await screen.findByText("Board for frontend")).toBeTruthy();
     expect(router.state.location.pathname).toBe("/p/demo/board");

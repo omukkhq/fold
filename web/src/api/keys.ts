@@ -73,6 +73,9 @@ export const keys = {
   /** Under the messages prefix, so every message event refreshes the chat with an agent. */
   chat: (slug: string, agent: string) =>
     [slug, "messages", "chat", agent] as const,
+  notes: (slug: string) => [slug, "notes"] as const,
+  /** Under the notes prefix, so every note event and read mark that refreshes the notes also refreshes the count. */
+  notesUnread: (slug: string) => [slug, "notes", "unread"] as const,
   repository: (slug: string) => [slug, "repository"] as const,
   /** Outside the repository prefix: a revision never changes, so no integration refreshes its trees and files. */
   revisionTree: (slug: string, revision: string, dir: string) =>
