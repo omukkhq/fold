@@ -3,9 +3,9 @@ use std::sync::Arc;
 use fold_core::events::types;
 use fold_core::messages::resolve;
 use fold_core::{
-    Actor, Address, AddressedAs, AgentActor, AgentName, Choice, Clock, EventError, FoldError, HumanName,
-    IdKind, MessageBody, MessageChoices, MessageId, NewEvent, ProposalId, Recipient, RequestId,
-    Sender, Target, TaskId, Timestamp, WorkerName, codes, policy,
+    Actor, Address, AddressedAs, AgentActor, AgentName, Choice, Clock, EventError, FoldError,
+    HumanName, IdKind, MessageBody, MessageChoices, MessageId, NewEvent, ProposalId, Recipient,
+    RequestId, Sender, Target, TaskId, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::messages::{self, MessageHead, MessageRow, NewMessage, RecipientRow};
 use fold_store::tasks::claims;

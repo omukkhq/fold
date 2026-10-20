@@ -192,7 +192,8 @@ async fn a_task_worker_of_the_design_area_starts_with_the_areas_servers_model_an
 }
 
 #[tokio::test]
-async fn a_changed_profile_reaches_the_next_start_and_running_workers_hear_only_of_new_instructions() {
+async fn a_changed_profile_reaches_the_next_start_and_running_workers_hear_only_of_new_instructions()
+ {
     let fake = FakeClaude::new("result");
     let mut h = Harness::start_with_launcher(fake.launcher.clone()).await;
     h.make_main(MAIN).await;
@@ -240,7 +241,11 @@ async fn a_changed_profile_reaches_the_next_start_and_running_workers_hear_only_
         json!({"name": "design", "instructions": "Use the browser."}),
     )
     .await;
-    assert_eq!(h.message_rows().await, rows, "only new instructions are told");
+    assert_eq!(
+        h.message_rows().await,
+        rows,
+        "only new instructions are told"
+    );
 
     let cleared = h
         .call(

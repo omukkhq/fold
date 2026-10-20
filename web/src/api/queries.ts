@@ -3,7 +3,7 @@ import { getComparison, getFileDiff } from "./diff";
 import { RECENT_EVENTS, listAgents } from "./agents";
 import { getProjectGit } from "./git";
 import { keys } from "./keys";
-import { countAwaitingHuman, listThreads } from "./messages";
+import { countAwaitingHuman, getChat, listThreads } from "./messages";
 import { getProject, listProjects } from "./projects";
 import {
   getProposal,
@@ -83,6 +83,13 @@ export const threadQuery = (slug: string, thread: string) =>
   queryOptions({
     queryKey: keys.messagesThread(slug, thread),
     queryFn: () => getThread(slug, thread),
+    staleTime: Infinity,
+  });
+
+export const chatQuery = (slug: string, agent: string) =>
+  queryOptions({
+    queryKey: keys.chat(slug, agent),
+    queryFn: () => getChat(slug, agent),
     staleTime: Infinity,
   });
 

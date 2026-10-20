@@ -26,6 +26,7 @@ import { Route as PSlugProposalsIdRouteImport } from './routes/p.$slug.proposals
 import { Route as PSlugRequestsIdRouteImport } from './routes/p.$slug.requests_.$id'
 import { Route as PSlugTTaskRouteImport } from './routes/p.$slug.t.$task'
 import { Route as PSlugTNewRouteImport } from './routes/p.$slug.t.new'
+import { Route as PSlugAgentsAgentChatRouteImport } from './routes/p.$slug.agents_.$agent.chat'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -112,6 +113,11 @@ const PSlugTNewRoute = PSlugTNewRouteImport.update({
   path: '/t/new',
   getParentRoute: () => PSlugRoute,
 } as any)
+const PSlugAgentsAgentChatRoute = PSlugAgentsAgentChatRouteImport.update({
+  id: '/agents_/$agent/chat',
+  path: '/agents/$agent/chat',
+  getParentRoute: () => PSlugRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -131,6 +137,7 @@ export interface FileRoutesByFullPath {
   '/p/$slug/requests/$id': typeof PSlugRequestsIdRoute
   '/p/$slug/t/$task': typeof PSlugTTaskRoute
   '/p/$slug/t/new': typeof PSlugTNewRoute
+  '/p/$slug/agents/$agent/chat': typeof PSlugAgentsAgentChatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -150,6 +157,7 @@ export interface FileRoutesByTo {
   '/p/$slug/requests/$id': typeof PSlugRequestsIdRoute
   '/p/$slug/t/$task': typeof PSlugTTaskRoute
   '/p/$slug/t/new': typeof PSlugTNewRoute
+  '/p/$slug/agents/$agent/chat': typeof PSlugAgentsAgentChatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -170,6 +178,7 @@ export interface FileRoutesById {
   '/p/$slug/requests_/$id': typeof PSlugRequestsIdRoute
   '/p/$slug/t/$task': typeof PSlugTTaskRoute
   '/p/$slug/t/new': typeof PSlugTNewRoute
+  '/p/$slug/agents_/$agent/chat': typeof PSlugAgentsAgentChatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -191,6 +200,7 @@ export interface FileRouteTypes {
     | '/p/$slug/requests/$id'
     | '/p/$slug/t/$task'
     | '/p/$slug/t/new'
+    | '/p/$slug/agents/$agent/chat'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -210,6 +220,7 @@ export interface FileRouteTypes {
     | '/p/$slug/requests/$id'
     | '/p/$slug/t/$task'
     | '/p/$slug/t/new'
+    | '/p/$slug/agents/$agent/chat'
   id:
     | '__root__'
     | '/'
@@ -229,6 +240,7 @@ export interface FileRouteTypes {
     | '/p/$slug/requests_/$id'
     | '/p/$slug/t/$task'
     | '/p/$slug/t/new'
+    | '/p/$slug/agents_/$agent/chat'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -359,6 +371,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PSlugTNewRouteImport
       parentRoute: typeof PSlugRoute
     }
+    '/p/$slug/agents_/$agent/chat': {
+      id: '/p/$slug/agents_/$agent/chat'
+      path: '/agents/$agent/chat'
+      fullPath: '/p/$slug/agents/$agent/chat'
+      preLoaderRoute: typeof PSlugAgentsAgentChatRouteImport
+      parentRoute: typeof PSlugRoute
+    }
   }
 }
 
@@ -376,6 +395,7 @@ interface PSlugRouteChildren {
   PSlugRequestsIdRoute: typeof PSlugRequestsIdRoute
   PSlugTTaskRoute: typeof PSlugTTaskRoute
   PSlugTNewRoute: typeof PSlugTNewRoute
+  PSlugAgentsAgentChatRoute: typeof PSlugAgentsAgentChatRoute
 }
 
 const PSlugRouteChildren: PSlugRouteChildren = {
@@ -392,6 +412,7 @@ const PSlugRouteChildren: PSlugRouteChildren = {
   PSlugRequestsIdRoute: PSlugRequestsIdRoute,
   PSlugTTaskRoute: PSlugTTaskRoute,
   PSlugTNewRoute: PSlugTNewRoute,
+  PSlugAgentsAgentChatRoute: PSlugAgentsAgentChatRoute,
 }
 
 const PSlugRouteWithChildren = PSlugRoute._addFileChildren(PSlugRouteChildren)

@@ -7,8 +7,8 @@ use fold_core::roles::{
 };
 use fold_core::tasks::areas::check_new_area;
 use fold_core::{
-    Actor, AgentName, AreaName, FoldError, LabelName, MessageBody, NewEvent, ProjectConfig, ProposalId,
-    ReviewBatchId, Role, TaskId, WorkerName, WorkspaceId, codes,
+    Actor, AgentName, AreaName, FoldError, LabelName, MessageBody, NewEvent, ProjectConfig,
+    ProposalId, ReviewBatchId, Role, TaskId, WorkerName, WorkspaceId, codes,
 };
 use fold_store::agents::{self, AreaRow, NewWorkerProcess, WorkerProcessRow, WorkerRow};
 use fold_store::{StoreError, WriteTx};
@@ -276,7 +276,8 @@ impl AgentService {
                     .ok_or_else(|| area_not_found(name))?;
                 let profile = change.apply(&area.profile)?;
                 agents::set_area_profile(tx, area.id, &profile).await?;
-                if change.touches_instructions() && profile.instructions != area.profile.instructions
+                if change.touches_instructions()
+                    && profile.instructions != area.profile.instructions
                 {
                     let running: Vec<AgentName> = agents::list_worker_processes(tx.conn())
                         .await?

@@ -144,7 +144,9 @@ impl AreaProfileChange {
     /// The profile after the change. Added instructions that take the whole text over [`MAX_AREA_INSTRUCTIONS_CHARS`] are `invalid_request`.
     pub fn apply(&self, profile: &AreaProfile) -> Result<AreaProfile, FoldError> {
         let instructions = match (&self.add_instructions, &profile.instructions) {
-            (Some(added), Some(current)) => Some(check_instructions(&format!("{current}\n\n{added}"))?),
+            (Some(added), Some(current)) => {
+                Some(check_instructions(&format!("{current}\n\n{added}"))?)
+            }
             (Some(added), None) => Some(added.clone()),
             (None, _) => self.instructions.apply(profile.instructions.as_ref()),
         };
@@ -350,7 +352,10 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            instructions.apply(&AreaProfile::default()).unwrap().instructions,
+            instructions
+                .apply(&AreaProfile::default())
+                .unwrap()
+                .instructions,
             Some("write tests".to_owned())
         );
     }
@@ -373,17 +378,17 @@ mod tests {
             Some("draw\n\nuse the new tokens")
         );
         assert_eq!(
-            add.apply(&AreaProfile::default()).unwrap().instructions.as_deref(),
+            add.apply(&AreaProfile::default())
+                .unwrap()
+                .instructions
+                .as_deref(),
             Some("use the new tokens")
         );
         let full = AreaProfile {
             instructions: Some("é".repeat(MAX_AREA_INSTRUCTIONS_CHARS)),
             ..AreaProfile::default()
         };
-        assert_eq!(
-            add.apply(&full).unwrap_err().code(),
-            codes::INVALID_REQUEST
-        );
+        assert_eq!(add.apply(&full).unwrap_err().code(), codes::INVALID_REQUEST);
         for request in [
             AreaProfileRequest {
                 add_instructions: Some("a".to_owned()),

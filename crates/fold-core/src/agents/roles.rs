@@ -696,10 +696,7 @@ mod tests {
                 prompt.contains("send the request to the main agent"),
                 "{role:?}"
             );
-            assert!(
-                prompt.contains("tell the human in the chat"),
-                "{role:?}"
-            );
+            assert!(prompt.contains("tell the human in the chat"), "{role:?}");
         }
         assert!(
             Role::AreaLead

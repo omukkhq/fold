@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { idHref, projectPath, withQuery } from "./paths";
+import { agentChatPath, idHref, projectPath, withQuery } from "./paths";
 
 describe("projectPath", () => {
   it("joins the slug and the segments below /p", () => {
@@ -40,5 +40,13 @@ describe("idHref", () => {
     for (const kind of ["changeset", "workspace", "checkpoint"] as const) {
       expect(idHref("demo", kind, "X-1")).toBe("/p/demo/diff?to=X-1");
     }
+  });
+});
+
+describe("agentChatPath", () => {
+  it("opens the chat under the agent on the Agents screen", () => {
+    expect(agentChatPath("demo", "web-lead")).toBe(
+      "/p/demo/agents/web-lead/chat",
+    );
   });
 });

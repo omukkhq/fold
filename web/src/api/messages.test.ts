@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorReply, stubFetch } from "../test/stubFetch";
 import { isApiError } from "./errors";
-import { countAwaitingHuman, listThreads, sendMessage } from "./messages";
+import {
+  countAwaitingHuman,
+  getChat,
+  listThreads,
+  sendChat,
+  sendMessage,
+} from "./messages";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -70,5 +76,36 @@ describe("countAwaitingHuman", () => {
     });
     await expect(countAwaitingHuman("demo")).resolves.toBe(3);
     expect(calls[0]?.search.get("limit")).toBe("1");
+  });
+});
+
+describe("chat", () => {
+  it("reads the chat with an agent and writes to it", async () => {
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo/agents/web-lead/chat": {
+        body: { agent: "web-lead", messages: [], next: null },
+      },
+      "POST /api/v1/projects/demo/agents/web-lead/chat": {
+        status: 201,
+        body: { id: "m-4", thread: "m-4" },
+      },
+    });
+    expect((await getChat("demo", "web-lead")).agent).toBe("web-lead");
+    expect((await sendChat("demo", "web-lead", "use the tokens")).id).toBe(
+      "m-4",
+    );
+    expect(calls[1]?.body).toEqual({ body: "use the tokens" });
+  });
+
+  it("rejects with the daemon's code for an unknown agent", async () => {
+    stubFetch({
+      "GET /api/v1/projects/demo/agents/nobody/chat": errorReply(
+        404,
+        "agent_not_found",
+      ),
+    });
+    await expect(getChat("demo", "nobody")).rejects.toSatisfy((e: unknown) =>
+      isApiError(e, "agent_not_found"),
+    );
   });
 });

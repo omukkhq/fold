@@ -431,4 +431,19 @@ describe("AgentsScreen", () => {
     const alert = await within(panel).findByRole("alert");
     expect(alert.textContent).toContain("code: permission_question_closed");
   });
+  it("links the main agent and each lead to its chat", async () => {
+    stubFetch(routes());
+    await setup([agent("main")], team);
+    expect(
+      within(row("web-lead"))
+        .getByRole("link", { name: "Chat with web-lead" })
+        .getAttribute("href"),
+    ).toBe("/p/demo/agents/web-lead/chat");
+    expect(
+      within(row("main")).getByRole("link", { name: "Chat with main" }),
+    ).toBeTruthy();
+    expect(
+      within(row("web-worker")).queryByRole("link", { name: /^Chat with/ }),
+    ).toBeNull();
+  });
 });

@@ -84,3 +84,19 @@ export async function listNeedsYou(slug: string): Promise<NeedsYouItem[]> {
   );
   return items;
 }
+
+export type UpdateAreaBody = Schemas["UpdateAreaBody"];
+
+/** A named human changes an area's profile; it answers with the area after the change. Rejects with `area_not_found`, `invalid_request` or `human_name_required`. */
+export function updateArea(
+  slug: string,
+  name: string,
+  body: UpdateAreaBody,
+): Promise<AreaEntry> {
+  return unwrap(
+    api.PATCH("/api/v1/projects/{slug}/areas/{name}", {
+      params: { path: { slug, name } },
+      body,
+    }),
+  );
+}

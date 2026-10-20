@@ -1,9 +1,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use fold_core::{
-    Address, AgentName, Choice, FoldError, MessageBody, MessageId, RequestId, TaskId,
-};
+use fold_core::{Address, AgentName, Choice, FoldError, MessageBody, MessageId, RequestId, TaskId};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;

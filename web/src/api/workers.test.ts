@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorReply, stubFetch } from "@/test/stubFetch";
 import {
+  areaEntry,
   needsItem,
   permissionQuestion,
   workerList,
@@ -14,6 +15,7 @@ import {
   listWorkers,
   startWorker,
   stopWorker,
+  updateArea,
 } from "./workers";
 
 afterEach(() => {
@@ -80,5 +82,20 @@ describe("questions", () => {
     const item = needsItem();
     stubFetch({ [`GET ${BASE}/needs-you`]: { body: { items: [item] } } });
     expect(await listNeedsYou("demo")).toEqual([item]);
+  });
+});
+
+describe("updateArea", () => {
+  it("patches the area and answers with it", async () => {
+    const calls = stubFetch({
+      [`PATCH ${BASE}/areas/web`]: {
+        body: areaEntry("web", "frontend", { instructions: "Use the tokens." }),
+      },
+    });
+    const area = await updateArea("demo", "web", {
+      add_instructions: "Use the tokens.",
+    });
+    expect(area.instructions).toBe("Use the tokens.");
+    expect(calls[0]?.body).toEqual({ add_instructions: "Use the tokens." });
   });
 });

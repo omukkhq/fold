@@ -1,12 +1,22 @@
-import { CornerDownRight, ShieldAlert, UserPlus, Users } from "lucide-react";
+import {
+  CornerDownRight,
+  MessageSquare,
+  ShieldAlert,
+  UserPlus,
+  Users,
+} from "lucide-react";
 import { Fragment, type ReactNode } from "react";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
+import {
+  buttonClasses,
+  buttonIconClass,
+} from "@/components/button/buttonStyles";
 import { Label } from "@/components/label/Label";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { PersonName } from "@/people/PersonName";
-import { projectPath } from "@/routes/paths";
+import { agentChatPath, projectPath } from "@/routes/paths";
 import { StatePill, StepText } from "./parts";
 import { StopWorker } from "./StopWorker";
 import { areaNote, type TeamGroup, type TeamRow } from "./team";
@@ -137,7 +147,21 @@ function Row({
         <StepText step={row.step} />
       </td>
       <td className={CELL}>
-        <StopCell slug={slug} row={row} human={human} />
+        <span className="flex items-center gap-6">
+          {row.child ? null : (
+            <HrefLink
+              href={agentChatPath(slug, row.name)}
+              aria-label={`Chat with ${row.name}`}
+              className={cn(buttonClasses("secondary", "sm"), focusRing)}
+            >
+              <span className={buttonIconClass("secondary")}>
+                <MessageSquare aria-hidden="true" size={13} />
+              </span>
+              Chat
+            </HrefLink>
+          )}
+          <StopCell slug={slug} row={row} human={human} />
+        </span>
       </td>
     </tr>
   );

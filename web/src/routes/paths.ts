@@ -5,6 +5,11 @@ export function projectPath(slug: string, ...segments: string[]): string {
   return `/p/${[slug, ...segments].map(encodeURIComponent).join("/")}`;
 }
 
+/** The direct chat with one agent. Other screens link here to answer an agent outside any task, so the path stays the same. */
+export function agentChatPath(slug: string, agent: string): string {
+  return projectPath(slug, "agents", agent, "chat");
+}
+
 /** The path with its query string, or the path alone when the query is empty. */
 export function withQuery(
   path: string,

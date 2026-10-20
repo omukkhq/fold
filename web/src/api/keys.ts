@@ -70,6 +70,9 @@ export const keys = {
     [slug, "messages", "thread", thread] as const,
   /** Under the messages prefix, so every message event that refreshes the threads also refreshes the count. */
   messagesAwaiting: (slug: string) => [slug, "messages", "awaiting"] as const,
+  /** Under the messages prefix, so every message event refreshes the chat with an agent. */
+  chat: (slug: string, agent: string) =>
+    [slug, "messages", "chat", agent] as const,
   repository: (slug: string) => [slug, "repository"] as const,
   /** Outside the repository prefix: a revision never changes, so no integration refreshes its trees and files. */
   revisionTree: (slug: string, revision: string, dir: string) =>

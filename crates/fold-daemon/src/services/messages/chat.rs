@@ -45,7 +45,9 @@ impl MessageService {
             rows.remove(0);
         }
         let messages: Vec<MessageView> = rows.into_iter().map(message_view).collect();
-        let next = more.then(|| messages.first().map(|message| message.id)).flatten();
+        let next = more
+            .then(|| messages.first().map(|message| message.id))
+            .flatten();
         Ok(ChatPage {
             agent: agent.clone(),
             messages,

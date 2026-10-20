@@ -56,3 +56,31 @@ export async function countAwaitingHuman(slug: string): Promise<number> {
   );
   return page.total_awaiting_human;
 }
+
+export type ChatView = Schemas["ChatView"];
+
+/** The newest page of the direct chat between the humans and `agent`, oldest message first. Rejects with `agent_not_found` for an unknown agent. */
+export async function getChat(slug: string, agent: string): Promise<ChatView> {
+  return unwrap(
+    api.GET("/api/v1/projects/{slug}/agents/{name}/chat", {
+      params: { path: { slug, name: agent } },
+    }),
+  );
+}
+
+/**
+ * Writes to `agent` in its direct chat and answers with the stored message, which no task holds. The message changes no task state.
+ * Rejects with the daemon's codes, such as `agent_not_found` or `human_name_required`.
+ */
+export async function sendChat(
+  slug: string,
+  agent: string,
+  body: string,
+): Promise<MessageView> {
+  return unwrap(
+    api.POST("/api/v1/projects/{slug}/agents/{name}/chat", {
+      params: { path: { slug, name: agent } },
+      body: { body },
+    }),
+  );
+}

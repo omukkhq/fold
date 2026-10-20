@@ -127,8 +127,14 @@ async fn acceptance_19_a_human_chats_with_a_lead_and_the_main_agent_outside_any_
     assert_eq!(sent["recipients"][0]["name"], LEAD);
     until_stdin(&fake, LEAD, &message_notice(&first)).await;
     let inbox = h.call(LEAD, "get_inbox", json!({})).await;
-    assert!(inbox.to_string().contains("Use the new design tokens"), "{inbox}");
-    assert!(inbox.to_string().contains(&format!("human:{HUMAN}")), "{inbox}");
+    assert!(
+        inbox.to_string().contains("Use the new design tokens"),
+        "{inbox}"
+    );
+    assert!(
+        inbox.to_string().contains(&format!("human:{HUMAN}")),
+        "{inbox}"
+    );
 
     let answer = h
         .send_with(

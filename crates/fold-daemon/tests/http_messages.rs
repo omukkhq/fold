@@ -478,7 +478,14 @@ async fn a_chat_holds_only_the_direct_messages_between_the_humans_and_one_agent(
     fixture.send("backend", &["frontend"], None, None).await;
     let chat = |agent: &str| format!("{BASE}/agents/{agent}/chat");
     let post = async |agent: &str, body: Value| {
-        call(fixture.http(), Method::POST, &chat(agent), &[COOKIE], Some(body)).await
+        call(
+            fixture.http(),
+            Method::POST,
+            &chat(agent),
+            &[COOKIE],
+            Some(body),
+        )
+        .await
     };
     let (status, first) = post("frontend", json!({"body": "use the tokens"})).await;
     assert_eq!(status, StatusCode::CREATED, "{first}");
@@ -503,7 +510,10 @@ async fn a_chat_holds_only_the_direct_messages_between_the_humans_and_one_agent(
         .unwrap();
     let (_, second) = post("frontend", json!({"body": "the new ones"})).await;
     assert_eq!(second["id"], "m-5");
-    assert_eq!(second["thread"], "m-4", "it joins the newest message's thread");
+    assert_eq!(
+        second["thread"], "m-4",
+        "it joins the newest message's thread"
+    );
 
     let (status, page) = fixture.get("/agents/frontend/chat").await;
     assert_eq!(status, StatusCode::OK, "{page}");
