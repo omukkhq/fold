@@ -86,11 +86,15 @@ impl MessageService {
         let ids: Vec<MessageId> = heads.iter().map(|head| head.thread).collect();
         let rows = messages::threads(&mut tx, &ids).await?;
         let awaiting = messages::threads_awaiting_human(&mut *tx).await?;
+        let connected = self.connected(&mut tx).await?;
         tx.commit().await.map_err(StoreError::from)?;
         let mut items: Vec<ThreadView> = group(rows)
             .into_iter()
             .map(|(thread, rows)| thread_view(thread, rows, &awaiting))
             .collect();
+        for item in &mut items {
+            self.mark_reach(&mut item.messages, &connected);
+        }
         items.sort_by_key(|thread| std::cmp::Reverse(last_number(thread)));
         let next = more.then(|| heads.last().map(|head| head.last)).flatten();
         Ok(ThreadPage {
@@ -108,8 +112,11 @@ impl MessageService {
             .ok_or_else(|| message_not_found(message))?;
         let rows = messages::thread(&mut tx, head.thread).await?;
         let awaiting = awaiting_set(&mut tx, head.thread).await?;
+        let connected = self.connected(&mut tx).await?;
         tx.commit().await.map_err(StoreError::from)?;
-        Ok(thread_view(head.thread, rows, &awaiting))
+        let mut view = thread_view(head.thread, rows, &awaiting);
+        self.mark_reach(&mut view.messages, &connected);
+        Ok(view)
     }
 
     /// A human's feedback (`task`), message in a request's clarification thread (`request`, linked to `task` when given) or reply (`reply_to`). A reply joins the parent's thread and inherits its task unless `task` names another, and its request; it answers a question to humans, which clears the task's `question` attention.
@@ -168,8 +175,11 @@ impl MessageService {
         };
         let rows = messages::thread(&mut tx, thread).await?;
         let awaiting = awaiting_set(&mut tx, thread).await?;
+        let connected = self.connected(&mut tx).await?;
         tx.commit().await.map_err(StoreError::from)?;
-        Ok(Some(thread_view(thread, rows, &awaiting)))
+        let mut view = thread_view(thread, rows, &awaiting);
+        self.mark_reach(&mut view.messages, &connected);
+        Ok(Some(view))
     }
 
     /// A named human's message in the request's clarification thread, linked to `task` when given. It goes to `to` when given, otherwise to the request's drafter; with neither it is `recipient_not_found`.

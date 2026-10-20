@@ -174,6 +174,19 @@ async fn red_integration_checks_send_the_proposal_back_to_its_author() {
     assert_eq!(summary.state, ProposalState::Open);
     assert_eq!(summary.turn, Some(Turn::WithAuthor));
     assert_eq!(fx.status(1).await, TaskStatus::InProgress);
+    let card = fx
+        .tasks
+        .board()
+        .await
+        .unwrap()
+        .columns
+        .into_iter()
+        .flat_map(|column| column.cards)
+        .find(|card| card.id == t(1))
+        .unwrap();
+    assert!(card.proposal.unwrap().checks_failed, "the card shows it");
+    let view = fx.tasks.get_view(t(1)).await.unwrap();
+    assert!(view.proposal.unwrap().checks_failed, "the task shows it");
     assert_eq!(
         fx.count("SELECT COUNT(*) FROM revisions").await,
         1,
@@ -202,6 +215,8 @@ async fn red_integration_checks_send_the_proposal_back_to_its_author() {
         .detail()
         .unwrap();
     assert!(!next.summary.checks_failed, "a new version clears the flag");
+    let view = fx.tasks.get_view(t(1)).await.unwrap();
+    assert!(!view.proposal.unwrap().checks_failed);
 }
 
 #[tokio::test]

@@ -1,10 +1,10 @@
 import type { BoardCard } from "@/api/board";
 import { formatQuiet, formatSince } from "@/format/time";
 import type { LiveWorkspace } from "@/live/envelope";
-import { hasKind } from "./attention";
+import { sentText, sentVersion, showsStall, waitText } from "./sentVersion";
 
 export interface ActivityLine {
-  /** `Editing src/a.ts`, or `No edits for 6 min` when the worker is stalled, with `· blocked` when the task also waits on a prerequisite. */
+  /** `Editing src/a.ts`; `Sent P-1 v1 · waits for review` while the workspace files are the open proposal's newest version; or `No edits for 6 min` when the worker is stalled and no sent version waits on others, with `· blocked` when the task also waits on a prerequisite. */
   text: string;
   /** `12 s ago`. */
   since: string;
@@ -15,10 +15,14 @@ export interface ActivityLine {
 
 /**
  * The card's live line. A board payload that carries `activity` names the file and the time of the last edit; a live frame
- * of the same workspace that arrived later moves the time forward, and names the file when exactly one changed. `stalled` comes only from the daemon's `attention` list.
+ * of the same workspace that arrived later moves the time forward, and names the file when exactly one changed. `stalled` comes only from the daemon's `attention` list,
+ * and never shows while the holder's sent version waits on others.
  */
 export function activityLine(
-  card: Pick<BoardCard, "activity" | "attention" | "blocked">,
+  card: Pick<
+    BoardCard,
+    "activity" | "attention" | "blocked" | "proposal" | "edits_after_version"
+  >,
   live: LiveWorkspace | undefined,
   now: number,
 ): ActivityLine | null {
@@ -30,7 +34,13 @@ export function activityLine(
     activity?.at ?? Number.NEGATIVE_INFINITY,
     live?.last_activity_at ?? Number.NEGATIVE_INFINITY,
   );
-  const stalled = hasKind(card.attention, "stalled");
+  const sent = sentVersion(
+    card.proposal,
+    card.edits_after_version,
+    live ?? null,
+    card.attention,
+  );
+  const stalled = showsStall(sent, card.attention);
   const [only, ...rest] = live?.files ?? [];
   const path =
     activity?.path ??
@@ -42,6 +52,9 @@ export function activityLine(
     if (card.blocked) {
       text += " · blocked";
     }
+  } else if (sent !== null) {
+    const verb = sentText(sent);
+    text = `${verb.charAt(0).toUpperCase()}${verb.slice(1)} · ${waitText(sent.waits)}`;
   } else {
     text = path === null ? "Editing" : `Editing ${path}`;
   }

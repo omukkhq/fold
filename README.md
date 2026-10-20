@@ -3,6 +3,8 @@
 <p align="center"><strong>Build with parallel AI agents. Review and integrate in one place.</strong></p>
 
 <p align="center">
+  <a href="https://omukk.dev/fold">Website</a> ·
+  <a href="https://www.youtube.com/watch?v=EKHyqm3N7Jo">Demo</a> ·
   <a href="#get-started">Get started</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="https://github.com/omukkhq/fold/releases">Releases</a> ·
@@ -34,7 +36,7 @@ Install fold on **Linux AMD64 (x86_64)**, **Linux ARM64 (aarch64)**, or **macOS 
 curl -fsSL https://omukk.dev/fold/install.sh | sh
 ```
 
-The script installs `fld` into `~/.local/bin`. Run it again to update fold, then run `fld restart` so a running daemon uses the new version. To choose another folder or a specific release, set `FOLD_INSTALL_DIR` or `FOLD_VERSION`, for example `FOLD_VERSION=v0.1.0`.
+The script installs `fld` into `~/.local/bin`. Run it again to update fold, then run `fld restart` so a running daemon uses the new version. To choose another folder or a specific release, set `FOLD_INSTALL_DIR` or `FOLD_VERSION`, for example `FOLD_VERSION=v0.2.1`.
 
 To uninstall fold, run:
 
@@ -138,12 +140,16 @@ Run these commands inside your project:
 | `fld new` | Start a fresh main agent session. |
 | `fld pause` | Stop project workers and keep their sessions. |
 | `fld resume` | Resume workers stopped by a project pause. |
+| `fld worker restart <name>` | Start a worker again in a new Claude Code session, for example when its session is broken. It keeps its name, claims and workers. |
 | `fld record` | Record your own changes in the project folder on main. |
 | `fld stash` | Put your unrecorded changes aside, so the project folder follows main. `fld stash list` shows the stash. |
 | `fld unstash` | Bring the newest stashed changes back into the project folder. If they conflict, fix the conflict markers, then run `fld record`. |
 | `fld setup` | Start the daemon at login. |
 | `fld restart` | Restart the daemon after an update, so the new version takes over. Workers continue in their sessions. |
 | `fld doctor` | Check the installation, daemon, and projects, with suggested fixes. |
+| `fld transcript` | Find an agent's Claude Code transcript: `fld transcript <agent>` prints the path of the file of its current session, and `fld transcript <agent> --tail N` prints the file's last N lines. |
+| `fld gc` | Delete objects that nothing refers to, prune old automatic checkpoints, and remove the folders of workspaces closed for longer than `closed_workspace_days` (14 days by default). The daemon also runs it every day; `fld gc` needs a running daemon. `fld gc --dry-run` counts what a run would remove and changes nothing. |
+| `fld token` | Manage the tokens that sign a person in to the web interface off localhost: `fld token create`, `fld token list`, and `fld token revoke`. |
 | `fld --help` | See the command reference. |
 
 A project pause stops workers; approved proposals can still integrate.

@@ -164,6 +164,7 @@
   --width-project-agents: var(--width-project-agents);
   --width-project-state: var(--width-project-state);
   --width-needs-you: var(--width-needs-you);
+  --width-transcript: var(--width-transcript);
 
   --height-*: initial;
   --height-bar: var(--height-bar);

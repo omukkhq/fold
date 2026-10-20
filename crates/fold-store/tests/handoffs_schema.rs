@@ -9,11 +9,11 @@ use crate::common::{count, exec, open};
 const ROWS: &str = "
 INSERT INTO agents (id, name, created_at) VALUES (1, 'web-lead', 0), (2, 'author', 0);
 INSERT INTO workers (id, agent_id, name, created_at) VALUES (2, 2, 'author', 0);
-INSERT INTO labels (id, name, color, created_at) VALUES (1, 'ui', 'sage', 0), (2, 'server', 'sage', 0);
-INSERT INTO areas (id, name, label_id, created_by, created_at) VALUES (1, 'web', 1, 'main', 0);
+INSERT INTO labels (id, name, color, created_at) VALUES (11, 'ui', 'sage', 0), (12, 'server', 'sage', 0);
+INSERT INTO areas (id, name, label_id, created_by, created_at) VALUES (11, 'web', 11, 'main', 0);
 INSERT INTO tasks (id, number, title, created_by, created_at, updated_at, status) VALUES (1, 1, 'one', 'fold', 0, 0, 'todo'), (2, 2, 'two', 'fold', 0, 0, 'done'), (3, 3, 'three', 'fold', 0, 0, 'in_progress'), (4, 4, 'four', 'fold', 0, 0, 'backlog'), (5, 5, 'five', 'fold', 0, 0, 'review');
 UPDATE tasks SET archived_at = 1 WHERE number = 4;
-INSERT INTO task_labels (task_id, label_id) VALUES (1, 1), (2, 1), (3, 1), (4, 1), (5, 2);
+INSERT INTO task_labels (task_id, label_id) VALUES (1, 11), (2, 11), (3, 11), (4, 11), (5, 12);
 INSERT INTO revisions (id, number, hash, tree_hash, created_at) VALUES (1, 1, 'h1', 't1', 0);
 INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 1, 3, 2, 'draw', 0, 0), (2, 2, 5, 2, 'serve', 0, 0);
 ";
@@ -30,7 +30,7 @@ async fn seeded() -> (tempfile::TempDir, Store, i64) {
                 &NewWorkerProcess {
                     agent_id: 1,
                     role: Role::AreaLead,
-                    area_id: Some(1),
+                    area_id: Some(11),
                     model: None,
                     session_id: "s-1",
                     started_by: "human:ana",
@@ -164,7 +164,7 @@ async fn a_session_is_asked_once_and_a_refresh_starts_a_new_one() {
 async fn the_summary_reads_the_open_tasks_and_proposals_of_a_label() {
     let (_dir, store, _id) = seeded().await;
     let mut conn = store.read().acquire().await.unwrap();
-    let (tasks, total) = agents::open_area_tasks(&mut conn, Some(1), 20)
+    let (tasks, total) = agents::open_area_tasks(&mut conn, Some(11), 20)
         .await
         .unwrap();
     assert_eq!(total, 2, "done and archived tasks are not open");
@@ -179,7 +179,7 @@ async fn the_summary_reads_the_open_tasks_and_proposals_of_a_label() {
     assert_eq!(tasks[0].title, "one");
     let (first, all) = agents::open_area_tasks(&mut conn, None, 1).await.unwrap();
     assert_eq!((first.len(), all), (1, 3));
-    let (proposals, total) = agents::open_area_proposals(&mut conn, Some(1), 20)
+    let (proposals, total) = agents::open_area_proposals(&mut conn, Some(11), 20)
         .await
         .unwrap();
     assert_eq!(total, 1);
@@ -190,4 +190,41 @@ async fn the_summary_reads_the_open_tasks_and_proposals_of_a_label() {
         .await
         .unwrap();
     assert_eq!((every.len(), total), (2, 2));
+}
+
+#[tokio::test]
+async fn each_left_session_is_kept_in_order_with_its_reason() {
+    let (_dir, store, id) = seeded().await;
+    assert!(
+        agents::previous_sessions(store.read())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for (reason, session, time) in [
+        (agents::SessionEnd::Handoff, "s-2", 20),
+        (agents::SessionEnd::Requested, "s-3", 30),
+    ] {
+        store
+            .write(async |tx| {
+                agents::record_previous_session(tx, id, reason, at(time)).await?;
+                agents::refresh_session(tx, id, session, at(time)).await
+            })
+            .await
+            .unwrap();
+    }
+    let lead = fold_core::AgentName::parse("web-lead").unwrap();
+    let sessions = agents::previous_sessions(store.read()).await.unwrap();
+    let kept: Vec<(&str, agents::SessionEnd, Timestamp)> = sessions[&lead]
+        .iter()
+        .map(|row| (row.session_id.as_str(), row.reason, row.ended_at))
+        .collect();
+    assert_eq!(
+        kept,
+        [
+            ("s-1", agents::SessionEnd::Handoff, at(20)),
+            ("s-2", agents::SessionEnd::Requested, at(30))
+        ]
+    );
+    fold_store::testing::assert_append_only(&store, "worker_previous_sessions").await;
 }

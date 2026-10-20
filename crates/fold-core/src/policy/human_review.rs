@@ -64,7 +64,34 @@ pub fn checks_file_mark(
     })
 }
 
-/// The mark holds integration until a human has looked, so only a human takes it off.
+/// The reason of the mark fold sets on a task that comes into the area Main.
+pub const MAIN_AREA_REASON: &str =
+    "a task of the main agent's own area main, so a human approves its proposal";
+
+/// A task of Main is reviewed by no review agent, so fold gives it the human review mark when it comes into Main, in the transaction that gives it the label: any human may approve, and `set_by` is fold. A task that already has a mark keeps it, and so does a task that is not coming into Main (`entering`). A plan the user agreed to leaves the mark off with `main_approves`, which is the user's word that the main agent approves the task's proposal itself.
+pub fn main_area_mark(
+    current: Option<&HumanReviewMark>,
+    entering: bool,
+) -> Option<HumanReviewMark> {
+    if !entering || current.is_some() {
+        return None;
+    }
+    Some(HumanReviewMark {
+        reviewer: None,
+        reason: MAIN_AREA_REASON.to_owned(),
+        set_by: EventActor::fold(),
+    })
+}
+
+/// A task that leaves Main (`leaving`) goes back to the review agents, so fold takes off the mark that it set itself when the task came in: only a mark set by fold with [`MAIN_AREA_REASON`]. A mark a person set, and fold's mark of a changed checks file, stay.
+pub fn main_area_unmark(current: Option<&HumanReviewMark>, leaving: bool) -> bool {
+    leaving
+        && current.is_some_and(|mark| {
+            mark.set_by == EventActor::fold() && mark.reason == MAIN_AREA_REASON
+        })
+}
+
+/// The mark holds integration until a human has looked, so only a human takes it off; fold takes off only its own mark of Main ([`main_area_unmark`]).
 pub fn can_clear_human_review(actor: &Actor) -> Result<(), PolicyDenied> {
     if actor.is_human() {
         return Ok(());
@@ -103,13 +130,14 @@ pub fn can_edit_as_human<'a>(
     }
 }
 
-/// A human reviews a marked task after an agent: the human approves only once an agent that decides reviews, other than `author`'s, has approved the version. `reviews` are the reviews of the version the human approves. A task without the mark, and a human's comment or request for changes, need no agent approval.
+/// A human reviews a marked task after an agent: the human approves only once an agent that decides reviews, other than `author`'s, has approved the version. `reviews` are the reviews of the version the human approves. A task without the mark, a task of Main (`main_task`), which no review agent reviews, and a human's comment or request for changes need no agent approval.
 pub fn can_human_approve(
     mark: Option<&HumanReviewMark>,
     reviews: &[ReviewFact],
     author: &AgentName,
+    main_task: bool,
 ) -> Result<(), PolicyDenied> {
-    if mark.is_none() || deciding_approval(reviews, author) {
+    if mark.is_none() || main_task || deciding_approval(reviews, author) {
         return Ok(());
     }
     Err(PolicyDenied {
@@ -164,19 +192,54 @@ mod tests {
         use crate::reviews::{Approver, Verdict};
         let author = AgentName::parse("backend").unwrap();
         let marked = mark(None, "billing");
-        assert!(can_human_approve(None, &[], &author).is_ok());
-        let denied = can_human_approve(Some(&marked), &[], &author).unwrap_err();
+        assert!(can_human_approve(None, &[], &author, false).is_ok());
+        assert!(can_human_approve(Some(&marked), &[], &author, true).is_ok());
+        let denied = can_human_approve(Some(&marked), &[], &author, false).unwrap_err();
         assert_eq!(denied.code(), codes::AGENT_APPROVAL_REQUIRED);
         assert!(denied.hint().contains("review lead"));
         let other = [fact(Verdict::Approve, Approver::OtherAgent, 1)];
-        assert!(can_human_approve(Some(&marked), &other, &author).is_err());
+        assert!(can_human_approve(Some(&marked), &other, &author, false).is_err());
         let decided = [fact(Verdict::Approve, Approver::DecidingAgent, 1)];
-        assert!(can_human_approve(Some(&marked), &decided, &author).is_ok());
+        assert!(can_human_approve(Some(&marked), &decided, &author, false).is_ok());
         let withdrawn = [
             fact(Verdict::Approve, Approver::DecidingAgent, 1),
             fact(Verdict::RequestChanges, Approver::DecidingAgent, 2),
         ];
-        assert!(can_human_approve(Some(&marked), &withdrawn, &author).is_err());
+        assert!(can_human_approve(Some(&marked), &withdrawn, &author, false).is_err());
+    }
+
+    #[test]
+    fn fold_marks_a_task_that_comes_into_main_unless_it_has_a_mark() {
+        let set = main_area_mark(None, true).unwrap();
+        assert_eq!(set.reviewer, None);
+        assert_eq!(set.reason, MAIN_AREA_REASON);
+        assert_eq!(set.set_by, EventActor::fold());
+        let own = mark(Some("tanim"), "billing");
+        assert_eq!(main_area_mark(Some(&own), true), None);
+        assert_eq!(main_area_mark(None, false), None);
+    }
+
+    #[test]
+    fn fold_takes_off_only_its_own_mark_of_main_when_a_task_leaves_main() {
+        let own = main_area_mark(None, true).unwrap();
+        assert!(main_area_unmark(Some(&own), true));
+        assert!(!main_area_unmark(Some(&own), false));
+        assert!(!main_area_unmark(None, true));
+        let by_human = HumanReviewMark {
+            set_by: EventActor::parse("human:ana").unwrap(),
+            ..own.clone()
+        };
+        assert!(!main_area_unmark(Some(&by_human), true));
+        let reworded = HumanReviewMark {
+            reason: "billing".to_owned(),
+            ..own.clone()
+        };
+        assert!(!main_area_unmark(Some(&reworded), true));
+        let checks = HumanReviewMark {
+            reason: CHECKS_FILE_REASON.to_owned(),
+            ..own
+        };
+        assert!(!main_area_unmark(Some(&checks), true));
     }
 
     fn outcome(result: Result<MarkChange, PolicyDenied>) -> Result<MarkChange, &'static str> {

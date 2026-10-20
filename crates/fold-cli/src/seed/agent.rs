@@ -35,6 +35,7 @@ impl Agent {
             pid: std::process::id(),
             agent: Some(name.to_owned()),
             tags: tags.iter().map(|tag| (*tag).to_owned()).collect(),
+            inbox: None,
         };
         let (read, write) = daemon_client::handshake(stream, &hello)
             .await

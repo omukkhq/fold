@@ -113,6 +113,7 @@ impl Host {
             pid: std::process::id(),
             agent: Some("main".to_owned()),
             tags: vec!["main".to_owned()],
+            inbox: None,
         };
         let (read, write) = daemon_client::handshake(stream, &hello).await.unwrap();
         let session = Session(().serve((read, write)).await.unwrap());

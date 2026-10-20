@@ -10,6 +10,8 @@ import {
   chipPresence,
   chipStateText,
   failedText,
+  chipErrorTitle,
+  MODEL_UNREACHABLE_TEXT,
   isPaused,
 } from "./agentChipsModel";
 
@@ -72,9 +74,13 @@ const supervised = (
   state: NonNullable<ProjectAgent["process"]>["state"],
   options: ChipOptions = {},
   failedReason: string | null = null,
+  error: { last_error: string | null; model_unreachable: boolean } = {
+    last_error: null,
+    model_unreachable: false,
+  },
 ): ProjectAgent => ({
   ...agent({ presence: "offline", ...options }),
-  process: { state, failed_reason: failedReason },
+  process: { state, failed_reason: failedReason, ...error },
 });
 
 describe("agentStateText of a supervised agent", () => {
@@ -98,12 +104,35 @@ describe("agentStateText of a supervised agent", () => {
     );
   });
 
+  it("says that a process whose turns fail cannot reach the model unless it failed for a reason the chip names, with Claude Code's error as the tooltip", () => {
+    const failing = { last_error: "Invalid key", model_unreachable: true };
+    for (const state of ["idle", "working", "failed"] as const) {
+      expect(agentStateText(supervised(state, {}, null, failing))).toBe(
+        MODEL_UNREACHABLE_TEXT,
+      );
+    }
+    expect(
+      agentStateText(supervised("failed", {}, "fld_missing", failing)),
+    ).toBe("failed: fld not found");
+    expect(agentStateText(supervised("failed", {}, "exited", failing))).toBe(
+      MODEL_UNREACHABLE_TEXT,
+    );
+    expect(chipErrorTitle(supervised("idle", {}, null, failing))).toBe(
+      "Invalid key",
+    );
+    expect(chipErrorTitle(supervised("idle"))).toBeUndefined();
+    expect(chipErrorTitle(agent({ presence: "active" }))).toBeUndefined();
+  });
+
   it("names the failures a person can act on", () => {
     expect(agentStateText(supervised("failed", {}, "mcp_unavailable"))).toBe(
       "failed: no fold connection",
     );
     expect(agentStateText(supervised("failed", {}, "fld_missing"))).toBe(
       "failed: fld not found",
+    );
+    expect(agentStateText(supervised("failed", {}, "claude_not_found"))).toBe(
+      "failed: claude not found",
     );
     expect(agentStateText(supervised("failed", {}, "exited"))).toBe("failed");
     expect(failedText(null)).toBe("failed");

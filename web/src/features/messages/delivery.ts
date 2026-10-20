@@ -3,11 +3,12 @@ import type { MessageView, RecipientView } from "@/api/messages";
 import { isHumanName } from "@/people/names";
 import { actorSegment, seg, type Segment } from "@/people/segments";
 
-/** One recipient's delivery: `acknowledged by` / `read by` (a human) / `delivered to` / `not delivered to`, the recipient, and the time the daemon recorded, if any. */
+/** One recipient's delivery: `acknowledged by` / `read by` (a human) / `delivered to` / `not delivered to`, the recipient, the time the daemon recorded, if any, and a note when fold cannot tell the agent that the message waits. */
 export interface Delivery {
   lead: string;
   actor: string;
   at: string | null;
+  note: string | null;
 }
 
 export function recipientState(r: RecipientView, now: number): Delivery {
@@ -16,6 +17,7 @@ export function recipientState(r: RecipientView, now: number): Delivery {
       lead: isHumanName(r.name) ? "read by" : "acknowledged by",
       actor: r.name,
       at: formatAsOf(now, r.acknowledged_at),
+      note: null,
     };
   }
   if (r.delivered_at !== null) {
@@ -23,9 +25,18 @@ export function recipientState(r: RecipientView, now: number): Delivery {
       lead: "delivered to",
       actor: r.name,
       at: formatAsOf(now, r.delivered_at),
+      note: null,
     };
   }
-  return { lead: "not delivered to", actor: r.name, at: null };
+  return {
+    lead: "not delivered to",
+    actor: r.name,
+    at: null,
+    note:
+      r.reachable === false
+        ? "not reachable now · it gets the message when it reads its inbox"
+        : null,
+  };
 }
 
 /** One line per recipient, in the order the daemon lists them. */

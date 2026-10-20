@@ -13,7 +13,6 @@ import {
   APPROVE_BODY,
   approveBlock,
   CHECKS_FAILED,
-  canComment,
   humanVerdict,
   integrateBlock,
   showsApproveLine,
@@ -74,16 +73,6 @@ describe("visibleActions", () => {
 
   it("never offers a reject", () => {
     expect(visibleActions(proposal(), "tanim")).not.toContain("reject");
-  });
-});
-
-describe("canComment", () => {
-  it("opens the composer only on the current version of an open proposal for a named human", () => {
-    expect(canComment(proposal(), "tanim", 2)).toBe(true);
-    expect(canComment(proposal(), "tanim", 1)).toBe(false);
-    expect(canComment(proposal(), "tanim", null)).toBe(false);
-    expect(canComment(proposal(), null, 2)).toBe(false);
-    expect(canComment(proposal({ state: "closed" }), "tanim", 2)).toBe(false);
   });
 });
 
@@ -196,6 +185,15 @@ describe("approveBlock", () => {
       { agent_approved: true },
     );
     expect(approveBlock(approved)).toBeNull();
+  });
+
+  it("lets a human approve a task of the main agent's area first, since no reviewer agent reviews it", () => {
+    const main = proposalDetail(
+      proposalSummary("P-4", { human_review: mark }),
+      { agent_approved: false, main_task: true },
+    );
+    expect(approveBlock(main)).toBeNull();
+    expect(integrateBlock(main, "r8")).not.toBe(AGENT_APPROVES_FIRST);
   });
 
   it("blocks Integrate on a marked task with the same line, because integrating approves", () => {

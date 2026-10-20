@@ -1,12 +1,12 @@
 use fold_core::events::types;
-use fold_core::policy::AgentStanding;
+use fold_core::policy::{AgentStanding, ReviewTask};
 use fold_core::reviews::{Reviewer, Verdict};
 use fold_core::{
     Actor, CommentId, FoldError, IdKind, NewEvent, ProposalId, ReviewBatchId, TaskId, codes, policy,
 };
 use fold_store::agents;
 use fold_store::reviews::{self, NewComment, ProposalRow, ReviewerRef, batches};
-use fold_store::{StoreError, WriteTx, counters, workspaces};
+use fold_store::{SqliteConnection, StoreError, WriteTx, counters, workspaces};
 use serde_json::json;
 
 use super::comments::{CommentInput, MAX_BODY_CHARS, check_ranges, check_shape};
@@ -15,7 +15,7 @@ use super::proposals::{ProposalSummary, Retirement, require_open, retire_proposa
 use super::scopes::{SuggestedScope, scope_record_in_tx};
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
-use crate::services::tasks::{recompute, worker_row};
+use crate::services::tasks::{recompute, task_in_main_area, worker_row};
 
 /// What a review command wrote: the version it reviewed, the new comments in order, and the proposal as it stands after the review.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,7 +46,8 @@ impl ReviewService {
         let read = self.store.read();
         let row = require_open(reviews::get_proposal(read, proposal).await?, proposal)?;
         let standing = agents::standing_of(read, actor).await?;
-        verdict_gate(actor, standing, verdict, &row)?;
+        let task = review_task(&mut *read.acquire().await.map_err(StoreError::from)?, &row).await?;
+        verdict_gate(actor, standing, verdict, &row, task)?;
         let target = reviews::review_target(read, proposal)
             .await?
             .ok_or(StoreError::Corrupt("proposal_versions.version"))?;
@@ -136,14 +137,15 @@ pub(super) async fn record_review(
     let proposal = row.id;
     let reviewer = actor.event_actor();
     let standing = agents::standing_of(tx.conn(), actor).await?;
-    let (by, suggested) = match verdict_gate(actor, standing, verdict, row)? {
+    let task = review_task(tx.conn(), row).await?;
+    let (by, suggested) = match verdict_gate(actor, standing, verdict, row, task)? {
         Reviewer::Agent(agent) => (
             ReviewerRef::Worker(worker_row(tx, agent).await?.id),
             record.scope,
         ),
         Reviewer::Human(name) => {
             if verdict == Verdict::Approve {
-                human_approval_gate(tx, proposal, version).await?;
+                human_approval_gate(tx, proposal, version, task.main).await?;
             }
             (ReviewerRef::Human(name), None)
         }
@@ -328,39 +330,56 @@ fn check_body(verdict: Verdict, body: &str, comments: usize) -> Result<String, R
     Ok(body.to_owned())
 }
 
-/// A human approves a marked task only after a reviewer agent approved `version` (`policy::can_human_approve`). The mark and the reviews are read in the review's transaction, so an approval and a mark that land meanwhile count.
+/// A human approves a marked task only after a reviewer agent approved `version`, except on a task of Main (`main_task`), which no review agent reviews (`policy::can_human_approve`). The mark and the reviews are read in the review's transaction, so an approval and a mark that land meanwhile count.
 async fn human_approval_gate(
     tx: &mut WriteTx,
     proposal: ProposalId,
     version: u32,
+    main_task: bool,
 ) -> Result<(), ReviewError> {
     let row = reviews::get_proposal(tx.conn(), proposal)
         .await?
         .ok_or(StoreError::Corrupt("proposals.number"))?;
     let facts = reviews::review_facts(tx.conn(), proposal, version).await?;
-    policy::can_human_approve(row.human_review.as_ref(), &facts, &row.author.agent()).map_err(
-        |denied| {
-            FoldError::from(denied)
-                .with_details([
-                    ("proposal", json!(proposal.to_string())),
-                    ("version", json!(version)),
-                ])
-                .into()
-        },
+    policy::can_human_approve(
+        row.human_review.as_ref(),
+        &facts,
+        &row.author.agent(),
+        main_task,
     )
+    .map_err(|denied| {
+        FoldError::from(denied)
+            .with_details([
+                ("proposal", json!(proposal.to_string())),
+                ("version", json!(version)),
+            ])
+            .into()
+    })
 }
 
-/// `standing` is the acting agent's, read by the caller. An approval of a version whose integration checks failed is refused, as its integration is, until the author sends a new version.
+/// Who decides the proposal of `row`: whether its task is in Main, read on `conn`, and whether the task has the human review mark.
+pub(super) async fn review_task(
+    conn: &mut SqliteConnection,
+    row: &ProposalRow,
+) -> Result<ReviewTask, StoreError> {
+    Ok(ReviewTask {
+        main: task_in_main_area(conn, row.task).await?,
+        marked: row.human_review.is_some(),
+    })
+}
+
+/// `standing` is the acting agent's and `task` the facts of [`review_task`], read by the caller. An approval of a version whose integration checks failed is refused, as its integration is, until the author sends a new version.
 pub(super) fn verdict_gate<'a>(
     actor: &'a Actor,
     standing: AgentStanding,
     verdict: Verdict,
     row: &ProposalRow,
+    task: ReviewTask,
 ) -> Result<Reviewer<'a>, ReviewError> {
     if verdict == Verdict::Approve && row.checks_failed {
         return Err(checks_failed_refusal(row.id, row.current_version).into());
     }
-    policy::can_submit_verdict(actor, standing, verdict, &row.author).map_err(|denied| {
+    policy::can_submit_verdict(actor, standing, verdict, &row.author, task).map_err(|denied| {
         FoldError::from(denied)
             .with_details([
                 ("proposal", json!(row.id.to_string())),

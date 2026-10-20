@@ -8,9 +8,9 @@ use crate::common::{count, exec, open};
 const ROWS: &str = "
 INSERT INTO agents (id, name, created_at) VALUES (1, 'web-lead', 0), (2, 'web-worker', 0), (3, 'api-lead', 0), (4, 'review-lead', 0), (5, 'author', 0);
 INSERT INTO workers (id, agent_id, name, created_at) VALUES (5, 5, 'author', 0);
-INSERT INTO labels (id, name, color, created_at) VALUES (1, 'ui', 'sage', 0), (2, 'server', 'sage', 0);
+INSERT INTO labels (id, name, color, created_at) VALUES (11, 'ui', 'sage', 0), (12, 'server', 'sage', 0);
 INSERT INTO tasks (id, number, title, created_by, created_at, updated_at) VALUES (1, 1, 'one', 'fold', 0, 0), (2, 2, 'two', 'fold', 0, 0);
-INSERT INTO task_labels (task_id, label_id) VALUES (1, 1);
+INSERT INTO task_labels (task_id, label_id) VALUES (1, 11);
 INSERT INTO revisions (id, number, hash, tree_hash, created_at) VALUES (1, 1, 'h1', 't1', 0);
 INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 3, 2, 5, 'p', 0, 0);
 ";
@@ -22,6 +22,14 @@ async fn seeded() -> (tempfile::TempDir, Store) {
         exec(&store, statement).await.unwrap();
     }
     (dir, store)
+}
+
+/// The areas but the built-in area main, which every project has.
+#[cfg(test)]
+async fn led_areas(store: &Store) -> Vec<agents::AreaRow> {
+    let mut areas = agents::list_areas(store.read()).await.unwrap();
+    areas.retain(|area| !area.name.is_main());
+    areas
 }
 
 #[cfg(test)]
@@ -69,7 +77,7 @@ async fn an_area_has_one_lead_for_good_and_one_label() {
         .unwrap();
     let same_label = exec(
         &store,
-        "INSERT INTO areas (name, label_id, created_by, created_at) VALUES ('site', 1, 'main', 0)",
+        "INSERT INTO areas (name, label_id, created_by, created_at) VALUES ('site', 11, 'main', 0)",
     )
     .await
     .unwrap_err();
@@ -89,10 +97,10 @@ async fn an_area_has_one_lead_for_good_and_one_label() {
         .unwrap();
     assert_eq!(row.lead, Some(AgentName::parse("web-lead").unwrap()));
     assert_eq!(row.label, ui);
-    assert_eq!(agents::list_areas(store.read()).await.unwrap(), vec![row]);
+    assert_eq!(led_areas(&store).await, vec![row]);
     exec(
         &store,
-        "INSERT INTO areas (name, label_id, created_by, created_at) VALUES ('api', 2, 'main', 0)",
+        "INSERT INTO areas (name, label_id, created_by, created_at) VALUES ('api', 12, 'main', 0)",
     )
     .await
     .unwrap();
@@ -110,11 +118,51 @@ async fn an_area_has_one_lead_for_good_and_one_label() {
 }
 
 #[tokio::test]
+async fn every_project_has_the_area_main_without_a_lead_and_keeps_its_label() {
+    let (_dir, store) = seeded().await;
+    let main = agents::find_area(store.read(), &fold_core::AreaName::main())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(main.label, fold_core::LabelName::main());
+    assert_eq!(main.lead, None);
+    assert_eq!(main.profile, AreaProfile::default());
+    for sql in [
+        "UPDATE areas SET lead_agent_id = 1 WHERE name = 'main'",
+        "UPDATE areas SET instructions = 'draw' WHERE name = 'main'",
+        "UPDATE areas SET model = 'opus' WHERE name = 'main'",
+        "INSERT INTO area_mcp_servers (area_id, position, name) VALUES ((SELECT id FROM areas WHERE name = 'main'), 0, 'fold')",
+    ] {
+        let refused = exec(&store, sql).await.unwrap_err();
+        assert!(
+            refused.to_string().contains("areas_main_without_lead"),
+            "{sql}: {refused}"
+        );
+    }
+    for sql in [
+        "UPDATE labels SET name = 'core' WHERE name = 'main'",
+        "DELETE FROM labels WHERE name = 'main'",
+    ] {
+        let refused = exec(&store, sql).await.unwrap_err();
+        assert!(
+            refused.to_string().contains("labels_main_kept"),
+            "{sql}: {refused}"
+        );
+    }
+    exec(
+        &store,
+        "UPDATE labels SET color = 'gold' WHERE name = 'main'",
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn an_area_profile_changes_while_its_lead_stays_set_once() {
     let (_dir, store) = seeded().await;
     let web = fold_core::AreaName::parse("web").unwrap();
     let area = store
-        .write(async |tx| agents::insert_area(tx, &web, 1, "main", at(1)).await)
+        .write(async |tx| agents::insert_area(tx, &web, 11, "main", at(1)).await)
         .await
         .unwrap();
     let fresh = agents::find_area(store.read(), &web)
@@ -141,7 +189,7 @@ async fn an_area_profile_changes_while_its_lead_stays_set_once() {
         .unwrap();
     assert_eq!(row.profile, design);
     assert_eq!(row.lead, Some(AgentName::parse("web-lead").unwrap()));
-    assert_eq!(agents::list_areas(store.read()).await.unwrap(), vec![row]);
+    assert_eq!(led_areas(&store).await, vec![row]);
 
     let fewer = AreaProfile {
         mcp: Some(vec!["fold".to_owned()]),
@@ -161,17 +209,20 @@ async fn an_area_profile_changes_while_its_lead_stays_set_once() {
         1
     );
 
-    let cleared = exec(&store, "UPDATE areas SET lead_agent_id = NULL WHERE id = 1")
-        .await
-        .unwrap_err();
+    let cleared = exec(
+        &store,
+        "UPDATE areas SET lead_agent_id = NULL WHERE name = 'web'",
+    )
+    .await
+    .unwrap_err();
     assert!(cleared.to_string().contains("areas_lead_once"), "{cleared}");
-    let renamed = exec(&store, "UPDATE areas SET name = 'site' WHERE id = 1")
+    let renamed = exec(&store, "UPDATE areas SET name = 'site' WHERE name = 'web'")
         .await
         .unwrap_err();
     assert!(renamed.to_string().contains("areas_lead_once"), "{renamed}");
     let twice = exec(
         &store,
-        "INSERT INTO area_mcp_servers (area_id, position, name) VALUES (1, 5, 'fold')",
+        "INSERT INTO area_mcp_servers (area_id, position, name) VALUES ((SELECT id FROM areas WHERE name = 'web'), 5, 'fold')",
     )
     .await
     .unwrap_err();
@@ -179,9 +230,12 @@ async fn an_area_profile_changes_while_its_lead_stays_set_once() {
         twice.constraint().as_deref(),
         Some("area_mcp_servers.area_id, area_mcp_servers.name")
     );
-    let blank = exec(&store, "UPDATE areas SET instructions = '  ' WHERE id = 1")
-        .await
-        .unwrap_err();
+    let blank = exec(
+        &store,
+        "UPDATE areas SET instructions = '  ' WHERE name = 'web'",
+    )
+    .await
+    .unwrap_err();
     assert_eq!(
         blank.constraint().as_deref(),
         Some("areas_instructions_present")
@@ -193,7 +247,7 @@ async fn a_worker_process_keeps_its_role_area_and_session_and_binds_its_own_kind
     let (_dir, store) = seeded().await;
     exec(
         &store,
-        "INSERT INTO areas (id, name, label_id, created_by, created_at) VALUES (1, 'web', 1, 'main', 0)",
+        "INSERT INTO areas (id, name, label_id, created_by, created_at) VALUES (11, 'web', 11, 'main', 0)",
     )
     .await
     .unwrap();
@@ -207,12 +261,12 @@ async fn a_worker_process_keeps_its_role_area_and_session_and_binds_its_own_kind
         no_area.constraint().as_deref(),
         Some("worker_processes_area_of_role")
     );
-    let lead = process(&store, 1, Role::AreaLead, Some(1), "s1").await;
-    let task_worker = process(&store, 2, Role::TaskWorker, Some(1), "s2").await;
+    let lead = process(&store, 1, Role::AreaLead, Some(11), "s1").await;
+    let task_worker = process(&store, 2, Role::TaskWorker, Some(11), "s2").await;
     let reviewer = process(&store, 4, Role::Reviewer, None, "s4").await;
     let twice = exec(
         &store,
-        "INSERT INTO worker_processes (agent_id, role, area_id, session_id, state, started_by, started_at) VALUES (1, 'area_lead', 1, 's9', 'starting', 'main', 0)",
+        "INSERT INTO worker_processes (agent_id, role, area_id, session_id, state, started_by, started_at) VALUES (1, 'area_lead', 11, 's9', 'starting', 'main', 0)",
     )
     .await
     .unwrap_err();
@@ -374,12 +428,12 @@ async fn the_row_follows_its_process_through_turns_stops_and_restarts() {
     let (_dir, store) = seeded().await;
     exec(
         &store,
-        "INSERT INTO areas (id, name, label_id, created_by, created_at) VALUES (1, 'web', 1, 'main', 0)",
+        "INSERT INTO areas (id, name, label_id, created_by, created_at) VALUES (11, 'web', 11, 'main', 0)",
     )
     .await
     .unwrap();
-    let id = process(&store, 1, Role::AreaLead, Some(1), "s1").await;
-    let web = Some(1);
+    let id = process(&store, 1, Role::AreaLead, Some(11), "s1").await;
+    let web = Some(11);
     assert_eq!(
         agents::running_counts(store.read(), Role::AreaLead, web)
             .await
@@ -517,11 +571,11 @@ async fn a_new_session_comes_only_with_a_new_start() {
     let (_dir, store) = seeded().await;
     exec(
         &store,
-        "INSERT INTO areas (id, name, label_id, created_by, created_at) VALUES (1, 'web', 1, 'main', 0)",
+        "INSERT INTO areas (id, name, label_id, created_by, created_at) VALUES (11, 'web', 11, 'main', 0)",
     )
     .await
     .unwrap();
-    let task_worker = process(&store, 2, Role::TaskWorker, Some(1), "s2").await;
+    let task_worker = process(&store, 2, Role::TaskWorker, Some(11), "s2").await;
     store
         .write(async |tx| {
             agents::set_worker_state(tx, task_worker, WorkerState::Working, at(15)).await
@@ -839,4 +893,222 @@ async fn a_stored_batch_reviewer_becomes_a_reviewer_and_keeps_its_rows() {
     .await
     .unwrap_err();
     assert!(moved.to_string().contains("worker_processes_fixed"));
+}
+
+#[tokio::test]
+async fn a_failed_turn_keeps_its_error_until_a_turn_ends_without_one() {
+    let (_dir, store) = seeded().await;
+    let lead = process(&store, 1, Role::ReviewLead, None, "s1").await;
+    let row = async || {
+        let mut conn = store.read().acquire().await.unwrap();
+        agents::find_worker_process(&mut conn, &AgentName::parse("web-lead").unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    let failed = async |error: &'static str, reached: bool, now: i64| {
+        store
+            .write(async |tx| agents::record_turn_error(tx, lead, error, reached, at(now)).await)
+            .await
+            .unwrap()
+    };
+    assert_eq!(
+        (row().await.last_error, row().await.failed_turns),
+        (None, 0)
+    );
+    assert_eq!(failed("Not signed in", false, 20).await, Some(1));
+    assert_eq!(failed("Not signed in", false, 30).await, Some(2));
+    let kept = row().await;
+    assert_eq!(kept.last_error.as_deref(), Some("Not signed in"));
+    assert_eq!((kept.last_error_at, kept.failed_turns), (Some(at(30)), 2));
+    assert_eq!(
+        failed("Reached max turns", true, 40).await,
+        Some(0),
+        "a turn that reached the model starts the count again"
+    );
+    assert_eq!(row().await.last_error.as_deref(), Some("Reached max turns"));
+    store
+        .write(async |tx| agents::clear_turn_error(tx, lead).await)
+        .await
+        .unwrap();
+    let cleared = row().await;
+    assert_eq!(
+        (
+            cleared.last_error,
+            cleared.last_error_at,
+            cleared.failed_turns
+        ),
+        (None, None, 0)
+    );
+    store
+        .write(async |tx| agents::set_worker_state(tx, lead, WorkerState::Stopping, at(50)).await)
+        .await
+        .unwrap();
+    assert_eq!(
+        failed("interrupted", false, 60).await,
+        None,
+        "the interrupt of a stop counts no failed turn"
+    );
+    store
+        .write(async |tx| agents::set_exit_error(tx, lead, "fatal: no access", at(70)).await)
+        .await
+        .unwrap();
+    let exited = row().await;
+    assert_eq!(exited.last_error.as_deref(), Some("fatal: no access"));
+    assert_eq!(exited.last_error_at, Some(at(70)));
+    for change in [
+        format!("UPDATE worker_processes SET last_error = '' WHERE id = {lead}"),
+        format!(
+            "UPDATE worker_processes SET last_error = '{}' WHERE id = {lead}",
+            "a".repeat(1001)
+        ),
+        format!("UPDATE worker_processes SET last_error_at = NULL WHERE id = {lead}"),
+        format!("UPDATE worker_processes SET failed_turns = -1 WHERE id = {lead}"),
+    ] {
+        assert!(exec(&store, &change).await.is_err(), "{change}");
+    }
+}
+
+#[tokio::test]
+async fn a_made_up_model_is_forgotten_and_a_real_one_kept() {
+    let (_dir, store) = seeded().await;
+    let lead = process(&store, 1, Role::ReviewLead, None, "s1").await;
+    let model = async |set: &str| {
+        exec(
+            &store,
+            &format!("UPDATE worker_processes SET model = {set} WHERE id = {lead}"),
+        )
+        .await
+        .unwrap();
+        store
+            .write(async |tx| agents::forget_made_up_model(tx, lead).await)
+            .await
+            .unwrap();
+        let mut conn = store.read().acquire().await.unwrap();
+        agents::find_worker_process(&mut conn, &AgentName::parse("web-lead").unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .model
+    };
+    assert_eq!(model("'<synthetic>'").await, None);
+    assert_eq!(model("'opus'").await.as_deref(), Some("opus"));
+    assert_eq!(model("NULL").await, None);
+}
+
+/// A project from before the area main: a plain label `main` on an open task, a Done task and a task with a mark of its own.
+const PLAIN_MAIN_LABEL: &str = "
+INSERT INTO labels (id, name, color, created_at) VALUES (1, 'ui', 'sage', 0), (2, 'main', 'gold', 0);
+INSERT INTO tasks (id, number, title, created_by, created_at, updated_at, status) VALUES (1, 1, 'notes', 'fold', 0, 0, 'todo'), (2, 2, 'old', 'fold', 0, 0, 'done'), (3, 3, 'checks', 'fold', 0, 0, 'todo'), (4, 4, 'ui', 'fold', 0, 0, 'todo');
+UPDATE tasks SET human_review = 1, human_review_reason = 'billing', human_review_set_by = 'human:ana' WHERE id = 3;
+INSERT INTO task_labels (task_id, label_id) VALUES (1, 2), (2, 2), (3, 2), (4, 1);
+";
+
+/// A project folder whose database has every migration before the area main and then `seed`.
+#[cfg(test)]
+async fn before_main_area(seed: &'static str) -> (tempfile::TempDir, fold_core::ProjectPaths) {
+    use sqlx::Connection;
+    let dir = tempfile::TempDir::new().unwrap();
+    let paths = fold_core::ProjectPaths::new(dir.path().join("project"));
+    std::fs::create_dir_all(paths.db().parent().unwrap()).unwrap();
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(paths.db())
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let mut conn = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .unwrap();
+    let mut before: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/project");
+    let area = before
+        .migrations
+        .iter()
+        .position(|migration| migration.description == "main area")
+        .unwrap();
+    before.migrations = std::borrow::Cow::Owned(before.migrations[..area].to_vec());
+    before.run(&mut conn).await.unwrap();
+    sqlx::raw_sql(seed).execute(&mut conn).await.unwrap();
+    conn.close().await.unwrap();
+    (dir, paths)
+}
+
+#[tokio::test]
+async fn a_plain_label_main_becomes_the_label_of_the_area_and_its_open_tasks_get_the_mark() {
+    let (_dir, paths) = before_main_area(PLAIN_MAIN_LABEL).await;
+    let store = Store::open_project(&paths).await.unwrap();
+    let main = agents::find_area(store.read(), &fold_core::AreaName::main())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(main.label, fold_core::LabelName::main());
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM labels").await, 2);
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM labels WHERE name = 'main' AND color = 'gold'"
+        )
+        .await,
+        1
+    );
+    let marks: Vec<(i64, i64, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT number, human_review, human_review_reason, human_review_set_by FROM tasks ORDER BY number",
+    )
+    .fetch_all(store.read())
+    .await
+    .unwrap();
+    let reason = Some(fold_core::policy::MAIN_AREA_REASON.to_owned());
+    let fold = Some("fold".to_owned());
+    assert_eq!(
+        marks,
+        [
+            (1, 1, reason, fold),
+            (2, 0, None, None),
+            (
+                3,
+                1,
+                Some("billing".to_owned()),
+                Some("human:ana".to_owned())
+            ),
+            (4, 0, None, None),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_area_of_the_project_that_holds_the_name_or_label_main_stops_the_migration() {
+    let cases = [
+        (
+            "INSERT INTO labels (id, name, color, created_at) VALUES (1, 'main', 'gold', 0);
+             INSERT INTO areas (name, label_id, created_by, created_at) VALUES ('core', 1, 'fold', 0);",
+            "Rename the label main",
+        ),
+        (
+            "INSERT INTO labels (id, name, color, created_at) VALUES (1, 'core', 'gold', 0);
+             INSERT INTO areas (name, label_id, created_by, created_at) VALUES ('main', 1, 'fold', 0);",
+            "define that area under another name",
+        ),
+        (
+            "INSERT INTO labels (id, name, color, created_at) VALUES (1, 'main', 'gold', 0);
+             INSERT INTO areas (name, label_id, created_by, created_at, model) VALUES ('main', 1, 'fold', 0, 'opus');",
+            "a lead or a profile",
+        ),
+    ];
+    for (seed, fix) in cases {
+        let (_dir, paths) = before_main_area(seed).await;
+        let error = Store::open_project(&paths).await.unwrap_err();
+        let shown = format!("{error:?}");
+        assert!(shown.contains("main_area_conflict"), "{shown}");
+        assert!(shown.contains(fix), "{shown}");
+    }
+    let (_dir, paths) = before_main_area(
+        "INSERT INTO labels (id, name, color, created_at) VALUES (1, 'main', 'gold', 0);
+         INSERT INTO areas (name, label_id, created_by, created_at) VALUES ('main', 1, 'fold', 0);",
+    )
+    .await;
+    let store = Store::open_project(&paths).await.unwrap();
+    let main = agents::find_area(store.read(), &fold_core::AreaName::main())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(main.label, fold_core::LabelName::main());
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM areas").await, 1);
 }

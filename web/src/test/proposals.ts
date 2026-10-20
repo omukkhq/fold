@@ -138,6 +138,7 @@ export function proposalDetail(
     comments: { total: 0, on_version: 0, outdated: 0 },
     last_reviewed_version: null,
     agent_approved: false,
+    main_task: false,
     gates: humanGates(),
     conflict: null,
     files: [],

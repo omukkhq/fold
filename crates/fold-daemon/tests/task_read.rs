@@ -83,6 +83,8 @@ async fn the_proposal_the_reviews_and_the_integration_follow_the_task_to_done() 
         (pill.id, pill.standing, pill.revision),
         (p(1), ProposalStanding::Open, None)
     );
+    assert_eq!((pill.version, pill.checks_failed), (1, false));
+    assert!(!proposal.checks_failed);
 
     fx.reviews
         .submit_review(

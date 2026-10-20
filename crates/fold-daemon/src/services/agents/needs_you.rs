@@ -1,6 +1,7 @@
 use fold_core::requests::{RequestState, Requester};
 use fold_core::reviews::checks::CHECKS_FILE;
-use fold_core::roles::restart_hint;
+use fold_core::roles::{CLAUDE_NOT_FOUND, restart_hint};
+use fold_core::turn_errors::{MODEL_UNREACHABLE_HINT, model_unreachable};
 use fold_core::{
     AgentName, Choice, HumanName, MessageId, PermissionQuestionId, ProposalId, RequestId, Sender,
     TaskId, Timestamp, WorkerState,
@@ -40,6 +41,10 @@ pub enum NeedsYouKind {
     ChecksFileInvalidOnMain,
     /// A worker failed because it cannot reach fold: its fold MCP server did not connect, or the fld binary it would start is gone. A new start fails the same way until the daemon runs the installed fld, so `reason` names `fld restart`, after which the daemon start resumes the worker once fld is there; the item ends when the worker runs again, through that resume or through `resume_worker`.
     WorkerUnreachable,
+    /// A worker's turns failed [`fold_core::turn_errors::MODEL_UNREACHABLE_TURNS`] times in a row before any token reached the model, so it does no work until a human fixes what Claude Code needs, such as its sign-in: `title` holds Claude Code's error and `reason` what to check. The item ends when a turn of the worker reaches the model, with or without an error, or when the worker is stopped. A worker whose process failed cannot be stopped, so it keeps the item until `resume_worker` runs it again and a turn reaches the model; a start that runs a stopped worker again shows the item again until then.
+    WorkerModelUnreachable,
+    /// A worker failed because the daemon found no `claude` on the `PATH` it gives workers. The daemon reads that `PATH` from the user's login shell at its start, so `reason` names `fld restart`, after which the daemon start resumes the worker; the item ends when the worker runs again.
+    ClaudeNotFound,
 }
 
 /// The screen on which a human answers an item.
@@ -66,7 +71,9 @@ impl NeedsYouKind {
             | NeedsYouKind::FolderHeld
             | NeedsYouKind::UnstashConflicted
             | NeedsYouKind::ChecksFileInvalidOnMain => Screen::Repository,
-            NeedsYouKind::WorkerUnreachable => Screen::Worker,
+            NeedsYouKind::WorkerUnreachable
+            | NeedsYouKind::WorkerModelUnreachable
+            | NeedsYouKind::ClaudeNotFound => Screen::Worker,
         }
     }
 }
@@ -91,9 +98,9 @@ pub struct NeedsYouItem {
     pub choices: Vec<Choice>,
     /// The short header of a `Question`.
     pub header: Option<String>,
-    /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft; the task title of a `HumanTask` or a `Blocker`.
+    /// The proposal title of a `HumanReview`; the request title of a `RequestDraft`, which the claim gave it before any draft; the task title of a `HumanTask` or a `Blocker`; Claude Code's error of a `WorkerModelUnreachable`.
     pub title: Option<String>,
-    /// The reason of a `Blocker`; the command that brings the branch back for `HeadMoved`, records the folder's changes for `FolderHeld`, ends the conflict for `UnstashConflicted`, or lets a `WorkerUnreachable` worker reach fold again.
+    /// The reason of a `Blocker`; the command that brings the branch back for `HeadMoved`, records the folder's changes for `FolderHeld`, ends the conflict for `UnstashConflicted`, or lets a `WorkerUnreachable` worker reach fold again; what to check for a `WorkerModelUnreachable`.
     pub reason: Option<String>,
     /// The human's Git commit of a `HumanChange`.
     pub commit: Option<String>,
@@ -197,6 +204,16 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         items.push(item);
     }
     for row in agents::list_worker_processes(&mut conn).await? {
+        if model_unreachable(row.failed_turns, row.state) {
+            let mut item = NeedsYouItem::new(
+                NeedsYouKind::WorkerModelUnreachable,
+                row.last_error_at.unwrap_or(row.started_at),
+            );
+            item.agent = Some(row.agent.clone());
+            item.title = row.last_error.clone();
+            item.reason = Some(MODEL_UNREACHABLE_HINT.to_owned());
+            items.push(item);
+        }
         let hint = row
             .failed_reason
             .as_deref()
@@ -205,7 +222,12 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         let (Some(since), Some(hint)) = (row.stopped_at, hint) else {
             continue;
         };
-        let mut item = NeedsYouItem::new(NeedsYouKind::WorkerUnreachable, since);
+        let kind = if row.failed_reason.as_deref() == Some(CLAUDE_NOT_FOUND) {
+            NeedsYouKind::ClaudeNotFound
+        } else {
+            NeedsYouKind::WorkerUnreachable
+        };
+        let mut item = NeedsYouItem::new(kind, since);
         item.agent = Some(row.agent);
         item.reason = Some(hint.to_owned());
         items.push(item);

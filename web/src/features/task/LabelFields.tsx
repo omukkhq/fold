@@ -6,7 +6,6 @@ import { useId, useRef, useState, type ReactNode } from "react";
 import type { BoardLabel } from "@/api/board";
 import { workersQuery } from "@/api/queries";
 import { labelsQuery } from "@/api/tasks";
-import type { AreaEntry } from "@/api/workers";
 import { IconButton } from "@/components/button/Button";
 import { controlClasses } from "@/components/form/Field";
 import { labelColors } from "@/components/label/labelColors";
@@ -19,16 +18,18 @@ import {
   NO_AREA_TEXT,
   labelChoices,
   labelNamed,
-  leadText,
+  ownerText,
+  withMainArea,
   type AreaOption,
+  type AreaRef,
 } from "./areas";
 
 const FIELD_LABEL = "text-bar leading-snug font-semibold text-text";
 const FIELD_HINT = "text-meta leading-normal text-text-faint";
 
-/** The project's areas and labels. The areas are null until the worker list is read; a refused read leaves them empty, so every label counts as one that is no area, and sets `failed`. */
+/** The project's areas, with the built-in area Main first, and its labels. The areas are null until the worker list is read; a refused read leaves them empty, so every label counts as one that is no area, and sets `failed`. */
 export function useAreas(slug: string): {
-  areas: AreaEntry[] | null;
+  areas: AreaRef[] | null;
   labels: BoardLabel[];
   failed: boolean;
   retry: () => void;
@@ -37,7 +38,12 @@ export function useAreas(slug: string): {
   const labels = useQuery(labelsQuery(slug));
   const failed = workers.data === undefined && workers.isError;
   return {
-    areas: workers.data?.areas ?? (failed ? [] : null),
+    areas:
+      workers.data === undefined
+        ? failed
+          ? []
+          : null
+        : withMainArea(workers.data.areas, workers.data.main_label),
     labels: labels.data ?? [],
     failed,
     retry: () => {
@@ -63,13 +69,13 @@ function AreaRow({ option }: { option: AreaOption }) {
         {option.label.name}
       </span>
       <span className="shrink-0 text-caption text-text-faint">
-        {leadText(option.lead)}
+        {ownerText(option)}
       </span>
     </>
   );
 }
 
-/** The single choice of a task's area: "Let the main agent decide" first, then every area with its lead. */
+/** The single choice of a task's area: "Decide automatically" first, then Main, which the main agent builds, then every area with its lead. */
 export function AreaMenu({
   options,
   value,
@@ -166,8 +172,9 @@ export function AreaField({
         </button>
       </AreaMenu>
       <p id={`${ids}-hint`} className={FIELD_HINT}>
-        The area&apos;s lead starts a worker for the task. Without an area, the
-        main agent chooses one.
+        The area&apos;s lead starts a worker for the task. With Decide
+        automatically, the main agent chooses an area; with Main agent, it
+        builds the task itself and a human approves it.
       </p>
     </div>
   );
@@ -221,7 +228,7 @@ export function LabelsField({
   disabled,
 }: {
   labels: readonly BoardLabel[];
-  areas: readonly AreaEntry[];
+  areas: readonly AreaRef[];
   value: readonly string[];
   onChange: (labels: string[]) => void;
   disabled: boolean;

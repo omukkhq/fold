@@ -11,6 +11,7 @@ import type {
   WorkerState,
 } from "@/api/workers";
 import type { WorkerSteps } from "@/live/apply";
+import { type SessionView, sessionView } from "./session";
 
 /** The look of a state pill; each tone has its soft fill, dot and text colour. */
 export type PillTone =
@@ -144,6 +145,25 @@ export interface Step {
 
 export type StopControl = "stop" | "stopping" | null;
 
+/** The last error of a worker as its row shows it under the step: Claude Code's text, and what to check when the daemon says the worker cannot reach the model. */
+export interface RowError {
+  title: string;
+  /** Claude Code's text, shown as data. */
+  text: string;
+  /** The daemon's hint, with its commands between backticks; null when the worker still reaches the model. */
+  hint: string | null;
+}
+
+/** The row's error line; null for a worker whose last turn ended without an error. */
+export function rowError(worker: WorkerProcess): RowError | null {
+  if (worker.last_error === null) return null;
+  return {
+    title: worker.model_unreachable ? "cannot reach the model" : "last error",
+    text: worker.last_error,
+    hint: worker.hint,
+  };
+}
+
 export interface TeamRow {
   name: string;
   /** A child row is a short-lived worker, drawn under its lead. */
@@ -160,7 +180,14 @@ export interface TeamRow {
   cost: string;
   context: string;
   step: Step;
+  error: RowError | null;
   stop: StopControl;
+  /** A named human may start the worker again in a new session. */
+  restart: boolean;
+  /** The ids of the sessions the worker had before its current one, oldest first. */
+  previousSessions: string[];
+  /** The worker's Claude Code session; null for the main agent, whose session fold does not run. */
+  session: SessionView | null;
 }
 
 export interface TeamGroup {
@@ -280,6 +307,20 @@ export function workerStep(
   }
 }
 
+/** A worker that fold is not stopping can start again in a new session; a running one is stopped first. */
+export function canRestart(state: WorkerState): boolean {
+  return state !== "stopping";
+}
+
+/** The role, then how many sessions the worker had before its current one. */
+export function roleLine(worker: WorkerProcess): string {
+  const earlier = worker.previous_sessions.length;
+  if (earlier === 0) return roleName(worker.role);
+  const sessions =
+    earlier === 1 ? "1 earlier session" : `${String(earlier)} earlier sessions`;
+  return `${roleName(worker.role)} · ${sessions}`;
+}
+
 export function stopControl(state: WorkerState): StopControl {
   if (state === "stopping") return "stopping";
   return state === "stopped" || state === "failed" ? null : "stop";
@@ -387,6 +428,7 @@ function workerRow(
       pill: PAUSED_PILL,
       step: faint("paused · resumes in its own session"),
       stop: null,
+      restart: false,
     };
   }
   return runningRow(worker, input, child);
@@ -401,7 +443,7 @@ function runningRow(
     name: worker.name,
     child,
     role: roleName(worker.role),
-    roleLine: roleName(worker.role),
+    roleLine: roleLine(worker),
     pill: workerPill(worker.state),
     asks: input.questions.some(
       (q) => q.worker === worker.name && q.answer === null,
@@ -416,8 +458,25 @@ function runningRow(
       input.steps,
       waitsForTaskWorkers(worker, input.workers.workers),
     ),
+    error: rowError(worker),
     stop: stopControl(worker.state),
+    restart: canRestart(worker.state),
+    previousSessions: worker.previous_sessions.map((s) => s.session_id),
+    session: sessionView(worker),
   };
+}
+
+/** The main agent's step when a connected session cannot get fold's notices, so it learns of a message only when it reads its inbox; null otherwise. */
+export function noticeStep(agent: AgentView): Step | null {
+  if (agent.sessions === 0) return null;
+  switch (agent.notices) {
+    case "unreachable":
+      return faint("not reachable · reads new messages from its inbox");
+    case "failing":
+      return faint("notices fail · reads new messages from its inbox");
+    default:
+      return null;
+  }
 }
 
 function mainRow(agent: AgentView, human: string | null): TeamRow {
@@ -436,8 +495,12 @@ function mainRow(agent: AgentView, human: string | null): TeamRow {
     turns: NONE,
     cost: NONE,
     context: NONE,
-    step: faint(NONE),
+    step: noticeStep(agent) ?? faint(NONE),
+    error: null,
     stop: null,
+    restart: false,
+    previousSessions: [],
+    session: null,
   };
 }
 

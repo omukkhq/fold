@@ -549,6 +549,10 @@ function applyWorkerOutput(
     void queryClient.invalidateQueries({ queryKey: keys.agents(slug) });
     void queryClient.invalidateQueries({ queryKey: keys.workers(slug) });
   }
+  // A turn's end changes the item of a worker that could not reach the model without a stored event: a turn that reaches the model ends it, and a failed one changes its error.
+  if (frame.step === "result" || frame.step === "result_error") {
+    void queryClient.invalidateQueries({ queryKey: keys.needsYou(slug) });
+  }
 }
 
 /** The steps that start or end a worker's turn. */

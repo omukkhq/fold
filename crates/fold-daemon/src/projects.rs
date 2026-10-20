@@ -14,6 +14,7 @@ use crate::daemon::DRAIN_TIMEOUT;
 use crate::jobs::{self, AutoCommit};
 use crate::live::{LiveConfig, LiveState};
 use crate::push::{self, PushTargets, PushTask};
+use crate::services::agents::environment::WorkerEnvironment;
 use crate::services::agents::{AgentService, Launcher, SeenPresence, Supervisor, code_of};
 use crate::services::events::EventBus;
 use crate::services::messages::MessageService;
@@ -285,6 +286,7 @@ impl ProjectHandle {
             self.bus.clone(),
             self.clock.clone(),
         )
+        .with_push_targets(self.push.clone())
     }
 
     /// The review service of this project. Every transport builds it here, per request or session, so it always shares the project's integration mutex, object lock and workspace locks, and knows the humans of `registry`.
@@ -431,6 +433,8 @@ pub struct Projects {
     opening: tokio::sync::Mutex<()>,
     /// The programs every project's worker processes run.
     launcher: Launcher,
+    /// What the daemon found at its start about the environment of the workers.
+    environment: WorkerEnvironment,
     /// The host registry, whose humans a worker's `AskUserQuestion` call reaches, and from which a project whose `.fold/` is gone is removed.
     registry: Option<Store>,
     /// The runs of checks that may go at once across every project.
@@ -439,6 +443,8 @@ pub struct Projects {
     removed: RwLock<HashMap<String, PathBuf>>,
     /// The projects that are unavailable because their folder is missing, which the live job opens again when the folder is back.
     away: RwLock<HashSet<String>>,
+    /// The daemon's folder of kept push targets, one subfolder per project slug; `None` keeps them in memory only.
+    push_files: Option<PathBuf>,
 }
 
 impl Projects {
@@ -449,8 +455,29 @@ impl Projects {
     }
 
     #[must_use]
+    pub fn with_environment(mut self, environment: WorkerEnvironment) -> Self {
+        self.environment = environment;
+        self
+    }
+
+    pub fn launcher(&self) -> &Launcher {
+        &self.launcher
+    }
+
+    pub fn environment(&self) -> &WorkerEnvironment {
+        &self.environment
+    }
+
+    #[must_use]
     pub fn with_registry(mut self, registry: Store) -> Self {
         self.registry = Some(registry);
+        self
+    }
+
+    /// Keeps each project's push targets below `dir`, in the folder named by the project's slug.
+    #[must_use]
+    pub fn with_push_files(mut self, dir: PathBuf) -> Self {
+        self.push_files = Some(dir);
         self
     }
 
@@ -468,7 +495,7 @@ impl Projects {
             .collect()
     }
 
-    /// Opens `row` unless it is already open, in which case the same handle comes back. A folder that is there without `.fold/`, as after its fold data was deleted, is removed from fold instead, with `project_not_found`; a missing folder or a `.fold/` without its database leaves the project registered and unavailable. An open handle whose database was replaced is closed first, with its workers, and leaves the slot, so the new project that `fld init` made there opens fresh. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect. The handle's commit writer runs as it starts, which writes the commit of a revision an integration cut off after its own commit never got and brings the project folder to it, and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. Once the handle is in place, every worker that was working or idle runs again with its session resumed; a resumed worker's adapter connects through the daemon's socket, which is bound by then, and its handshake opens this same project, so the resume runs after the open has let go of its lock.
+    /// Opens `row` unless it is already open, in which case the same handle comes back. A folder that is there without `.fold/`, as after its fold data was deleted, is removed from fold instead, with `project_not_found`; a missing folder or a `.fold/` without its database leaves the project registered and unavailable. An open handle whose database was replaced is closed first, with its workers, and leaves the slot, so the new project that `fld init` made there opens fresh. A new handle runs its start-up sequence before any request can reach it: the database opens with SQLite's own WAL recovery, the workspaces are reconciled with their directories, and every session a previous run left open ends at the start time with its `session.ended`, so presence shows offline until the adapters reconnect; the inbox socket that the daemon kept for each agent, outside the project folder, is then restored while its session still listens, so a session that outlived the daemon gets its notices again. The handle's commit writer runs as it starts, which writes the commit of a revision an integration cut off after its own commit never got and brings the project folder to it, and changes nothing otherwise. No session of this run can exist yet, because a session starts only through an open handle. Once the handle is in place, every worker that was working or idle runs again with its session resumed; a resumed worker's adapter connects through the daemon's socket, which is bound by then, and its handshake opens this same project, so the resume runs after the open has let go of its lock.
     pub async fn open(
         &self,
         row: &ProjectRow,
@@ -544,6 +571,12 @@ impl Projects {
             }
             if let Err(error) = handle.agents().close_orphan_sessions().await {
                 tracing::error!(project = %row.slug, code = code_of(&error), "could not end orphan sessions");
+            }
+            if let Some(dir) = &self.push_files {
+                handle.push.keep_files_in(dir.join(&row.slug));
+            }
+            if let Err(error) = handle.agents().restore_push_targets().await {
+                tracing::error!(project = %row.slug, code = code_of(&error), "could not restore the kept inbox sockets");
             }
         }
         let slot = match &outcome {

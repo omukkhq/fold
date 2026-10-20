@@ -1,9 +1,16 @@
+use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 
-use fold_core::roles::{FLD_MISSING, StartFacts, first_turn, needs_restart};
-use fold_core::{AgentName, WorkerState};
-use fold_store::StoreError;
+use fold_core::dag::Dag;
+use fold_core::readiness::{Candidate, ready_order, unblock_count};
+use fold_core::roles::{
+    CatchUpFacts, FLD_MISSING, Role, StartFacts, catch_up_turn, first_turn, needs_restart,
+};
+use fold_core::{AgentName, WorkerName, WorkerState};
 use fold_store::agents::{self, WorkerProcessRow};
+use fold_store::reviews::{self, ProposalRow, ProposalState};
+use fold_store::tasks::LabelRow;
+use fold_store::{StoreError, tasks};
 
 use super::{Supervisor, lock, resume, reviewer_batch};
 use crate::services::agents::AgentError;
@@ -19,7 +26,7 @@ pub const MCP_RETRY_TURN: &str = "fold resumed you after your fold MCP server fa
 pub const PAUSE_TURN: &str = "fold resumed you after a pause of every agent of the project. Your claims kept their leases. Check your inbox, your claims and your workspace, then continue your work.";
 
 impl Supervisor {
-    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped, and every worker that could not reach fold: `--resume` of its session, with a turn that tells a working one to go on and a turn that tells the other one that its fold connection failed. A worker whose fld binary was gone resumes only once the fld path names a file again. A start reads the rows once, so a worker that fails the same way again stays failed until the next start. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. A row that cannot be served is logged and the next row is served. Requested changes, conflicts and send-backs that the worker limits held back are then served. A start in a paused project does none of this: the resume of the pause runs the workers again, those that could not reach fold among them.
+    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped, and every worker that could not reach fold: `--resume` of its session, with a turn that tells a working one to go on and a turn that tells the other one that its fold connection failed. A lead hears in the same turn of the work that waits for it, and an idle lead with nothing waiting gets no turn. A worker whose fld binary was gone resumes only once the fld path names a file again. A start reads the rows once, so a worker that fails the same way again stays failed until the next start. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. A row that cannot be served is logged and the next row is served. Requested changes, conflicts and send-backs that the worker limits held back are then served. A start in a paused project does none of this: the resume of the pause runs the workers again, those that could not reach fold among them.
     pub async fn resume_after_restart(&self) -> Result<(), AgentError> {
         if self.is_paused().await? {
             self.inner.unreachable_owed.store(true, Ordering::SeqCst);
@@ -35,8 +42,16 @@ impl Supervisor {
         let rows = agents::list_worker_processes(&mut conn).await?;
         drop(conn);
         let fld = self.fld_present().await;
+        let kept: BTreeSet<AgentName> = rows
+            .iter()
+            .filter(|row| {
+                matches!(row.state, WorkerState::Working | WorkerState::Idle)
+                    || (row.state == WorkerState::Failed && reaches_fold_again(row, fld))
+            })
+            .map(|row| row.agent.clone())
+            .collect();
         for row in rows {
-            if let Err(error) = self.restart_row(&row, fld).await {
+            if let Err(error) = self.restart_row(&row, fld, &kept).await {
                 tracing::warn!(agent = %row.agent, code = code_of(&error), "could not serve a worker after the daemon start");
             }
         }
@@ -46,18 +61,26 @@ impl Supervisor {
         Ok(())
     }
 
-    /// What a daemon start does with one row; see [`Supervisor::resume_after_restart`]. `fld` tells whether the fld binary of the workers' MCP configuration is there.
-    async fn restart_row(&self, row: &WorkerProcessRow, fld: bool) -> Result<(), AgentError> {
+    /// What a daemon start does with one row; see [`Supervisor::resume_after_restart`]. `fld` tells whether the fld binary of the workers' MCP configuration is there, and `kept` names the workers the start runs again.
+    async fn restart_row(
+        &self,
+        row: &WorkerProcessRow,
+        fld: bool,
+        kept: &BTreeSet<AgentName>,
+    ) -> Result<(), AgentError> {
         match row.state {
             WorkerState::Working | WorkerState::Idle => {
                 let turn = (row.state == WorkerState::Working).then(|| RESTART_TURN.to_owned());
+                let turn = self.with_catch_up(row, turn, kept).await;
                 self.relaunch(row, turn, None).await?;
             }
             WorkerState::Starting => self.fail(row.id, &row.agent, "daemon_restart").await?,
             WorkerState::Stopping => self.stopped_without_process(row).await?,
             WorkerState::Failed if reaches_fold_again(row, fld) => {
-                self.relaunch(row, Some(MCP_RETRY_TURN.to_owned()), None)
-                    .await?;
+                let turn = self
+                    .with_catch_up(row, Some(MCP_RETRY_TURN.to_owned()), kept)
+                    .await;
+                self.relaunch(row, turn, None).await?;
             }
             WorkerState::Stopped | WorkerState::Failed => {}
         }
@@ -91,7 +114,7 @@ impl Supervisor {
             .is_paused())
     }
 
-    /// Ends a pause that began at `paused_at`: each worker that was working, idle or starting runs again in its own session with [`PAUSE_TURN`], followed by the first turn a starting worker never read, the answer to a question a human answered during the pause, and the requested changes, conflicts and send-backs its task worker missed; a worker left `stopping` ends `stopped`. When the daemon started during the pause, each worker that could not reach fold runs again with [`MCP_RETRY_TURN`], as that start would have resumed it. The resumes, send-backs and fresh starts of lost sessions that the pause held back are then served. A row that cannot be served is logged and the next row is served.
+    /// Ends a pause that began at `paused_at`: each worker that was working, idle or starting runs again in its own session with [`PAUSE_TURN`], followed by the first turn a starting worker never read, the answer to a question a human answered during the pause, the requested changes, conflicts and send-backs its task worker missed, and the work that waits for a lead; a worker left `stopping` ends `stopped`. When the daemon started during the pause, each worker that could not reach fold runs again with [`MCP_RETRY_TURN`], as that start would have resumed it. The resumes, send-backs and fresh starts of lost sessions that the pause held back are then served. A row that cannot be served is logged and the next row is served.
     pub(in crate::services::agents::workers) async fn resume_after_pause(
         &self,
         paused_at: fold_core::Timestamp,
@@ -109,6 +132,18 @@ impl Supervisor {
         let mut sent_back = self.send_backs_owed_to_paused().await;
         let unreachable = self.inner.unreachable_owed.swap(false, Ordering::SeqCst);
         let fld = unreachable && self.fld_present().await;
+        let kept: BTreeSet<AgentName> = rows
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row.state,
+                    WorkerState::Working | WorkerState::Idle | WorkerState::Starting
+                ) || (row.state == WorkerState::Failed
+                    && unreachable
+                    && reaches_fold_again(row, fld))
+            })
+            .map(|row| row.agent.clone())
+            .collect();
         for row in rows {
             if self.is_running(&row.agent) {
                 continue;
@@ -118,7 +153,7 @@ impl Supervisor {
                     let owed_here = owed.remove(&row.agent);
                     let sent_back_here = sent_back.remove(&row.agent);
                     match self
-                        .unpaused_turn(&row, paused_at, owed_here, sent_back_here)
+                        .unpaused_turn(&row, paused_at, owed_here, sent_back_here, &kept)
                         .await
                     {
                         Ok((parts, first)) => {
@@ -129,8 +164,10 @@ impl Supervisor {
                 }
                 WorkerState::Stopping => self.stopped_without_process(&row).await,
                 WorkerState::Failed if unreachable && reaches_fold_again(&row, fld) => {
-                    self.relaunch(&row, Some(MCP_RETRY_TURN.to_owned()), None)
-                        .await
+                    let turn = self
+                        .with_catch_up(&row, Some(MCP_RETRY_TURN.to_owned()), &kept)
+                        .await;
+                    self.relaunch(&row, turn, None).await
                 }
                 WorkerState::Stopped | WorkerState::Failed => Ok(()),
             };
@@ -148,13 +185,14 @@ impl Supervisor {
         Ok(())
     }
 
-    /// The parts of the turn that ends a pause for `row`: [`PAUSE_TURN`], then the first turn of a `starting` worker, whose process never read it, the answer to its question that a human gave during the pause, which the worker's repeat of the call then takes, and the work owed to it. A running worker owes `owed` and `sent_back`, recorded since its process started; a `starting` worker owes what its bound proposals and reports still ask for, because the turn that told of it went unread. The first turn also comes back on its own, for a worker whose session turns out to be gone.
+    /// The parts of the turn that ends a pause for `row`: [`PAUSE_TURN`], then the first turn of a `starting` worker, whose process never read it, the answer to its question that a human gave during the pause, which the worker's repeat of the call then takes, the work owed to it, and the work that waits for a lead, where `kept` names the workers the resume runs again. A running worker owes `owed` and `sent_back`, recorded since its process started; a `starting` worker owes what its bound proposals and reports still ask for, because the turn that told of it went unread. The first turn also comes back on its own, for a worker whose session turns out to be gone.
     async fn unpaused_turn(
         &self,
         row: &WorkerProcessRow,
         paused_at: fold_core::Timestamp,
         owed: Option<Vec<resume::Found>>,
         sent_back: Option<String>,
+        kept: &BTreeSet<AgentName>,
     ) -> Result<(Vec<String>, Option<String>), AgentError> {
         let mut parts = vec![PAUSE_TURN.to_owned()];
         let first = if row.state == WorkerState::Starting {
@@ -184,7 +222,105 @@ impl Supervisor {
             parts.push(resume::notice_turn(&found));
         }
         parts.extend(sent_back);
+        parts.extend(self.catch_up(row, kept).await);
         Ok((parts, first))
+    }
+
+    /// `turn` with the work that waits for a lead joined to it. A lead whose process starts again in its own session may have missed the notices of that work, because fold stores none and one sent while the lead had no process is lost. Joining it to the turn the start sends anyway gives the lead one turn, never two, and a lead with nothing waiting and no turn stays idle.
+    async fn with_catch_up(
+        &self,
+        row: &WorkerProcessRow,
+        turn: Option<String>,
+        kept: &BTreeSet<AgentName>,
+    ) -> Option<String> {
+        let parts: Vec<String> = turn
+            .into_iter()
+            .chain(self.catch_up(row, kept).await)
+            .collect();
+        (!parts.is_empty()).then(|| parts.join("\n\n"))
+    }
+
+    /// The work that waits for a lead, see [`catch_up_turn`]. A claim hides its task or proposal only while its worker runs or is among `kept`, the workers the same start runs again. A read that fails is logged and names nothing, so the lead still runs.
+    async fn catch_up(&self, row: &WorkerProcessRow, kept: &BTreeSet<AgentName>) -> Option<String> {
+        match self.waiting_for(row, kept).await {
+            Ok(text) => text,
+            Err(error) => {
+                tracing::warn!(agent = %row.agent, code = error.log_code(), "could not read the work that waits for a lead");
+                None
+            }
+        }
+    }
+
+    async fn waiting_for(
+        &self,
+        row: &WorkerProcessRow,
+        kept: &BTreeSet<AgentName>,
+    ) -> Result<Option<String>, StoreError> {
+        let holds = |worker: &WorkerName| {
+            let agent = worker.agent();
+            kept.contains(&agent) || self.is_running(&agent)
+        };
+        let read = self.inner.store.read();
+        let (tasks, proposals) = match row.role {
+            Role::AreaLead => {
+                let Some(area) = &row.area else {
+                    return Ok(None);
+                };
+                let Some(area) = agents::find_area(read, area).await? else {
+                    return Ok(None);
+                };
+                let in_area =
+                    |labels: &[LabelRow]| labels.iter().any(|label| label.name == area.label);
+                let snapshot = tasks::ready_snapshot(read).await?;
+                let held = tasks::held_todo(read).await?;
+                let dag = Dag::from_edges(snapshot.edges);
+                let candidates: Vec<Candidate> = snapshot
+                    .candidates
+                    .iter()
+                    .filter(|task| in_area(&task.labels))
+                    .map(|task| (task.id, task.created_at))
+                    .chain(
+                        held.iter()
+                            .filter(|task| in_area(&task.labels) && !holds(&task.holder))
+                            .map(|task| (task.id, task.created_at)),
+                    )
+                    .map(|(task, created_at)| Candidate {
+                        task,
+                        unblock_count: unblock_count(task, &dag, &snapshot.statuses),
+                        created_at,
+                    })
+                    .collect();
+                (ready_order(&candidates), Vec::new())
+            }
+            Role::ReviewLead => {
+                let open = reviews::list_proposals(read, Some(ProposalState::Open), None).await?;
+                let mut proposals = Vec::new();
+                for proposal in open {
+                    let waits = waits_for_review(&proposal)
+                        && proposal
+                            .review_claim
+                            .as_ref()
+                            .is_none_or(|holder| !holds(holder));
+                    // A human or the main agent decides a proposal of a task of Main, never the review lead.
+                    if waits
+                        && !tasks::labels_for(read, proposal.task)
+                            .await?
+                            .iter()
+                            .any(|label| label.name.is_main())
+                    {
+                        proposals.push(proposal.id);
+                    }
+                }
+                (Vec::new(), proposals)
+            }
+            Role::TaskWorker | Role::Reviewer => return Ok(None),
+        };
+        Ok(catch_up_turn(&CatchUpFacts {
+            role: row.role,
+            area: row.area.as_ref(),
+            tasks: &tasks,
+            proposals: &proposals,
+        }))
     }
 
     /// The first turn of a start, from the row's role, area and bound tasks and proposals. fold never stores a starter's instructions, so this turn goes without them.
@@ -205,6 +341,11 @@ impl Supervisor {
             instructions: None,
         }))
     }
+}
+
+/// An open proposal whose current version has no verdict and nothing its author must change first.
+fn waits_for_review(proposal: &ProposalRow) -> bool {
+    proposal.latest_verdict.is_none() && !proposal.conflicted && !proposal.checks_failed
 }
 
 /// A failed worker that a start resumes: one whose fold MCP server did not connect, or whose fld binary was gone and is there again (`fld`).

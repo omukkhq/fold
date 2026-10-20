@@ -32,7 +32,8 @@ pub use integrations::{
 };
 pub use scopes::{ScopeChoiceRow, insert_review_scope, insert_scope_choice, latest_scope_choice};
 pub use summaries::{
-    IntegrationRecord, ProposalSummary, ReviewEntry, proposal_summaries, review_entries,
+    IntegrationRecord, OpenTurn, ProposalSummary, ReviewEntry, open_turns, proposal_summaries,
+    review_entries,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

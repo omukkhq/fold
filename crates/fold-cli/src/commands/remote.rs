@@ -139,7 +139,7 @@ pub(crate) fn find_project(start: &Path) -> PathBuf {
     init::project_root_at_or_above(&absolute).unwrap_or(absolute)
 }
 
-fn project_paths(project: Option<&Path>) -> Result<ProjectPaths, FoldError> {
+pub(crate) fn project_paths(project: Option<&Path>) -> Result<ProjectPaths, FoldError> {
     let paths = ProjectPaths::new(find_project(project.unwrap_or_else(|| Path::new("."))));
     if !paths.db().is_file() {
         return Err(FoldError::new(
@@ -446,6 +446,17 @@ pub(crate) fn request_project(
     method: Method,
     action: &str,
 ) -> Result<Response, RemoteError> {
+    request_project_with(socket, project, method, action, None)
+}
+
+/// [`request_project`] with a JSON body.
+pub(crate) fn request_project_with(
+    socket: Option<&Path>,
+    project: Option<&Path>,
+    method: Method,
+    action: &str,
+    body: Option<&serde_json::Value>,
+) -> Result<Response, RemoteError> {
     let dirs = Dirs::from_env();
     let host = init::host_paths(&dirs)?;
     let start = project.map_or_else(|| PathBuf::from("."), Path::to_path_buf);
@@ -456,7 +467,7 @@ pub(crate) fn request_project(
     runtime.block_on(async {
         let slug = slug_for_dir_on_host(&host, &dir).await?;
         let path = format!("/api/v1/projects/{slug}/{action}");
-        Ok::<_, RemoteError>(client.request(method, &path, None).await?)
+        Ok::<_, RemoteError>(client.request(method, &path, body).await?)
     })
 }
 

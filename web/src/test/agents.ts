@@ -62,6 +62,7 @@ export function agent(
     workers: [worker(name)],
     events: [],
     process: null,
+    notices: "socket",
     ...fields,
   };
 }

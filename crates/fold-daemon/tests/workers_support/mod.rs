@@ -5,13 +5,14 @@ use std::path::{Path, PathBuf};
 use fold_daemon::services::agents::Launcher;
 use tempfile::TempDir;
 
-/// A stand-in for `claude -p` in stream-json mode, so no test needs Claude Code. It records its arguments, environment, working directory and every stdin line under `FOLD_FAKE_CLAUDE_DIR`, answers `initialize` and `interrupt` as Claude Code does, replays the fixture `FOLD_FAKE_CLAUDE_TURN` for each user turn, waits after a `can_use_tool` request until fold answers it, and exits when stdin closes. With `FOLD_FAKE_CLAUDE_STUBBORN` set it ignores SIGINT and a closed stdin, so only SIGTERM or SIGKILL ends it. With `FOLD_FAKE_CLAUDE_LOST` naming a fixture, a run with `--resume` answers its first user turn with that fixture and exits with code 1, as Claude Code does for a session it cannot find. With `FOLD_FAKE_CLAUDE_CHILD` set it starts a background `sleep` first, as a tool's command would, and records its pid; with `FOLD_FAKE_CLAUDE_NOISE` set it writes a line that is not UTF-8 and a line over the supervisor's length cap before each turn. Once its stdin closes it records that.
+/// A stand-in for `claude -p` in stream-json mode, so no test needs Claude Code. It records its arguments, environment, working directory and every stdin line under `FOLD_FAKE_CLAUDE_DIR`, answers `initialize` and `interrupt` as Claude Code does, replays the fixture `FOLD_FAKE_CLAUDE_TURN` for each user turn, waits after a `can_use_tool` request until fold answers it, and exits when stdin closes. With `FOLD_FAKE_CLAUDE_STUBBORN` set it ignores SIGINT and a closed stdin, so only SIGTERM or SIGKILL ends it. With `FOLD_FAKE_CLAUDE_LOST` naming a fixture, a run with `--resume` answers its first user turn with that fixture and exits with code 1, as Claude Code does for a session it cannot find. With `FOLD_FAKE_CLAUDE_STDERR` set it answers its first user turn by writing a line and that text in red to stderr and exits with code 1, as a process that cannot run does. With `FOLD_FAKE_CLAUDE_WARN` set it writes that text to stderr when it starts and runs on. With `FOLD_FAKE_CLAUDE_CHILD` set it starts a background `sleep` first, as a tool's command would, and records its pid; with `FOLD_FAKE_CLAUDE_NOISE` set it writes a line that is not UTF-8 and a line over the supervisor's length cap before each turn. Once its stdin closes it records that.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 dir="$FOLD_FAKE_CLAUDE_DIR"
 for arg in "$@"; do printf '%s\n' "$arg"; done > "$dir/$$.args"
 env > "$dir/$$.env"
 pwd > "$dir/$$.cwd"
 if [ -n "$FOLD_FAKE_CLAUDE_STUBBORN" ]; then trap '' INT; fi
+if [ -n "$FOLD_FAKE_CLAUDE_WARN" ]; then printf '%s\n' "$FOLD_FAKE_CLAUDE_WARN" >&2; fi
 if [ -n "$FOLD_FAKE_CLAUDE_CHILD" ]; then
   sleep 300 &
   printf '%s\n' "$!" > "$dir/$$.child"
@@ -31,6 +32,10 @@ while IFS= read -r line; do
       printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":1,"session_id":"fake","total_cost_usd":0}' ;;
     *'"type":"user"'*)
       if [ -n "$lost" ]; then cat "$FOLD_FAKE_CLAUDE_LOST"; exit 1; fi
+      if [ -n "$FOLD_FAKE_CLAUDE_STDERR" ]; then
+        printf 'starting\n\033[31m%s\033[0m\n' "$FOLD_FAKE_CLAUDE_STDERR" >&2
+        exit 1
+      fi
       if [ -n "$FOLD_FAKE_CLAUDE_NOISE" ]; then
         printf '\377\376\n'
         head -c 17000000 /dev/zero | tr '\0' a
@@ -138,6 +143,24 @@ impl FakeClaude {
             "FOLD_FAKE_CLAUDE_LOST".to_owned(),
             fixture("error_result").to_string_lossy().into_owned(),
         ));
+        self
+    }
+
+    /// The first user turn of each run writes `text` to stderr and exits with code 1.
+    #[must_use]
+    pub fn failing_with_stderr(mut self, text: &str) -> Self {
+        self.launcher
+            .env
+            .push(("FOLD_FAKE_CLAUDE_STDERR".to_owned(), text.to_owned()));
+        self
+    }
+
+    /// Each run writes `text` to stderr when it starts and runs on.
+    #[must_use]
+    pub fn warning_on_stderr(mut self, text: &str) -> Self {
+        self.launcher
+            .env
+            .push(("FOLD_FAKE_CLAUDE_WARN".to_owned(), text.to_owned()));
         self
     }
 

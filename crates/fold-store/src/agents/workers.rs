@@ -46,6 +46,11 @@ pub struct WorkerProcessRow {
     pub exit_code: Option<i64>,
     /// Why the latest process failed, such as `exited` or `mcp_unavailable`; `None` unless the row is `failed`, and for a row that failed before fold stored the reason.
     pub failed_reason: Option<String>,
+    /// Claude Code's error of the latest failed turn, or the stderr of the latest process that exited with an error; `None` once a turn ends without an error.
+    pub last_error: Option<String>,
+    pub last_error_at: Option<Timestamp>,
+    /// The turns in a row that failed before any token reached the model.
+    pub failed_turns: u64,
     pub tasks: Vec<TaskId>,
     pub proposals: Vec<ProposalId>,
 }
@@ -335,6 +340,9 @@ struct RawProcess {
     context_tokens: i64,
     exit_code: Option<i64>,
     failed_reason: Option<String>,
+    last_error: Option<String>,
+    last_error_at: Option<i64>,
+    failed_turns: i64,
 }
 
 impl RawProcess {
@@ -368,6 +376,9 @@ impl RawProcess {
             context_tokens: count(self.context_tokens, "worker_processes.context_tokens")?,
             exit_code: self.exit_code,
             failed_reason: self.failed_reason,
+            last_error: self.last_error,
+            last_error_at: optional_time(self.last_error_at, "worker_processes.last_error_at")?,
+            failed_turns: count(self.failed_turns, "worker_processes.failed_turns")?,
             tasks: Vec::new(),
             proposals: Vec::new(),
         })
@@ -382,7 +393,8 @@ macro_rules! select_processes {
             r#"SELECT w.id AS "id!: i64", w.agent_id, g.name AS agent, w.role, w.area_id, a.name AS "area?: String",
                       w.model, w.session_id, w.pid, w.state, w.started_by, w.started_at, w.stopped_at,
                       w.idle_since, w.turns, w.cost_micro_usd, w.cache_read_tokens, w.cache_write_tokens,
-                      w.context_tokens, w.exit_code, w.failed_reason
+                      w.context_tokens, w.exit_code, w.failed_reason, w.last_error, w.last_error_at,
+                      w.failed_turns
                FROM worker_processes w JOIN agents g ON g.id = w.agent_id LEFT JOIN areas a ON a.id = w.area_id
                "# + $tail
             $(, $arg)*
@@ -575,6 +587,17 @@ pub async fn set_worker_context(
     Ok(())
 }
 
+/// Forgets a model name that Claude Code made up, such as `<synthetic>`, which no start asked for; a real name stays.
+pub async fn forget_made_up_model(tx: &mut WriteTx, id: i64) -> Result<(), StoreError> {
+    sqlx::query!(
+        "UPDATE worker_processes SET model = NULL WHERE id = ? AND model LIKE '<%'",
+        id
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
 /// Counts one finished turn and makes the worker idle.
 pub async fn record_turn(
     tx: &mut WriteTx,
@@ -597,6 +620,64 @@ pub async fn record_turn(
         cost,
         read,
         write,
+        now
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
+/// Records a turn that ended in Claude Code's `error`: it becomes the row's last error, and the count of failed turns in a row grows by one, or starts again at 0 for a turn that `reached_model`. A row that is stopping or has ended is left as it is, because the interrupt of a stop ends its turn in an error too. Returns the new count, or `None` for a row left as it was.
+pub async fn record_turn_error(
+    tx: &mut WriteTx,
+    id: i64,
+    error: &str,
+    reached_model: bool,
+    now: Timestamp,
+) -> Result<Option<u64>, StoreError> {
+    let now = now.as_millis();
+    let turns = sqlx::query_scalar!(
+        r#"UPDATE worker_processes
+           SET last_error = ?2, last_error_at = ?3,
+               failed_turns = CASE WHEN ?4 THEN 0 ELSE failed_turns + 1 END
+           WHERE id = ?1 AND state IN ('starting', 'working', 'idle')
+           RETURNING failed_turns AS "failed_turns!: i64""#,
+        id,
+        error,
+        now,
+        reached_model
+    )
+    .fetch_optional(tx.conn())
+    .await?;
+    turns
+        .map(|turns| count(turns, "worker_processes.failed_turns"))
+        .transpose()
+}
+
+/// A turn ended without an error, so the worker reaches the model: the last error goes and the count of failed turns starts again.
+pub async fn clear_turn_error(tx: &mut WriteTx, id: i64) -> Result<(), StoreError> {
+    sqlx::query!(
+        "UPDATE worker_processes SET last_error = NULL, last_error_at = NULL, failed_turns = 0
+         WHERE id = ?",
+        id
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
+/// Makes `error`, the stderr of a process that exited with an error, the row's last error.
+pub async fn set_exit_error(
+    tx: &mut WriteTx,
+    id: i64,
+    error: &str,
+    now: Timestamp,
+) -> Result<(), StoreError> {
+    let now = now.as_millis();
+    sqlx::query!(
+        "UPDATE worker_processes SET last_error = ?2, last_error_at = ?3 WHERE id = ?1",
+        id,
+        error,
         now
     )
     .execute(tx.conn())

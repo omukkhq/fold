@@ -30,7 +30,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** The Claude Code session-start hook of an agent: stores the session's inbox socket for the session push when `socket` and `token` are both present, then returns the session's context. Socket only. A process under a worker names only that worker's own agent. */
+        /** The Claude Code session-start hook of an agent: stores the session's inbox socket for the session push when `socket` and `token` are both present, and keeps it in the daemon's own file of the agent, outside the project folder, for a restarted daemon; the inbox of an agent the project does not know yet waits in the daemon's memory until a session's adapter registers the agent. Then it returns the session's context. Socket only. A process under a worker names only that worker's own agent. */
         post: operations["hook_session_start"];
         delete?: never;
         options?: never;
@@ -355,7 +355,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, and a worker that failed because it cannot reach fold. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed` and `worker.refreshed`. */
+        /** Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, and a worker whose turns fail before they reach the model. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, and with the live `worker.output` steps `result` and `result_error`, which end a turn. */
         get: operations["list_needs_you"];
         put?: never;
         post?: never;
@@ -1174,6 +1174,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/workers/{name}/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human starts a worker of any role again in a new Claude Code session, for example when its session is broken. A running worker's process ends first, and the worker keeps its place under the worker limits. The worker keeps its name, claims, bound tasks and proposals and the workers it started; its old session id stays in `previous_sessions`, and the new session gets the role's first turn. */
+        post: operations["restart_worker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/workers/{name}/stop": {
         parameters: {
             query?: never;
@@ -1278,6 +1295,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/worker-environment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The environment of the workers and the answers of their `claude`, which the daemon runs with `--version` and `auth status`, never with a prompt. Socket only, so the paths of the user's home never reach the network. */
+        get: operations["worker_environment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1308,6 +1342,8 @@ export interface components {
              */
             last_call_at: number | null;
             name: string;
+            /** @description How fold's notices reach the agent now: `stdin` of its supervised process, `socket` of a session's inbox, `failing` when the last post to every inbox socket failed, `unreachable` with neither. A failing or unreachable agent sees a message only when it reads its inbox. */
+            notices: components["schemas"]["NoticeReach"];
             /** @description The connected sessions, oldest first. */
             open_sessions: components["schemas"]["AgentSession"][];
             presence: components["schemas"]["PresenceState"];
@@ -1333,6 +1369,13 @@ export interface components {
              * @example mcp_unavailable
              */
             failed_reason: string | null;
+            /**
+             * @description Claude Code's error text of the process's latest failed turn or failed exit; null once a turn ends without an error.
+             * @example Invalid API key · Please run /login
+             */
+            last_error: string | null;
+            /** @description The process's turns failed often enough in a row without reaching the model that it cannot work until a human fixes Claude Code; the daemon decides it, and it is false for a stopped process. */
+            model_unreachable: boolean;
             state: components["schemas"]["WorkerProcessState"];
         };
         /** @description A connected session. A session has no public id; one adapter process is one session, so its pid names it. */
@@ -1463,6 +1506,8 @@ export interface components {
              * @description UTC milliseconds of the completion record; null until the task is Done.
              */
             completed_at: number | null;
+            /** @description Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them. */
+            edits_after_version: boolean | null;
             human_review: components["schemas"]["HumanReviewMark"] | null;
             kind: components["schemas"]["TaskKind"];
             labels: components["schemas"]["Label"][];
@@ -1512,6 +1557,8 @@ export interface components {
             todo: number;
         };
         BoardProposal: {
+            /** @description The integration checks of the current version failed, so the proposal is back with its author until a new version. */
+            checks_failed: boolean;
             /** @example P-3 */
             id: string;
             /**
@@ -1520,6 +1567,11 @@ export interface components {
              */
             revision: string | null;
             state: components["schemas"]["ProposalState"];
+            /**
+             * Format: int32
+             * @description The current version.
+             */
+            version: number;
         };
         /** @description The five columns in board order: backlog, todo, in_progress, review, done. Archived tasks are left out. */
         BoardView: {
@@ -2010,7 +2062,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -2379,6 +2431,8 @@ export interface components {
              */
             base: string;
             checkpoints: components["schemas"]["CheckpointSummary"][];
+            /** @description Whether the working files differ from the tree of the open proposal's newest version: false while every file is the same, true from the first file that differs. Null without an open proposal. */
+            edits_after_version: boolean | null;
             files: components["schemas"]["ChangedFile"][];
             /**
              * Format: int64
@@ -2499,7 +2553,7 @@ export interface components {
              */
             question: string | null;
             /**
-             * @description The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, ends the conflict for `unstash_conflicted`, or lets the worker of a `worker_unreachable` reach fold again.
+             * @description The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, ends the conflict for `unstash_conflicted`, or lets the worker of a `worker_unreachable` reach fold again; what to check for a `worker_model_unreachable`.
              * @example Wait until the design is signed off
              */
             reason: string | null;
@@ -2519,7 +2573,7 @@ export interface components {
              */
             thread: string | null;
             /**
-             * @description The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`.
+             * @description The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`; Claude Code's error of a `worker_model_unreachable`.
              * @example Database schema for reports
              */
             title: string | null;
@@ -2533,7 +2587,7 @@ export interface components {
          * @description Why an item waits for a human.
          * @enum {string}
          */
-        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable";
+        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable" | "worker_model_unreachable" | "claude_not_found";
         /** @description Every item that waits for a human, oldest first. */
         NeedsYouList: {
             items: components["schemas"]["NeedsYouEntry"][];
@@ -2552,6 +2606,8 @@ export interface components {
             /** @description The text of a plain step. */
             text?: string | null;
         };
+        /** @enum {string} */
+        NoticeReach: "stdin" | "socket" | "failing" | "unreachable";
         OpenProject: {
             /** @description The slug of a project already in the registry. */
             slug: string;
@@ -2581,6 +2637,17 @@ export interface components {
          * @enum {string}
          */
         PresenceState: "active" | "idle" | "offline";
+        /** @description A Claude Code session a worker had before its current one. */
+        PreviousSessionEntry: {
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the change to the next session.
+             */
+            ended_at: number;
+            reason: components["schemas"]["SessionEndReason"];
+            /** @description The session id, which names the session's Claude Code transcript. */
+            session_id: string;
+        };
         ProjectAgent: {
             name: string;
             presence: components["schemas"]["PresenceState"];
@@ -2652,6 +2719,8 @@ export interface components {
              * @description The newest version before the selected one that has a verdict, by any reviewer, agent or human: what changed since it is what is left to review.
              */
             last_reviewed_version: number | null;
+            /** @description The task is in the built-in area Main, the main agent's own work: no review agent reviews it, and a human approves it without a reviewer agent first, even with the human review mark. */
+            main_task: boolean;
             /** @description The direct prerequisites of the task. */
             prerequisites: components["schemas"]["ProposalTask"][];
             review_claim: components["schemas"]["ReviewClaim"] | null;
@@ -2909,6 +2978,8 @@ export interface components {
             delivered_at: number | null;
             /** @example frontend/ui */
             name: string;
+            /** @description For an agent recipient, whether fold can post a notice into one of the agent's sessions now; false means the agent learns of the message only when it reads its inbox. Null for a human and for an agent without a connected session. */
+            reachable: boolean | null;
         };
         RecordResult: {
             /** @description The Git commit of the new revision while Git sync is on; null otherwise. */
@@ -3086,6 +3157,11 @@ export interface components {
             last_at: number;
             /** Format: int32 */
             messages: number;
+        };
+        /** @description What a human adds to the first turn of a worker's new session. */
+        RestartWorkerBody: {
+            /** @description Added to the first turn of the new session; it is never stored. */
+            instructions?: string | null;
         };
         /** @description The human edit the human sends for review again. */
         ReviewAgainBody: {
@@ -3388,6 +3464,11 @@ export interface components {
             /** @description What to change: plain text, not empty. */
             note: string;
         };
+        /**
+         * @description Why a worker left a session for a new one: `handoff` (a fresh context after its hand-off note), `lost` (Claude Code no longer had the session) or `requested` (a human or the main agent asked for a new session).
+         * @enum {string}
+         */
+        SessionEndReason: "handoff" | "lost" | "requested";
         /** @description A token off loopback, a name on loopback. */
         SessionRequest: components["schemas"]["TokenSignIn"] | components["schemas"]["NameSignIn"];
         SessionStartContext: {
@@ -3432,6 +3513,11 @@ export interface components {
              */
             task_worker?: number | null;
         };
+        /**
+         * @description Why the daemon did not take the login shell's environment.
+         * @enum {string}
+         */
+        ShellProblemKind: "no_shell" | "failed" | "timed_out" | "no_claude";
         /** @description The newest durable sequence number and every live workspace, sent after a replay so a client starts from current state. */
         Snapshot: {
             /**
@@ -3608,6 +3694,8 @@ export interface components {
             tasks: components["schemas"]["TaskSummary"][];
         };
         TaskProposal: {
+            /** @description The integration checks of the current version failed, so the proposal is back with its author until a new version. */
+            checks_failed: boolean;
             /** @example P-3 */
             id: string;
             /** @description Newest first. */
@@ -3708,6 +3796,8 @@ export interface components {
             dependencies: components["schemas"]["TaskEdge"][];
             /** @description Markdown. */
             description: string;
+            /** @description Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them. */
+            edits_after_version: boolean | null;
             /** @description The task's newest stored events, newest first, at most 50. */
             history: components["schemas"]["TaskEvent"][];
             human_review: components["schemas"]["HumanReviewMark"] | null;
@@ -3905,11 +3995,36 @@ export interface components {
             /** @description Workspaces in state `active` or `missing`. */
             workspaces: components["schemas"]["WorkerWorkspace"][];
         };
+        /**
+         * @description Where the workers' environment came from.
+         * @enum {string}
+         */
+        WorkerEnvironmentSource: "shell" | "setup" | "daemon";
+        /** @description The environment in which the daemon starts Claude Code for its workers, as it found it at its start, with the answers of that `claude`. It names paths and variable names, never a variable's value. */
+        WorkerEnvironmentView: {
+            /** @description The absolute path of the `claude` that workers run; null when the `PATH` of the workers' environment holds none. */
+            claude?: string | null;
+            /** @description The absolute path of the `git` on that `PATH`; null when it holds none. */
+            git?: string | null;
+            shell_problem?: components["schemas"]["ShellProblemKind"] | null;
+            /** @description The sorted names of the variables of the workers' environment that decide how Claude Code signs in, such as `HOME`, `CLAUDE_CONFIG_DIR` and `ANTHROPIC_API_KEY`. */
+            sign_in_variables: string[];
+            /** @description Whether `claude auth status` says Claude Code is signed in; null when it gave no answer fold can read. */
+            signed_in?: boolean | null;
+            source: components["schemas"]["WorkerEnvironmentSource"];
+            /** @description The version that `claude --version` printed, such as `2.1.301`; null when it printed none fold can read. */
+            version?: string | null;
+        };
         /** @description The areas and every worker fold runs or ran. */
         WorkerList: {
-            /** @description In name order. */
+            /** @description In name order, without the built-in area Main, which has no lead and no profile. */
             areas: components["schemas"]["AreaEntry"][];
             limits: components["schemas"]["LimitsEntry"] | null;
+            /**
+             * @description The label of the built-in area Main: a task with it belongs to the main agent, which builds it itself, and a human approves its proposal.
+             * @example main
+             */
+            main_label: string;
             pause: components["schemas"]["PauseEntry"];
             /** @description Each role with the cache time a new worker of the role gets; empty when fold cannot read `.fold/config.toml`. */
             roles: components["schemas"]["RoleEntry"][];
@@ -3975,20 +4090,46 @@ export interface components {
              */
             exit_code: number | null;
             /**
-             * @description Why the worker's latest process failed, such as `exited`, `spawn`, `mcp_unavailable` (its fold MCP server did not connect) or `fld_missing` (the fld binary of that server is gone); null unless `state` is `failed`, and for a worker that failed before fold stored the reason.
+             * @description Why the worker's latest process failed, such as `exited`, `spawn`, `mcp_unavailable` (its fold MCP server did not connect), `fld_missing` (the fld binary of that server is gone) or `claude_not_found` (the daemon found no `claude` on the `PATH` it gives workers); null unless `state` is `failed`, and for a worker that failed before fold stored the reason.
              * @example mcp_unavailable
              */
             failed_reason: string | null;
+            /**
+             * Format: int64
+             * @description The turns in a row that failed before any token reached the model.
+             */
+            failed_turns: number;
+            /**
+             * @description What the human checks for a worker that cannot reach the model; null otherwise.
+             * @example check the Claude Code sign-in, model and usage limit, or run `fld doctor`
+             */
+            hint: string | null;
+            /**
+             * @description Claude Code's error text of the worker's latest failed turn, or the last stderr lines of its latest process that exited with an error, at most 1000 characters; null once a turn ends without an error.
+             * @example Invalid API key · Please run /login
+             */
+            last_error: string | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of `last_error`; null without one.
+             */
+            last_error_at: number | null;
             /** @description The model Claude Code reported, or the one fold asked for; null for Claude Code's default before the first turn. */
             model: string | null;
+            /** @description The worker's turns failed often enough in a row without reaching the model that it cannot work until a human fixes Claude Code; the daemon decides it, and the human's list of what waits for them holds an item for it. */
+            model_unreachable: boolean;
             /**
              * @description The worker's agent name.
              * @example web-worker
              */
             name: string;
+            /** @description The sessions the worker had before its current one, oldest first. */
+            previous_sessions: components["schemas"]["PreviousSessionEntry"][];
             /** @description The proposals a reviewer is bound to. */
             proposals: string[];
             role: components["schemas"]["WorkerRole"];
+            /** @description The worker's current Claude Code session, whose transcript Claude Code keeps under this id. */
+            session_id: string;
             /**
              * Format: int64
              * @description UTC milliseconds of the newest process start.
@@ -4004,6 +4145,11 @@ export interface components {
             stopped_at: number | null;
             /** @description The tasks a task worker is bound to. */
             tasks: string[];
+            /**
+             * @description The path of the current session's transcript file, which Claude Code writes from the session's first message on; fold never reads it. Null when fold cannot tell where Claude Code keeps it, such as when `CLAUDE_CODE_PROJECT_DIR_NAME` renames the project folder, or when a long project path ends in a hash and no folder holds the file yet.
+             * @example /home/tanim/.claude/projects/-home-tanim-ledger/0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a13.jsonl
+             */
+            transcript: string | null;
             /**
              * Format: int64
              * @description Finished turns.
@@ -4867,7 +5013,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            /** @description `main_area`: the area main has no profile; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7072,7 +7218,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `stale_version` (`details.expected_version`, `details.current_version`), `agent_approval_required` (a human's approve on a task with the human review mark before a reviewer agent approved the version), `proposal_not_open` or `task_closed` */
+            /** @description `stale_version` (`details.expected_version`, `details.current_version`), `agent_approval_required` (a human's approve on a task with the human review mark before a reviewer agent approved the version; a task of the area main needs no reviewer agent first), `proposal_not_open` or `task_closed` */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -10969,7 +11115,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `worker_start_denied`: a human starts only leads; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            /** @description `worker_start_denied`: a human starts only leads; `main_area`: the area main has no lead; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10988,6 +11134,98 @@ export interface operations {
                 };
             };
             /** @description `area_has_lead`, `worker_exists`, `worker_limit_reached`, `project_paused` or `invalid_config` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    restart_worker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The worker's agent name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestartWorkerBody"];
+            };
+        };
+        responses: {
+            /** @description The worker in its new session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerProcessEntry"];
+                };
+            };
+            /** @description `invalid_request` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `worker_process_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `worker_exists`, `worker_busy` (a stop came first), `worker_limit_reached`, `project_paused` or `invalid_config` */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11548,6 +11786,53 @@ export interface operations {
             };
             /** @description Internal error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    worker_environment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The workers' environment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerEnvironmentView"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

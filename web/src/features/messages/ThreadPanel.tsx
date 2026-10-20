@@ -146,6 +146,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
                   {line.lead}
                   <PersonName name={line.actor} className="text-bar" />
                   {line.at === null ? null : ` · ${line.at}`}
+                  {line.note === null ? null : ` · ${line.note}`}
                 </li>
               ))}
             </ul>

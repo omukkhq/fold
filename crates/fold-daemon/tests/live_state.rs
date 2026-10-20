@@ -766,9 +766,9 @@ async fn proposals_and_checkpoints_update_the_state_after_their_commit() {
     let (id, _) = fx.create(&fx.frontend, 1).await;
     let mut bus = fx.bus.subscribe();
     let proposal: ProposalId = "P-3".parse().unwrap();
-    fx.live.set_proposal(id, Some(proposal));
+    fx.live.set_proposal(id, Some(proposal), None).await;
     assert_eq!(fx.live.get(id).unwrap().view.proposal, Some(proposal));
-    fx.live.set_proposal(id, Some(proposal));
+    fx.live.set_proposal(id, Some(proposal), None).await;
     assert_eq!(drain_live(&mut bus, id).len(), 1);
 
     let objects = ObjectStore::open(&fx.project.paths().fold_dir()).unwrap();
@@ -811,7 +811,7 @@ async fn proposals_and_checkpoints_update_the_state_after_their_commit() {
     assert_eq!(drain_live(&mut bus, id).len(), 1);
     // A detached workspace ignores later updates.
     fx.live.detach(id).await;
-    fx.live.set_proposal(id, None);
+    fx.live.set_proposal(id, None, None).await;
     assert!(fx.live.get(id).is_none());
 
     // Attaching again reads the stored checkpoints, which the store has not pruned, and attaching twice only rescans.
@@ -1015,6 +1015,139 @@ async fn proposal_commands_update_the_proposal_and_checkpoints_of_the_state() {
         .await
         .unwrap();
     assert_eq!(fx.live.get(id).unwrap().view.proposal, None);
+}
+
+#[tokio::test]
+async fn the_working_files_count_as_sent_while_they_are_the_newest_version() {
+    let fx = Fixture::with_backend(Silent).await;
+    let (id, dir) = fx.create(&fx.frontend, 1).await;
+    let reviews = ReviewService::new(
+        fx.project.store().clone(),
+        fx.bus.clone(),
+        Arc::new(fx.project.clock().clone()),
+        fx.workspaces.clone(),
+        Arc::default(),
+    );
+    let actor = by(&fx.frontend);
+    // A proposal command does not wait for the comparison; a rescan queues behind it, so it returns the compared state.
+    let edits = async || {
+        let live = fx.live.rescan(id).await.unwrap().view.edits_after_version;
+        let view = fx.tasks.get_view(t(1)).await.unwrap().edits_after_version;
+        let board = fx.tasks.board().await.unwrap();
+        let card = board
+            .columns
+            .iter()
+            .flat_map(|column| &column.cards)
+            .find(|card| card.id == t(1))
+            .unwrap()
+            .edits_after_version;
+        assert_eq!((view, card), (live, live), "the views read the live state");
+        live
+    };
+    fs::write(dir.join("README.md"), "# demo\nfirst\n").unwrap();
+    fx.live.rescan(id).await.unwrap();
+    assert_eq!(edits().await, None, "no proposal yet");
+
+    let proposal = reviews
+        .create_proposal(&actor, t(1), "Change the readme", None)
+        .await
+        .unwrap()
+        .detail()
+        .unwrap()
+        .summary
+        .id;
+    assert_eq!(edits().await, Some(false));
+    fx.workspaces
+        .record_checkpoint(&actor, id, Some("same files"))
+        .await
+        .unwrap();
+    fx.live.rescan(id).await.unwrap();
+    assert_eq!(edits().await, Some(false), "a checkpoint of the same files");
+
+    fs::write(dir.join("README.md"), "# demo\nsecond\n").unwrap();
+    fx.live.rescan(id).await.unwrap();
+    assert_eq!(edits().await, Some(true), "the first file that differs");
+    fs::write(dir.join("README.md"), "# demo\nfirst\n").unwrap();
+    fx.live.rescan(id).await.unwrap();
+    assert_eq!(edits().await, Some(false), "the content, not the time");
+
+    fs::write(dir.join("README.md"), "# demo\nsecond\n").unwrap();
+    reviews
+        .update_proposal(&actor, proposal, Some("tests pass"))
+        .await
+        .unwrap();
+    assert_eq!(edits().await, Some(false), "the new version holds the edit");
+
+    fx.live.detach(id).await;
+    assert_eq!(
+        fx.live.attach(id).await.unwrap().view.edits_after_version,
+        Some(false),
+        "an attach compares against the open proposal again"
+    );
+    assert_eq!(fx.live.get(id).unwrap().view.proposal, Some(proposal));
+
+    fs::write(dir.join("README.md"), "# demo\nthird\n").unwrap();
+    fx.live.rescan(id).await.unwrap();
+    let mut bus = fx.bus.subscribe();
+    reviews
+        .close_proposal(&actor, proposal, "another approach")
+        .await
+        .unwrap();
+    assert_eq!(edits().await, None);
+    let frames = drain_live(&mut bus, id);
+    assert!(
+        frames
+            .iter()
+            .any(|frame| frame.proposal.is_none() && frame.edits_after_version.is_none()),
+        "{frames:?}"
+    );
+    assert!(
+        frames
+            .iter()
+            .all(|frame| frame.proposal.is_some() || frame.edits_after_version.is_none()),
+        "no frame keeps the comparison of a closed proposal: {frames:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_version_tree_that_cannot_be_read_counts_as_edited() {
+    let fx = Fixture::with_backend(Silent).await;
+    let (id, dir) = fx.create(&fx.frontend, 1).await;
+    let reviews = ReviewService::new(
+        fx.project.store().clone(),
+        fx.bus.clone(),
+        Arc::new(fx.project.clock().clone()),
+        fx.workspaces.clone(),
+        Arc::default(),
+    );
+    fs::write(dir.join("README.md"), "# demo\nsent\n").unwrap();
+    fx.live.rescan(id).await.unwrap();
+    let proposal = reviews
+        .create_proposal(&by(&fx.frontend), t(1), "Change the readme", None)
+        .await
+        .unwrap()
+        .detail()
+        .unwrap()
+        .summary
+        .id;
+    assert_eq!(
+        fx.live.rescan(id).await.unwrap().view.edits_after_version,
+        Some(false)
+    );
+    let tree = fold_store::reviews::list_versions(fx.project.store().read(), proposal)
+        .await
+        .unwrap()
+        .pop()
+        .unwrap()
+        .tree;
+    fx.live.detach(id).await;
+    let objects = ObjectStore::open(&fx.project.paths().fold_dir()).unwrap();
+    assert!(objects.remove(&tree).unwrap());
+    assert_eq!(
+        fx.live.attach(id).await.unwrap().view.edits_after_version,
+        Some(true),
+        "a version it cannot read never shows the holder as sent"
+    );
 }
 
 #[tokio::test]

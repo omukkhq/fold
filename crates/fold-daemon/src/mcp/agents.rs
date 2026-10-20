@@ -2,10 +2,11 @@ use fold_core::roles::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, WorkerLimits, WorkerLimitsChange,
 };
 use fold_core::text::shorten;
+use fold_core::turn_errors;
 use fold_core::{
     AgentName, AreaName, FoldError, LabelName, ProposalId, Role, Tag, TaskId, WorkerName, codes,
 };
-use fold_store::agents::{AreaRow, HandoffRow, WorkerProcessRow};
+use fold_store::agents::{AreaRow, HandoffRow, PreviousSessionRow, WorkerProcessRow};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -17,7 +18,7 @@ use super::error::from_agent;
 use super::parse;
 use crate::services::agents::{
     AgentOverview, ClaimSummary, OverviewFilter, PauseState, ProposalSummary, StartWorker,
-    WorkerOverview, WorkspaceSummary,
+    StartedWorker, WorkerOverview, WorkspaceSummary,
 };
 
 pub const GET_ACTIVITY: &str = "get_activity";
@@ -31,6 +32,7 @@ pub const SET_WORKER_LIMITS: &str = "set_worker_limits";
 pub const WRITE_HANDOFF: &str = "write_handoff";
 pub const PAUSE_PROJECT: &str = "pause_project";
 pub const RESUME_PROJECT: &str = "resume_project";
+pub const RESTART_WORKER: &str = "restart_worker";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -94,7 +96,7 @@ pub struct UpdateAreaInput {
 pub struct StartWorkerInput {
     /// area_lead or review_lead (started by the main agent), task_worker (started by an area lead) or reviewer (started by the review lead).
     pub role: String,
-    /// The worker's agent name. Leave it out for a name from the role and area, such as web-lead or web-worker-2.
+    /// The worker's agent name. Leave it out for a name from the role and area, such as web-lead or web-worker-2. An area keeps one lead and a project one review lead: when that lead exists and has stopped or failed, fold resumes it under its own name and does not use this name; the result then has resumed true and the unused name.
     #[serde(default)]
     pub name: Option<String>,
     /// The area of an area lead. A task worker takes its lead's area; leave it out for the other roles.
@@ -126,6 +128,19 @@ pub struct StopWorkerInput {
     /// The worker's agent name, such as web-worker.
     pub name: String,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct RestartWorkerInput {
+    /// The worker's agent name, such as web-lead. Any role: an area lead, the review lead, a task worker or a reviewer.
+    pub name: String,
+    /// What the user wants the worker to know in its new session; fold adds it to the first turn and never stores it.
+    #[serde(default)]
+    pub instructions: Option<String>,
+    /// The worker that makes this call. Leave it out: only the main agent's main worker restarts a worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
 }
@@ -211,7 +226,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             START_WORKER,
-            "Start a worker agent that fold runs and supervises: the main agent starts an area lead or the review lead, an area lead starts a task worker for tasks of its area, the review lead starts a reviewer for one proposal or a group of related proposals. fold gives the new worker its claims in the same step: the implementation claim on each task, or the review claim on the one proposal, or a review batch of two or more. A task or proposal that another running worker holds refuses the start with already_claimed; a stale claim, a claim of a worker that has ended and a task claim of your own agent move to the new worker. A group with a proposal whose task has the human review mark is refused with invalid_request: give that proposal to a reviewer alone. Refused over the worker limits.",
+            "Start a worker agent that fold runs and supervises: the main agent starts an area lead or the review lead, an area lead starts a task worker for tasks of its area, the review lead starts a reviewer for one proposal or a group of related proposals. fold gives the new worker its claims in the same step: the implementation claim on each task, or the review claim on the one proposal, or a review batch of two or more. A task or proposal that another running worker holds refuses the start with already_claimed; a stale claim, a claim of a worker that has ended and a task claim of your own agent move to the new worker. A group with a proposal whose task has the human review mark is refused with invalid_request: give that proposal to a reviewer alone. Refused over the worker limits. An area has one lead and the project one review lead: while it runs, a start is refused with area_has_lead or worker_exists; once it has stopped or failed, a start resumes that lead under its own name, ignores name, and says resumed with its session.",
             schema_for_type::<StartWorkerInput>(),
         ),
         Tool::new(
@@ -221,7 +236,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_WORKERS,
-            "List the areas with their leads and every worker fold runs, with its role, state, bound tasks or proposals, turns, cost, context size and newest hand-off note.",
+            "List the areas with their leads and every worker fold runs, with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human.",
             schema_for_type::<ListWorkersInput>(),
         ),
         Tool::new(
@@ -244,6 +259,11 @@ pub fn tools() -> Vec<Tool> {
             "As an area lead or the review lead, store your hand-off note when fold asks for it; fold then starts you again with a fresh context whose first turn holds the note and the current fold state.",
             schema_for_type::<WriteHandoffInput>(),
         ),
+        Tool::new(
+            RESTART_WORKER,
+            "As the main agent, and only when the user asks, start a worker of any role again in a new Claude Code session, for example when its session is broken. fold stops a running worker first. The worker keeps its name, claims, tasks, proposals and workers; list_workers shows its newest old session ids in previous_sessions with previous_session_count, and the new session gets the role's first turn. Refused with project_paused while paused and over the worker limits.",
+            schema_for_type::<RestartWorkerInput>(),
+        ),
     ]
 }
 
@@ -258,7 +278,7 @@ fn area_json(area: &AreaRow) -> Value {
     })
 }
 
-/// A failed worker also names why it failed.
+/// A failed worker also names why it failed, and a worker whose turns fail names Claude Code's error.
 fn worker_process_json(row: &WorkerProcessRow) -> Value {
     let mut value = json!({
         "name": row.agent.as_str(),
@@ -274,6 +294,15 @@ fn worker_process_json(row: &WorkerProcessRow) -> Value {
     });
     if let Some(reason) = &row.failed_reason {
         value["failed_reason"] = json!(reason);
+    }
+    if let Some(error) = &row.last_error {
+        value["last_error"] = json!(error);
+    }
+    if row.failed_turns > 0 {
+        value["failed_turns"] = json!(row.failed_turns);
+    }
+    if turn_errors::model_unreachable(row.failed_turns, row.state) {
+        value["hint"] = json!(turn_errors::MODEL_UNREACHABLE_HINT);
     }
     value
 }
@@ -355,12 +384,59 @@ pub async fn start_worker(
         instructions: input.instructions,
     };
     let actor = server.actor(as_worker).await?;
-    let worker = server
+    let started = server
         .agents
         .start_worker(&actor, request)
         .await
         .map_err(from_agent)?;
-    Ok(json!({ "worker": worker_process_json(&worker) }))
+    Ok(started_json(&started))
+}
+
+/// A start that resumed the existing lead says so, with the session fold resumes and the turns the lead has had, because the caller may have asked for a new agent. fold learns only after the result whether that session is gone, so the hint names both outcomes.
+fn started_json(started: &StartedWorker) -> Value {
+    let worker = &started.worker;
+    let mut value = json!({ "worker": worker_process_json(worker) });
+    if !started.resumed {
+        return value;
+    }
+    value["resumed"] = json!(true);
+    value["session"] = json!(worker.session_id);
+    let mut unused = String::new();
+    if let Some(name) = &started.unused_name {
+        value["unused_name"] = json!(name.as_str());
+        unused = format!(", and did not use the name {name}");
+    }
+    let hint = format!(
+        "fold resumed {}, the existing lead (turns so far: {}), in its session, or in a new session with its hand-off note when that session is gone{unused}; message it with send_message or read it with list_workers",
+        worker.agent, worker.turns
+    );
+    value["hint"] = json!(hint);
+    value
+}
+
+pub async fn restart_worker(
+    server: &FoldServer,
+    as_worker: Option<&WorkerName>,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: RestartWorkerInput = parse(arguments)?;
+    let name = AgentName::parse(&input.name)?;
+    let actor = server.actor(as_worker).await?;
+    let worker = server
+        .agents
+        .restart_worker(&actor, &name, input.instructions.as_deref())
+        .await
+        .map_err(from_agent)?;
+    let mut value = worker_process_json(&worker);
+    let previous = server
+        .agents
+        .previous_sessions()
+        .await
+        .map_err(from_agent)?
+        .remove(&worker.agent)
+        .unwrap_or_default();
+    add_previous_sessions(&mut value, &previous);
+    Ok(json!({ "worker": value }))
 }
 
 pub async fn stop_worker(
@@ -451,6 +527,11 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
     let areas = server.agents.list_areas().await.map_err(from_agent)?;
     let workers = server.agents.list_workers().await.map_err(from_agent)?;
     let mut notes = server.agents.latest_handoffs().await.map_err(from_agent)?;
+    let mut previous = server
+        .agents
+        .previous_sessions()
+        .await
+        .map_err(from_agent)?;
     let config = server.agents.worker_config().await;
     let pause = server.agents.pause_state().await.map_err(from_agent)?;
     let mut listed = Vec::with_capacity(workers.len());
@@ -462,6 +543,9 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
         value["handoff"] = notes
             .remove(&worker.agent)
             .map_or(Value::Null, |note| handoff_json(&note));
+        if let Some(sessions) = previous.remove(&worker.agent) {
+            add_previous_sessions(&mut value, &sessions);
+        }
         listed.push(value);
     }
     Ok(json!({
@@ -470,6 +554,25 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
         "limits": config.as_ref().map_or(Value::Null, |config| limits_json(config.workers.limits())),
         "pause": pause_json(&pause),
     }))
+}
+
+/// How many of a worker's previous sessions an agent sees. Each hand-off refresh adds one, so a long-lived lead gathers many; the HTTP route and the web app list them all.
+const PREVIOUS_SESSIONS_SHOWN: usize = 3;
+
+/// Adds the newest [`PREVIOUS_SESSIONS_SHOWN`] sessions the worker left, oldest first, each id naming a Claude Code transcript, and the count of all of them.
+fn add_previous_sessions(value: &mut Value, sessions: &[PreviousSessionRow]) {
+    let shown = &sessions[sessions.len().saturating_sub(PREVIOUS_SESSIONS_SHOWN)..];
+    value["previous_sessions"] = shown
+        .iter()
+        .map(|session| {
+            json!({
+                "session": session.session_id,
+                "reason": session.reason.as_str(),
+                "ended_at": session.ended_at,
+            })
+        })
+        .collect();
+    value["previous_session_count"] = json!(sessions.len());
 }
 
 /// How much of a hand-off note `list_workers` shows. The whole note goes to the lead's next session; the list only lets the main agent see what each lead was doing.

@@ -23,6 +23,8 @@ pub struct ProposalSummary {
     pub task: TaskId,
     pub integrated: bool,
     pub conflicted: bool,
+    /// The integration checks of the current version failed, which sends the proposal back to its author until a new version.
+    pub checks_failed: bool,
     /// The highest version number.
     pub version: u32,
     /// The latest verdict on the current version that is not a comment.
@@ -40,6 +42,55 @@ pub struct ReviewEntry {
     pub at: Timestamp,
 }
 
+/// The open proposal of a task as the stall rule reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenTurn {
+    pub task: TaskId,
+    pub proposal: ProposalId,
+    /// The time of the latest verdict on the current version when that verdict requests changes.
+    pub changes_requested_at: Option<Timestamp>,
+    /// While the proposal is flagged as conflicting or failing its integration checks: the last change of its row, which is the flag or a later handover to a new author.
+    pub flagged_at: Option<Timestamp>,
+}
+
+/// The [`OpenTurn`] of every open proposal.
+pub async fn open_turns(conn: &mut SqliteConnection) -> Result<Vec<OpenTurn>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT t.number AS "task!: i64", p.number AS "proposal!: i64",
+                  CASE WHEN p.conflicted OR p.checks_failed THEN p.updated_at END AS "flagged_at?: i64",
+                  CASE WHEN (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) = 'request_changes'
+                       THEN (SELECT MAX(r.created_at) FROM reviews r
+                             WHERE r.verdict = 'request_changes'
+                               AND r.version_id = (SELECT v.id FROM proposal_versions v
+                                                   WHERE v.proposal_id = p.id
+                                                   ORDER BY v.version DESC LIMIT 1))
+                  END AS "changes_requested_at?: i64"
+           FROM proposals p
+           JOIN tasks t ON t.id = p.task_id
+           WHERE p.state = 'open'
+           ORDER BY t.number"#
+    )
+    .fetch_all(conn)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(OpenTurn {
+                task: TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?,
+                proposal: ProposalId::try_from_db(row.proposal)
+                    .ok_or(StoreError::Corrupt("proposals.number"))?,
+                changes_requested_at: row
+                    .changes_requested_at
+                    .map(|at| time(at, "reviews.created_at"))
+                    .transpose()?,
+                flagged_at: row
+                    .flagged_at
+                    .map(|at| time(at, "proposals.updated_at"))
+                    .transpose()?,
+            })
+        })
+        .collect()
+}
+
 /// The [`ProposalSummary`] of `task`, or of every task in number order when it is `None`.
 pub async fn proposal_summaries(
     conn: &mut SqliteConnection,
@@ -49,6 +100,7 @@ pub async fn proposal_summaries(
     let rows = sqlx::query!(
         r#"SELECT p.number AS "number!: i64", t.number AS "task!: i64", p.state,
                   p.conflicted AS "conflicted: bool",
+                  p.checks_failed AS "checks_failed: bool",
                   (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id) AS "version?: i64",
                   (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) AS "verdict?: String",
                   rev.number AS "revision?: i64",
@@ -89,6 +141,7 @@ pub async fn proposal_summaries(
                 task: TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?,
                 integrated: row.state == "integrated",
                 conflicted: row.conflicted,
+                checks_failed: row.checks_failed,
                 version: row
                     .version
                     .and_then(|value| u32::try_from(value).ok())

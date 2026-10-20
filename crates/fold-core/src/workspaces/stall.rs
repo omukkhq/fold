@@ -5,12 +5,52 @@ use crate::time::Timestamp;
 pub enum WorkspaceFact {
     /// A task workspace whose directory is in place.
     Active,
+    /// A task workspace whose files are the tree of its open proposal's newest version while the proposal waits on others: the worker sent its work and waits for the review or the integration.
+    Sent,
     /// A task workspace whose directory is gone.
     Missing,
     /// An archived or abandoned task workspace.
     Closed,
     /// A review checkout: nothing in it is recorded, so its files say nothing about the worker.
     ReviewCheckout,
+}
+
+/// Whose move the open proposal of a task waits for, as the stall rule sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProposalTurn {
+    /// Reviewers or the integration. A new version always starts here: it has no verdict, and its conflict and check flags start clear.
+    Others,
+    /// Its author, since the proposal came back: changes were requested, or the version was flagged as conflicting with main or failing its integration checks.
+    Author { since: Timestamp },
+}
+
+impl ProposalTurn {
+    /// From the time the latest verdict on the current version requested changes and the time the proposal was flagged as conflicting or failing its checks, each `None` when it does not apply. These are the facts that put the next move with the author in the task status too; the later time is the one the author answers.
+    pub fn of(changes_requested_at: Option<Timestamp>, flagged_at: Option<Timestamp>) -> Self {
+        match changes_requested_at.max(flagged_at) {
+            Some(since) => Self::Author { since },
+            None => Self::Others,
+        }
+    }
+}
+
+/// The fact of a task workspace whose directory is in place: `Sent` while its files are the open proposal's newest version (`edits_after_version` is false) and the proposal waits on others, `Active` otherwise. A proposal that came back to its author makes the workspace active again, edited or not.
+pub fn present_workspace(
+    edits_after_version: Option<bool>,
+    turn: Option<ProposalTurn>,
+) -> WorkspaceFact {
+    match (edits_after_version, turn) {
+        (Some(false), Some(ProposalTurn::Others)) => WorkspaceFact::Sent,
+        _ => WorkspaceFact::Active,
+    }
+}
+
+/// The time the stall window counts from: the last activity, or the time the proposal came back to its author when that is later, so the author gets the whole window to answer.
+pub fn stall_start(last_activity_at: Timestamp, turn: Option<ProposalTurn>) -> Timestamp {
+    match turn {
+        Some(ProposalTurn::Author { since }) => last_activity_at.max(since),
+        Some(ProposalTurn::Others) | None => last_activity_at,
+    }
 }
 
 /// A worker is stalled when it holds the unreleased implementation claim of the task whose active workspace has had no tracked content change for `stall_minutes`. The time counts from `last_activity_at`, which is the creation time of a workspace with no edits. Calls do not count: a stalled worker can hold a fresh lease. A `last_activity_at` later than `now` is not stalled.
@@ -104,6 +144,62 @@ mod tests {
                 "{workspace:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_workspace_that_holds_its_sent_version_does_not_stall() {
+        let late = at(60 * MINUTE);
+        assert!(!is_stalled(late, true, WorkspaceFact::Sent, at(0), 5));
+        assert!(is_stalled(late, true, WorkspaceFact::Active, at(0), 5));
+    }
+
+    #[test]
+    fn a_proposal_is_with_its_author_from_the_later_of_its_verdict_and_its_flag() {
+        assert_eq!(ProposalTurn::of(None, None), ProposalTurn::Others);
+        assert_eq!(
+            ProposalTurn::of(Some(at(5)), None),
+            ProposalTurn::Author { since: at(5) }
+        );
+        assert_eq!(
+            ProposalTurn::of(None, Some(at(7))),
+            ProposalTurn::Author { since: at(7) }
+        );
+        assert_eq!(
+            ProposalTurn::of(Some(at(9)), Some(at(7))),
+            ProposalTurn::Author { since: at(9) }
+        );
+    }
+
+    #[test]
+    fn only_a_sent_version_that_waits_on_others_is_sent() {
+        let back = Some(ProposalTurn::Author { since: at(0) });
+        let waiting = Some(ProposalTurn::Others);
+        assert_eq!(present_workspace(Some(false), waiting), WorkspaceFact::Sent);
+        assert_eq!(present_workspace(Some(false), back), WorkspaceFact::Active);
+        assert_eq!(
+            present_workspace(Some(true), waiting),
+            WorkspaceFact::Active
+        );
+        assert_eq!(present_workspace(None, waiting), WorkspaceFact::Active);
+        assert_eq!(present_workspace(Some(false), None), WorkspaceFact::Active);
+    }
+
+    #[test]
+    fn requested_changes_stall_from_the_verdict_not_from_the_last_edit() {
+        let verdict = at(30 * MINUTE);
+        let turn = Some(ProposalTurn::Author { since: verdict });
+        let start = stall_start(at(0), turn);
+        assert_eq!(start, verdict);
+        let fact = present_workspace(Some(false), turn);
+        assert!(!is_stalled(at(34 * MINUTE), true, fact, start, 5));
+        assert!(is_stalled(at(35 * MINUTE), true, fact, start, 5));
+        assert_eq!(
+            stall_start(at(40 * MINUTE), turn),
+            at(40 * MINUTE),
+            "a later edit counts"
+        );
+        assert_eq!(stall_start(at(3), Some(ProposalTurn::Others)), at(3));
+        assert_eq!(stall_start(at(3), None), at(3));
     }
 
     #[test]

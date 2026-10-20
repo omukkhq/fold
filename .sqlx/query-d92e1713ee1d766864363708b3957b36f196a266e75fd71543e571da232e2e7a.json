@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO worker_previous_sessions (worker_process_id, session_id, reason, ended_at)\n         SELECT id, session_id, ?2, ?3 FROM worker_processes WHERE id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "d92e1713ee1d766864363708b3957b36f196a266e75fd71543e571da232e2e7a"
+}

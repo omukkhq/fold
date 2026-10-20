@@ -25,8 +25,10 @@ import {
   isEmptyTeam,
   mainAgentName,
   mainPill,
+  noticeStep,
   ownedTasks,
   pillSpec,
+  rowError,
   roleModel,
   roleName,
   stepOf,
@@ -255,6 +257,29 @@ describe("steps", () => {
     expect(running?.rows[0]?.pill).toEqual(workerPill("working"));
   });
 
+  it("shows a worker's last error under its step, and what to check once it cannot reach the model", () => {
+    expect(rowError(workerProcess("web-lead"))).toBeNull();
+    expect(
+      rowError(workerProcess("web-lead", { last_error: "Reached max turns" })),
+    ).toEqual({ title: "last error", text: "Reached max turns", hint: null });
+    const failing = workerProcess("web-lead", {
+      state: "idle",
+      last_error: "Invalid key",
+      failed_turns: 3,
+      model_unreachable: true,
+      hint: "check the sign-in, or run `fld doctor`",
+    });
+    expect(rowError(failing)).toEqual({
+      title: "cannot reach the model",
+      text: "Invalid key",
+      hint: "check the sign-in, or run `fld doctor`",
+    });
+    const [group] = teamGroups(
+      input({ workers: workerList({ workers: [failing] }) }),
+    );
+    expect(group?.rows[0]?.error?.title).toBe("cannot reach the model");
+  });
+
   it("offers Stop to a live process and a pending stop while it stops", () => {
     expect(stopControl("working")).toBe("stop");
     expect(stopControl("idle")).toBe("stop");
@@ -298,6 +323,24 @@ describe("lookups", () => {
       card("T-3", "backend"),
     ];
     expect(ownedTasks(cards, "frontend")).toBe(1);
+  });
+});
+
+describe("notices", () => {
+  it("names a connected main agent that fold cannot reach", () => {
+    expect(noticeStep(agent("main", { notices: "socket" }))).toBe(null);
+    expect(noticeStep(agent("main", { notices: "stdin" }))).toBe(null);
+    expect(noticeStep(agent("main", { notices: "unreachable" }))).toEqual({
+      tool: null,
+      text: "not reachable · reads new messages from its inbox",
+      faint: true,
+    });
+    expect(noticeStep(agent("main", { notices: "failing" }))?.text).toBe(
+      "notices fail · reads new messages from its inbox",
+    );
+    expect(
+      noticeStep(agent("main", { notices: "unreachable", sessions: 0 })),
+    ).toBe(null);
   });
 });
 
@@ -360,6 +403,7 @@ describe("teamGroups", () => {
       bound: { kind: "person", name: "human:tanim" },
       stop: null,
       model: "-",
+      session: null,
     });
     expect(web?.label).toEqual({ name: "frontend", color: "slate" });
     expect(web?.owned).toBe(2);
@@ -375,6 +419,7 @@ describe("teamGroups", () => {
       model: "-",
       bound: { kind: "ids", text: "T-12 · ws-7, T-13", batch: null },
       step: { tool: "Edit", text: "", faint: false },
+      session: { short: "0f8e2c1a" },
     });
     expect(api?.label).toEqual({ name: "api", color: "stone" });
     expect(api?.rows).toEqual([]);

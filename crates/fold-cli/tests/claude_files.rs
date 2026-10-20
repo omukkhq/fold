@@ -4,8 +4,8 @@ use std::process::{Command, Output};
 
 use fold_cli::claude_files::{
     self, AGENTS_BEGIN, AGENTS_END, AGENTS_FILE, CLAUDE_FILE, ClaudeFileError, MALFORMED_REASON,
-    MCP_FILE, SETTINGS_FILE, SKILL_FILE, agents_md, instructions_file, shadowing_files,
-    stale_section, without_section,
+    MCP_FILE, REFERENCE_FILE, SETTINGS_FILE, SKILL_FILE, agents_md, instructions_file,
+    shadowing_files, stale_section, without_section,
 };
 use tempfile::TempDir;
 
@@ -25,7 +25,7 @@ fn read(root: &Path, relative: &str) -> String {
 /// The modification time of each of fold's files.
 #[cfg(test)]
 fn mtimes(root: &Path) -> Vec<std::time::SystemTime> {
-    [AGENTS_FILE, SKILL_FILE]
+    [AGENTS_FILE, SKILL_FILE, REFERENCE_FILE]
         .map(|relative| {
             std::fs::metadata(root.join(relative))
                 .unwrap()
@@ -61,14 +61,16 @@ fn a_fresh_write_gives_the_section_and_the_skill_and_a_refresh_changes_no_byte()
         skill.starts_with("---\nname: fold\ndescription: "),
         "{skill}"
     );
+    let reference = read(root, REFERENCE_FILE);
+    assert!(reference.starts_with("# fold reference\n"), "{reference}");
 
     let before = mtimes(root);
-    let bytes: Vec<String> = [AGENTS_FILE, SKILL_FILE]
+    let bytes: Vec<String> = [AGENTS_FILE, SKILL_FILE, REFERENCE_FILE]
         .map(|relative| read(root, relative))
         .to_vec();
     claude_files::write(root).unwrap();
     claude_files::write(root).unwrap();
-    let after: Vec<String> = [AGENTS_FILE, SKILL_FILE]
+    let after: Vec<String> = [AGENTS_FILE, SKILL_FILE, REFERENCE_FILE]
         .map(|relative| read(root, relative))
         .to_vec();
     assert_eq!(bytes, after);
@@ -216,6 +218,7 @@ fn a_malformed_json_file_is_refused_and_nothing_is_written() {
         assert_eq!(read(root, relative), content, "the file stays as it was");
         assert!(!root.join(AGENTS_FILE).exists());
         assert!(!root.join(SKILL_FILE).exists());
+        assert!(!root.join(REFERENCE_FILE).exists());
     }
 }
 
@@ -290,6 +293,7 @@ fn unmatched_or_repeated_markers_are_refused_and_leave_the_file_untouched() {
         assert!(error.message().contains(AGENTS_FILE));
         assert_eq!(read(root, AGENTS_FILE), existing);
         assert!(!root.join(SKILL_FILE).exists());
+        assert!(!root.join(REFERENCE_FILE).exists());
     }
 }
 
@@ -516,6 +520,7 @@ fn refresh_never_touches_the_workspaces() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(tree(&project.join(".fold/ws")), ws);
     assert!(project.join(SKILL_FILE).is_file());
+    assert!(project.join(REFERENCE_FILE).is_file());
 }
 
 #[test]
@@ -673,6 +678,7 @@ fn an_instructions_link_that_leads_outside_the_root_or_nowhere_is_refused() {
         );
         assert!(is_link(&root.join(AGENTS_FILE)));
         assert!(!root.join(SKILL_FILE).exists(), "nothing is written");
+        assert!(!root.join(REFERENCE_FILE).exists(), "nothing is written");
     }
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "# shared\n");
 }

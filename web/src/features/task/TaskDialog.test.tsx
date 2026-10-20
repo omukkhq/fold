@@ -96,7 +96,8 @@ beforeAll(() => {
 const ui = { name: "ui", color: "sage" };
 const auth = { name: "auth", color: "slate" };
 const server = { name: "server", color: "gold" };
-/** `ui` and `server` are area labels; `auth` is a plain label. */
+const main = { name: "main", color: "ink" };
+/** `ui` and `server` are area labels, `main` is the label of the built-in area Main, and `auth` is a plain label. */
 const AREAS = [
   areaEntry("api", "server"),
   areaEntry("web", "ui", { lead: "web-lead" }),
@@ -116,7 +117,7 @@ let linked: MessageView[];
 function seed(): void {
   nextTask = 17;
   linked = [];
-  labels = [auth, server, ui];
+  labels = [auth, main, server, ui];
   tasks = new Map([
     [
       "T-2",
@@ -634,6 +635,7 @@ describe("the task dialog route", () => {
             addressed_as: "agent",
             delivered_at: null,
             acknowledged_at: null,
+            reachable: null,
           },
         ],
         body: "Ready for review",
@@ -666,6 +668,7 @@ describe("the task dialog route", () => {
         id: "P-3",
         state: "open",
         version: 2,
+        checks_failed: false,
         reviews: [{ reviewer: "review", verdict: "approve", version: 2, at }],
       },
       integration: {
@@ -968,7 +971,7 @@ describe("creating a task", () => {
     );
     const area = await within(dialog).findByRole(
       "button",
-      { name: "Area Let the main agent decide" },
+      { name: "Area Decide automatically" },
       WAIT,
     );
     await waitFor(() => {
@@ -1180,7 +1183,12 @@ describe("the human edits", () => {
       within(menu)
         .getAllByRole("menuitemradio")
         .map((item) => item.textContent),
-    ).toEqual(["Let the main agent decide", "serverno lead yet", "uiweb-lead"]);
+    ).toEqual([
+      "Decide automatically",
+      "mainMain agent",
+      "serverno lead yet",
+      "uiweb-lead",
+    ]);
     expect(
       within(menu)
         .getByRole("menuitemradio", { name: /web-lead/ })
@@ -1215,7 +1223,7 @@ describe("the human edits", () => {
     // The marked choice changes nothing, so it sends no write.
     await userEvent.click(
       within(menu).getByRole("menuitemradio", {
-        name: "Let the main agent decide",
+        name: "Decide automatically",
       }),
     );
     expect(daemon.made(`PATCH ${P}/demo/tasks/T-1`)).toHaveLength(0);
@@ -1228,6 +1236,20 @@ describe("the human edits", () => {
     ).toBeTruthy();
     expect(daemon.made(`PATCH ${P}/demo/tasks/T-1`)[0]?.body).toEqual({
       labels: ["ui"],
+    });
+  }, 15_000);
+
+  it("gives a task to the main agent, and shows the main agent instead of the no-area warning", async () => {
+    const { dialog } = await openLabels("T-1", "Session cookie");
+    const area = region(dialog, "Area");
+    await userEvent.click(within(area).getByRole("button", { name: "Change" }));
+    await userEvent.click(
+      await screen.findByRole("menuitemradio", { name: /Main agent/ }, WAIT),
+    );
+    expect(await within(area).findByText("Main agent", {}, WAIT)).toBeTruthy();
+    expect(within(area).queryByText(/No area yet/)).toBeNull();
+    expect(daemon.made(`PATCH ${P}/demo/tasks/T-1`)[0]?.body).toEqual({
+      labels: ["main"],
     });
   }, 15_000);
 
@@ -1263,7 +1285,7 @@ describe("the human edits", () => {
       within(menu)
         .getAllByRole("menuitemradio")
         .map((item) => item.getAttribute("aria-checked")),
-    ).toEqual(["false", "false", "false"]);
+    ).toEqual(["false", "false", "false", "false"]);
     daemon.on(`PATCH ${P}/:slug/tasks/:id`, (call) => {
       const body = call.body as { labels: string[] };
       return ok(
@@ -1747,14 +1769,22 @@ describe("the human edits", () => {
     ).toBe("/p/demo/repository?path=web%2Freport.tsx");
   }, 15_000);
 
-  it("lets the feedback box address an agent from the agent list", async () => {
+  it("lists the claim holder once and the other agents after it", async () => {
     const { dialog } = await openTask();
     const messages = region(dialog, "Messages");
     await waitFor(() => {
       expect(
-        within(messages).getByRole("option", { name: "frontend/ui" }),
+        within(messages).getByRole("option", { name: "frontend" }),
       ).toBeTruthy();
     }, WAIT);
+    expect(
+      within(messages).getAllByRole("option", { name: /frontend\/ui/ }),
+    ).toHaveLength(1);
+    expect(
+      within(messages).getByRole("option", {
+        name: "frontend/ui (claim holder)",
+      }),
+    ).toBeTruthy();
   }, 15_000);
 });
 

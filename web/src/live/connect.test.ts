@@ -18,6 +18,7 @@ function workspace(summary: string) {
     checkpoints: [],
     proposal: null,
     stalled: false,
+    edits_after_version: null,
   };
 }
 

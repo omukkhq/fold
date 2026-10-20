@@ -129,7 +129,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         codes::MAIN_AGENT_REQUIRED
         | codes::WORKER_START_DENIED
         | codes::WORKER_STOP_DENIED
-        | codes::TASK_OUTSIDE_AREA => Some(StatusCode::FORBIDDEN),
+        | codes::TASK_OUTSIDE_AREA
+        | codes::MAIN_AREA => Some(StatusCode::FORBIDDEN),
         codes::AREA_EXISTS
         | codes::AREA_HAS_LEAD
         | codes::WORKER_LIMIT_REACHED
@@ -380,6 +381,7 @@ mod tests {
             (codes::WORKER_START_DENIED, StatusCode::FORBIDDEN),
             (codes::WORKER_STOP_DENIED, StatusCode::FORBIDDEN),
             (codes::TASK_OUTSIDE_AREA, StatusCode::FORBIDDEN),
+            (codes::MAIN_AREA, StatusCode::FORBIDDEN),
             (codes::AREA_EXISTS, StatusCode::CONFLICT),
             (codes::AREA_HAS_LEAD, StatusCode::CONFLICT),
             (codes::WORKER_LIMIT_REACHED, StatusCode::CONFLICT),

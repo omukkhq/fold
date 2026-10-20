@@ -31,6 +31,10 @@ function isNullableString(value: unknown): boolean {
   return value === null || typeof value === "string";
 }
 
+function isNullableBoolean(value: unknown): boolean {
+  return value === null || typeof value === "boolean";
+}
+
 const CHANGE_KINDS: readonly unknown[] = [
   "added",
   "modified",
@@ -80,7 +84,8 @@ export function isLiveWorkspace(value: unknown): value is LiveWorkspace {
     Array.isArray(value.checkpoints) &&
     value.checkpoints.every(isCheckpoint) &&
     isNullableString(value.proposal) &&
-    typeof value.stalled === "boolean"
+    typeof value.stalled === "boolean" &&
+    isNullableBoolean(value.edits_after_version)
   );
 }
 
@@ -150,5 +155,6 @@ export function liveWorkspaceOf(frame: WorkspaceChanged): LiveWorkspace {
     checkpoints: frame.checkpoints,
     proposal: frame.proposal,
     stalled: frame.stalled,
+    edits_after_version: frame.edits_after_version,
   };
 }

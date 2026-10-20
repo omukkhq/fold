@@ -21,7 +21,8 @@ pub use fold_daemon::http::actor::HUMAN_HEADER;
 use fold_daemon::mcp::handshake::{Answer, Hello, MAX_LINE};
 
 const START_LOCK_FILE: &str = "start.lock";
-const START_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a client waits for the daemon it started to answer: longer than the 10 seconds the daemon gives the login shell at its start, so a shell that hangs delays the start but does not fail it.
+const START_TIMEOUT: Duration = Duration::from_secs(20);
 const FIRST_BACKOFF: Duration = Duration::from_millis(10);
 const MAX_BACKOFF: Duration = Duration::from_millis(200);
 

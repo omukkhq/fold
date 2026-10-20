@@ -743,6 +743,8 @@ pub struct ProposalDetail {
     pub gates: Vec<ProposalGate>,
     /// A reviewer agent (the main agent, the review lead or a reviewer) approved the current version and no request for changes came after it. On a task with the human review mark a human approves only then; otherwise the approval is `agent_approval_required`.
     pub agent_approved: bool,
+    /// The task is in the built-in area Main, the main agent's own work: no review agent reviews it, and a human approves it without a reviewer agent first, even with the human review mark.
+    pub main_task: bool,
     /// The latest conflict report of the selected version.
     #[schema(required = true)]
     pub conflict: Option<ConflictReportView>,
@@ -796,6 +798,7 @@ impl From<service::ProposalView> for ProposalDetail {
             last_reviewed_version: view.last_reviewed,
             gates: view.gates.into_iter().map(ProposalGate::from).collect(),
             agent_approved: view.agent_approved,
+            main_task: view.main_task,
             conflict: detail.conflict.map(ConflictReportView::from),
             files: view.files.into_iter().map(ComparedFile::from).collect(),
             totals: view.totals.into(),
@@ -1252,7 +1255,7 @@ pub async fn add_review_comment(
         (status = 400, description = "`invalid_request` (`details.field` names the field, or `details.reason` is `checks_failed` for an approve of a version whose integration checks failed), `invalid_path`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
-        (status = 409, description = "`stale_version` (`details.expected_version`, `details.current_version`), `agent_approval_required` (a human's approve on a task with the human review mark before a reviewer agent approved the version), `proposal_not_open` or `task_closed`", body = ErrorEnvelope),
+        (status = 409, description = "`stale_version` (`details.expected_version`, `details.current_version`), `agent_approval_required` (a human's approve on a task with the human review mark before a reviewer agent approved the version; a task of the area main needs no reviewer agent first), `proposal_not_open` or `task_closed`", body = ErrorEnvelope),
         (status = 422, description = "`empty_review`, `unknown_comment_path` or `invalid_comment_range`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),

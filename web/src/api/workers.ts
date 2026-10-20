@@ -11,6 +11,8 @@ export type AreaEntry = Schemas["AreaEntry"];
 export type WorkerList = Schemas["WorkerList"];
 export type RoleEntry = Schemas["RoleEntry"];
 export type StartWorkerBody = Schemas["StartWorkerBody"];
+export type RestartWorkerBody = Schemas["RestartWorkerBody"];
+export type PreviousSession = Schemas["PreviousSessionEntry"];
 export type WorkerQuestion = Schemas["WorkerQuestionEntry"];
 export type QuestionAnswer = Schemas["QuestionAnswer"];
 export type Behavior = Schemas["Behavior"];
@@ -45,6 +47,20 @@ export function stopWorker(slug: string, name: string): Promise<WorkerProcess> {
   return unwrap(
     api.POST("/api/v1/projects/{slug}/workers/{name}/stop", {
       params: { path: { slug, name } },
+    }),
+  );
+}
+
+/** A named human starts a worker again in a new Claude Code session; it answers with the worker in its new session. Rejects with the daemon's codes, such as `project_paused` or `worker_limit_reached`. */
+export function restartWorker(
+  slug: string,
+  name: string,
+  body: RestartWorkerBody,
+): Promise<WorkerProcess> {
+  return unwrap(
+    api.POST("/api/v1/projects/{slug}/workers/{name}/restart", {
+      params: { path: { slug, name } },
+      body,
     }),
   );
 }

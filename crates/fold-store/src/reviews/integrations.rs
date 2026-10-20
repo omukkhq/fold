@@ -21,6 +21,8 @@ pub struct IntegrationFacts {
     /// The reviews of the current version only.
     pub reviews: Vec<ReviewFact>,
     pub human_review: Option<HumanReviewMark>,
+    /// The task carries the label of the area Main.
+    pub main_task: bool,
     pub prerequisites: Vec<(TaskId, TaskStatus)>,
     pub live_workspace: Option<WorkspaceId>,
 }
@@ -41,6 +43,10 @@ pub async fn integration_facts(
         .await?
         .ok_or(StoreError::Corrupt("proposals.task_id"))?
         .human_review;
+    let main_task = tasks::labels_for_conn(&mut *conn, row.task)
+        .await?
+        .iter()
+        .any(|label| label.name.is_main());
     let prerequisites = tasks::prerequisite_statuses(&mut *conn, row.task).await?;
     let live_workspace = live_task_workspace(&mut *conn, row.task)
         .await?
@@ -50,6 +56,7 @@ pub async fn integration_facts(
         target,
         reviews,
         human_review,
+        main_task,
         prerequisites,
         live_workspace,
     }))

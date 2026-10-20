@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use clap::Args;
 use fold_core::events::types;
-use fold_core::{Clock, FoldError, HumanName, ProjectPaths, Role, Timestamp, codes};
+use fold_core::{Clock, FoldError, HumanName, ProjectConfig, ProjectPaths, Role, Timestamp, codes};
 use fold_daemon::SystemClock;
 use fold_daemon::projects::database_missing_hint;
 use fold_daemon::services::agents::claude::{AuthStatus, ClaudeVersion, MIN_CLAUDE_VERSION};
@@ -195,6 +195,22 @@ pub(crate) fn collect(
     sections[0]
         .checks
         .extend(host_checks(args.socket.as_deref(), &file, host));
+    let report = daemon_socket(args.socket.as_deref(), &host.dirs)
+        .map_or(environment::DaemonReport::NotRunning, |socket| {
+            environment::ask_daemon(&socket, host.user.clone(), runtime)
+        });
+    sections[0]
+        .checks
+        .push(environment::daemon_claude_verdict(&report));
+    let names: Vec<String> = std::env::vars_os()
+        .filter_map(|(name, _)| name.into_string().ok())
+        .collect();
+    let shell = environment::sign_in_names(names.iter().map(String::as_str));
+    sections[0].checks.extend(environment::daemon_env_verdict(
+        &report,
+        &shell,
+        host.platform.linux,
+    ));
     let projects = match &args.project {
         Some(dir) => {
             let root = absolute_dir(dir);
@@ -207,10 +223,21 @@ pub(crate) fn collect(
             projects
         }
     };
+    let registered = if args.project.is_some() {
+        registered_projects(&host.dirs, runtime)
+            .map(|(projects, _)| projects)
+            .unwrap_or_default()
+    } else {
+        projects.clone()
+    };
+    let socket = daemon_socket(args.socket.as_deref(), &host.dirs);
     for (label, root) in projects {
+        let mut checks = project_checks(&root, host, now, runtime);
+        let slug = push::slug_of(&registered, &root);
+        checks.push(push::push_check(socket.as_deref(), slug.as_deref()));
         sections.push(Section {
             title: format!("project {label}"),
-            checks: project_checks(&root, host, now, runtime),
+            checks,
         });
     }
     Ok(sections)
@@ -823,6 +850,7 @@ fn project_checks(
     });
     checks.push(claude_files_check(root));
     checks.push(role_prompts_check(&paths));
+    checks.push(models_check(&paths, &facts));
     let home = host.dirs.home.as_deref().map(absolute_dir);
     checks.extend(shadowing_checks(root, home.as_deref()));
     checks
@@ -856,6 +884,8 @@ pub(crate) struct DatabaseFacts {
     pub(crate) degraded: Vec<Timestamp>,
     /// Whether the project's Git sync is on; `None` when the database cannot tell.
     pub(crate) git_sync: Option<bool>,
+    /// The model of each area profile that names one, as `(area, model)`.
+    pub(crate) area_models: Vec<(String, String)>,
 }
 
 /// SQLite sets bytes 18 and 19 of the header to 2 in WAL mode. Reading the header avoids the journal-mode pragma, which a connection may try to change.
@@ -902,6 +932,11 @@ async fn inspect_database(path: &Path, events_now: Option<Timestamp>) -> Databas
         .await
         .ok()
         .map(|rows| rows > 0);
+    facts.area_models =
+        sqlx::query_as("SELECT name, model FROM areas WHERE model IS NOT NULL ORDER BY name")
+            .fetch_all(&mut conn)
+            .await
+            .unwrap_or_default();
     let _ = conn.close().await;
     facts
 }
@@ -1037,13 +1072,13 @@ fn objects_check(path: &Path) -> Check {
     objects_verdict(path, inspect_objects(path))
 }
 
-/// The problems with fold's Claude Code files in the project root: the marked section of the instructions file, which `instructions` names with its text, the fold skill, and the project files in `old` that still hold entries an earlier fold wrote there.
+/// The problems with fold's Claude Code files in the project root: the marked section of the instructions file, which `instructions` names with its text, the files of the fold skill that are `missing`, and the project files in `old` that still hold entries an earlier fold wrote there.
 pub(crate) fn claude_file_problems(
     instructions: (&str, Option<&str>),
-    skill: bool,
+    missing: &[&str],
     old: &[&str],
 ) -> Vec<String> {
-    use claude_files::{AGENTS_BEGIN, AGENTS_END, SKILL_FILE};
+    use claude_files::{AGENTS_BEGIN, AGENTS_END};
     let mut problems = Vec::new();
     let (name, text) = instructions;
     match text {
@@ -1053,8 +1088,8 @@ pub(crate) fn claude_file_problems(
         }
         Some(_) => {}
     }
-    if !skill {
-        problems.push(format!("{SKILL_FILE} is missing"));
+    for file in missing {
+        problems.push(format!("{file} is missing"));
     }
     for file in old {
         problems.push(format!(
@@ -1159,7 +1194,10 @@ fn claude_files_check(root: &Path) -> Check {
     let instructions = claude_files::instructions_file(root);
     let mut problems = claude_file_problems(
         (instructions, read(instructions).as_deref()),
-        root.join(claude_files::SKILL_FILE).is_file(),
+        &claude_files::SKILL_FILES
+            .into_iter()
+            .filter(|file| !root.join(file).is_file())
+            .collect::<Vec<_>>(),
         &claude_files::old_entries(root),
     );
     if let Some(stale) = claude_files::stale_section(root) {
@@ -1214,6 +1252,26 @@ fn role_prompts_check(paths: &ProjectPaths) -> Check {
     )
 }
 
+/// The models that `.fold/config.toml` gives the roles and that the area profiles name. A configuration that cannot be read adds none: the daemon refuses it with its own error.
+fn models_check(paths: &ProjectPaths, facts: &DatabaseFacts) -> Check {
+    let config = std::fs::read_to_string(paths.config())
+        .ok()
+        .and_then(|text| ProjectConfig::from_toml(&text).ok())
+        .unwrap_or_default();
+    let models: Vec<(String, String)> = config
+        .roles
+        .iter()
+        .filter_map(|(role, settings)| Some((format!("roles.{role}"), settings.model.clone()?)))
+        .chain(
+            facts
+                .area_models
+                .iter()
+                .map(|(area, model)| (format!("area {area}"), model.clone())),
+        )
+        .collect();
+    environment::model_names_verdict(&models)
+}
+
 fn shadowing_checks(root: &Path, home: Option<&Path>) -> Vec<Check> {
     let files = shadowing_files(root, home);
     if files.is_empty() {
@@ -1231,6 +1289,9 @@ fn shadowing_checks(root: &Path, home: Option<&Path>) -> Vec<Check> {
         })
         .collect()
 }
+
+mod environment;
+mod push;
 
 #[cfg(test)]
 mod tests;

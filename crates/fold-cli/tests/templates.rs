@@ -2,8 +2,9 @@ use std::collections::BTreeSet;
 
 const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
+const REFERENCE: &str = include_str!("../templates/REFERENCE.md");
 
-const FOLD_TOOLS: [&str; 90] = [
+const FOLD_TOOLS: [&str; 91] = [
     "register_agent",
     "register_worker",
     "list_agents",
@@ -94,13 +95,14 @@ const FOLD_TOOLS: [&str; 90] = [
     "run_checks",
     "get_check_run",
     "set_review_scope",
+    "restart_worker",
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 157] = [
+const FOLD_ERROR_CODES: [&str; 158] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -258,13 +260,14 @@ const FOLD_ERROR_CODES: [&str; 157] = [
     "checks_running",
     "check_run_not_found",
     "worker_claim_denied",
+    "main_area",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
 const PENDING_ERROR_CODES: [&str; 1] = ["too_large"];
 
 /// The `invalid_request` reasons that have a name.
-const INVALID_REQUEST_REASONS: [&str; 13] = [
+const INVALID_REQUEST_REASONS: [&str; 14] = [
     "self_dependency",
     "checklist_origin",
     "linked_item",
@@ -278,9 +281,10 @@ const INVALID_REQUEST_REASONS: [&str; 13] = [
     "checks_failed",
     "integration_queued",
     "two_areas",
+    "main_approves",
 ];
 
-const NON_TOOL_NAMES: [&str; 37] = [
+const NON_TOOL_NAMES: [&str; 39] = [
     "human_review",
     "fold_failed",
     "left_out",
@@ -318,6 +322,8 @@ const NON_TOOL_NAMES: [&str; 37] = [
     "v3_or_later",
     "review_scope",
     "areas_conflict",
+    "main_approves",
+    "previous_sessions",
 ];
 
 const SECTIONS: [&str; 14] = [
@@ -441,6 +447,7 @@ fn every_tool_the_main_prompt_names_is_a_fold_tool() {
         "submit_request_draft",
         "pause_project",
         "resume_project",
+        "restart_worker",
         "clear_blocker",
         "complete_task",
     ] {
@@ -729,4 +736,179 @@ fn no_text_calls_a_plain_fold_binary() {
         }
     }
     assert!(offenders.is_empty(), "plain `fold` command: {offenders:?}");
+}
+
+const REFERENCE_SECTIONS: [&str; 7] = [
+    "Checks",
+    "Project config",
+    "Areas",
+    "Ignore files",
+    "Commands",
+    "Web app",
+    "Tools",
+];
+
+/// Backticked names of the reference that are neither tools, codes, config or checks keys nor run states, but the values and fields it explains.
+const REFERENCE_NAMES: [&str; 1] = ["session_days"];
+
+/// Every key of `.fold/config.toml` as `(section, key)`, from the serialised form of a config that sets every optional key, so a new field of the config structs fails the reference test until the reference shows it. A section of named tables, such as `[remotes.<name>]`, is its name with a `.` after it.
+#[cfg(test)]
+fn config_keys() -> BTreeSet<(String, String)> {
+    use fold_core::config::{ProjectConfig, RoleConfig};
+    let mut config = ProjectConfig::default();
+    config.workers.max_per_area = Some(1);
+    config.remotes.insert(
+        "origin".to_owned(),
+        fold_core::RemoteConfig {
+            url: "https://example.com/app.git".to_owned(),
+            branch: "main".to_owned(),
+            push_on_integrate: true,
+        },
+    );
+    config.roles.insert(
+        "task_worker".to_owned(),
+        RoleConfig {
+            model: Some("sonnet".to_owned()),
+            cache_ttl: Some(fold_core::roles::CacheTtl::FiveMinutes),
+            idle_minutes: Some(1),
+            mcp: Some(vec!["fold".to_owned()]),
+            handoff_at: Some(1),
+        },
+    );
+    let table = toml::Table::try_from(config).unwrap();
+    let mut keys = BTreeSet::new();
+    for (key, value) in table {
+        let Some(section) = value.as_table() else {
+            keys.insert((String::new(), key));
+            continue;
+        };
+        for (inner, value) in section {
+            match value.as_table() {
+                Some(named) => {
+                    for field in named.keys() {
+                        keys.insert((format!("{key}."), field.clone()));
+                    }
+                }
+                None => {
+                    keys.insert((key.clone(), inner.clone()));
+                }
+            }
+        }
+    }
+    keys
+}
+
+/// The keys a table of `fold-checks.toml` accepts, from the refusal of an unknown key in it: serde's message lists every field of the struct after "expected".
+#[cfg(test)]
+fn checks_keys(table: &str) -> Vec<String> {
+    let error = fold_core::reviews::checks::ChecksFile::parse(&format!("{table}unknown_key = 1\n"))
+        .unwrap_err();
+    let (_, expected) = error
+        .message()
+        .split_once("expected")
+        .unwrap_or_else(|| panic!("no field list in {:?}", error.message()));
+    expected
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_owned)
+        .collect()
+}
+
+fn run_state_names() -> BTreeSet<&'static str> {
+    use fold_core::reviews::checks::{Outcome, RunReason, RunState, Stage};
+    Stage::ALL
+        .map(Stage::as_str)
+        .into_iter()
+        .chain(RunState::ALL.map(RunState::as_str))
+        .chain(RunReason::ALL.map(RunReason::as_str))
+        .chain(Outcome::ALL.map(Outcome::as_str))
+        .collect()
+}
+
+#[test]
+fn the_reference_has_every_section() {
+    let headings: Vec<&str> = REFERENCE
+        .lines()
+        .filter_map(|line| line.strip_prefix("## "))
+        .collect();
+    assert_eq!(headings, REFERENCE_SECTIONS);
+    assert!(REFERENCE.starts_with("# fold reference\n"));
+}
+
+#[test]
+fn the_reference_names_every_tool() {
+    let named = backticked_identifiers(REFERENCE);
+    for tool in server_tools() {
+        assert!(named.contains(&tool), "REFERENCE.md does not name `{tool}`");
+    }
+}
+
+#[test]
+fn the_reference_shows_every_config_key_in_its_example() {
+    let keys = config_keys();
+    assert!(keys.contains(&("remotes.".to_owned(), "push_on_integrate".to_owned())));
+    assert!(keys.contains(&("roles.".to_owned(), "handoff_at".to_owned())));
+    assert!(keys.contains(&("workers".to_owned(), "max_per_area".to_owned())));
+    for (section, key) in keys {
+        if !section.is_empty() {
+            let header = match section.strip_suffix('.') {
+                Some(_) => format!("\n[{section}"),
+                None => format!("\n[{section}]"),
+            };
+            assert!(
+                REFERENCE.contains(&header),
+                "REFERENCE.md has no {header:?} section"
+            );
+        }
+        assert!(
+            REFERENCE.contains(&format!("\n{key} = ")),
+            "REFERENCE.md does not show `{key}` of [{section}]"
+        );
+    }
+}
+
+#[test]
+fn the_reference_names_every_checks_key_and_run_state() {
+    let top = checks_keys("");
+    assert_eq!(top, ["setup", "check"]);
+    assert!(REFERENCE.contains("`[setup]`") && REFERENCE.contains("`[[check]]`"));
+    for key in checks_keys("[setup]\n")
+        .into_iter()
+        .chain(checks_keys("[[check]]\nname = \"a\"\nrun = \"b\"\n"))
+    {
+        assert!(
+            REFERENCE.contains(&format!("`{key}`")),
+            "REFERENCE.md does not name the checks key `{key}`"
+        );
+    }
+    for name in run_state_names() {
+        assert!(
+            REFERENCE.contains(&format!("`{name}`")),
+            "REFERENCE.md does not name `{name}`"
+        );
+    }
+}
+
+#[test]
+fn every_backticked_identifier_of_the_reference_is_known() {
+    let mut known: BTreeSet<String> = known_names().into_iter().map(str::to_owned).collect();
+    known.extend(config_keys().into_iter().map(|(_, key)| key));
+    known.extend(run_state_names().into_iter().map(str::to_owned));
+    known.extend(REFERENCE_NAMES.map(str::to_owned));
+    for identifier in backticked_identifiers(REFERENCE) {
+        assert!(
+            known.contains(&identifier),
+            "REFERENCE.md names `{identifier}`, which is not a tool, a code, a key or an allowed name"
+        );
+    }
+}
+
+#[test]
+fn the_skill_points_to_the_reference_and_it_has_no_imports_or_design_documents() {
+    assert!(SKILL.contains("`REFERENCE.md` next to this file"));
+    assert!(REFERENCE.lines().all(|line| !line.starts_with('@')));
+    assert!(!REFERENCE.contains("ARCHITECTURE.md"));
+    assert!(!REFERENCE.contains("IMPLEMENTATION_PLAN.md"));
+    assert!(!REFERENCE.to_lowercase().contains("pull request"));
 }

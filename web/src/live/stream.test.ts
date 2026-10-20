@@ -43,6 +43,7 @@ const live = () =>
     checkpoints: [],
     proposal: null,
     stalled: false,
+    edits_after_version: null,
   })}\n\n`;
 /** An `agent_presence_changed` frame is live too: no `seq`, no `id` line. */
 const presence = () =>

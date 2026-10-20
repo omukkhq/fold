@@ -340,7 +340,7 @@ async fn a_thread_is_read_by_any_of_its_messages() {
         assert_eq!(messages[1]["body"], "reply");
         assert_eq!(
             messages[1]["recipients"],
-            json!([{"name": "frontend", "addressed_as": "agent", "delivered_at": null, "acknowledged_at": null}])
+            json!([{"name": "frontend", "addressed_as": "agent", "delivered_at": null, "acknowledged_at": null, "reachable": false}])
         );
     }
     let (status, body) = fixture.get("/threads/m-9").await;

@@ -5,7 +5,7 @@ use fold_core::roles::{
     AreaProfile, AreaProfileChange, StartFacts, check_model, default_worker_name, first_turn,
     outside_area, session_uuid,
 };
-use fold_core::tasks::areas::check_new_area;
+use fold_core::tasks::areas::{check_led_area, check_new_area};
 use fold_core::{
     Actor, AgentName, AreaName, FoldError, LabelName, NewEvent, ProjectConfig, ProposalId,
     ReviewBatchId, Role, TaskId, WorkerName, WorkspaceId, codes,
@@ -22,6 +22,7 @@ use crate::services::reviews::{Assignment, assign_reviews_in_tx};
 use crate::services::tasks::assign_in_tx;
 use tokio::sync::OwnedMutexGuard;
 
+mod fresh;
 mod handoff;
 mod limits;
 mod output;
@@ -50,6 +51,16 @@ pub struct StartWorker {
     pub model: Option<String>,
     /// Content from the starter for the worker's first turn; it is never stored or logged.
     pub instructions: Option<String>,
+}
+
+/// What `start_worker` gave. An area or the review role keeps one lead, so a start for a lead that exists and has ended resumes that lead under its own name instead of starting a new agent.
+#[derive(Debug, Clone)]
+pub struct StartedWorker {
+    pub worker: WorkerProcessRow,
+    /// The start resumed the existing lead.
+    pub resumed: bool,
+    /// The name the start asked for that the resumed lead does not have.
+    pub unused_name: Option<AgentName>,
 }
 
 /// The stable code of an agent error for a log line.
@@ -249,6 +260,7 @@ impl AgentService {
     ) -> Result<AreaRow, AgentError> {
         let starter = self.starter(actor).await?;
         policy::can_update_area(&starter).map_err(FoldError::from)?;
+        check_led_area(name)?;
         let now = self.clock.now();
         let by = actor.event_actor();
         let mut buffer = EventBuffer::new();
@@ -272,13 +284,30 @@ impl AgentService {
         Ok(area)
     }
 
+    /// The areas a lead owns, in name order: every area but Main, which has no lead or profile.
     pub async fn list_areas(&self) -> Result<Vec<AreaRow>, AgentError> {
-        Ok(agents::list_areas(self.store.read()).await?)
+        let mut areas = agents::list_areas(self.store.read()).await?;
+        areas.retain(|area| !area.name.is_main());
+        Ok(areas)
     }
 
     /// The project's worker settings from `.fold/config.toml`, or its defaults when there is no file; `None` when the service knows no project folder or the file does not parse, so a list still answers.
     pub async fn worker_config(&self) -> Option<ProjectConfig> {
         load_config(self.config_paths()?).await.ok()
+    }
+
+    /// The transcript path of each row's session, in the order of `rows`; all `None` for a service that runs no worker processes. See [`Supervisor::transcripts`].
+    pub async fn worker_transcripts(&self, rows: &[WorkerProcessRow]) -> Vec<Option<String>> {
+        let Some(supervisor) = &self.workers else {
+            return vec![None; rows.len()];
+        };
+        let ids = rows.iter().map(|row| row.session_id.clone()).collect();
+        supervisor
+            .transcripts(ids)
+            .await
+            .into_iter()
+            .map(|path| path.map(|path| path.to_string_lossy().into_owned()))
+            .collect()
     }
 
     pub async fn list_workers(&self) -> Result<Vec<WorkerProcessRow>, AgentError> {
@@ -329,12 +358,12 @@ impl AgentService {
         Ok(held)
     }
 
-    /// Starts a worker agent: the agent and its main worker, its process row in state `starting`, its binding and its claims, in one transaction with `worker.started`; then its Claude Code process with its first turn. Only a lead claims, so the start gives the new worker its work: a task worker the implementation claim on each of its tasks (see [`assign_in_tx`]), a reviewer the review claim on its one proposal or a batch of its two or more (see [`assign_reviews_in_tx`]). A claim that cannot be given refuses the whole start, so no worker runs without its claims. A task worker is refused for a human task (`task_needs_human`) and for a task on hold (`task_on_hold`). A lead whose area or role already has a stopped or failed lead resumes that lead instead, and starts it in a new session when its old one is gone.
+    /// Starts a worker agent: the agent and its main worker, its process row in state `starting`, its binding and its claims, in one transaction with `worker.started`; then its Claude Code process with its first turn. Only a lead claims, so the start gives the new worker its work: a task worker the implementation claim on each of its tasks (see [`assign_in_tx`]), a reviewer the review claim on its one proposal or a batch of its two or more (see [`assign_reviews_in_tx`]). A claim that cannot be given refuses the whole start, so no worker runs without its claims. A task worker is refused for a human task (`task_needs_human`) and for a task on hold (`task_on_hold`). A lead whose area or role already has a stopped or failed lead resumes that lead instead, under its own name whatever name the start asked for, and starts it in a new session when its old one is gone; [`StartedWorker`] says so.
     pub async fn start_worker(
         &self,
         actor: &Actor,
         request: StartWorker,
-    ) -> Result<WorkerProcessRow, AgentError> {
+    ) -> Result<StartedWorker, AgentError> {
         let supervisor = self.supervisor()?.clone();
         let role = request.role.ok_or_else(|| {
             invalid(
@@ -345,6 +374,9 @@ impl AgentService {
         let starter = self.starter(actor).await?;
         policy::can_start_worker(&starter, role).map_err(FoldError::from)?;
         let area = binding_area(role, &starter, &request)?;
+        if let Some(area) = &area {
+            check_led_area(area)?;
+        }
         if let Some(model) = &request.model {
             check_model(model)?;
         }
@@ -583,7 +615,11 @@ impl AgentService {
                 supervisor
                     .launch(&row, false, Some(turn(&row.agent)))
                     .await?;
-                self.get_worker(&row.agent).await
+                Ok(StartedWorker {
+                    worker: self.get_worker(&row.agent).await?,
+                    resumed: false,
+                    unused_name: None,
+                })
             }
             Started::Resume(agent) => {
                 let text = turn(&agent);
@@ -594,7 +630,11 @@ impl AgentService {
                         request.instructions.clone(),
                     ));
                 }
-                self.get_worker(&agent).await
+                Ok(StartedWorker {
+                    worker: self.get_worker(&agent).await?,
+                    resumed: true,
+                    unused_name: request.name.filter(|name| *name != agent),
+                })
             }
         }
     }

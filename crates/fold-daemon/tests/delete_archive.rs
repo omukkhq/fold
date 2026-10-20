@@ -348,7 +348,11 @@ async fn deleting_a_fresh_task_removes_every_row_that_mentions_it_and_frees_its_
     assert_eq!(fx.count("SELECT COUNT(*) FROM checklists").await, 1);
     assert_eq!(fx.count("SELECT COUNT(*) FROM checklist_items").await, 0);
     assert_eq!(fx.count("SELECT COUNT(*) FROM dependencies").await, 0);
-    assert_eq!(fx.count("SELECT COUNT(*) FROM labels").await, 1);
+    assert_eq!(
+        fx.count("SELECT COUNT(*) FROM labels").await,
+        2,
+        "the task's label and the label of the area main stay"
+    );
     assert_eq!(fx.count("SELECT COUNT(*) FROM claims").await, 0);
     assert_eq!(fx.status(2).await, Todo);
     assert_eq!(fx.status(3).await, Todo);

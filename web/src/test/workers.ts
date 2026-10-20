@@ -30,7 +30,16 @@ export function workerProcess(
     context_tokens: 164_000,
     exit_code: null,
     failed_reason: null,
+    last_error: null,
+    last_error_at: null,
+    failed_turns: 0,
+    model_unreachable: false,
+    hint: null,
     cache_ttl: "1h",
+    session_id: "0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a13",
+    previous_sessions: [],
+    transcript:
+      "/home/tanim/.claude/projects/-home-tanim-ledger/0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a13.jsonl",
     ...fields,
   };
 }
@@ -55,6 +64,7 @@ export function areaEntry(
 export function workerList(fields: Partial<WorkerList> = {}): WorkerList {
   return {
     areas: [],
+    main_label: "main",
     workers: [],
     roles: [],
     limits: null,

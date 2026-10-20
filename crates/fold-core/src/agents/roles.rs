@@ -45,39 +45,51 @@ impl Role {
         }
     }
 
-    /// The prompt that ships with fold: the role's text followed by the shared rules. A project replaces the role's text with `.fold/roles/<role>.md`; [`with_shared_rules`] then adds the shared rules again.
+    /// The prompt that ships with fold: the role's text followed by the shared rules and the practices. A project replaces the role's text with `.fold/roles/<role>.md`; [`with_shared_rules`] then adds the shared rules and the practices again.
     pub fn prompt(self) -> &'static str {
         match self {
             Role::AreaLead => concat!(
                 include_str!("roles/area_lead.md"),
                 "\n",
-                include_str!("roles/shared.md")
+                include_str!("roles/shared.md"),
+                "\n",
+                include_str!("roles/practices.md")
             ),
             Role::ReviewLead => concat!(
                 include_str!("roles/review_lead.md"),
                 "\n",
-                include_str!("roles/shared.md")
+                include_str!("roles/shared.md"),
+                "\n",
+                include_str!("roles/practices.md")
             ),
             Role::TaskWorker => concat!(
                 include_str!("roles/task_worker.md"),
                 "\n",
-                include_str!("roles/shared.md")
+                include_str!("roles/shared.md"),
+                "\n",
+                include_str!("roles/practices.md")
             ),
             Role::Reviewer => concat!(
                 include_str!("roles/reviewer.md"),
                 "\n",
-                include_str!("roles/shared.md")
+                include_str!("roles/shared.md"),
+                "\n",
+                include_str!("roles/practices.md")
             ),
         }
     }
 }
 
-/// The authority and recovery rules that every agent prompt ends with, the main agent's and the workers' alike, whether the role text ships with fold or comes from a project file.
+/// The authority and recovery rules followed by the default engineering practices, which every agent prompt ends with, the main agent's and the workers' alike, whether the role text ships with fold or comes from a project file.
 pub fn shared_prompt() -> &'static str {
-    include_str!("roles/shared.md")
+    concat!(
+        include_str!("roles/shared.md"),
+        "\n",
+        include_str!("roles/practices.md")
+    )
 }
 
-/// A project's own role text followed by the shared rules, so an override never drops them. The daemon (workers) and `fld claude` (main agent) both build their override prompts here.
+/// A project's own role text followed by the shared rules and the practices, so an override never drops them. The daemon (workers) and `fld claude` (main agent) both build their override prompts here.
 pub fn with_shared_rules(role_text: &str) -> String {
     let mut prompt = role_text.to_owned();
     if !prompt.ends_with('\n') {
@@ -88,12 +100,14 @@ pub fn with_shared_rules(role_text: &str) -> String {
     prompt
 }
 
-/// The prompt that ships with fold for the main agent, which `fld claude` appends to the system prompt of the user's session; a project replaces the role text with `.fold/roles/main.md`, and the shared rules follow it either way. It stands apart from [`Role`] because fold neither starts nor supervises the main agent.
+/// The prompt that ships with fold for the main agent, which `fld claude` appends to the system prompt of the user's session; a project replaces the role text with `.fold/roles/main.md`, and the shared rules and the practices follow it either way. It stands apart from [`Role`] because fold neither starts nor supervises the main agent.
 pub fn main_prompt() -> &'static str {
     concat!(
         include_str!("roles/main.md"),
         "\n",
-        include_str!("roles/shared.md")
+        include_str!("roles/shared.md"),
+        "\n",
+        include_str!("roles/practices.md")
     )
 }
 
@@ -134,9 +148,12 @@ pub const MCP_UNAVAILABLE: &str = "mcp_unavailable";
 /// The `worker.failed` reason of a worker whose MCP configuration would start an fld binary that is not there.
 pub const FLD_MISSING: &str = "fld_missing";
 
-/// A worker that failed for `reason` cannot reach fold, and starting it again fails the same way until the daemon runs the installed fld. Such a worker keeps its claims, as in a pause, and a daemon start resumes it in its own session: its cause lies outside the agent, and a start of the installed fld removes it.
+/// The `worker.failed` reason of a worker whose `claude` the daemon did not find on the `PATH` it gives workers. The daemon reads that `PATH` from the user's login shell once at its start, so a restart is what makes a newly installed Claude Code or a changed shell file count.
+pub const CLAUDE_NOT_FOUND: &str = "claude_not_found";
+
+/// A worker that failed for `reason` cannot reach fold or cannot run Claude Code, and starting it again fails the same way until the daemon starts again. Such a worker keeps its claims, as in a pause, and a daemon start resumes it in its own session: its cause lies outside the agent, and a start of the installed fld, which reads the shell's `PATH` again, removes it.
 pub fn needs_restart(reason: &str) -> bool {
-    reason == MCP_UNAVAILABLE || reason == FLD_MISSING
+    reason == MCP_UNAVAILABLE || reason == FLD_MISSING || reason == CLAUDE_NOT_FOUND
 }
 
 /// What a human does about a failure that [`needs_restart`] accepts; `None` for any other reason.
@@ -145,6 +162,9 @@ pub fn restart_hint(reason: &str) -> Option<&'static str> {
         MCP_UNAVAILABLE => Some("run `fld restart`; the daemon then resumes the worker"),
         FLD_MISSING => Some(
             "install fld and run `fld restart`; the daemon then resumes the worker, or an agent resumes it with `resume_worker`",
+        ),
+        CLAUDE_NOT_FOUND => Some(
+            "install Claude Code or add its folder to PATH in your shell's startup files, then run `fld restart`; the daemon then resumes the worker, and `fld doctor` shows where it looks for claude",
         ),
         _ => None,
     }
@@ -433,6 +453,49 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
     }
 }
 
+/// What waits for a lead whose process starts again in its own session: for an area lead the ready tasks of its area in the ready order, for the review lead the open proposals that have no verdict on their current version. A claim hides a task or proposal only while its worker runs or the same start runs it again, because a start moves the claim of a worker that has ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatchUpFacts<'a> {
+    pub role: Role,
+    pub area: Option<&'a AreaName>,
+    pub tasks: &'a [TaskId],
+    pub proposals: &'a [ProposalId],
+}
+
+/// The part of a restarted lead's turn that names the work waiting for it, at most [`SUMMARY_ITEMS`] ids. fold stores no push notice, so the lead may never have heard of this work. `None` for the other roles and when nothing waits, so a lead with nothing to do stays idle.
+pub fn catch_up_turn(facts: &CatchUpFacts<'_>) -> Option<String> {
+    fn listed(ids: Vec<String>) -> String {
+        let more = ids.len().saturating_sub(SUMMARY_ITEMS);
+        let named = ids
+            .into_iter()
+            .take(SUMMARY_ITEMS)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if more == 0 {
+            named
+        } else {
+            format!("{named} and {more} more")
+        }
+    }
+    match facts.role {
+        Role::AreaLead if !facts.tasks.is_empty() => {
+            let area = facts
+                .area
+                .map(|area| format!(" of area {area}"))
+                .unwrap_or_default();
+            Some(format!(
+                "These tasks{area} are ready and wait for a task worker: {}. fold may not have told you of each one. Read each with get_task, find the others with get_ready_tasks, and start task workers for them with start_worker, which also moves the claim of a worker that has ended.",
+                listed(facts.tasks.iter().map(ToString::to_string).collect())
+            ))
+        }
+        Role::ReviewLead if !facts.proposals.is_empty() => Some(format!(
+            "These open proposals wait for a review: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, then review them yourself or give them to reviewers with start_worker, which also moves the claim of a reviewer that has ended.",
+            listed(facts.proposals.iter().map(ToString::to_string).collect())
+        )),
+        Role::AreaLead | Role::ReviewLead | Role::TaskWorker | Role::Reviewer => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,6 +508,7 @@ mod tests {
     fn only_a_worker_that_cannot_reach_fold_waits_for_a_restart() {
         assert!(needs_restart(MCP_UNAVAILABLE));
         assert!(needs_restart(FLD_MISSING));
+        assert!(needs_restart(CLAUDE_NOT_FOUND));
         for reason in ["exited", "spawn", "daemon_restart"] {
             assert!(!needs_restart(reason), "{reason}");
         }
@@ -457,6 +521,10 @@ mod tests {
             Some(
                 "install fld and run `fld restart`; the daemon then resumes the worker, or an agent resumes it with `resume_worker`"
             )
+        );
+        assert!(
+            restart_hint(CLAUDE_NOT_FOUND)
+                .is_some_and(|hint| hint.contains("fld restart") && hint.contains("fld doctor"))
         );
         assert_eq!(restart_hint("exited"), None);
     }
@@ -610,7 +678,9 @@ mod tests {
         assert!(prompt.starts_with("# Main agent\n"));
         assert!(prompt.contains("`AskUserQuestion`"));
         assert!(prompt.contains("explicit OK"));
-        assert!(prompt.contains("Never build a task yourself"));
+        assert!(prompt.contains("Never build a task of another area yourself"));
+        assert!(prompt.contains("Build the tasks of `main` yourself"));
+        assert!(prompt.contains("only when the user said so for that task"));
         assert!(prompt.contains("Wait for the user's explicit OK to that diff"));
         assert!(prompt.contains("call `submit_main_change`"));
         assert!(prompt.contains("Delegate whenever a task fits"));
@@ -619,12 +689,37 @@ mod tests {
         assert!(prompt.contains("names the folders the area owns"));
         assert!(prompt.contains("`pause_project` or `resume_project` only when the user asks"));
         assert!(prompt.contains("`start_worker` fails with `project_paused`"));
+        assert!(prompt.contains(
+            "Call `restart_worker` (new session) or `set_worker_limits` only when the user asks"
+        ));
         assert!(prompt.contains("only when the user tells you in this conversation"));
-        assert!(prompt.contains("or claim a task or a review, only when the user tells you"));
         assert!(
-            prompt.split_whitespace().count() < 1650,
+            prompt.contains(
+                "or claim a review or a task outside `main`, only when the user tells you"
+            )
+        );
+        assert!(
+            prompt
+                .replace(include_str!("roles/practices.md"), "")
+                .split_whitespace()
+                .count()
+                < 1800,
             "the prompt stays in context every turn"
         );
+    }
+
+    #[test]
+    fn the_main_agent_and_the_leads_are_pointed_to_the_reference() {
+        assert!(main_prompt().contains(
+            "Read the skill's `REFERENCE.md` before you plan checks, config or areas, or tell the user a command."
+        ));
+        for role in [Role::ReviewLead, Role::AreaLead] {
+            assert!(
+                role.prompt()
+                    .contains("Checks section of the skill's `REFERENCE.md`"),
+                "{role}"
+            );
+        }
     }
 
     #[test]
@@ -636,6 +731,37 @@ mod tests {
         {
             assert_eq!(prompt.matches(include_str!("roles/shared.md")).count(), 1);
         }
+    }
+
+    #[test]
+    fn every_prompt_ends_with_the_practices_once_after_the_shared_rules() {
+        let practices = include_str!("roles/practices.md");
+        let shared = include_str!("roles/shared.md");
+        let overridden = with_shared_rules("Our own prompt.\n");
+        for prompt in Role::ALL
+            .into_iter()
+            .map(|role| role.prompt().to_owned())
+            .chain([main_prompt().to_owned(), overridden])
+        {
+            assert_eq!(prompt.matches(practices).count(), 1);
+            assert!(prompt.find(shared).unwrap() < prompt.find(practices).unwrap());
+            assert!(prompt.ends_with(practices));
+        }
+    }
+
+    #[test]
+    fn the_practices_yield_to_the_project_and_default_to_a_static_web_app() {
+        let practices = include_str!("roles/practices.md");
+        assert!(
+            practices.contains(
+                "The project's own AGENTS.md (or CLAUDE.md) and the user's word come first"
+            )
+        );
+        assert!(practices.contains("Keep the web app static"));
+        assert!(
+            practices.split_whitespace().count() < 1200,
+            "the practices stay in context every turn"
+        );
     }
 
     #[test]
@@ -875,5 +1001,48 @@ mod tests {
             });
             assert!(turn.starts_with("fold started you as web-lead"));
         }
+    }
+
+    #[test]
+    fn a_catch_up_names_what_waits_for_the_lead_and_nothing_when_nothing_waits() {
+        let web = area("web");
+        let tasks: Vec<TaskId> = (1..=3).filter_map(TaskId::from_number).collect();
+        let proposals = [ProposalId::from_number(4).unwrap()];
+        let facts = |role, tasks, proposals| CatchUpFacts {
+            role,
+            area: Some(&web),
+            tasks,
+            proposals,
+        };
+        let lead = catch_up_turn(&facts(Role::AreaLead, &tasks, &[])).unwrap();
+        assert!(
+            lead.starts_with(
+                "These tasks of area web are ready and wait for a task worker: T-1, T-2, T-3."
+            ),
+            "{lead}"
+        );
+        assert!(
+            lead.contains("get_ready_tasks") && lead.contains("start_worker"),
+            "{lead}"
+        );
+        let review = catch_up_turn(&CatchUpFacts {
+            area: None,
+            ..facts(Role::ReviewLead, &[], &proposals)
+        })
+        .unwrap();
+        assert!(review.contains("wait for a review: P-4."), "{review}");
+        assert!(
+            review.contains("list_proposals") && review.contains("start_worker"),
+            "{review}"
+        );
+        assert_eq!(catch_up_turn(&facts(Role::AreaLead, &[], &proposals)), None);
+        assert_eq!(catch_up_turn(&facts(Role::ReviewLead, &tasks, &[])), None);
+        for role in [Role::TaskWorker, Role::Reviewer] {
+            assert_eq!(catch_up_turn(&facts(role, &tasks, &proposals)), None);
+        }
+        let many: Vec<TaskId> = (1..=25).filter_map(TaskId::from_number).collect();
+        let long = catch_up_turn(&facts(Role::AreaLead, &many, &[])).unwrap();
+        assert!(long.contains("T-20 and 5 more."), "{long}");
+        assert!(!long.contains("T-21"), "{long}");
     }
 }

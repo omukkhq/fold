@@ -15,6 +15,7 @@ mod restart;
 mod seed;
 mod serve;
 mod service;
+mod shell_env;
 mod token;
 
 use std::ffi::OsString;
@@ -72,6 +73,13 @@ enum Command {
     Stash(commands::stash::StashArgs),
     /// Merge the newest stash entry into the project folder as it is now; a conflict writes conflict markers and keeps the entry until fld record
     Unstash(commands::stash::UnstashArgs),
+    /// Print this process's environment for the daemon, which runs it through the user's login shell at its start
+    #[command(hide = true, name = "shell-env")]
+    ShellEnv,
+    /// Manage the workers that fold runs: fld worker restart <name> starts one again in a new Claude Code session
+    Worker(commands::worker::WorkerArgs),
+    /// Print the path of an agent's Claude Code transcript, the file of its current session; --tail N prints the file's last N lines instead
+    Transcript(commands::transcript::TranscriptArgs),
     /// Development helpers
     #[cfg(feature = "dev-seed")]
     #[command(hide = true)]
@@ -156,6 +164,13 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         }
         Some(Command::Unstash(args)) => {
             commands::stash::run_unstash(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::ShellEnv) => {
+            shell_env::print(std::env::vars_os(), out).map_err(Failure::Write)
+        }
+        Some(Command::Worker(args)) => commands::worker::run(&args, out).map_err(Failure::Remote),
+        Some(Command::Transcript(args)) => {
+            commands::transcript::run_transcript(&args, out).map_err(Failure::Remote)
         }
         #[cfg(feature = "dev-seed")]
         Some(Command::Dev(args)) => {
@@ -281,7 +296,7 @@ mod tests {
     fn no_subcommand_prints_the_version_line() {
         let (result, out) = run_with(&["fld"]);
         assert!(result.is_ok());
-        assert_eq!(out, "fld 0.2.1\n");
+        assert_eq!(out, "fld 0.3.0\n");
     }
 
     #[test]
@@ -291,7 +306,7 @@ mod tests {
             panic!("expected a parse failure, got {result:?}");
         };
         assert_eq!(error.kind(), ErrorKind::DisplayVersion);
-        assert_eq!(error.to_string().trim(), "fld 0.2.1");
+        assert_eq!(error.to_string().trim(), "fld 0.3.0");
         assert!(out.is_empty());
     }
 
@@ -362,6 +377,32 @@ mod tests {
         struct Outer(#[source] io::Error);
         let shown = message_with_causes(&Outer(io::Error::other("permission denied")));
         assert_eq!(shown, "cannot read the file: permission denied");
+    }
+
+    /// Every visible subcommand path below `command`, such as `token create`.
+    fn subcommand_paths(command: &clap::Command, prefix: &str, paths: &mut Vec<String>) {
+        for sub in command.get_subcommands().filter(|sub| !sub.is_hide_set()) {
+            let path = format!("{prefix}{}", sub.get_name());
+            subcommand_paths(sub, &format!("{path} "), paths);
+            paths.push(path);
+        }
+    }
+
+    #[test]
+    fn the_reference_names_every_visible_subcommand() {
+        use clap::CommandFactory;
+        let reference = include_str!("../templates/REFERENCE.md");
+        let mut paths = Vec::new();
+        subcommand_paths(&Cli::command(), "", &mut paths);
+        assert!(paths.iter().any(|path| path == "token create"));
+        assert!(!paths.iter().any(|path| path == "hook"));
+        for path in paths {
+            assert!(
+                reference.contains(&format!("`fld {path}`"))
+                    || reference.contains(&format!("`fld {path} ")),
+                "REFERENCE.md does not name `fld {path}`"
+            );
+        }
     }
 
     #[test]

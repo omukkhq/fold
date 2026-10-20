@@ -102,8 +102,12 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Waits until a process of `agent` that fold let go of has exited, such as one whose fold MCP server did not connect: its row has ended already, but a new start of the agent must not run beside it in the same row and session. It waits as long as a stop's steps take, then refuses with `worker_exists`.
-    pub(super) async fn until_let_go_exited(&self, agent: &AgentName) -> Result<(), AgentError> {
+    /// Waits until a process of `agent` that fold let go of has exited, such as one whose fold MCP server did not connect: its row has ended already, but a new start of the agent must not run beside it in the same row and session. It waits as long as a stop's steps take, then refuses with `worker_exists`, whose hint names `retry`, the tool of the start that waits.
+    pub(super) async fn until_let_go_exited(
+        &self,
+        agent: &AgentName,
+        retry: &str,
+    ) -> Result<(), AgentError> {
         let exited = lock(&self.inner.running)
             .get(agent)
             .filter(|run| run.detached.load(Ordering::SeqCst))
@@ -124,7 +128,7 @@ impl Supervisor {
             format!("the last process of worker {agent} is still ending"),
         )
         .with_details([("agent", json!(agent.as_str()))])
-        .with_hint("call list_workers, then call resume_worker again")
+        .with_hint(format!("call list_workers, then call {retry} again"))
         .into())
     }
 

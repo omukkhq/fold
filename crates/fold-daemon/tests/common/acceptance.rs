@@ -41,10 +41,10 @@ const MAIN_HANDSHAKE_PID: u32 = 900_000;
 pub const SLUG: &str = "demo";
 /// The three sessions of the acceptance scenarios, in registration order.
 pub const AGENTS: [&str; 3] = ["frontend", "backend", "review"];
-/// A launcher whose Claude Code is a program that does not exist, so a scenario without a stand-in never runs the real `claude`.
+/// A launcher whose Claude Code is a file that cannot run, so a scenario without a stand-in never runs the real `claude`, and a worker it starts fails with the plain `spawn` reason.
 fn no_claude() -> Launcher {
     Launcher {
-        claude: std::path::PathBuf::from("/nonexistent/fold-tests-run-no-claude"),
+        claude: std::path::PathBuf::from("/dev/null"),
         ..Launcher::default()
     }
 }

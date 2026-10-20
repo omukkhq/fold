@@ -124,6 +124,7 @@ fn all_equals_the_plans_event_types() {
         "integration.unqueued",
         "integration.held",
         "review.scope_chosen",
+        "worker.model_unreachable",
     ]);
     assert_eq!(declared, expected);
 }

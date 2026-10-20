@@ -32,7 +32,7 @@ pub use hold::{WaitingTask, clear_hold, held_tasks, ready_human_tasks, set_hold}
 pub use human_review::{
     MarkedProposal, clear_human_review, marked_open_proposals, set_human_review,
 };
-pub use ready::{ReadyRow, ReadySnapshot, ready_snapshot};
+pub use ready::{HeldTodoRow, ReadyRow, ReadySnapshot, held_todo, ready_snapshot};
 pub use recompute::{LoadedFacts, load_facts, write_cache};
 pub use removal::{
     TaskHistory, delete, delete_edges_touching, delete_linked_items, history, linked_item_owners,

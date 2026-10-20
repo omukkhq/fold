@@ -45,19 +45,6 @@ export function visibleActions(
     : actions;
 }
 
-/** The composer opens only on the current version of an open proposal, for a named human. */
-export function canComment(
-  proposal: ProposalDetail,
-  human: string | null,
-  shownVersion: number | null,
-): boolean {
-  return (
-    human !== null &&
-    proposal.summary.state === "open" &&
-    shownVersion === proposal.summary.current_version
-  );
-}
-
 /** The line under a disabled Approve and Integrate once the integration checks of the current version failed: the daemon refuses that version until its author sends a new one. */
 export const CHECKS_FAILED =
   "The integration checks failed; the author sends a new version.";
@@ -81,11 +68,13 @@ export const AGENT_APPROVES_FIRST = "A reviewer agent approves first.";
 
 /**
  * Why Approve cannot work for the signed-in human; null when it can.
- * On a task with the human review mark the daemon takes a human's approval only after an agent with review rights approved the current version, which it reports as `agent_approved`.
+ * On a task with the human review mark the daemon takes a human's approval only after an agent with review rights approved the current version, which it reports as `agent_approved`. A task of the main agent's own area (`main_task`) has no reviewer agent, so the human approves it first.
  */
 export function approveBlock(proposal: ProposalDetail): string | null {
   if (proposal.summary.checks_failed) return CHECKS_FAILED;
-  return proposal.summary.human_review !== null && !proposal.agent_approved
+  return proposal.summary.human_review !== null &&
+    !proposal.agent_approved &&
+    !proposal.main_task
     ? AGENT_APPROVES_FIRST
     : null;
 }

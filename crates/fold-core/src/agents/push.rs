@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::agents::roles::{FLD_MISSING, MCP_UNAVAILABLE};
+use crate::agents::roles::{CLAUDE_NOT_FOUND, FLD_MISSING, MCP_UNAVAILABLE};
 use crate::agents::{AgentName, AreaName};
 use crate::events::{Event, types};
 use crate::ids::{MessageId, RequestId, TaskId};
@@ -38,8 +38,10 @@ pub struct PushContext {
     pub main_agents: BTreeSet<AgentName>,
     /// No agent can take the event's task now: it is a human task or on hold, or, for `task.hold_cleared` and `task.updated`, it is not an unclaimed Todo task.
     pub held_from_agents: bool,
-    /// For `worker.failed`, the agent that started the failed worker; `None` for a human.
+    /// For `worker.failed` and `worker.model_unreachable`, the agent that started the worker; `None` for a human.
     pub starter: Option<AgentName>,
+    /// The event's proposal belongs to a task of the area Main, which no review agent reviews.
+    pub main_task: bool,
 }
 
 /// One line for one agent's Claude Code session. `text` holds public ids and the next tool only.
@@ -79,6 +81,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::PROPOSAL_REVIEWER_FIXED,
         types::INTEGRATION_HELD,
         types::WORKER_FAILED,
+        types::WORKER_MODEL_UNREACHABLE,
     ]
     .contains(&event.event_type)
 }
@@ -471,6 +474,9 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
     if kind == types::WORKER_FAILED {
         return unreachable_worker_rule(event, ctx);
     }
+    if kind == types::WORKER_MODEL_UNREACHABLE {
+        return model_unreachable_rule(event, ctx);
+    }
     if let Some(rule) = request_rule(event, ctx) {
         return Some(rule);
     }
@@ -510,6 +516,9 @@ fn unreachable_worker_rule(
         FLD_MISSING => format!(
             "worker {agent} failed: its fld is gone; ask the human to install fld and run `fld restart`, which resumes it, or call resume_worker once fld is back"
         ),
+        CLAUDE_NOT_FOUND => format!(
+            "worker {agent} failed: the daemon finds no claude; ask the human to install Claude Code or fix PATH, then run `fld restart`, which resumes it"
+        ),
         _ => return None,
     };
     let agents = ctx
@@ -522,9 +531,39 @@ fn unreachable_worker_rule(
     Some((agents, text, "list_workers"))
 }
 
-/// A ready task nobody claimed goes to whoever starts its builder. The lead of its area starts a task worker; while the area has no lead, the main agent starts one; a task in no area waits for the main agent to give it an area label. Both an approved request card and a dependent of an integrated task turn ready through `task.status_changed`, so this one rule routes them.
+/// A worker whose turns keep failing before any token reached the model reaches the main agent and the agent that started it, so they ask the human to fix what Claude Code needs instead of sending the worker more work. Its error is on its row, which `list_workers` shows; the notice holds only the hint.
+fn model_unreachable_rule(
+    event: &Event,
+    ctx: &PushContext,
+) -> Option<(Vec<AgentName>, String, &'static str)> {
+    let agent = event
+        .data
+        .get("agent")
+        .and_then(serde_json::Value::as_str)?;
+    let text = format!(
+        "worker {agent} cannot reach the model; ask the human to {}",
+        crate::agents::turn_errors::MODEL_UNREACHABLE_HINT
+    );
+    let agents = ctx
+        .main_agents
+        .iter()
+        .chain(&ctx.starter)
+        .filter(|starter| starter.as_str() != agent)
+        .cloned()
+        .collect();
+    Some((agents, text, "list_workers"))
+}
+
+/// A ready task nobody claimed goes to whoever starts its builder. A task of Main goes to the main agent, which claims and builds it itself; the lead of any other area starts a task worker; while the area has no lead, the main agent starts one; a task in no area waits for the main agent to give it an area label. Both an approved request card and a dependent of an integrated task turn ready through `task.status_changed`, so this one rule routes them.
 fn ready_route(task: TaskId, ctx: &PushContext) -> (Vec<AgentName>, String, &'static str) {
     let main = || ctx.main_agents.iter().cloned().collect();
+    if ctx.areas.iter().any(AreaName::is_main) {
+        return (
+            main(),
+            format!("{task} is ready in area main, for you to build"),
+            "claim_task",
+        );
+    }
     if !ctx.area_leads.is_empty() {
         return (
             ctx.area_leads.iter().cloned().collect(),
@@ -622,10 +661,11 @@ fn approved_text(request: RequestId, tasks: &[TaskId]) -> String {
     }
 }
 
-/// Every review lead but the author's agent, then the holder of the review claim.
+/// Every review lead but the author's agent, then the holder of the review claim. No review lead hears of a proposal of a task of Main.
 fn reviewers(ctx: &PushContext) -> Vec<AgentName> {
     ctx.review_leads
         .iter()
+        .filter(|_| !ctx.main_task)
         .filter(|agent| ctx.author.as_ref() != Some(*agent))
         .chain(&ctx.review_claim)
         .cloned()
@@ -689,6 +729,7 @@ mod tests {
             main_agents: BTreeSet::new(),
             held_from_agents: false,
             starter: None,
+            main_task: false,
         }
     }
 
@@ -726,6 +767,50 @@ mod tests {
                     "claim_review"
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn no_review_lead_hears_of_a_proposal_of_a_task_of_main() {
+        let main_task = PushContext {
+            main_task: true,
+            review_claim: None,
+            ..ctx()
+        };
+        for kind in [types::PROPOSAL_OPENED, types::PROPOSAL_VERSION_ADDED] {
+            let event = with_data(event(kind, "main"), json!({"version": 2}));
+            assert!(notice_for(&event, &main_task).is_empty(), "{kind}");
+        }
+        let again = with_data(
+            event(types::PROPOSAL_REVIEW_AGAIN_REQUESTED, "human:ana"),
+            json!({"version": 2}),
+        );
+        assert!(notice_for(&again, &main_task).is_empty());
+    }
+
+    #[test]
+    fn a_ready_task_of_main_goes_to_the_main_agent_to_build() {
+        let status = with_data(
+            event(types::TASK_STATUS_CHANGED, "fold"),
+            json!({"from": "backlog", "to": "todo"}),
+        );
+        let main_ready = ready(None, &[], &["main"]);
+        let expected = vec![row(
+            "lead",
+            "fold: T-12 is ready in area main, for you to build. Call claim_task.",
+            "claim_task",
+        )];
+        assert_eq!(sent(&notice_for(&status, &main_ready)), expected);
+        assert_eq!(
+            sent(&notice_for(&label_added(&["main"]), &main_ready)),
+            expected
+        );
+        assert_eq!(
+            sent(&notice_for(
+                &event(types::TASK_HOLD_CLEARED, "human:ana"),
+                &main_ready
+            )),
+            expected
         );
     }
 
@@ -1148,8 +1233,14 @@ mod tests {
             missing[0].text,
             "fold: worker backend-worker failed: its fld is gone; ask the human to install fld and run `fld restart`, which resumes it, or call resume_worker once fld is back. Call list_workers."
         );
+        let no_claude = notice_for(&failed(CLAUDE_NOT_FOUND), &ctx);
+        assert_eq!(no_claude.len(), 2);
+        assert_eq!(
+            no_claude[0].text,
+            "fold: worker backend-worker failed: the daemon finds no claude; ask the human to install Claude Code or fix PATH, then run `fld restart`, which resumes it. Call list_workers."
+        );
         let longest = "w".repeat(32);
-        for reason in [MCP_UNAVAILABLE, FLD_MISSING] {
+        for reason in [MCP_UNAVAILABLE, FLD_MISSING, CLAUDE_NOT_FOUND] {
             let event = with_data(
                 event(types::WORKER_FAILED, "fold"),
                 serde_json::json!({"agent": longest, "reason": reason}),
@@ -1174,6 +1265,43 @@ mod tests {
             ["main"]
         );
         let bare = event(types::WORKER_FAILED, "fold");
+        assert!(notice_for(&bare, &ctx).is_empty());
+    }
+
+    #[test]
+    fn a_worker_that_cannot_reach_the_model_tells_the_main_agent_and_its_starter() {
+        let mut ctx = ctx();
+        ctx.main_agents = [name("main")].into_iter().collect();
+        ctx.starter = Some(name("backend-lead"));
+        let unreachable = |agent: &str| {
+            with_data(
+                event(types::WORKER_MODEL_UNREACHABLE, "fold"),
+                serde_json::json!({"agent": agent, "turns": 3}),
+            )
+        };
+        assert!(is_pushed(&unreachable("backend-worker")));
+        let text = "fold: worker backend-worker cannot reach the model; ask the human to check the Claude Code sign-in, model and usage limit, or run `fld doctor`. Call list_workers.";
+        assert_eq!(
+            sent(&notice_for(&unreachable("backend-worker"), &ctx)),
+            vec![
+                row("main", text, "list_workers"),
+                row("backend-lead", text, "list_workers"),
+            ]
+        );
+        assert_eq!(
+            sent(&notice_for(&unreachable("backend-lead"), &ctx))
+                .into_iter()
+                .map(|(agent, _, _)| agent)
+                .collect::<Vec<_>>(),
+            ["main"]
+        );
+        let longest = "w".repeat(32);
+        assert!(
+            notice_for(&unreachable(&longest), &ctx)
+                .iter()
+                .all(|notice| notice.text.len() <= MAX_NOTICE_LEN)
+        );
+        let bare = event(types::WORKER_MODEL_UNREACHABLE, "fold");
         assert!(notice_for(&bare, &ctx).is_empty());
     }
 

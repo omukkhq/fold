@@ -17,7 +17,13 @@ import {
 const proposal = (
   state: BoardProposal["state"],
   revision: string | null = null,
-): BoardProposal => ({ id: "P-3", state, revision });
+): BoardProposal => ({
+  id: "P-3",
+  state,
+  version: 1,
+  checks_failed: false,
+  revision,
+});
 
 describe("taskPath", () => {
   it("is the task dialog route", () => {

@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fold_core::events::types;
 use fold_core::reviews::{HumanReviewMark, human_review_reason};
+use fold_core::tasks::areas::in_main_area;
 use fold_core::tasks::{PlanRef, PlannedTask, check_task_plan};
 use fold_core::{
     Actor, ChecklistName, DependencyOrigin, FoldError, HoldMark, HoldReason, HumanName, NewEvent,
@@ -12,7 +13,7 @@ use serde_json::json;
 
 use super::{
     CreateTask, ItemContent, NewChecklistItem, TaskError, TaskService, TaskView, add_edge_in_tx,
-    areas_of, checklists, create_in_tx, recompute, task_not_found,
+    areas_of, checklists, insert_in_tx, mark_main_task, recompute, task_not_found,
 };
 use crate::services::agents::starter_of;
 use crate::services::events::EventBuffer;
@@ -74,7 +75,7 @@ impl TaskService {
                     let areas = areas_of(tx, &task.labels).await?;
                     policy::can_choose_no_proposal(&starter, &areas).map_err(FoldError::from)?;
                 }
-                let id = create_in_tx(tx, &mut buffer, actor, &input, task.kind, now).await?;
+                let id = insert_in_tx(tx, &mut buffer, actor, &input, task.kind, now).await?;
                 by_key.insert(task.key.as_str(), id);
                 created.push((task.key.clone(), id));
                 for planned in &task.checklist {
@@ -95,6 +96,8 @@ impl TaskService {
                         .task(id).data(json!({"reviewer": mark.reviewer.as_ref().map(HumanName::as_str), "reason": mark.reason, "set_by": mark.set_by.as_str()}))?;
                     buffer.append(tx, &event, now).await?;
                 }
+                let main_marks = in_main_area(&task.labels) && !task.main_approves;
+                mark_main_task(tx, &mut buffer, id, main_marks, now).await?;
                 if let Some(reason) = &task.blocker {
                     let reason = HoldReason::parse(reason).map_err(FoldError::from)?;
                     let areas = areas_of(tx, &task.labels).await?;

@@ -18,6 +18,24 @@ pub fn areas_among<'a>(
         .collect()
 }
 
+/// The task is in the built-in area Main: the main agent builds it, and a human approves its proposal, or the main agent when the user said so for the task.
+pub fn in_main_area(labels: &[LabelName]) -> bool {
+    labels.iter().any(LabelName::is_main)
+}
+
+/// Main has no lead and no profile, because its tasks go to the main agent itself. Starting a lead for it and changing its profile are refused with `main_area`.
+pub fn check_led_area(area: &AreaName) -> Result<(), FoldError> {
+    if !area.is_main() {
+        return Ok(());
+    }
+    Err(FoldError::new(
+        codes::MAIN_AREA,
+        "the area main belongs to the main agent: it has no lead and no profile",
+    )
+    .with_details([("area", json!(area.as_str()))])
+    .with_hint("the main agent builds a task of main itself with claim_task; give work for a lead another area's label with update_task"))
+}
+
 /// The labels carry the labels of two or more areas. [`check_one_area`] refuses such a set on every write, but the database can hold one; the views flag it so a person can choose its area.
 pub fn areas_conflict(labels: &[LabelName], areas: &[(AreaName, LabelName)]) -> bool {
     areas_among(labels, areas).len() > 1
@@ -142,6 +160,20 @@ mod tests {
 
     fn task(number: u32) -> TaskId {
         TaskId::from_number(number).unwrap()
+    }
+
+    #[test]
+    fn main_is_an_area_of_the_main_agent_without_a_lead() {
+        assert!(in_main_area(&labels(&["docs", "main"])));
+        assert!(!in_main_area(&labels(&["ui", "mainline"])));
+        assert!(check_led_area(&AreaName::parse("web").unwrap()).is_ok());
+        let error = check_led_area(&AreaName::main()).unwrap_err();
+        assert_eq!(error.code(), codes::MAIN_AREA);
+        assert_eq!(error.details().unwrap()["area"], "main");
+        let mut with_main = areas();
+        with_main.push((AreaName::main(), LabelName::main()));
+        let error = check_one_area(&labels(&["main", "ui"]), &with_main).unwrap_err();
+        assert_eq!(error.details().unwrap()["areas"], json!(["web", "main"]));
     }
 
     #[test]

@@ -662,6 +662,23 @@ describe("Proposal detail", () => {
     ).toMatchObject({ start_line: 2, end_line: 4, side: "new" });
   });
 
+  it("says at the selection why an older version takes no comment, and links to the current version", async () => {
+    const user = userEvent.setup();
+    const { container } = renderAt("/p/demo/proposals/P-4?version=1");
+    await user.click(await lineCell(container, "new:3"));
+    const note = await screen.findByText(
+      /This is v1\. Comments go on the current version, v2\./,
+    );
+    expect(note.getAttribute("role")).toBe("status");
+    expect(screen.queryByRole("form", { name: /Comment on line/ })).toBeNull();
+    const link = screen.getByRole("link", { name: "Open v2" });
+    expect(link.getAttribute("href")).toBe(
+      `/p/demo/proposals/P-4?path=${encodeURIComponent(SCHEMA)}`,
+    );
+    fireEvent.click(await lineCell(container, "new:5"), { shiftKey: true });
+    expect(screen.getByText(/This is v1\./)).toBeTruthy();
+  });
+
   it("suggests items and files in the line comment and the request-changes box", async () => {
     mentionRoutes();
     const user = userEvent.setup();

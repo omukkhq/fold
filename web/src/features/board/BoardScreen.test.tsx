@@ -234,6 +234,8 @@ describe("BoardScreen", () => {
       first.proposal = {
         id: "P-3",
         state: "changes_requested",
+        version: 1,
+        checks_failed: false,
         revision: null,
       };
       first.activity = { path: "src/routes/login.tsx", at: Date.now() };

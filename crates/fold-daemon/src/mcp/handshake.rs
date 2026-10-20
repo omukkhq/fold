@@ -44,6 +44,24 @@ pub struct Hello {
     /// `FOLD_AGENT_TAGS`, split at commas: the tags the session's agent registers with, such as `main` from `fld claude`. They need `agent`, and an adapter that sends none omits the field.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// The session's Claude Code inbox, when Claude Code gave the adapter one. It needs `agent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inbox: Option<SessionInbox>,
+}
+
+/// `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN` of the session. Its `Debug` leaves the token out, so a logged handshake never shows it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionInbox {
+    pub socket: PathBuf,
+    pub token: String,
+}
+
+impl std::fmt::Debug for SessionInbox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionInbox")
+            .field("socket", &self.socket)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The daemon's answer line.
@@ -260,6 +278,15 @@ async fn open(
         .await
         .map_err(from_agent)?;
     session.peer = peers::session_peer(worker, &handle.slug);
+    if let (Some(agent), Some(inbox)) = (&agent, hello.inbox)
+        && let Err(error) = agents.keep_session_inbox(&session, agent, inbox.socket, &inbox.token)
+    {
+        tracing::debug!(
+            project = handle.slug,
+            code = from_agent(error).code(),
+            "the adapter's inbox socket was refused"
+        );
+    }
     if let Some(agent) = agent
         && let Err(error) = agents.register_agent(&mut session, &agent, &tags).await
     {

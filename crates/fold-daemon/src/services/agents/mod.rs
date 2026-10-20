@@ -23,6 +23,8 @@ use crate::services::workspaces::WorkspaceLocks;
 /// Claude Code's headless stream-json protocol as fold reads and writes it, the oldest Claude Code fold drives, and the sign-in answer of `claude auth status`. It is public because `fld doctor` checks the installed Claude Code with the same version and sign-in types.
 pub mod claude;
 mod context;
+/// The environment of the workers: which variables of the login shell they take, and what the daemon found about it at its start.
+pub mod environment;
 mod needs_you;
 mod overview;
 /// The kernel's view of a socket peer: whether a worker that fold started is the peer or one of its ancestors.
@@ -44,8 +46,8 @@ pub use presence::SeenPresence;
 #[cfg(feature = "dev-launcher")]
 pub use workers::{DEV_STUB_COMMAND, DEV_STUB_DIR};
 pub use workers::{
-    Launcher, MCP_RETRY_TURN, PAUSE_TURN, PauseState, RESTART_TURN, StartWorker, StopTimeouts,
-    Supervisor, WorkerLimitsChanged, new_session_id,
+    Launcher, MCP_RETRY_TURN, PAUSE_TURN, PauseState, RESTART_TURN, StartWorker, StartedWorker,
+    StopTimeouts, Supervisor, WorkerLimitsChanged, new_session_id,
 };
 pub(crate) use workers::{code_of, starter_of};
 
@@ -243,7 +245,7 @@ impl AgentService {
         })
     }
 
-    /// Creates the agent and its main worker on first use, merges `tags` and binds the session. A repeat call changes nothing except the tags it adds. It keeps the session context instead of an `Actor` because it binds that session. A session under a worker's process tree binds only to that worker's agent; any other name appends `session.bind_refused` and fails. The tags come from the adapter's handshake, which carries the `main` tag of `fld claude`.
+    /// Creates the agent and its main worker on first use, merges `tags` and binds the session. A repeat call changes nothing except the tags it adds. After the commit it registers the inbox held for the agent, else its kept inbox socket, as a push target counted from the session's start, which covers a session whose start hook ran before the agent existed and a session that reconnects to a restarted daemon; the end of that session drops the target and its kept file. It keeps the session context instead of an `Actor` because it binds that session. A session under a worker's process tree binds only to that worker's agent; any other name appends `session.bind_refused` and fails. The tags come from the adapter's handshake, which carries the `main` tag of `fld claude`.
     pub async fn register_agent(
         &self,
         ctx: &mut SessionContext,
@@ -267,7 +269,7 @@ impl AgentService {
         let session_id = ctx.session_id;
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
-        let registered = self
+        let (registered, started_at) = self
             .store
             .write(async |tx| {
                 register_agent_in(tx, &mut buffer, session_id, name, tags, origin, now).await
@@ -275,6 +277,7 @@ impl AgentService {
             .await?;
         self.bus.publish(buffer);
         ctx.agent = Some(name.clone());
+        self.push.restore(name, started_at).await;
         Ok(registered)
     }
 
@@ -486,7 +489,7 @@ impl AgentService {
             .await?;
         self.bus.publish(buffer);
         if let Some((agent, started_at)) = last {
-            self.push.clear_registered_by(&agent, started_at);
+            self.push.clear_registered_by(&agent, started_at).await;
         }
         Ok(())
     }
@@ -531,7 +534,7 @@ async fn register_agent_in(
     tags: &[Tag],
     origin: TagOrigin,
     now: Timestamp,
-) -> Result<Registered, AgentError> {
+) -> Result<(Registered, Timestamp), AgentError> {
     let session = agents::find_session(tx.conn(), session_id)
         .await?
         .ok_or(StoreError::Invalid("the session does not exist"))?;
@@ -589,12 +592,15 @@ async fn register_agent_in(
             .data(json!({"agent": name.as_str(), "pid": session.pid}))?;
         buffer.append(tx, &started, now).await?;
     }
-    Ok(Registered {
-        agent: name.clone(),
-        tags: agents::tags(tx.conn(), agent_id).await?,
-        main_worker: WorkerName::main(name),
-        created,
-    })
+    Ok((
+        Registered {
+            agent: name.clone(),
+            tags: agents::tags(tx.conn(), agent_id).await?,
+            main_worker: WorkerName::main(name),
+            created,
+        },
+        session.started_at,
+    ))
 }
 
 fn main_actor(agent: &AgentName) -> EventActor {

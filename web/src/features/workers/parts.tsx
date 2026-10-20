@@ -1,7 +1,12 @@
 import { CircleAlert } from "lucide-react";
 import { CodeText } from "@/components/code/CodeText";
 import { cn } from "@/lib/cn";
-import { pillSpec, type StatePill as Pill, type Step } from "./team";
+import {
+  pillSpec,
+  type RowError,
+  type StatePill as Pill,
+  type Step,
+} from "./team";
 import type { Failure } from "./startLead";
 
 export function StatePill({ pill }: { pill: Pill }) {
@@ -39,6 +44,26 @@ export function StepText({ step }: { step: Step }) {
           {step.text}
         </span>
       ) : null}
+    </span>
+  );
+}
+
+/** A worker's last error under its step: what it means, Claude Code's text cut to the cell with the whole text as its tooltip, and the hint. */
+export function RowErrorText({ error }: { error: RowError }) {
+  return (
+    <span className="mt-2 flex w-search min-w-0 flex-col gap-2 text-meta">
+      <span className="flex items-center gap-4 font-medium text-danger">
+        <CircleAlert aria-hidden="true" size={12} className="shrink-0" />
+        {error.title}
+      </span>
+      <span className="truncate font-mono text-text-muted" title={error.text}>
+        {error.text}
+      </span>
+      {error.hint === null ? null : (
+        <span className="text-text-muted">
+          <CodeText text={error.hint} caption />
+        </span>
+      )}
     </span>
   );
 }

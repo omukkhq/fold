@@ -262,6 +262,9 @@ pub struct BoardCard {
     /// The last tracked edit in the live workspace.
     #[schema(required = true)]
     pub activity: Option<BoardActivity>,
+    /// Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them.
+    #[schema(required = true)]
+    pub edits_after_version: Option<bool>,
 }
 
 /// Where a proposal stands, as the pill on a card and the block of a task draw it.
@@ -293,6 +296,10 @@ pub struct BoardProposal {
     #[schema(example = "P-3")]
     pub id: String,
     pub state: ProposalState,
+    /// The current version.
+    pub version: u32,
+    /// The integration checks of the current version failed, so the proposal is back with its author until a new version.
+    pub checks_failed: bool,
     /// The revision an integrated proposal became; null before integration.
     #[schema(required = true, example = "r8")]
     pub revision: Option<String>,
@@ -303,6 +310,8 @@ impl From<service::CardProposal> for BoardProposal {
         Self {
             id: proposal.id.to_string(),
             state: proposal.standing.into(),
+            version: proposal.version,
+            checks_failed: proposal.checks_failed,
             revision: proposal.revision.map(|revision| revision.to_string()),
         }
     }
@@ -351,6 +360,7 @@ impl From<service::BoardCard> for BoardCard {
             attention: attention(card.attention),
             proposal: card.proposal.map(BoardProposal::from),
             activity: card.activity.map(BoardActivity::from),
+            edits_after_version: card.edits_after_version,
         }
     }
 }
@@ -510,6 +520,9 @@ pub struct TaskView {
     /// The last tracked edit in the live workspace.
     #[schema(required = true)]
     pub activity: Option<BoardActivity>,
+    /// Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them.
+    #[schema(required = true)]
+    pub edits_after_version: Option<bool>,
     /// Of the live workspace, or of the latest one when none is live; newest first.
     pub changesets: Vec<TaskChangeset>,
     /// Of the live workspace, or of the latest one when none is live; pruned ones left out, newest first.
@@ -575,6 +588,8 @@ pub struct TaskProposal {
     pub state: ProposalState,
     /// The current version.
     pub version: u32,
+    /// The integration checks of the current version failed, so the proposal is back with its author until a new version.
+    pub checks_failed: bool,
     /// Newest first.
     pub reviews: Vec<TaskReview>,
 }
@@ -762,6 +777,7 @@ impl From<service::TaskDetail> for TaskView {
                 behind: info.behind,
             }),
             activity: detail.activity.map(BoardActivity::from),
+            edits_after_version: detail.edits_after_version,
             changesets: detail
                 .changesets
                 .into_iter()
@@ -780,6 +796,7 @@ impl From<service::TaskDetail> for TaskView {
                 id: proposal.id.to_string(),
                 state: proposal.standing.into(),
                 version: proposal.version,
+                checks_failed: proposal.checks_failed,
                 reviews: proposal
                     .reviews
                     .into_iter()

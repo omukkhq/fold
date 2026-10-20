@@ -7,7 +7,9 @@ import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { PersonName } from "@/people/PersonName";
 import { projectPath } from "@/routes/paths";
-import { StatePill, StepText } from "./parts";
+import { RowErrorText, StatePill, StepText } from "./parts";
+import { RestartWorker } from "./RestartWorker";
+import { SessionLine } from "./SessionLine";
 import { StopWorker } from "./StopWorker";
 import { areaNote, type TeamGroup, type TeamRow } from "./team";
 
@@ -66,20 +68,31 @@ function StopCell({
   row: TeamRow;
   human: string | null;
 }) {
-  // Only a named human stops a worker.
-  if (row.stop === null || human === null) return null;
+  // Only a named human stops a worker or starts it in a new session.
+  if (human === null || (row.stop === null && !row.restart)) return null;
   return (
-    <StopWorker
-      slug={slug}
-      name={row.name}
-      control={row.stop}
-      size="sm"
-      idleLabel="Stop"
-      busyLabel="Stopping…"
-      ariaLabel={`Stop ${row.name}`}
-      ariaBusyLabel={`Stopping ${row.name}…`}
-      className="items-start"
-    />
+    <div className="flex items-start gap-6">
+      {row.stop === null ? null : (
+        <StopWorker
+          slug={slug}
+          name={row.name}
+          control={row.stop}
+          size="sm"
+          idleLabel="Stop"
+          busyLabel="Stopping…"
+          ariaLabel={`Stop ${row.name}`}
+          ariaBusyLabel={`Stopping ${row.name}…`}
+          className="items-start"
+        />
+      )}
+      {row.restart ? (
+        <RestartWorker
+          slug={slug}
+          name={row.name}
+          previousSessions={row.previousSessions}
+        />
+      ) : null}
+    </div>
   );
 }
 
@@ -110,6 +123,9 @@ function Row({
               className="leading-snug"
             />
             <span className="text-meta text-text-muted">{row.roleLine}</span>
+            {row.session === null ? null : (
+              <SessionLine session={row.session} />
+            )}
           </div>
         </div>
       </td>
@@ -135,6 +151,7 @@ function Row({
       <td className={cn(CELL, NUMBER)}>{row.context}</td>
       <td className={CELL}>
         <StepText step={row.step} />
+        {row.error === null ? null : <RowErrorText error={row.error} />}
       </td>
       <td className={CELL}>
         <StopCell slug={slug} row={row} human={human} />

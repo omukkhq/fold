@@ -176,6 +176,9 @@ define_codes! {
     CHECKS_RUNNING = "checks_running",
     CHECK_RUN_NOT_FOUND = "check_run_not_found",
     WORKER_CLAIM_DENIED = "worker_claim_denied",
+    MAIN_AREA = "main_area",
+    AGENT_SESSION_NOT_FOUND = "agent_session_not_found",
+    TRANSCRIPT_NOT_FOUND = "transcript_not_found",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

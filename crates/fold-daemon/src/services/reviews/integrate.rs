@@ -255,6 +255,7 @@ pub(super) fn decide(
         expected_version,
         reviews: &facts.reviews,
         human_review: facts.human_review.as_ref(),
+        main_task: facts.main_task,
         prerequisites: &facts.prerequisites,
     })
 }

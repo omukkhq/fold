@@ -234,7 +234,8 @@ async fn labels_attach_replace_and_list_in_name_order() {
             .await
             .unwrap()
             .len(),
-        3
+        4,
+        "a, b, c and the label of the area main"
     );
 
     let mut conn = project.store().read().acquire().await.unwrap();

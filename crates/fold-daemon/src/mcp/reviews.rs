@@ -367,7 +367,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CLAIM_REVIEW,
-            "For a review of your own: the main agent and the review lead claim the review of an open proposal before they review it. A reviewer gets its claims from the review lead's start_worker and gets worker_claim_denied here; any other agent gets integrator_required and messages the review lead. The author's agent cannot claim it. A repeat call renews the claim.",
+            "For a review of your own: the main agent and the review lead claim the review of an open proposal before they review it. A reviewer gets its claims from the review lead's start_worker and gets worker_claim_denied here; any other agent gets integrator_required and messages the review lead. The author's agent cannot claim it. Nobody claims the review of a task of the area main (main_area): a human approves it. A repeat call renews the claim.",
             schema_for_type::<ClaimReviewInput>(),
         ),
         Tool::new(
@@ -382,7 +382,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             SUBMIT_REVIEW,
-            "Review the version of a proposal you read, the version of your review checkout, with a verdict, a text and line comments. request_changes gives the turn to the author; reject closes the proposal. A version that is no longer current is refused with stale_version; an approve of a version whose integration checks failed is refused with invalid_request and the reason checks_failed until the author sends a new version.",
+            "Review the version of a proposal you read, the version of your review checkout, with a verdict, a text and line comments. request_changes gives the turn to the author; reject closes the proposal. A version that is no longer current is refused with stale_version; an approve of a version whose integration checks failed is refused with invalid_request and the reason checks_failed until the author sends a new version. On a task of the area main only a human approves or rejects, or the main agent while the task has no human review mark, its own proposal included; any other agent gets main_area.",
             schema_for_type::<SubmitReviewInput>(),
         ),
         Tool::new(

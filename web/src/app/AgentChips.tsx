@@ -10,6 +10,7 @@ import { PersonName } from "../people/PersonName";
 import {
   agentBoardPath,
   chipAgents,
+  chipErrorTitle,
   chipPresence,
   chipStateText,
   isPaused,
@@ -33,6 +34,7 @@ export function AgentChips({ slug }: { slug: string }) {
         <li key={agent.name}>
           <HrefLink
             href={agentBoardPath(slug, agent.name)}
+            title={chipErrorTitle(agent)}
             className={cn(
               "inline-flex items-center gap-6 rounded-chip bg-surface px-9 py-3 text-meta inset-ring inset-ring-border hover:bg-sunken",
               focusRing,

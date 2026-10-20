@@ -8,16 +8,18 @@ use fold_core::events::types;
 use fold_core::layout::{
     AGENT_ENV, AGENT_TAGS_ENV, MCP_COMMAND, MCP_SERVER_NAME, MCP_SERVERS_KEY, session_settings,
 };
-use fold_core::roles::{FLD_MISSING, area_prompt, needs_restart};
+use fold_core::roles::{CLAUDE_NOT_FOUND, FLD_MISSING, area_prompt, needs_restart};
 use fold_core::{AgentName, AreaName, EventActor, NewEvent, ProjectPaths, WorkerState, codes};
 use fold_store::StoreError;
 use fold_store::agents::{self, ProcessEnd, WorkerProcessRow};
 use fold_store::tasks::claims::{self, ClaimTarget, ReleaseReason};
 use serde_json::{Map, Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::{ChildStderr, ChildStdin, Command};
+use tokio::io::AsyncWriteExt;
+use tokio::process::{ChildStdin, Command};
 use tokio::sync::{mpsc, watch};
 
+use super::super::output::real_model;
+use super::stderr::StderrTail;
 use super::{Input, Launcher, Process, Running, StartWatch, Supervisor, lock, own_binary};
 use crate::push::StdinSink;
 use crate::services::agents::AgentError;
@@ -100,7 +102,13 @@ impl Supervisor {
         } else {
             command.arg("--session-id").arg(&row.session_id);
         }
-        if let Some(model) = &row.model {
+        // A row can hold a model Claude Code made up, which no start asked for; the area's or role's model stands in for it.
+        let model = row
+            .model
+            .as_deref()
+            .and_then(real_model)
+            .or_else(|| row.model.as_ref().and(settings.model.as_deref()));
+        if let Some(model) = model {
             command.arg("--model").arg(model);
         }
         command
@@ -140,6 +148,11 @@ impl Supervisor {
         fail::fail_point!("worker_launch_before_spawn");
         let mut child = match command.spawn() {
             Ok(child) => child,
+            Err(error) if claude_missing(&error, &program, &launcher) => {
+                tracing::warn!(agent = %row.agent, "found no claude on the PATH the daemon gives workers");
+                self.fail(row.id, &row.agent, CLAUDE_NOT_FOUND).await?;
+                return Ok(None);
+            }
             Err(_) => {
                 tracing::warn!(agent = %row.agent, "could not start Claude Code for a worker");
                 self.fail(row.id, &row.agent, "spawn").await?;
@@ -168,6 +181,7 @@ impl Supervisor {
             resumed: resume,
             session_id: row.session_id.clone(),
             session: Arc::new(session),
+            stderr: StderrTail::read(stderr),
         };
         let start = StartWatch {
             session: sessions,
@@ -197,6 +211,7 @@ impl Supervisor {
                 let paused = agents::pause_state(tx.conn()).await?.is_paused();
                 if starting && !paused {
                     agents::set_worker_pid(tx, row.id, pid).await?;
+                    agents::forget_made_up_model(tx, row.id).await?;
                     if idle {
                         agents::set_worker_state(tx, row.id, WorkerState::Idle, now).await?;
                     }
@@ -214,7 +229,6 @@ impl Supervisor {
                 return Ok(None);
             }
         };
-        tokio::spawn(drain(stderr));
         // A paused project keeps the row `starting` for the resume, as a daemon stop keeps a running row.
         if paused {
             detached.store(true, Ordering::SeqCst);
@@ -341,14 +355,11 @@ impl Supervisor {
     }
 }
 
-/// Reads and drops the process's stderr, so a full pipe never blocks it. Its text never reaches a log.
-async fn drain(mut stderr: ChildStderr) {
-    let mut buffer = [0_u8; 4096];
-    while let Ok(read) = stderr.read(&mut buffer).await {
-        if read == 0 {
-            break;
-        }
-    }
+/// Whether a failed spawn of `program` means that Claude Code is not installed where the daemon looks: the program is the launcher's `claude`, the system found no such file, and no file is at that path either, which tells it apart from a script whose interpreter is missing. Blocking, for one `stat`.
+fn claude_missing(error: &std::io::Error, program: &Path, launcher: &Launcher) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound
+        && program == launcher.claude
+        && !(program.is_absolute() && program.is_file())
 }
 
 /// Why a worker's files were not written.
@@ -375,7 +386,7 @@ struct WorkerFiles {
     program_args: &'static [&'static str],
 }
 
-/// Writes the worker's MCP configuration, its settings and its prompt under the worker's folder. The settings allow the fold tools and run fold's hooks, so a worker never depends on the user's own Claude Code settings. The prompt is the role's text, shipped or the project's override, then the shared rules, then the area's instructions when there are any; the override file itself is never passed, because it lacks the shared rules. Returns the three paths Claude Code reads, with the program to run. An fld path that names no file writes nothing.
+/// Writes the worker's MCP configuration, its settings and its prompt under the worker's folder. The settings allow the fold tools and run fold's hooks, so a worker never depends on the user's own Claude Code settings. The prompt is the role's text, shipped or the project's override, then the shared rules and the practices, then the area's instructions when there are any; the override file itself is never passed, because it lacks them. Returns the three paths Claude Code reads, with the program to run. An fld path that names no file writes nothing.
 async fn write_files(
     paths: &ProjectPaths,
     launcher: &Launcher,

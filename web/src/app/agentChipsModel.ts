@@ -1,4 +1,5 @@
 import type { ProjectAgent } from "../api/agentBar";
+import { MAIN_TAG } from "../api/agents";
 import { formatAsOfMinute } from "../format/time";
 import type { LiveStatus } from "../live/status";
 import { syncedAt } from "./streamStatusModel";
@@ -27,6 +28,7 @@ type AgentProcess = NonNullable<ProjectAgent["process"]>;
 const FAILED_REASONS: Readonly<Record<string, string>> = {
   mcp_unavailable: "no fold connection",
   fld_missing: "fld not found",
+  claude_not_found: "claude not found",
 };
 
 /** `failed`, followed by the reason when the chip has words for it. */
@@ -41,8 +43,23 @@ function withStalled(agent: ProjectAgent, text: string): string {
   return stalled > 0 ? `${text} · ${String(stalled)} stalled` : text;
 }
 
-/** A supervised agent runs Claude Code only during a turn, so its process tells its state; its presence would read offline between turns. */
+/** What the chip says of a process whose turns fail before they reach the model, which the daemon decides. */
+export const MODEL_UNREACHABLE_TEXT = "cannot reach the model";
+
+/** Whether the process failed for a reason the chip has words for, which the human fixes before anything else. */
+function knownFailure(process: AgentProcess): boolean {
+  return (
+    process.state === "failed" &&
+    process.failed_reason !== null &&
+    FAILED_REASONS[process.failed_reason] !== undefined
+  );
+}
+
+/** A supervised agent runs Claude Code only during a turn, so its process tells its state; its presence would read offline between turns. A process whose turns cannot reach the model says so, unless it failed for a reason the chip names. */
 function processText(agent: ProjectAgent, process: AgentProcess): string {
+  if (process.model_unreachable && !knownFailure(process)) {
+    return MODEL_UNREACHABLE_TEXT;
+  }
   switch (process.state) {
     case "working": {
       const working = workingCount(agent);
@@ -85,9 +102,14 @@ export function agentStateText(agent: ProjectAgent): string {
     : withStalled(agent, `${String(working)} working`);
 }
 
+/** The chip's tooltip: Claude Code's last error of the process the chip follows; undefined without one. */
+export function chipErrorTitle(agent: ProjectAgent): string | undefined {
+  return chipProcess(agent)?.last_error ?? undefined;
+}
+
 /** Whether a pause holds the agent: every agent but the main agent, whose session fold does not stop. */
 function pausedAgent(agent: ProjectAgent, paused: boolean): boolean {
-  return paused && !agent.tags.includes("main");
+  return paused && !agent.tags.includes(MAIN_TAG);
 }
 
 /** The dot beside the name: the state of the process the chip follows as a presence, so a lead between turns shows idle instead of offline; for any other agent, its presence. A pause ends every worker process but keeps its row's state, so a paused agent's dot is offline. */

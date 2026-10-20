@@ -129,6 +129,17 @@ define_line!(
     TaskValueError::InvalidStepText
 );
 
+impl LabelName {
+    /// The label of the built-in area Main, which every project has and which is never renamed or deleted.
+    pub fn main() -> Self {
+        Self(crate::agents::MAIN_AREA.to_owned())
+    }
+
+    pub fn is_main(&self) -> bool {
+        self.0 == crate::agents::MAIN_AREA
+    }
+}
+
 impl ChecklistName {
     /// The name of the checklist that an item added without a checklist name creates.
     pub fn subtasks() -> Self {

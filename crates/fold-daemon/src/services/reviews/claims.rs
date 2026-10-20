@@ -15,7 +15,7 @@ use super::proposals::{proposal_not_found, require_open};
 use super::scopes::{check_choices, choose_scope_in_tx};
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
-use crate::services::tasks::{renew_leases, worker_row};
+use crate::services::tasks::{renew_leases, task_in_main_area, worker_row};
 
 /// The `release_reason` of a claim that a stale take-over ended.
 pub(super) const TAKEN_OVER: &str = "taken_over";
@@ -63,8 +63,9 @@ impl ReviewService {
                 let row =
                     require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
                 let standing = agents::standing_of(tx.conn(), actor).await?;
-                let reviewer =
-                    policy::can_claim_review(actor, standing, &row.author).map_err(|denied| {
+                let main_task = task_in_main_area(tx.conn(), row.task).await?;
+                let reviewer = policy::can_claim_review(actor, standing, &row.author, main_task)
+                    .map_err(|denied| {
                         FoldError::from(denied).with_details([
                             ("proposal", json!(proposal.to_string())),
                             ("author", json!(row.author.as_str())),
@@ -154,10 +155,12 @@ pub(crate) async fn assign_reviews_in_tx(
     check_choices(proposals, assignment.scopes)?;
     let mut rows = Vec::with_capacity(proposals.len());
     for &proposal in proposals {
-        rows.push(require_open(
-            reviews::get_proposal(tx.conn(), proposal).await?,
-            proposal,
-        )?);
+        let row = require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
+        let main_task = task_in_main_area(tx.conn(), row.task).await?;
+        policy::can_assign_review(main_task).map_err(|denied| {
+            FoldError::from(denied).with_details([("proposal", json!(proposal.to_string()))])
+        })?;
+        rows.push(row);
     }
     let batch = if let [row] = rows.as_slice() {
         take_review_claim(tx, buffer, row, worker, lease_minutes, now).await?;

@@ -216,6 +216,16 @@ pub fn deciding_approval(reviews: &[ReviewFact], author: &AgentName) -> bool {
     })
 }
 
+/// Whether an approval by an agent that decides reviews stands on the version, one after the last `request_changes`, the author's own included: on a task of Main without the human review mark the main agent approves its own proposal. Pass the reviews of one version only.
+pub fn main_approval(reviews: &[ReviewFact]) -> bool {
+    let withdrawn = last_request_changes(reviews);
+    reviews.iter().any(|review| {
+        review.verdict == Verdict::Approve
+            && review.approver == Approver::DecidingAgent
+            && withdrawn.is_none_or(|seq| review.seq > seq)
+    })
+}
+
 /// Whether an approval that integration counts stands on the version: [`deciding_approval`], or a human's approval after the last `request_changes`. Any standing approval counts, not only the latest verdict, so a later approval by an agent without the right to decide takes nothing away. Pass the reviews of one version only.
 pub fn counted_approval(reviews: &[ReviewFact], author: &AgentName) -> bool {
     let withdrawn = last_request_changes(reviews);

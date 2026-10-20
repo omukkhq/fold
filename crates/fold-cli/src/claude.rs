@@ -9,7 +9,9 @@ use fold_cli::claude_files;
 use fold_cli::claude_user::{self, UserFiles};
 use fold_cli::daemon_client::{self, ClientError, DaemonClient, Response};
 use fold_core::layout::{MCP_COMMAND, session_settings};
+use fold_core::transcript::{claude_config_dir, is_session_id};
 use fold_core::{AgentName, FoldError, MAIN_TAG, ProjectPaths, codes};
+use fold_daemon::services::agents::claude::transcript_path;
 use fold_daemon::services::agents::new_session_id;
 use fold_daemon::services::projects::{ProjectError, root_for_dir_on_host, slug_for_dir_on_host};
 use hyper::Method;
@@ -169,7 +171,7 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
     let start = if picks_session(&args.claude_args) {
         None
     } else {
-        let config_dir = claude_config_dir(|name| std::env::var_os(name)).map(|dir| root.join(dir));
+        let config_dir = local_config_dir(&root);
         Some(start(
             &paths,
             &agent,
@@ -232,7 +234,7 @@ fn picks_system_prompt(extra: &[OsString]) -> bool {
     })
 }
 
-/// The main agent prompt for `claude`, written anew into fold's own file on each start so that it follows the installed `fld`: the project's `.fold/roles/main.md` followed by the shared rules when it has that file, else the shipped prompt. The project's file is never passed itself, because it lacks the shared rules.
+/// The main agent prompt for `claude`, written anew into fold's own file on each start so that it follows the installed `fld`: the project's `.fold/roles/main.md` followed by the shared rules and the practices when it has that file, else the shipped prompt. The project's file is never passed itself, because it lacks them.
 fn prompt_file(paths: &ProjectPaths) -> io::Result<PathBuf> {
     let own = paths.main_role_prompt();
     let text = if own.is_file() {
@@ -279,63 +281,20 @@ pub(crate) fn follow_record(paths: &ProjectPaths, agent: &AgentName, id: &str) -
 }
 
 /// The recorded session id of `agent`, when the record holds one.
-fn recorded(paths: &ProjectPaths, agent: &AgentName) -> Option<String> {
+pub(crate) fn recorded(paths: &ProjectPaths, agent: &AgentName) -> Option<String> {
     let text = std::fs::read_to_string(paths.main_session(agent)).ok()?;
     let id = text.trim();
     is_session_id(id).then(|| id.to_owned())
 }
 
-/// A UUID in the form of [`session_uuid`], so a record can never name a path outside Claude Code's project folder.
-fn is_session_id(id: &str) -> bool {
-    id.len() == 36
-        && id.bytes().enumerate().all(|(index, byte)| match index {
-            8 | 13 | 18 | 23 => byte == b'-',
-            _ => byte.is_ascii_hexdigit(),
-        })
+/// Claude Code's own folder for a `claude` that runs in `root` with this process's environment; see [`claude_config_dir`].
+pub(crate) fn local_config_dir(root: &Path) -> Option<PathBuf> {
+    claude_config_dir(|name| std::env::var_os(name)).map(|dir| root.join(dir))
 }
 
-/// Claude Code's own folder from the environment `var`: `CLAUDE_CONFIG_DIR`, or `.claude` in the home directory; a relative one is relative to the project root, where `claude` runs. It is `None` when fold cannot be sure which folder Claude Code keeps the project's transcripts in, so that a new session starts: Claude Code takes a set but empty `CLAUDE_CONFIG_DIR` as given, and `CLAUDE_CODE_PROJECT_DIR_NAME` can give the project folder another name.
-fn claude_config_dir(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    if var("CLAUDE_CODE_PROJECT_DIR_NAME").is_some_and(|name| !name.is_empty()) {
-        return None;
-    }
-    match var("CLAUDE_CONFIG_DIR") {
-        Some(dir) if dir.is_empty() => None,
-        Some(dir) => Some(PathBuf::from(dir)),
-        None => var("HOME")
-            .filter(|home| !home.is_empty())
-            .map(|home| PathBuf::from(home).join(".claude")),
-    }
-}
-
-/// Whether Claude Code still has the session `id` of the project at `root`. An interactive `claude --resume` of a session it does not have stops at "No conversation found", and an `exec` cannot recover from that, so fold checks first that the session's transcript file exists. It tests only that the file is there and never opens it, because the transcript holds the user's conversation. Where the file lives is Claude Code's own layout, not a documented interface: `projects/<name>/<id>.jsonl` in its folder, where the name is the root with every UTF-16 unit other than an ASCII letter or digit replaced by `-`, and a name longer than 200 characters is cut to 200 and followed by `-` and a hash, which Claude Code itself matches by that prefix. When the layout changes, the file is not found and a new session starts, which loses the old conversation but never stops the user at an error. A transcript appears only after the first message, so a session the user left empty starts again as a new one.
+/// Whether Claude Code still has the session `id` of the project at `root`. An interactive `claude --resume` of a session it does not have stops at "No conversation found", and an `exec` cannot recover from that, so fold checks first that the session's transcript file exists. It tests only that the file is there and never opens it, because the transcript holds the user's conversation. Where the file lives is Claude Code's own layout, not a documented interface (see [`transcript_path`]): when the layout changes, the file is not found and a new session starts, which loses the old conversation but never stops the user at an error. A transcript appears only after the first message, so a session the user left empty starts again as a new one.
 fn transcript_exists(config_dir: &Path, root: &Path, id: &str) -> bool {
-    const MAX_NAME: usize = 200;
-    let projects = config_dir.join("projects");
-    let file = format!("{id}.jsonl");
-    let mut name = String::new();
-    for c in root.to_string_lossy().chars() {
-        if c.is_ascii_alphanumeric() {
-            name.push(c);
-        } else {
-            name.extend(std::iter::repeat_n('-', c.len_utf16()));
-        }
-    }
-    if name.len() <= MAX_NAME {
-        return projects.join(&name).join(&file).is_file();
-    }
-    let prefix = format!("{}-", &name[..MAX_NAME]);
-    std::fs::read_dir(&projects)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .any(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|dir| dir.starts_with(&prefix))
-                && entry.path().join(&file).is_file()
-        })
+    transcript_path(config_dir, root, id).is_some_and(|path| path.is_file())
 }
 
 /// The `claude` run of `fld claude`: its own arguments come after `--name`, the session and the main agent prompt, each `None` when they choose it themselves. `socket` is the socket the user chose with `--socket` or `FOLD_SOCKET`; the session's `fld mcp` and hooks read it from `FOLD_SOCKET`, as they have no flag of their own to carry it.
@@ -516,13 +475,8 @@ mod tests {
     }
 
     #[test]
-    fn session_ids_are_uuids_only() {
-        assert!(is_session_id(ID));
+    fn a_new_session_id_counts_as_one() {
         assert!(is_session_id(&new_session_id().unwrap()));
-        assert!(!is_session_id(""));
-        assert!(!is_session_id("../../../../etc/passwd-aaaaaaaaaaaaaaaaaaa"));
-        assert!(!is_session_id("0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a1g"));
-        assert!(!is_session_id("0f8e2c1a05b7d-4c3e-9a1f-2d4b6c8e0a13"));
     }
 
     #[test]
@@ -582,46 +536,6 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join(format!("{ID}.jsonl")), "").unwrap();
         assert!(transcript_exists(config.path(), root, ID));
-    }
-
-    #[test]
-    fn the_config_dir_is_none_when_the_transcripts_folder_is_unsure() {
-        let dir = |vars: &[(&str, &str)]| {
-            let vars: Vec<(String, OsString)> = vars
-                .iter()
-                .map(|(name, value)| ((*name).to_owned(), OsString::from(value)))
-                .collect();
-            claude_config_dir(move |name| {
-                vars.iter()
-                    .find(|(key, _)| key == name)
-                    .map(|(_, value)| value.clone())
-            })
-        };
-        assert_eq!(
-            dir(&[("HOME", "/home/ana")]),
-            Some(PathBuf::from("/home/ana/.claude"))
-        );
-        assert_eq!(
-            dir(&[("HOME", "/home/ana"), ("CLAUDE_CONFIG_DIR", "/etc/cc")]),
-            Some(PathBuf::from("/etc/cc"))
-        );
-        assert_eq!(
-            dir(&[("HOME", "/home/ana"), ("CLAUDE_CONFIG_DIR", "")]),
-            None
-        );
-        assert_eq!(
-            dir(&[
-                ("CLAUDE_CONFIG_DIR", "/etc/cc"),
-                ("CLAUDE_CODE_PROJECT_DIR_NAME", "app")
-            ]),
-            None
-        );
-        assert_eq!(
-            dir(&[("HOME", "/home/ana"), ("CLAUDE_CODE_PROJECT_DIR_NAME", "")]),
-            Some(PathBuf::from("/home/ana/.claude"))
-        );
-        assert_eq!(dir(&[("HOME", "")]), None);
-        assert_eq!(dir(&[]), None);
     }
 
     #[test]

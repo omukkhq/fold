@@ -5,7 +5,7 @@ use clap::Args;
 use fold_cli::claude_files::{AGENT_ENV, AGENT_TAGS_ENV};
 use fold_cli::daemon_client::{self, ClientConfig, ClientError, HandshakeError};
 use fold_daemon::mcp::OutsideProject;
-use fold_daemon::mcp::handshake::{Hello, PROTOCOL_VERSION};
+use fold_daemon::mcp::handshake::{Hello, PROTOCOL_VERSION, SessionInbox};
 use thiserror::Error;
 
 use crate::init::project_root_at_or_above;
@@ -60,12 +60,33 @@ pub fn run(args: &McpArgs) -> Result<(), McpError> {
         pid: std::process::id(),
         agent,
         tags: agent_tags(std::env::var(AGENT_TAGS_ENV).ok().as_deref()),
+        inbox: session_inbox(
+            std::env::var_os(MESSAGING_SOCKET_ENV),
+            std::env::var(MESSAGING_TOKEN_ENV).ok(),
+        ),
     };
     let runtime = serve::current_thread_runtime().map_err(McpError::Runtime)?;
     let outcome = runtime.block_on(session(&config, &hello));
     // The stdin reader blocks a runtime thread until the next line, which may never come.
     runtime.shutdown_background();
     outcome
+}
+
+/// Claude Code sets these for its session-start hook; the adapter sends them too whenever Claude Code passed them to it, so a session reaches a restarted daemon even before its next start hook.
+const MESSAGING_SOCKET_ENV: &str = "CLAUDE_CODE_MESSAGING_SOCKET";
+const MESSAGING_TOKEN_ENV: &str = "CLAUDE_CODE_MESSAGING_TOKEN";
+
+/// The session's inbox when both values are set and not empty.
+fn session_inbox(
+    socket: Option<std::ffi::OsString>,
+    token: Option<String>,
+) -> Option<SessionInbox> {
+    let socket = socket.filter(|socket| !socket.is_empty())?;
+    let token = token.filter(|token| !token.is_empty())?;
+    Some(SessionInbox {
+        socket: PathBuf::from(socket),
+        token,
+    })
 }
 
 /// The comma-separated tags of `FOLD_AGENT_TAGS`, without blanks. The daemon checks each one.
@@ -136,6 +157,25 @@ mod tests {
             error.to_string(),
             "the connection to the daemon failed: stdout closed"
         );
+    }
+
+    #[test]
+    fn the_inbox_needs_both_messaging_values() {
+        let socket = || Some(std::ffi::OsString::from("/run/claude/inbox.sock"));
+        let token = || Some("0123456789abcdef".to_owned());
+        assert_eq!(
+            session_inbox(socket(), token()),
+            Some(SessionInbox {
+                socket: PathBuf::from("/run/claude/inbox.sock"),
+                token: "0123456789abcdef".to_owned(),
+            })
+        );
+        assert_eq!(session_inbox(None, token()), None);
+        assert_eq!(session_inbox(socket(), None), None);
+        assert_eq!(session_inbox(Some("".into()), token()), None);
+        assert_eq!(session_inbox(socket(), Some(String::new())), None);
+        let shown = format!("{:?}", session_inbox(socket(), token()));
+        assert!(!shown.contains("0123456789abcdef"), "{shown}");
     }
 
     #[test]

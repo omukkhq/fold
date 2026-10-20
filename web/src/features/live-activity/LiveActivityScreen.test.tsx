@@ -56,6 +56,7 @@ function live(workspace: string, paths: string[], at = NOW): LiveWorkspace {
     ],
     proposal: null,
     stalled: false,
+    edits_after_version: null,
   };
 }
 

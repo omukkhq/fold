@@ -10,11 +10,13 @@ use super::error::{ApiError, ApiQuery, ErrorEnvelope};
 use super::events::DurableEvent;
 use super::tasks::AttentionKind;
 use crate::daemon::AppState;
+use crate::push::PushReach;
 use crate::services::agents::{
     AgentAttention, AgentOverview, ClaimSummary, OverviewFilter, ProposalSummary, SessionSummary,
     WorkerOverview, WorkspaceSummary,
 };
 
+pub mod environment;
 pub mod questions;
 pub mod workers;
 
@@ -23,6 +25,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_agents))
         .merge(workers::routes())
         .merge(questions::routes())
+        .merge(environment::routes())
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -63,6 +66,28 @@ pub struct AgentEntry {
     /// The Claude Code process that fold supervises for the agent; null for an agent fold does not run, such as the main agent. A supervised agent runs Claude Code only during a turn, so its presence is offline between turns while this process is idle.
     #[schema(required = true)]
     pub process: Option<AgentProcess>,
+    /// How fold's notices reach the agent now: `stdin` of its supervised process, `socket` of a session's inbox, `failing` when the last post to every inbox socket failed, `unreachable` with neither. A failing or unreachable agent sees a message only when it reads its inbox.
+    pub notices: NoticeReach,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeReach {
+    Stdin,
+    Socket,
+    Failing,
+    Unreachable,
+}
+
+impl From<PushReach> for NoticeReach {
+    fn from(reach: PushReach) -> Self {
+        match reach {
+            PushReach::Stdin => NoticeReach::Stdin,
+            PushReach::Socket => NoticeReach::Socket,
+            PushReach::Failing => NoticeReach::Failing,
+            PushReach::Unreachable => NoticeReach::Unreachable,
+        }
+    }
 }
 
 /// The state of an agent's supervised process.
@@ -72,6 +97,11 @@ pub struct AgentProcess {
     /// Why the process failed, such as `exited` or `mcp_unavailable` (its fold MCP server did not connect); null unless `state` is `failed`, and for a process that failed before fold stored the reason.
     #[schema(required = true, example = "mcp_unavailable")]
     pub failed_reason: Option<String>,
+    /// Claude Code's error text of the process's latest failed turn or failed exit; null once a turn ends without an error.
+    #[schema(required = true, example = "Invalid API key · Please run /login")]
+    pub last_error: Option<String>,
+    /// The process's turns failed often enough in a row without reaching the model that it cannot work until a human fixes Claude Code; the daemon decides it, and it is false for a stopped process.
+    pub model_unreachable: bool,
 }
 
 /// A connected session. A session has no public id; one adapter process is one session, so its pid names it.
@@ -294,7 +324,10 @@ impl From<AgentOverview> for AgentEntry {
             process: agent.process.map(|process| AgentProcess {
                 state: process.state.into(),
                 failed_reason: process.failed_reason,
+                last_error: process.last_error,
+                model_unreachable: process.model_unreachable,
             }),
+            notices: agent.push.into(),
         }
     }
 }

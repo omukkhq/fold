@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::json;
 
+use super::areas::in_main_area;
 use super::{ChecklistName, HoldReason, LabelName, StepText, TaskDescription, TaskKind, TaskTitle};
 use crate::reviews::human_review_reason;
 use crate::{FoldError, HumanName, TaskId, codes};
@@ -54,6 +55,8 @@ pub struct PlannedTask {
     pub blocker: Option<String>,
     /// Plain steps created with the task, in order, before any worker sees it.
     pub checklist: Vec<PlannedChecklistItem>,
+    /// The user's word, agreed with the plan, that the main agent approves the proposal of this task of Main itself, so fold leaves the task's human review mark off. Only a task with the label of Main and without `human_review` takes it.
+    pub main_approves: bool,
 }
 
 /// Checks plan-local names and review reasons. Edges use the same DAG rules as individual task commands after references resolve.
@@ -78,6 +81,14 @@ pub fn check_task_plan(tasks: &[PlannedTask]) -> Result<(), FoldError> {
         }
         if let Some(review) = &task.human_review {
             human_review_reason(&review.reason)?;
+        }
+        if task.main_approves && (task.human_review.is_some() || !in_main_area(&task.labels)) {
+            return Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                "only a task of main without a human review mark takes main_approves",
+            )
+            .with_details([("reason", json!("main_approves")), ("position", json!(position + 1))])
+            .with_hint("give main_approves only to a task with the label main and without human_review, and only when the user said that you approve it yourself, then call create_task_plan again"));
         }
         if let Some(reason) = &task.blocker {
             HoldReason::parse(reason).map_err(|error| {
@@ -136,6 +147,27 @@ mod tests {
             human_review: None,
             blocker: None,
             checklist: Vec::new(),
+            main_approves: false,
+        }
+    }
+
+    #[test]
+    fn only_a_task_of_main_without_a_mark_takes_main_approves() {
+        let mut own = task("own");
+        own.labels = vec![LabelName::main()];
+        own.main_approves = true;
+        assert!(check_task_plan(&[own.clone()]).is_ok());
+        let mut marked = own.clone();
+        marked.human_review = Some(PlannedReview {
+            reviewer: None,
+            reason: "Check".to_owned(),
+        });
+        let mut elsewhere = own.clone();
+        elsewhere.labels = vec![LabelName::parse("ui").unwrap()];
+        for bad in [marked, elsewhere] {
+            let error = check_task_plan(&[bad]).unwrap_err();
+            assert_eq!(error.code(), codes::INVALID_REQUEST);
+            assert_eq!(error.details().unwrap()["reason"], "main_approves");
         }
     }
 

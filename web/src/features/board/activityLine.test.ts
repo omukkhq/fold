@@ -11,8 +11,17 @@ function card(
   activity: BoardCard["activity"],
   attention: BoardCard["attention"] = [],
   blocked = false,
-): Pick<BoardCard, "activity" | "attention" | "blocked"> {
-  return { activity, attention, blocked };
+): Pick<
+  BoardCard,
+  "activity" | "attention" | "blocked" | "proposal" | "edits_after_version"
+> {
+  return {
+    activity,
+    attention,
+    blocked,
+    proposal: null,
+    edits_after_version: null,
+  };
 }
 
 function live(at: number, files: number): LiveWorkspace {
@@ -34,6 +43,7 @@ function live(at: number, files: number): LiveWorkspace {
     checkpoints: [],
     proposal: null,
     stalled: false,
+    edits_after_version: null,
   };
 }
 
@@ -133,8 +143,75 @@ describe("activityLine", () => {
     expect(activityLine(card(null), live(NOW, 3), NOW)?.text).toBe("Editing");
   });
 
+  it("says the holder sent the version and what it waits for while the files are that version", () => {
+    const sent = {
+      ...card({ path: "a.ts", at: NOW - 6 * MINUTE }, [
+        { kind: "stalled" },
+        { kind: "human_review" },
+      ]),
+      proposal: {
+        id: "P-1",
+        state: "open" as const,
+        version: 2,
+        checks_failed: false,
+        revision: null,
+      },
+      edits_after_version: false,
+    };
+    expect(activityLine(sent, undefined, NOW)).toEqual({
+      text: "Sent P-1 v2 · waits for human review",
+      since: "6 min ago",
+      stalled: false,
+      files: null,
+    });
+    const frame = { ...live(NOW - SECOND, 1), proposal: "P-1" };
+    expect(
+      activityLine(
+        { ...sent, attention: [] },
+        { ...frame, edits_after_version: true },
+        NOW,
+      )?.text,
+    ).toBe("Editing a.ts");
+    expect(
+      activityLine(
+        { ...sent, edits_after_version: true },
+        { ...frame, edits_after_version: false },
+        NOW,
+      )?.text,
+    ).toBe("Sent P-1 v2 · waits for human review");
+  });
+
+  it("says the stall while a sent version is back with its author", () => {
+    const back = {
+      ...card({ path: "a.ts", at: NOW - 6 * MINUTE }, [{ kind: "stalled" }]),
+      proposal: {
+        id: "P-1",
+        state: "changes_requested" as const,
+        version: 1,
+        checks_failed: false,
+        revision: null,
+      },
+      edits_after_version: false,
+    };
+    expect(activityLine(back, undefined, NOW)).toEqual({
+      text: "No edits for 6 min",
+      since: "6 min ago",
+      stalled: true,
+      files: null,
+    });
+    expect(activityLine({ ...back, attention: [] }, undefined, NOW)?.text).toBe(
+      "Sent P-1 v1 · changes requested",
+    );
+  });
+
   it("works from a card whose payload has no activity", () => {
-    const bare = { activity: null, attention: [], blocked: false };
+    const bare = {
+      activity: null,
+      attention: [],
+      blocked: false,
+      proposal: null,
+      edits_after_version: null,
+    };
     expect(activityLine(bare, undefined, NOW)).toBeNull();
     expect(activityLine(bare, live(NOW, 0), NOW)?.text).toBe("Editing");
   });

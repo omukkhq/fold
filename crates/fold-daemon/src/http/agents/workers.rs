@@ -5,7 +5,7 @@ use fold_core::roles::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, WorkerLimits, WorkerLimitsChange,
 };
 use fold_core::{AgentName, AreaName, FoldError, LabelName, ProjectConfig, Role, Timestamp};
-use fold_store::agents::{AreaRow, WorkerProcessRow};
+use fold_store::agents::{AreaRow, PreviousSessionRow, WorkerProcessRow};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
@@ -21,6 +21,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_workers, start_worker))
         .routes(routes!(stop_worker))
+        .routes(routes!(restart_worker))
         .routes(routes!(define_area))
         .routes(routes!(update_area))
         .routes(routes!(set_worker_limits))
@@ -31,8 +32,11 @@ pub fn routes() -> OpenApiRouter<AppState> {
 /// The areas and every worker fold runs or ran.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct WorkerList {
-    /// In name order.
+    /// In name order, without the built-in area Main, which has no lead and no profile.
     pub areas: Vec<AreaEntry>,
+    /// The label of the built-in area Main: a task with it belongs to the main agent, which builds it itself, and a human approves its proposal.
+    #[schema(example = "main")]
+    pub main_label: String,
     /// In start order.
     pub workers: Vec<WorkerEntry>,
     /// Each role with the cache time a new worker of the role gets; empty when fold cannot read `.fold/config.toml`.
@@ -235,17 +239,91 @@ pub struct WorkerEntry {
     /// The exit code of the last process; a signal counts as 128 plus its number.
     #[schema(required = true)]
     pub exit_code: Option<i64>,
-    /// Why the worker's latest process failed, such as `exited`, `spawn`, `mcp_unavailable` (its fold MCP server did not connect) or `fld_missing` (the fld binary of that server is gone); null unless `state` is `failed`, and for a worker that failed before fold stored the reason.
+    /// Why the worker's latest process failed, such as `exited`, `spawn`, `mcp_unavailable` (its fold MCP server did not connect), `fld_missing` (the fld binary of that server is gone) or `claude_not_found` (the daemon found no `claude` on the `PATH` it gives workers); null unless `state` is `failed`, and for a worker that failed before fold stored the reason.
     #[schema(required = true, example = "mcp_unavailable")]
     pub failed_reason: Option<String>,
+    /// Claude Code's error text of the worker's latest failed turn, or the last stderr lines of its latest process that exited with an error, at most 1000 characters; null once a turn ends without an error.
+    #[schema(required = true, example = "Invalid API key · Please run /login")]
+    pub last_error: Option<String>,
+    /// UTC milliseconds of `last_error`; null without one.
+    #[schema(value_type = Option<i64>, required = true)]
+    pub last_error_at: Option<fold_core::Timestamp>,
+    /// The turns in a row that failed before any token reached the model.
+    pub failed_turns: u64,
+    /// The worker's turns failed often enough in a row without reaching the model that it cannot work until a human fixes Claude Code; the daemon decides it, and the human's list of what waits for them holds an item for it.
+    pub model_unreachable: bool,
+    /// What the human checks for a worker that cannot reach the model; null otherwise.
+    #[schema(
+        required = true,
+        example = "check the Claude Code sign-in, model and usage limit, or run `fld doctor`"
+    )]
+    pub hint: Option<String>,
     /// The prompt cache time of the worker's role from `.fold/config.toml`, `1h` or `5m`; null when fold cannot read the file.
     #[schema(required = true, example = "5m")]
     pub cache_ttl: Option<String>,
+    /// The worker's current Claude Code session, whose transcript Claude Code keeps under this id.
+    pub session_id: String,
+    /// The sessions the worker had before its current one, oldest first.
+    pub previous_sessions: Vec<PreviousSessionEntry>,
+    /// The path of the current session's transcript file, which Claude Code writes from the session's first message on; fold never reads it. Null when fold cannot tell where Claude Code keeps it, such as when `CLAUDE_CODE_PROJECT_DIR_NAME` renames the project folder, or when a long project path ends in a hash and no folder holds the file yet.
+    #[schema(
+        required = true,
+        example = "/home/tanim/.claude/projects/-home-tanim-ledger/0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a13.jsonl"
+    )]
+    pub transcript: Option<String>,
+}
+
+/// Why a worker left a session for a new one: `handoff` (a fresh context after its hand-off note), `lost` (Claude Code no longer had the session) or `requested` (a human or the main agent asked for a new session).
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionEndReason {
+    Handoff,
+    Lost,
+    Requested,
+}
+
+impl From<fold_store::agents::SessionEnd> for SessionEndReason {
+    fn from(end: fold_store::agents::SessionEnd) -> Self {
+        use fold_store::agents::SessionEnd as E;
+        match end {
+            E::Handoff => Self::Handoff,
+            E::Lost => Self::Lost,
+            E::Requested => Self::Requested,
+        }
+    }
+}
+
+/// A Claude Code session a worker had before its current one.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PreviousSessionEntry {
+    /// The session id, which names the session's Claude Code transcript.
+    pub session_id: String,
+    pub reason: SessionEndReason,
+    /// UTC milliseconds of the change to the next session.
+    #[schema(value_type = i64)]
+    pub ended_at: fold_core::Timestamp,
+}
+
+impl From<PreviousSessionRow> for PreviousSessionEntry {
+    fn from(row: PreviousSessionRow) -> Self {
+        Self {
+            session_id: row.session_id,
+            reason: row.reason.into(),
+            ended_at: row.ended_at,
+        }
+    }
 }
 
 impl WorkerEntry {
-    fn new(row: WorkerProcessRow, config: Option<&ProjectConfig>) -> Self {
+    fn new(
+        row: WorkerProcessRow,
+        config: Option<&ProjectConfig>,
+        previous: Vec<PreviousSessionRow>,
+        transcript: Option<String>,
+    ) -> Self {
         let cache_ttl = config.map(|config| config.role(row.role).cache_ttl.as_str().to_owned());
+        let model_unreachable =
+            fold_core::turn_errors::model_unreachable(row.failed_turns, row.state);
         Self {
             name: row.agent.to_string(),
             role: row.role.into(),
@@ -264,7 +342,16 @@ impl WorkerEntry {
             context_tokens: row.context_tokens,
             exit_code: row.exit_code,
             failed_reason: row.failed_reason,
+            last_error: row.last_error,
+            last_error_at: row.last_error_at,
+            failed_turns: row.failed_turns,
+            model_unreachable,
+            hint: model_unreachable
+                .then(|| fold_core::turn_errors::MODEL_UNREACHABLE_HINT.to_owned()),
             cache_ttl,
+            session_id: row.session_id,
+            previous_sessions: previous.into_iter().map(Into::into).collect(),
+            transcript,
         }
     }
 }
@@ -355,6 +442,7 @@ pub async fn list_workers(project: Project) -> Result<Json<WorkerList>, ApiError
     let agents = project.0.agents();
     let areas = agents.list_areas().await?;
     let workers = agents.list_workers().await?;
+    let mut previous = agents.previous_sessions().await?;
     let config = agents.worker_config().await;
     let roles = config.as_ref().map_or_else(Vec::new, |config| {
         Role::ALL
@@ -369,11 +457,17 @@ pub async fn list_workers(project: Project) -> Result<Json<WorkerList>, ApiError
             })
             .collect()
     });
+    let transcripts = agents.worker_transcripts(&workers).await;
     Ok(Json(WorkerList {
         areas: areas.into_iter().map(AreaEntry::from).collect(),
+        main_label: fold_core::MAIN_AREA.to_owned(),
         workers: workers
             .into_iter()
-            .map(|row| WorkerEntry::new(row, config.as_ref()))
+            .zip(transcripts)
+            .map(|(row, transcript)| {
+                let sessions = previous.remove(&row.agent).unwrap_or_default();
+                WorkerEntry::new(row, config.as_ref(), sessions, transcript)
+            })
             .collect(),
         roles,
         limits: config.as_ref().map(|config| config.workers.limits().into()),
@@ -392,7 +486,7 @@ pub async fn list_workers(project: Project) -> Result<Json<WorkerList>, ApiError
         (status = 201, description = "The started worker", body = WorkerEntry),
         (status = 400, description = "`invalid_request` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
-        (status = 403, description = "`worker_start_denied`: a human starts only leads", body = ErrorEnvelope),
+        (status = 403, description = "`worker_start_denied`: a human starts only leads; `main_area`: the area main has no lead", body = ErrorEnvelope),
         (status = 404, description = "`area_not_found` or `project_not_found`", body = ErrorEnvelope),
         (status = 409, description = "`area_has_lead`, `worker_exists`, `worker_limit_reached`, `project_paused` or `invalid_config`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
@@ -423,12 +517,8 @@ pub async fn start_worker(
         ..StartWorker::default()
     };
     let agents = project.0.agents();
-    let worker = agents.start_worker(&human.actor(), request).await?;
-    let config = agents.worker_config().await;
-    Ok((
-        StatusCode::CREATED,
-        Json(WorkerEntry::new(worker, config.as_ref())),
-    ))
+    let worker = agents.start_worker(&human.actor(), request).await?.worker;
+    Ok((StatusCode::CREATED, Json(entry(&agents, worker).await?)))
 }
 
 /// A named human stops a worker. Its turn is interrupted and its process ends; it keeps its session.
@@ -457,8 +547,73 @@ pub async fn stop_worker(
     let name = fold(AgentName::parse(&name))?;
     let agents = project.0.agents();
     let worker = agents.stop_worker(&human.actor(), &name).await?;
+    Ok(Json(entry(&agents, worker).await?))
+}
+
+/// The answer for one worker, with its previous sessions and its transcript path.
+async fn entry(
+    agents: &crate::services::agents::AgentService,
+    worker: WorkerProcessRow,
+) -> Result<WorkerEntry, ApiError> {
+    let previous = agents
+        .previous_sessions()
+        .await?
+        .remove(&worker.agent)
+        .unwrap_or_default();
     let config = agents.worker_config().await;
-    Ok(Json(WorkerEntry::new(worker, config.as_ref())))
+    let transcript = agents
+        .worker_transcripts(std::slice::from_ref(&worker))
+        .await
+        .pop()
+        .flatten();
+    Ok(WorkerEntry::new(
+        worker,
+        config.as_ref(),
+        previous,
+        transcript,
+    ))
+}
+
+/// What a human adds to the first turn of a worker's new session.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+pub struct RestartWorkerBody {
+    /// Added to the first turn of the new session; it is never stored.
+    #[serde(default)]
+    pub instructions: Option<String>,
+}
+
+/// A named human starts a worker of any role again in a new Claude Code session, for example when its session is broken. A running worker's process ends first, and the worker keeps its place under the worker limits. The worker keeps its name, claims, bound tasks and proposals and the workers it started; its old session id stays in `previous_sessions`, and the new session gets the role's first turn.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/workers/{name}/restart",
+    operation_id = "restart_worker",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("name" = String, Path, description = "The worker's agent name"),
+    ),
+    request_body = RestartWorkerBody,
+    responses(
+        (status = 200, description = "The worker in its new session", body = WorkerEntry),
+        (status = 400, description = "`invalid_request` or `invalid_name`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`worker_process_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`worker_exists`, `worker_busy` (a stop came first), `worker_limit_reached`, `project_paused` or `invalid_config`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn restart_worker(
+    human: Human,
+    project: Project,
+    Path((_slug, name)): Path<(String, String)>,
+    ApiJson(body): ApiJson<RestartWorkerBody>,
+) -> Result<Json<WorkerEntry>, ApiError> {
+    let name = fold(AgentName::parse(&name))?;
+    let agents = project.0.agents();
+    let worker = agents
+        .restart_worker(&human.actor(), &name, body.instructions.as_deref())
+        .await?;
+    Ok(Json(entry(&agents, worker).await?))
 }
 
 /// A named human defines an area over the tasks of one label.
@@ -512,6 +667,7 @@ pub async fn define_area(
         (status = 200, description = "The area after the change", body = AreaEntry),
         (status = 400, description = "`invalid_request` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 403, description = "`main_area`: the area main has no profile", body = ErrorEnvelope),
         (status = 404, description = "`area_not_found` or `project_not_found`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
