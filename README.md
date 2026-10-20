@@ -3,6 +3,8 @@
 <p align="center"><strong>Build with parallel AI agents. Review and integrate in one place.</strong></p>
 
 <p align="center">
+  <a href="https://omukk.dev/fold">Website</a> ·
+  <a href="https://www.youtube.com/watch?v=EKHyqm3N7Jo">Demo</a> ·
   <a href="#get-started">Get started</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="https://github.com/omukkhq/fold/releases">Releases</a> ·

@@ -386,7 +386,7 @@ struct WorkerFiles {
     program_args: &'static [&'static str],
 }
 
-/// Writes the worker's MCP configuration, its settings and its prompt under the worker's folder. The settings allow the fold tools and run fold's hooks, so a worker never depends on the user's own Claude Code settings. The prompt is the role's text, shipped or the project's override, then the shared rules, then the area's instructions when there are any; the override file itself is never passed, because it lacks the shared rules. Returns the three paths Claude Code reads, with the program to run. An fld path that names no file writes nothing.
+/// Writes the worker's MCP configuration, its settings and its prompt under the worker's folder. The settings allow the fold tools and run fold's hooks, so a worker never depends on the user's own Claude Code settings. The prompt is the role's text, shipped or the project's override, then the shared rules and the practices, then the area's instructions when there are any; the override file itself is never passed, because it lacks them. Returns the three paths Claude Code reads, with the program to run. An fld path that names no file writes nothing.
 async fn write_files(
     paths: &ProjectPaths,
     launcher: &Launcher,

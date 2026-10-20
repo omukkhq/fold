@@ -234,7 +234,7 @@ fn picks_system_prompt(extra: &[OsString]) -> bool {
     })
 }
 
-/// The main agent prompt for `claude`, written anew into fold's own file on each start so that it follows the installed `fld`: the project's `.fold/roles/main.md` followed by the shared rules when it has that file, else the shipped prompt. The project's file is never passed itself, because it lacks the shared rules.
+/// The main agent prompt for `claude`, written anew into fold's own file on each start so that it follows the installed `fld`: the project's `.fold/roles/main.md` followed by the shared rules and the practices when it has that file, else the shipped prompt. The project's file is never passed itself, because it lacks them.
 fn prompt_file(paths: &ProjectPaths) -> io::Result<PathBuf> {
     let own = paths.main_role_prompt();
     let text = if own.is_file() {

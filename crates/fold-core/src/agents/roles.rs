@@ -45,39 +45,51 @@ impl Role {
         }
     }
 
-    /// The prompt that ships with fold: the role's text followed by the shared rules. A project replaces the role's text with `.fold/roles/<role>.md`; [`with_shared_rules`] then adds the shared rules again.
+    /// The prompt that ships with fold: the role's text followed by the shared rules and the practices. A project replaces the role's text with `.fold/roles/<role>.md`; [`with_shared_rules`] then adds the shared rules and the practices again.
     pub fn prompt(self) -> &'static str {
         match self {
             Role::AreaLead => concat!(
                 include_str!("roles/area_lead.md"),
                 "\n",
-                include_str!("roles/shared.md")
+                include_str!("roles/shared.md"),
+                "\n",
+                include_str!("roles/practices.md")
             ),
             Role::ReviewLead => concat!(
                 include_str!("roles/review_lead.md"),
                 "\n",
-                include_str!("roles/shared.md")
+                include_str!("roles/shared.md"),
+                "\n",
+                include_str!("roles/practices.md")
             ),
             Role::TaskWorker => concat!(
                 include_str!("roles/task_worker.md"),
                 "\n",
-                include_str!("roles/shared.md")
+                include_str!("roles/shared.md"),
+                "\n",
+                include_str!("roles/practices.md")
             ),
             Role::Reviewer => concat!(
                 include_str!("roles/reviewer.md"),
                 "\n",
-                include_str!("roles/shared.md")
+                include_str!("roles/shared.md"),
+                "\n",
+                include_str!("roles/practices.md")
             ),
         }
     }
 }
 
-/// The authority and recovery rules that every agent prompt ends with, the main agent's and the workers' alike, whether the role text ships with fold or comes from a project file.
+/// The authority and recovery rules followed by the default engineering practices, which every agent prompt ends with, the main agent's and the workers' alike, whether the role text ships with fold or comes from a project file.
 pub fn shared_prompt() -> &'static str {
-    include_str!("roles/shared.md")
+    concat!(
+        include_str!("roles/shared.md"),
+        "\n",
+        include_str!("roles/practices.md")
+    )
 }
 
-/// A project's own role text followed by the shared rules, so an override never drops them. The daemon (workers) and `fld claude` (main agent) both build their override prompts here.
+/// A project's own role text followed by the shared rules and the practices, so an override never drops them. The daemon (workers) and `fld claude` (main agent) both build their override prompts here.
 pub fn with_shared_rules(role_text: &str) -> String {
     let mut prompt = role_text.to_owned();
     if !prompt.ends_with('\n') {
@@ -88,12 +100,14 @@ pub fn with_shared_rules(role_text: &str) -> String {
     prompt
 }
 
-/// The prompt that ships with fold for the main agent, which `fld claude` appends to the system prompt of the user's session; a project replaces the role text with `.fold/roles/main.md`, and the shared rules follow it either way. It stands apart from [`Role`] because fold neither starts nor supervises the main agent.
+/// The prompt that ships with fold for the main agent, which `fld claude` appends to the system prompt of the user's session; a project replaces the role text with `.fold/roles/main.md`, and the shared rules and the practices follow it either way. It stands apart from [`Role`] because fold neither starts nor supervises the main agent.
 pub fn main_prompt() -> &'static str {
     concat!(
         include_str!("roles/main.md"),
         "\n",
-        include_str!("roles/shared.md")
+        include_str!("roles/shared.md"),
+        "\n",
+        include_str!("roles/practices.md")
     )
 }
 
@@ -685,7 +699,11 @@ mod tests {
             )
         );
         assert!(
-            prompt.split_whitespace().count() < 1800,
+            prompt
+                .replace(include_str!("roles/practices.md"), "")
+                .split_whitespace()
+                .count()
+                < 1800,
             "the prompt stays in context every turn"
         );
     }
@@ -713,6 +731,37 @@ mod tests {
         {
             assert_eq!(prompt.matches(include_str!("roles/shared.md")).count(), 1);
         }
+    }
+
+    #[test]
+    fn every_prompt_ends_with_the_practices_once_after_the_shared_rules() {
+        let practices = include_str!("roles/practices.md");
+        let shared = include_str!("roles/shared.md");
+        let overridden = with_shared_rules("Our own prompt.\n");
+        for prompt in Role::ALL
+            .into_iter()
+            .map(|role| role.prompt().to_owned())
+            .chain([main_prompt().to_owned(), overridden])
+        {
+            assert_eq!(prompt.matches(practices).count(), 1);
+            assert!(prompt.find(shared).unwrap() < prompt.find(practices).unwrap());
+            assert!(prompt.ends_with(practices));
+        }
+    }
+
+    #[test]
+    fn the_practices_yield_to_the_project_and_default_to_a_static_web_app() {
+        let practices = include_str!("roles/practices.md");
+        assert!(
+            practices.contains(
+                "The project's own AGENTS.md (or CLAUDE.md) and the user's word come first"
+            )
+        );
+        assert!(practices.contains("Keep the web app static"));
+        assert!(
+            practices.split_whitespace().count() < 1200,
+            "the practices stay in context every turn"
+        );
     }
 
     #[test]
