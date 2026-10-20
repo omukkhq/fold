@@ -23,6 +23,11 @@ impl DaemonConfig {
         self.data_dir.join("registry.db")
     }
 
+    /// The kept inbox sockets of every project's agents, outside every project folder.
+    pub fn push_dir(&self) -> PathBuf {
+        self.data_dir.join("push")
+    }
+
     pub fn lock_path(&self) -> PathBuf {
         self.runtime_dir.join(LOCK_FILE)
     }

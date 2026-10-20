@@ -164,7 +164,7 @@ pub fn render(facts: &SessionFacts) -> String {
 }
 
 impl AgentService {
-    /// The session-start hook: stores the session's inbox socket when the hook sent one, then builds [`AgentService::session_context`]. An agent the project does not know yet gets its context without the push target, because the adapter registers the agent only when it connects.
+    /// The session-start hook: stores the session's inbox socket when the hook sent one, then builds [`AgentService::session_context`]. For an agent the project does not know yet the socket only waits in memory, because the adapter registers the agent only when it connects, and that registration takes it.
     pub async fn session_start(
         &self,
         project: &str,

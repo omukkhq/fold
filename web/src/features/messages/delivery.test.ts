@@ -46,8 +46,27 @@ describe("delivery", () => {
       lead: "not delivered to",
       actor: "review",
       at: null,
+      note: null,
     });
     expect(states[3]).toMatchObject({ lead: "read by", actor: "human:tanim" });
+  });
+  it("says when fold cannot tell an agent that the message waits", () => {
+    const unreachable = recipient("main", { reachable: false });
+    expect(recipientState(unreachable, NOW)).toEqual({
+      lead: "not delivered to",
+      actor: "main",
+      at: null,
+      note: "not reachable now · it gets the message when it reads its inbox",
+    });
+    expect(
+      recipientState(recipient("main", { reachable: true }), NOW).note,
+    ).toBe(null);
+    expect(
+      recipientState(
+        recipient("main", { reachable: false, delivered_at: NOW }),
+        NOW,
+      ).note,
+    ).toBe(null);
   });
   it("has a line per recipient", () => {
     const lines = deliveryLines(message, NOW);

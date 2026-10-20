@@ -10,6 +10,7 @@ use super::error::{ApiError, ApiQuery, ErrorEnvelope};
 use super::events::DurableEvent;
 use super::tasks::AttentionKind;
 use crate::daemon::AppState;
+use crate::push::PushReach;
 use crate::services::agents::{
     AgentAttention, AgentOverview, ClaimSummary, OverviewFilter, ProposalSummary, SessionSummary,
     WorkerOverview, WorkspaceSummary,
@@ -63,6 +64,28 @@ pub struct AgentEntry {
     /// The Claude Code process that fold supervises for the agent; null for an agent fold does not run, such as the main agent. A supervised agent runs Claude Code only during a turn, so its presence is offline between turns while this process is idle.
     #[schema(required = true)]
     pub process: Option<AgentProcess>,
+    /// How fold's notices reach the agent now: `stdin` of its supervised process, `socket` of a session's inbox, `failing` when the last post to every inbox socket failed, `unreachable` with neither. A failing or unreachable agent sees a message only when it reads its inbox.
+    pub notices: NoticeReach,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeReach {
+    Stdin,
+    Socket,
+    Failing,
+    Unreachable,
+}
+
+impl From<PushReach> for NoticeReach {
+    fn from(reach: PushReach) -> Self {
+        match reach {
+            PushReach::Stdin => NoticeReach::Stdin,
+            PushReach::Socket => NoticeReach::Socket,
+            PushReach::Failing => NoticeReach::Failing,
+            PushReach::Unreachable => NoticeReach::Unreachable,
+        }
+    }
 }
 
 /// The state of an agent's supervised process.
@@ -302,6 +325,7 @@ impl From<AgentOverview> for AgentEntry {
                 last_error: process.last_error,
                 model_unreachable: process.model_unreachable,
             }),
+            notices: agent.push.into(),
         }
     }
 }

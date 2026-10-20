@@ -634,6 +634,7 @@ describe("the task dialog route", () => {
             addressed_as: "agent",
             delivered_at: null,
             acknowledged_at: null,
+            reachable: null,
           },
         ],
         body: "Ready for review",

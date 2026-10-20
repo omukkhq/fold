@@ -207,10 +207,21 @@ pub(crate) fn collect(
             projects
         }
     };
+    let registered = if args.project.is_some() {
+        registered_projects(&host.dirs, runtime)
+            .map(|(projects, _)| projects)
+            .unwrap_or_default()
+    } else {
+        projects.clone()
+    };
+    let socket = daemon_socket(args.socket.as_deref(), &host.dirs);
     for (label, root) in projects {
+        let mut checks = project_checks(&root, host, now, runtime);
+        let slug = push::slug_of(&registered, &root);
+        checks.push(push::push_check(socket.as_deref(), slug.as_deref()));
         sections.push(Section {
             title: format!("project {label}"),
-            checks: project_checks(&root, host, now, runtime),
+            checks,
         });
     }
     Ok(sections)
@@ -1231,6 +1242,8 @@ fn shadowing_checks(root: &Path, home: Option<&Path>) -> Vec<Check> {
         })
         .collect()
 }
+
+mod push;
 
 #[cfg(test)]
 mod tests;

@@ -1,9 +1,11 @@
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
-use std::io;
+use std::io::{self, Read as _, Write as _};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use fold_core::push::{MAX_NOTICE_LEN, Notice, PushContext, is_pushed, notice_for, request_of};
@@ -13,7 +15,7 @@ use fold_store::agents::AgentRow;
 use fold_store::reviews;
 use fold_store::tasks::{claims, requests};
 use fold_store::{Store, StoreError, agents, events, tasks};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use tokio::sync::Notify;
@@ -25,6 +27,9 @@ use crate::support::lock;
 
 /// The newest sockets kept per agent. One agent rarely runs more sessions at once.
 pub const MAX_TARGETS: usize = 4;
+
+/// The most agents a session's inbox waits for before the project knows them; one more drops the oldest.
+pub const MAX_PENDING: usize = 16;
 
 /// Notices waiting for one socket; a full queue drops its oldest notice.
 pub const QUEUE_LEN: usize = 16;
@@ -85,7 +90,27 @@ fn unix_connect() -> Connect {
 /// Hands one notice text to a supervised worker's stdin as a user turn; it returns false once the worker's process is gone.
 pub type StdinSink = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
-/// The inbox sockets of one project's agents, in memory only, and the stdin of each worker process fold supervises. They are keyed by agent rather than by session because the session-start hook runs before the adapter connects. Each socket has its own queue and sender task, so a slow socket never holds up another one or the bus.
+/// How an agent's notices reach it now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushReach {
+    /// The agent's supervised worker process takes them on its stdin.
+    Stdin,
+    /// A session's inbox socket took the last notice posted to it, or has had none posted yet.
+    Socket,
+    /// The last post to every inbox socket of the agent failed.
+    Failing,
+    /// The agent has no inbox socket and no worker process, so it sees a message only when it reads its inbox.
+    Unreachable,
+}
+
+impl PushReach {
+    /// A notice queued now reaches the agent unless its post fails.
+    pub fn reachable(self) -> bool {
+        matches!(self, PushReach::Stdin | PushReach::Socket)
+    }
+}
+
+/// The inbox sockets of one project's agents and the stdin of each worker process fold supervises. They are keyed by agent rather than by session because the session-start hook runs before the adapter connects. Each socket has its own queue and sender task, so a slow socket never holds up another one or the bus. A socket reported for an agent the project does not know yet waits in memory until a session's adapter registers that agent. With a folder from [`PushTargets::keep_files_in`], the newest socket and token of each registered agent are also kept there, so the daemon reaches the session again after it restarts.
 #[derive(Clone)]
 pub struct PushTargets {
     inner: Arc<Inner>,
@@ -108,6 +133,39 @@ struct Inner {
     /// One per supervised worker. A session ending never clears it: the worker's adapter session can reconnect while its process lives, and only the supervisor removes it when the process ends.
     stdin: Mutex<HashMap<AgentName, Arc<Queue>>>,
     connect: Connect,
+    /// The inbox reported for each agent the project does not know yet, by the session-start hook or the adapter's handshake.
+    pending: Mutex<HashMap<AgentName, Pending>>,
+    /// Unset keeps the targets in memory only.
+    files: OnceLock<TargetFiles>,
+}
+
+struct Pending {
+    socket: PathBuf,
+    token: PushToken,
+    at: Timestamp,
+}
+
+/// The daemon's own folder for one project's kept targets, outside every project folder, so no workspace, check or tree of the project reaches it by a relative path. One lock serialises every file operation in it, so a removal never takes a file that a newer session wrote in the meantime.
+#[derive(Clone)]
+struct TargetFiles {
+    dir: PathBuf,
+    lock: Arc<Mutex<()>>,
+}
+
+impl TargetFiles {
+    /// Runs `work` on the blocking pool while it holds the folder's lock.
+    async fn run<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&Path) -> io::Result<T> + Send + 'static,
+    ) -> io::Result<T> {
+        let files = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let _guard = lock(&files.lock);
+            work(&files.dir)
+        })
+        .await
+        .unwrap_or_else(|error| Err(io::Error::other(error)))
+    }
 }
 
 impl Drop for Inner {
@@ -139,7 +197,128 @@ impl PushTargets {
                 agents: Mutex::new(HashMap::new()),
                 stdin: Mutex::new(HashMap::new()),
                 connect,
+                pending: Mutex::new(HashMap::new()),
+                files: OnceLock::new(),
             }),
+        }
+    }
+
+    /// Keeps each registered agent's newest socket and token in `dir`, the daemon's folder for this project, from now on. The first call decides; the project's open makes it before any session can reach the targets.
+    pub fn keep_files_in(&self, dir: PathBuf) {
+        let _ = self.inner.files.set(TargetFiles {
+            dir,
+            lock: Arc::new(Mutex::new(())),
+        });
+    }
+
+    /// Holds the inbox of a session whose agent the project does not know yet, in place of an earlier one for the same name, until [`PushTargets::restore`] registers it. Nothing goes to disk.
+    pub fn hold(&self, agent: &AgentName, socket: PathBuf, token: PushToken, at: Timestamp) {
+        let mut pending = lock(&self.inner.pending);
+        pending.insert(agent.clone(), Pending { socket, token, at });
+        if pending.len() > MAX_PENDING
+            && let Some(oldest) = pending
+                .iter()
+                .min_by_key(|(_, held)| held.at)
+                .map(|(name, _)| name.clone())
+        {
+            pending.remove(&oldest);
+        }
+    }
+
+    /// Writes the agent's socket and token to its file, in place of an earlier session's. A failure is logged with the agent alone and leaves the earlier file.
+    pub async fn keep(&self, agent: &AgentName, socket: &Path, token: &PushToken) {
+        let Some(files) = self.inner.files.get() else {
+            return;
+        };
+        let (name, socket, token) = (agent.clone(), socket.to_path_buf(), token.clone());
+        let written = files
+            .run(move |dir| write_target(dir, &name, &socket, &token))
+            .await;
+        if written.is_err() {
+            tracing::warn!(agent = %agent, "session push could not keep the session's inbox socket");
+        }
+    }
+
+    /// Registers the agent's held inbox, else the socket kept in its file, as a target registered at `at`, and keeps a held one in the file. A kept socket that is gone or that nobody listens on has its file removed. A socket the agent has already counts from `at` when that is later, so the end of an earlier session leaves it. A file that cannot be read is left and logged with the agent alone. Returns whether a target was added.
+    pub async fn restore(&self, agent: &AgentName, at: Timestamp) -> bool {
+        let held = lock(&self.inner.pending).remove(agent);
+        if let Some(held) = held {
+            if self.advance(agent, &held.socket, at) {
+                return false;
+            }
+            self.keep(agent, &held.socket, &held.token).await;
+            self.register(agent, held.socket, held.token, at);
+            return true;
+        }
+        let Some(files) = self.inner.files.get() else {
+            return false;
+        };
+        let name = agent.clone();
+        let read = files.run(move |dir| read_live_target(dir, &name)).await;
+        let (socket, token) = match read {
+            Ok(Some(target)) => target,
+            Ok(None) => return false,
+            Err(_) => {
+                tracing::warn!(agent = %agent, "session push could not read the kept inbox socket");
+                return false;
+            }
+        };
+        if self.advance(agent, &socket, at) {
+            return false;
+        }
+        self.register(agent, socket, token, at);
+        true
+    }
+
+    /// Removes the temporary files that a write cut short left in the project's folder.
+    pub async fn sweep(&self) {
+        let Some(files) = self.inner.files.get() else {
+            return;
+        };
+        if files.run(remove_temporary).await.is_err() {
+            tracing::warn!("session push could not clear its temporary files");
+        }
+    }
+
+    /// Moves the registration of the agent's `socket` forward to `at`, when it is later. Returns whether the agent has the socket.
+    fn advance(&self, agent: &AgentName, socket: &Path, at: Timestamp) -> bool {
+        let mut agents = lock(&self.inner.agents);
+        let Some(target) = agents
+            .get_mut(agent)
+            .and_then(|targets| targets.iter_mut().find(|target| target.socket == socket))
+        else {
+            return false;
+        };
+        target.registered_at = target.registered_at.max(at);
+        true
+    }
+
+    /// Removes the agent's file when it still names `socket`, whose session has gone.
+    async fn drop_file(&self, agent: &AgentName, socket: &Path) {
+        let Some(files) = self.inner.files.get() else {
+            return;
+        };
+        let (name, socket) = (agent.clone(), socket.to_path_buf());
+        if files
+            .run(move |dir| remove_target(dir, &name, &socket))
+            .await
+            .is_err()
+        {
+            tracing::warn!(agent = %agent, "session push could not remove the kept inbox socket");
+        }
+    }
+
+    /// How a notice to the agent would travel now.
+    pub fn reach(&self, agent: &AgentName) -> PushReach {
+        if lock(&self.inner.stdin).contains_key(agent) {
+            return PushReach::Stdin;
+        }
+        match lock(&self.inner.agents).get(agent) {
+            Some(targets) if targets.iter().any(|target| !target.queue.failing()) => {
+                PushReach::Socket
+            }
+            Some(targets) if !targets.is_empty() => PushReach::Failing,
+            _ => PushReach::Unreachable,
         }
     }
 
@@ -226,9 +405,9 @@ impl PushTargets {
         }
     }
 
-    /// Drops the agent's targets registered at or before `at`. A session's hook registers before its adapter connects, so passing the start of an ending session drops its own socket and keeps one a newer session registered since.
-    pub fn clear_registered_by(&self, agent: &AgentName, at: Timestamp) {
-        let mut removed = Vec::new();
+    /// Drops the agent's targets registered at or before `at`, with their kept files. A session's hook registers before its adapter connects, so passing the start of an ending session drops its own socket and keeps one a newer session registered since.
+    pub async fn clear_registered_by(&self, agent: &AgentName, at: Timestamp) {
+        let mut removed: Vec<Target> = Vec::new();
         {
             let mut agents = lock(&self.inner.agents);
             if let Some(targets) = agents.get_mut(agent) {
@@ -244,10 +423,13 @@ impl PushTargets {
         }
         for target in removed {
             target.queue.close();
+            self.drop_file(agent, &target.socket).await;
         }
     }
 
+    /// Drops every socket target and every held inbox and leaves the kept files, for a daemon that stops or starts while the sessions may live on.
     pub fn clear_all(&self) {
+        lock(&self.inner.pending).clear();
         let removed: Vec<Target> = lock(&self.inner.agents)
             .drain()
             .flat_map(|(_, targets)| targets)
@@ -285,7 +467,11 @@ impl PushTargets {
                 });
                 continue;
             }
-            for target in agents.get(&notice.agent).into_iter().flatten() {
+            let targets = agents.get(&notice.agent).map_or(&[][..], Vec::as_slice);
+            if targets.is_empty() {
+                tracing::info!(agent = %notice.agent, seq, "session push has no inbox socket for the agent");
+            }
+            for target in targets {
                 target.queue.push(Queued {
                     text: Arc::from(notice.text.as_str()),
                     seq,
@@ -324,6 +510,8 @@ struct Queued {
 struct Queue {
     state: Mutex<QueueState>,
     wake: Notify,
+    /// The last post from this queue failed.
+    failing: AtomicBool,
 }
 
 #[derive(Default)]
@@ -340,7 +528,12 @@ impl Queue {
                 closed: false,
             }),
             wake: Notify::new(),
+            failing: AtomicBool::new(false),
         }
+    }
+
+    fn failing(&self) -> bool {
+        self.failing.load(Ordering::Relaxed)
     }
 
     /// Closes the queue and hands back the notices still waiting in it.
@@ -404,23 +597,27 @@ struct Sender {
 }
 
 impl Sender {
-    /// Posts one notice at a time until the target is dropped. Every failure drops only the notice, except a missing socket or one with no listener: the session has ended, so the socket is dropped too.
+    /// Posts one notice at a time until the target is dropped. Every failure drops only the notice and marks the target failing until a post succeeds, except a missing socket or one with no listener: the session has ended, so the socket and its kept file are dropped too.
     async fn run(self) {
         while let Some(notice) = self.queue.next().await {
             let Err(error) = self.post(&notice.text).await else {
+                self.queue.failing.store(false, Ordering::Relaxed);
                 continue;
             };
             if matches!(
                 error.kind(),
                 io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
             ) {
-                tracing::info!(agent = %self.agent, seq = notice.seq, "session push found the session gone and dropped its socket");
+                tracing::warn!(agent = %self.agent, seq = notice.seq, "session push found the session gone and dropped its socket");
                 if let Some(inner) = self.targets.upgrade() {
-                    PushTargets { inner }.forget(&self.agent, &self.queue);
+                    let targets = PushTargets { inner };
+                    targets.forget(&self.agent, &self.queue);
+                    targets.drop_file(&self.agent, &self.socket).await;
                 }
                 return;
             }
-            tracing::info!(agent = %self.agent, seq = notice.seq, "session push dropped a notice");
+            self.queue.failing.store(true, Ordering::Relaxed);
+            tracing::warn!(agent = %self.agent, seq = notice.seq, "session push dropped a notice");
         }
     }
 
@@ -490,10 +687,161 @@ fn frames(token: &PushToken, text: &str) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// One agent's kept socket and token. Not `Debug`, as it holds the token.
+#[derive(Serialize, Deserialize)]
+struct StoredTarget {
+    socket: PathBuf,
+    token: String,
+}
+
+fn target_file(dir: &Path, agent: &AgentName) -> PathBuf {
+    dir.join(format!("{agent}.json"))
+}
+
+/// Makes `dir` and its parent, the daemon's folder of every project's targets, where they are missing, and accepts each only as a real directory of this user that no one else can enter, narrowing a wider mode to 0700.
+fn private_dir(dir: &Path) -> io::Result<()> {
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)?;
+    let uid = rustix::process::getuid().as_raw();
+    for folder in [dir.parent(), Some(dir)].into_iter().flatten() {
+        let meta = std::fs::symlink_metadata(folder)?;
+        if !meta.is_dir() || meta.uid() != uid {
+            return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+        }
+        if meta.mode() & 0o077 != 0 {
+            std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    Ok(())
+}
+
+/// Writes a temporary file of mode 0600 and renames it into place, so a reader never sees half a file and the token is never in a file anyone else can read.
+fn write_target(dir: &Path, agent: &AgentName, socket: &Path, token: &PushToken) -> io::Result<()> {
+    static TEMP: AtomicU64 = AtomicU64::new(0);
+    private_dir(dir)?;
+    let bytes = serde_json::to_vec(&StoredTarget {
+        socket: socket.to_path_buf(),
+        token: token.0.to_string(),
+    })
+    .map_err(io::Error::other)?;
+    let temp = dir.join(format!(
+        ".{agent}.{}.{}.tmp",
+        std::process::id(),
+        TEMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temp)
+        .and_then(|mut file| {
+            file.write_all(&bytes)?;
+            file.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&temp, target_file(dir, agent)))
+        .and_then(|()| std::fs::File::open(dir)?.sync_all());
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    written
+}
+
+/// Reads the agent's file without following a symlink in its place.
+fn read_target(dir: &Path, agent: &AgentName) -> io::Result<Option<StoredTarget>> {
+    use rustix::fs::{Mode, OFlags};
+    let opened = rustix::fs::open(
+        target_file(dir, agent),
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    );
+    let mut file = match opened {
+        Ok(fd) => std::fs::File::from(fd),
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::from(io::ErrorKind::InvalidData));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))
+}
+
+/// The kept target while a session listens on its socket; the file of a socket that is gone or has no listener is removed. The check connects and closes without sending a line, which delivers nothing to the session.
+fn read_live_target(dir: &Path, agent: &AgentName) -> io::Result<Option<(PathBuf, PushToken)>> {
+    let Some(stored) = read_target(dir, agent)? else {
+        return Ok(None);
+    };
+    check_socket(&stored.socket).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+    let token =
+        PushToken::parse(&stored.token).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+    match std::fs::symlink_metadata(&stored.socket) {
+        Ok(meta) if meta.file_type().is_socket() => {}
+        Ok(_) => return Err(io::Error::from(io::ErrorKind::InvalidData)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            remove_target(dir, agent, &stored.socket)?;
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    }
+    match std::os::unix::net::UnixStream::connect(&stored.socket) {
+        Ok(_) => Ok(Some((stored.socket, token))),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            remove_target(dir, agent, &stored.socket)?;
+            Ok(None)
+        }
+        Err(_) => Ok(Some((stored.socket, token))),
+    }
+}
+
+/// A newer session may have written its own socket since, so the file goes only while it names `socket`.
+fn remove_target(dir: &Path, agent: &AgentName, socket: &Path) -> io::Result<()> {
+    match read_target(dir, agent) {
+        Ok(Some(stored)) if stored.socket == socket => {
+            match std::fs::remove_file(target_file(dir, agent)) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+                _ => Ok(()),
+            }
+        }
+        Ok(_) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Removes the `.<agent>.<pid>.<n>.tmp` files of writes that stopped before their rename.
+fn remove_temporary(dir: &Path) -> io::Result<()> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') && name.ends_with(".tmp") {
+            match std::fs::remove_file(entry.path()) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The project's push delivery.
 pub type PushTask = ProjectTask;
 
-/// Starts the delivery task of one project: it reads each event from the bus, which carries an event only after its commit, and queues the notices the event sends. Push is a hint: it writes nothing, and an event committed while no socket was registered is never replayed.
+/// Starts the delivery task of one project: it reads each event from the bus, which carries an event only after its commit, and queues the notices the event sends. Push is a hint: it writes nothing to the database, and an event committed while no socket was registered is never replayed.
 pub fn run(store: Store, bus: &EventBus, targets: PushTargets) -> PushTask {
     let receiver = bus.subscribe();
     ProjectTask::spawn(deliver_events(store, receiver, bus.closing(), targets))

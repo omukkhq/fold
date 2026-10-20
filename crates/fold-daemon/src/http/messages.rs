@@ -33,6 +33,9 @@ pub struct RecipientView {
     /// UTC milliseconds; null until the recipient acknowledged it.
     #[schema(required = true)]
     pub acknowledged_at: Option<i64>,
+    /// For an agent recipient, whether fold can post a notice into one of the agent's sessions now; false means the agent learns of the message only when it reads its inbox. Null for a human.
+    #[schema(required = true)]
+    pub reachable: Option<bool>,
 }
 
 /// A stored message with public ids only.
@@ -106,6 +109,7 @@ impl From<service::MessageView> for MessageView {
                     addressed_as: recipient.addressed_as.as_str().to_owned(),
                     delivered_at: recipient.delivered_at.map(|time| time.as_millis()),
                     acknowledged_at: recipient.acknowledged_at.map(|time| time.as_millis()),
+                    reachable: recipient.reachable,
                 })
                 .collect(),
             choices: message

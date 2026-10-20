@@ -91,6 +91,9 @@ impl MessageService {
             .into_iter()
             .map(|(thread, rows)| thread_view(thread, rows, &awaiting))
             .collect();
+        for item in &mut items {
+            self.mark_reach(&mut item.messages);
+        }
         items.sort_by_key(|thread| std::cmp::Reverse(last_number(thread)));
         let next = more.then(|| heads.last().map(|head| head.last)).flatten();
         Ok(ThreadPage {
@@ -109,7 +112,9 @@ impl MessageService {
         let rows = messages::thread(&mut tx, head.thread).await?;
         let awaiting = awaiting_set(&mut tx, head.thread).await?;
         tx.commit().await.map_err(StoreError::from)?;
-        Ok(thread_view(head.thread, rows, &awaiting))
+        let mut view = thread_view(head.thread, rows, &awaiting);
+        self.mark_reach(&mut view.messages);
+        Ok(view)
     }
 
     /// A human's feedback (`task`), message in a request's clarification thread (`request`, linked to `task` when given) or reply (`reply_to`). A reply joins the parent's thread and inherits its task unless `task` names another, and its request; it answers a question to humans, which clears the task's `question` attention.
@@ -169,7 +174,9 @@ impl MessageService {
         let rows = messages::thread(&mut tx, thread).await?;
         let awaiting = awaiting_set(&mut tx, thread).await?;
         tx.commit().await.map_err(StoreError::from)?;
-        Ok(Some(thread_view(thread, rows, &awaiting)))
+        let mut view = thread_view(thread, rows, &awaiting);
+        self.mark_reach(&mut view.messages);
+        Ok(Some(view))
     }
 
     /// A named human's message in the request's clarification thread, linked to `task` when given. It goes to `to` when given, otherwise to the request's drafter; with neither it is `recipient_not_found`.

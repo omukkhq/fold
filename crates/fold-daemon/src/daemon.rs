@@ -139,7 +139,8 @@ impl Daemon {
         let state: AppState = Arc::new(DaemonState {
             projects: Projects::default()
                 .with_launcher(launcher)
-                .with_registry(registry.clone()),
+                .with_registry(registry.clone())
+                .with_push_files(config.push_dir()),
             registry,
             clock: clock.clone(),
             assets: config

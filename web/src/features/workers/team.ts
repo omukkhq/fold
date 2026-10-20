@@ -441,6 +441,19 @@ function runningRow(
   };
 }
 
+/** The main agent's step when a connected session cannot get fold's notices, so it learns of a message only when it reads its inbox; null otherwise. */
+export function noticeStep(agent: AgentView): Step | null {
+  if (agent.sessions === 0) return null;
+  switch (agent.notices) {
+    case "unreachable":
+      return faint("not reachable · reads new messages from its inbox");
+    case "failing":
+      return faint("notices fail · reads new messages from its inbox");
+    default:
+      return null;
+  }
+}
+
 function mainRow(agent: AgentView, human: string | null): TeamRow {
   return {
     name: agent.name,
@@ -457,7 +470,7 @@ function mainRow(agent: AgentView, human: string | null): TeamRow {
     turns: NONE,
     cost: NONE,
     context: NONE,
-    step: faint(NONE),
+    step: noticeStep(agent) ?? faint(NONE),
     error: null,
     stop: null,
   };

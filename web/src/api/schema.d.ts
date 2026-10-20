@@ -30,7 +30,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** The Claude Code session-start hook of an agent: stores the session's inbox socket for the session push when `socket` and `token` are both present, then returns the session's context. Socket only. A process under a worker names only that worker's own agent. */
+        /** The Claude Code session-start hook of an agent: stores the session's inbox socket for the session push when `socket` and `token` are both present, and keeps it in the daemon's own file of the agent, outside the project folder, for a restarted daemon; the inbox of an agent the project does not know yet waits in the daemon's memory until a session's adapter registers the agent. Then it returns the session's context. Socket only. A process under a worker names only that worker's own agent. */
         post: operations["hook_session_start"];
         delete?: never;
         options?: never;
@@ -1308,6 +1308,8 @@ export interface components {
              */
             last_call_at: number | null;
             name: string;
+            /** @description How fold's notices reach the agent now: `stdin` of its supervised process, `socket` of a session's inbox, `failing` when the last post to every inbox socket failed, `unreachable` with neither. A failing or unreachable agent sees a message only when it reads its inbox. */
+            notices: components["schemas"]["NoticeReach"];
             /** @description The connected sessions, oldest first. */
             open_sessions: components["schemas"]["AgentSession"][];
             presence: components["schemas"]["PresenceState"];
@@ -2559,6 +2561,8 @@ export interface components {
             /** @description The text of a plain step. */
             text?: string | null;
         };
+        /** @enum {string} */
+        NoticeReach: "stdin" | "socket" | "failing" | "unreachable";
         OpenProject: {
             /** @description The slug of a project already in the registry. */
             slug: string;
@@ -2916,6 +2920,8 @@ export interface components {
             delivered_at: number | null;
             /** @example frontend/ui */
             name: string;
+            /** @description For an agent recipient, whether fold can post a notice into one of the agent's sessions now; false means the agent learns of the message only when it reads its inbox. Null for a human. */
+            reachable: boolean | null;
         };
         RecordResult: {
             /** @description The Git commit of the new revision while Git sync is on; null otherwise. */

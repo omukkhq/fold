@@ -343,6 +343,7 @@ async fn the_agents_route_returns_the_overview_in_registration_order() {
             ],
             "events": [],
             "process": null,
+            "notices": "unreachable",
         })
     );
     assert_eq!(body["agents"][0]["tags"], json!(["review"]));

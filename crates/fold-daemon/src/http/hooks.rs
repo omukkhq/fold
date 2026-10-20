@@ -55,7 +55,7 @@ pub struct StopUnread {
     pub unread: u64,
 }
 
-/// The Claude Code session-start hook of an agent: stores the session's inbox socket for the session push when `socket` and `token` are both present, then returns the session's context. Socket only. A process under a worker names only that worker's own agent.
+/// The Claude Code session-start hook of an agent: stores the session's inbox socket for the session push when `socket` and `token` are both present, and keeps it in the daemon's own file of the agent, outside the project folder, for a restarted daemon; the inbox of an agent the project does not know yet waits in the daemon's memory until a session's adapter registers the agent. Then it returns the session's context. Socket only. A process under a worker names only that worker's own agent.
 #[utoipa::path(
     post,
     path = "/api/v1/hooks/session-start",

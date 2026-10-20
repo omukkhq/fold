@@ -18,6 +18,7 @@ use tempfile::TempDir;
 use tokio::io::{
     AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, DuplexStream, ReadHalf, WriteHalf,
 };
+use tokio::net::UnixListener;
 use tower::ServiceExt as _;
 
 #[cfg(test)]
@@ -36,6 +37,8 @@ struct Host {
     _project: TestProject,
     root: PathBuf,
     daemon: RunningDaemon,
+    config: DaemonConfig,
+    clock: ManualClock,
 }
 
 #[cfg(test)]
@@ -67,12 +70,40 @@ impl Host {
             .await
             .unwrap();
         registry.close().await.unwrap();
-        let daemon = Daemon::start(config, Arc::new(clock)).await.unwrap();
+        let daemon = Daemon::start(config.clone(), Arc::new(clock.clone()))
+            .await
+            .unwrap();
         Self {
             _dir: dir,
             _project: project,
             root,
             daemon,
+            config,
+            clock,
+        }
+    }
+
+    /// Stops the daemon and starts a new one on the same folders, as `fld restart` does.
+    async fn restart(self) -> Self {
+        let Self {
+            _dir,
+            _project,
+            root,
+            daemon,
+            config,
+            clock,
+        } = self;
+        daemon.shutdown().await;
+        let daemon = Daemon::start(config.clone(), Arc::new(clock.clone()))
+            .await
+            .unwrap();
+        Self {
+            _dir,
+            _project,
+            root,
+            daemon,
+            config,
+            clock,
         }
     }
 
@@ -574,4 +605,167 @@ async fn shutdown_answers_an_open_wait_for_events_and_ends_before_the_drain_time
         .expect("the wait got its answer before the session ended");
     let body: Value = serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
     assert_eq!(body, json!({"timed_out": true}));
+}
+
+/// A stand-in for a Claude Code session's inbox at `path`: the bytes of each connection, read to its end. A connection that sends nothing, as the check of a kept socket, delivers nothing.
+#[cfg(test)]
+fn session_inbox(path: &Path) -> tokio::sync::mpsc::UnboundedReceiver<String> {
+    let listener = UnixListener::bind(path).unwrap();
+    let (sender, received) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).await.unwrap();
+            if !bytes.is_empty() {
+                let _ = sender.send(String::from_utf8(bytes).unwrap());
+            }
+        }
+    });
+    received
+}
+
+#[cfg(test)]
+async fn next_notice(inbox: &mut tokio::sync::mpsc::UnboundedReceiver<String>) -> String {
+    tokio::time::timeout(WAIT, inbox.recv())
+        .await
+        .expect("a notice within the wait")
+        .unwrap()
+}
+
+#[cfg(test)]
+const INBOX_TOKEN: &str = "0123456789abcdef0123456789abcdef";
+
+/// The session-start hook of `agent` with the session's inbox, through the daemon's socket router.
+#[cfg(test)]
+async fn session_start_hook(host: &Host, agent: &str, socket: &Path) -> Value {
+    let body = json!({"cwd": host.root, "agent": agent, "socket": socket, "token": INBOX_TOKEN});
+    let request = axum::http::Request::builder()
+        .header(fold_daemon::http::host::CLIENT_HEADER, "test")
+        .method(axum::http::Method::POST)
+        .uri("/api/v1/hooks/session-start")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = fold_daemon::http::socket_router(host.state())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let bytes = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+/// Sends one message from the human `ana` to `main` through the project's message service, which opens the project first.
+#[cfg(test)]
+async fn message_main(host: &Host) {
+    let state = host.state();
+    let ana = fold_core::HumanName::parse("ana").unwrap();
+    let now = host.clock.now();
+    state
+        .registry
+        .write(async |tx| projects::ensure_human(tx, &ana, now).await)
+        .await
+        .unwrap();
+    let handle = fold_daemon::services::projects::open_for_dir(&state, &host.root)
+        .await
+        .unwrap();
+    handle
+        .messages(&state.registry)
+        .send(
+            &fold_core::Actor::human(ana),
+            fold_daemon::services::messages::SendMessage {
+                to: fold_core::Address::parse_all(&["main"]).unwrap(),
+                body: fold_core::MessageBody::parse("are you there").unwrap(),
+                task: None,
+                proposal: None,
+                reply_to: None,
+            },
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn the_first_session_of_a_new_project_gets_notices_once_its_adapter_registers_the_agent() {
+    let host = Host::start().await;
+    let socket = host.root.parent().unwrap().join("main-inbox.sock");
+    let mut inbox = session_inbox(&socket);
+    let answer = session_start_hook(&host, "main", &socket).await;
+    assert!(
+        answer["context"]
+            .as_str()
+            .unwrap()
+            .contains("not registered in this project yet"),
+        "{answer}"
+    );
+    let (accepted, rest) = handshake(host.state(), &host.hello(&host.root, Some("main"))).await;
+    assert!(accepted.ok);
+    let client = mcp(rest).await;
+
+    message_main(&host).await;
+    assert!(
+        next_notice(&mut inbox)
+            .await
+            .contains("fold: message m-1 arrived. Call get_inbox.")
+    );
+    client.cancel().await.unwrap();
+    host.daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_session_gets_the_next_notice_after_the_daemon_restarts() {
+    let host = Host::start().await;
+    let socket = host.root.parent().unwrap().join("main-inbox.sock");
+    let mut inbox = session_inbox(&socket);
+    let (accepted, rest) = handshake(host.state(), &host.hello(&host.root, Some("main"))).await;
+    assert!(accepted.ok);
+    let client = mcp(rest).await;
+    session_start_hook(&host, "main", &socket).await;
+    message_main(&host).await;
+    assert!(next_notice(&mut inbox).await.contains("m-1 arrived"));
+
+    let host = host.restart().await;
+    drop(client);
+    message_main(&host).await;
+    let notice = next_notice(&mut inbox).await;
+    assert!(notice.contains("m-2 arrived"), "{notice}");
+    assert!(notice.contains(INBOX_TOKEN));
+    host.daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_adapter_reports_the_inbox_that_claude_code_gave_it() {
+    let host = Host::start().await;
+    let socket = host.root.parent().unwrap().join("main-inbox.sock");
+    let mut inbox = session_inbox(&socket);
+    let mut hello = host.hello(&host.root, Some("main"));
+    hello["inbox"] = json!({"socket": socket, "token": INBOX_TOKEN});
+    let (accepted, rest) = handshake(host.state(), &hello).await;
+    assert!(accepted.ok);
+    let client = mcp(rest).await;
+    message_main(&host).await;
+    assert!(next_notice(&mut inbox).await.contains("m-1 arrived"));
+    let kept = host.config.push_dir().join("app").join("main.json");
+    assert!(!host.root.join(".fold").join("push").exists());
+    assert_eq!(
+        std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&kept).unwrap().permissions())
+            & 0o777,
+        0o600
+    );
+
+    // A relative socket is refused without refusing the session, and the kept file stays the one above.
+    let mut bad = host.hello(&host.root, Some("main"));
+    bad["inbox"] = json!({"socket": "relative.sock", "token": INBOX_TOKEN});
+    let (accepted, _rest) = handshake(host.state(), &bad).await;
+    assert!(accepted.ok, "a bad inbox never refuses the session");
+    assert!(
+        std::fs::read_to_string(&kept)
+            .unwrap()
+            .contains("main-inbox.sock")
+    );
+    client.cancel().await.unwrap();
+    host.daemon.shutdown().await;
 }

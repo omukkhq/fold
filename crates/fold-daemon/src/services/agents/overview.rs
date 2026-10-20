@@ -12,6 +12,7 @@ use serde_json::json;
 
 use super::presence::facts;
 use super::{AgentError, AgentService};
+use crate::push::PushReach;
 use crate::services::tasks::{AttentionKind, stalled_tasks};
 
 /// The most events one agent of the overview carries.
@@ -45,6 +46,8 @@ pub struct AgentOverview {
     pub events: Vec<Event>,
     /// The Claude Code process that fold supervises for the agent; `None` for an agent fold does not run, such as the main agent.
     pub process: Option<ProcessSummary>,
+    /// How a notice to the agent would travel at the time of the read.
+    pub push: PushReach,
 }
 
 /// The state of an agent's supervised process, and why it failed when it did.
@@ -261,6 +264,7 @@ impl AgentService {
                     workers,
                     events: events_of.remove(&row.id).unwrap_or_default(),
                     process: processes.remove(&row.id),
+                    push: self.push.reach(&row.name),
                     name: row.name,
                 }
             })

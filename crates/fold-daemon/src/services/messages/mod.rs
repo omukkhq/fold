@@ -13,6 +13,7 @@ use fold_store::{Store, StoreError, WriteTx, counters, projects, reviews, tasks}
 use serde_json::json;
 use thiserror::Error;
 
+use crate::push::PushTargets;
 use crate::services::agents::{actor_worker, worker_not_found};
 use crate::services::events::{EventBuffer, EventBus};
 #[cfg(feature = "failpoints")]
@@ -70,6 +71,8 @@ pub struct RecipientView {
     pub addressed_as: AddressedAs,
     pub delivered_at: Option<Timestamp>,
     pub acknowledged_at: Option<Timestamp>,
+    /// Whether a notice to the recipient's agent would reach one of its sessions now; `None` for a human, and for every recipient of a service without the project's push targets.
+    pub reachable: Option<bool>,
 }
 
 /// A message with public ids only.
@@ -99,6 +102,7 @@ fn recipient_view(row: RecipientRow) -> RecipientView {
         addressed_as: row.addressed_as,
         delivered_at: row.delivered_at,
         acknowledged_at: row.acked_at,
+        reachable: None,
     }
 }
 
@@ -126,6 +130,7 @@ pub struct MessageService {
     registry: Store,
     bus: EventBus,
     clock: Arc<dyn Clock>,
+    push: Option<PushTargets>,
 }
 
 impl std::fmt::Debug for MessageService {
@@ -141,6 +146,29 @@ impl MessageService {
             registry,
             bus,
             clock,
+            push: None,
+        }
+    }
+
+    /// Lets the thread views tell whether each agent recipient can be reached by a notice now.
+    #[must_use]
+    pub fn with_push_targets(mut self, push: PushTargets) -> Self {
+        self.push = Some(push);
+        self
+    }
+
+    /// Sets `reachable` of every agent recipient from the push targets as they are now.
+    fn mark_reach(&self, messages: &mut [MessageView]) {
+        let Some(push) = &self.push else {
+            return;
+        };
+        for recipient in messages
+            .iter_mut()
+            .flat_map(|message| message.recipients.iter_mut())
+        {
+            if let Target::Worker(worker) = &recipient.name {
+                recipient.reachable = Some(push.reach(&worker.agent()).reachable());
+            }
         }
     }
 
@@ -419,6 +447,7 @@ async fn write_message(
                 addressed_as: recipient.addressed_as,
                 delivered_at: None,
                 acknowledged_at: None,
+                reachable: None,
             })
             .collect(),
         choices,

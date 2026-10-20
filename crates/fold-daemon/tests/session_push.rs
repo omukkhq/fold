@@ -31,7 +31,7 @@ use tracing_subscriber::fmt::MakeWriter;
 const WAIT: Duration = Duration::from_secs(10);
 const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
-/// A stand-in for a Claude Code session's inbox: it accepts each connection, reads to end of file and never writes back.
+/// A stand-in for a Claude Code session's inbox: it accepts each connection, reads to end of file and never writes back. A connection that sends nothing, as the check of a kept socket, delivers nothing.
 #[cfg(test)]
 struct Inbox {
     path: PathBuf,
@@ -49,7 +49,9 @@ impl Inbox {
                 tokio::spawn(async move {
                     let mut bytes = Vec::new();
                     stream.read_to_end(&mut bytes).await.unwrap();
-                    let _ = sender.send(String::from_utf8(bytes).unwrap());
+                    if !bytes.is_empty() {
+                        let _ = sender.send(String::from_utf8(bytes).unwrap());
+                    }
                 });
             }
         });
@@ -132,6 +134,8 @@ struct Fixture {
     agents: AgentService,
     tasks: TaskService,
     messages: MessageService,
+    /// The daemon's folder of kept targets, outside the project folder.
+    state: TempDir,
     /// Each connect the push makes, with its outcome.
     connects: tokio::sync::Mutex<mpsc::UnboundedReceiver<(PathBuf, Option<std::io::ErrorKind>)>>,
     _push: PushTask,
@@ -154,11 +158,24 @@ fn recording(outcomes: mpsc::UnboundedSender<(PathBuf, Option<std::io::ErrorKind
 impl Fixture {
     /// Agents `frontend` (with the worker `frontend/ui`), `backend`, `docs` and `lead` (the review lead), and the human `ana`.
     async fn new() -> Self {
+        Self::build(false).await
+    }
+
+    /// [`Fixture::new`] with the targets kept in a folder of the daemon's own, as the daemon keeps a project's.
+    async fn keeping_files() -> Self {
+        Self::build(true).await
+    }
+
+    async fn build(keep_files: bool) -> Self {
         let project = TestProject::new().await;
         let bus = EventBus::new();
         let clock = Arc::new(project.clock().clone());
         let (outcomes, connects) = mpsc::unbounded_channel();
         let targets = PushTargets::with_connector(recording(outcomes));
+        let state = TempDir::new().unwrap();
+        if keep_files {
+            targets.keep_files_in(state.path().join("push").join("demo"));
+        }
         let agents = AgentService::new(project.store().clone(), bus.clone(), clock.clone())
             .with_push_targets(targets.clone());
         let tasks = TaskService::new(project.store().clone(), bus.clone(), clock.clone(), 5);
@@ -185,6 +202,7 @@ impl Fixture {
         Self {
             project,
             dir: TempDir::new().unwrap(),
+            state,
             bus,
             targets,
             agents,
@@ -851,7 +869,7 @@ async fn no_log_line_carries_the_token_or_a_message_body() {
     let token = "5ec7e75ec7e75ec7e75ec7e75ec7e75e";
     let body = "body-that-must-stay-out-of-logs";
 
-    let fixture = Fixture::new().await;
+    let fixture = Fixture::keeping_files().await;
     let mut backend = Inbox::bind(fixture.path("backend.sock"));
     fixture
         .agents
@@ -879,4 +897,343 @@ async fn no_log_line_carries_the_token_or_a_message_body() {
     assert!(logs.contains("agent=docs seq=1"));
     assert!(!logs.contains(token));
     assert!(!logs.contains(body));
+}
+
+#[cfg(test)]
+fn files_dir(fixture: &Fixture) -> PathBuf {
+    fixture.state.path().join("push").join("demo")
+}
+
+#[cfg(test)]
+fn kept_file(fixture: &Fixture, agent: &str) -> PathBuf {
+    files_dir(fixture).join(format!("{agent}.json"))
+}
+
+#[cfg(test)]
+fn mode_of(path: &Path) -> u32 {
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+#[tokio::test]
+async fn a_session_that_started_before_its_agent_existed_gets_notices_once_the_adapter_registers_it()
+ {
+    let fixture = Fixture::keeping_files().await;
+    let newcomer = name("newcomer");
+    let mut inbox = Inbox::bind(fixture.path("newcomer.sock"));
+    let context = fixture
+        .agents
+        .session_start(
+            "demo",
+            &newcomer,
+            &fixture.tasks,
+            Some((inbox.path.clone(), TOKEN)),
+        )
+        .await
+        .unwrap();
+    assert!(
+        context.contains("not registered in this project yet"),
+        "{context}"
+    );
+    assert!(fixture.targets.sockets(&newcomer).is_empty());
+    assert_eq!(
+        fixture.agents.push_reach(&newcomer),
+        push::PushReach::Unreachable
+    );
+    // The inbox of an agent the project does not know waits in memory only.
+    let file = kept_file(&fixture, "newcomer");
+    assert!(!file.exists());
+    assert!(!fixture.project.paths().fold_dir().join("push").exists());
+
+    // The adapter connects a moment after the session started, as a handshake does.
+    let mut ctx = fixture.agents.start_session(7).await.unwrap();
+    fixture
+        .project
+        .clock()
+        .advance(Duration::from_secs(3))
+        .unwrap();
+    fixture
+        .agents
+        .register_agent(&mut ctx, &newcomer, &[])
+        .await
+        .unwrap();
+    assert_eq!(fixture.targets.sockets(&newcomer), [inbox.path.clone()]);
+    assert_eq!(
+        fixture.agents.push_reach(&newcomer),
+        push::PushReach::Socket
+    );
+    assert_eq!(mode_of(&file), 0o600);
+    assert_eq!(mode_of(&files_dir(&fixture)), 0o700);
+    fixture.send("backend", &["newcomer"], "welcome").await;
+    assert_eq!(inbox.next().await, wire(TOKEN, &inbox_text(1)));
+
+    // The target counts from the session's start, so the end of that session drops it and its file.
+    fixture.agents.end_session(&ctx).await.unwrap();
+    assert!(fixture.targets.sockets(&newcomer).is_empty());
+    assert!(!file.exists());
+    let mut again = fixture.agents.start_session(8).await.unwrap();
+    fixture
+        .agents
+        .register_agent(&mut again, &newcomer, &[])
+        .await
+        .unwrap();
+    assert!(fixture.targets.sockets(&newcomer).is_empty());
+}
+
+#[tokio::test]
+async fn a_restart_restores_the_kept_inbox_and_a_gone_socket_drops_its_file() {
+    let fixture = Fixture::keeping_files().await;
+    let backend = name("backend");
+    let mut inbox = fixture.inbox("backend", "backend.sock").await;
+    let file = kept_file(&fixture, "backend");
+    assert!(!std::fs::read_to_string(&file).unwrap().is_empty());
+    assert!(!fixture.project.paths().fold_dir().join("push").exists());
+
+    // A restarted daemon has no target in memory until the project's open restores the kept ones.
+    fixture.agents.close_orphan_sessions().await.unwrap();
+    assert!(fixture.targets.sockets(&backend).is_empty());
+    assert!(file.exists(), "a daemon stop leaves the kept file");
+    assert_eq!(fixture.agents.restore_push_targets().await.unwrap(), 1);
+    assert_eq!(fixture.agents.restore_push_targets().await.unwrap(), 0);
+    fixture
+        .send("frontend", &["backend"], "after the restart")
+        .await;
+    assert_eq!(inbox.next().await, wire(TOKEN, &inbox_text(1)));
+    assert_eq!(fixture.attempt(&inbox.path).await, None);
+
+    // The session ends: its socket goes, and the first post that finds it gone drops the target and the file.
+    std::fs::remove_file(&inbox.path).unwrap();
+    fixture
+        .send("frontend", &["backend"], "nobody listens")
+        .await;
+    assert_eq!(
+        fixture.attempt(&inbox.path).await,
+        Some(std::io::ErrorKind::NotFound)
+    );
+    let targets = fixture.targets.clone();
+    until(|| targets.sockets(&backend).is_empty()).await;
+    until(|| !file.exists()).await;
+    assert_eq!(fixture.agents.restore_push_targets().await.unwrap(), 0);
+    assert_eq!(
+        fixture.agents.push_reach(&backend),
+        push::PushReach::Unreachable
+    );
+}
+
+#[tokio::test]
+async fn a_kept_file_whose_socket_is_gone_is_removed_and_a_newer_session_keeps_its_own() {
+    let fixture = Fixture::keeping_files().await;
+    let docs = name("docs");
+    let old = fixture.path("old.sock");
+    fixture
+        .agents
+        .register_push_target(&docs, old.clone(), TOKEN)
+        .await
+        .unwrap();
+    fixture.agents.clear_push_targets(&docs);
+    assert!(
+        !fixture
+            .agents
+            .restore_push_target(&docs, fixture.project.now())
+            .await
+    );
+    assert!(!kept_file(&fixture, "docs").exists());
+
+    // A socket file that nobody listens on any more, as a session that stopped without removing it leaves.
+    let dead = fixture.path("dead.sock");
+    drop(std::os::unix::net::UnixListener::bind(&dead).unwrap());
+    fixture
+        .agents
+        .register_push_target(&docs, dead.clone(), TOKEN)
+        .await
+        .unwrap();
+    fixture.agents.clear_push_targets(&docs);
+    assert!(
+        !fixture
+            .agents
+            .restore_push_target(&docs, fixture.project.now())
+            .await
+    );
+    assert!(!kept_file(&fixture, "docs").exists());
+
+    let newer = Inbox::bind(fixture.path("newer.sock"));
+    fixture
+        .agents
+        .register_push_target(&docs, newer.path.clone(), TOKEN)
+        .await
+        .unwrap();
+    fixture.agents.clear_push_targets(&docs);
+    assert!(
+        fixture
+            .agents
+            .restore_push_target(&docs, fixture.project.now())
+            .await
+    );
+    assert_eq!(
+        fixture.targets.sockets(&docs),
+        std::slice::from_ref(&newer.path)
+    );
+}
+
+#[tokio::test]
+async fn the_kept_files_stay_private_and_a_cut_short_write_leaves_nothing() {
+    let fixture = Fixture::keeping_files().await;
+    let dir = files_dir(&fixture);
+    std::fs::create_dir_all(&dir).unwrap();
+    set_mode(&dir, 0o755);
+    let stale = dir.join(".backend.1.0.tmp");
+    std::fs::write(&stale, "{}").unwrap();
+    assert_eq!(fixture.agents.restore_push_targets().await.unwrap(), 0);
+    assert!(!stale.exists());
+
+    let _backend = fixture.inbox("backend", "backend.sock").await;
+    assert_eq!(mode_of(&dir), 0o700);
+    assert_eq!(mode_of(&kept_file(&fixture, "backend")), 0o600);
+
+    // A symlink in place of an agent's file is never followed.
+    let elsewhere = fixture.path("elsewhere.json");
+    std::fs::copy(kept_file(&fixture, "backend"), &elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, kept_file(&fixture, "docs")).unwrap();
+    assert!(
+        !fixture
+            .agents
+            .restore_push_target(&name("docs"), fixture.project.now())
+            .await
+    );
+    assert!(fixture.targets.sockets(&name("docs")).is_empty());
+
+    // A symlink in place of the folder is refused, so no token is written through it.
+    let other = TempDir::new().unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::os::unix::fs::symlink(other.path(), &dir).unwrap();
+    let _lead = fixture.inbox("lead", "lead.sock").await;
+    assert_eq!(std::fs::read_dir(other.path()).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn a_worker_cannot_hold_an_inbox_for_another_agent_and_project_files_are_never_read() {
+    let fixture = Fixture::keeping_files().await;
+    let backend = name("backend");
+    let planted = Inbox::bind(fixture.path("planted.sock"));
+    let worker = SessionContext {
+        session_id: 0,
+        agent: None,
+        peer: fold_core::policy::SessionPeer::Worker(name("frontend")),
+    };
+    fixture
+        .agents
+        .keep_session_inbox(&worker, &backend, planted.path.clone(), TOKEN)
+        .unwrap();
+    let project_file = fixture.project.paths().fold_dir().join("push");
+    std::fs::create_dir_all(&project_file).unwrap();
+    std::fs::write(
+        project_file.join("backend.json"),
+        json!({"socket": planted.path, "token": TOKEN}).to_string(),
+    )
+    .unwrap();
+
+    let mut ctx = fixture.agents.start_session(9).await.unwrap();
+    fixture
+        .agents
+        .register_agent(&mut ctx, &backend, &[])
+        .await
+        .unwrap();
+    assert_eq!(fixture.agents.restore_push_targets().await.unwrap(), 0);
+    assert!(fixture.targets.sockets(&backend).is_empty());
+    assert_eq!(
+        fixture.agents.push_reach(&backend),
+        push::PushReach::Unreachable
+    );
+}
+
+#[tokio::test]
+async fn a_restored_socket_counts_from_the_newest_session_that_registered_it() {
+    let fixture = Fixture::keeping_files().await;
+    let backend = name("backend");
+    let _inbox = fixture.inbox("backend", "backend.sock").await;
+    let hooked = fixture.project.now();
+    fixture
+        .project
+        .clock()
+        .advance(Duration::from_secs(5))
+        .unwrap();
+    let later = fixture.project.now();
+    assert!(!fixture.agents.restore_push_target(&backend, later).await);
+    fixture.targets.clear_registered_by(&backend, hooked).await;
+    assert_eq!(fixture.targets.sockets(&backend).len(), 1);
+    fixture.targets.clear_registered_by(&backend, later).await;
+    assert!(fixture.targets.sockets(&backend).is_empty());
+    assert!(!kept_file(&fixture, "backend").exists());
+}
+
+#[tokio::test]
+async fn the_agents_and_their_messages_show_who_a_notice_can_reach() {
+    let fixture = Fixture::keeping_files().await;
+    let _backend = fixture.inbox("backend", "backend.sock").await;
+    let blocked = Inbox::bind(fixture.path("blocked.sock"));
+    set_mode(&blocked.path, 0o000);
+    fixture
+        .agents
+        .register_push_target(&name("lead"), blocked.path.clone(), TOKEN)
+        .await
+        .unwrap();
+    let messages = MessageService::new(
+        fixture.project.store().clone(),
+        fixture.project.registry().clone(),
+        fixture.bus.clone(),
+        Arc::new(fixture.project.clock().clone()),
+    )
+    .with_push_targets(fixture.targets.clone());
+    let sent = messages
+        .send(
+            &actor("frontend"),
+            SendMessage {
+                to: Address::parse_all(&["backend", "docs", "lead", "human:ana"]).unwrap(),
+                body: MessageBody::parse("who hears this").unwrap(),
+                task: None,
+                proposal: None,
+                reply_to: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.attempt(&blocked.path).await,
+        Some(std::io::ErrorKind::PermissionDenied)
+    );
+    let agents = fixture.agents.clone();
+    until(|| agents.push_reach(&name("lead")) == push::PushReach::Failing).await;
+
+    let thread = messages.thread_view(sent.id).await.unwrap();
+    let reach: Vec<(String, Option<bool>)> = thread.messages[0]
+        .recipients
+        .iter()
+        .map(|recipient| (recipient.name.to_string(), recipient.reachable))
+        .collect();
+    assert_eq!(
+        reach,
+        [
+            ("backend".to_owned(), Some(true)),
+            ("docs".to_owned(), Some(false)),
+            ("lead".to_owned(), Some(false)),
+            ("human:ana".to_owned(), None),
+        ]
+    );
+    let overview = fixture
+        .agents
+        .overview(&fold_daemon::services::agents::OverviewFilter::default())
+        .await
+        .unwrap();
+    let pushes: Vec<(String, push::PushReach)> = overview
+        .into_iter()
+        .map(|agent| (agent.name.to_string(), agent.push))
+        .collect();
+    assert_eq!(
+        pushes,
+        [
+            ("frontend".to_owned(), push::PushReach::Unreachable),
+            ("backend".to_owned(), push::PushReach::Socket),
+            ("docs".to_owned(), push::PushReach::Unreachable),
+            ("lead".to_owned(), push::PushReach::Failing),
+        ]
+    );
 }

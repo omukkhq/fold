@@ -25,6 +25,7 @@ import {
   isEmptyTeam,
   mainAgentName,
   mainPill,
+  noticeStep,
   ownedTasks,
   pillSpec,
   rowError,
@@ -322,6 +323,24 @@ describe("lookups", () => {
       card("T-3", "backend"),
     ];
     expect(ownedTasks(cards, "frontend")).toBe(1);
+  });
+});
+
+describe("notices", () => {
+  it("names a connected main agent that fold cannot reach", () => {
+    expect(noticeStep(agent("main", { notices: "socket" }))).toBe(null);
+    expect(noticeStep(agent("main", { notices: "stdin" }))).toBe(null);
+    expect(noticeStep(agent("main", { notices: "unreachable" }))).toEqual({
+      tool: null,
+      text: "not reachable · reads new messages from its inbox",
+      faint: true,
+    });
+    expect(noticeStep(agent("main", { notices: "failing" }))?.text).toBe(
+      "notices fail · reads new messages from its inbox",
+    );
+    expect(
+      noticeStep(agent("main", { notices: "unreachable", sessions: 0 })),
+    ).toBe(null);
   });
 });
 
