@@ -621,6 +621,21 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
         }
         return Ok(ctx);
     }
+    if kind == fold_core::events::types::WORKER_MODEL_UNREACHABLE {
+        let agent = event
+            .data
+            .get("agent")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|agent| AgentName::parse(agent).ok());
+        if let Some(agent) = agent {
+            ctx.main_agents = tagged(store, Tag::is_main).await?;
+            let mut conn = store.read().acquire().await?;
+            ctx.starter = agents::find_worker_process(&mut conn, &agent)
+                .await?
+                .and_then(|row| starter_agent(&row.started_by));
+        }
+        return Ok(ctx);
+    }
     if kind == fold_core::events::types::TASK_REPORTED {
         if let Some(task) = event.task {
             route(store, task, None, &mut ctx).await?;

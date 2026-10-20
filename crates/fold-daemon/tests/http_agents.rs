@@ -408,7 +408,7 @@ async fn the_agents_route_gives_a_supervised_agent_the_state_of_its_process() {
     assert_eq!(lead["presence"], "offline", "no session between turns");
     assert_eq!(
         lead["process"],
-        json!({"state": "idle", "failed_reason": null})
+        json!({"state": "idle", "failed_reason": null, "last_error": null, "model_unreachable": false})
     );
     assert_eq!(body["agents"][0]["process"], Value::Null);
 }

@@ -238,6 +238,19 @@ pub struct WorkerEntry {
     /// Why the worker's latest process failed, such as `exited`, `spawn`, `mcp_unavailable` (its fold MCP server did not connect) or `fld_missing` (the fld binary of that server is gone); null unless `state` is `failed`, and for a worker that failed before fold stored the reason.
     #[schema(required = true, example = "mcp_unavailable")]
     pub failed_reason: Option<String>,
+    /// Claude Code's error text of the worker's latest failed turn, or the last stderr lines of its latest process that exited with an error, at most 1000 characters; null once a turn ends without an error.
+    #[schema(required = true, example = "Invalid API key · Please run /login")]
+    pub last_error: Option<String>,
+    /// UTC milliseconds of `last_error`; null without one.
+    #[schema(value_type = Option<i64>, required = true)]
+    pub last_error_at: Option<fold_core::Timestamp>,
+    /// The turns in a row that failed before any token reached the model.
+    pub failed_turns: u64,
+    /// The worker's turns failed often enough in a row without reaching the model that it cannot work until a human fixes Claude Code; the daemon decides it, and the human's list of what waits for them holds an item for it.
+    pub model_unreachable: bool,
+    /// What the human checks for a worker that cannot reach the model; null otherwise.
+    #[schema(required = true, example = "check the Claude Code sign-in, model and usage limit, or run `fld doctor`")]
+    pub hint: Option<String>,
     /// The prompt cache time of the worker's role from `.fold/config.toml`, `1h` or `5m`; null when fold cannot read the file.
     #[schema(required = true, example = "5m")]
     pub cache_ttl: Option<String>,
@@ -246,6 +259,8 @@ pub struct WorkerEntry {
 impl WorkerEntry {
     fn new(row: WorkerProcessRow, config: Option<&ProjectConfig>) -> Self {
         let cache_ttl = config.map(|config| config.role(row.role).cache_ttl.as_str().to_owned());
+        let model_unreachable =
+            fold_core::turn_errors::model_unreachable(row.failed_turns, row.state);
         Self {
             name: row.agent.to_string(),
             role: row.role.into(),
@@ -264,6 +279,11 @@ impl WorkerEntry {
             context_tokens: row.context_tokens,
             exit_code: row.exit_code,
             failed_reason: row.failed_reason,
+            last_error: row.last_error,
+            last_error_at: row.last_error_at,
+            failed_turns: row.failed_turns,
+            model_unreachable,
+            hint: model_unreachable.then(|| fold_core::turn_errors::MODEL_UNREACHABLE_HINT.to_owned()),
             cache_ttl,
         }
     }

@@ -52,6 +52,9 @@ pub struct AgentOverview {
 pub struct ProcessSummary {
     pub state: WorkerState,
     pub failed_reason: Option<String>,
+    pub last_error: Option<String>,
+    /// Its turns fail without reaching the model, as [`fold_core::turn_errors::model_unreachable`] decides.
+    pub model_unreachable: bool,
 }
 
 /// A connected session of the agent. `cwd` is `None` for a session opened without a working directory.
@@ -151,6 +154,11 @@ impl AgentService {
                     ProcessSummary {
                         state: row.state,
                         failed_reason: row.failed_reason,
+                        last_error: row.last_error,
+                        model_unreachable: fold_core::turn_errors::model_unreachable(
+                            row.failed_turns,
+                            row.state,
+                        ),
                     },
                 )
             })

@@ -2,6 +2,7 @@ use fold_core::roles::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, WorkerLimits, WorkerLimitsChange,
 };
 use fold_core::text::shorten;
+use fold_core::turn_errors;
 use fold_core::{
     AgentName, AreaName, FoldError, LabelName, ProposalId, Role, Tag, TaskId, WorkerName, codes,
 };
@@ -221,7 +222,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_WORKERS,
-            "List the areas with their leads and every worker fold runs, with its role, state, bound tasks or proposals, turns, cost, context size and newest hand-off note.",
+            "List the areas with their leads and every worker fold runs, with its role, state, bound tasks or proposals, turns, cost, context size and newest hand-off note. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human.",
             schema_for_type::<ListWorkersInput>(),
         ),
         Tool::new(
@@ -258,7 +259,7 @@ fn area_json(area: &AreaRow) -> Value {
     })
 }
 
-/// A failed worker also names why it failed.
+/// A failed worker also names why it failed, and a worker whose turns fail names Claude Code's error.
 fn worker_process_json(row: &WorkerProcessRow) -> Value {
     let mut value = json!({
         "name": row.agent.as_str(),
@@ -274,6 +275,15 @@ fn worker_process_json(row: &WorkerProcessRow) -> Value {
     });
     if let Some(reason) = &row.failed_reason {
         value["failed_reason"] = json!(reason);
+    }
+    if let Some(error) = &row.last_error {
+        value["last_error"] = json!(error);
+    }
+    if row.failed_turns > 0 {
+        value["failed_turns"] = json!(row.failed_turns);
+    }
+    if turn_errors::model_unreachable(row.failed_turns, row.state) {
+        value["hint"] = json!(turn_errors::MODEL_UNREACHABLE_HINT);
     }
     value
 }

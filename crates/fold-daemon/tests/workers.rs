@@ -716,6 +716,42 @@ async fn a_stop_escalates_to_signals_on_the_projects_clock() {
     );
 }
 
+#[tokio::test]
+async fn a_stop_that_needs_signals_leaves_no_last_error() {
+    let fake = FakeClaude::new("result")
+        .stubborn()
+        .warning_on_stderr("warning: slow disk");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    until_state(&harness, &lead, WorkerState::Idle).await;
+    let agents = harness.handle.agents();
+    let human = Actor::human(HumanName::parse("ana").unwrap());
+    let target = name(&lead);
+    let stop = tokio::spawn(async move { agents.stop_worker(&human, &target).await });
+    let clock = harness.project.clock().clone();
+    eventually(WAIT, async || {
+        if stop.is_finished() {
+            Ok(())
+        } else {
+            clock.advance(Duration::from_secs(6)).unwrap();
+            Err(clock.now())
+        }
+    })
+    .await;
+    let row = worker(&harness, &lead).await;
+    assert_eq!(
+        (row.state, row.exit_code),
+        (WorkerState::Stopped, Some(143))
+    );
+    assert_eq!(
+        (row.last_error, row.last_error_at),
+        (None, None),
+        "the stderr of a process that fold stopped is no error"
+    );
+}
+
 /// Whether `pid` is gone or only waits to be reaped. `ps` prints the state of a listed process and nothing for one that is gone, on Linux and on macOS.
 fn ended(pid: u32) -> bool {
     let output = std::process::Command::new("ps")
@@ -1994,7 +2030,12 @@ async fn a_worker_whose_fold_server_failed_ends_failed_and_asks_for_a_restart() 
     };
     assert_eq!(
         process_of("web-lead"),
-        json!({"state": "failed", "failed_reason": "mcp_unavailable"})
+        json!({
+            "state": "failed",
+            "failed_reason": "mcp_unavailable",
+            "last_error": null,
+            "model_unreachable": false,
+        })
     );
     assert_eq!(
         process_of(MAIN),
@@ -2168,4 +2209,168 @@ async fn a_daemon_start_resumes_a_worker_whose_fold_connection_failed_once_per_s
             .any(|item| item["kind"] == "worker_unreachable"),
         "{list}"
     );
+}
+
+#[tokio::test]
+async fn a_worker_whose_turns_reach_no_model_shows_the_error_and_asks_a_human() {
+    let mut fake = FakeClaude::new("error_result");
+    let turns = tempfile::TempDir::new().unwrap();
+    let turn = writable_turn(&mut fake, &turns, "error_result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let mut inbox = harness.register_inbox(MAIN).await;
+    let lead = start_lead(&mut harness, "web").await;
+    let error = "No conversation found with session ID: 00000000-0000-4000-8000-000000000074";
+    let until_failed_turns = async |count: u64| {
+        eventually(WAIT, async || {
+            let row = worker(&harness, &lead).await;
+            if row.failed_turns == count && row.state == WorkerState::Idle {
+                Ok(row)
+            } else {
+                Err((row.failed_turns, row.state))
+            }
+        })
+        .await
+    };
+    let first = until_failed_turns(1).await;
+    assert_eq!(first.last_error.as_deref(), Some(error));
+    assert!(first.last_error_at.is_some());
+    assert_eq!(first.turns, 1, "a failed turn is still a turn");
+    let unreachable_events = async || {
+        stored_events(&harness)
+            .await
+            .into_iter()
+            .filter(|(kind, _)| kind == "worker.model_unreachable")
+            .map(|(_, data)| data)
+            .collect::<Vec<_>>()
+    };
+    assert!(unreachable_events().await.is_empty());
+    let nudge = async || {
+        harness
+            .call(
+                MAIN,
+                "send_message",
+                json!({"to": [&lead], "body": "go on"}),
+            )
+            .await;
+    };
+    nudge().await;
+    until_failed_turns(2).await;
+    nudge().await;
+    until_failed_turns(3).await;
+    assert_eq!(
+        unreachable_events().await,
+        [json!({"agent": "web-lead", "turns": 3})]
+    );
+    let notice = loop {
+        let post = inbox.next().await;
+        if post.contains("worker web-lead cannot reach the model") {
+            break post;
+        }
+    };
+    assert!(notice.contains("run `fld doctor`"), "{notice}");
+    assert!(!notice.contains("No conversation"), "{notice}");
+
+    let (status, list) = harness
+        .http(Method::GET, "/api/v1/projects/demo/needs-you", None, "ana")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let items: Vec<&Value> = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["kind"] == "worker_model_unreachable")
+        .collect();
+    assert_eq!(items.len(), 1, "{list}");
+    assert_eq!(items[0]["agent"], "web-lead");
+    assert_eq!(items[0]["screen"], "worker");
+    assert_eq!(items[0]["title"], error);
+    assert_eq!(
+        items[0]["reason"],
+        "check the Claude Code sign-in, model and usage limit, or run `fld doctor`"
+    );
+    let listed = harness.call(MAIN, "list_workers", json!({})).await;
+    let entry = &listed["workers"][0];
+    assert_eq!(entry["last_error"], error);
+    assert_eq!(entry["failed_turns"], 3);
+    assert_eq!(
+        entry["hint"],
+        "check the Claude Code sign-in, model and usage limit, or run `fld doctor`"
+    );
+    let (status, workers) = harness
+        .http(Method::GET, "/api/v1/projects/demo/workers", None, "ana")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{workers}");
+    let entry = &workers["workers"][0];
+    assert_eq!(
+        (
+            &entry["last_error"],
+            &entry["failed_turns"],
+            &entry["model_unreachable"]
+        ),
+        (&json!(error), &json!(3), &json!(true))
+    );
+    assert!(entry["last_error_at"].is_i64());
+    let (_, agents) = harness
+        .http(Method::GET, "/api/v1/projects/demo/agents", None, "ana")
+        .await;
+    let process = agents["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["name"] == "web-lead")
+        .map(|agent| agent["process"].clone())
+        .unwrap();
+    assert_eq!(
+        process,
+        json!({"state": "idle", "failed_reason": null, "last_error": error, "model_unreachable": true})
+    );
+
+    nudge().await;
+    until_failed_turns(4).await;
+    assert_eq!(
+        unreachable_events().await.len(),
+        1,
+        "the push comes once for a run of failed turns"
+    );
+
+    std::fs::copy(crate::workers_support::fixture("result"), &turn).unwrap();
+    nudge().await;
+    let healed = until_failed_turns(0).await;
+    assert_eq!((healed.last_error, healed.last_error_at), (None, None));
+    let (_, list) = harness
+        .http(Method::GET, "/api/v1/projects/demo/needs-you", None, "ana")
+        .await;
+    assert!(
+        !list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["kind"] == "worker_model_unreachable"),
+        "{list}"
+    );
+}
+
+#[tokio::test]
+async fn a_process_that_exits_with_an_error_leaves_its_last_stderr_lines() {
+    let fake = FakeClaude::new("result").failing_with_stderr("Error: no access to the model");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    let failed = until_state(&harness, &lead, WorkerState::Failed).await;
+    assert_eq!(failed.failed_reason.as_deref(), Some("exited"));
+    assert_eq!(failed.exit_code, Some(1));
+    assert_eq!(
+        failed.last_error.as_deref(),
+        Some("starting\nError: no access to the model")
+    );
+    assert_eq!(failed.failed_turns, 0, "no turn ended");
+    let listed = harness.call(MAIN, "list_workers", json!({})).await;
+    assert_eq!(
+        listed["workers"][0]["last_error"],
+        "starting\nError: no access to the model"
+    );
+    assert!(listed["workers"][0].get("hint").is_none());
 }

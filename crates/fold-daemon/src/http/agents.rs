@@ -72,6 +72,11 @@ pub struct AgentProcess {
     /// Why the process failed, such as `exited` or `mcp_unavailable` (its fold MCP server did not connect); null unless `state` is `failed`, and for a process that failed before fold stored the reason.
     #[schema(required = true, example = "mcp_unavailable")]
     pub failed_reason: Option<String>,
+    /// Claude Code's error text of the process's latest failed turn or failed exit; null once a turn ends without an error.
+    #[schema(required = true, example = "Invalid API key · Please run /login")]
+    pub last_error: Option<String>,
+    /// The process's turns failed often enough in a row without reaching the model that it cannot work until a human fixes Claude Code; the daemon decides it, and it is false for a stopped process.
+    pub model_unreachable: bool,
 }
 
 /// A connected session. A session has no public id; one adapter process is one session, so its pid names it.
@@ -294,6 +299,8 @@ impl From<AgentOverview> for AgentEntry {
             process: agent.process.map(|process| AgentProcess {
                 state: process.state.into(),
                 failed_reason: process.failed_reason,
+                last_error: process.last_error,
+                model_unreachable: process.model_unreachable,
             }),
         }
     }

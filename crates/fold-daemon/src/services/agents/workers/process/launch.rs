@@ -14,10 +14,11 @@ use fold_store::StoreError;
 use fold_store::agents::{self, ProcessEnd, WorkerProcessRow};
 use fold_store::tasks::claims::{self, ClaimTarget, ReleaseReason};
 use serde_json::{Map, Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::{ChildStderr, ChildStdin, Command};
+use tokio::io::AsyncWriteExt;
+use tokio::process::{ChildStdin, Command};
 use tokio::sync::{mpsc, watch};
 
+use super::stderr::StderrTail;
 use super::{Input, Launcher, Process, Running, StartWatch, Supervisor, lock, own_binary};
 use crate::push::StdinSink;
 use crate::services::agents::AgentError;
@@ -168,6 +169,7 @@ impl Supervisor {
             resumed: resume,
             session_id: row.session_id.clone(),
             session: Arc::new(session),
+            stderr: StderrTail::read(stderr),
         };
         let start = StartWatch {
             session: sessions,
@@ -214,7 +216,6 @@ impl Supervisor {
                 return Ok(None);
             }
         };
-        tokio::spawn(drain(stderr));
         // A paused project keeps the row `starting` for the resume, as a daemon stop keeps a running row.
         if paused {
             detached.store(true, Ordering::SeqCst);
@@ -337,16 +338,6 @@ impl Supervisor {
                     tracing::warn!(agent = %process.agent, code = error.log_code(), "could not mark a worker working");
                 }
             }
-        }
-    }
-}
-
-/// Reads and drops the process's stderr, so a full pipe never blocks it. Its text never reaches a log.
-async fn drain(mut stderr: ChildStderr) {
-    let mut buffer = [0_u8; 4096];
-    while let Ok(read) = stderr.read(&mut buffer).await {
-        if read == 0 {
-            break;
         }
     }
 }

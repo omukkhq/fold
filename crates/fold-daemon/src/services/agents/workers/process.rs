@@ -23,6 +23,7 @@ mod refresh;
 mod restart;
 mod resume;
 mod send_back;
+mod stderr;
 mod stop;
 mod watch;
 
@@ -187,6 +188,7 @@ struct Process {
     session: Arc<tokio::sync::watch::Sender<Option<bool>>>,
     /// The worker row's Claude Code session id.
     session_id: String,
+    stderr: stderr::StderrTail,
 }
 
 impl Supervisor {

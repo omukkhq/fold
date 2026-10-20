@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use fold_core::events::types;
 use fold_core::roles::MCP_UNAVAILABLE;
+use fold_core::turn_errors::MODEL_UNREACHABLE_TURNS;
 use fold_core::{EventActor, LiveEvent, NewEvent, WorkerState, codes};
 use fold_store::StoreError;
 use fold_store::agents::{self, ProcessEnd, TurnTotals};
@@ -12,7 +13,9 @@ use tokio::process::{Child, ChildStdout};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::watch;
 
-use super::super::output::{LineEffect, RowChange, effect_of, fold_unreachable, micro_usd};
+use super::super::output::{
+    LineEffect, RowChange, TurnError, effect_of, fold_unreachable, micro_usd,
+};
 use super::lines::Lines;
 use super::resume;
 use super::stop::stopped_event;
@@ -124,35 +127,35 @@ impl Supervisor {
         {
             self.on_tool_request(process, request).await;
         }
-        let now = self.inner.clock.now();
         let id = process.id;
         let mut ended = None;
-        let written = match change {
+        let written: Result<(), AgentError> = match change {
             _ if detached => Ok(()),
             RowChange::None => Ok(()),
-            RowChange::TurnStarted { model } => {
-                self.inner
-                    .store
-                    .write(async |tx| {
-                        let model = (!model.is_empty()).then_some(model.as_str());
-                        agents::set_worker_context(tx, id, model, None).await?;
-                        agents::mark_worker_working(tx, id).await?;
-                        Ok::<_, StoreError>(())
-                    })
-                    .await
-            }
-            RowChange::Context { tokens, model } => {
-                self.inner
-                    .store
-                    .write(async |tx| {
-                        agents::set_worker_context(tx, id, model.as_deref(), Some(tokens)).await
-                    })
-                    .await
-            }
+            RowChange::TurnStarted { model } => self
+                .inner
+                .store
+                .write(async |tx| {
+                    let model = (!model.is_empty()).then_some(model.as_str());
+                    agents::set_worker_context(tx, id, model, None).await?;
+                    agents::mark_worker_working(tx, id).await?;
+                    Ok::<_, StoreError>(())
+                })
+                .await
+                .map_err(AgentError::from),
+            RowChange::Context { tokens, model } => self
+                .inner
+                .store
+                .write(async |tx| {
+                    agents::set_worker_context(tx, id, model.as_deref(), Some(tokens)).await
+                })
+                .await
+                .map_err(AgentError::from),
             RowChange::TurnEnded {
                 total_cost_usd,
                 usage,
                 windows,
+                error,
             } => {
                 ended = Some(windows);
                 let totals = TurnTotals {
@@ -160,14 +163,11 @@ impl Supervisor {
                     cache_read_tokens: usage.cache_read_input_tokens,
                     cache_write_tokens: usage.cache_creation_input_tokens,
                 };
-                self.inner
-                    .store
-                    .write(async |tx| agents::record_turn(tx, id, totals, now).await)
-                    .await
+                self.end_turn(process, totals, error.as_ref()).await
             }
         };
         if let Err(error) = &written {
-            tracing::warn!(agent = %process.agent, code = error.log_code(), "could not record a worker's output");
+            tracing::warn!(agent = %process.agent, code = code_of(error), "could not record a worker's output");
         }
         if let Ok(event) = LiveEvent::new(
             types::WORKER_OUTPUT,
@@ -181,6 +181,50 @@ impl Supervisor {
         {
             self.after_turn(&process.agent, &windows).await;
         }
+    }
+
+    /// Counts a finished turn. A turn that ended in an error leaves Claude Code's text on the row; the turn that makes [`MODEL_UNREACHABLE_TURNS`] in a row that reached no model appends `worker.model_unreachable`, once per run of such turns, so the main agent and the worker's starter hear of it. A turn that ended well clears the error.
+    async fn end_turn(
+        &self,
+        process: &Process,
+        totals: TurnTotals,
+        error: Option<&TurnError>,
+    ) -> Result<(), AgentError> {
+        let now = self.inner.clock.now();
+        let id = process.id;
+        let agent = &process.agent;
+        let mut buffer = EventBuffer::new();
+        self.inner
+            .store
+            .write(async |tx| {
+                match error {
+                    Some(error) => {
+                        let failed = agents::record_turn_error(
+                            tx,
+                            id,
+                            &error.text,
+                            error.reached_model,
+                            now,
+                        )
+                        .await?;
+                        if failed == Some(MODEL_UNREACHABLE_TURNS) {
+                            let event =
+                                NewEvent::new(types::WORKER_MODEL_UNREACHABLE, EventActor::fold())?
+                                    .data(json!({
+                                        "agent": agent.as_str(),
+                                        "turns": MODEL_UNREACHABLE_TURNS,
+                                    }))?;
+                            buffer.append(tx, &event, now).await?;
+                        }
+                    }
+                    None => agents::clear_turn_error(tx, id).await?,
+                }
+                agents::record_turn(tx, id, totals, now).await?;
+                Ok::<_, AgentError>(())
+            })
+            .await?;
+        self.inner.bus.publish(buffer);
+        Ok(())
     }
 
     /// Ends a worker whose fold MCP server did not connect, which without the fold tools can only end its turns: the row ends `failed` with [`MCP_UNAVAILABLE`] at once, and the process is let go of and stopped, so the rest of its turn changes no row. A worker that a stop is ending is left to the stop. A failure that cannot be recorded still stops the process, whose exit then records the failure. The stop runs in a task of its own, because it waits for the exit that this process's reader records.
@@ -217,7 +261,7 @@ impl Supervisor {
         tokio::spawn(async move { supervisor.terminate(&run, true).await });
     }
 
-    /// A stop that fold asked for ends `stopped` with `worker.stopped`; any other exit ends `failed` with `worker.failed`. A process the daemon let go of at its own stop leaves the row as it was.
+    /// A stop that fold asked for ends `stopped` with `worker.stopped`; any other exit ends `failed` with `worker.failed`. A process the daemon let go of at its own stop leaves the row as it was. A process that exited with an error and wrote to stderr leaves the last lines it wrote as the row's last error, unless fold stopped it: the signals of a stop end it with an error too.
     async fn on_exit(
         &self,
         process: &Process,
@@ -235,6 +279,10 @@ impl Supervisor {
             }
             return Ok(());
         }
+        let stderr = match code {
+            Some(0) => None,
+            _ => process.stderr.text(LAST_LINES).await,
+        };
         let mut buffer = EventBuffer::new();
         let agent = &process.agent;
         self.inner
@@ -251,6 +299,9 @@ impl Supervisor {
                     agents::record_exit(tx, id, ProcessEnd::Stopped, code, now).await?;
                     stopped_event(&row, code)?
                 } else {
+                    if let Some(stderr) = &stderr {
+                        agents::set_exit_error(tx, id, stderr, now).await?;
+                    }
                     agents::record_exit(tx, id, ProcessEnd::Failed("exited"), code, now).await?;
                     NewEvent::new(types::WORKER_FAILED, EventActor::fold())?.data(json!({
                         "agent": agent.as_str(),

@@ -355,7 +355,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, and a worker that failed because it cannot reach fold. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed` and `worker.refreshed`. */
+        /** Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, and a worker whose turns fail before they reach the model. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, and with the live `worker.output` steps `result` and `result_error`, which end a turn. */
         get: operations["list_needs_you"];
         put?: never;
         post?: never;
@@ -1333,6 +1333,13 @@ export interface components {
              * @example mcp_unavailable
              */
             failed_reason: string | null;
+            /**
+             * @description Claude Code's error text of the process's latest failed turn or failed exit; null once a turn ends without an error.
+             * @example Invalid API key · Please run /login
+             */
+            last_error: string | null;
+            /** @description The process's turns failed often enough in a row without reaching the model that it cannot work until a human fixes Claude Code; the daemon decides it, and it is false for a stopped process. */
+            model_unreachable: boolean;
             state: components["schemas"]["WorkerProcessState"];
         };
         /** @description A connected session. A session has no public id; one adapter process is one session, so its pid names it. */
@@ -2010,7 +2017,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -2499,7 +2506,7 @@ export interface components {
              */
             question: string | null;
             /**
-             * @description The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, ends the conflict for `unstash_conflicted`, or lets the worker of a `worker_unreachable` reach fold again.
+             * @description The reason of a `blocker`; the command that brings the Git branch back for `head_moved`, records the folder's changes for `folder_held`, ends the conflict for `unstash_conflicted`, or lets the worker of a `worker_unreachable` reach fold again; what to check for a `worker_model_unreachable`.
              * @example Wait until the design is signed off
              */
             reason: string | null;
@@ -2519,7 +2526,7 @@ export interface components {
              */
             thread: string | null;
             /**
-             * @description The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`.
+             * @description The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`; Claude Code's error of a `worker_model_unreachable`.
              * @example Database schema for reports
              */
             title: string | null;
@@ -2533,7 +2540,7 @@ export interface components {
          * @description Why an item waits for a human.
          * @enum {string}
          */
-        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable";
+        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable" | "worker_model_unreachable";
         /** @description Every item that waits for a human, oldest first. */
         NeedsYouList: {
             items: components["schemas"]["NeedsYouEntry"][];
@@ -3979,8 +3986,30 @@ export interface components {
              * @example mcp_unavailable
              */
             failed_reason: string | null;
+            /**
+             * Format: int64
+             * @description The turns in a row that failed before any token reached the model.
+             */
+            failed_turns: number;
+            /**
+             * @description What the human checks for a worker that cannot reach the model; null otherwise.
+             * @example check the Claude Code sign-in, model and usage limit, or run `fld doctor`
+             */
+            hint: string | null;
+            /**
+             * @description Claude Code's error text of the worker's latest failed turn, or the last stderr lines of its latest process that exited with an error, at most 1000 characters; null once a turn ends without an error.
+             * @example Invalid API key · Please run /login
+             */
+            last_error: string | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of `last_error`; null without one.
+             */
+            last_error_at: number | null;
             /** @description The model Claude Code reported, or the one fold asked for; null for Claude Code's default before the first turn. */
             model: string | null;
+            /** @description The worker's turns failed often enough in a row without reaching the model that it cannot work until a human fixes Claude Code; the daemon decides it, and the human's list of what waits for them holds an item for it. */
+            model_unreachable: boolean;
             /**
              * @description The worker's agent name.
              * @example web-worker

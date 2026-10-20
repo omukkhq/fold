@@ -1,9 +1,10 @@
 use fold_core::layout::MCP_SERVER_NAME;
+use fold_core::turn_errors;
 use serde_json::{Value, json};
 
 use crate::services::agents::claude::{
     CanUseTool, ClaudeInput, ClaudeMessage, ContentBlock, ControlRequest, ControlResponseBody,
-    IncomingRequest, SystemMessage, Usage, UserContent,
+    IncomingRequest, ResultMessage, SystemMessage, Usage, UserContent,
 };
 
 /// What one stdout line of a worker changes. It holds counts, names and lengths, never text: the step goes into the live `worker.output` event and the change into the worker's row.
@@ -71,7 +72,38 @@ pub(super) enum RowChange {
         usage: Usage,
         /// The context window of each model the process used, by model name.
         windows: Vec<(String, u64)>,
+        /// The error a turn ended in; `None` for a turn that ended well.
+        error: Option<TurnError>,
     },
+}
+
+/// The error a turn ended in: Claude Code's text, bounded by [`turn_errors::error_text`], and whether any token of the turn reached the model. The text goes onto the worker's row only, never into a log or an event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TurnError {
+    pub text: String,
+    pub reached_model: bool,
+}
+
+/// The last error of a turn whose result names none.
+const NO_ERROR_TEXT: &str = "Claude Code ended the turn in an error without a message";
+
+/// The result's final text when it has one, else its `errors`. `usage` is the turn's own, so a turn that made no model call has 0 in every count; the running cost and `modelUsage` count the whole process.
+fn turn_error(result: &ResultMessage) -> TurnError {
+    let named = result
+        .result
+        .as_deref()
+        .and_then(turn_errors::error_text)
+        .or_else(|| turn_errors::error_text(&result.errors.join("\n")));
+    let usage = &result.usage;
+    let tokens = usage
+        .input_tokens
+        .saturating_add(usage.output_tokens)
+        .saturating_add(usage.cache_creation_input_tokens)
+        .saturating_add(usage.cache_read_input_tokens);
+    TurnError {
+        text: named.unwrap_or_else(|| NO_ERROR_TEXT.to_owned()),
+        reached_model: tokens > 0,
+    }
 }
 
 pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
@@ -150,6 +182,7 @@ pub(super) fn effect_of(message: &ClaudeMessage) -> LineEffect {
                     .iter()
                     .map(|(model, usage)| (model.clone(), usage.context_window))
                     .collect(),
+                error: result.is_error.then(|| turn_error(result)),
             },
             reply: None,
             permission: None,
@@ -404,6 +437,57 @@ mod tests {
             .unwrap(),
         );
         assert_eq!(other_block.step.kind, "other");
+    }
+
+    fn turn_error_of(effects: &[LineEffect]) -> Option<Option<TurnError>> {
+        effects.iter().find_map(|effect| match &effect.change {
+            RowChange::TurnEnded { error, .. } => Some(error.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn an_error_result_keeps_claude_codes_text_and_whether_the_turn_reached_the_model() {
+        assert_eq!(
+            turn_error_of(&effects("error_result")),
+            Some(Some(TurnError {
+                text: "No conversation found with session ID: 00000000-0000-4000-8000-000000000074"
+                    .to_owned(),
+                reached_model: false,
+            }))
+        );
+        assert_eq!(turn_error_of(&effects("result")), Some(None));
+        let interrupted = turn_error_of(&effects("interrupt")).flatten().unwrap();
+        assert!(
+            !interrupted.reached_model,
+            "an interrupted turn reports no tokens of its own"
+        );
+        let result = |line: &str| turn_error_of(&[effect_of(&ClaudeMessage::parse(line).unwrap())]);
+        assert_eq!(
+            result(
+                r#"{"type":"result","subtype":"success","is_error":true,"session_id":"s","result":"\u001b[31mNo access\u001b[0m","errors":["other"],"usage":{"output_tokens":5}}"#
+            ),
+            Some(Some(TurnError {
+                text: "No access".to_owned(),
+                reached_model: true,
+            }))
+        );
+        assert_eq!(
+            result(
+                r#"{"type":"result","subtype":"error_max_turns","is_error":true,"session_id":"s","result":" ","errors":["first","second"]}"#
+            ),
+            Some(Some(TurnError {
+                text: "first\nsecond".to_owned(),
+                reached_model: false,
+            }))
+        );
+        assert_eq!(
+            result(r#"{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s"}"#),
+            Some(Some(TurnError {
+                text: NO_ERROR_TEXT.to_owned(),
+                reached_model: false,
+            }))
+        );
     }
 
     #[test]
