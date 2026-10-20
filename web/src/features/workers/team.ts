@@ -144,6 +144,25 @@ export interface Step {
 
 export type StopControl = "stop" | "stopping" | null;
 
+/** The last error of a worker as its row shows it under the step: Claude Code's text, and what to check when the daemon says the worker cannot reach the model. */
+export interface RowError {
+  title: string;
+  /** Claude Code's text, shown as data. */
+  text: string;
+  /** The daemon's hint, with its commands between backticks; null when the worker still reaches the model. */
+  hint: string | null;
+}
+
+/** The row's error line; null for a worker whose last turn ended without an error. */
+export function rowError(worker: WorkerProcess): RowError | null {
+  if (worker.last_error === null) return null;
+  return {
+    title: worker.model_unreachable ? "cannot reach the model" : "last error",
+    text: worker.last_error,
+    hint: worker.hint,
+  };
+}
+
 export interface TeamRow {
   name: string;
   /** A child row is a short-lived worker, drawn under its lead. */
@@ -160,6 +179,7 @@ export interface TeamRow {
   cost: string;
   context: string;
   step: Step;
+  error: RowError | null;
   stop: StopControl;
 }
 
@@ -416,6 +436,7 @@ function runningRow(
       input.steps,
       waitsForTaskWorkers(worker, input.workers.workers),
     ),
+    error: rowError(worker),
     stop: stopControl(worker.state),
   };
 }
@@ -437,6 +458,7 @@ function mainRow(agent: AgentView, human: string | null): TeamRow {
     cost: NONE,
     context: NONE,
     step: faint(NONE),
+    error: null,
     stop: null,
   };
 }

@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Bell,
   ChevronRight,
+  CloudOff,
   FileWarning,
   FileX,
   FolderClock,
@@ -48,6 +49,7 @@ const ICONS: Record<NeedsYouKind, LucideIcon> = {
   unstash_conflicted: FileWarning,
   checks_file_invalid_on_main: FileX,
   worker_unreachable: Unplug,
+  worker_model_unreachable: CloudOff,
 };
 
 const MINUTE_MS = 60_000;

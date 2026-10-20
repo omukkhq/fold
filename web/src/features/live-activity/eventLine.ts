@@ -823,6 +823,10 @@ const SPECS: Record<EventType, Spec> = {
         ? "held the integrations: fold-checks.toml on main is not valid"
         : `held the integrations: fold-checks.toml on ${e.revision} is not valid`,
   },
+  "worker.model_unreachable": {
+    icon: TriangleAlert,
+    text: (e) => `${workerOf(e)} cannot reach the model`,
+  },
 };
 
 /** Every stored event type this build writes a line for. */

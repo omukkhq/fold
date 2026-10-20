@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { PersonName } from "@/people/PersonName";
 import { projectPath } from "@/routes/paths";
-import { StatePill, StepText } from "./parts";
+import { RowErrorText, StatePill, StepText } from "./parts";
 import { StopWorker } from "./StopWorker";
 import { areaNote, type TeamGroup, type TeamRow } from "./team";
 
@@ -135,6 +135,7 @@ function Row({
       <td className={cn(CELL, NUMBER)}>{row.context}</td>
       <td className={CELL}>
         <StepText step={row.step} />
+        {row.error === null ? null : <RowErrorText error={row.error} />}
       </td>
       <td className={CELL}>
         <StopCell slug={slug} row={row} human={human} />

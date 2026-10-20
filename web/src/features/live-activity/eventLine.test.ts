@@ -293,6 +293,9 @@ describe("eventLine", () => {
     expect(line("worker.failed", { agent: "web-worker" })).toBe(
       "web-worker failed",
     );
+    expect(line("worker.model_unreachable", { agent: "web-lead" })).toBe(
+      "web-lead cannot reach the model",
+    );
     expect(line("worker.refreshed", { agent: "web-lead", handoff: true })).toBe(
       "gave web-lead a fresh context with its hand-off note",
     );

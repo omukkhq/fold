@@ -27,6 +27,7 @@ import {
   mainPill,
   ownedTasks,
   pillSpec,
+  rowError,
   roleModel,
   roleName,
   stepOf,
@@ -253,6 +254,29 @@ describe("steps", () => {
     expect(pillSpec("paused").fill).toBe("bg-warning-soft");
     const [running] = teamGroups(input({ workers: workerList({ workers }) }));
     expect(running?.rows[0]?.pill).toEqual(workerPill("working"));
+  });
+
+  it("shows a worker's last error under its step, and what to check once it cannot reach the model", () => {
+    expect(rowError(workerProcess("web-lead"))).toBeNull();
+    expect(
+      rowError(workerProcess("web-lead", { last_error: "Reached max turns" })),
+    ).toEqual({ title: "last error", text: "Reached max turns", hint: null });
+    const failing = workerProcess("web-lead", {
+      state: "idle",
+      last_error: "Invalid key",
+      failed_turns: 3,
+      model_unreachable: true,
+      hint: "check the sign-in, or run `fld doctor`",
+    });
+    expect(rowError(failing)).toEqual({
+      title: "cannot reach the model",
+      text: "Invalid key",
+      hint: "check the sign-in, or run `fld doctor`",
+    });
+    const [group] = teamGroups(
+      input({ workers: workerList({ workers: [failing] }) }),
+    );
+    expect(group?.rows[0]?.error?.title).toBe("cannot reach the model");
   });
 
   it("offers Stop to a live process and a pending stop while it stops", () => {

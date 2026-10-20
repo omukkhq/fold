@@ -334,6 +334,39 @@ describe("needsYouGroups", () => {
     });
   });
 
+  it("shows a worker that cannot reach the model with Claude Code's error and what to check, after the workers that cannot reach fold", () => {
+    const groups = needsYouGroups("demo", [
+      needsItem({
+        kind: "worker_model_unreachable",
+        screen: "worker",
+        agent: "web-lead",
+        title: "Invalid `key`",
+        reason: "check the sign-in, or run `fld doctor`",
+      }),
+      needsItem({ kind: "worker_unreachable", agent: "api-lead" }),
+      needsItem({ kind: "worker_model_unreachable", agent: "api-worker" }),
+    ]);
+    expect(groups.map((group) => group.kind)).toEqual([
+      "worker_unreachable",
+      "worker_model_unreachable",
+    ]);
+    expect(groups[1]?.title).toBe("Model access");
+    expect(groups[1]?.lines[0]).toMatchObject({
+      person: "web-lead",
+      chip: null,
+      task: null,
+      title: "Invalid \\`key\\`",
+      text: "cannot reach the model: check the sign-in, or run `fld doctor`",
+      hint: "opens the agents",
+      href: "/p/demo/agents",
+    });
+    expect(groups[1]?.lines[1]).toMatchObject({
+      person: "api-worker",
+      title: null,
+      text: "cannot reach the model",
+    });
+  });
+
   it("counts what waits", () => {
     expect(waitingText(4)).toBe("4 waiting");
   });

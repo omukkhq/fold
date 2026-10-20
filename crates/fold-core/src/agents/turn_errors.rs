@@ -124,10 +124,7 @@ mod tests {
             error_text("\u{1b}]0;title\u{7}left\u{1b}]8;;x\u{1b}\\ right\u{1b}c!"),
             Some("left right!".to_owned())
         );
-        assert_eq!(
-            error_text("unended\u{1b}]8;;x"),
-            Some("unended".to_owned())
-        );
+        assert_eq!(error_text("unended\u{1b}]8;;x"), Some("unended".to_owned()));
         assert_eq!(error_text("cut\u{1b}["), Some("cut".to_owned()));
         assert_eq!(error_text(" \n\u{1b}[0m\r\n"), None);
         assert_eq!(error_text(""), None);

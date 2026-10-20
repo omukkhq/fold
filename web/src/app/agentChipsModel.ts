@@ -41,8 +41,23 @@ function withStalled(agent: ProjectAgent, text: string): string {
   return stalled > 0 ? `${text} · ${String(stalled)} stalled` : text;
 }
 
-/** A supervised agent runs Claude Code only during a turn, so its process tells its state; its presence would read offline between turns. */
+/** What the chip says of a process whose turns fail before they reach the model, which the daemon decides. */
+export const MODEL_UNREACHABLE_TEXT = "cannot reach the model";
+
+/** Whether the process failed for a reason the chip has words for, which the human fixes before anything else. */
+function knownFailure(process: AgentProcess): boolean {
+  return (
+    process.state === "failed" &&
+    process.failed_reason !== null &&
+    FAILED_REASONS[process.failed_reason] !== undefined
+  );
+}
+
+/** A supervised agent runs Claude Code only during a turn, so its process tells its state; its presence would read offline between turns. A process whose turns cannot reach the model says so, unless it failed for a reason the chip names. */
 function processText(agent: ProjectAgent, process: AgentProcess): string {
+  if (process.model_unreachable && !knownFailure(process)) {
+    return MODEL_UNREACHABLE_TEXT;
+  }
   switch (process.state) {
     case "working": {
       const working = workingCount(agent);
@@ -83,6 +98,11 @@ export function agentStateText(agent: ProjectAgent): string {
   return working === 0
     ? "waiting"
     : withStalled(agent, `${String(working)} working`);
+}
+
+/** The chip's tooltip: Claude Code's last error of the process the chip follows; undefined without one. */
+export function chipErrorTitle(agent: ProjectAgent): string | undefined {
+  return chipProcess(agent)?.last_error ?? undefined;
 }
 
 /** Whether a pause holds the agent: every agent but the main agent, whose session fold does not stop. */

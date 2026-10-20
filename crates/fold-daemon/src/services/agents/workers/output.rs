@@ -482,7 +482,9 @@ mod tests {
             }))
         );
         assert_eq!(
-            result(r#"{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s"}"#),
+            result(
+                r#"{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s"}"#
+            ),
             Some(Some(TurnError {
                 text: NO_ERROR_TEXT.to_owned(),
                 reached_model: false,

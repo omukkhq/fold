@@ -858,7 +858,10 @@ async fn a_failed_turn_keeps_its_error_until_a_turn_ends_without_one() {
             .await
             .unwrap()
     };
-    assert_eq!((row().await.last_error, row().await.failed_turns), (None, 0));
+    assert_eq!(
+        (row().await.last_error, row().await.failed_turns),
+        (None, 0)
+    );
     assert_eq!(failed("Not signed in", false, 20).await, Some(1));
     assert_eq!(failed("Not signed in", false, 30).await, Some(2));
     let kept = row().await;
@@ -876,7 +879,11 @@ async fn a_failed_turn_keeps_its_error_until_a_turn_ends_without_one() {
         .unwrap();
     let cleared = row().await;
     assert_eq!(
-        (cleared.last_error, cleared.last_error_at, cleared.failed_turns),
+        (
+            cleared.last_error,
+            cleared.last_error_at,
+            cleared.failed_turns
+        ),
         (None, None, 0)
     );
     store

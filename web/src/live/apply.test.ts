@@ -367,6 +367,7 @@ describe("patch rules", () => {
       expect(hit(keys.agents(slug)), step).toBe(true);
       expect(hit(keys.workers(slug)), step).toBe(true);
       expect(hit(keys.activity(slug)), step).toBe(false);
+      expect(hit(keys.needsYou(slug)), step).toBe(step !== "init");
     }
   });
 

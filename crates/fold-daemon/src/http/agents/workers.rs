@@ -249,7 +249,10 @@ pub struct WorkerEntry {
     /// The worker's turns failed often enough in a row without reaching the model that it cannot work until a human fixes Claude Code; the daemon decides it, and the human's list of what waits for them holds an item for it.
     pub model_unreachable: bool,
     /// What the human checks for a worker that cannot reach the model; null otherwise.
-    #[schema(required = true, example = "check the Claude Code sign-in, model and usage limit, or run `fld doctor`")]
+    #[schema(
+        required = true,
+        example = "check the Claude Code sign-in, model and usage limit, or run `fld doctor`"
+    )]
     pub hint: Option<String>,
     /// The prompt cache time of the worker's role from `.fold/config.toml`, `1h` or `5m`; null when fold cannot read the file.
     #[schema(required = true, example = "5m")]
@@ -283,7 +286,8 @@ impl WorkerEntry {
             last_error_at: row.last_error_at,
             failed_turns: row.failed_turns,
             model_unreachable,
-            hint: model_unreachable.then(|| fold_core::turn_errors::MODEL_UNREACHABLE_HINT.to_owned()),
+            hint: model_unreachable
+                .then(|| fold_core::turn_errors::MODEL_UNREACHABLE_HINT.to_owned()),
             cache_ttl,
         }
     }

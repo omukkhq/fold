@@ -30,6 +30,11 @@ export function workerProcess(
     context_tokens: 164_000,
     exit_code: null,
     failed_reason: null,
+    last_error: null,
+    last_error_at: null,
+    failed_turns: 0,
+    model_unreachable: false,
+    hint: null,
     cache_ttl: "1h",
     ...fields,
   };
