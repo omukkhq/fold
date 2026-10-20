@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT MAX(number) AS \"number?: i64\" FROM notes",
+  "describe": {
+    "columns": [
+      {
+        "name": "number?: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "a190e4c02ba2a11c6b3dd60ee9cee35bfe3051926a1bd7254260097d6ab32026"
+}

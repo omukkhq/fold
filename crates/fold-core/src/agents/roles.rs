@@ -706,6 +706,29 @@ mod tests {
     }
 
     #[test]
+    fn leads_record_their_decisions_and_workers_tell_their_lead() {
+        for prompt in [
+            Role::AreaLead.prompt(),
+            Role::ReviewLead.prompt(),
+            main_prompt(),
+        ] {
+            assert!(prompt.contains("without asking"));
+            assert!(prompt.contains("with `add_note`"));
+            assert!(prompt.contains("`list_notes`"));
+            assert!(prompt.contains("a default, an interpretation"));
+        }
+        for role in [Role::AreaLead, Role::ReviewLead] {
+            assert!(role.prompt().contains("record that too"), "{role:?}");
+        }
+        for role in [Role::TaskWorker, Role::Reviewer] {
+            let prompt = role.prompt();
+            assert!(prompt.contains("without asking the human"), "{role:?}");
+            assert!(prompt.contains("records it as a note"), "{role:?}");
+            assert!(prompt.contains("`note_denied`"), "{role:?}");
+        }
+    }
+
+    #[test]
     fn workers_get_their_claims_from_their_lead_and_never_claim() {
         for role in [Role::TaskWorker, Role::Reviewer] {
             let prompt = role.prompt();

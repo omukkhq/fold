@@ -11,6 +11,12 @@ use crate::error::{FoldError, codes};
 use crate::events::EventActor;
 use crate::text::{LineFault, one_line};
 
+mod notes;
+
+pub use notes::{
+    MAX_LINK_PATH, MAX_NOTE_LINKS, MAX_NOTE_TEXT, MAX_NOTE_TITLE, NoteDraft, NoteLink,
+};
+
 const TAG_PREFIX: &str = "tag:";
 const HUMAN_PREFIX: &str = EventActor::HUMAN_PREFIX;
 pub(crate) const ALL: &str = "all";

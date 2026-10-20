@@ -327,6 +327,54 @@ pub fn can_send_message(actor: &Actor) -> Result<(), PolicyDenied> {
     }
 }
 
+/// Who writes a decision note: the agents that decide for an area or for the project and answer to the human for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteAuthor {
+    Main,
+    AreaLead,
+    ReviewLead,
+}
+
+/// A note records a decision that an agent took without asking the human, so the human reads it later and asks its author about it. The main agent and the leads write notes; a task worker or a reviewer takes its decisions within its lead's work, so it tells its lead and the lead writes the note. A session without a fold role, a human and the system write none. `standing` is the acting agent's.
+pub fn can_add_note(actor: &Actor, standing: AgentStanding) -> Result<NoteAuthor, PolicyDenied> {
+    let Actor::Agent(_) = actor else {
+        return Err(PolicyDenied {
+            code: codes::NOTE_DENIED,
+            message: "only the main agent and the leads write decision notes",
+            hint: "ask the agent that took the decision in its chat",
+        });
+    };
+    if standing.is_main_agent() {
+        return Ok(NoteAuthor::Main);
+    }
+    match standing.role {
+        Some(Role::AreaLead) => Ok(NoteAuthor::AreaLead),
+        Some(Role::ReviewLead) => Ok(NoteAuthor::ReviewLead),
+        Some(Role::TaskWorker | Role::Reviewer) => Err(PolicyDenied {
+            code: codes::NOTE_DENIED,
+            message: "a worker that fold started tells its lead about a decision, and the lead writes the note",
+            hint: "send_message to your lead with the decision and its reason",
+        }),
+        None => Err(PolicyDenied {
+            code: codes::NOTE_DENIED,
+            message: "only the main agent and the leads write decision notes",
+            hint: "send_message to the main agent with the decision and its reason",
+        }),
+    }
+}
+
+/// A human's read mark on the notes says which notes that human has seen, so only a named human moves it.
+pub fn can_mark_notes_read(actor: &Actor) -> Result<(), PolicyDenied> {
+    if actor.is_human() {
+        return Ok(());
+    }
+    Err(PolicyDenied {
+        code: codes::HUMAN_REQUIRED,
+        message: "only a human marks notes as read",
+        hint: "read the notes with list_notes",
+    })
+}
+
 /// A reviewer judges someone else's work, so no worker of the author's agent reviews it, whatever its role. `comment` and `request_changes` are open to every other agent and to any human; `approve` and `reject` decide the proposal's fate, so they need an agent that [decides reviews](AgentStanding::decides_reviews) or a human. The system never reviews. `standing` is the acting agent's. It returns the admitted reviewer.
 pub fn can_submit_verdict<'a>(
     actor: &'a Actor,
@@ -567,6 +615,38 @@ mod tests {
         holds_main: true,
         role: None,
     };
+
+    #[test]
+    fn the_main_agent_and_the_leads_write_notes_and_workers_tell_their_lead() {
+        let lead = agent("web-lead", &[]);
+        assert_eq!(can_add_note(&lead, MAIN), Ok(NoteAuthor::Main));
+        assert_eq!(
+            can_add_note(&lead, supervised(Role::AreaLead)),
+            Ok(NoteAuthor::AreaLead)
+        );
+        assert_eq!(
+            can_add_note(&lead, supervised(Role::ReviewLead)),
+            Ok(NoteAuthor::ReviewLead)
+        );
+        for role in [Role::TaskWorker, Role::Reviewer] {
+            let denied = can_add_note(&lead, supervised(role)).unwrap_err();
+            assert_eq!(denied.code(), codes::NOTE_DENIED);
+            assert!(denied.hint().contains("your lead"), "{role}");
+        }
+        let unsupervised = can_add_note(&lead, UNSUPERVISED).unwrap_err();
+        assert!(unsupervised.hint().contains("main agent"));
+        for actor in [human(), Actor::System] {
+            assert_eq!(
+                outcome(can_add_note(&actor, AgentStanding::NO_RIGHTS)),
+                Some(codes::NOTE_DENIED)
+            );
+        }
+        assert!(can_mark_notes_read(&human()).is_ok());
+        assert_eq!(
+            outcome(can_mark_notes_read(&lead)),
+            Some(codes::HUMAN_REQUIRED)
+        );
+    }
 
     /// The standing [`actors`] act with: only `review` is the review lead.
     fn standing_of(case: &str) -> AgentStanding {

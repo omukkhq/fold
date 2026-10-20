@@ -3,12 +3,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use fold_core::text::shorten;
-use fold_core::{AgentName, FoldError, TaskId, Timestamp, WorkerName, codes};
+use fold_core::{AgentName, FoldError, NoteId, TaskId, Timestamp, WorkerName, codes};
 use fold_store::agents::{self, ClaimKind};
 use fold_store::messages;
 
 use super::overview::OverviewFilter;
 use super::{AgentError, AgentService};
+use crate::services::messages::start_notes;
 use crate::services::tasks::TaskService;
 
 /// The longest context the session-start hook hands to Claude Code, in characters.
@@ -19,6 +20,10 @@ pub const CONTEXT_READY_TASKS: usize = 5;
 const CONTEXT_CLAIMS: usize = 10;
 /// The longest task title the context repeats, in characters.
 const CONTEXT_TITLE: usize = 100;
+/// How many recent decision notes the context names.
+pub const CONTEXT_NOTES: usize = 5;
+/// The longest note title the context repeats, in characters.
+const CONTEXT_NOTE_TITLE: usize = 80;
 
 /// One claim as the context names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,10 +46,12 @@ pub struct SessionFacts {
     pub claims: Vec<ContextClaim>,
     /// The first [`CONTEXT_READY_TASKS`] ready tasks, in ready order.
     pub ready: Vec<(TaskId, String)>,
+    /// The newest [`CONTEXT_NOTES`] decision notes the agent keeps to, newest first, each with its title.
+    pub notes: Vec<(NoteId, String)>,
 }
 
 impl AgentService {
-    /// The text the session-start hook adds to a new Claude Code session of `agent`: who it is, its unread messages, its claims with the minutes left on each lease at the clock's time, and the top ready tasks. Nothing is written.
+    /// The text the session-start hook adds to a new Claude Code session of `agent`: who it is, its unread messages, its claims with the minutes left on each lease at the clock's time, the top ready tasks and the recent decision notes it keeps to. Nothing is written.
     pub async fn session_context(
         &self,
         project: &str,
@@ -65,6 +72,7 @@ impl AgentService {
             unread: 0,
             claims: Vec::new(),
             ready,
+            notes: Vec::new(),
         };
         let Some(row) = agents::find_agent(self.store.read(), agent).await? else {
             return Ok(render(&facts));
@@ -90,6 +98,17 @@ impl AgentService {
             }
         }
         facts.claims.sort_by_key(|claim| claim.task);
+        let mut conn = self
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(fold_store::StoreError::from)?;
+        facts.notes = start_notes(&mut conn, agent, CONTEXT_NOTES as u32)
+            .await?
+            .into_iter()
+            .map(|note| (note.id, note.title))
+            .collect();
         Ok(render(&facts))
     }
 }
@@ -158,6 +177,13 @@ pub fn render(facts: &SessionFacts) -> String {
         text.push_str("Ready tasks:\n");
         for (task, title) in &facts.ready {
             let _ = writeln!(text, "- {task} {}", shorten(title, CONTEXT_TITLE));
+        }
+    }
+    // The notes come last, so a long context loses notes before it loses claims or ready tasks.
+    if !facts.notes.is_empty() {
+        text.push_str("Recent decision notes, which you keep to (list_notes reads them):\n");
+        for (note, title) in &facts.notes {
+            let _ = writeln!(text, "- {note} {}", shorten(title, CONTEXT_NOTE_TITLE));
         }
     }
     shorten(text.trim_end(), MAX_SESSION_CONTEXT)

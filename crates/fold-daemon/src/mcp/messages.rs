@@ -2,8 +2,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 use fold_core::{
-    Address, Choice, FoldError, MessageBody, MessageChoices, MessageId, ProposalId, RequestId,
-    TaskId, Timestamp, codes,
+    Address, AgentName, AreaName, Choice, FoldError, MessageBody, MessageChoices, MessageId,
+    NoteDraft, NoteId, ProposalId, RequestId, TaskId, Timestamp, codes,
 };
 use fold_store::agents::WorkerRow;
 use rmcp::handler::server::common::schema_for_type;
@@ -16,12 +16,16 @@ use super::error::{from_agent, from_message};
 use super::parse;
 use super::{FoldServer, FooterPart, FooterSource};
 use crate::services::agents::{AgentService, SessionContext};
-use crate::services::messages::{InboxItem, MessageService, MessageView, SendMessage};
+use crate::services::messages::{
+    InboxItem, MessageService, MessageView, NoteFilter, NoteView, SendMessage,
+};
 
 pub const SEND_MESSAGE: &str = "send_message";
 pub const GET_INBOX: &str = "get_inbox";
 pub const GET_THREAD: &str = "get_thread";
 pub const ACKNOWLEDGE_MESSAGE: &str = "acknowledge_message";
+pub const ADD_NOTE: &str = "add_note";
+pub const LIST_NOTES: &str = "list_notes";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -127,6 +131,43 @@ pub struct AcknowledgeMessageInput {
     pub as_worker: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct AddNoteInput {
+    /// A short one-line title of the decision, at most 200 characters, such as "Cards sort by due date".
+    pub title: String,
+    /// What you decided, in plain words, at most 4000 characters. It is stored as plain text and never logged.
+    pub decision: String,
+    /// Why you decided it, such as the default you took, how you read the task or the trade-off, at most 4000 characters.
+    pub reason: String,
+    /// Up to 20 links to what the decision concerns, in fold's mention forms: a task #T-12, a proposal #P-3, a request #RQ-2, a file of main @web/src/board.ts, a folder @web/src/, or a file of a workspace @ws-9:web/src/board.ts.
+    #[serde(default)]
+    pub links: Vec<String>,
+    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct ListNotesInput {
+    /// Only the notes of this area, such as web. Leave it out for the notes of every area and those without one.
+    #[serde(default)]
+    pub area: Option<String>,
+    /// Only the notes that this agent wrote, such as web-lead.
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// Only notes older than this one, such as n-40: pass the `next` of the previous page.
+    #[serde(default)]
+    pub before: Option<String>,
+    /// How many notes to return, newest first; 50 when left out, at most 200.
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
 pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
@@ -148,6 +189,16 @@ pub fn tools() -> Vec<Tool> {
             ACKNOWLEDGE_MESSAGE,
             "Mark a message as handled, so it leaves your inbox and the unread count. With up_to, also every earlier message of the same worker.",
             schema_for_type::<AcknowledgeMessageInput>(),
+        ),
+        Tool::new(
+            ADD_NOTE,
+            "Record a decision you took without asking the human, such as a default, an interpretation, a trade-off or a convention: a title, the decision, the reason and links. The human reads it on the Notes screen and asks you in the chat when it needs clarification; a note asks nothing and changes no task. Only the main agent, an area lead and the review lead write notes; a task worker or a reviewer gets note_denied and tells its lead with send_message. A note of an area lead belongs to its area. Notes never change once written.",
+            schema_for_type::<AddNoteInput>(),
+        ),
+        Tool::new(
+            LIST_NOTES,
+            "Read the decision notes, newest first, optionally of one area or one agent. Keep to the decisions they record; a lead and its workers start with their area's recent notes.",
+            schema_for_type::<ListNotesInput>(),
         ),
     ]
 }
@@ -340,6 +391,72 @@ pub async fn acknowledge_message(
         .await
         .map_err(from_message)?;
     Ok(json!({ "acknowledged": ids(&acknowledged) }))
+}
+
+fn note_json(note: &NoteView) -> Value {
+    let mut object = Map::new();
+    object.insert("id".into(), json!(note.id.to_string()));
+    object.insert("author".into(), json!(note.author.as_str()));
+    if let Some(area) = &note.area {
+        object.insert("area".into(), json!(area.as_str()));
+    }
+    object.insert("title".into(), json!(note.title));
+    object.insert("decision".into(), json!(note.decision));
+    object.insert("reason".into(), json!(note.reason));
+    if !note.links.is_empty() {
+        object.insert("links".into(), json!(note.links));
+    }
+    object.insert("written_at".into(), json!(millis(note.written_at)));
+    Value::Object(object)
+}
+
+pub async fn add_note(
+    server: &FoldServer,
+    worker: &WorkerRow,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: AddNoteInput = parse(arguments)?;
+    let draft = NoteDraft::parse(&input.title, &input.decision, &input.reason, &input.links)?;
+    let actor = server.actor(Some(&worker.name)).await?;
+    let note = server
+        .messages
+        .add_note(&actor, draft)
+        .await
+        .map_err(from_message)?;
+    let mut result = Map::new();
+    result.insert("id".into(), json!(note.id.to_string()));
+    if let Some(area) = &note.area {
+        result.insert("area".into(), json!(area.as_str()));
+    }
+    Ok(Value::Object(result))
+}
+
+pub async fn list_notes(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
+    let input: ListNotesInput = parse(arguments)?;
+    let filter = NoteFilter {
+        agent: input.agent.as_deref().map(AgentName::parse).transpose()?,
+        area: input.area.as_deref().map(AreaName::parse).transpose()?,
+        before: input
+            .before
+            .as_deref()
+            .map(str::parse::<NoteId>)
+            .transpose()?,
+        limit: input.limit,
+    };
+    let page = server
+        .messages
+        .notes(&filter, None)
+        .await
+        .map_err(from_message)?;
+    let mut result = Map::new();
+    result.insert(
+        "notes".into(),
+        json!(page.notes.iter().map(note_json).collect::<Vec<_>>()),
+    );
+    if let Some(next) = page.next {
+        result.insert("next".into(), json!(next.to_string()));
+    }
+    Ok(Value::Object(result))
 }
 
 /// The `unread` part of the footer: the unacknowledged messages of every worker of the calling agent.

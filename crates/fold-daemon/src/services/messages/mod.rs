@@ -20,10 +20,13 @@ use crate::services::fired;
 
 mod chat;
 mod inbox;
+mod notes;
 mod threads;
 
 pub use chat::{ChatPage, DEFAULT_CHAT_LIMIT, MAX_CHAT_LIMIT};
 pub use inbox::{InboxItem, unread_count};
+pub(crate) use notes::start_notes;
+pub use notes::{DEFAULT_NOTE_LIMIT, MAX_NOTE_LIMIT, NoteFilter, NotePage, NoteView};
 pub use threads::{
     DEFAULT_THREAD_LIMIT, Feedback, MAX_THREAD_LIMIT, ThreadPage, ThreadQuery, ThreadView,
 };

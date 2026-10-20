@@ -214,6 +214,10 @@ impl FoldServer {
             (messages::SEND_MESSAGE, Some(worker)) => {
                 messages::send_message(self, worker, arguments).await?
             }
+            (messages::ADD_NOTE, Some(worker)) => {
+                messages::add_note(self, worker, arguments).await?
+            }
+            (messages::LIST_NOTES, Some(_)) => messages::list_notes(self, arguments).await?,
             (workspaces::GET_REPOSITORY_STATE, Some(_)) => {
                 workspaces::get_repository_state(self, arguments).await?
             }

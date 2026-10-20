@@ -27,6 +27,7 @@ mod acceptance_17_stash;
 mod acceptance_18_project_checks;
 mod acceptance_19_direct_chat;
 mod acceptance_1_three_sessions;
+mod acceptance_20_decision_notes;
 mod acceptance_2_messaging;
 mod acceptance_3_parallel_workspaces;
 mod acceptance_4_live_diff;

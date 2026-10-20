@@ -11,6 +11,8 @@ use crate::columns::time;
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
+pub mod notes;
+
 /// The values of a new message. Every reference is a public id; the insert resolves each to its row.
 #[derive(Debug, Clone)]
 pub struct NewMessage<'a> {

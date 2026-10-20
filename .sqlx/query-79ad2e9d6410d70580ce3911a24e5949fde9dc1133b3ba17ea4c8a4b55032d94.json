@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO notes (number, author_worker_id, area_id, title, decision, reason, links, created_at)\n         VALUES (?1,\n                 (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id\n                  WHERE a.name = ?2 AND w.name = ?3),\n                 (SELECT id FROM areas WHERE name = ?4), ?5, ?6, ?7, ?8, ?9)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "79ad2e9d6410d70580ce3911a24e5949fde9dc1133b3ba17ea4c8a4b55032d94"
+}

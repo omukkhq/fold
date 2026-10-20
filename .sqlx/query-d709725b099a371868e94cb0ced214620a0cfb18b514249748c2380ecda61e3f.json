@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT n.number, w.name AS author, ar.name AS \"area?: String\", n.title, n.decision,\n                  n.reason, n.links, n.created_at\n           FROM notes n\n           JOIN workers w ON w.id = n.author_worker_id\n           JOIN agents a ON a.id = w.agent_id\n           LEFT JOIN areas ar ON ar.id = n.area_id\n           WHERE (?1 IS NULL OR a.name = ?1)\n             AND (?2 = 'any' OR (?2 = 'none' AND n.area_id IS NULL) OR (?2 = 'area' AND ar.name = ?3))\n             AND (?4 IS NULL OR n.number < ?4)\n           ORDER BY n.number DESC\n           LIMIT ?5",
+  "describe": {
+    "columns": [
+      {
+        "name": "number",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notes",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "author",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "area?: String",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "areas",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "notes",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "decision",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "notes",
+            "name": "decision"
+          }
+        }
+      },
+      {
+        "name": "reason",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "notes",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "name": "links",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "notes",
+            "name": "links"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notes",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d709725b099a371868e94cb0ced214620a0cfb18b514249748c2380ecda61e3f"
+}

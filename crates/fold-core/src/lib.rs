@@ -35,7 +35,7 @@ pub use events::{
 };
 pub use ids::{
     ChangesetId, CheckRunId, ChecklistItemId, CheckpointId, CommentId, IdKind, IdParseError,
-    IntegrationId, MessageId, PermissionQuestionId, ProposalId, RequestId, ReviewBatchId,
+    IntegrationId, MessageId, NoteId, PermissionQuestionId, ProposalId, RequestId, ReviewBatchId,
     RevisionId, TaskId, WebTokenId, WorkspaceId,
 };
 pub use layout::{
@@ -44,7 +44,7 @@ pub use layout::{
 };
 pub use messages::{
     Address, AddressError, AddressedAs, Choice, Directory, DirectoryAgent, MessageBody,
-    MessageChoices, Recipient, ResolveError, Sender, Target,
+    MessageChoices, NoteDraft, NoteLink, Recipient, ResolveError, Sender, Target,
 };
 pub use policy::PolicyDenied;
 pub use projects::{choose_slug, slugify};

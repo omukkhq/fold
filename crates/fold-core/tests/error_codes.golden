@@ -160,3 +160,4 @@ checks_file_invalid
 checks_running
 check_run_not_found
 worker_claim_denied
+note_denied

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 
-const FOLD_TOOLS: [&str; 90] = [
+const FOLD_TOOLS: [&str; 92] = [
     "register_agent",
     "register_worker",
     "list_agents",
@@ -94,13 +94,15 @@ const FOLD_TOOLS: [&str; 90] = [
     "run_checks",
     "get_check_run",
     "set_review_scope",
+    "add_note",
+    "list_notes",
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 157] = [
+const FOLD_ERROR_CODES: [&str; 158] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -258,6 +260,7 @@ const FOLD_ERROR_CODES: [&str; 157] = [
     "checks_running",
     "check_run_not_found",
     "worker_claim_denied",
+    "note_denied",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.

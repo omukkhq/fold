@@ -176,6 +176,7 @@ define_codes! {
     CHECKS_RUNNING = "checks_running",
     CHECK_RUN_NOT_FOUND = "check_run_not_found",
     WORKER_CLAIM_DENIED = "worker_claim_denied",
+    NOTE_DENIED = "note_denied",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

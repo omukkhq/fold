@@ -419,6 +419,14 @@ pub async fn standing_of(
     }
 }
 
+/// [`standing_of`] for an agent named outside a call, such as the agent of a session that starts.
+pub async fn standing_of_agent(
+    executor: impl SqliteExecutor<'_>,
+    agent: &AgentName,
+) -> Result<AgentStanding, StoreError> {
+    standing(executor, agent).await
+}
+
 /// Whether `agent` has the `main` tag and the role of its worker process. An unknown agent stands as one that fold does not supervise.
 async fn standing(
     executor: impl SqliteExecutor<'_>,

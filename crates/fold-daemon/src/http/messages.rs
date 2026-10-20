@@ -1,7 +1,10 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use fold_core::{Address, AgentName, Choice, FoldError, MessageBody, MessageId, RequestId, TaskId};
+use fold_core::{
+    Address, AgentName, AreaName, Choice, FoldError, MessageBody, MessageId, NoteId, RequestId,
+    TaskId,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
@@ -19,6 +22,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(show_thread))
         .routes(routes!(send_feedback))
         .routes(routes!(show_chat, send_chat))
+        .routes(routes!(list_notes))
+        .routes(routes!(read_notes))
 }
 
 /// One recipient row. Names starting `human:` are humans.
@@ -437,4 +442,174 @@ pub async fn send_chat(
         .send_chat(&human.actor(), &agent, body)
         .await?;
     Ok((StatusCode::CREATED, Json(message.into())))
+}
+
+/// A decision note that the main agent or a lead wrote about a decision it took without asking the human.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct NoteView {
+    #[schema(example = "n-4")]
+    pub id: String,
+    /// The worker that wrote the note.
+    #[schema(example = "web-lead")]
+    pub author: String,
+    /// The agent of the author, whose direct chat answers questions about the note.
+    #[schema(example = "web-lead")]
+    pub agent: String,
+    /// The area of the area lead that wrote it; null for a note of the main agent or the review lead.
+    #[schema(required = true, example = "web")]
+    pub area: Option<String>,
+    #[schema(example = "Cards sort by due date")]
+    pub title: String,
+    /// Plain text.
+    pub decision: String,
+    /// Plain text.
+    pub reason: String,
+    /// What the decision concerns, in fold's mention forms such as `#T-12` or `@web/src/board.ts`.
+    pub links: Vec<String>,
+    /// UTC milliseconds.
+    pub written_at: i64,
+}
+
+impl From<service::NoteView> for NoteView {
+    fn from(note: service::NoteView) -> Self {
+        Self {
+            id: note.id.to_string(),
+            agent: note.author.agent().to_string(),
+            author: note.author.to_string(),
+            area: note.area.map(|area| area.to_string()),
+            title: note.title,
+            decision: note.decision,
+            reason: note.reason,
+            links: note.links,
+            written_at: note.written_at.as_millis(),
+        }
+    }
+}
+
+/// One page of decision notes, newest first.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct NotesPage {
+    pub items: Vec<NoteView>,
+    /// Pass as `before` for the page of older notes; null when this page holds the oldest.
+    #[schema(required = true, example = "n-40")]
+    pub next: Option<String>,
+    /// How many notes of the whole project the reading human has not read; null when the request names no human.
+    #[schema(required = true, example = 2)]
+    pub unread: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct NotesParams {
+    /// Only the notes that this agent wrote, such as `web-lead`.
+    pub agent: Option<String>,
+    /// Only the notes of this area, such as `web`.
+    pub area: Option<String>,
+    /// The `next` of the newer page: only notes before it.
+    pub before: Option<String>,
+    /// The page size: 50 when left out, at most 200.
+    pub limit: Option<u32>,
+}
+
+/// The decision notes of the project, newest first, with the reading human's unread count. A note never asks the human anything, so it is never a Needs you item.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/notes",
+    operation_id = "list_notes",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        NotesParams,
+    ),
+    responses(
+        (status = 200, description = "One page of notes", body = NotesPage),
+        (status = 400, description = "`invalid_name`: `agent` or `area` is not a name; `invalid_id`: `before` is not a note id; `invalid_request`: `limit` is 0", body = ErrorEnvelope),
+        (status = 404, description = "`project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn list_notes(
+    human: Result<Human, ApiError>,
+    State(state): State<AppState>,
+    project: Project,
+    ApiQuery(params): ApiQuery<NotesParams>,
+) -> Result<Json<NotesPage>, ApiError> {
+    let filter = service::NoteFilter {
+        agent: params
+            .agent
+            .as_deref()
+            .map(AgentName::parse)
+            .transpose()
+            .map_err(FoldError::from)?,
+        area: params
+            .area
+            .as_deref()
+            .map(AreaName::parse)
+            .transpose()
+            .map_err(FoldError::from)?,
+        before: params
+            .before
+            .as_deref()
+            .map(str::parse::<NoteId>)
+            .transpose()
+            .map_err(FoldError::from)?,
+        limit: params.limit,
+    };
+    let reader = human.ok().map(|human| human.0);
+    let page = project
+        .0
+        .messages(&state.registry)
+        .notes(&filter, reader.as_ref())
+        .await?;
+    Ok(Json(NotesPage {
+        items: page.notes.into_iter().map(Into::into).collect(),
+        next: page.next.map(|id| id.to_string()),
+        unread: page.unread,
+    }))
+}
+
+/// How far a human has read the notes.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ReadNotesRequest {
+    /// The newest note the human has seen, such as `n-12`; every note up to it counts as read.
+    #[schema(example = "n-12")]
+    pub through: String,
+}
+
+/// The human's unread count after a read mark.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct NotesRead {
+    #[schema(example = 0)]
+    pub unread: u64,
+}
+
+/// A named human marks the notes up to `through` as read. The mark only moves forward, and other humans keep their own.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/notes/read",
+    operation_id = "read_notes",
+    params(("slug" = String, Path, description = "The project slug")),
+    request_body = ReadNotesRequest,
+    responses(
+        (status = 200, description = "The human's unread count after the mark", body = NotesRead),
+        (status = 400, description = "`invalid_id`: `through` is not a note id; `invalid_request`: a malformed request", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "`unknown_human` or `project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn read_notes(
+    human: Human,
+    State(state): State<AppState>,
+    project: Project,
+    ApiJson(request): ApiJson<ReadNotesRequest>,
+) -> Result<Json<NotesRead>, ApiError> {
+    let through = request.through.parse::<NoteId>().map_err(FoldError::from)?;
+    let unread = project
+        .0
+        .messages(&state.registry)
+        .mark_notes_read(&human.actor(), through)
+        .await?;
+    Ok(Json(NotesRead { unread }))
 }

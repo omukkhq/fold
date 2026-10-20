@@ -31,9 +31,10 @@ INSERT INTO worker_permission_closures (question_id, created_at) VALUES (3, 0);
 INSERT INTO worker_question_messages (question_id, position, message_id) VALUES (2, 1, 1);
 INSERT INTO message_choices (message_id, position, label) VALUES (1, 1, 'Red');
 INSERT INTO review_again_requests (version_id, requested_by_human, created_at) VALUES (1, 'ana', 0);
+INSERT INTO notes (number, author_worker_id, title, decision, reason, created_at) VALUES (1, 1, 't', 'd', 'r', 0);
 ";
 
-const APPEND_ONLY: [&str; 18] = [
+const APPEND_ONLY: [&str; 19] = [
     "completions",
     "revisions",
     "changesets",
@@ -52,6 +53,7 @@ const APPEND_ONLY: [&str; 18] = [
     "worker_question_messages",
     "message_choices",
     "review_again_requests",
+    "notes",
 ];
 
 /// The append-only tables whose rows are derived in the transaction of a row that carries the time, so they have no `created_at` of their own.
@@ -115,6 +117,8 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "message_question_headers",
         "message_recipients",
         "messages",
+        "note_reads",
+        "notes",
         "project_pause",
         "proposal_versions",
         "proposals",

@@ -5,7 +5,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use fold_core::{
-    Actor, Address, AgentActor, AgentName, HumanName, MessageBody, TaskDescription, TaskId,
+    Actor, Address, AgentActor, AgentName, HumanName, MessageBody, NoteId, TaskDescription, TaskId,
     TaskTitle, WorkerName, codes,
 };
 use fold_daemon::daemon::{AppState, DaemonState};
@@ -381,6 +381,7 @@ fn the_context_is_capped_at_1500_characters_and_counts_the_claims_it_leaves_out(
         ready: (20..25)
             .map(|number| (t(number), "é".repeat(400)))
             .collect(),
+        notes: vec![(NoteId::from_number(3).unwrap(), "n".repeat(300))],
     };
     let text = render_session_context(&facts);
     assert_eq!(text.chars().count(), MAX_SESSION_CONTEXT);
@@ -399,6 +400,10 @@ fn the_context_is_capped_at_1500_characters_and_counts_the_claims_it_leaves_out(
     assert!(text.contains("- and 4 more\n"));
     let title = format!("- T-20 {}…\n", "é".repeat(99));
     assert!(text.contains(&title), "a title is cut to 100 characters");
+    assert!(
+        !text.contains("n-3"),
+        "the notes are cut before the ready tasks"
+    );
 
     let short = SessionFacts {
         project: "demo".to_owned(),
@@ -409,6 +414,14 @@ fn the_context_is_capped_at_1500_characters_and_counts_the_claims_it_leaves_out(
     };
     assert_eq!(
         render_session_context(&short),
-        "fold project demo.\nYou are agent frontend, main worker frontend.\nUnread messages: 0.\nClaims: none.\nReady tasks: none."
+        format!(
+            "fold project demo.\nYou are agent frontend, main worker frontend.\nUnread messages: 0.\nClaims: none.\nReady tasks: none.\nRecent decision notes, which you keep to (list_notes reads them):\n- n-3 {}…",
+            "n".repeat(79)
+        )
     );
+    let none = SessionFacts {
+        notes: Vec::new(),
+        ..short
+    };
+    assert!(render_session_context(&none).ends_with("Ready tasks: none."));
 }

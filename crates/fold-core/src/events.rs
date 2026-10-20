@@ -153,6 +153,7 @@ define_event_types! {
     INTEGRATION_UNQUEUED = "integration.unqueued",
     INTEGRATION_HELD = "integration.held",
     REVIEW_SCOPE_CHOSEN = "review.scope_chosen",
+    NOTE_ADDED = "note.added",
 }
 
 impl EventType {

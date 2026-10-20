@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO note_reads (human, through, read_at) VALUES (?1, ?2, ?3)\n         ON CONFLICT (human) DO UPDATE SET through = max(through, excluded.through), read_at = excluded.read_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "378c1caed1e98bd1b42845b80dd0d19faecac68b59bd5c2ad19fab4e7ba24643"
+}

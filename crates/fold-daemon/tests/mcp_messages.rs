@@ -157,7 +157,7 @@ fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
 }
 
 #[tokio::test]
-async fn the_four_tools_are_listed_with_described_inputs() {
+async fn the_message_and_note_tools_are_listed_with_described_inputs() {
     let fixture = Fixture::new().await;
     let client = fixture.connect("frontend").await;
     let tools = client.list_all_tools().await.unwrap();
@@ -166,6 +166,8 @@ async fn the_four_tools_are_listed_with_described_inputs() {
         "get_inbox",
         "get_thread",
         "acknowledge_message",
+        "add_note",
+        "list_notes",
     ] {
         let tool = tools
             .iter()
