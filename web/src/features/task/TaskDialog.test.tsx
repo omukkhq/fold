@@ -1747,14 +1747,22 @@ describe("the human edits", () => {
     ).toBe("/p/demo/repository?path=web%2Freport.tsx");
   }, 15_000);
 
-  it("lets the feedback box address an agent from the agent list", async () => {
+  it("lists the claim holder once and the other agents after it", async () => {
     const { dialog } = await openTask();
     const messages = region(dialog, "Messages");
     await waitFor(() => {
       expect(
-        within(messages).getByRole("option", { name: "frontend/ui" }),
+        within(messages).getByRole("option", { name: "frontend" }),
       ).toBeTruthy();
     }, WAIT);
+    expect(
+      within(messages).getAllByRole("option", { name: /frontend\/ui/ }),
+    ).toHaveLength(1);
+    expect(
+      within(messages).getByRole("option", {
+        name: "frontend/ui (claim holder)",
+      }),
+    ).toBeTruthy();
   }, 15_000);
 });
 

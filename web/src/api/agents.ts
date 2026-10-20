@@ -15,6 +15,9 @@ export type WorkspaceView = Schemas["WorkerWorkspace"];
 export type ProposalView = Schemas["AuthoredProposal"];
 export type DurableEvent = Schemas["DurableEvent"];
 
+/** The tag of the main agent, the user's own session that `fld claude` starts. The daemon lets only one agent hold it at a time. */
+export const MAIN_TAG = "main";
+
 /** How many recent events the Agents screen asks for per agent. */
 export const RECENT_EVENTS = 5;
 

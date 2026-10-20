@@ -1,4 +1,5 @@
 import type { ProjectAgent } from "../api/agentBar";
+import { MAIN_TAG } from "../api/agents";
 import { formatAsOfMinute } from "../format/time";
 import type { LiveStatus } from "../live/status";
 import { syncedAt } from "./streamStatusModel";
@@ -107,7 +108,7 @@ export function chipErrorTitle(agent: ProjectAgent): string | undefined {
 
 /** Whether a pause holds the agent: every agent but the main agent, whose session fold does not stop. */
 function pausedAgent(agent: ProjectAgent, paused: boolean): boolean {
-  return paused && !agent.tags.includes("main");
+  return paused && !agent.tags.includes(MAIN_TAG);
 }
 
 /** The dot beside the name: the state of the process the chip follows as a presence, so a lead between turns shows idle instead of offline; for any other agent, its presence. A pause ends every worker process but keeps its row's state, so a paused agent's dot is offline. */

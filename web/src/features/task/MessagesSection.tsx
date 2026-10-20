@@ -22,6 +22,7 @@ import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { MentionTextarea } from "@/mentions/MentionTextarea";
 import { threadPath } from "./links";
+import { recipientOptions } from "./recipients";
 import { SectionHead, submit, WriteError } from "./parts";
 import { feedbackSchema, type FeedbackForm } from "./schemas";
 import {
@@ -125,17 +126,9 @@ function FeedbackBox({
           {...form.register("to")}
         >
           {holder === null ? <option value="">Choose a reader</option> : null}
-          {holder === null ? null : (
-            <option value="holder">{holder} (claim holder)</option>
-          )}
-          {(targets.data?.agents ?? []).map((agent) => (
-            <option key={`agent:${agent}`} value={`agent:${agent}`}>
-              {agent}
-            </option>
-          ))}
-          {(targets.data?.tags ?? []).map((tag) => (
-            <option key={`tag:${tag}`} value={`tag:${tag}`}>
-              tag {tag}
+          {recipientOptions(holder, targets.data).map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
             </option>
           ))}
         </select>
