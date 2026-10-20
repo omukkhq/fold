@@ -52,6 +52,16 @@ pub struct StartWorker {
     pub instructions: Option<String>,
 }
 
+/// What `start_worker` gave. An area or the review role keeps one lead, so a start for a lead that exists and has ended resumes that lead under its own name instead of starting a new agent.
+#[derive(Debug, Clone)]
+pub struct StartedWorker {
+    pub worker: WorkerProcessRow,
+    /// The start resumed the existing lead.
+    pub resumed: bool,
+    /// The name the start asked for that the resumed lead does not have.
+    pub unused_name: Option<AgentName>,
+}
+
 /// The stable code of an agent error for a log line.
 pub(crate) fn code_of(error: &AgentError) -> &'static str {
     error.log_code()
@@ -329,12 +339,12 @@ impl AgentService {
         Ok(held)
     }
 
-    /// Starts a worker agent: the agent and its main worker, its process row in state `starting`, its binding and its claims, in one transaction with `worker.started`; then its Claude Code process with its first turn. Only a lead claims, so the start gives the new worker its work: a task worker the implementation claim on each of its tasks (see [`assign_in_tx`]), a reviewer the review claim on its one proposal or a batch of its two or more (see [`assign_reviews_in_tx`]). A claim that cannot be given refuses the whole start, so no worker runs without its claims. A task worker is refused for a human task (`task_needs_human`) and for a task on hold (`task_on_hold`). A lead whose area or role already has a stopped or failed lead resumes that lead instead, and starts it in a new session when its old one is gone.
+    /// Starts a worker agent: the agent and its main worker, its process row in state `starting`, its binding and its claims, in one transaction with `worker.started`; then its Claude Code process with its first turn. Only a lead claims, so the start gives the new worker its work: a task worker the implementation claim on each of its tasks (see [`assign_in_tx`]), a reviewer the review claim on its one proposal or a batch of its two or more (see [`assign_reviews_in_tx`]). A claim that cannot be given refuses the whole start, so no worker runs without its claims. A task worker is refused for a human task (`task_needs_human`) and for a task on hold (`task_on_hold`). A lead whose area or role already has a stopped or failed lead resumes that lead instead, under its own name whatever name the start asked for, and starts it in a new session when its old one is gone; [`StartedWorker`] says so.
     pub async fn start_worker(
         &self,
         actor: &Actor,
         request: StartWorker,
-    ) -> Result<WorkerProcessRow, AgentError> {
+    ) -> Result<StartedWorker, AgentError> {
         let supervisor = self.supervisor()?.clone();
         let role = request.role.ok_or_else(|| {
             invalid(
@@ -583,7 +593,11 @@ impl AgentService {
                 supervisor
                     .launch(&row, false, Some(turn(&row.agent)))
                     .await?;
-                self.get_worker(&row.agent).await
+                Ok(StartedWorker {
+                    worker: self.get_worker(&row.agent).await?,
+                    resumed: false,
+                    unused_name: None,
+                })
             }
             Started::Resume(agent) => {
                 let text = turn(&agent);
@@ -594,7 +608,11 @@ impl AgentService {
                         request.instructions.clone(),
                     ));
                 }
-                self.get_worker(&agent).await
+                Ok(StartedWorker {
+                    worker: self.get_worker(&agent).await?,
+                    resumed: true,
+                    unused_name: request.name.filter(|name| *name != agent),
+                })
             }
         }
     }

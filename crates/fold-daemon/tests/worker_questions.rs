@@ -679,6 +679,7 @@ async fn a_supervisor_that_falls_behind_its_bus_still_answers_a_replied_question
         )
         .await
         .unwrap()
+        .worker
         .agent;
     // The reply goes out on a bus of its own, so its event never reaches the supervisor.
     let messages = MessageService::new(

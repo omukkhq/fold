@@ -18,7 +18,7 @@ use super::error::from_agent;
 use super::parse;
 use crate::services::agents::{
     AgentOverview, ClaimSummary, OverviewFilter, PauseState, ProposalSummary, StartWorker,
-    WorkerOverview, WorkspaceSummary,
+    StartedWorker, WorkerOverview, WorkspaceSummary,
 };
 
 pub const GET_ACTIVITY: &str = "get_activity";
@@ -95,7 +95,7 @@ pub struct UpdateAreaInput {
 pub struct StartWorkerInput {
     /// area_lead or review_lead (started by the main agent), task_worker (started by an area lead) or reviewer (started by the review lead).
     pub role: String,
-    /// The worker's agent name. Leave it out for a name from the role and area, such as web-lead or web-worker-2.
+    /// The worker's agent name. Leave it out for a name from the role and area, such as web-lead or web-worker-2. An area keeps one lead and a project one review lead: when that lead exists and has stopped or failed, fold resumes it under its own name and does not use this name; the result then has resumed true and the unused name.
     #[serde(default)]
     pub name: Option<String>,
     /// The area of an area lead. A task worker takes its lead's area; leave it out for the other roles.
@@ -212,7 +212,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             START_WORKER,
-            "Start a worker agent that fold runs and supervises: the main agent starts an area lead or the review lead, an area lead starts a task worker for tasks of its area, the review lead starts a reviewer for one proposal or a group of related proposals. fold gives the new worker its claims in the same step: the implementation claim on each task, or the review claim on the one proposal, or a review batch of two or more. A task or proposal that another running worker holds refuses the start with already_claimed; a stale claim, a claim of a worker that has ended and a task claim of your own agent move to the new worker. A group with a proposal whose task has the human review mark is refused with invalid_request: give that proposal to a reviewer alone. Refused over the worker limits.",
+            "Start a worker agent that fold runs and supervises: the main agent starts an area lead or the review lead, an area lead starts a task worker for tasks of its area, the review lead starts a reviewer for one proposal or a group of related proposals. fold gives the new worker its claims in the same step: the implementation claim on each task, or the review claim on the one proposal, or a review batch of two or more. A task or proposal that another running worker holds refuses the start with already_claimed; a stale claim, a claim of a worker that has ended and a task claim of your own agent move to the new worker. A group with a proposal whose task has the human review mark is refused with invalid_request: give that proposal to a reviewer alone. Refused over the worker limits. An area has one lead and the project one review lead: while it runs, a start is refused with area_has_lead or worker_exists; once it has stopped or failed, a start resumes that lead under its own name, ignores name, and says resumed with its session.",
             schema_for_type::<StartWorkerInput>(),
         ),
         Tool::new(
@@ -365,12 +365,34 @@ pub async fn start_worker(
         instructions: input.instructions,
     };
     let actor = server.actor(as_worker).await?;
-    let worker = server
+    let started = server
         .agents
         .start_worker(&actor, request)
         .await
         .map_err(from_agent)?;
-    Ok(json!({ "worker": worker_process_json(&worker) }))
+    Ok(started_json(&started))
+}
+
+/// A start that resumed the existing lead says so, with the session fold resumes and the turns the lead has had, because the caller may have asked for a new agent. fold learns only after the result whether that session is gone, so the hint names both outcomes.
+fn started_json(started: &StartedWorker) -> Value {
+    let worker = &started.worker;
+    let mut value = json!({ "worker": worker_process_json(worker) });
+    if !started.resumed {
+        return value;
+    }
+    value["resumed"] = json!(true);
+    value["session"] = json!(worker.session_id);
+    let mut unused = String::new();
+    if let Some(name) = &started.unused_name {
+        value["unused_name"] = json!(name.as_str());
+        unused = format!(", and did not use the name {name}");
+    }
+    let hint = format!(
+        "fold resumed {}, the existing lead (turns so far: {}), in its session, or in a new session with its hand-off note when that session is gone{unused}; message it with send_message or read it with list_workers",
+        worker.agent, worker.turns
+    );
+    value["hint"] = json!(hint);
+    value
 }
 
 pub async fn stop_worker(

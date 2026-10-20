@@ -447,7 +447,7 @@ pub async fn start_worker(
         ..StartWorker::default()
     };
     let agents = project.0.agents();
-    let worker = agents.start_worker(&human.actor(), request).await?;
+    let worker = agents.start_worker(&human.actor(), request).await?.worker;
     let config = agents.worker_config().await;
     Ok((
         StatusCode::CREATED,

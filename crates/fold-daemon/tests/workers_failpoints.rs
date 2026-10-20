@@ -94,7 +94,7 @@ async fn a_stop_before_the_process_starts_leaves_no_process_running() {
     assert_eq!(stopped.state, WorkerState::Stopped);
     fail::remove(BEFORE_SPAWN);
     let started = start.await.unwrap().unwrap();
-    assert_eq!(started.state, WorkerState::Stopped);
+    assert_eq!(started.worker.state, WorkerState::Stopped);
     eventually(WAIT, async || {
         if harness.handle.workers.is_running(&lead) {
             Err(())

@@ -2452,3 +2452,65 @@ async fn a_row_that_holds_a_synthetic_model_launches_without_it_and_forgets_it()
         "the row holds the model that answered"
     );
 }
+
+#[tokio::test]
+async fn a_start_for_an_area_whose_lead_ended_resumes_that_lead_and_says_the_name_went_unused() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    let idle = until_state(&harness, &lead, WorkerState::Idle).await;
+    let start = json!({"role": "area_lead", "area": "web", "name": "web-lead2"});
+    let refused = harness.refused(MAIN, "start_worker", start.clone()).await;
+    assert_eq!(refused["code"], codes::AREA_HAS_LEAD, "{refused}");
+
+    harness
+        .call(MAIN, "stop_worker", json!({"name": lead}))
+        .await;
+    until_state(&harness, &lead, WorkerState::Stopped).await;
+    let resumed = harness.call(MAIN, "start_worker", start).await;
+    assert_eq!(resumed["worker"]["name"], lead.as_str(), "{resumed}");
+    assert_eq!(resumed["resumed"], true, "{resumed}");
+    assert_eq!(resumed["session"], idle.session_id.as_str(), "{resumed}");
+    assert_eq!(resumed["unused_name"], "web-lead2", "{resumed}");
+    let hint = resumed["hint"].as_str().unwrap();
+    assert!(
+        hint.contains("fold resumed web-lead, the existing lead (turns so far: 1), in its session")
+            && hint
+                .contains("or in a new session with its hand-off note when that session is gone")
+            && hint.contains("did not use the name web-lead2")
+            && hint.contains("send_message"),
+        "{hint}"
+    );
+    let runs = until_runs(&fake, &lead, 2, 2).await;
+    assert_eq!(runs[1].flag("--resume"), Some(idle.session_id.as_str()));
+    let agents = harness.call(MAIN, "list_agents", json!({})).await;
+    assert!(
+        !agents.to_string().contains("web-lead2"),
+        "no agent of the unused name: {agents}"
+    );
+
+    until_state(&harness, &lead, WorkerState::Idle).await;
+    harness
+        .call(MAIN, "stop_worker", json!({"name": lead}))
+        .await;
+    until_state(&harness, &lead, WorkerState::Stopped).await;
+    let unnamed = harness
+        .call(
+            MAIN,
+            "start_worker",
+            json!({"role": "area_lead", "area": "web"}),
+        )
+        .await;
+    assert_eq!(unnamed["resumed"], true, "{unnamed}");
+    assert!(unnamed.get("unused_name").is_none(), "{unnamed}");
+    assert!(
+        !unnamed["hint"].as_str().unwrap().contains("did not use"),
+        "{unnamed}"
+    );
+    let fresh = harness
+        .call(MAIN, "start_worker", json!({"role": "review_lead"}))
+        .await;
+    assert!(fresh.get("resumed").is_none(), "{fresh}");
+}
