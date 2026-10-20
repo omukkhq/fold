@@ -433,6 +433,49 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
     }
 }
 
+/// What waits for a lead whose process starts again in its own session: for an area lead the ready tasks of its area in the ready order, for the review lead the open proposals that have no verdict on their current version. A claim hides a task or proposal only while its worker runs or the same start runs it again, because a start moves the claim of a worker that has ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatchUpFacts<'a> {
+    pub role: Role,
+    pub area: Option<&'a AreaName>,
+    pub tasks: &'a [TaskId],
+    pub proposals: &'a [ProposalId],
+}
+
+/// The part of a restarted lead's turn that names the work waiting for it, at most [`SUMMARY_ITEMS`] ids. fold stores no push notice, so the lead may never have heard of this work. `None` for the other roles and when nothing waits, so a lead with nothing to do stays idle.
+pub fn catch_up_turn(facts: &CatchUpFacts<'_>) -> Option<String> {
+    fn listed(ids: Vec<String>) -> String {
+        let more = ids.len().saturating_sub(SUMMARY_ITEMS);
+        let named = ids
+            .into_iter()
+            .take(SUMMARY_ITEMS)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if more == 0 {
+            named
+        } else {
+            format!("{named} and {more} more")
+        }
+    }
+    match facts.role {
+        Role::AreaLead if !facts.tasks.is_empty() => {
+            let area = facts
+                .area
+                .map(|area| format!(" of area {area}"))
+                .unwrap_or_default();
+            Some(format!(
+                "These tasks{area} are ready and wait for a task worker: {}. fold may not have told you of each one. Read each with get_task, find the others with get_ready_tasks, and start task workers for them with start_worker, which also moves the claim of a worker that has ended.",
+                listed(facts.tasks.iter().map(ToString::to_string).collect())
+            ))
+        }
+        Role::ReviewLead if !facts.proposals.is_empty() => Some(format!(
+            "These open proposals wait for a review: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, then review them yourself or give them to reviewers with start_worker, which also moves the claim of a reviewer that has ended.",
+            listed(facts.proposals.iter().map(ToString::to_string).collect())
+        )),
+        Role::AreaLead | Role::ReviewLead | Role::TaskWorker | Role::Reviewer => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -875,5 +918,48 @@ mod tests {
             });
             assert!(turn.starts_with("fold started you as web-lead"));
         }
+    }
+
+    #[test]
+    fn a_catch_up_names_what_waits_for_the_lead_and_nothing_when_nothing_waits() {
+        let web = area("web");
+        let tasks: Vec<TaskId> = (1..=3).filter_map(TaskId::from_number).collect();
+        let proposals = [ProposalId::from_number(4).unwrap()];
+        let facts = |role, tasks, proposals| CatchUpFacts {
+            role,
+            area: Some(&web),
+            tasks,
+            proposals,
+        };
+        let lead = catch_up_turn(&facts(Role::AreaLead, &tasks, &[])).unwrap();
+        assert!(
+            lead.starts_with(
+                "These tasks of area web are ready and wait for a task worker: T-1, T-2, T-3."
+            ),
+            "{lead}"
+        );
+        assert!(
+            lead.contains("get_ready_tasks") && lead.contains("start_worker"),
+            "{lead}"
+        );
+        let review = catch_up_turn(&CatchUpFacts {
+            area: None,
+            ..facts(Role::ReviewLead, &[], &proposals)
+        })
+        .unwrap();
+        assert!(review.contains("wait for a review: P-4."), "{review}");
+        assert!(
+            review.contains("list_proposals") && review.contains("start_worker"),
+            "{review}"
+        );
+        assert_eq!(catch_up_turn(&facts(Role::AreaLead, &[], &proposals)), None);
+        assert_eq!(catch_up_turn(&facts(Role::ReviewLead, &tasks, &[])), None);
+        for role in [Role::TaskWorker, Role::Reviewer] {
+            assert_eq!(catch_up_turn(&facts(role, &tasks, &proposals)), None);
+        }
+        let many: Vec<TaskId> = (1..=25).filter_map(TaskId::from_number).collect();
+        let long = catch_up_turn(&facts(Role::AreaLead, &many, &[])).unwrap();
+        assert!(long.contains("T-20 and 5 more."), "{long}");
+        assert!(!long.contains("T-21"), "{long}");
     }
 }

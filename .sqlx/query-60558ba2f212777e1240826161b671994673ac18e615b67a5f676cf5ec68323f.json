@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.number AS \"number!: i64\", t.created_at, w.name AS holder\n           FROM tasks t\n           JOIN claims c ON c.task_id = t.id AND c.kind = 'implementation' AND c.released_at IS NULL\n           JOIN workers w ON w.id = c.worker_id\n           WHERE t.status = 'todo' AND t.archived_at IS NULL\n             AND t.kind <> 'human' AND t.hold_reason IS NULL\n           ORDER BY t.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "holder",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "60558ba2f212777e1240826161b671994673ac18e615b67a5f676cf5ec68323f"
+}

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use axum::http::{Method, StatusCode};
 use fold_core::{Actor, AgentActor, AgentName, Clock, HumanName, WorkerName, WorkerState, codes};
-use fold_daemon::services::agents::{MCP_RETRY_TURN, RESTART_TURN};
+use fold_daemon::services::agents::{MCP_RETRY_TURN, PAUSE_TURN, RESTART_TURN};
 use fold_daemon::services::events::BusMessage;
 use fold_store::agents::WorkerProcessRow;
 use fold_store::testing::{eventually, remove_dir_eventually};
@@ -556,6 +556,13 @@ async fn a_daemon_restart_resumes_a_working_lead() {
     let runs = until_runs(&fake, &lead, 2, 2).await;
     assert_eq!(runs[1].flag("--resume"), Some(working.session_id.as_str()));
     assert!(runs[1].stdin[1].contains(RESTART_TURN));
+    assert!(
+        runs[1].stdin[1]
+            .contains("These tasks of area web are ready and wait for a task worker: T-1."),
+        "the restart turn also names the ready task: {:?}",
+        runs[1].stdin
+    );
+    assert_eq!(user_turns(&runs[1]).len(), 1, "{:?}", runs[1].stdin);
     let resumed = until_state(&harness, &lead, WorkerState::Working).await;
     assert_eq!(resumed.session_id, working.session_id);
     assert!(harness.handle.workers.is_running(&name(&lead)));
@@ -1869,10 +1876,13 @@ async fn a_daemon_start_during_a_pause_leaves_a_worker_that_could_not_reach_fold
     let runs = until_runs(&fake, &lead, 2, 2).await;
     assert_eq!(runs[1].flag("--resume"), Some(failed.session_id.as_str()));
     assert!(
-        runs[1].stdin[1].contains(MCP_RETRY_TURN),
-        "{:?}",
+        runs[1].stdin[1].contains(MCP_RETRY_TURN)
+            && runs[1].stdin[1]
+                .contains("These tasks of area web are ready and wait for a task worker: T-1."),
+        "the retry turn also names the ready task: {:?}",
         runs[1].stdin
     );
+    assert_eq!(user_turns(&runs[1]).len(), 1, "{:?}", runs[1].stdin);
     until_state(&harness, &lead, WorkerState::Idle).await;
 }
 
@@ -2513,4 +2523,378 @@ async fn a_start_for_an_area_whose_lead_ended_resumes_that_lead_and_says_the_nam
         .call(MAIN, "start_worker", json!({"role": "review_lead"}))
         .await;
     assert!(fresh.get("resumed").is_none(), "{fresh}");
+}
+
+/// The user turns among the stdin lines of `run`.
+fn user_turns(run: &Run) -> Vec<&String> {
+    run.stdin
+        .iter()
+        .filter(|line| line.contains(r#""type":"user""#))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_task_made_ready_while_its_lead_could_not_reach_fold_gets_a_worker_after_the_daemon_start()
+ {
+    let mut fake = FakeClaude::new("mcp_failed");
+    let turns = tempfile::TempDir::new().unwrap();
+    let turn = writable_turn(&mut fake, &turns, "mcp_failed");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    until_state(&harness, &lead, WorkerState::Failed).await;
+    eventually(WAIT, async || {
+        if harness.handle.workers.is_running(&name(&lead)) {
+            Err(())
+        } else {
+            Ok(())
+        }
+    })
+    .await;
+    let created = harness
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Style the page", "labels": ["ui"]}),
+        )
+        .await;
+    assert_eq!(created["id"], "T-3", "{created}");
+
+    std::fs::copy(crate::workers_support::fixture("result"), &turn).unwrap();
+    harness.restart().await;
+    until_runs(&fake, &lead, 2, 2).await;
+    until_state(&harness, &lead, WorkerState::Idle).await;
+    let runs = fake.runs_of(&lead);
+    let resumed = user_turns(&runs[1]);
+    assert_eq!(resumed.len(), 1, "one turn: {resumed:?}");
+    assert!(resumed[0].contains(MCP_RETRY_TURN), "{}", resumed[0]);
+    assert!(
+        resumed[0]
+            .contains("These tasks of area web are ready and wait for a task worker: T-1, T-3."),
+        "{}",
+        resumed[0]
+    );
+
+    harness.connect(&lead).await;
+    let started = harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-3"]}),
+        )
+        .await;
+    assert_eq!(started["worker"]["name"], "web-worker", "{started}");
+    let view = harness.call(MAIN, "get_task", json!({"id": "T-3"})).await;
+    assert_eq!(view["claim"]["holder"], "web-worker", "{view}");
+}
+
+#[tokio::test]
+async fn an_idle_lead_gets_a_turn_at_a_daemon_start_only_when_ready_tasks_wait_for_it() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    until_state(&harness, &lead, WorkerState::Idle).await;
+
+    harness.stop().await;
+    harness.start_again().await;
+    until_runs(&fake, &lead, 2, 2).await;
+    let idle = until_state(&harness, &lead, WorkerState::Idle).await;
+    assert_eq!(idle.turns, 2);
+    let runs = fake.runs_of(&lead);
+    let caught_up = user_turns(&runs[1]);
+    assert_eq!(caught_up.len(), 1, "{caught_up:?}");
+    assert!(
+        caught_up[0].contains("These tasks of area web are ready and wait for a task worker: T-1."),
+        "{}",
+        caught_up[0]
+    );
+    assert!(!caught_up[0].contains(RESTART_TURN), "{}", caught_up[0]);
+
+    harness.connect(&lead).await;
+    harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    until_state(&harness, "web-worker", WorkerState::Idle).await;
+    harness.stop().await;
+    harness.start_again().await;
+    let row = worker(&harness, &lead).await;
+    assert_eq!(
+        (row.state, row.turns),
+        (WorkerState::Idle, 2),
+        "nothing waits for the lead, so it gets no turn"
+    );
+    let runs = until_runs(&fake, &lead, 3, 1).await;
+    assert!(user_turns(&runs[2]).is_empty(), "{:?}", runs[2].stdin);
+}
+
+#[tokio::test]
+async fn a_pause_resume_names_the_tasks_that_turned_ready_in_the_same_turn() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    until_state(&harness, &lead, WorkerState::Idle).await;
+    harness.call(MAIN, "pause_project", json!({})).await;
+    eventually(WAIT, async || {
+        if harness.handle.workers.is_running(&name(&lead)) {
+            Err(())
+        } else {
+            Ok(())
+        }
+    })
+    .await;
+    harness
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Style the page", "labels": ["ui"]}),
+        )
+        .await;
+
+    harness.call(MAIN, "resume_project", json!({})).await;
+    until_runs(&fake, &lead, 2, 2).await;
+    let idle = until_state(&harness, &lead, WorkerState::Idle).await;
+    assert_eq!(idle.turns, 2, "one turn after the resume");
+    let runs = fake.runs_of(&lead);
+    let resumed = user_turns(&runs[1]);
+    assert_eq!(resumed.len(), 1, "{resumed:?}");
+    assert!(resumed[0].contains(PAUSE_TURN), "{}", resumed[0]);
+    assert!(
+        resumed[0].contains("wait for a task worker: T-1, T-3."),
+        "{}",
+        resumed[0]
+    );
+}
+
+#[tokio::test]
+async fn a_review_lead_hears_at_a_daemon_start_of_the_proposals_that_wait_for_a_review() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let started = harness
+        .call(MAIN, "start_worker", json!({"role": "review_lead"}))
+        .await;
+    let review_lead = started["worker"]["name"].as_str().unwrap().to_owned();
+    until_state(&harness, &review_lead, WorkerState::Idle).await;
+    let lead = start_lead(&mut harness, "web").await;
+    harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    until_state(&harness, "web-worker", WorkerState::Idle).await;
+    harness.connect("web-worker").await;
+    let work = harness.start_work("web-worker", "T-1").await;
+    std::fs::write(work.dir.join("page.html"), "<p>page</p>\n").unwrap();
+    let proposal = harness.propose("web-worker", &work, "Draw the page").await;
+    until_state(&harness, "web-worker", WorkerState::Stopped).await;
+    until_state(&harness, &review_lead, WorkerState::Idle).await;
+    until_state(&harness, &lead, WorkerState::Idle).await;
+    let before = worker(&harness, &lead).await.turns;
+
+    harness.restart().await;
+    let runs = until_runs(&fake, &review_lead, 2, 2).await;
+    let caught_up = user_turns(&runs[1]);
+    assert_eq!(caught_up.len(), 1, "{caught_up:?}");
+    assert!(
+        caught_up[0].contains(&format!(
+            "These open proposals wait for a review: {proposal}."
+        )),
+        "{}",
+        caught_up[0]
+    );
+    let row = worker(&harness, &lead).await;
+    assert_eq!(
+        (row.state, row.turns),
+        (WorkerState::Idle, before),
+        "T-1 is in review, so nothing waits for its area lead"
+    );
+}
+
+#[tokio::test]
+async fn a_catch_up_names_in_ready_order_only_the_ready_tasks_of_the_area_that_no_live_worker_holds()
+ {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let lead = start_lead(&mut harness, "web").await;
+    until_state(&harness, &lead, WorkerState::Idle).await;
+    for task in [
+        json!({"title": "Check the page on a phone", "labels": ["ui"], "kind": "human"}),
+        json!({"title": "Pick the font", "labels": ["ui"]}),
+        json!({"title": "Size the logo", "labels": ["ui"]}),
+        json!({"title": "Name the page"}),
+        json!({"title": "Draw the icon", "labels": ["ui"]}),
+        json!({"title": "Draw the footer", "labels": ["ui"]}),
+        json!({"title": "Draw the header", "labels": ["ui"]}),
+    ] {
+        harness.call(MAIN, "create_task", task).await;
+    }
+    harness
+        .call(
+            MAIN,
+            "set_blocker",
+            json!({"id": "T-4", "reason": "Wait for the brand colours"}),
+        )
+        .await;
+    harness
+        .call(MAIN, "archive_task", json!({"id": "T-5"}))
+        .await;
+    harness
+        .call(
+            MAIN,
+            "add_dependency",
+            json!({"task": "T-9", "needs": "T-8"}),
+        )
+        .await;
+    harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    until_state(&harness, "web-worker", WorkerState::Idle).await;
+    until_state(&harness, &lead, WorkerState::Idle).await;
+    let before = fake.runs_of(&lead).len();
+
+    harness.stop().await;
+    harness.start_again().await;
+    let runs = until_runs(&fake, &lead, before + 1, 2).await;
+    let caught_up = user_turns(&runs[before]);
+    assert_eq!(caught_up.len(), 1, "{caught_up:?}");
+    assert!(
+        caught_up[0]
+            .contains("These tasks of area web are ready and wait for a task worker: T-8, T-7."),
+        "T-8 frees T-9, so it comes first; the running worker's T-1, the human T-3, the blocked T-4, the archived T-5, T-6 in no area and T-2 of another area are left out: {}",
+        caught_up[0]
+    );
+}
+
+#[tokio::test]
+async fn a_claim_of_a_stopped_worker_hides_no_work_from_the_catch_up_and_a_live_one_does() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    areas(&harness).await;
+    let started = harness
+        .call(MAIN, "start_worker", json!({"role": "review_lead"}))
+        .await;
+    let review_lead = started["worker"]["name"].as_str().unwrap().to_owned();
+    until_state(&harness, &review_lead, WorkerState::Idle).await;
+    harness.connect(&review_lead).await;
+    let lead = start_lead(&mut harness, "web").await;
+    harness
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Draw the footer", "labels": ["ui"]}),
+        )
+        .await;
+    let mut proposals = Vec::new();
+    for (worker, task) in [("web-worker", "T-1"), ("web-worker-2", "T-3")] {
+        harness
+            .call(
+                &lead,
+                "start_worker",
+                json!({"role": "task_worker", "tasks": [task]}),
+            )
+            .await;
+        until_state(&harness, worker, WorkerState::Idle).await;
+        harness.connect(worker).await;
+        let work = harness.start_work(worker, task).await;
+        std::fs::write(work.dir.join(format!("{task}.html")), "<p>page</p>\n").unwrap();
+        proposals.push(harness.propose(worker, &work, "Draw the page").await);
+        until_state(&harness, worker, WorkerState::Stopped).await;
+    }
+    for (reviewer, proposal) in [("reviewer", &proposals[0]), ("reviewer-2", &proposals[1])] {
+        let given = harness
+            .call(
+                &review_lead,
+                "start_worker",
+                json!({"role": "reviewer", "proposals": [proposal]}),
+            )
+            .await;
+        assert_eq!(given["worker"]["name"], reviewer, "{given}");
+        until_state(&harness, reviewer, WorkerState::Idle).await;
+    }
+    harness
+        .call(&review_lead, "stop_worker", json!({"name": "reviewer"}))
+        .await;
+    until_state(&harness, "reviewer", WorkerState::Stopped).await;
+    let held = harness
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Draw the header", "labels": ["ui"]}),
+        )
+        .await;
+    assert_eq!(held["id"], "T-4", "{held}");
+    harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-4"]}),
+        )
+        .await;
+    until_state(&harness, "web-worker-3", WorkerState::Idle).await;
+    harness
+        .call(&lead, "stop_worker", json!({"name": "web-worker-3"}))
+        .await;
+    until_state(&harness, "web-worker-3", WorkerState::Stopped).await;
+    let view = harness.call(MAIN, "get_task", json!({"id": "T-4"})).await;
+    assert_eq!(
+        (&view["status"], &view["claim"]["holder"]),
+        (&json!("todo"), &json!("web-worker-3")),
+        "{view}"
+    );
+    until_state(&harness, &lead, WorkerState::Idle).await;
+    until_state(&harness, &review_lead, WorkerState::Idle).await;
+    let lead_runs = fake.runs_of(&lead).len();
+    let review_runs = fake.runs_of(&review_lead).len();
+
+    harness.restart().await;
+    let runs = until_runs(&fake, &review_lead, review_runs + 1, 2).await;
+    let caught_up = user_turns(&runs[review_runs]);
+    assert_eq!(caught_up.len(), 1, "{caught_up:?}");
+    assert!(
+        caught_up[0].contains(&format!(
+            "These open proposals wait for a review: {}.",
+            proposals[0]
+        )),
+        "the stopped reviewer's proposal waits, the running reviewer-2 keeps the other: {}",
+        caught_up[0]
+    );
+    let runs = until_runs(&fake, &lead, lead_runs + 1, 2).await;
+    let caught_up = user_turns(&runs[lead_runs]);
+    assert_eq!(caught_up.len(), 1, "{caught_up:?}");
+    assert!(
+        caught_up[0].contains("These tasks of area web are ready and wait for a task worker: T-4."),
+        "{}",
+        caught_up[0]
+    );
+
+    harness.connect(&lead).await;
+    let moved = harness
+        .call(
+            &lead,
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-4"]}),
+        )
+        .await;
+    assert_eq!(moved["worker"]["name"], "web-worker-4", "{moved}");
+    let view = harness.call(MAIN, "get_task", json!({"id": "T-4"})).await;
+    assert_eq!(view["claim"]["holder"], "web-worker-4", "{view}");
 }
