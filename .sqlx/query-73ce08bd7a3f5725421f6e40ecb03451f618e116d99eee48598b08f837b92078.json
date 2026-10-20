@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT m.number AS \"number!: i64\" FROM messages m\n           WHERE m.task_id IS NULL AND m.proposal_id IS NULL AND m.request_id IS NULL\n             AND ((m.sender_kind = 'human' AND EXISTS (\n                       SELECT 1 FROM message_recipients r\n                       JOIN workers w ON w.id = r.worker_id\n                       JOIN agents a ON a.id = w.agent_id\n                       WHERE r.message_id = m.id AND a.name = ?1))\n                  OR (EXISTS (\n                       SELECT 1 FROM workers w JOIN agents a ON a.id = w.agent_id\n                       WHERE w.id = m.sender_worker_id AND a.name = ?1)\n                      AND EXISTS (\n                       SELECT 1 FROM message_recipients r\n                       WHERE r.message_id = m.id AND r.human IS NOT NULL)))\n             AND (?2 IS NULL OR m.number < ?2)\n           ORDER BY m.number DESC\n           LIMIT ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "73ce08bd7a3f5725421f6e40ecb03451f618e116d99eee48598b08f837b92078"
+}

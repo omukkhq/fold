@@ -688,6 +688,27 @@ mod tests {
     }
 
     #[test]
+    fn leads_send_a_human_chat_request_that_changes_the_plan_to_the_main_agent() {
+        for role in [Role::AreaLead, Role::ReviewLead] {
+            let prompt = role.prompt();
+            assert!(prompt.contains("`fld message`"), "{role:?}");
+            assert!(
+                prompt.contains("send the request to the main agent"),
+                "{role:?}"
+            );
+            assert!(
+                prompt.contains("tell the human in the chat"),
+                "{role:?}"
+            );
+        }
+        assert!(
+            Role::AreaLead
+                .prompt()
+                .contains("When fold sends you new instructions of your area")
+        );
+    }
+
+    #[test]
     fn workers_get_their_claims_from_their_lead_and_never_claim() {
         for role in [Role::TaskWorker, Role::Reviewer] {
             let prompt = role.prompt();

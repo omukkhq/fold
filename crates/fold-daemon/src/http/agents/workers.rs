@@ -336,6 +336,9 @@ pub struct UpdateAreaBody {
     /// True gives the area's workers the role's MCP servers again.
     #[serde(default)]
     pub clear_mcp: bool,
+    /// Text added after the current instructions as a paragraph of its own; not together with `instructions` or `clear_instructions`. The whole text stays within 8000 characters.
+    #[serde(default)]
+    pub add_instructions: Option<String>,
 }
 
 /// The areas and every worker of the project.
@@ -498,7 +501,7 @@ pub async fn define_area(
     Ok((StatusCode::CREATED, Json(area.into())))
 }
 
-/// A named human changes an area's profile. The next start of the area's lead or task workers gets it; running workers keep theirs.
+/// A named human changes an area's profile. The next start of the area's lead or task workers gets it. A change of the instructions also reaches the area's running lead and task workers on their next turn, as a message from fold that holds the new instructions.
 #[utoipa::path(
     patch,
     path = "/api/v1/projects/{slug}/areas/{name}",
@@ -531,6 +534,7 @@ pub async fn update_area(
         clear_instructions: body.clear_instructions,
         clear_model: body.clear_model,
         clear_mcp: body.clear_mcp,
+        add_instructions: body.add_instructions,
     }))?;
     let area = project
         .0

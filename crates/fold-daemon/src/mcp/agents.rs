@@ -321,6 +321,7 @@ pub async fn update_area(
         clear_instructions: input.clear_instructions,
         clear_model: input.clear_model,
         clear_mcp: input.clear_mcp,
+        add_instructions: None,
     })?;
     let actor = server.actor(as_worker).await?;
     let area = server

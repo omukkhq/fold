@@ -62,6 +62,22 @@ fn servers(run: &Run) -> Vec<String> {
         .collect()
 }
 
+/// The body of the newest message from fold to `agent`.
+async fn told_by_fold(h: &Harness, agent: &str) -> String {
+    sqlx::query_scalar(
+        "SELECT m.body FROM messages m
+         JOIN message_recipients r ON r.message_id = m.id
+         JOIN workers w ON w.id = r.worker_id
+         JOIN agents a ON a.id = w.agent_id
+         WHERE a.name = ? AND m.sender_kind = 'fold' AND m.task_id IS NULL
+         ORDER BY m.number DESC LIMIT 1",
+    )
+    .bind(agent)
+    .fetch_one(h.handle.store.read())
+    .await
+    .unwrap()
+}
+
 fn prompt(run: &Run) -> String {
     std::fs::read_to_string(run.flag("--append-system-prompt-file").unwrap()).unwrap()
 }
@@ -176,7 +192,7 @@ async fn a_task_worker_of_the_design_area_starts_with_the_areas_servers_model_an
 }
 
 #[tokio::test]
-async fn a_changed_profile_reaches_the_next_start_and_never_a_running_worker() {
+async fn a_changed_profile_reaches_the_next_start_and_running_workers_hear_only_of_new_instructions() {
     let fake = FakeClaude::new("result");
     let mut h = Harness::start_with_launcher(fake.launcher.clone()).await;
     h.make_main(MAIN).await;
@@ -204,12 +220,27 @@ async fn a_changed_profile_reaches_the_next_start_and_never_a_running_worker() {
         std::fs::read_to_string(before.flag("--mcp-config").unwrap()).unwrap(),
         first_config
     );
+    for agent in [LEAD, first.as_str()] {
+        let told = told_by_fold(&h, agent).await;
+        assert!(
+            told.ends_with("in your system prompt, with the same limits:\n\nUse the browser."),
+            "{told}"
+        );
+    }
 
     let second = start_task_worker(&h, "T-2", json!({})).await;
     let run = first_run(&fake, &second).await;
     assert_eq!(run.flag("--model"), Some("sonnet"));
     assert_eq!(servers(&run), ["browser", "fold"]);
     assert!(prompt(&run).ends_with("\n\nUse the browser.\n"));
+    let rows = h.message_rows().await;
+    h.call(
+        MAIN,
+        "update_area",
+        json!({"name": "design", "instructions": "Use the browser."}),
+    )
+    .await;
+    assert_eq!(h.message_rows().await, rows, "only new instructions are told");
 
     let cleared = h
         .call(
@@ -237,6 +268,7 @@ async fn a_changed_profile_reaches_the_next_start_and_never_a_running_worker() {
         changes,
         [
             json!({"area": "design", "fields": ["instructions", "model", "mcp"]}),
+            json!({"area": "design", "fields": ["instructions"]}),
             json!({"area": "design", "fields": ["instructions", "model", "mcp"]}),
         ]
     );

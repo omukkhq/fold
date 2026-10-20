@@ -7,7 +7,7 @@ use fold_core::roles::{
 };
 use fold_core::tasks::areas::check_new_area;
 use fold_core::{
-    Actor, AgentName, AreaName, FoldError, LabelName, NewEvent, ProjectConfig, ProposalId,
+    Actor, AgentName, AreaName, FoldError, LabelName, MessageBody, NewEvent, ProjectConfig, ProposalId,
     ReviewBatchId, Role, TaskId, WorkerName, WorkspaceId, codes,
 };
 use fold_store::agents::{self, AreaRow, NewWorkerProcess, WorkerProcessRow, WorkerRow};
@@ -17,6 +17,7 @@ use serde_json::json;
 
 use super::{AgentError, AgentService, main_actor};
 use crate::services::events::EventBuffer;
+use crate::services::messages::tell_agents_in_tx;
 use crate::services::projects::load_config;
 use crate::services::reviews::{Assignment, assign_reviews_in_tx};
 use crate::services::tasks::assign_in_tx;
@@ -50,6 +51,21 @@ pub struct StartWorker {
     pub model: Option<String>,
     /// Content from the starter for the worker's first turn; it is never stored or logged.
     pub instructions: Option<String>,
+}
+
+/// What fold tells the running workers of an area whose instructions changed: the whole new text, or that the area has none now.
+fn instructions_message(
+    area: &AreaName,
+    instructions: Option<&str>,
+) -> Result<MessageBody, FoldError> {
+    MessageBody::parse(match instructions {
+        Some(text) => format!(
+            "The instructions of area {area} changed. From now on they take the place of the area's instructions in your system prompt, with the same limits:\n\n{text}"
+        ),
+        None => format!(
+            "Area {area} has no instructions now. From now on ignore the area's instructions in your system prompt; your role and task instructions stay."
+        ),
+    })
 }
 
 /// The stable code of an agent error for a log line.
@@ -240,7 +256,7 @@ impl AgentService {
         Ok(area)
     }
 
-    /// Changes the profile of area `name`. Running workers keep what they started with; the next start of a lead or a task worker of the area gets the new profile.
+    /// Changes the profile of area `name`. The next start of a lead or a task worker of the area gets the new profile in its system prompt. A running process keeps the prompt it started with, so a change of the instructions also goes, in the same transaction, as a message from fold to every running worker of the area, which fold pushes as its next turn.
     pub async fn update_area(
         &self,
         actor: &Actor,
@@ -258,7 +274,21 @@ impl AgentService {
                 let area = agents::find_area(tx.conn(), name)
                     .await?
                     .ok_or_else(|| area_not_found(name))?;
-                agents::set_area_profile(tx, area.id, &change.apply(&area.profile)).await?;
+                let profile = change.apply(&area.profile)?;
+                agents::set_area_profile(tx, area.id, &profile).await?;
+                if change.touches_instructions() && profile.instructions != area.profile.instructions
+                {
+                    let running: Vec<AgentName> = agents::list_worker_processes(tx.conn())
+                        .await?
+                        .into_iter()
+                        .filter(|row| row.area_id == Some(area.id) && row.state.is_running())
+                        .map(|row| row.agent)
+                        .collect();
+                    let body = instructions_message(name, profile.instructions.as_deref())?;
+                    tell_agents_in_tx(tx, &mut buffer, &running, &body, now)
+                        .await
+                        .map_err(AgentError::from)?;
+                }
                 let event = NewEvent::new(types::AREA_UPDATED, by.clone())?
                     .data(json!({"area": name.as_str(), "fields": change.fields()}))?;
                 buffer.append(tx, &event, now).await?;

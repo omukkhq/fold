@@ -3,7 +3,7 @@ use std::sync::Arc;
 use fold_core::events::types;
 use fold_core::messages::resolve;
 use fold_core::{
-    Actor, Address, AddressedAs, AgentActor, Choice, Clock, EventError, FoldError, HumanName,
+    Actor, Address, AddressedAs, AgentActor, AgentName, Choice, Clock, EventError, FoldError, HumanName,
     IdKind, MessageBody, MessageChoices, MessageId, NewEvent, ProposalId, Recipient, RequestId,
     Sender, Target, TaskId, Timestamp, WorkerName, codes, policy,
 };
@@ -18,9 +18,11 @@ use crate::services::events::{EventBuffer, EventBus};
 #[cfg(feature = "failpoints")]
 use crate::services::fired;
 
+mod chat;
 mod inbox;
 mod threads;
 
+pub use chat::{ChatPage, DEFAULT_CHAT_LIMIT, MAX_CHAT_LIMIT};
 pub use inbox::{InboxItem, unread_count};
 pub use threads::{
     DEFAULT_THREAD_LIMIT, Feedback, MAX_THREAD_LIMIT, ThreadPage, ThreadQuery, ThreadView,
@@ -449,6 +451,36 @@ pub(crate) async fn send_from_fold_in_tx(
         now,
     };
     write_message(tx, buffer, draft).await
+}
+
+/// Sends `body` from `fold` to the main worker of each of `agents` inside the caller's transaction, linked to nothing, so a command can tell agents about a change that no task carries. Sends nothing when `agents` is empty. The caller publishes the buffer after the commit.
+pub(crate) async fn tell_agents_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    agents: &[AgentName],
+    body: &MessageBody,
+    now: Timestamp,
+) -> Result<Option<MessageView>, MessageError> {
+    if agents.is_empty() {
+        return Ok(None);
+    }
+    let to: Vec<Address> = agents.iter().cloned().map(Address::Agent).collect();
+    let directory = messages::directory(tx.conn(), Vec::new()).await?;
+    let recipients = resolve(&to, &directory, &Sender::Fold).map_err(FoldError::from)?;
+    let draft = Draft {
+        actor: &Actor::System,
+        sender: &Sender::Fold,
+        task: None,
+        proposal: None,
+        request: None,
+        join: None,
+        parent: None,
+        body,
+        choices: None,
+        recipients,
+        now,
+    };
+    Ok(Some(write_message(tx, buffer, draft).await?))
 }
 
 /// A worker's question to every human in `humans`, linked to `task`, with `choices` when the question offers them.

@@ -87,19 +87,32 @@ pub struct AreaProfileRequest {
     pub clear_instructions: bool,
     pub clear_model: bool,
     pub clear_mcp: bool,
+    /// Text to add after the current instructions as a paragraph of its own, so a lasting instruction keeps the ones before it.
+    pub add_instructions: Option<String>,
 }
 
 /// A checked change of an area's profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AreaProfileChange {
     pub instructions: FieldChange<String>,
+    /// Checked text that [`AreaProfileChange::apply`] adds after the current instructions; never together with a set or clear of `instructions`.
+    pub add_instructions: Option<String>,
     pub model: FieldChange<String>,
     pub mcp: FieldChange<Vec<String>>,
 }
 
 impl AreaProfileChange {
-    /// Refuses a request that changes nothing or that both sets and clears one field, with `invalid_request`.
+    /// Refuses a request that changes nothing, that both sets and clears one field, or that adds instructions while it sets or clears them, with `invalid_request`.
     pub fn from_request(request: AreaProfileRequest) -> Result<Self, FoldError> {
+        if request.add_instructions.is_some()
+            && (request.instructions.is_some() || request.clear_instructions)
+        {
+            return Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                "add_instructions cannot go with instructions or clear_instructions in one call",
+            )
+            .with_hint("pass add_instructions alone to keep the current instructions"));
+        }
         let change = Self {
             instructions: field(
                 "instructions",
@@ -112,30 +125,45 @@ impl AreaProfileChange {
                 request.clear_model,
             )?,
             mcp: field("mcp", request.mcp.map(check_servers), request.clear_mcp)?,
+            add_instructions: request
+                .add_instructions
+                .as_deref()
+                .map(check_instructions)
+                .transpose()?,
         };
         if change.fields().is_empty() {
             return Err(FoldError::new(
                 codes::INVALID_REQUEST,
                 "update_area needs a field to change",
             )
-            .with_hint("pass instructions, model or mcp, or clear one of them"));
+            .with_hint("pass instructions, add_instructions, model or mcp, or clear one of them"));
         }
         Ok(change)
     }
 
-    #[must_use]
-    pub fn apply(&self, profile: &AreaProfile) -> AreaProfile {
-        AreaProfile {
-            instructions: self.instructions.apply(profile.instructions.as_ref()),
+    /// The profile after the change. Added instructions that take the whole text over [`MAX_AREA_INSTRUCTIONS_CHARS`] are `invalid_request`.
+    pub fn apply(&self, profile: &AreaProfile) -> Result<AreaProfile, FoldError> {
+        let instructions = match (&self.add_instructions, &profile.instructions) {
+            (Some(added), Some(current)) => Some(check_instructions(&format!("{current}\n\n{added}"))?),
+            (Some(added), None) => Some(added.clone()),
+            (None, _) => self.instructions.apply(profile.instructions.as_ref()),
+        };
+        Ok(AreaProfile {
+            instructions,
             model: self.model.apply(profile.model.as_ref()),
             mcp: self.mcp.apply(profile.mcp.as_ref()),
-        }
+        })
+    }
+
+    /// The change sets, adds to or clears the instructions.
+    pub fn touches_instructions(&self) -> bool {
+        self.instructions.changes() || self.add_instructions.is_some()
     }
 
     /// The names of the fields the change sets or clears, in profile order.
     pub fn fields(&self) -> Vec<&'static str> {
         [
-            ("instructions", self.instructions.changes()),
+            ("instructions", self.touches_instructions()),
             ("model", self.model.changes()),
             ("mcp", self.mcp.changes()),
         ]
@@ -309,7 +337,7 @@ mod tests {
         .unwrap();
         assert_eq!(change.fields(), ["model", "mcp"]);
         assert_eq!(
-            change.apply(&profile),
+            change.apply(&profile).unwrap(),
             AreaProfile {
                 instructions: Some("draw".to_owned()),
                 model: Some("sonnet".to_owned()),
@@ -322,9 +350,67 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            instructions.apply(&AreaProfile::default()).instructions,
+            instructions.apply(&AreaProfile::default()).unwrap().instructions,
             Some("write tests".to_owned())
         );
+    }
+
+    #[test]
+    fn added_instructions_follow_the_current_ones_within_the_bound() {
+        let add = AreaProfileChange::from_request(AreaProfileRequest {
+            add_instructions: Some(" use the new tokens ".to_owned()),
+            ..AreaProfileRequest::default()
+        })
+        .unwrap();
+        assert_eq!(add.fields(), ["instructions"]);
+        assert!(add.touches_instructions());
+        let current = AreaProfile {
+            instructions: Some("draw".to_owned()),
+            ..AreaProfile::default()
+        };
+        assert_eq!(
+            add.apply(&current).unwrap().instructions.as_deref(),
+            Some("draw\n\nuse the new tokens")
+        );
+        assert_eq!(
+            add.apply(&AreaProfile::default()).unwrap().instructions.as_deref(),
+            Some("use the new tokens")
+        );
+        let full = AreaProfile {
+            instructions: Some("é".repeat(MAX_AREA_INSTRUCTIONS_CHARS)),
+            ..AreaProfile::default()
+        };
+        assert_eq!(
+            add.apply(&full).unwrap_err().code(),
+            codes::INVALID_REQUEST
+        );
+        for request in [
+            AreaProfileRequest {
+                add_instructions: Some("a".to_owned()),
+                instructions: Some("b".to_owned()),
+                ..AreaProfileRequest::default()
+            },
+            AreaProfileRequest {
+                add_instructions: Some("a".to_owned()),
+                clear_instructions: true,
+                ..AreaProfileRequest::default()
+            },
+            AreaProfileRequest {
+                add_instructions: Some("  ".to_owned()),
+                ..AreaProfileRequest::default()
+            },
+        ] {
+            assert_eq!(
+                AreaProfileChange::from_request(request).unwrap_err().code(),
+                codes::INVALID_REQUEST
+            );
+        }
+        let model = AreaProfileChange::from_request(AreaProfileRequest {
+            model: Some("opus".to_owned()),
+            ..AreaProfileRequest::default()
+        })
+        .unwrap();
+        assert!(!model.touches_instructions());
     }
 
     #[test]

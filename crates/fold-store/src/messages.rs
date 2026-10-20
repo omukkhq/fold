@@ -576,6 +576,42 @@ pub async fn tasks_awaiting_human(
     rows.into_iter().map(task_id).collect()
 }
 
+/// One page of the direct chat between the humans and `agent`: the newest `limit` chat messages older than `before` when given, in number order. A chat message has no task, proposal or request, and either a human sent it to a worker of the agent or a worker of the agent sent it to a human, so fold's own messages and the agents' work threads stay out.
+pub async fn chat_page(
+    conn: &mut SqliteConnection,
+    agent: &AgentName,
+    before: Option<MessageId>,
+    limit: u32,
+) -> Result<Vec<MessageRow>, StoreError> {
+    let agent = agent.as_str();
+    let before = before.map(MessageId::to_db);
+    let limit = i64::from(limit);
+    let numbers = sqlx::query_scalar!(
+        r#"SELECT m.number AS "number!: i64" FROM messages m
+           WHERE m.task_id IS NULL AND m.proposal_id IS NULL AND m.request_id IS NULL
+             AND ((m.sender_kind = 'human' AND EXISTS (
+                       SELECT 1 FROM message_recipients r
+                       JOIN workers w ON w.id = r.worker_id
+                       JOIN agents a ON a.id = w.agent_id
+                       WHERE r.message_id = m.id AND a.name = ?1))
+                  OR (EXISTS (
+                       SELECT 1 FROM workers w JOIN agents a ON a.id = w.agent_id
+                       WHERE w.id = m.sender_worker_id AND a.name = ?1)
+                      AND EXISTS (
+                       SELECT 1 FROM message_recipients r
+                       WHERE r.message_id = m.id AND r.human IS NOT NULL)))
+             AND (?2 IS NULL OR m.number < ?2)
+           ORDER BY m.number DESC
+           LIMIT ?3"#,
+        agent,
+        before,
+        limit
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    by_numbers(conn, &numbers).await
+}
+
 fn id_list(ids: &[i64]) -> Result<String, StoreError> {
     serde_json::to_string(ids).map_err(|_| StoreError::Invalid("row ids"))
 }

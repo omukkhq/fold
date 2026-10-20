@@ -124,6 +124,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/agents/{name}/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The direct chat between the humans and one agent, the newest page. Every human reads the same chat; it is not tied to a task. */
+        get: operations["show_chat"];
+        put?: never;
+        /** A named human writes to an agent in their direct chat. The message goes to the agent's main worker, linked to no task, and joins the thread of the chat's newest message. A supervised lead gets it as a turn and an interactive session as a notice; the agent answers with `send_message`. The message changes no task state. */
+        post: operations["send_chat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/areas": {
         parameters: {
             query?: never;
@@ -154,7 +172,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** A named human changes an area's profile. The next start of the area's lead or task workers gets it; running workers keep theirs. */
+        /** A named human changes an area's profile. The next start of the area's lead or task workers gets it. A change of the instructions also reaches the area's running lead and task workers on their next turn, as a message from fold that holds the new instructions. */
         patch: operations["update_area"];
         trace?: never;
     };
@@ -1544,6 +1562,23 @@ export interface components {
             previous_path: string | null;
             /** Format: int32 */
             removed_lines: number;
+        };
+        /** @description A human's message in the direct chat with an agent. */
+        ChatRequest: {
+            /** @description Plain text with some visible character. In message text `#` names a fold item and `@` names a file; the daemon parses nothing. */
+            body: string;
+        };
+        /** @description The newest messages of the direct chat between the humans and one agent. */
+        ChatView: {
+            /** @example web-lead */
+            agent: string;
+            /** @description In number order, the oldest of the page first. Each message has no task, proposal or request: a human sent it to a worker of the agent, or a worker of the agent sent it to a human. */
+            messages: components["schemas"]["MessageView"][];
+            /**
+             * @description Pass as `before` for the page of older messages; null when this page holds the chat's first message.
+             * @example m-40
+             */
+            next: string | null;
         };
         /**
          * @description What one command did.
@@ -3868,6 +3903,8 @@ export interface components {
         UnstashState: "applied" | "conflicted";
         /** @description A change of an area's profile; a field left out and not cleared stays as it is. */
         UpdateAreaBody: {
+            /** @description Text added after the current instructions as a paragraph of its own; not together with `instructions` or `clear_instructions`. The whole text stays within 8000 characters. */
+            add_instructions?: string | null;
             /** @description True removes the instructions. */
             clear_instructions?: boolean;
             /** @description True gives the area's workers the role's MCP servers again. */
@@ -4705,6 +4742,173 @@ export interface operations {
             };
             /** @description `invalid_config`: the project's config.toml has a bad lease value */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    show_chat: {
+        parameters: {
+            query?: {
+                /** @description The `next` of the newer page: only messages before it. */
+                before?: string;
+                /** @description The page size: 50 when left out, at most 200. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The agent's name, such as `web-lead` */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the chat */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatView"];
+                };
+            };
+            /** @description `invalid_name`: the name is not an agent name; `invalid_id`: `before` is not a message id; `invalid_request`: `limit` is 0 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `agent_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    send_chat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The agent's name, such as `web-lead` */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatRequest"];
+            };
+        };
+        responses: {
+            /** @description The stored message */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageView"];
+                };
+            };
+            /** @description `invalid_request`: an empty body or a malformed request; `invalid_name`: the name is not an agent name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `agent_not_found`, `unknown_human` or `project_not_found` */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -470,3 +470,89 @@ async fn feedback_needs_a_named_human_and_a_task_or_reply() {
         .unwrap();
     assert_eq!(messages, 0);
 }
+
+#[tokio::test]
+async fn a_chat_holds_only_the_direct_messages_between_the_humans_and_one_agent() {
+    let fixture = Fixture::new().await;
+    fixture.send("frontend", &["humans"], Some(1), None).await;
+    fixture.send("backend", &["frontend"], None, None).await;
+    let chat = |agent: &str| format!("{BASE}/agents/{agent}/chat");
+    let post = async |agent: &str, body: Value| {
+        call(fixture.http(), Method::POST, &chat(agent), &[COOKIE], Some(body)).await
+    };
+    let (status, first) = post("frontend", json!({"body": "use the tokens"})).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    assert_eq!(first["id"], "m-3");
+    assert_eq!(first["thread"], "m-3");
+    assert_eq!(first["sender"], "human:tanim");
+    assert_eq!(first["task"], Value::Null);
+    assert_eq!(recipients(&first), ["frontend"]);
+    fixture
+        .messages
+        .send(
+            &agent("frontend/ui"),
+            SendMessage {
+                to: Address::parse_all(&["human:tanim"]).unwrap(),
+                body: MessageBody::parse("which tokens?").unwrap(),
+                task: None,
+                proposal: None,
+                reply_to: None,
+            },
+        )
+        .await
+        .unwrap();
+    let (_, second) = post("frontend", json!({"body": "the new ones"})).await;
+    assert_eq!(second["id"], "m-5");
+    assert_eq!(second["thread"], "m-4", "it joins the newest message's thread");
+
+    let (status, page) = fixture.get("/agents/frontend/chat").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let ids = |page: &Value| -> Vec<String> {
+        page["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|message| message["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(page["agent"], "frontend");
+    assert_eq!(ids(&page), ["m-3", "m-4", "m-5"]);
+    assert_eq!(page["next"], Value::Null);
+    let (_, newest) = fixture.get("/agents/frontend/chat?limit=2").await;
+    assert_eq!(ids(&newest), ["m-4", "m-5"]);
+    assert_eq!(newest["next"], "m-4");
+    let (_, older) = fixture.get("/agents/frontend/chat?before=m-4").await;
+    assert_eq!(ids(&older), ["m-3"]);
+    assert_eq!(older["next"], Value::Null);
+    let (_, backend) = fixture.get("/agents/backend/chat").await;
+    assert!(ids(&backend).is_empty(), "{backend}");
+
+    let (status, body) = fixture.get("/agents/nobody/chat").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(code(&body), "agent_not_found");
+    let (status, body) = post("nobody", json!({"body": "x"})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(code(&body), "agent_not_found");
+    for (path, expected) in [
+        ("/agents/Bad Name/chat", "invalid_name"),
+        ("/agents/frontend/chat?before=T-1", "invalid_id"),
+        ("/agents/frontend/chat?limit=0", "invalid_request"),
+    ] {
+        let (status, body) = fixture.get(&path.replace(' ', "%20")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
+        assert_eq!(code(&body), expected, "{path}");
+    }
+    let (status, body) = post("frontend", json!({"body": " "})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(code(&body), "invalid_request");
+    let (status, body) = call(
+        fixture.http(),
+        Method::POST,
+        &chat("frontend"),
+        &[],
+        Some(json!({"body": "x"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(code(&body), "human_name_required");
+}

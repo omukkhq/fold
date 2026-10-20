@@ -1,7 +1,9 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use fold_core::{Address, Choice, FoldError, MessageBody, MessageId, RequestId, TaskId};
+use fold_core::{
+    Address, AgentName, Choice, FoldError, MessageBody, MessageId, RequestId, TaskId,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
@@ -18,6 +20,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_messages))
         .routes(routes!(show_thread))
         .routes(routes!(send_feedback))
+        .routes(routes!(show_chat, send_chat))
 }
 
 /// One recipient row. Names starting `human:` are humans.
@@ -327,6 +330,113 @@ pub async fn send_feedback(
         .0
         .messages(&state.registry)
         .feedback(&human.actor(), feedback)
+        .await?;
+    Ok((StatusCode::CREATED, Json(message.into())))
+}
+
+/// The newest messages of the direct chat between the humans and one agent.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ChatView {
+    #[schema(example = "web-lead")]
+    pub agent: String,
+    /// In number order, the oldest of the page first. Each message has no task, proposal or request: a human sent it to a worker of the agent, or a worker of the agent sent it to a human.
+    pub messages: Vec<MessageView>,
+    /// Pass as `before` for the page of older messages; null when this page holds the chat's first message.
+    #[schema(required = true, example = "m-40")]
+    pub next: Option<String>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ChatParams {
+    /// The `next` of the newer page: only messages before it.
+    pub before: Option<String>,
+    /// The page size: 50 when left out, at most 200.
+    pub limit: Option<u32>,
+}
+
+/// A human's message in the direct chat with an agent.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ChatRequest {
+    /// Plain text with some visible character. In message text `#` names a fold item and `@` names a file; the daemon parses nothing.
+    pub body: String,
+}
+
+/// The direct chat between the humans and one agent, the newest page. Every human reads the same chat; it is not tied to a task.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/agents/{name}/chat",
+    operation_id = "show_chat",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("name" = String, Path, description = "The agent's name, such as `web-lead`"),
+        ChatParams,
+    ),
+    responses(
+        (status = 200, description = "One page of the chat", body = ChatView),
+        (status = 400, description = "`invalid_name`: the name is not an agent name; `invalid_id`: `before` is not a message id; `invalid_request`: `limit` is 0", body = ErrorEnvelope),
+        (status = 404, description = "`agent_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn show_chat(
+    State(state): State<AppState>,
+    project: Project,
+    Path((_slug, name)): Path<(String, String)>,
+    ApiQuery(params): ApiQuery<ChatParams>,
+) -> Result<Json<ChatView>, ApiError> {
+    let agent = AgentName::parse(&name).map_err(FoldError::from)?;
+    let before = params
+        .before
+        .as_deref()
+        .map(str::parse::<MessageId>)
+        .transpose()
+        .map_err(FoldError::from)?;
+    let page = project
+        .0
+        .messages(&state.registry)
+        .chat(&agent, before, params.limit)
+        .await?;
+    Ok(Json(ChatView {
+        agent: page.agent.to_string(),
+        messages: page.messages.into_iter().map(Into::into).collect(),
+        next: page.next.map(|id| id.to_string()),
+    }))
+}
+
+/// A named human writes to an agent in their direct chat. The message goes to the agent's main worker, linked to no task, and joins the thread of the chat's newest message. A supervised lead gets it as a turn and an interactive session as a notice; the agent answers with `send_message`. The message changes no task state.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/agents/{name}/chat",
+    operation_id = "send_chat",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("name" = String, Path, description = "The agent's name, such as `web-lead`"),
+    ),
+    request_body = ChatRequest,
+    responses(
+        (status = 201, description = "The stored message", body = MessageView),
+        (status = 400, description = "`invalid_request`: an empty body or a malformed request; `invalid_name`: the name is not an agent name", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "`agent_not_found`, `unknown_human` or `project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn send_chat(
+    human: Human,
+    State(state): State<AppState>,
+    project: Project,
+    Path((_slug, name)): Path<(String, String)>,
+    ApiJson(request): ApiJson<ChatRequest>,
+) -> Result<(StatusCode, Json<MessageView>), ApiError> {
+    let agent = AgentName::parse(&name).map_err(FoldError::from)?;
+    let body = MessageBody::parse(request.body)?;
+    let message = project
+        .0
+        .messages(&state.registry)
+        .send_chat(&human.actor(), &agent, body)
         .await?;
     Ok((StatusCode::CREATED, Json(message.into())))
 }
