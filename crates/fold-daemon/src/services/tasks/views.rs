@@ -56,6 +56,8 @@ pub struct TaskProposal {
     pub id: ProposalId,
     pub standing: ProposalStanding,
     pub version: u32,
+    /// The integration checks of the current version failed.
+    pub checks_failed: bool,
     /// Newest first.
     pub reviews: Vec<ReviewEntry>,
 }
@@ -85,6 +87,10 @@ pub struct Activity {
 pub struct CardProposal {
     pub id: ProposalId,
     pub standing: ProposalStanding,
+    /// The highest version number.
+    pub version: u32,
+    /// The integration checks of the current version failed.
+    pub checks_failed: bool,
     /// The revision an integrated proposal became.
     pub revision: Option<RevisionId>,
 }
@@ -128,6 +134,8 @@ pub struct TaskDetail {
     pub status_reason: String,
     pub workspace_info: Option<WorkspaceInfo>,
     pub activity: Option<Activity>,
+    /// See [`TaskService::edits_after_version`].
+    pub edits_after_version: Option<bool>,
     /// Of the live workspace, or of the latest one when none is live; newest first.
     pub changesets: Vec<ChangesetSummary>,
     /// Of the live workspace, or of the latest one when none is live; pruned ones left out, newest first.
@@ -188,6 +196,8 @@ pub struct BoardCard {
     pub attention: Vec<AttentionItem>,
     pub proposal: Option<CardProposal>,
     pub activity: Option<Activity>,
+    /// See [`TaskService::edits_after_version`].
+    pub edits_after_version: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -309,6 +319,7 @@ impl TaskService {
             Some(summary) => Some(TaskProposal {
                 standing: standing(&summary),
                 version: summary.version,
+                checks_failed: summary.checks_failed,
                 reviews: reviews::review_entries(&mut tx, summary.id).await?,
                 id: summary.id,
             }),
@@ -395,14 +406,12 @@ impl TaskService {
             None => None,
         };
         let activity = self.activity_of(workspace, live.as_ref().and_then(|w| w.last_activity_at));
-        let status_reason = status_reason(
-            &facts,
-            workspace,
-            proposal
-                .as_ref()
-                .filter(|p| p.standing != ProposalStanding::Integrated)
-                .map(|p| p.id),
-        );
+        let open = proposal
+            .as_ref()
+            .filter(|p| p.standing != ProposalStanding::Integrated)
+            .map(|p| p.id);
+        let edits_after_version = self.edits_after_version(workspace, open);
+        let status_reason = status_reason(&facts, workspace, open);
         Ok(TaskDetail {
             task: view(row, labels, &areas),
             checklists,
@@ -416,6 +425,7 @@ impl TaskService {
             status_reason,
             workspace_info: info,
             activity,
+            edits_after_version,
             changesets,
             checkpoints,
             proposal,
@@ -439,6 +449,20 @@ impl TaskService {
             _ => None,
         });
         Some(Activity { path, at })
+    }
+
+    /// Whether the files of the live workspace differ from the tree of the open proposal's newest version, as the live state compared them on its last scan: content, never times, so an automatic checkpoint of unchanged files is no edit. `None` without an open proposal, or while the live state does not hold the workspace or has not compared it with that proposal.
+    fn edits_after_version(
+        &self,
+        workspace: Option<WorkspaceId>,
+        open: Option<ProposalId>,
+    ) -> Option<bool> {
+        let open = open?;
+        let live = workspace.and_then(|id| self.live.as_ref()?.get(id))?;
+        if live.view.proposal != Some(open) {
+            return None;
+        }
+        live.view.edits_after_version
     }
 
     /// The tasks that are not archived, in number order, with their direct prerequisites and claim holders. Done tasks only when `include_done`.
@@ -500,6 +524,20 @@ impl TaskService {
         for row in std::mem::take(&mut snapshot.tasks) {
             let needs = needs.get(&row.id).cloned().unwrap_or_default();
             let labels = labels_of(&mut snapshot, row.id);
+            let proposal = snapshot.proposals.get(&row.id).map(|summary| CardProposal {
+                id: summary.id,
+                standing: standing(summary),
+                version: summary.version,
+                checks_failed: summary.checks_failed,
+                revision: summary.integration.as_ref().map(|record| record.revision),
+            });
+            let edits_after_version = self.edits_after_version(
+                snapshot.workspaces.get(&row.id).copied(),
+                proposal
+                    .as_ref()
+                    .filter(|p| p.standing != ProposalStanding::Integrated)
+                    .map(|p| p.id),
+            );
             let card = BoardCard {
                 areas_conflict: card_areas_conflict(&labels, &areas),
                 blocked_by: needs
@@ -521,11 +559,8 @@ impl TaskService {
                 hold: row.hold,
                 messages: snapshot.messages.get(&row.id).copied().unwrap_or(0),
                 completed_at: snapshot.completions.get(&row.id).copied(),
-                proposal: snapshot.proposals.get(&row.id).map(|summary| CardProposal {
-                    id: summary.id,
-                    standing: standing(summary),
-                    revision: summary.integration.as_ref().map(|record| record.revision),
-                }),
+                proposal,
+                edits_after_version,
                 activity: self.activity_of(
                     snapshot.workspaces.get(&row.id).copied(),
                     snapshot.activity.get(&row.id).copied(),

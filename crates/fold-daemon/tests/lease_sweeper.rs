@@ -594,6 +594,9 @@ async fn the_agents_route_gives_each_agent_the_items_of_its_own_claims() {
     let fx = Fixture::new().await;
     let (id, dir) = fx.create(&fx.frontend, 1).await;
     fx.review_claim(&dir).await;
+    // An edit after the version, so the author's workspace stalls while the reviewer holds the proposal.
+    fs::write(dir.join("README.md"), "# demo\nafter the version\n").unwrap();
+    fx.handle.live.rescan(id).await.unwrap();
     let none = BTreeMap::from([
         ("frontend".to_owned(), json!([])),
         ("backend".to_owned(), json!([])),
@@ -658,6 +661,46 @@ async fn a_stalled_worker_that_keeps_calling_keeps_a_fresh_lease() {
         .unwrap();
     assert_eq!(claim.renewed_at, fx.project.now());
     assert_eq!(fx.attention("T-1").await, ["stalled"]);
+}
+
+#[tokio::test]
+async fn a_worker_whose_files_are_its_sent_version_never_stalls() {
+    let fx = Fixture::new().await;
+    let (id, dir) = fx.create(&fx.frontend, 1).await;
+    fx.advance(STALL);
+    assert_eq!(fx.check().await, 1);
+    assert!(fx.stalled(id));
+
+    fs::write(dir.join("README.md"), "# demo\nsent\n").unwrap();
+    let reviews = fx.handle.reviews(fx.project.registry());
+    let proposal = reviews
+        .create_proposal(&by(&fx.frontend.worker), t(1), "Change the readme", None)
+        .await
+        .unwrap()
+        .detail()
+        .unwrap()
+        .summary
+        .id;
+    fx.advance(STALL);
+    assert_eq!(fx.check().await, 0, "the version waits, the worker does not stall");
+    assert!(!fx.stalled(id));
+    assert!(fx.attention("T-1").await.is_empty());
+
+    fs::write(dir.join("README.md"), "# demo\nedited after\n").unwrap();
+    fx.handle.live.rescan(id).await.unwrap();
+    fx.advance(STALL);
+    assert_eq!(fx.check().await, 1, "an edit after the version counts again");
+    assert!(fx.stalled(id));
+    assert_eq!(fx.attention("T-1").await, ["stalled"]);
+
+    fs::write(dir.join("README.md"), "# demo\nsent\n").unwrap();
+    fx.handle.live.rescan(id).await.unwrap();
+    assert_eq!(fx.check().await, 0, "the scan that found the change cleared it");
+    assert!(!fx.stalled(id));
+    assert_eq!(
+        fx.handle.live.get(id).unwrap().view.proposal,
+        Some(proposal)
+    );
 }
 
 #[tokio::test]
@@ -744,4 +787,74 @@ async fn the_jobs_sweep_leases_and_check_stalls_of_every_open_project() {
     leases.stopped(WAIT).await;
     stalls.stopped(WAIT).await;
     assert_eq!(fx.stale_events().await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_sent_version_that_waits_for_review_or_integration_never_stalls() {
+    let fx = Fixture::new().await;
+    let (id, dir) = fx.create(&fx.frontend, 1).await;
+    let proposal = fx.review_claim(&dir).await;
+    fx.handle.live.rescan(id).await.unwrap();
+    fx.advance(STALL);
+    assert_eq!(fx.check().await, 0, "open, it waits for the review");
+    fx.handle
+        .reviews(fx.project.registry())
+        .submit_review(
+            &by(&fx.backend.worker),
+            proposal,
+            1,
+            fold_core::reviews::Verdict::Approve,
+            "fine",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    fx.advance(STALL * 3);
+    assert_eq!(
+        fx.check().await,
+        0,
+        "approved, it waits for the integration"
+    );
+    assert!(!fx.stalled(id));
+    assert!(fx.attention("T-1").await.is_empty());
+}
+
+#[tokio::test]
+async fn requested_changes_stall_the_author_from_the_verdict_without_an_edit() {
+    let fx = Fixture::new().await;
+    let (id, dir) = fx.create(&fx.frontend, 1).await;
+    let proposal = fx.review_claim(&dir).await;
+    fx.handle.live.rescan(id).await.unwrap();
+    fx.advance(STALL * 2);
+    assert_eq!(fx.check().await, 0, "the version waits for the review");
+    fx.handle
+        .reviews(fx.project.registry())
+        .submit_review(
+            &by(&fx.backend.worker),
+            proposal,
+            1,
+            fold_core::reviews::Verdict::RequestChanges,
+            "rename it",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fx.check().await,
+        0,
+        "the window counts from the verdict, not from the last edit"
+    );
+    fx.advance(STALL - Duration::from_secs(1));
+    assert_eq!(fx.check().await, 0);
+    assert!(!fx.stalled(id));
+    fx.advance(Duration::from_secs(1));
+    assert_eq!(fx.check().await, 1, "back with its author, nothing changed");
+    assert!(fx.stalled(id));
+    assert_eq!(fx.attention("T-1").await, ["stalled"]);
+    assert_eq!(
+        fx.handle.live.get(id).unwrap().view.edits_after_version,
+        Some(false)
+    );
+    fx.handle.live.rescan(id).await.unwrap();
+    assert!(fx.stalled(id), "a rescan without an edit leaves the flag");
 }

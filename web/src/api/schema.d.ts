@@ -1472,6 +1472,8 @@ export interface components {
              * @description UTC milliseconds of the completion record; null until the task is Done.
              */
             completed_at: number | null;
+            /** @description Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them. */
+            edits_after_version: boolean | null;
             human_review: components["schemas"]["HumanReviewMark"] | null;
             kind: components["schemas"]["TaskKind"];
             labels: components["schemas"]["Label"][];
@@ -1521,6 +1523,8 @@ export interface components {
             todo: number;
         };
         BoardProposal: {
+            /** @description The integration checks of the current version failed, so the proposal is back with its author until a new version. */
+            checks_failed: boolean;
             /** @example P-3 */
             id: string;
             /**
@@ -1529,6 +1533,11 @@ export interface components {
              */
             revision: string | null;
             state: components["schemas"]["ProposalState"];
+            /**
+             * Format: int32
+             * @description The current version.
+             */
+            version: number;
         };
         /** @description The five columns in board order: backlog, todo, in_progress, review, done. Archived tasks are left out. */
         BoardView: {
@@ -2388,6 +2397,8 @@ export interface components {
              */
             base: string;
             checkpoints: components["schemas"]["CheckpointSummary"][];
+            /** @description Whether the working files differ from the tree of the open proposal's newest version: false while every file is the same, true from the first file that differs. Null without an open proposal. */
+            edits_after_version: boolean | null;
             files: components["schemas"]["ChangedFile"][];
             /**
              * Format: int64
@@ -3621,6 +3632,8 @@ export interface components {
             tasks: components["schemas"]["TaskSummary"][];
         };
         TaskProposal: {
+            /** @description The integration checks of the current version failed, so the proposal is back with its author until a new version. */
+            checks_failed: boolean;
             /** @example P-3 */
             id: string;
             /** @description Newest first. */
@@ -3721,6 +3734,8 @@ export interface components {
             dependencies: components["schemas"]["TaskEdge"][];
             /** @description Markdown. */
             description: string;
+            /** @description Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them. */
+            edits_after_version: boolean | null;
             /** @description The task's newest stored events, newest first, at most 50. */
             history: components["schemas"]["TaskEvent"][];
             human_review: components["schemas"]["HumanReviewMark"] | null;

@@ -11,7 +11,7 @@ use fold_core::{
     CheckpointId, Clock, EventActor, FoldError, LiveEvent, NewEvent, ProjectConfig, ProjectPaths,
     ProposalId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId, codes,
 };
-use fold_store::Store;
+use fold_store::{Store, reviews};
 use fold_store::workspaces::{self, Checkpoint, CheckpointKind, WorkspaceKind, WorkspaceState};
 use fold_vcs::compare::{self as vcs, FileChange, LineCache, State};
 use fold_vcs::ignore::IgnoreRules;
@@ -121,6 +121,9 @@ pub struct LiveWorkspace {
     pub proposal: Option<ProposalId>,
     /// The worker holds the task's implementation claim and nothing in the workspace changed for `stall_minutes`. Calls do not count, so a stalled worker can hold a fresh lease.
     pub stalled: bool,
+    /// Whether the working files differ from the tree of the open proposal's newest version: false while every file is the same, true from the first file that differs. Null without an open proposal.
+    #[schema(required = true)]
+    pub edits_after_version: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -447,12 +450,24 @@ impl LiveState {
         }
         let base = workspaces::get_by_number(read, row.base).await?;
         let checkpoints = workspaces::list_checkpoints(read, workspace, false).await?;
+        let proposal = match task {
+            Some(task) => reviews::open_for_task(read, task).await?.or(row.proposal),
+            None => row.proposal,
+        };
+        let version = match proposal {
+            Some(proposal) => reviews::list_versions(read, proposal)
+                .await?
+                .pop()
+                .map(|version| version.tree),
+            None => None,
+        };
         let root = shared.paths.root().join(&row.path);
         let last_activity = row.last_activity_at.unwrap_or(row.created_at);
         let seed = Seed {
             workspace,
             root: root.clone(),
             base_tree: base.tree_hash,
+            version,
             max_file_bytes: shared.config.max_file_bytes,
         };
         let (caps, opened) = {
@@ -495,6 +510,7 @@ impl LiveState {
             seed,
             scanner: Some(opened),
             rebased: None,
+            reversioned: None,
             initial: LiveWorkspace {
                 workspace,
                 task,
@@ -507,8 +523,9 @@ impl LiveState {
                 summary: ChangeTally::default().summary(),
                 last_activity_at: last_activity,
                 checkpoints: checkpoints.iter().map(CheckpointSummary::from).collect(),
-                proposal: row.proposal,
+                proposal,
                 stalled: false,
+                edits_after_version: None,
             },
             last_activity,
             last_full: shared.clock.now(),
@@ -607,9 +624,21 @@ impl LiveState {
         self.update(workspace, |view| view.worker = worker.to_string());
     }
 
-    /// Sets the open proposal after the commit that opened or closed it.
-    pub fn set_proposal(&self, workspace: WorkspaceId, proposal: Option<ProposalId>) {
-        self.update(workspace, |view| view.proposal = proposal);
+    /// Sets the open proposal after the commit of a proposal command, and has the pipeline compare the working files against `tree`, the tree of the proposal's newest version, in a full scan it starts without the caller waiting for it; `None` stops the comparison. Until that scan `edits_after_version` is null, so no state pairs the proposal with a comparison against another tree.
+    pub async fn set_proposal(
+        &self,
+        workspace: WorkspaceId,
+        proposal: Option<ProposalId>,
+        tree: Option<ObjectHash>,
+    ) {
+        self.update(workspace, |view| {
+            view.proposal = proposal;
+            view.edits_after_version = None;
+        });
+        if let Some(sender) = self.shared.sender(workspace) {
+            let (answer, _unread) = oneshot::channel();
+            let _ = sender.send(Command::Version { tree, answer }).await;
+        }
     }
 
     /// Sets the flag the stall check decided from `last_activity_at` and returns whether it changed. A scan that found activity or a missing directory in the meantime wins: the flag is left as that scan set it.
@@ -726,6 +755,10 @@ enum Command {
         tree: ObjectHash,
         answer: Answer,
     },
+    Version {
+        tree: Option<ObjectHash>,
+        answer: Answer,
+    },
     Tick,
     Stop,
 }
@@ -740,6 +773,8 @@ struct Round {
     missing: bool,
     /// The newest base a sync or restore moved the workspace to.
     rebase: Option<(RevisionId, ObjectHash)>,
+    /// The newest version tree a proposal command gave; `Some(None)` stops the comparison.
+    version: Option<Option<ObjectHash>>,
     answers: Vec<Answer>,
     stop: bool,
 }
@@ -760,6 +795,11 @@ impl Round {
                 self.full = true;
                 self.answers.push(answer);
             }
+            Command::Version { tree, answer } => {
+                self.version = Some(tree);
+                self.full = true;
+                self.answers.push(answer);
+            }
             Command::Tick => self.tick = true,
             Command::Stop => self.stop = true,
         }
@@ -772,6 +812,8 @@ struct Seed {
     workspace: WorkspaceId,
     root: PathBuf,
     base_tree: ObjectHash,
+    /// The tree of the open proposal's newest version.
+    version: Option<ObjectHash>,
     max_file_bytes: u64,
 }
 
@@ -790,6 +832,8 @@ struct Pipeline {
     scanner: Option<Scanner>,
     /// A base tree the open scanner has not loaded yet.
     rebased: Option<ObjectHash>,
+    /// A version tree the open scanner has not loaded yet; `Some(None)` stops the comparison.
+    reversioned: Option<Option<ObjectHash>>,
     /// The state before the first scan.
     initial: LiveWorkspace,
     last_activity: Timestamp,
@@ -813,6 +857,7 @@ struct Scanned {
     /// The `(path, content hash)` pairs differ from the previous scan's.
     moved: bool,
     warnings: Vec<Warning>,
+    edits_after_version: Option<bool>,
 }
 
 impl Pipeline {
@@ -851,6 +896,10 @@ impl Pipeline {
             self.seed.base_tree = tree;
             self.rebased = Some(tree);
             self.initial.base = base;
+        }
+        if let Some(tree) = round.version {
+            self.seed.version = tree;
+            self.reversioned = Some(tree);
         }
         let due = self
             .last_full
@@ -918,12 +967,16 @@ impl Pipeline {
     async fn scan(&mut self, touched: Option<Vec<RepoPath>>) -> Result<Scan, FoldError> {
         let scanner = self.scanner.take();
         let rebased = self.rebased.take();
+        let reversioned = self.reversioned.take();
         let (paths, caps, seed) = (self.paths.clone(), self.caps, self.seed.clone());
         let done = tokio::task::spawn_blocking(move || {
             let mut scanner = match scanner {
                 Some(mut scanner) => {
                     if let Some(tree) = rebased {
                         scanner.rebase(&tree)?;
+                    }
+                    if let Some(tree) = reversioned {
+                        scanner.set_version(tree.as_ref());
                     }
                     scanner
                 }
@@ -970,6 +1023,7 @@ impl Pipeline {
         view.files = files;
         view.summary = tally.summary();
         view.last_activity_at = self.last_activity;
+        view.edits_after_version = scanned.edits_after_version;
         if scanned.moved {
             view.stalled = false;
         }
@@ -1111,6 +1165,7 @@ struct Scanner {
     index: StatIndex,
     base: State,
     current: FlatTree,
+    version: Version,
     scanned: bool,
     warnings: BTreeMap<RepoPath, WarningReason>,
     cache: LineCache,
@@ -1128,6 +1183,7 @@ impl Scanner {
         }
         let objects = ObjectStore::open_existing(&paths.fold_dir()).map_err(FoldError::from)?;
         let base = vcs::load_flat(&objects, &seed.base_tree)?;
+        let version = Version::load(&objects, seed.version.as_ref());
         let index = StatIndex::load(&paths.workspace_index(seed.workspace), caps);
         let boundary_dir = paths.index();
         fold_vcs::platform::create_dir_below(&paths.fold_dir(), &boundary_dir)
@@ -1141,6 +1197,7 @@ impl Scanner {
             index,
             base: State::recorded(base),
             current: FlatTree::new(),
+            version,
             scanned: false,
             warnings: BTreeMap::new(),
             cache: LineCache::new(LINE_CACHE_PAIRS),
@@ -1152,6 +1209,10 @@ impl Scanner {
     fn rebase(&mut self, tree: &ObjectHash) -> Result<(), FoldError> {
         self.base = State::recorded(vcs::load_flat(&self.objects, tree)?);
         Ok(())
+    }
+
+    fn set_version(&mut self, tree: Option<&ObjectHash>) {
+        self.version = Version::load(&self.objects, tree);
     }
 
     /// Scans `touched`, or the whole workspace when it is `None` or nothing was scanned yet, and compares the result to the base tree. A partial scan that fails is repeated as a full one.
@@ -1208,6 +1269,7 @@ impl Scanner {
         Ok(Scan::Done(Scanned {
             files: comparison.files,
             moved,
+            edits_after_version: self.version.differs_from(&self.current),
             warnings: self
                 .warnings
                 .iter()
@@ -1217,6 +1279,39 @@ impl Scanner {
                 })
                 .collect(),
         }))
+    }
+}
+
+/// The tree of the open proposal's newest version, as the scanner compares the working files against it.
+#[derive(Debug)]
+enum Version {
+    None,
+    Tree(FlatTree),
+    /// The tree could not be read, so every scan counts as an edit after the version.
+    Unreadable,
+}
+
+impl Version {
+    fn load(objects: &ObjectStore, tree: Option<&ObjectHash>) -> Self {
+        let Some(tree) = tree else {
+            return Self::None;
+        };
+        match vcs::load_flat(objects, tree) {
+            Ok(flat) => Self::Tree(flat),
+            Err(error) => {
+                tracing::warn!(code = error.code(), "the version tree was not read; the working files count as edited");
+                Self::Unreadable
+            }
+        }
+    }
+
+    /// Exact entries, kinds included: the files a recording of the workspace would put in the version.
+    fn differs_from(&self, current: &FlatTree) -> Option<bool> {
+        match self {
+            Self::None => None,
+            Self::Tree(flat) => Some(flat != current),
+            Self::Unreadable => Some(true),
+        }
     }
 }
 

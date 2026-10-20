@@ -78,6 +78,7 @@ fn sample_workspace() -> LiveWorkspace {
         }],
         proposal: ProposalId::from_number(3),
         stalled: true,
+        edits_after_version: Some(true),
     }
 }
 

@@ -1,0 +1,52 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.number AS \"task!: i64\", p.number AS \"proposal!: i64\",\n                  CASE WHEN p.conflicted OR p.checks_failed THEN p.updated_at END AS \"flagged_at?: i64\",\n                  CASE WHEN (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) = 'request_changes'\n                       THEN (SELECT MAX(r.created_at) FROM reviews r\n                             WHERE r.verdict = 'request_changes'\n                               AND r.version_id = (SELECT v.id FROM proposal_versions v\n                                                   WHERE v.proposal_id = p.id\n                                                   ORDER BY v.version DESC LIMIT 1))\n                  END AS \"changes_requested_at?: i64\"\n           FROM proposals p\n           JOIN tasks t ON t.id = p.task_id\n           WHERE p.state = 'open'\n           ORDER BY t.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "task!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "proposal!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "flagged_at?: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "changes_requested_at?: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "cef1cc743fef70aecd8606742fcc3f7e5569f9dd24fba92e0fbd2d0fb10ae07f"
+}

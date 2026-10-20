@@ -1,7 +1,8 @@
 #![cfg(test)]
 
-use crate::common::acceptance::{FakeInbox, HUMAN, Harness, SLUG, assert_in_order};
+use crate::common::acceptance::{FakeInbox, HUMAN, Harness, SLUG, WAIT, assert_in_order};
 use axum::http::{Method, StatusCode};
+use fold_store::testing::eventually;
 use serde_json::{Value, json};
 
 const ENDPOINT: (&str, &str) = ("src/login.txt", "POST /login\n// TODO remove\n");
@@ -15,6 +16,20 @@ async fn notice_with(inbox: &mut FakeInbox, needle: &str) -> String {
             return posted;
         }
     }
+}
+
+/// Waits until the task view says whether the holder's files differ from the newest version; a proposal command returns before the live state compares them.
+async fn wait_for_edits(harness: &Harness, task: &str, edited: bool) {
+    let path = format!("/api/v1/projects/{SLUG}/tasks/{task}");
+    eventually(WAIT, async || {
+        let (_, view) = harness.http(Method::GET, &path, None, HUMAN).await;
+        if view["edits_after_version"] == json!(edited) {
+            Ok(())
+        } else {
+            Err(view["edits_after_version"].clone())
+        }
+    })
+    .await;
 }
 
 fn proposal_path(proposal: &str, rest: &str) -> String {
@@ -43,6 +58,7 @@ async fn acceptance_13_a_human_edit_in_a_human_review_keeps_the_approval_until_i
     let proposal = harness
         .propose("backend", &work, "Add the login endpoint")
         .await;
+    wait_for_edits(&harness, &task, false).await;
     harness.approve(&proposal).await;
 
     let (code, refused) = harness
@@ -86,6 +102,8 @@ async fn acceptance_13_a_human_edit_in_a_human_review_keeps_the_approval_until_i
     let notice = notice_with(&mut backend_inbox, "a human edited").await;
     assert!(notice.contains(&format!("a human edited {proposal} as version 2")));
     assert!(notice.contains("sync_workspace"), "{notice}");
+    // The human's version is not in backend's files, so backend edits after it until it syncs.
+    wait_for_edits(&harness, &task, true).await;
     let view = harness
         .call("backend", "get_proposal", json!({"id": proposal}))
         .await;
@@ -118,6 +136,7 @@ async fn acceptance_13_a_human_edit_in_a_human_review_keeps_the_approval_until_i
         .call("backend", "sync_workspace", json!({"ws": work.workspace}))
         .await;
     assert_eq!(std::fs::read_to_string(&on_disk).unwrap(), EDITED);
+    wait_for_edits(&harness, &task, false).await;
 
     // Sent for review again, the kept approval stops counting and the review lead gets the turn.
     let (code, summary) = harness

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT p.number AS \"number!: i64\", t.number AS \"task!: i64\", p.state,\n                  p.conflicted AS \"conflicted: bool\",\n                  (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id) AS \"version?: i64\",\n                  (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) AS \"verdict?: String\",\n                  rev.number AS \"revision?: i64\",\n                  i.actor AS \"integrated_by?: String\",\n                  i.created_at AS \"integrated_at?: i64\",\n                  rc.\"commit\" AS \"git_commit?: String\"\n           FROM proposals p\n           JOIN tasks t ON t.id = p.task_id\n           LEFT JOIN integrations i ON i.proposal_id = p.id AND i.result = 'succeeded'\n           LEFT JOIN revisions rev ON rev.id = i.revision_id\n           LEFT JOIN revision_commits rc ON rc.revision_id = rev.id\n           WHERE p.state IN ('open', 'integrated')\n             AND (?1 IS NULL OR t.number = ?1)\n             AND p.number = (\n                     SELECT MAX(q.number) FROM proposals q\n                     WHERE q.task_id = p.task_id AND q.state IN ('open', 'integrated')\n                 )\n           ORDER BY t.number",
+  "query": "SELECT p.number AS \"number!: i64\", t.number AS \"task!: i64\", p.state,\n                  p.conflicted AS \"conflicted: bool\",\n                  p.checks_failed AS \"checks_failed: bool\",\n                  (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id) AS \"version?: i64\",\n                  (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) AS \"verdict?: String\",\n                  rev.number AS \"revision?: i64\",\n                  i.actor AS \"integrated_by?: String\",\n                  i.created_at AS \"integrated_at?: i64\",\n                  rc.\"commit\" AS \"git_commit?: String\"\n           FROM proposals p\n           JOIN tasks t ON t.id = p.task_id\n           LEFT JOIN integrations i ON i.proposal_id = p.id AND i.result = 'succeeded'\n           LEFT JOIN revisions rev ON rev.id = i.revision_id\n           LEFT JOIN revision_commits rc ON rc.revision_id = rev.id\n           WHERE p.state IN ('open', 'integrated')\n             AND (?1 IS NULL OR t.number = ?1)\n             AND p.number = (\n                     SELECT MAX(q.number) FROM proposals q\n                     WHERE q.task_id = p.task_id AND q.state IN ('open', 'integrated')\n                 )\n           ORDER BY t.number",
   "describe": {
     "columns": [
       {
@@ -48,14 +48,25 @@
         }
       },
       {
-        "name": "version?: i64",
+        "name": "checks_failed: bool",
         "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "checks_failed"
+          }
+        }
+      },
+      {
+        "name": "version?: i64",
+        "ordinal": 5,
         "type_info": "Integer",
         "origin": "Expression"
       },
       {
         "name": "verdict?: String",
-        "ordinal": 5,
+        "ordinal": 6,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -66,7 +77,7 @@
       },
       {
         "name": "revision?: i64",
-        "ordinal": 6,
+        "ordinal": 7,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -77,7 +88,7 @@
       },
       {
         "name": "integrated_by?: String",
-        "ordinal": 7,
+        "ordinal": 8,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -88,7 +99,7 @@
       },
       {
         "name": "integrated_at?: i64",
-        "ordinal": 8,
+        "ordinal": 9,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -99,7 +110,7 @@
       },
       {
         "name": "git_commit?: String",
-        "ordinal": 9,
+        "ordinal": 10,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -117,6 +128,7 @@
       false,
       false,
       false,
+      false,
       true,
       true,
       true,
@@ -125,5 +137,5 @@
       true
     ]
   },
-  "hash": "c2b15c7de02043225e0bc10eac318a956adb94f2b06a9c020e744022196f5e7d"
+  "hash": "8ec0cdf956e1722d6df092c445348c9ab76c734d4bb39a58abee86413faeadf4"
 }
