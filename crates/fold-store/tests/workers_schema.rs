@@ -995,3 +995,120 @@ async fn a_made_up_model_is_forgotten_and_a_real_one_kept() {
     assert_eq!(model("'opus'").await.as_deref(), Some("opus"));
     assert_eq!(model("NULL").await, None);
 }
+
+/// A project from before the area main: a plain label `main` on an open task, a Done task and a task with a mark of its own.
+const PLAIN_MAIN_LABEL: &str = "
+INSERT INTO labels (id, name, color, created_at) VALUES (1, 'ui', 'sage', 0), (2, 'main', 'gold', 0);
+INSERT INTO tasks (id, number, title, created_by, created_at, updated_at, status) VALUES (1, 1, 'notes', 'fold', 0, 0, 'todo'), (2, 2, 'old', 'fold', 0, 0, 'done'), (3, 3, 'checks', 'fold', 0, 0, 'todo'), (4, 4, 'ui', 'fold', 0, 0, 'todo');
+UPDATE tasks SET human_review = 1, human_review_reason = 'billing', human_review_set_by = 'human:ana' WHERE id = 3;
+INSERT INTO task_labels (task_id, label_id) VALUES (1, 2), (2, 2), (3, 2), (4, 1);
+";
+
+/// A project folder whose database has every migration before the area main and then `seed`.
+#[cfg(test)]
+async fn before_main_area(seed: &'static str) -> (tempfile::TempDir, fold_core::ProjectPaths) {
+    use sqlx::Connection;
+    let dir = tempfile::TempDir::new().unwrap();
+    let paths = fold_core::ProjectPaths::new(dir.path().join("project"));
+    std::fs::create_dir_all(paths.db().parent().unwrap()).unwrap();
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(paths.db())
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let mut conn = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .unwrap();
+    let mut before: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/project");
+    let area = before
+        .migrations
+        .iter()
+        .position(|migration| migration.description == "main area")
+        .unwrap();
+    before.migrations = std::borrow::Cow::Owned(before.migrations[..area].to_vec());
+    before.run(&mut conn).await.unwrap();
+    sqlx::raw_sql(seed).execute(&mut conn).await.unwrap();
+    conn.close().await.unwrap();
+    (dir, paths)
+}
+
+#[tokio::test]
+async fn a_plain_label_main_becomes_the_label_of_the_area_and_its_open_tasks_get_the_mark() {
+    let (_dir, paths) = before_main_area(PLAIN_MAIN_LABEL).await;
+    let store = Store::open_project(&paths).await.unwrap();
+    let main = agents::find_area(store.read(), &fold_core::AreaName::main())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(main.label, fold_core::LabelName::main());
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM labels").await, 2);
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM labels WHERE name = 'main' AND color = 'gold'"
+        )
+        .await,
+        1
+    );
+    let marks: Vec<(i64, i64, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT number, human_review, human_review_reason, human_review_set_by FROM tasks ORDER BY number",
+    )
+    .fetch_all(store.read())
+    .await
+    .unwrap();
+    let reason = Some(fold_core::policy::MAIN_AREA_REASON.to_owned());
+    let fold = Some("fold".to_owned());
+    assert_eq!(
+        marks,
+        [
+            (1, 1, reason, fold),
+            (2, 0, None, None),
+            (
+                3,
+                1,
+                Some("billing".to_owned()),
+                Some("human:ana".to_owned())
+            ),
+            (4, 0, None, None),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_area_of_the_project_that_holds_the_name_or_label_main_stops_the_migration() {
+    let cases = [
+        (
+            "INSERT INTO labels (id, name, color, created_at) VALUES (1, 'main', 'gold', 0);
+             INSERT INTO areas (name, label_id, created_by, created_at) VALUES ('core', 1, 'fold', 0);",
+            "Rename the label main",
+        ),
+        (
+            "INSERT INTO labels (id, name, color, created_at) VALUES (1, 'core', 'gold', 0);
+             INSERT INTO areas (name, label_id, created_by, created_at) VALUES ('main', 1, 'fold', 0);",
+            "define that area under another name",
+        ),
+        (
+            "INSERT INTO labels (id, name, color, created_at) VALUES (1, 'main', 'gold', 0);
+             INSERT INTO areas (name, label_id, created_by, created_at, model) VALUES ('main', 1, 'fold', 0, 'opus');",
+            "a lead or a profile",
+        ),
+    ];
+    for (seed, fix) in cases {
+        let (_dir, paths) = before_main_area(seed).await;
+        let error = Store::open_project(&paths).await.unwrap_err();
+        let shown = format!("{error:?}");
+        assert!(shown.contains("main_area_conflict"), "{shown}");
+        assert!(shown.contains(fix), "{shown}");
+    }
+    let (_dir, paths) = before_main_area(
+        "INSERT INTO labels (id, name, color, created_at) VALUES (1, 'main', 'gold', 0);
+         INSERT INTO areas (name, label_id, created_by, created_at) VALUES ('main', 1, 'fold', 0);",
+    )
+    .await;
+    let store = Store::open_project(&paths).await.unwrap();
+    let main = agents::find_area(store.read(), &fold_core::AreaName::main())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(main.label, fold_core::LabelName::main());
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM areas").await, 1);
+}

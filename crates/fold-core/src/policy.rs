@@ -118,7 +118,7 @@ pub fn can_claim(actor: &Actor) -> Result<&AgentActor, PolicyDenied> {
     }
 }
 
-/// Leads hand out the work: an area lead claims a task that carries its area's label (`lead_label`, the label of the area it leads), usually through the `start_worker` that gives the claim to a new task worker, and the main agent claims one when the user tells it to. A worker that fold started never takes work of its own, so an agent whose worker process is a task worker or a reviewer is refused through every one of its workers, and the review lead and a session without a fold role are refused too. `task_labels` are the task's labels. It returns the admitted agent, which is the claimant.
+/// Leads hand out the work: an area lead claims a task that carries its area's label (`lead_label`, the label of the area it leads), usually through the `start_worker` that gives the claim to a new task worker, and the main agent claims one when the user tells it to, or a task of the area main, which it builds itself. A worker that fold started never takes work of its own, so an agent whose worker process is a task worker or a reviewer is refused through every one of its workers, and the review lead and a session without a fold role are refused too. `task_labels` are the task's labels. It returns the admitted agent, which is the claimant.
 pub fn can_claim_task<'a>(
     actor: &'a Actor,
     standing: AgentStanding,
