@@ -12,7 +12,7 @@ import {
   MessageSquareReply,
   NotebookPen,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { keys } from "@/api/keys";
 import { markNotesRead, type NoteView } from "@/api/notes";
 import { olderNotListed } from "@/api/pages";
@@ -66,12 +66,15 @@ export function NotesScreen({
   });
   const human = session.data?.human ?? null;
   const mark = human === null ? null : readMark(notes, unread.data ?? null);
-  const { mutate, isPending } = read;
+  const { mutate } = read;
+  // Each note is marked once, so a failed mark or a count that is not refetched yet sends no second request.
+  const marked = useRef<string | null>(null);
   useEffect(() => {
-    if (mark !== null && !isPending) {
+    if (mark !== null && marked.current !== mark) {
+      marked.current = mark;
       mutate(mark);
     }
-  }, [mark, isPending, mutate]);
+  }, [mark, mutate]);
 
   const options = noteOptions(notes);
   const visible = filterNotes(notes, search);

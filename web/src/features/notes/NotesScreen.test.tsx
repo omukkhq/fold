@@ -18,7 +18,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { keys } from "@/api/keys";
 import type { NoteView } from "@/api/notes";
-import { stubFetch, type StubReply } from "@/test/stubFetch";
+import { errorReply, stubFetch, type StubReply } from "@/test/stubFetch";
 import { NotesScreen } from "./NotesScreen";
 import { parseNotesSearch } from "./notes";
 
@@ -52,7 +52,10 @@ const NOTES = [
   note("n-1", "api-lead", "api", "Errors carry a code"),
 ];
 
-type Routes = Record<string, StubReply | (() => StubReply)>;
+type Routes = Record<
+  string,
+  StubReply | (() => StubReply) | (() => Promise<StubReply>)
+>;
 
 async function setup(
   routes: Routes,
@@ -136,7 +139,36 @@ describe("NotesScreen", () => {
       const post = calls.find((call) => call.method === "POST");
       expect(post?.body).toEqual({ through: "n-3" });
     });
+    // The mark refetches the notes; a second mark would follow that answer.
+    await waitFor(() => {
+      expect(
+        calls.some(
+          (call) =>
+            call.method === "GET" &&
+            call.path === "/api/v1/projects/demo/notes",
+        ),
+      ).toBe(true);
+    });
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
     expect(within(first).getByText("New")).toBeTruthy();
+  });
+
+  it("marks the notes once though the mark fails", async () => {
+    const { calls } = await setup(
+      {
+        // A slow answer lets the screen render the pending mark before it fails.
+        "POST /api/v1/projects/demo/notes/read": async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return errorReply(503, "project_unavailable");
+        },
+      },
+      1,
+    );
+    await waitFor(() => {
+      expect(calls.some((call) => call.method === "POST")).toBe(true);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
   });
 
   it("filters by area and agent through the address", async () => {
