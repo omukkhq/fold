@@ -52,7 +52,7 @@ impl Fixture {
         std::fs::create_dir_all(web.path().join("assets")).unwrap();
         std::fs::write(web.path().join("assets").join("app.js"), "1").unwrap();
         std::fs::write(web.path().join("assets").join("onig-1a2b.wasm"), "\0asm").unwrap();
-        for icon in ["favicon.svg", "favicon-32.png", "apple-touch-icon.png"] {
+        for icon in ["favicon.ico", "favicon.png", "apple-touch-icon.png"] {
             std::fs::write(web.path().join(icon), icon).unwrap();
         }
         let clock = Arc::new(project.clock().clone());
@@ -555,8 +555,8 @@ async fn off_loopback_the_web_files_load_without_a_cookie() {
         assert_eq!(answer.status, StatusCode::OK, "{path}");
     }
     for (file, mime) in [
-        ("favicon.svg", "image/svg+xml"),
-        ("favicon-32.png", "image/png"),
+        ("favicon.ico", "image/x-icon"),
+        ("favicon.png", "image/png"),
         ("apple-touch-icon.png", "image/png"),
         ("assets/onig-1a2b.wasm", "application/wasm"),
     ] {

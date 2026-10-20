@@ -91,7 +91,7 @@ async fn a_file_is_served_with_its_type_and_a_hashed_asset_is_immutable() {
     let site = Site::new(&[
         ("index.html", INDEX),
         ("assets/app-1a2b.js", "console.log(1)"),
-        ("favicon.svg", "<svg/>"),
+        ("logo.svg", "<svg/>"),
     ])
     .await;
 
@@ -107,7 +107,7 @@ async fn a_file_is_served_with_its_type_and_a_hashed_asset_is_immutable() {
     );
     assert_eq!(text(response).await, "console.log(1)");
 
-    let response = site.get("/favicon.svg").await;
+    let response = site.get("/logo.svg").await;
     assert_eq!(header_of(&response, header::CONTENT_TYPE), "image/svg+xml");
     assert_eq!(header_of(&response, header::CACHE_CONTROL), "no-cache");
 
