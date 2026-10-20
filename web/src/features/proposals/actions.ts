@@ -68,11 +68,13 @@ export const AGENT_APPROVES_FIRST = "A reviewer agent approves first.";
 
 /**
  * Why Approve cannot work for the signed-in human; null when it can.
- * On a task with the human review mark the daemon takes a human's approval only after an agent with review rights approved the current version, which it reports as `agent_approved`.
+ * On a task with the human review mark the daemon takes a human's approval only after an agent with review rights approved the current version, which it reports as `agent_approved`. A task of the main agent's own area (`main_task`) has no reviewer agent, so the human approves it first.
  */
 export function approveBlock(proposal: ProposalDetail): string | null {
   if (proposal.summary.checks_failed) return CHECKS_FAILED;
-  return proposal.summary.human_review !== null && !proposal.agent_approved
+  return proposal.summary.human_review !== null &&
+    !proposal.agent_approved &&
+    !proposal.main_task
     ? AGENT_APPROVES_FIRST
     : null;
 }

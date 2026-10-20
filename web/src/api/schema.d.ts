@@ -2691,6 +2691,8 @@ export interface components {
              * @description The newest version before the selected one that has a verdict, by any reviewer, agent or human: what changed since it is what is left to review.
              */
             last_reviewed_version: number | null;
+            /** @description The task is in the built-in area Main, the main agent's own work: no review agent reviews it, and a human approves it without a reviewer agent first, even with the human review mark. */
+            main_task: boolean;
             /** @description The direct prerequisites of the task. */
             prerequisites: components["schemas"]["ProposalTask"][];
             review_claim: components["schemas"]["ReviewClaim"] | null;
@@ -3977,9 +3979,14 @@ export interface components {
         };
         /** @description The areas and every worker fold runs or ran. */
         WorkerList: {
-            /** @description In name order. */
+            /** @description In name order, without the built-in area Main, which has no lead and no profile. */
             areas: components["schemas"]["AreaEntry"][];
             limits: components["schemas"]["LimitsEntry"] | null;
+            /**
+             * @description The label of the built-in area Main: a task with it belongs to the main agent, which builds it itself, and a human approves its proposal.
+             * @example main
+             */
+            main_label: string;
             pause: components["schemas"]["PauseEntry"];
             /** @description Each role with the cache time a new worker of the role gets; empty when fold cannot read `.fold/config.toml`. */
             roles: components["schemas"]["RoleEntry"][];

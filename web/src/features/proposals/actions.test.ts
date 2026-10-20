@@ -187,6 +187,15 @@ describe("approveBlock", () => {
     expect(approveBlock(approved)).toBeNull();
   });
 
+  it("lets a human approve a task of the main agent's area first, since no reviewer agent reviews it", () => {
+    const main = proposalDetail(
+      proposalSummary("P-4", { human_review: mark }),
+      { agent_approved: false, main_task: true },
+    );
+    expect(approveBlock(main)).toBeNull();
+    expect(integrateBlock(main, "r8")).not.toBe(AGENT_APPROVES_FIRST);
+  });
+
   it("blocks Integrate on a marked task with the same line, because integrating approves", () => {
     const waiting = proposalDetail(
       proposalSummary("P-4", { human_review: mark }),

@@ -10,7 +10,6 @@ import {
   setLabels,
   type TaskDetail,
 } from "@/api/tasks";
-import type { AreaEntry } from "@/api/workers";
 import { Button } from "@/components/button/Button";
 import { Select, TextField } from "@/components/form/controls";
 import { Label } from "@/components/label/Label";
@@ -24,10 +23,11 @@ import {
   areaOptions,
   labelChoices,
   labelControls,
-  leadText,
   markedArea,
+  ownerLine,
   swapArea,
   taskLabelView,
+  type AreaRef,
 } from "./areas";
 import { fieldError } from "./errors";
 import { AreaMenu, RemovableLabel, useAreas } from "./LabelFields";
@@ -38,7 +38,7 @@ import { useTaskWrite } from "./useTaskWrite";
 interface GroupProps {
   slug: string;
   task: TaskDetail;
-  areas: readonly AreaEntry[];
+  areas: readonly AreaRef[];
   labels: readonly BoardLabel[];
   /** Which controls take input, from `labelControls`. */
   controls: { area: boolean; labels: boolean };
@@ -113,7 +113,7 @@ function AreaGroup({ slug, task, areas, labels, controls }: GroupProps) {
             <li key={area.name} className="flex items-center gap-8">
               <Label color={area.label.color}>{area.label.name}</Label>
               <span className="text-meta text-text-faint">
-                lead: {leadText(area.lead)}
+                {ownerLine(area)}
               </span>
             </li>
           ))}

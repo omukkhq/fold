@@ -60,6 +60,7 @@ export function areaEntry(
 export function workerList(fields: Partial<WorkerList> = {}): WorkerList {
   return {
     areas: [],
+    main_label: "main",
     workers: [],
     roles: [],
     limits: null,

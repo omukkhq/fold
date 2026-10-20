@@ -53,7 +53,9 @@ import {
   reportedText,
   resolvedText,
 } from "./leadCheck";
+import { inMainArea, mainReviewNote } from "./areas";
 import { blockerControls, blockerView } from "./humanTask";
+import { useAreas } from "./LabelFields";
 import { LabelsSide } from "./LabelsSide";
 import { recordedCheckpoints } from "./liveStrip";
 import { proposalPath, revisionPath } from "./links";
@@ -549,6 +551,11 @@ function HumanReview({ slug, task }: { slug: string; task: TaskDetail }) {
   );
   const mark = task.human_review;
   const editable = task.can_change_human_review;
+  const { areas } = useAreas(slug);
+  const note = mainReviewNote(
+    inMainArea(task.labels, areas ?? []),
+    mark !== null,
+  );
   if (mark === null) {
     return (
       <SideGroup title="Human review">
@@ -577,6 +584,9 @@ function HumanReview({ slug, task }: { slug: string; task: TaskDetail }) {
             ) : null}
           </div>
         )}
+        {note === null ? null : (
+          <p className="text-meta leading-normal text-text-muted">{note}</p>
+        )}
       </SideGroup>
     );
   }
@@ -597,6 +607,9 @@ function HumanReview({ slug, task }: { slug: string; task: TaskDetail }) {
         {lines.at === null ? null : ` · ${lines.at}`}
       </p>
       <p className="text-bar leading-normal text-text">{mark.reason}</p>
+      {note === null ? null : (
+        <p className="text-meta leading-normal text-text-muted">{note}</p>
+      )}
       {editable ? (
         <Button
           variant="ghost"

@@ -1,18 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { areaEntry } from "@/test/workers";
 import {
+  MAIN_AREA_TEXT,
   NO_AREA,
   UNMARKED,
   areaChanges,
   areaOptions,
   createLabels,
+  inMainArea,
   labelChoices,
   labelControls,
   labelNamed,
   leadText,
+  mainReviewNote,
   markedArea,
+  ownerLine,
+  ownerText,
   swapArea,
   taskLabelView,
+  withMainArea,
 } from "./areas";
 
 const frontend = { name: "frontend", color: "sage" };
@@ -28,14 +34,19 @@ const areas = [
 describe("area options", () => {
   it("lists every area with its label colour and lead, in the daemon's order", () => {
     expect(areaOptions(areas, labels)).toEqual([
-      { name: "api", label: backend, lead: "api-lead" },
-      { name: "web", label: frontend, lead: "web-lead" },
+      { name: "api", label: backend, lead: "api-lead", main: false },
+      { name: "web", label: frontend, lead: "web-lead", main: false },
     ]);
   });
 
   it("draws an area whose label is not in the list in stone", () => {
     expect(areaOptions([areaEntry("docs", "writing")], labels)).toEqual([
-      { name: "docs", label: { name: "writing", color: "stone" }, lead: null },
+      {
+        name: "docs",
+        label: { name: "writing", color: "stone" },
+        lead: null,
+        main: false,
+      },
     ]);
   });
 
@@ -143,5 +154,65 @@ describe("label controls", () => {
 
   it("leave only the area change on a task with two areas", () => {
     expect(labelControls(true, false)).toEqual({ area: true, labels: false });
+  });
+});
+
+describe("the area Main", () => {
+  const main = { name: "main", color: "ink" };
+  const withMain = withMainArea(areas, "main");
+
+  it("comes first, after the choice to decide automatically, without a lead", () => {
+    expect(withMain.map((a) => a.name)).toEqual(["main", "api", "web"]);
+    const [option] = areaOptions(withMain, [...labels, main]);
+    expect(option).toEqual({
+      name: "main",
+      label: main,
+      lead: null,
+      main: true,
+    });
+    expect(withMainArea(areas, null)).toEqual(areas);
+  });
+
+  it("names the main agent where an area names its lead", () => {
+    const [own, api] = areaOptions(withMain, [...labels, main]);
+    if (own === undefined || api === undefined) throw new Error("two options");
+    expect(ownerText(own)).toBe(MAIN_AREA_TEXT);
+    expect(MAIN_AREA_TEXT).toBe("Main agent");
+    expect(ownerLine(own)).toBe("Main agent");
+    expect(ownerText(api)).toBe("api-lead");
+    expect(ownerLine(api)).toBe("lead: api-lead");
+  });
+
+  it("is the task's one area, so the task screen shows it instead of the no-area warning", () => {
+    const view = taskLabelView([bug, main], withMain);
+    expect(view.areas.map((a) => a.name)).toEqual(["main"]);
+    expect(view.others).toEqual([bug]);
+    expect(markedArea(view, false)).toBe("main");
+    expect(inMainArea([bug, main], withMain)).toBe(true);
+    expect(inMainArea([bug, frontend], withMain)).toBe(false);
+    expect(inMainArea([main], areas)).toBe(false);
+  });
+
+  it("gives a new task its label and swaps with the other areas", () => {
+    expect(createLabels(withMain, "main", ["bug"])).toEqual(["main", "bug"]);
+    expect(swapArea([bug, frontend], withMain, "main")).toEqual([
+      "bug",
+      "main",
+    ]);
+    expect(swapArea([main, bug], withMain, "web")).toEqual(["bug", "frontend"]);
+    expect(labelChoices([...labels, main], withMain, [], "")).toEqual([
+      bug,
+      database,
+    ]);
+  });
+
+  it("explains who approves the proposal of a task of Main", () => {
+    expect(mainReviewNote(false, true)).toBeNull();
+    expect(mainReviewNote(true, true)).toBe(
+      "A task of the main agent: a human approves its proposal. Turn off human review to let the main agent approve it.",
+    );
+    expect(mainReviewNote(true, false)).toBe(
+      "A task of the main agent: the main agent approves its own proposal.",
+    );
   });
 });
