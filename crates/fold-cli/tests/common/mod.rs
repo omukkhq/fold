@@ -205,6 +205,7 @@ pub fn init_files(project: &Path) -> (usize, u64) {
     let written = [
         "AGENTS.md",
         ".claude/skills/fold/SKILL.md",
+        ".claude/skills/fold/REFERENCE.md",
         ".foldignore",
         ".gitignore",
     ];

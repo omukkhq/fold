@@ -433,7 +433,7 @@ fn new_claude_files(root: &Path) -> Result<Vec<PathBuf>, FoldError> {
     let written = [claude_files::instructions_file(root)]
         .into_iter()
         .chain(claude_files::FOLDERS)
-        .chain([claude_files::SKILL_FILE]);
+        .chain(claude_files::SKILL_FILES);
     let mut created: Vec<PathBuf> = Vec::new();
     for path in written.map(|relative| root.join(relative)) {
         if std::fs::symlink_metadata(&path).is_err()

@@ -30,10 +30,15 @@ pub const AGENTS_BEGIN: &str = "<!-- fold:begin -->";
 pub const AGENTS_END: &str = "<!-- fold:end -->";
 
 pub const SKILL_FILE: &str = ".claude/skills/fold/SKILL.md";
+/// The reference beside the skill: fold's file formats, the human's commands and the web app's screens, which a session reads when its task needs them instead of holding them in every context.
+pub const REFERENCE_FILE: &str = ".claude/skills/fold/REFERENCE.md";
+/// The files of the fold skill, which fold owns whole.
+pub const SKILL_FILES: [&str; 2] = [SKILL_FILE, REFERENCE_FILE];
 
 /// Not named `AGENTS.md`, so an agent working in the fold repository never loads it as rules.
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 const SKILL: &str = include_str!("../templates/SKILL.md");
+const REFERENCE: &str = include_str!("../templates/REFERENCE.md");
 
 /// `details.reason` of a Claude Code file that fold cannot merge into.
 pub const MALFORMED_REASON: &str = "malformed_claude_file";
@@ -110,7 +115,7 @@ pub fn stale_section(root: &Path) -> Option<&'static str> {
     }
 }
 
-/// Writes or refreshes fold's Claude Code files in the project root, keeping everything in them that fold does not own: the marked section in [`instructions_file`] and the fold skill. The other root instructions file loses a section an earlier write left there, so the project holds one, and [`MCP_FILE`] and [`SETTINGS_FILE`] lose the entries an earlier fold wrote; a file that held nothing else goes. Every file is checked and every symbolic link followed before the first file changes, so a refusal leaves all of them untouched. A file whose content would not change is not written, so its modification time stays.
+/// Writes or refreshes fold's Claude Code files in the project root, keeping everything in them that fold does not own: the marked section in [`instructions_file`], the fold skill and its reference. The other root instructions file loses a section an earlier write left there, so the project holds one, and [`MCP_FILE`] and [`SETTINGS_FILE`] lose the entries an earlier fold wrote; a file that held nothing else goes. Every file is checked and every symbolic link followed before the first file changes, so a refusal leaves all of them untouched. A file whose content would not change is not written, so its modification time stays.
 pub fn write(root: &Path) -> Result<(), ClaudeFileError> {
     let project = std::fs::canonicalize(root).map_err(|source| ClaudeFileError::Io {
         path: root.to_owned(),
@@ -129,11 +134,12 @@ pub fn write(root: &Path) -> Result<(), ClaudeFileError> {
     if let Some((end, text)) = without_stale_section(&project, root, name)? {
         changes.push(Change::Write(end, text));
     }
-    let skill_path = root.join(SKILL_FILE);
-    changes.push(Change::Write(
-        link_end_of(&skill_path)?,
-        SKILL.as_bytes().to_vec(),
-    ));
+    for (relative, text) in SKILL_FILES.into_iter().zip([SKILL, REFERENCE]) {
+        changes.push(Change::Write(
+            link_end_of(&root.join(relative))?,
+            text.as_bytes().to_vec(),
+        ));
+    }
     for change in &changes {
         change.apply()?;
     }
@@ -732,6 +738,7 @@ mod tests {
         let parent = |file: &str| Path::new(file).parent().map(Path::to_owned);
         assert_eq!(parent(SETTINGS_FILE), Some(PathBuf::from(FOLDERS[0])));
         assert_eq!(parent(SKILL_FILE), Some(PathBuf::from(FOLDERS[2])));
+        assert_eq!(parent(REFERENCE_FILE), Some(PathBuf::from(FOLDERS[2])));
         assert_eq!(parent(FOLDERS[2]), Some(PathBuf::from(FOLDERS[1])));
         assert_eq!(parent(FOLDERS[1]), Some(PathBuf::from(FOLDERS[0])));
     }

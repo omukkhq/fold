@@ -9,7 +9,7 @@ use super::*;
 use crate::platform::Probe;
 use fold_cli::claude_files::{
     AGENTS_BEGIN, AGENTS_END, AGENTS_FILE, ALLOW_FOLD_TOOLS, CLAUDE_FILE, MCP_FILE,
-    MCP_SERVER_NAME, MCP_SERVERS_KEY, SETTINGS_FILE, SKILL_FILE,
+    MCP_SERVER_NAME, MCP_SERVERS_KEY, SETTINGS_FILE, SKILL_FILES,
 };
 use fold_cli::claude_user::{UserFiles, allows_fold_tools, runs_hook};
 use fold_core::layout::HOOKS;
@@ -136,7 +136,9 @@ impl Fixture {
             store.close().await.unwrap();
         });
         std::fs::create_dir_all(root.join(".claude/skills/fold")).unwrap();
-        std::fs::write(root.join(SKILL_FILE), "# fold\n").unwrap();
+        for file in SKILL_FILES {
+            std::fs::write(root.join(file), "# fold\n").unwrap();
+        }
         std::fs::write(root.join(AGENTS_FILE), good_agents()).unwrap();
         root
     }
@@ -1177,28 +1179,29 @@ fn a_project_folder_without_its_fold_data_fails_alone_with_the_init_that_replace
 fn the_claude_files_warn_for_each_missing_fold_entry() {
     let agents = &good_agents();
     let named = (AGENTS_FILE, Some(agents.as_str()));
-    assert!(claude_file_problems(named, true, &[]).is_empty());
+    assert!(claude_file_problems(named, &[], &[]).is_empty());
     assert_eq!(
-        claude_file_problems((AGENTS_FILE, None), false, &[]),
+        claude_file_problems((AGENTS_FILE, None), &SKILL_FILES, &[]),
         [
             "AGENTS.md is missing",
-            ".claude/skills/fold/SKILL.md is missing"
+            ".claude/skills/fold/SKILL.md is missing",
+            ".claude/skills/fold/REFERENCE.md is missing"
         ]
     );
     assert_eq!(
-        claude_file_problems((AGENTS_FILE, Some("no markers")), true, &[]),
+        claude_file_problems((AGENTS_FILE, Some("no markers")), &[], &[]),
         ["AGENTS.md lacks the fold section"]
     );
     assert_eq!(
-        claude_file_problems((AGENTS_FILE, Some(AGENTS_BEGIN)), true, &[]),
+        claude_file_problems((AGENTS_FILE, Some(AGENTS_BEGIN)), &[], &[]),
         ["AGENTS.md lacks the fold section"]
     );
     assert_eq!(
-        claude_file_problems((CLAUDE_FILE, None), true, &[]),
+        claude_file_problems((CLAUDE_FILE, None), &[], &[]),
         ["CLAUDE.md is missing"]
     );
     assert_eq!(
-        claude_file_problems(named, true, &[MCP_FILE, SETTINGS_FILE]),
+        claude_file_problems(named, &[], &[MCP_FILE, SETTINGS_FILE]),
         [
             ".mcp.json holds fold entries, which belong in your Claude Code config",
             ".claude/settings.json holds fold entries, which belong in your Claude Code config"

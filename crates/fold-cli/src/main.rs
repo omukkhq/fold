@@ -371,6 +371,32 @@ mod tests {
         assert_eq!(shown, "cannot read the file: permission denied");
     }
 
+    /// Every visible subcommand path below `command`, such as `token create`.
+    fn subcommand_paths(command: &clap::Command, prefix: &str, paths: &mut Vec<String>) {
+        for sub in command.get_subcommands().filter(|sub| !sub.is_hide_set()) {
+            let path = format!("{prefix}{}", sub.get_name());
+            subcommand_paths(sub, &format!("{path} "), paths);
+            paths.push(path);
+        }
+    }
+
+    #[test]
+    fn the_reference_names_every_visible_subcommand() {
+        use clap::CommandFactory;
+        let reference = include_str!("../templates/REFERENCE.md");
+        let mut paths = Vec::new();
+        subcommand_paths(&Cli::command(), "", &mut paths);
+        assert!(paths.iter().any(|path| path == "token create"));
+        assert!(!paths.iter().any(|path| path == "hook"));
+        for path in paths {
+            assert!(
+                reference.contains(&format!("`fld {path}`"))
+                    || reference.contains(&format!("`fld {path} ")),
+                "REFERENCE.md does not name `fld {path}`"
+            );
+        }
+    }
+
     #[test]
     fn a_failed_write_is_not_a_parse_failure() {
         let mut full: &mut [u8] = &mut [];

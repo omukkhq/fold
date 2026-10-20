@@ -1072,13 +1072,13 @@ fn objects_check(path: &Path) -> Check {
     objects_verdict(path, inspect_objects(path))
 }
 
-/// The problems with fold's Claude Code files in the project root: the marked section of the instructions file, which `instructions` names with its text, the fold skill, and the project files in `old` that still hold entries an earlier fold wrote there.
+/// The problems with fold's Claude Code files in the project root: the marked section of the instructions file, which `instructions` names with its text, the files of the fold skill that are `missing`, and the project files in `old` that still hold entries an earlier fold wrote there.
 pub(crate) fn claude_file_problems(
     instructions: (&str, Option<&str>),
-    skill: bool,
+    missing: &[&str],
     old: &[&str],
 ) -> Vec<String> {
-    use claude_files::{AGENTS_BEGIN, AGENTS_END, SKILL_FILE};
+    use claude_files::{AGENTS_BEGIN, AGENTS_END};
     let mut problems = Vec::new();
     let (name, text) = instructions;
     match text {
@@ -1088,8 +1088,8 @@ pub(crate) fn claude_file_problems(
         }
         Some(_) => {}
     }
-    if !skill {
-        problems.push(format!("{SKILL_FILE} is missing"));
+    for file in missing {
+        problems.push(format!("{file} is missing"));
     }
     for file in old {
         problems.push(format!(
@@ -1194,7 +1194,10 @@ fn claude_files_check(root: &Path) -> Check {
     let instructions = claude_files::instructions_file(root);
     let mut problems = claude_file_problems(
         (instructions, read(instructions).as_deref()),
-        root.join(claude_files::SKILL_FILE).is_file(),
+        &claude_files::SKILL_FILES
+            .into_iter()
+            .filter(|file| !root.join(file).is_file())
+            .collect::<Vec<_>>(),
         &claude_files::old_entries(root),
     );
     if let Some(stale) = claude_files::stale_section(root) {
