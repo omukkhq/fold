@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
@@ -72,6 +73,22 @@ async fn the_main_agents_transcript_is_its_recorded_session_in_claude_codes_fold
     let tail = fld_transcript(&host, &["main", "--tail", "2"], Some(&config)).await;
     assert!(tail.status.success(), "{tail:?}");
     assert_eq!(text(&tail.stdout), "{\"n\":2}\n{\"n\":3}\n");
+
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // Root reads the file whatever its mode, so only another user sees the refusal.
+    if std::fs::File::open(&file).is_err() {
+        let unreadable = fld_transcript(&host, &["main", "--tail", "1"], Some(&config)).await;
+        assert_eq!(unreadable.status.code(), Some(1));
+        let stderr = text(&unreadable.stderr);
+        assert!(
+            stderr.contains(&format!(
+                "transcript_not_found: cannot read {}: ",
+                file.display()
+            )) && stderr.contains("hint: run `ls -l "),
+            "{stderr}"
+        );
+    }
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
 
     let home = fld_transcript(&host, &["main"], None).await;
     assert_eq!(home.status.code(), Some(1));

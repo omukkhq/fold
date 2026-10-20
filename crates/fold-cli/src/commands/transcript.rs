@@ -47,8 +47,9 @@ pub fn run_transcript(args: &TranscriptArgs, out: &mut impl Write) -> Result<(),
     match args.tail {
         None => output::line(out, &path.to_string_lossy())?,
         Some(lines) => {
-            let mut file = std::fs::File::open(&path)?;
-            let text = last_lines(&mut file, lines)?;
+            let text = std::fs::File::open(&path)
+                .and_then(|mut file| last_lines(&mut file, lines))
+                .map_err(|error| unreadable(&path, &error))?;
             if !text.is_empty() {
                 let text = String::from_utf8_lossy(&text);
                 output::line(out, text.strip_suffix('\n').unwrap_or(&text))?;
@@ -111,40 +112,53 @@ fn missing(path: &Path) -> FoldError {
     .with_hint("Claude Code writes the transcript after the first message of the session")
 }
 
-/// The last `lines` lines of `file`, read from its end in chunks, so a long transcript is not read whole. A final newline does not start another line.
+fn unreadable(path: &Path, error: &io::Error) -> FoldError {
+    FoldError::new(
+        codes::TRANSCRIPT_NOT_FOUND,
+        format!("cannot read {}: {error}", path.display()),
+    )
+    .with_hint(format!(
+        "run `ls -l {}` to see who may read the file; Claude Code writes it with your user's rights",
+        output::shell_quote(path)
+    ))
+}
+
+/// The last `lines` lines of `file`, read from its end in chunks, so a long transcript is not read whole. Each chunk is read and searched once, so a long last line costs no more than its length. A final newline does not start another line.
 fn last_lines(file: &mut (impl Read + Seek), lines: usize) -> io::Result<Vec<u8>> {
     const CHUNK: u64 = 64 * 1024;
     if lines == 0 {
         return Ok(Vec::new());
     }
-    let mut end = file.seek(SeekFrom::End(0))?;
-    let mut tail = Vec::new();
-    loop {
+    let size = file.seek(SeekFrom::End(0))?;
+    let mut end = size;
+    let mut chunks = Vec::new();
+    let mut newlines = 0;
+    let mut cut = 0;
+    while end > 0 {
         let start = end.saturating_sub(CHUNK);
-        let size = usize::try_from(end - start).map_err(io::Error::other)?;
-        let mut chunk = vec![0; size];
+        let mut chunk = vec![0; usize::try_from(end - start).map_err(io::Error::other)?];
         file.seek(SeekFrom::Start(start))?;
         file.read_exact(&mut chunk)?;
-        chunk.extend_from_slice(&tail);
-        tail = chunk;
+        let last = (end == size).then(|| chunk.len() - 1);
+        let found = chunk.iter().enumerate().rev().find_map(|(at, byte)| {
+            if *byte != b'\n' || Some(at) == last {
+                return None;
+            }
+            newlines += 1;
+            (newlines == lines).then_some(at + 1)
+        });
+        chunks.push(chunk);
         end = start;
-        if start == 0 || line_start(&tail, lines).is_some() {
+        if let Some(at) = found {
+            cut = at;
             break;
         }
     }
-    let from = line_start(&tail, lines).unwrap_or(0);
-    Ok(tail.split_off(from))
-}
-
-/// Where the last `lines` lines of `text` start, when `text` holds the newline before them.
-fn line_start(text: &[u8], lines: usize) -> Option<usize> {
-    let body = text.strip_suffix(b"\n").unwrap_or(text);
-    body.iter()
-        .enumerate()
-        .rev()
-        .filter(|(_, byte)| **byte == b'\n')
-        .nth(lines - 1)
-        .map(|(at, _)| at + 1)
+    let mut tail = Vec::new();
+    for (index, chunk) in chunks.iter().rev().enumerate() {
+        tail.extend_from_slice(if index == 0 { &chunk[cut..] } else { chunk });
+    }
+    Ok(tail)
 }
 
 #[cfg(test)]
