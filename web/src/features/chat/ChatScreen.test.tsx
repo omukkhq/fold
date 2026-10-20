@@ -137,6 +137,31 @@ describe("ChatScreen", () => {
     expect(post?.body).toEqual({ body: "Use the tokens." });
   });
 
+  it("shows the options of a question the agent asks in the chat", async () => {
+    stubFetch(
+      routes({
+        [`GET ${BASE}/agents/web-lead/chat`]: {
+          body: page([
+            {
+              ...message("m-12", "web-lead", "Which palette?"),
+              header: "Palette",
+              choices: [
+                { label: "Warm", description: "Sand and clay." },
+                { label: "Cold", description: null },
+              ],
+            },
+          ]),
+        },
+      }),
+    );
+    setup();
+    const choices = await screen.findByRole("list", { name: "Choices" });
+    expect(within(choices).getByText("Warm")).toBeTruthy();
+    expect(within(choices).getByText("Sand and clay.")).toBeTruthy();
+    expect(within(choices).getByText("Cold")).toBeTruthy();
+    expect(screen.getByText("Palette")).toBeTruthy();
+  });
+
   it("shows a refused send with its sentence", async () => {
     stubFetch(
       routes({

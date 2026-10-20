@@ -24,6 +24,7 @@ import { PersonName } from "@/people/PersonName";
 import { projectPath } from "@/routes/paths";
 import { MessageBody } from "@/features/messages/MessageBody";
 import { replySchema, type ReplyValues } from "@/features/messages/compose";
+import { QuestionHeader } from "@/features/messages/QuestionChoices";
 import {
   agentFacts,
   chatLines,
@@ -114,7 +115,35 @@ export function ChatScreen({ slug, agent }: { slug: string; agent: string }) {
                       {formatAsOf(now, message.sent_at)}
                     </span>
                   </p>
+                  {message.header === null ? null : (
+                    <QuestionHeader header={message.header} />
+                  )}
                   <MessageBody body={message.body} slug={slug} />
+                  {message.choices.length === 0 ? null : (
+                    <>
+                      <ul aria-label="Choices" className="flex flex-col gap-4">
+                        {message.choices.map(({ label, description }) => (
+                          <li
+                            key={label}
+                            className="flex flex-col gap-2 rounded-s bg-sunken px-10 py-6"
+                          >
+                            <span className="text-body font-medium text-text">
+                              {label}
+                            </span>
+                            {description === null ? null : (
+                              <span className="text-meta text-text-muted">
+                                {description}
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="text-meta text-text-muted">
+                        Answer below with the label of an option, or in your own
+                        words.
+                      </p>
+                    </>
+                  )}
                 </li>
               ))}
             </ol>
