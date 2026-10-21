@@ -233,10 +233,26 @@ struct HostFile {
     targets: Vec<Target>,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct ProjectFile {
     #[serde(default)]
     targets: Vec<Target>,
+    /// Whether the host's targets get the project's notices while it has none of its own; on for a project that never set it.
+    #[serde(default = "on")]
+    use_host_targets: bool,
+}
+
+const fn on() -> bool {
+    true
+}
+
+impl Default for ProjectFile {
+    fn default() -> Self {
+        Self {
+            targets: Vec::new(),
+            use_host_targets: true,
+        }
+    }
 }
 
 /// The host file has a folder of its own below the notify folder, as each project file has, because a private write narrows the folder it writes in and that folder's parent to 0700: the parent is then the notify folder, never the daemon's data folder.
@@ -320,13 +336,33 @@ impl NotifySettings {
         })
     }
 
-    /// The targets that get the notices of `slug`: its own, or the host's when it has none, with true for the host's.
+    /// The targets that get the notices of `slug`: its own, or the host's when it has none and uses them, with true for the host's. A project that has none of its own and does not use the host's gets none.
     pub async fn applying(&self, slug: &str) -> Result<(Vec<Target>, bool), FoldError> {
-        let own = self.project(slug).await?.targets;
-        if !own.is_empty() {
-            return Ok((own, false));
+        let file = self.project(slug).await?;
+        if !file.targets.is_empty() {
+            return Ok((file.targets, false));
+        }
+        if !file.use_host_targets {
+            return Ok((Vec::new(), false));
         }
         Ok((self.host().await?.targets, true))
+    }
+
+    /// Whether the host's targets get the notices of `slug` while it has none of its own.
+    pub async fn use_host_targets(&self, slug: &str) -> Result<bool, FoldError> {
+        Ok(self.project(slug).await?.use_host_targets)
+    }
+
+    pub async fn set_use_host_targets(&self, slug: &str, on: bool) -> Result<(), FoldError> {
+        let name = project_file(slug)?;
+        let _writing = self.writing.lock().await;
+        let projects = self.project_dir();
+        self.blocking(move |_| {
+            let mut file: ProjectFile = read_file(&projects.join(&name))?;
+            file.use_host_targets = on;
+            write_file(&projects, &name, &file)
+        })
+        .await
     }
 
     /// The address of the web app that links start with, when a human set one.
@@ -651,6 +687,30 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn a_project_uses_the_host_targets_until_a_human_turns_that_off() {
+        let temp = tempfile::tempdir().unwrap();
+        let settings = NotifySettings::new(temp.path().join("notify"));
+        let host = settings
+            .add(&Scope::Host, |id| {
+                webhook("https://h/x", "0123456789abcdef").checked(id, &ana(), Timestamp::EPOCH)
+            })
+            .await
+            .unwrap();
+        assert!(settings.use_host_targets("demo").await.unwrap());
+        assert_eq!(settings.applying("demo").await.unwrap(), (vec![host], true));
+        settings.set_use_host_targets("demo", false).await.unwrap();
+        assert!(!settings.use_host_targets("demo").await.unwrap());
+        assert_eq!(
+            settings.applying("demo").await.unwrap(),
+            (Vec::new(), false)
+        );
+        assert!(settings.use_host_targets("other").await.unwrap());
+        assert!(settings.set_use_host_targets("../x", false).await.is_err());
+        settings.forget_project("demo").await;
+        assert!(settings.use_host_targets("demo").await.unwrap());
     }
 
     #[tokio::test]

@@ -91,6 +91,19 @@ pub async fn test_target(
     sent
 }
 
+/// Sets whether the host's targets get the notices of the project `slug` while it has none of its own. Off, such a project sends no notices.
+pub async fn set_use_host_targets(
+    settings: &NotifySettings,
+    actor: &Actor,
+    slug: &str,
+    on: bool,
+) -> Result<(), FoldError> {
+    human(actor)?;
+    settings.set_use_host_targets(slug, on).await?;
+    tracing::info!(project = %slug, use_host_targets = on, "a project's use of the host targets changed");
+    Ok(())
+}
+
 /// Sets the address of the web app that the links of every notice start with, or clears it with `None` so links follow the daemon's listen address.
 pub async fn set_web_url(
     settings: &NotifySettings,

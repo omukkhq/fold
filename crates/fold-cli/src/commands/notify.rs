@@ -35,6 +35,20 @@ enum NotifyCommand {
     Test(IdArgs),
     /// Show or set the web address that the links of every notice start with
     WebUrl(WebUrlArgs),
+    /// Show or set whether the host's targets get the project's notices while it has none of its own
+    HostTargets(HostTargetsArgs),
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum Switch {
+    On,
+    Off,
+}
+
+#[derive(Args, Debug)]
+struct HostTargetsArgs {
+    /// on: the host's targets get the notices while the project has none of its own; off: such a project sends no notices
+    state: Option<Switch>,
 }
 
 #[derive(Args, Debug)]
@@ -254,8 +268,32 @@ pub fn run(
             };
             output::line(out, &line)?;
         }
+        NotifyCommand::HostTargets(switch) => {
+            let response = match switch.state {
+                Some(state) => {
+                    let body = json!({ "use_host_targets": matches!(state, Switch::On) });
+                    call(args, false, Method::PUT, "notify", Some(&body))?
+                }
+                None => call(args, false, Method::GET, "notify", None)?,
+            };
+            refusal(&response)?;
+            output::line(out, &host_targets_line(&response.body)?)?;
+        }
     }
     Ok(())
+}
+
+/// Whether the project uses the host's targets, as `fld notify list` and `fld notify host-targets` end.
+fn host_targets_line(body: &Value) -> Result<String, RemoteError> {
+    Ok(if body["use_host_targets"]
+        .as_bool()
+        .ok_or(RemoteError::Answer)?
+    {
+        "host targets: on, they get the notices while the project has none of its own"
+    } else {
+        "host targets: off, a project without targets of its own sends no notices"
+    }
+    .to_owned())
 }
 
 fn parse_id(text: &str) -> Result<NotifyTargetId, RemoteError> {
@@ -363,8 +401,15 @@ fn list_lines(body: &Value, host: bool) -> Result<Vec<String>, RemoteError> {
     }
     let own = targets("targets")?;
     let host_targets = targets("host_targets")?;
+    let use_host = body["use_host_targets"]
+        .as_bool()
+        .ok_or(RemoteError::Answer)?;
     if !own.is_empty() {
         lines.extend(own);
+    } else if !use_host {
+        lines.push(
+            "no targets: the project has none of its own and does not use the host's".to_owned(),
+        );
     } else if host_targets.is_empty() {
         lines.push(
             "no targets: add one with fld notify add webhook <url>, or fld notify add email"
@@ -374,6 +419,7 @@ fn list_lines(body: &Value, host: bool) -> Result<Vec<String>, RemoteError> {
         lines.push("the project has no targets of its own and uses the host's:".to_owned());
         lines.extend(host_targets);
     }
+    lines.push(host_targets_line(body)?);
     Ok(lines)
 }
 
@@ -404,21 +450,32 @@ mod tests {
 
     #[test]
     fn the_list_says_whose_targets_get_the_notices() {
-        let none = json!({"targets": [], "host_targets": []});
+        let none = json!({"targets": [], "host_targets": [], "use_host_targets": true});
         assert_eq!(
             list_lines(&none, false).unwrap()[0],
             "no targets: add one with fld notify add webhook <url>, or fld notify add email"
         );
-        let host = json!({"targets": [], "host_targets": [webhook()]});
+        let host = json!({"targets": [], "host_targets": [webhook()], "use_host_targets": true});
         assert_eq!(
             list_lines(&host, false).unwrap(),
             [
                 "the project has no targets of its own and uses the host's:",
-                "nt-1 webhook https://h/… every 10 minutes"
+                "nt-1 webhook https://h/… every 10 minutes",
+                "host targets: on, they get the notices while the project has none of its own"
             ]
         );
-        let own = json!({"targets": [email()], "host_targets": [webhook()]});
-        assert_eq!(list_lines(&own, false).unwrap().len(), 1);
+        let off = json!({"targets": [], "host_targets": [webhook()], "use_host_targets": false});
+        assert_eq!(
+            list_lines(&off, false).unwrap(),
+            [
+                "no targets: the project has none of its own and does not use the host's",
+                "host targets: off, a project without targets of its own sends no notices"
+            ]
+        );
+        let own =
+            json!({"targets": [email()], "host_targets": [webhook()], "use_host_targets": false});
+        assert_eq!(list_lines(&own, false).unwrap().len(), 2);
+        assert!(list_lines(&json!({"targets": [], "host_targets": []}), false).is_err());
         assert_eq!(
             list_lines(&json!({"targets": []}), true).unwrap()[0],
             "no host targets: add one with fld notify add webhook <url> --host"

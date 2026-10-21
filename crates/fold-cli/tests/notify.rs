@@ -30,7 +30,7 @@ async fn fld_notify_adds_lists_tests_and_removes_targets_and_keeps_secrets_priva
     assert!(empty.status.success(), "{empty:?}");
     assert_eq!(
         String::from_utf8(empty.stdout).unwrap(),
-        "no targets: add one with fld notify add webhook <url>, or fld notify add email\n"
+        "no targets: add one with fld notify add webhook <url>, or fld notify add email\nhost targets: on, they get the notices while the project has none of its own\n"
     );
 
     let added = run(&[
@@ -84,7 +84,7 @@ async fn fld_notify_adds_lists_tests_and_removes_targets_and_keeps_secrets_priva
     let listed = run(&["notify", "list"]).output().await.unwrap();
     assert_eq!(
         String::from_utf8(listed.stdout).unwrap(),
-        "nt-1 webhook http://127.0.0.1:9/… every 5 minutes\n"
+        "nt-1 webhook http://127.0.0.1:9/… every 5 minutes\nhost targets: on, they get the notices while the project has none of its own\n"
     );
     let listed = run(&["notify", "list", "--host"]).output().await.unwrap();
     assert_eq!(
@@ -135,7 +135,35 @@ async fn fld_notify_adds_lists_tests_and_removes_targets_and_keeps_secrets_priva
     let listed = run(&["notify"]).output().await.unwrap();
     assert_eq!(
         String::from_utf8(listed.stdout).unwrap(),
-        "the project has no targets of its own and uses the host's:\nnt-2 webhook https://hooks.example.com/… every 10 minutes\n"
+        "the project has no targets of its own and uses the host's:\nnt-2 webhook https://hooks.example.com/… every 10 minutes\nhost targets: on, they get the notices while the project has none of its own\n"
+    );
+    let off = run(&["notify", "host-targets", "off"])
+        .output()
+        .await
+        .unwrap();
+    assert!(off.status.success(), "{off:?}");
+    assert_eq!(
+        String::from_utf8(off.stdout).unwrap(),
+        "host targets: off, a project without targets of its own sends no notices\n"
+    );
+    let listed = run(&["notify"]).output().await.unwrap();
+    assert_eq!(
+        String::from_utf8(listed.stdout).unwrap(),
+        "no targets: the project has none of its own and does not use the host's\nhost targets: off, a project without targets of its own sends no notices\n"
+    );
+    let shown = run(&["notify", "host-targets"]).output().await.unwrap();
+    assert!(
+        String::from_utf8(shown.stdout)
+            .unwrap()
+            .starts_with("host targets: off")
+    );
+    let on = run(&["notify", "host-targets", "on"])
+        .output()
+        .await
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(on.stdout).unwrap(),
+        "host targets: on, they get the notices while the project has none of its own\n"
     );
     let gone = run(&["notify", "remove", "nt-1"]).output().await.unwrap();
     assert!(

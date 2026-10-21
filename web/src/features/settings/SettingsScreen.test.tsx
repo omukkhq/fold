@@ -58,6 +58,7 @@ describe("SettingsScreen", () => {
           targets,
           host_targets: [],
           uses_host: targets.length === 0,
+          use_host_targets: true,
           link_base: "local",
         },
       }),
@@ -118,6 +119,67 @@ describe("SettingsScreen", () => {
         "The test notice was not sent: the webhook receiver answered HTTP 500.",
       ),
     ).toBeTruthy();
+  });
+
+  it("turns the host targets off and stays pending until the settings are read again", async () => {
+    let useHost = true;
+    let release: () => void = () => undefined;
+    const calls = stubFetch({
+      "GET /api/v1/session": { body: { human: "ana", authenticated: true } },
+      "GET /api/v1/projects/demo/notify": () => ({
+        body: {
+          targets: [],
+          host_targets: [WEBHOOK],
+          uses_host: useHost,
+          use_host_targets: useHost,
+          link_base: "local",
+        },
+      }),
+      "GET /api/v1/notify": {
+        body: { targets: [WEBHOOK], web_url: null, link_base: "local" },
+      },
+      "PUT /api/v1/projects/demo/notify": async () => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        useHost = false;
+        return {
+          body: {
+            targets: [],
+            host_targets: [WEBHOOK],
+            uses_host: false,
+            use_host_targets: false,
+            link_base: "local",
+          },
+        };
+      },
+    });
+    renderScreen();
+    const box = await screen.findByRole("checkbox", {
+      name: "Use the host targets",
+    });
+    expect(box.getAttribute("aria-checked")).toBe("true");
+    const user = userEvent.setup();
+    await user.click(box);
+    expect(await screen.findByText("Saving…")).toBeTruthy();
+    expect(box.hasAttribute("disabled")).toBe(true);
+    expect(box.getAttribute("aria-checked")).toBe("true");
+    release();
+    expect(
+      await screen.findByText(
+        /does not use the host targets, so it sends no notices/,
+      ),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("checkbox", { name: "Use the host targets" })
+          .getAttribute("aria-checked"),
+      ).toBe("false");
+    });
+    expect(calls.find((call) => call.method === "PUT")?.body).toEqual({
+      use_host_targets: false,
+    });
   });
 
   it("shows a load failure with its code and asks for a name before any write", async () => {

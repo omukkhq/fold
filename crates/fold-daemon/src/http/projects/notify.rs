@@ -22,7 +22,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(add_host_target))
         .routes(routes!(remove_host_target))
         .routes(routes!(test_host_target))
-        .routes(routes!(show_project_notify))
+        .routes(routes!(show_project_notify, set_project_notify))
         .routes(routes!(add_project_target))
         .routes(routes!(remove_project_target))
         .routes(routes!(test_project_target))
@@ -310,7 +310,7 @@ pub async fn set_host_notify(
     request_body = NewNotifyTargetBody,
     responses(
         (status = 201, description = "The new target", body = NotifyTargetEntry),
-        (status = 400, description = "`invalid_notify_target`, `plaintext_notify_target` (an http:// webhook or an SMTP server without TLS off this machine) or `invalid_request`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_notify_target`, `plaintext_notify_target` (a webhook without https or an SMTP server without TLS off this machine) or `invalid_request`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 500, description = "`notify_settings_io` or internal error", body = ErrorEnvelope),
     )
@@ -400,8 +400,10 @@ pub struct ProjectNotify {
     pub targets: Vec<NotifyTargetEntry>,
     /// The host's targets, oldest first.
     pub host_targets: Vec<NotifyTargetEntry>,
-    /// True while the project has no targets of its own, so the host's targets get its notices.
+    /// True while the host's targets get the project's notices: it has no targets of its own and uses the host's.
     pub uses_host: bool,
+    /// Whether the host's targets get the project's notices while it has none of its own; off, such a project sends no notices.
+    pub use_host_targets: bool,
     /// The address every link of a notice starts with now.
     pub link_base: String,
 }
@@ -409,8 +411,10 @@ pub struct ProjectNotify {
 async fn project_notify(state: &AppState, slug: &str) -> Result<ProjectNotify, ApiError> {
     let settings = settings(state)?;
     let targets = settings.targets(&Scope::Project(slug.to_owned())).await?;
+    let use_host_targets = settings.use_host_targets(slug).await?;
     Ok(ProjectNotify {
-        uses_host: targets.is_empty(),
+        uses_host: targets.is_empty() && use_host_targets,
+        use_host_targets,
         targets: entries(targets),
         host_targets: entries(settings.targets(&Scope::Host).await?),
         link_base: notify::link_base(settings, state.listen).await?,
@@ -437,6 +441,46 @@ pub async fn show_project_notify(
     Ok(Json(project_notify(&state, &project.0.slug).await?))
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetProjectNotifyBody {
+    /// Whether the host's targets get the project's notices while it has none of its own.
+    pub use_host_targets: bool,
+}
+
+/// A named human sets whether the host's targets get the project's notices while it has none of its own.
+#[utoipa::path(
+    put,
+    path = "/api/v1/projects/{slug}/notify",
+    operation_id = "set_project_notify",
+    params(("slug" = String, Path, description = "The project slug")),
+    request_body = SetProjectNotifyBody,
+    responses(
+        (status = 200, description = "The project's settings after the change", body = ProjectNotify),
+        (status = 400, description = "`invalid_request`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "`notify_settings_io` or internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn set_project_notify(
+    State(state): State<AppState>,
+    project: Project,
+    human: Human,
+    ApiJson(body): ApiJson<SetProjectNotifyBody>,
+) -> Result<Json<ProjectNotify>, ApiError> {
+    let slug = &project.0.slug;
+    notify::set_use_host_targets(
+        settings(&state)?,
+        &human.actor(),
+        slug,
+        body.use_host_targets,
+    )
+    .await?;
+    Ok(Json(project_notify(&state, slug).await?))
+}
+
 /// A named human adds a target of the project. From then on the project's own targets get its notices instead of the host's.
 #[utoipa::path(
     post,
@@ -446,7 +490,7 @@ pub async fn show_project_notify(
     request_body = NewNotifyTargetBody,
     responses(
         (status = 201, description = "The new target", body = NotifyTargetEntry),
-        (status = 400, description = "`invalid_notify_target`, `plaintext_notify_target` (an http:// webhook or an SMTP server without TLS off this machine) or `invalid_request`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_notify_target`, `plaintext_notify_target` (a webhook without https or an SMTP server without TLS off this machine) or `invalid_request`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`project_not_found`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),

@@ -478,7 +478,8 @@ export interface paths {
         };
         /** Where the project's notices go: one notice when an item comes into Needs you, at most one digest per target in each of its intervals, and nothing for an item a human closes before the send. */
         get: operations["show_project_notify"];
-        put?: never;
+        /** A named human sets whether the host's targets get the project's notices while it has none of its own. */
+        put: operations["set_project_notify"];
         post?: never;
         delete?: never;
         options?: never;
@@ -3038,7 +3039,9 @@ export interface components {
             link_base: string;
             /** @description The project's own targets, oldest first. */
             targets: components["schemas"]["NotifyTargetEntry"][];
-            /** @description True while the project has no targets of its own, so the host's targets get its notices. */
+            /** @description Whether the host's targets get the project's notices while it has none of its own; off, such a project sends no notices. */
+            use_host_targets: boolean;
+            /** @description True while the host's targets get the project's notices: it has no targets of its own and uses the host's. */
             uses_host: boolean;
         };
         /** @description What the project list shows of an open project. */
@@ -3894,6 +3897,10 @@ export interface components {
         SetHostNotifyBody: {
             /** @description The full address people open fold at, with its http or https scheme; null or empty to let links follow the daemon's listen address. */
             web_url?: string | null;
+        };
+        SetProjectNotifyBody: {
+            /** @description Whether the host's targets get the project's notices while it has none of its own. */
+            use_host_targets: boolean;
         };
         /** @description A change of the worker limits; a limit left out stays as it is. */
         SetWorkerLimitsBody: {
@@ -5194,7 +5201,7 @@ export interface operations {
                     "application/json": components["schemas"]["NotifyTargetEntry"];
                 };
             };
-            /** @description `invalid_notify_target`, `plaintext_notify_target` (an http:// webhook or an SMTP server without TLS off this machine) or `invalid_request` */
+            /** @description `invalid_notify_target`, `plaintext_notify_target` (a webhook without https or an SMTP server without TLS off this machine) or `invalid_request` */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -7284,6 +7291,87 @@ export interface operations {
             };
         };
     };
+    set_project_notify: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetProjectNotifyBody"];
+            };
+        };
+        responses: {
+            /** @description The project's settings after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectNotify"];
+                };
+            };
+            /** @description `invalid_request` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_settings_io` or internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     add_project_notify_target: {
         parameters: {
             query?: never;
@@ -7309,7 +7397,7 @@ export interface operations {
                     "application/json": components["schemas"]["NotifyTargetEntry"];
                 };
             };
-            /** @description `invalid_notify_target`, `plaintext_notify_target` (an http:// webhook or an SMTP server without TLS off this machine) or `invalid_request` */
+            /** @description `invalid_notify_target`, `plaintext_notify_target` (a webhook without https or an SMTP server without TLS off this machine) or `invalid_request` */
             400: {
                 headers: {
                     [name: string]: unknown;

@@ -232,10 +232,20 @@ export function projectStatus(settings: ProjectNotify): string {
   if (settings.targets.length > 0) {
     return "This project sends its notices to its own targets. The host targets do not get them.";
   }
+  if (!settings.use_host_targets) {
+    return "This project has no targets of its own and does not use the host targets, so it sends no notices.";
+  }
   if (settings.host_targets.length > 0) {
     return "This project has no targets of its own, so the host targets get its notices.";
   }
   return "No target gets this project's notices yet. Add one here, or add a host target for every project.";
+}
+
+/** The hint under the Use the host targets box: what it changes now. */
+export function hostTargetsHint(settings: ProjectNotify): string {
+  return settings.targets.length > 0
+    ? "Its own targets get this project's notices now; this applies when it has none."
+    : "On, the host targets get this project's notices while it has none of its own. Off, it sends none.";
 }
 
 function daemonMessage(error: unknown): string {

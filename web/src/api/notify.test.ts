@@ -6,6 +6,7 @@ import {
   getHostNotify,
   getProjectNotify,
   removeNotifyTarget,
+  setUseHostTargets,
   setWebUrl,
   testNotifyTarget,
   type NotifyScope,
@@ -21,6 +22,7 @@ const settings = {
   targets: [],
   host_targets: [],
   uses_host: true,
+  use_host_targets: true,
   link_base: "local",
 };
 
@@ -67,6 +69,15 @@ describe("notification settings", () => {
     ]);
     expect(calls[0]?.body).toEqual({ web_url: "x" });
     expect(calls[1]?.body).toEqual(body);
+  });
+
+  it("sets the project's use of the host targets", async () => {
+    const off = { ...settings, uses_host: false, use_host_targets: false };
+    const calls = stubFetch({
+      "PUT /api/v1/projects/demo/notify": { body: off },
+    });
+    expect(await setUseHostTargets("demo", false)).toEqual(off);
+    expect(calls[0]?.body).toEqual({ use_host_targets: false });
   });
 
   it("rejects a failed test with the daemon's code", async () => {

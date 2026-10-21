@@ -2,21 +2,31 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { RefreshCw, Save } from "lucide-react";
 import { useState, type SyntheticEvent, type ReactNode } from "react";
 import { apiErrorCode } from "@/api/errors";
-import { setWebUrl, type NotifyScope } from "@/api/notify";
+import {
+  setUseHostTargets,
+  setWebUrl,
+  type NotifyScope,
+  type ProjectNotify,
+} from "@/api/notify";
 import {
   hostNotifyQuery,
   projectNotifyQuery,
   sessionQuery,
 } from "@/api/queries";
 import { Button } from "@/components/button/Button";
-import { TextField } from "@/components/form/controls";
+import { Checkbox, TextField } from "@/components/form/controls";
 import { Mono } from "@/components/mono/Mono";
 import { FailurePanel } from "@/components/states/FailurePanel";
 import { Skeleton } from "@/components/states/Skeleton";
 import { ErrorNote } from "../workers/parts";
 import { AddTargetForm } from "./AddTargetForm";
 import { NotifyTargets, useRefreshNotify } from "./NotifyTargets";
-import { checkWebUrl, notifyFailure, projectStatus } from "./notifyModel";
+import {
+  checkWebUrl,
+  hostTargetsHint,
+  notifyFailure,
+  projectStatus,
+} from "./notifyModel";
 
 function Section({
   title,
@@ -112,6 +122,37 @@ function WebUrlForm({
   );
 }
 
+/** The project's switch for the host targets. It shows the daemon's value and stays pending until the settings are read again. */
+function HostTargetsSwitch({
+  slug,
+  settings,
+  canWrite,
+}: {
+  slug: string;
+  settings: ProjectNotify;
+  canWrite: boolean;
+}) {
+  const refresh = useRefreshNotify({ kind: "project", slug });
+  const save = useMutation({
+    mutationFn: (on: boolean) => setUseHostTargets(slug, on),
+    onSuccess: refresh,
+  });
+  return (
+    <div className="flex flex-col gap-6">
+      <Checkbox
+        label="Use the host targets"
+        hint={save.isPending ? "Saving…" : hostTargetsHint(settings)}
+        checked={settings.use_host_targets}
+        disabled={!canWrite || save.isPending}
+        onCheckedChange={(on) => {
+          save.mutate(on);
+        }}
+      />
+      {save.isError ? <ErrorNote failure={notifyFailure(save.error)} /> : null}
+    </div>
+  );
+}
+
 function LoadFailure({
   error,
   onRetry,
@@ -185,13 +226,18 @@ export function SettingsScreen({ slug }: { slug: string }) {
                 canWrite={canWrite}
                 label="Project targets"
               />
+              <HostTargetsSwitch
+                slug={slug}
+                settings={project.data}
+                canWrite={canWrite}
+              />
               <AddTargetForm scope={scope} canWrite={canWrite} />
             </>
           )}
         </Section>
         <Section
           title="Host targets"
-          text="Every project without targets of its own sends its notices here."
+          text="Every project without targets of its own that uses the host targets sends its notices here."
         >
           {host.isError ? (
             <LoadFailure

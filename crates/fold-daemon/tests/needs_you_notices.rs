@@ -1058,3 +1058,86 @@ async fn a_restart_never_sends_a_project_folder_item_again() {
         "head_moved"
     );
 }
+
+#[tokio::test]
+async fn a_project_that_does_not_use_the_host_targets_sends_only_to_its_own() {
+    let fixture = Fixture::new().await;
+    let mut host = Receiver::start(200).await;
+    fixture.webhook(&host.url, true, 1).await;
+    let (_, settings) = fixture
+        .call(Method::GET, "/api/v1/projects/demo/notify", None)
+        .await;
+    assert_eq!(
+        (&settings["use_host_targets"], &settings["uses_host"]),
+        (&json!(true), &json!(true))
+    );
+    let request = Request::builder()
+        .header(CLIENT_HEADER, "test")
+        .method(Method::PUT)
+        .uri("/api/v1/projects/demo/notify")
+        .header("content-type", "application/json")
+        .body(Body::from(json!({"use_host_targets": false}).to_string()))
+        .unwrap();
+    let response = router(fixture.state.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let (status, settings) = fixture
+        .call(
+            Method::PUT,
+            "/api/v1/projects/demo/notify",
+            Some(json!({"use_host_targets": false})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{settings}");
+    assert_eq!(
+        (&settings["use_host_targets"], &settings["uses_host"]),
+        (&json!(false), &json!(false))
+    );
+
+    fixture.ask().await;
+    assert_eq!(fixture.pass().await, 0);
+    fixture.advance(SETTLE);
+    assert_eq!(
+        fixture.pass().await,
+        0,
+        "off and without targets of its own, the project sends nothing"
+    );
+
+    let mut own = Receiver::start(200).await;
+    let id = fixture.webhook(&own.url, false, 1).await;
+    let later = fixture.ask().await;
+    assert_eq!(fixture.pass().await, 0);
+    fixture.advance(SETTLE);
+    assert_eq!(fixture.pass().await, 1);
+    let post = own.next().await.json();
+    assert_eq!(post["items"].as_array().unwrap().len(), 1);
+    assert_eq!(post["items"][0]["id"], later);
+
+    let (status, _) = fixture
+        .call(
+            Method::DELETE,
+            &format!("/api/v1/projects/demo/notify/targets/{id}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, settings) = fixture
+        .call(
+            Method::PUT,
+            "/api/v1/projects/demo/notify",
+            Some(json!({"use_host_targets": true})),
+        )
+        .await;
+    assert_eq!(settings["uses_host"], true);
+    assert_eq!(fixture.pass().await, 0);
+    let last = fixture.ask().await;
+    assert_eq!(fixture.pass().await, 0);
+    fixture.advance(SETTLE);
+    assert_eq!(fixture.pass().await, 1, "on again, the host targets get it");
+    let post = host.next().await.json();
+    assert_eq!(post["items"].as_array().unwrap().len(), 1);
+    assert_eq!(post["items"][0]["id"], last);
+    assert!(host.none_waiting() && own.none_waiting());
+}

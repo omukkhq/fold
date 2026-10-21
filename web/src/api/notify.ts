@@ -27,6 +27,19 @@ export async function setWebUrl(webUrl: string | null): Promise<HostNotify> {
   return unwrap(api.PUT("/api/v1/notify", { body: { web_url: webUrl } }));
 }
 
+/** Sets whether the host's targets get the project's notices while it has none of its own. */
+export async function setUseHostTargets(
+  slug: string,
+  useHostTargets: boolean,
+): Promise<ProjectNotify> {
+  return unwrap(
+    api.PUT("/api/v1/projects/{slug}/notify", {
+      params: { path: { slug } },
+      body: { use_host_targets: useHostTargets },
+    }),
+  );
+}
+
 /** Rejects with `invalid_notify_target` for a field the daemon refuses. */
 export async function addNotifyTarget(
   scope: NotifyScope,

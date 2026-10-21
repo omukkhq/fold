@@ -5,6 +5,7 @@ import {
   EMPTY_DRAFT,
   checkDraft,
   checkWebUrl,
+  hostTargetsHint,
   isLoopbackHost,
   notifyFailure,
   projectStatus,
@@ -231,17 +232,29 @@ describe("targetView", () => {
 });
 
 describe("projectStatus", () => {
-  const settings = (own: number, host: number): ProjectNotify => ({
+  const settings = (
+    own: number,
+    host: number,
+    useHost = true,
+  ): ProjectNotify => ({
     targets: Array.from({ length: own }, () => entry({})),
     host_targets: Array.from({ length: host }, () => entry({})),
-    uses_host: own === 0,
+    uses_host: own === 0 && useHost,
+    use_host_targets: useHost,
     link_base: "x",
   });
 
   it("says whose targets get the notices", () => {
     expect(projectStatus(settings(1, 1))).toMatch(/its own targets/);
+    expect(projectStatus(settings(1, 1, false))).toMatch(/its own targets/);
     expect(projectStatus(settings(0, 1))).toMatch(/host targets get/);
+    expect(projectStatus(settings(0, 1, false))).toMatch(/sends no notices/);
     expect(projectStatus(settings(0, 0))).toMatch(/No target/);
+  });
+
+  it("says what the host targets box changes now", () => {
+    expect(hostTargetsHint(settings(0, 1))).toMatch(/^On, the host targets/);
+    expect(hostTargetsHint(settings(2, 1))).toMatch(/applies when it has none/);
   });
 });
 
