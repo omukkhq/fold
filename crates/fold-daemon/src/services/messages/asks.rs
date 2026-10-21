@@ -81,17 +81,13 @@ impl MessageService {
                         AskScope::Task(task)
                     }
                 };
+                let standing = agents::standing_of(tx.conn(), actor).await?;
                 let mut closed = Vec::new();
                 for ask in messages::open_asks(tx.conn(), scope).await? {
                     if ask.worker_question {
                         continue;
                     }
-                    policy::can_close_ask(
-                        actor,
-                        agents::standing_of(tx.conn(), actor).await?,
-                        &ask.sender,
-                    )
-                    .map_err(FoldError::from)?;
+                    policy::can_close_ask(actor, standing, &ask.sender).map_err(FoldError::from)?;
                     close(tx, &mut buffer, actor, &ask, AskClosure::Dismissed, now).await?;
                     closed.push(ask.id);
                 }
