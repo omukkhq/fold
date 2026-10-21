@@ -985,6 +985,33 @@ pub async fn reviews_owed_to_ended_reviewers(
         .collect()
 }
 
+/// The open proposals, in number order, whose unreleased review claim a worker of `agent` holds while its reviewer process has ended, and whose newest version has no verdict. A comment is not a verdict.
+pub async fn unreviewed_claims_of_ended_reviewer(
+    executor: impl SqliteExecutor<'_>,
+    agent: &AgentName,
+) -> Result<Vec<ProposalId>, StoreError> {
+    let name = agent.as_str();
+    let rows = sqlx::query_scalar!(
+        r#"SELECT p.number AS "proposal!: i64"
+           FROM worker_processes w
+           JOIN agents g ON g.id = w.agent_id
+           JOIN workers k ON k.agent_id = w.agent_id
+           JOIN claims c ON c.worker_id = k.id AND c.kind = 'review' AND c.released_at IS NULL
+           JOIN proposals p ON p.id = c.proposal_id AND p.state = 'open'
+           WHERE g.name = ?1 AND w.role = 'reviewer' AND w.state IN ('stopped', 'failed')
+             AND (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) IS NULL
+           ORDER BY p.number"#,
+        name
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|number| {
+            ProposalId::try_from_db(number).ok_or(StoreError::Corrupt("proposals.number"))
+        })
+        .collect()
+}
+
 /// How many bound proposals of each worker in `worker_process_ids` are open and have no verdict on their newest version; every id has an entry. A comment is not a verdict.
 pub async fn proposals_without_verdict(
     executor: impl SqliteExecutor<'_>,

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use crate::agents::roles::{CLAUDE_NOT_FOUND, FLD_MISSING, MCP_UNAVAILABLE};
 use crate::agents::{AgentName, AreaName};
 use crate::events::{Event, types};
-use crate::ids::{MessageId, RequestId, TaskId};
+use crate::ids::{MessageId, ProposalId, RequestId, TaskId};
 use crate::tasks::status::TaskStatus;
 
 /// The longest notice text. A notice names ids and a tool, so it never comes near it.
@@ -42,6 +42,8 @@ pub struct PushContext {
     pub starter: Option<AgentName>,
     /// The event's proposal belongs to a task of the area Main, which no review agent reviews.
     pub main_task: bool,
+    /// For `worker.stopped` and `worker.failed` of a reviewer, the open proposals whose review claim it still holds, whose newest version has no verdict and for which fold owes it no resume; empty while the project is paused, because the resume of the pause runs the reviewer again.
+    pub unreviewed: Vec<ProposalId>,
 }
 
 /// One line for one agent's Claude Code session. `text` holds public ids and the next tool only.
@@ -80,6 +82,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::HUMAN_CHANGE_WITHDRAWN,
         types::PROPOSAL_REVIEWER_FIXED,
         types::INTEGRATION_HELD,
+        types::WORKER_STOPPED,
         types::WORKER_FAILED,
         types::WORKER_MODEL_UNREACHABLE,
     ]
@@ -443,7 +446,10 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
         ));
     }
     if kind == types::WORKER_FAILED {
-        return unreachable_worker_rule(event, ctx);
+        return unreachable_worker_rule(event, ctx).or_else(|| ended_reviewer_rule(event, ctx));
+    }
+    if kind == types::WORKER_STOPPED {
+        return ended_reviewer_rule(event, ctx);
     }
     if kind == types::WORKER_MODEL_UNREACHABLE {
         return model_unreachable_rule(event, ctx);
@@ -500,6 +506,32 @@ fn unreachable_worker_rule(
         .cloned()
         .collect();
     Some((agents, text, "list_workers"))
+}
+
+/// A reviewer that ended with versions that have no verdict, which fold does not resume it for, reaches the review lead: fold resumes a reviewer once for each version, and the claim it keeps hides the versions from the review lead's notices. `start_worker` takes over the claim of a reviewer that has ended.
+fn ended_reviewer_rule(
+    event: &Event,
+    ctx: &PushContext,
+) -> Option<(Vec<AgentName>, String, &'static str)> {
+    if ctx.unreviewed.is_empty() {
+        return None;
+    }
+    let agent = event
+        .data
+        .get("agent")
+        .and_then(serde_json::Value::as_str)?;
+    let proposals: Vec<String> = ctx.unreviewed.iter().map(ToString::to_string).collect();
+    let text = format!(
+        "{agent} ended with no verdict on {}; a reviewer you start takes over its claim",
+        listed(&proposals, proposals.len(), "proposal", "proposals", true)
+    );
+    let leads = ctx
+        .review_leads
+        .iter()
+        .filter(|lead| lead.as_str() != agent)
+        .cloned()
+        .collect();
+    Some((leads, text, "start_worker"))
 }
 
 /// A worker whose turns keep failing before any token reached the model reaches the main agent and the agent that started it, so they ask the human to fix what Claude Code needs instead of sending the worker more work. Its error is on its row, which `list_workers` shows; the notice holds only the hint.
@@ -632,7 +664,7 @@ fn approved_text(request: RequestId, tasks: &[TaskId]) -> String {
     }
 }
 
-/// A proposal that needs a review reaches the review lead, which gives the review to a reviewer with `start_worker`, and the holder of its review claim, which checks out the version to review. A new version, or one a human sent for review again, reaches the review lead only while nobody holds the claim: fold resumes a holder that has ended for that version. A review lead that holds the claim, taken before fold refused its reviews, is told to release it and give the review to a reviewer, since it can no longer check the version out. No review lead hears of a proposal of a task of Main or of its own proposal.
+/// A proposal that needs a review reaches the review lead, which gives the review to a reviewer with `start_worker`, and the holder of its review claim, which checks out the version to review. A new version, or one a human sent for review again, reaches the review lead only while nobody holds the claim: fold resumes a holder that has ended for that version. A review lead that holds the claim cannot check the version out, so it is told to release the claim and give the review to a reviewer. No review lead hears of a proposal of a task of Main or of its own proposal.
 fn review_rules(
     event: &Event,
     ctx: &PushContext,
@@ -746,6 +778,7 @@ mod tests {
             held_from_agents: false,
             starter: None,
             main_task: false,
+            unreviewed: Vec::new(),
         }
     }
 
@@ -1282,6 +1315,47 @@ mod tests {
         );
         let bare = event(types::WORKER_FAILED, "fold");
         assert!(notice_for(&bare, &ctx).is_empty());
+    }
+
+    #[test]
+    fn a_reviewer_that_ends_with_versions_nobody_reviews_tells_the_review_leads() {
+        let ended = PushContext {
+            unreviewed: vec![
+                ProposalId::from_number(3).unwrap(),
+                ProposalId::from_number(5).unwrap(),
+            ],
+            ..ctx()
+        };
+        let text = "fold: reviewer-1 ended with no verdict on P-3, P-5; a reviewer you start takes over its claim. Call start_worker.";
+        for kind in [types::WORKER_STOPPED, types::WORKER_FAILED] {
+            let event = with_data(event(kind, "fold"), json!({"agent": "reviewer-1"}));
+            assert!(is_pushed(&event), "{kind}");
+            assert_eq!(
+                sent(&notice_for(&event, &ended)),
+                vec![
+                    row("frontend", text, "start_worker"),
+                    row("lead", text, "start_worker"),
+                    row("review", text, "start_worker"),
+                ],
+                "{kind}"
+            );
+            // A reviewer that left every version with a verdict, or that fold resumes, tells nobody.
+            assert!(notice_for(&event, &ctx()).is_empty(), "{kind}");
+        }
+        // A failure that needs a restart says what brings the reviewer back instead.
+        let unreachable = with_data(
+            event(types::WORKER_FAILED, "fold"),
+            json!({"agent": "reviewer-1", "reason": MCP_UNAVAILABLE}),
+        );
+        let notices = notice_for(
+            &unreachable,
+            &PushContext {
+                starter: Some(name("review")),
+                ..ended
+            },
+        );
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].next_tool, "list_workers");
     }
 
     #[test]

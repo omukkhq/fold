@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT p.number AS \"proposal!: i64\"\n           FROM worker_processes w\n           JOIN agents g ON g.id = w.agent_id\n           JOIN workers k ON k.agent_id = w.agent_id\n           JOIN claims c ON c.worker_id = k.id AND c.kind = 'review' AND c.released_at IS NULL\n           JOIN proposals p ON p.id = c.proposal_id AND p.state = 'open'\n           WHERE g.name = ?1 AND w.role = 'reviewer' AND w.state IN ('stopped', 'failed')\n             AND (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) IS NULL\n           ORDER BY p.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "proposal!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8afde7d65fb555404614031bce756216390484e17631a63ac208ec5676aa655b"
+}

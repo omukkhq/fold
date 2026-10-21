@@ -1045,19 +1045,26 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
         ctx.main_agents = tagged(store, Tag::is_main).await?;
         return Ok(ctx);
     }
-    if kind == fold_core::events::types::WORKER_FAILED {
-        let reason = event.data.get("reason").and_then(serde_json::Value::as_str);
+    if kind == types::WORKER_FAILED || kind == types::WORKER_STOPPED {
         let agent = event
             .data
             .get("agent")
             .and_then(serde_json::Value::as_str)
             .and_then(|agent| AgentName::parse(agent).ok());
-        if let (Some(agent), Some(true)) = (agent, reason.map(fold_core::roles::needs_restart)) {
+        let Some(agent) = agent else {
+            return Ok(ctx);
+        };
+        let reason = event.data.get("reason").and_then(serde_json::Value::as_str);
+        if kind == types::WORKER_FAILED && reason.is_some_and(fold_core::roles::needs_restart) {
             ctx.main_agents = tagged(store, Tag::is_main).await?;
             let mut conn = store.read().acquire().await?;
             ctx.starter = agents::find_worker_process(&mut conn, &agent)
                 .await?
                 .and_then(|row| starter_agent(&row.started_by));
+        }
+        ctx.unreviewed = unreviewed_of(store, &agent).await?;
+        if !ctx.unreviewed.is_empty() {
+            ctx.review_leads = review_leads(store).await?;
         }
         return Ok(ctx);
     }
@@ -1217,6 +1224,31 @@ async fn integrated_reviewer(
     };
     let reviews = reviews::review_facts(store.read(), proposal, version).await?;
     Ok(fold_core::reviews::standing_agent_approval(&reviews))
+}
+
+/// The proposals that a reviewer which ended leaves without a verdict and without a resume that fold owes it, so nobody would give them to a reviewer; none while the project is paused, since the resume of the pause runs the reviewer again.
+async fn unreviewed_of(
+    store: &Store,
+    agent: &AgentName,
+) -> Result<Vec<fold_core::ProposalId>, StoreError> {
+    if agents::pause_state(store.read()).await?.is_paused() {
+        return Ok(Vec::new());
+    }
+    let held = agents::unreviewed_claims_of_ended_reviewer(store.read(), agent).await?;
+    if held.is_empty() {
+        return Ok(held);
+    }
+    let owed: std::collections::BTreeSet<fold_core::ProposalId> =
+        agents::reviews_owed_to_ended_reviewers(store.read(), None)
+            .await?
+            .into_iter()
+            .filter(|review| review.agent == *agent)
+            .map(|review| review.proposal)
+            .collect();
+    Ok(held
+        .into_iter()
+        .filter(|proposal| !owed.contains(proposal))
+        .collect())
 }
 
 /// The agents that fold started as the review lead.
