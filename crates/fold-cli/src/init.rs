@@ -355,14 +355,31 @@ fn enable_git(
     let runtime = current_thread_runtime().map_err(InitError::Runtime)?;
     let body = serde_json::json!({ "git_name": identity.name, "git_email": identity.email });
     let response = runtime.block_on(async {
-        let slug = fold_daemon::services::projects::slug_for_dir_on_host(&host, root).await?;
+        let found =
+            fold_daemon::services::projects::registration_for_dir_on_host(&host, root).await?;
+        let slug = found.row.slug;
+        if found.removed_at.is_some() {
+            // The daemon's open route brings a project a person removed back into fold, as `fld claude` does.
+            let open = serde_json::json!({ "slug": slug });
+            let opened = client
+                .request(Method::POST, "/api/v1/projects", Some(&open))
+                .await?;
+            if !opened.is_success() {
+                return Ok::<_, InitError>((slug, false, opened));
+            }
+        }
         let path = format!("/api/v1/projects/{slug}/git");
-        Ok::<_, InitError>((
+        let restored = found.removed_at.is_some();
+        Ok((
             slug,
+            restored,
             client.request(Method::POST, &path, Some(&body)).await?,
         ))
     })?;
-    let (slug, response) = response;
+    let (slug, restored, response) = response;
+    if restored {
+        output::line(out, &format!("project {slug} is back in fold"))?;
+    }
     if !response.is_success() {
         let refusal = response.refusal();
         return Err(match (refusal.code, refusal.message) {
