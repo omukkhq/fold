@@ -51,7 +51,7 @@ function question(fields: Partial<LineQuestion> = {}): LineQuestion {
 }
 
 describe("lineQuestions", () => {
-  it("reads each question about the proposal's lines, oldest first, answered once a recipient writes after it", () => {
+  it("reads each question about the proposal's lines, oldest first, answered once a worker of a recipient's agent writes after it", () => {
     const asked = message("m-12", {
       thread: "m-12",
       sender: "human:tanim",
@@ -64,7 +64,7 @@ describe("lineQuestions", () => {
         messages: [
           asked,
           message("m-13", { thread: "m-12", sender: "human:ana" }),
-          message("m-14", { thread: "m-12", sender: "backend/db" }),
+          message("m-14", { thread: "m-12", sender: "backend" }),
         ],
       }),
       thread("m-5", {

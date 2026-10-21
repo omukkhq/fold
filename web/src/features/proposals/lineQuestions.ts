@@ -15,12 +15,18 @@ export interface LineQuestion {
   range: DiffSelection;
   /** The workers the question went to. */
   to: string[];
-  /** A recipient wrote in the thread after the question. */
+  /** A worker of a recipient's agent wrote in the thread after the question. */
   answered: boolean;
 }
 
 function idNumber(id: string): number {
   return Number(id.slice(id.indexOf("-") + 1));
+}
+
+/** The agent of a worker such as `frontend/ui`; any other sender, such as `human:ana`, stays as it is. */
+function agentOf(sender: string): string {
+  const slash = sender.indexOf("/");
+  return slash < 0 ? sender : sender.slice(0, slash);
 }
 
 /** The questions about lines of `proposal` in `threads`, oldest first. */
@@ -34,10 +40,11 @@ export function lineQuestions(
         const lines = message.lines;
         if (lines === null || message.proposal !== proposal) return [];
         const to = message.recipients.map((r) => r.name);
+        const agents = to.map(agentOf);
         const answered = thread.messages.some(
           (later) =>
             idNumber(later.id) > idNumber(message.id) &&
-            to.includes(later.sender),
+            agents.includes(agentOf(later.sender)),
         );
         const question: LineQuestion = {
           id: message.id,

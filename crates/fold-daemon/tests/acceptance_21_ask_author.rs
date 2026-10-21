@@ -138,6 +138,11 @@ async fn acceptance_21_a_question_names_lines_that_exist() {
     let path = format!("/proposals/{proposal}/questions");
     for (ask, status, code) in [
         (
+            json!({"version": 1, "path": FILE, "side": "new", "start_line": 3, "end_line": 2, "body": "why"}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_comment_range",
+        ),
+        (
             json!({"version": 1, "path": FILE, "side": "new", "start_line": 3, "end_line": 4, "body": "why"}),
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_comment_range",
@@ -184,4 +189,37 @@ async fn acceptance_21_a_question_names_lines_that_exist() {
         .filter(|message| message["sender"] == format!("human:{HUMAN}"))
         .count();
     assert_eq!(from_human, 0);
+}
+
+#[tokio::test]
+async fn acceptance_21_a_question_about_an_integrated_proposal_goes_to_its_author() {
+    let h = Harness::start().await;
+    let task = h.create_task("frontend", "board numbers").await;
+    let work = h.start_work("frontend", &task).await;
+    work.write(&[(FILE, CONTENT)]);
+    let proposal = h.propose("frontend", &work, "Board numbers").await;
+    h.call("review", "claim_review", json!({"id": proposal}))
+        .await;
+    h.approve(&proposal).await;
+    let integrated = h
+        .call(
+            "review",
+            "integrate_proposal",
+            json!({"id": proposal, "expected_version": 1}),
+        )
+        .await;
+    assert_eq!(integrated["result"], "succeeded");
+
+    // The integration released the claim, so the question goes to the proposal's author.
+    let ask = json!({"version": 1, "path": FILE, "side": "new", "start_line": 1, "end_line": 1, "body": "Why a constant?"});
+    let (status, sent) = http(
+        &h,
+        Method::POST,
+        &format!("/proposals/{proposal}/questions"),
+        Some(&ask),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    assert_eq!(sent["recipients"][0]["name"], "frontend");
+    assert_eq!(sent["lines"]["excerpt"], "export const a = 1;");
 }
