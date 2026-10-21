@@ -20,6 +20,7 @@ function message(
     body,
     choices: labels.map((label) => ({ label, description: null })),
     header: null,
+    asks_human: false,
     proposal: null,
     recipients: [],
     reply_to: null,
@@ -33,6 +34,7 @@ function message(
 function thread(messages: MessageView[]): ThreadView {
   return {
     id: "m-1",
+    closable: false,
     messages,
     participants: [],
     awaiting_human: false,

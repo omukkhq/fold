@@ -93,7 +93,15 @@ export function errorReply(status: number, code: string): StubReply {
  * The routes every screen inside the project shell reads besides its own: the session, the project list, each project, its agents, its messages and what needs a human.
  */
 export function shellRoutes(slugs: readonly string[]): Record<string, Route> {
-  const projects = slugs.map((slug) => ({ slug, name: slug, available: true }));
+  const projects = slugs.map((slug) => ({
+    slug,
+    name: slug,
+    root: `/home/ana/${slug}`,
+    available: true,
+    last_used_at: 0,
+    removed_at: null,
+    folder: "present",
+  }));
   const routes: Record<string, Route> = {
     "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
     "GET /api/v1/projects": { body: { projects } },

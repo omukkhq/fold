@@ -1,4 +1,4 @@
-use axum::extract::FromRequestParts;
+use axum::extract::{FromRequestParts, OptionalFromRequestParts};
 use axum::http::HeaderMap;
 use axum::http::header::COOKIE;
 use axum::http::request::Parts;
@@ -31,31 +31,50 @@ impl FromRequestParts<AppState> for Human {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
-        let raw = match parts.extensions.get::<Transport>() {
-            Some(Transport::Socket) => {
-                let name = header_name(parts)?;
-                if name.is_some() {
-                    refuse_worker_peer(parts, state).await?;
-                }
-                name
-            }
-            None => match parts.extensions.get::<SessionHuman>() {
-                Some(SessionHuman(name)) => Some(name.to_string()),
-                None if state.auth_required() => None,
-                None => cookie(&parts.headers, HUMAN_COOKIE),
-            },
-        };
-        let raw = raw.ok_or_else(|| {
+        named(parts, state).await?.ok_or_else(|| {
             FoldError::new(
                 codes::HUMAN_NAME_REQUIRED,
                 "the request does not name a human",
             )
             .with_hint("set FOLD_HUMAN for the CLI, or sign in to the web interface")
-        })?;
-        let name = HumanName::parse(&raw).map_err(FoldError::from)?;
-        projects::ensure_human(&state.registry, state.clock.as_ref(), &name).await?;
-        Ok(Self(name))
+            .into()
+        })
     }
+}
+
+/// A read that shows more to a named human, such as what waits for them, and the same as before to a request that names none. A name that is malformed, or claimed from a worker's process tree, is still refused.
+impl OptionalFromRequestParts<AppState> for Human {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Option<Self>, ApiError> {
+        named(parts, state).await
+    }
+}
+
+async fn named(parts: &Parts, state: &AppState) -> Result<Option<Human>, ApiError> {
+    let raw = match parts.extensions.get::<Transport>() {
+        Some(Transport::Socket) => {
+            let name = header_name(parts)?;
+            if name.is_some() {
+                refuse_worker_peer(parts, state).await?;
+            }
+            name
+        }
+        None => match parts.extensions.get::<SessionHuman>() {
+            Some(SessionHuman(name)) => Some(name.to_string()),
+            None if state.auth_required() => None,
+            None => cookie(&parts.headers, HUMAN_COOKIE),
+        },
+    };
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let name = HumanName::parse(&raw).map_err(FoldError::from)?;
+    projects::ensure_human(&state.registry, state.clock.as_ref(), &name).await?;
+    Ok(Some(Human(name)))
 }
 
 /// A worker's Bash and a check command run as the host's user and can set `FOLD_HUMAN`, so the kernel's peer pid decides instead.

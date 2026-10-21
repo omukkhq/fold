@@ -46,14 +46,26 @@ const GROUPS: readonly { kind: NeedsYouKind; title: string }[] = [
   { kind: "claude_not_found", title: "Claude Code" },
 ];
 
-/** The items for this human: an item that waits for another named human is theirs. Before a name, every item shows. */
+/** The items for this human: an item that waits for another named human is theirs, and a question to named humans is only theirs, as their Messages count is. Before a name, every item shows. */
 export function itemsFor(
   items: readonly NeedsYouItem[],
   human: string | null,
 ): NeedsYouItem[] {
   return items.filter(
-    (item) => human === null || item.human === null || item.human === human,
+    (item) =>
+      human === null ||
+      ((item.human === null || item.human === human) &&
+        (item.humans.length === 0 || item.humans.includes(human))),
   );
+}
+
+/** How many proposals wait for this human's review: the `human_review` items of Needs you that are theirs, which the Proposals tab counts. */
+export function reviewsWaitingFor(
+  items: readonly NeedsYouItem[],
+  human: string | null,
+): number {
+  return itemsFor(items, human).filter((item) => item.kind === "human_review")
+    .length;
 }
 
 /** The title as the second line shows it, trimmed and escaped as data; null for a blank or missing title. The line cuts a long one to its width. */

@@ -95,6 +95,7 @@ export function requestMessage(
     request: "RQ-4",
     choices: [],
     header: null,
+    asks_human: false,
     body,
     sent_at: T0 + n * 1000,
     recipients: [
@@ -103,6 +104,7 @@ export function requestMessage(
         addressed_as: "agent",
         delivered_at: null,
         acknowledged_at: null,
+        pushed_at: null,
         reachable: null,
       },
     ],

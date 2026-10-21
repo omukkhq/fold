@@ -21,9 +21,9 @@ The main agent (the agent with the `main` tag), the review lead and the reviewer
 
 ## Messaging
 
-Use fold's `send_message`, `get_inbox`, `get_thread` and `acknowledge_message` for communication between fold agents and with humans. Native messages between local subagents do not replace fold messages, claims or task state. Terminal output is not a message to a lead.
+Use fold's `send_message`, `get_inbox`, `get_thread`, `acknowledge_message` and `mark_answered` for communication between fold agents and with humans. Native messages between local subagents do not replace fold messages, claims or task state. Terminal output is not a message to a lead.
 
-Addresses for `send_message(to[], body, task?, proposal?, request?, reply_to?, choices?)`:
+Addresses for `send_message(to[], body, task?, proposal?, request?, reply_to?, choices?, asks_human?)`:
 
 - `frontend` is the agent `frontend` and its main worker.
 - `frontend/ui` is the worker `ui` of the agent `frontend`.
@@ -33,6 +33,8 @@ Addresses for `send_message(to[], body, task?, proposal?, request?, reply_to?, c
 - `all` is every agent.
 
 To ask a human to choose, send the question to `humans` or `human:<name>` with 2 to 6 options in `choices`. Each option is a short label, or `{label, description}` with one line that says what the option means; the human sees the description under the label. The human answers with a reply that names one label, or with free text.
+
+Only an ask waits for a human on the board, in Needs you and in the Messages count: a question with `choices`, or a message to a human with `asks_human` true. Set `asks_human` only when you need the human's answer; a report or a thank-you waits for no one. An ask waits until a human replies in its thread or marks it answered. When the user answered it elsewhere, such as in the main agent's session, the asking agent or the main agent calls `mark_answered(message)`.
 
 To answer a message, pass its id as `reply_to`: the reply joins its thread. `get_inbox` lists your unread messages, `get_thread(thread)` shows one conversation, and `get_thread(request)` shows the clarification thread of a request. Call `acknowledge_message(id, up_to?)` when you have read a message. With `up_to` true it acknowledges every message up to `id`.
 
@@ -46,10 +48,10 @@ You get news in four ways:
 
 - The session push puts a new message into your session.
 - The footer of every tool result can show `fold: <u> unread · <e> new events · <c> claims near stale`. A part with a count of zero is left out.
-- `wait_for_events(types?, task?, proposal?, timeout_s?)` blocks until a matching event arrives or the time runs out. The default is 300 s and the most is 1500 s. Use it to wait for a proposal, a review or a dependency, and not to poll.
+- `wait_for_events(types?, task?, proposal?, timeout_s?)` blocks until a matching event arrives or the time runs out. The default is 300 s and the most is 1500 s. Use it to wait for a proposal, a review or a dependency, and not to poll. A new message to you also ends the wait, whatever `types` says: the result names it in `messages`, so call `get_inbox`.
 - The Stop hook continues your turn once when messages are unread.
 
-`get_events(after?, types?, task?, proposal?, limit?)` reads events. Without `after` it resumes from your cursor and moves the cursor. With an explicit `after` it leaves the cursor as it is. A session that was closed reads the events it missed through its cursor.
+`get_events(after?, types?, task?, proposal?, limit?)` reads events. Without `after` it resumes from your cursor and moves the cursor. With an explicit `after` it leaves the cursor as it is. Each worker has its own cursor: a call with `as` reads after that worker's cursor and moves only it, so the waits of a main worker and its workers never take each other's events. A session that was closed reads the events it missed through its cursor.
 
 ## Orchestrating
 

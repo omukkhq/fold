@@ -16,6 +16,7 @@ mod seed;
 mod serve;
 mod service;
 mod shell_env;
+mod status;
 mod token;
 
 use std::ffi::OsString;
@@ -78,6 +79,8 @@ enum Command {
     ShellEnv,
     /// Manage the workers that fold runs: fld worker restart <name> starts one again in a new Claude Code session
     Worker(commands::worker::WorkerArgs),
+    /// List main's revisions, newest first, as the web app's repository screen shows them: id, title, task, author, time and Git commit
+    Log(commands::log::LogArgs),
     /// Print the path of an agent's Claude Code transcript, the file of its current session; --tail N prints the file's last N lines instead
     Transcript(commands::transcript::TranscriptArgs),
     /// Development helpers
@@ -169,6 +172,7 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
             shell_env::print(std::env::vars_os(), out).map_err(Failure::Write)
         }
         Some(Command::Worker(args)) => commands::worker::run(&args, out).map_err(Failure::Remote),
+        Some(Command::Log(args)) => commands::log::run_log(&args, out).map_err(Failure::Remote),
         Some(Command::Transcript(args)) => {
             commands::transcript::run_transcript(&args, out).map_err(Failure::Remote)
         }
@@ -176,7 +180,7 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::Dev(args)) => {
             seed::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Seed)
         }
-        None => output::line(out, &output::version_line()).map_err(Failure::Write),
+        None => status::run(out).map_err(Failure::Write),
     }
 }
 
@@ -293,10 +297,9 @@ mod tests {
     }
 
     #[test]
-    fn no_subcommand_prints_the_version_line() {
-        let (result, out) = run_with(&["fld"]);
-        assert!(result.is_ok());
-        assert_eq!(out, "fld 0.3.0\n");
+    fn no_subcommand_is_the_status() {
+        let cli = Cli::try_parse_from(["fld"]).unwrap();
+        assert!(cli.command.is_none());
     }
 
     #[test]
@@ -306,7 +309,7 @@ mod tests {
             panic!("expected a parse failure, got {result:?}");
         };
         assert_eq!(error.kind(), ErrorKind::DisplayVersion);
-        assert_eq!(error.to_string().trim(), "fld 0.3.0");
+        assert_eq!(error.to_string().trim(), "fld 0.4.0");
         assert!(out.is_empty());
     }
 

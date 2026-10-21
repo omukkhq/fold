@@ -16,7 +16,7 @@ use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{
     Actor, AgentName, CONFIG_TEMPLATE, Clock, EventActor, FoldError, GitConfig, HostPaths,
     HumanName, IdKind, IntegrationId, NewEvent, Presence, ProjectConfig, ProjectPaths, RevisionId,
-    SessionFact, TaskStatus, Timestamp, choose_slug, codes, presence_of, slugify,
+    SessionFact, TaskStatus, Timestamp, choose_slug, codes, policy, presence_of, slugify,
 };
 use fold_store::counters;
 use fold_store::projects::{self, HumanRow, ProjectRow};
@@ -45,7 +45,8 @@ use thiserror::Error;
 
 use crate::daemon::DaemonState;
 use crate::projects::{
-    ProjectFolder, ProjectHandle, Slot, database_missing_hint, project_folder, removed, unopened,
+    ProjectFolder, ProjectHandle, Slot, database_missing_hint, project_folder, removed,
+    removed_by_person, unopened,
 };
 use crate::services::events::EventBuffer;
 #[cfg(feature = "failpoints")]
@@ -127,6 +128,8 @@ pub struct InitializedProject {
     pub resumed: bool,
     /// True when the registry held the folder for a project whose `.fold/` was deleted: this project took that registration's place and its slug.
     pub replaced: bool,
+    /// True when the folder held the complete project that a person removed from fold: init made nothing new and brought that project back under its slug. `imported` then holds what `revision` records, with no skipped paths.
+    pub restored: bool,
 }
 
 /// Files a caller writes into a new project's folder before init records it, so they are part of `r1`. It returns the files and folders it created, which a failed init removes; a file it changed stays changed. Blocking.
@@ -407,23 +410,26 @@ impl Init<'_> {
         name: String,
         start: Start,
     ) -> Result<InitializedProject, ProjectError> {
-        let registered = projects::find_by_root(self.registry.read(), self.root_text).await?;
+        let registered =
+            projects::find_registration_by_root(self.registry.read(), self.root_text).await?;
         let paths = ProjectPaths::new(root);
         let mut made = create_fold_dir(&paths).await?;
         if !made && registered.is_some() && remove_leftovers(&paths).await? {
             made = create_fold_dir(&paths).await?;
         }
         if !made {
-            if registered.is_some() {
-                return Err(registered_refusal(&paths).await.into());
-            }
+            let restores = match &registered {
+                Some(found) if found.removed_at.is_some() => Some(found.row.slug.as_str()),
+                Some(_) => return Err(registered_refusal(&paths).await.into()),
+                None => None,
+            };
             let setup = match start {
                 Start::New { repository, .. } => repository,
                 Start::FromGit { .. } => None,
             };
-            return self.finish_stopped(&paths, name, setup).await;
+            return self.finish_stopped(&paths, name, setup, restores).await;
         }
-        let replaces = registered.map(|row| row.slug);
+        let replaces = registered.map(|found| found.row.slug);
         let _init = match lock_fold_dir(&paths).await {
             Ok(lock) => lock,
             Err(error) => {
@@ -498,15 +504,17 @@ impl Init<'_> {
             git_sync: first.git_sync,
             resumed: false,
             replaced,
+            restored: false,
         })
     }
 
-    /// Finishes an init that stopped after it made `.fold/` and before it registered the project. A migrated database whose `main` names a revision with every object below it in the store is a project the stopped run completed, except perhaps for the repository of a project whose Git sync is on, which is then created, and the registry row, which is then inserted; the daemon writes the missing commits when it opens the project. Anything less is refused with `project_incomplete`, and so is a `.fold/` that a running init holds. Nothing is removed in either case, and no database is created in a `.fold/` that has none.
+    /// Finishes an init that stopped after it made `.fold/` and before it registered the project, or with `restores`, the slug of the folder's registration that a person removed, brings that project back into fold under its slug and name. A migrated database whose `main` names a revision with every object below it in the store is a project the stopped run completed, except perhaps for the repository of a project whose Git sync is on, which is then created, and the registry row, which is then inserted; the daemon writes the missing commits when it opens the project. Anything less is refused with `project_incomplete`, and so is a `.fold/` that a running init holds. Nothing is removed in either case, and no database is created in a `.fold/` that has none.
     async fn finish_stopped(
         &self,
         paths: &ProjectPaths,
         name: String,
         setup: Option<RepositorySetup>,
+        restores: Option<&str>,
     ) -> Result<InitializedProject, ProjectError> {
         let Some(_init) = try_lock_fold_dir(paths).await? else {
             return Err(incomplete(paths).into());
@@ -558,8 +566,14 @@ impl Init<'_> {
         let Some((imported, git_commit)) = finished else {
             return Err(incomplete(paths).into());
         };
-        let (row, _) =
-            register(self.registry, self.root_text, name, None, self.clock.now()).await?;
+        let row = match restores {
+            Some(slug) => restore_registration(self.registry, slug, self.root_text).await?,
+            None => {
+                register(self.registry, self.root_text, name, None, self.clock.now())
+                    .await?
+                    .0
+            }
+        };
         Ok(InitializedProject {
             slug: row.slug,
             name: row.name,
@@ -569,8 +583,9 @@ impl Init<'_> {
             git_commit,
             gitignore: None,
             git_sync,
-            resumed: true,
+            resumed: restores.is_none(),
             replaced: false,
+            restored: restores.is_some(),
         })
     }
 
@@ -977,6 +992,23 @@ async fn register(
                 Ok(()) => Ok((row, replaced)),
                 Err(error) if error.unique_violation() => Err(exists(Path::new(root_text)).into()),
                 Err(error) => Err(error.into()),
+            }
+        })
+        .await
+}
+
+/// Clears the removed mark of the registration `slug` at `root` and returns its row. A row that went or changed since init read it refuses the folder with `project_exists`.
+async fn restore_registration(
+    registry: &Store,
+    slug: &str,
+    root_text: &str,
+) -> Result<ProjectRow, ProjectError> {
+    registry
+        .write(async |tx| -> Result<ProjectRow, ProjectError> {
+            projects::clear_removed(tx, slug).await?;
+            match projects::find_project(tx.conn(), slug).await? {
+                Some(row) if row.root == root_text => Ok(row),
+                _ => Err(exists(Path::new(root_text)).into()),
             }
         })
         .await
@@ -1469,7 +1501,15 @@ pub(crate) async fn require_git_sync(store: &Store, command: &str) -> Result<(),
 pub struct ProjectEntry {
     pub slug: String,
     pub name: String,
+    /// The project folder, which holds `.fold/`.
+    pub root: PathBuf,
     pub available: bool,
+    /// When a person last opened the project or its newest event happened, whichever is later; the registration time before either.
+    pub last_used_at: Timestamp,
+    /// When a person removed the project from fold; `None` while it is in fold.
+    pub removed_at: Option<Timestamp>,
+    /// What is at the project folder: an open project's is there; any other's is looked at for the list.
+    pub folder: ProjectFolder,
     /// Read from the store of an open project; `None` for an unavailable one, and for an open one whose store could not be read.
     pub overview: Option<ProjectOverview>,
 }
@@ -1643,37 +1683,205 @@ pub async fn overview(handle: &ProjectHandle) -> Result<ProjectOverview, Project
     })
 }
 
-/// Every registered project, ordered by slug, with the overview of each open one. A project whose overview cannot be read is listed without it, so one damaged store does not hide the others. A project whose folder is there without `.fold/` is removed from fold first and is not listed.
-pub async fn list(state: &DaemonState) -> Result<Vec<ProjectEntry>, ProjectError> {
-    let rows = projects::list_projects(state.registry.read()).await?;
-    let mut entries = Vec::with_capacity(rows.len());
-    for row in rows {
-        if project_folder(Path::new(&row.root)).await == ProjectFolder::FoldMissing
-            && state.projects.remove_if_deleted(&row).await
+/// Every project in fold, ordered by slug, with the overview of each open one, and with `include_removed` the projects a person removed too. A project whose overview cannot be read is listed without it, so one damaged store does not hide the others. A project in fold whose folder is there without `.fold/` is removed from fold first and is not listed.
+pub async fn list(
+    state: &DaemonState,
+    include_removed: bool,
+) -> Result<Vec<ProjectEntry>, ProjectError> {
+    let registrations = projects::list_registrations(state.registry.read()).await?;
+    let mut entries = Vec::with_capacity(registrations.len());
+    for registration in registrations {
+        if registration.removed_at.is_some() {
+            if include_removed {
+                entries.push(entry_of(state, registration).await);
+            }
+            continue;
+        }
+        if project_folder(Path::new(&registration.row.root)).await == ProjectFolder::FoldMissing
+            && state.projects.remove_if_deleted(&registration.row).await
         {
             continue;
         }
-        let (available, overview) = match state.projects.slot(&row.slug) {
-            Some(Slot::Open(handle)) => match self::overview(&handle).await {
-                Ok(overview) => (true, Some(overview)),
-                Err(error) => {
-                    tracing::warn!(project = %row.slug, code = error.log_code(), "project overview could not be read");
-                    (true, None)
-                }
-            },
-            _ => (false, None),
-        };
-        entries.push(ProjectEntry {
-            available,
-            overview,
-            slug: row.slug,
-            name: row.name,
-        });
+        entries.push(entry_of(state, registration).await);
     }
     Ok(entries)
 }
 
-/// The open handle of `slug` for a request. A handle whose database was replaced or is missing, or whose folder is missing, is closed and the project is unavailable, with what to do for its folder; a project whose folder is there without `.fold/`, open or not, is removed from fold and is `project_not_found`, like a slug the registry does not hold.
+/// What the list shows of one registration: the overview of an open project, and what is at the folder of any other.
+async fn entry_of(state: &DaemonState, registration: projects::Registration) -> ProjectEntry {
+    let projects::Registration {
+        row,
+        last_used_at,
+        removed_at,
+    } = registration;
+    let root = PathBuf::from(&row.root);
+    let open = match state.projects.slot(&row.slug) {
+        Some(Slot::Open(handle)) if removed_at.is_none() => Some(handle),
+        _ => None,
+    };
+    let (available, overview, folder) = match open {
+        Some(handle) => match self::overview(&handle).await {
+            Ok(overview) => (true, Some(overview), ProjectFolder::Present),
+            Err(error) => {
+                tracing::warn!(project = %row.slug, code = error.log_code(), "project overview could not be read");
+                (true, None, ProjectFolder::Present)
+            }
+        },
+        None => (false, None, project_folder(&root).await),
+    };
+    ProjectEntry {
+        available,
+        last_used_at: last_use(last_used_at, overview.as_ref()),
+        removed_at,
+        folder,
+        overview,
+        root,
+        slug: row.slug,
+        name: row.name,
+    }
+}
+
+/// How long a person's use of a project stands before the next one is written, so a screen that reads the project again and again writes the registry at most once per period.
+const USE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// One open project as the project list shows it, for a person who opens it now: the registry notes the use, at most once per [`USE_INTERVAL`]. A use that cannot be written is logged and the project is shown with the use before it, so the registry never fails the read.
+pub async fn show(
+    state: &DaemonState,
+    handle: &ProjectHandle,
+) -> Result<ProjectEntry, ProjectError> {
+    let overview = overview(handle).await?;
+    let used = match note_use(state, &handle.slug).await {
+        Ok(used) => used,
+        Err(error) => {
+            tracing::warn!(project = %handle.slug, code = error.log_code(), "the use of the project could not be noted");
+            None
+        }
+    };
+    Ok(ProjectEntry {
+        slug: handle.slug.clone(),
+        name: handle.name.clone(),
+        root: handle.paths.root().to_owned(),
+        available: true,
+        last_used_at: last_use(used.unwrap_or(Timestamp::EPOCH), Some(&overview)),
+        removed_at: None,
+        folder: ProjectFolder::Present,
+        overview: Some(overview),
+    })
+}
+
+/// A named human takes the project `slug` off fold: the registry marks it removed and the daemon closes it, as [`Projects::remove_for_person`] describes, and answers with the project as the list shows it. The data in the folder's `.fold/` stays, and `fld claude`, `fld new` or `fld init` there, or [`restore`], brings the project back under its slug. A project removed already stays as it is. While a worker of the project runs, the removal is refused with `project_workers_running`.
+pub async fn remove(
+    state: &DaemonState,
+    actor: &Actor,
+    slug: &str,
+) -> Result<ProjectEntry, ProjectError> {
+    policy::can_remove_project(actor).map_err(FoldError::from)?;
+    let found = registration(state, slug).await?;
+    if found.removed_at.is_none() {
+        state
+            .projects
+            .remove_for_person(&state.registry, slug, state.clock.now())
+            .await?;
+    }
+    Ok(entry_of(state, registration(state, slug).await?).await)
+}
+
+/// A named human brings back the project `slug` that a person removed, while its folder holds the project's `.fold/`: the removed mark goes and the daemon opens the project, and the answer is the project as the list shows it. A project in fold stays as it is. A removed project whose folder is missing or whose `.fold/` holds no database keeps its mark and is refused with `project_unavailable`, and so is one whose `.fold/` is gone, where `fld init` makes a new project.
+pub async fn restore(
+    state: &DaemonState,
+    actor: &Actor,
+    slug: &str,
+) -> Result<ProjectEntry, ProjectError> {
+    policy::can_remove_project(actor).map_err(FoldError::from)?;
+    let found = registration(state, slug).await?;
+    if found.removed_at.is_some() {
+        refuse_return(slug, Path::new(&found.row.root)).await?;
+        bring_back(state, slug).await?;
+        if let Err(error) = open_registered(state, slug).await {
+            tracing::warn!(project = %slug, code = error.log_code(), "the project is back in fold but did not open");
+        }
+        if let Err(error) = note_use(state, slug).await {
+            tracing::warn!(project = %slug, code = error.log_code(), "the use of the project could not be noted");
+        }
+    }
+    Ok(entry_of(state, registration(state, slug).await?).await)
+}
+
+/// Refuses to bring back the removed project `slug` unless its folder at `root` holds the project's `.fold/` with its database, so the mark stays on a project that cannot open: a missing folder or database is `project_unavailable` with its reason, and a missing `.fold/` is `project_unavailable` with `fold_missing`, where `fld init` makes a new project.
+async fn refuse_return(slug: &str, root: &Path) -> Result<(), ProjectError> {
+    match project_folder(root).await {
+        ProjectFolder::Present => Ok(()),
+        ProjectFolder::FoldMissing => Err(FoldError::new(
+            codes::PROJECT_UNAVAILABLE,
+            format!(
+                "project {slug} cannot come back: {} is missing",
+                ProjectPaths::new(root).fold_dir().display()
+            ),
+        )
+        .with_hint(format!(
+            "run `fld init` in {} to make a new project there",
+            root.display()
+        ))
+        .with_details([("reason", serde_json::json!("fold_missing"))])
+        .into()),
+        ProjectFolder::RootMissing | ProjectFolder::DatabaseMissing => {
+            Err(unopened(slug, root).await.into())
+        }
+    }
+}
+
+/// The registry row of `slug`, removed or not; a slug the registry does not hold is `project_not_found`.
+async fn registration(
+    state: &DaemonState,
+    slug: &str,
+) -> Result<projects::Registration, ProjectError> {
+    projects::find_registration(state.registry.read(), slug)
+        .await?
+        .ok_or_else(|| {
+            FoldError::new(
+                codes::PROJECT_NOT_FOUND,
+                format!("project {slug} is not registered"),
+            )
+            .into()
+        })
+}
+
+/// Clears the removed mark of `slug`. True when the project was removed.
+async fn bring_back(state: &DaemonState, slug: &str) -> Result<bool, ProjectError> {
+    let back = state
+        .registry
+        .write(async |tx| projects::clear_removed(tx, slug).await)
+        .await?;
+    if back {
+        tracing::info!(project = %slug, "the removed project is back in fold");
+    }
+    Ok(back)
+}
+
+/// Notes that a person uses `slug` now, unless a use inside the last [`USE_INTERVAL`] stands, and returns the project's last use; `None` for a slug the registry does not hold.
+pub async fn note_use(state: &DaemonState, slug: &str) -> Result<Option<Timestamp>, ProjectError> {
+    let Some(found) = projects::find_registration(state.registry.read(), slug).await? else {
+        return Ok(None);
+    };
+    let now = state.clock.now();
+    let stale_before = now.checked_sub(USE_INTERVAL).unwrap_or(Timestamp::EPOCH);
+    if found.last_used_at > stale_before {
+        return Ok(Some(found.last_used_at));
+    }
+    let touched = state
+        .registry
+        .write(async |tx| projects::touch_project(tx, slug, now, stale_before).await)
+        .await?;
+    Ok(Some(if touched { now } else { found.last_used_at }))
+}
+
+fn last_use(used: Timestamp, overview: Option<&ProjectOverview>) -> Timestamp {
+    overview
+        .and_then(|overview| overview.last_change_at)
+        .map_or(used, |changed| changed.max(used))
+}
+
+/// The open handle of `slug` for a request. A handle whose database was replaced or is missing, or whose folder is missing, is closed and the project is unavailable, with what to do for its folder; a project whose folder is there without `.fold/`, open or not, is removed from fold and is `project_not_found`, like a slug the registry does not hold, and so is a project a person removed, with the way to bring it back.
 pub async fn handle(state: &DaemonState, slug: &str) -> Result<Arc<ProjectHandle>, ProjectError> {
     let root = match state.projects.slot(slug) {
         Some(Slot::Open(handle)) if !handle.database_replaced().await => return Ok(handle),
@@ -1700,11 +1908,16 @@ pub async fn handle(state: &DaemonState, slug: &str) -> Result<Arc<ProjectHandle
         .into()),
         (None, root) => match state.projects.take_removed(slug).or(root) {
             Some(root) => Err(removed(slug, &root).into()),
-            None => Err(FoldError::new(
-                codes::PROJECT_NOT_FOUND,
-                format!("project {slug} is not registered"),
-            )
-            .into()),
+            None => match projects::find_registration(state.registry.read(), slug).await? {
+                Some(found) if found.removed_at.is_some() => {
+                    Err(removed_by_person(slug, Path::new(&found.row.root)).into())
+                }
+                _ => Err(FoldError::new(
+                    codes::PROJECT_NOT_FOUND,
+                    format!("project {slug} is not registered"),
+                )
+                .into()),
+            },
         },
     }
 }
@@ -1777,8 +1990,25 @@ async fn remove_deleted_rows(registry: &Store) -> Result<Vec<String>, ProjectErr
     Ok(removed)
 }
 
-/// Opens a project that `fld init` registered after the daemon started. An open project returns its handle again; a slug the registry does not hold is `project_not_found`.
+/// Opens a project that `fld init` registered after the daemon started, for a `fld` command in its folder: a project a person removed comes back into fold first, under its slug, while its folder holds its `.fold/` with the database, and keeps its mark otherwise, as [`restore`] does. An open project returns its handle again; a slug the registry does not hold is `project_not_found`.
 pub async fn open(state: &DaemonState, slug: &str) -> Result<Arc<ProjectHandle>, ProjectError> {
+    if let Some(found) = projects::find_registration(state.registry.read(), slug).await?
+        && found.removed_at.is_some()
+    {
+        refuse_return(slug, Path::new(&found.row.root)).await?;
+        bring_back(state, slug).await?;
+    }
+    let handle = open_registered(state, slug).await?;
+    if let Err(error) = note_use(state, slug).await {
+        tracing::warn!(project = %slug, code = error.log_code(), "the use of the project could not be noted");
+    }
+    Ok(handle)
+}
+
+async fn open_registered(
+    state: &DaemonState,
+    slug: &str,
+) -> Result<Arc<ProjectHandle>, ProjectError> {
     let row = projects::find_project(state.registry.read(), slug)
         .await?
         .ok_or_else(|| match state.projects.take_removed(slug) {
@@ -1791,24 +2021,31 @@ pub async fn open(state: &DaemonState, slug: &str) -> Result<Arc<ProjectHandle>,
     Ok(state.projects.open(&row, state.clock.clone()).await?)
 }
 
-/// Opens the project whose registered root holds `cwd`, the nearest one when roots nest, so a session started in a task workspace finds its project.
+/// Opens the project whose registered root holds `cwd`, the nearest one when roots nest, so a session started in a task workspace finds its project. A session or hook in the folder of a project a person removed never brings it back, so a session that outlived the removal does not undo it; it is refused with the commands that do.
 pub async fn open_for_dir(
     state: &DaemonState,
     cwd: &Path,
 ) -> Result<Arc<ProjectHandle>, ProjectError> {
-    let slug = slug_for_dir(&state.registry, cwd).await?;
-    open(state, &slug).await
+    let found = row_for_dir(state.registry.read(), cwd).await?;
+    if found.removed_at.is_some() {
+        return Err(removed_by_person(&found.row.slug, Path::new(&found.row.root)).into());
+    }
+    open_registered(state, &found.row.slug).await
 }
 
 /// The slug of the registered project whose root holds `cwd`, the nearest one when roots nest.
 pub async fn slug_for_dir(registry: &Store, cwd: &Path) -> Result<String, ProjectError> {
-    Ok(row_for_dir(registry, cwd).await?.slug)
+    Ok(row_for_dir(registry.read(), cwd).await?.row.slug)
 }
 
-async fn row_for_dir(registry: &Store, cwd: &Path) -> Result<projects::ProjectRow, ProjectError> {
-    let rows = projects::list_projects(registry.read()).await?;
-    let root = find_root(cwd, rows.iter().map(|row| Path::new(&row.root)));
-    root.and_then(|root| rows.iter().find(|row| Path::new(&row.root) == root))
+/// The registration whose root holds `cwd`, the nearest one when roots nest, a project a person removed too, so a `fld` command there finds it and can bring it back.
+async fn row_for_dir(
+    registry: &fold_store::SqlitePool,
+    cwd: &Path,
+) -> Result<projects::Registration, ProjectError> {
+    let rows = projects::list_registrations(registry).await?;
+    let root = find_root(cwd, rows.iter().map(|found| Path::new(&found.row.root)));
+    root.and_then(|root| rows.iter().find(|found| Path::new(&found.row.root) == root))
         .cloned()
         .ok_or_else(|| {
             FoldError::new(
@@ -1854,9 +2091,32 @@ pub async fn deleted_project_slug(
 /// The registered root of the project that holds `cwd`, read from the host registry without a running daemon.
 pub async fn root_for_dir_on_host(host: &HostPaths, cwd: &Path) -> Result<PathBuf, ProjectError> {
     let registry = Store::open_registry(&host.registry_db()).await?;
-    let row = row_for_dir(&registry, cwd).await;
+    let found = row_for_dir(registry.read(), cwd).await;
     registry.close().await?;
-    Ok(PathBuf::from(row?.root))
+    Ok(PathBuf::from(found?.row.root))
+}
+
+/// The registration of the project that holds `cwd`, a project a person removed too, read from the host registry without a running daemon and without writing it: a missing registry is not created, a registry of another schema version is refused, and a lock is waited for at most `busy_timeout`.
+pub async fn row_for_dir_on_host(
+    host: &HostPaths,
+    cwd: &Path,
+    busy_timeout: std::time::Duration,
+) -> Result<projects::Registration, ProjectError> {
+    let registry = Store::read_registry(&host.registry_db(), busy_timeout).await?;
+    let found = row_for_dir(&registry, cwd).await;
+    registry.close().await;
+    found
+}
+
+/// The registration of the project that holds `cwd`, a project a person removed too, read from the host registry without a running daemon.
+pub async fn registration_for_dir_on_host(
+    host: &HostPaths,
+    cwd: &Path,
+) -> Result<projects::Registration, ProjectError> {
+    let registry = Store::open_registry(&host.registry_db()).await?;
+    let found = row_for_dir(registry.read(), cwd).await;
+    registry.close().await?;
+    found
 }
 
 /// The registry row of the human `name`, inserted on first use with `created_at` from `clock`. A known human costs one read and no write. Humans belong to the host, so this appends no project event.

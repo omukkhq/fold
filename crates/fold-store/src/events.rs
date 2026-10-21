@@ -159,14 +159,79 @@ pub async fn after(pool: &SqlitePool, after: u64, limit: usize) -> Result<Vec<Ev
     read_after(pool, after, &EventFilter::default(), limit).await
 }
 
-/// [`read_after`] for the agent with row id `agent_id`: an event of one of `message_types` is selected only when a worker of the agent receives the message it names in `events.message_id`, and an event of one of `own_types` only when a worker of the agent performed it, so one query returns the page an agent's wait keeps.
+/// Who reads a wait's page, and which events reach them besides the filter's.
+#[derive(Debug, Clone, Copy)]
+pub struct Reach<'a> {
+    pub agent_id: i64,
+    /// An event of one of these types is selected only when a worker of the agent receives the message it names in `events.message_id`.
+    pub message_types: &'a [EventType],
+    /// An event of one of these types is selected only when a worker of the agent performed it.
+    pub own_types: &'a [EventType],
+    /// The messages that end a wait whatever its filter says.
+    pub wake: Option<MessageWake>,
+}
+
+/// An event of `event_type` is selected past the filter when the worker row `worker_id` receives the message it names, or with `every_worker` when any worker of the agent does, on a row that no inbox read or acknowledgement has reached yet, and only when that worker did not send it: a wait wakes for a new message, never for one the agent has seen or its own.
+#[derive(Debug, Clone, Copy)]
+pub struct MessageWake {
+    pub event_type: EventType,
+    pub worker_id: i64,
+    pub every_worker: bool,
+}
+
+/// A message of a wait's page that waits for the waking worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WaitingMessage {
+    pub id: MessageId,
+    /// The waking worker has a row of it; otherwise only another worker of its agent has.
+    pub own: bool,
+}
+
+/// The messages that the events `seqs` name and that select an event past the filter by the rule of [`MessageWake`] now, in seq order.
+pub async fn waiting_messages(
+    executor: impl SqliteExecutor<'_>,
+    seqs: &[u64],
+    agent_id: i64,
+    wake: MessageWake,
+) -> Result<Vec<WaitingMessage>, StoreError> {
+    let seqs = json_list(seqs.iter(), |seq| (*seq).into());
+    let wake_type = wake.event_type.as_str();
+    let rows = sqlx::query!(
+        r#"SELECT m.number AS "number!: i64", MAX(r.worker_id = ?2) AS "own!: bool"
+           FROM events e
+           JOIN messages m ON m.number = e.message_id
+           JOIN message_recipients r ON r.message_id = m.id
+           JOIN workers w ON w.id = r.worker_id
+           WHERE e.seq IN (SELECT value FROM json_each(?1))
+             AND e.type = ?5
+             AND e.actor <> (SELECT s.name FROM workers s WHERE s.id = ?2)
+             AND r.delivered_at IS NULL AND r.acked_at IS NULL
+             AND (r.worker_id = ?2 OR (?3 AND w.agent_id = ?4))
+           GROUP BY m.number
+           ORDER BY MIN(e.seq)"#,
+        seqs,
+        wake.worker_id,
+        wake.every_worker,
+        agent_id,
+        wake_type
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let id =
+                MessageId::try_from_db(row.number).ok_or(StoreError::Corrupt("messages.number"))?;
+            Ok(WaitingMessage { id, own: row.own })
+        })
+        .collect()
+}
+
+/// [`read_after`] for one reader: the filter's events that reach the agent by the rules of [`Reach`], and the wake's message events whatever the filter says, so one query returns the page an agent's wait keeps.
 pub async fn read_reaching(
     executor: impl SqliteExecutor<'_>,
     after: u64,
     filter: &EventFilter,
-    agent_id: i64,
-    message_types: &[EventType],
-    own_types: &[EventType],
+    reach: Reach<'_>,
     limit: usize,
 ) -> Result<Vec<Event>, StoreError> {
     let after = seq_param(after)?;
@@ -175,17 +240,30 @@ pub async fn read_reaching(
         (!filter.types.is_empty()).then(|| json_list(filter.types.iter(), |t| t.as_str().into()));
     let task = filter.task.map(TaskId::to_db);
     let proposal = filter.proposal.map(ProposalId::to_db);
-    let message_types = json_list(message_types.iter(), |t| t.as_str().into());
-    let own_types = json_list(own_types.iter(), |t| t.as_str().into());
+    let agent_id = reach.agent_id;
+    let message_types = json_list(reach.message_types.iter(), |t| t.as_str().into());
+    let own_types = json_list(reach.own_types.iter(), |t| t.as_str().into());
+    let wake_type = reach.wake.map(|wake| wake.event_type.as_str());
+    let wake_worker = reach.wake.map(|wake| wake.worker_id);
+    let wake_every = reach.wake.is_some_and(|wake| wake.every_worker);
     let rows = sqlx::query_as!(
         EventRecord,
         r#"SELECT e.seq AS "seq!: i64", e.type AS event_type, e.actor, e.task_id, e.proposal_id,
                   e.workspace_id, e.revision_id, e.data, e.created_at
            FROM events e
            WHERE e.seq > ?1
-             AND (?2 IS NULL OR e.type IN (SELECT value FROM json_each(?2)))
-             AND (?3 IS NULL OR e.task_id = ?3)
-             AND (?4 IS NULL OR e.proposal_id = ?4)
+             AND (((?2 IS NULL OR e.type IN (SELECT value FROM json_each(?2)))
+                   AND (?3 IS NULL OR e.task_id = ?3)
+                   AND (?4 IS NULL OR e.proposal_id = ?4))
+                  OR (e.type = ?9
+                      AND e.actor <> (SELECT s.name FROM workers s WHERE s.id = ?10)
+                      AND EXISTS (
+                          SELECT 1 FROM messages m
+                          JOIN message_recipients r ON r.message_id = m.id
+                          JOIN workers w ON w.id = r.worker_id
+                          WHERE m.number = e.message_id
+                            AND r.delivered_at IS NULL AND r.acked_at IS NULL
+                            AND (r.worker_id = ?10 OR (?11 AND w.agent_id = ?5)))))
              AND (e.type NOT IN (SELECT value FROM json_each(?6))
                   OR EXISTS (
                       SELECT 1 FROM messages m
@@ -206,7 +284,10 @@ pub async fn read_reaching(
         agent_id,
         message_types,
         limit,
-        own_types
+        own_types,
+        wake_type,
+        wake_worker,
+        wake_every
     )
     .fetch_all(executor)
     .await?;
@@ -320,29 +401,29 @@ pub async fn newest_by_agent(
     rows.into_iter().map(EventRecord::into_event).collect()
 }
 
-/// The `seq` the agent has read up to, or 0 when it never moved its cursor.
-pub async fn cursor(executor: impl SqliteExecutor<'_>, agent_id: i64) -> Result<u64, StoreError> {
+/// The `seq` the worker has read up to, or 0 when it never moved its cursor.
+pub async fn cursor(executor: impl SqliteExecutor<'_>, worker_id: i64) -> Result<u64, StoreError> {
     let last = sqlx::query_scalar!(
-        r#"SELECT last_seq AS "last_seq!: i64" FROM agent_cursors WHERE agent_id = ?"#,
-        agent_id
+        r#"SELECT last_seq AS "last_seq!: i64" FROM worker_cursors WHERE worker_id = ?"#,
+        worker_id
     )
     .fetch_optional(executor)
     .await?;
     match last {
         None => Ok(0),
         Some(last) => {
-            u64::try_from(last).map_err(|_| StoreError::Corrupt("agent_cursors.last_seq"))
+            u64::try_from(last).map_err(|_| StoreError::Corrupt("worker_cursors.last_seq"))
         }
     }
 }
 
-/// Moves the agent's cursor to `seq`. A cursor already past `seq` stays where it is, so the cursor only moves forward.
-pub async fn advance_cursor(tx: &mut WriteTx, agent_id: i64, seq: u64) -> Result<(), StoreError> {
+/// Moves the worker's cursor to `seq`. A cursor already past `seq` stays where it is, so the cursor only moves forward.
+pub async fn advance_cursor(tx: &mut WriteTx, worker_id: i64, seq: u64) -> Result<(), StoreError> {
     let seq = seq_param(seq)?;
     sqlx::query!(
-        "INSERT INTO agent_cursors (agent_id, last_seq) VALUES (?1, ?2)
-         ON CONFLICT (agent_id) DO UPDATE SET last_seq = MAX(last_seq, excluded.last_seq)",
-        agent_id,
+        "INSERT INTO worker_cursors (worker_id, last_seq) VALUES (?1, ?2)
+         ON CONFLICT (worker_id) DO UPDATE SET last_seq = MAX(last_seq, excluded.last_seq)",
+        worker_id,
         seq
     )
     .execute(tx.conn())
@@ -350,28 +431,28 @@ pub async fn advance_cursor(tx: &mut WriteTx, agent_id: i64, seq: u64) -> Result
     Ok(())
 }
 
-/// Moves the agent's cursor from `from` to `to` only while it still stands at `from` (0 also when the agent has no cursor yet). False when another read moved it first, and then nothing changes.
+/// Moves the worker's cursor from `from` to `to` only while it still stands at `from` (0 also when the worker has no cursor yet). False when another read moved it first, and then nothing changes.
 pub async fn move_cursor(
     tx: &mut WriteTx,
-    agent_id: i64,
+    worker_id: i64,
     from: u64,
     to: u64,
 ) -> Result<bool, StoreError> {
     let (from, to) = (seq_param(from)?, seq_param(to)?);
     let moved = if from == 0 {
         sqlx::query!(
-            "INSERT INTO agent_cursors (agent_id, last_seq) VALUES (?1, ?2)
-             ON CONFLICT (agent_id) DO UPDATE SET last_seq = excluded.last_seq
-             WHERE agent_cursors.last_seq = 0",
-            agent_id,
+            "INSERT INTO worker_cursors (worker_id, last_seq) VALUES (?1, ?2)
+             ON CONFLICT (worker_id) DO UPDATE SET last_seq = excluded.last_seq
+             WHERE worker_cursors.last_seq = 0",
+            worker_id,
             to
         )
         .execute(tx.conn())
         .await?
     } else {
         sqlx::query!(
-            "UPDATE agent_cursors SET last_seq = ?3 WHERE agent_id = ?1 AND last_seq = ?2",
-            agent_id,
+            "UPDATE worker_cursors SET last_seq = ?3 WHERE worker_id = ?1 AND last_seq = ?2",
+            worker_id,
             from,
             to
         )

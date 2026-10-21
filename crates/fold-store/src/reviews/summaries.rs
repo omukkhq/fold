@@ -4,6 +4,7 @@ use sqlx::SqliteConnection;
 
 use super::{actor, parse_verdict, time};
 use crate::error::StoreError;
+use crate::workspaces::parse_stats;
 
 /// The integration that published a proposal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +22,11 @@ pub struct IntegrationRecord {
 pub struct ProposalSummary {
     pub id: ProposalId,
     pub task: TaskId,
+    pub title: String,
+    /// The worker that holds the unreleased review claim.
+    pub review_claim: Option<String>,
+    /// The files the head changeset of the current version adds, modifies and deletes.
+    pub files: u32,
     pub integrated: bool,
     pub conflicted: bool,
     /// The integration checks of the current version failed, which sends the proposal back to its author until a new version.
@@ -98,7 +104,11 @@ pub async fn proposal_summaries(
 ) -> Result<Vec<ProposalSummary>, StoreError> {
     let task = task.map(TaskId::to_db);
     let rows = sqlx::query!(
-        r#"SELECT p.number AS "number!: i64", t.number AS "task!: i64", p.state,
+        r#"SELECT p.number AS "number!: i64", t.number AS "task!: i64", p.state, p.title,
+                  (SELECT k.name FROM claims c JOIN workers k ON k.id = c.worker_id
+                   WHERE c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL) AS "review_claim?: String",
+                  (SELECT cs.stats FROM proposal_versions v JOIN changesets cs ON cs.id = v.head_changeset_id
+                   WHERE v.proposal_id = p.id ORDER BY v.version DESC LIMIT 1) AS "stats?: String",
                   p.conflicted AS "conflicted: bool",
                   p.checks_failed AS "checks_failed: bool",
                   (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id) AS "version?: i64",
@@ -139,6 +149,14 @@ pub async fn proposal_summaries(
                 id: ProposalId::try_from_db(row.number)
                     .ok_or(StoreError::Corrupt("proposals.number"))?,
                 task: TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?,
+                title: row.title,
+                review_claim: row.review_claim,
+                files: row
+                    .stats
+                    .as_deref()
+                    .and_then(parse_stats)
+                    .map(|stats| stats.files_added + stats.files_modified + stats.files_deleted)
+                    .ok_or(StoreError::Corrupt("changesets.stats"))?,
                 integrated: row.state == "integrated",
                 conflicted: row.conflicted,
                 checks_failed: row.checks_failed,

@@ -314,6 +314,9 @@ impl From<service::ProposalSummary> for ProposalSummary {
 pub struct ProposalList {
     /// In number order.
     pub proposals: Vec<ProposalSummary>,
+    /// The open proposals of the whole project, whatever the filter, whose current version waits for the signed-in human's review, in number order: the `human_review` items of Needs you that are theirs, which the Proposals screen marks. Empty when the request names no human.
+    #[schema(example = json!(["P-3"]))]
+    pub waiting_for_you: Vec<String>,
 }
 
 /// One immutable version of a proposal.
@@ -1060,7 +1063,7 @@ fn proposal(text: &str) -> Result<ProposalId, ApiError> {
     id(text)
 }
 
-/// Lists the proposals in number order.
+/// Lists the proposals in number order, with the ones that wait for the signed-in human's review.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/proposals",
@@ -1078,6 +1081,7 @@ fn proposal(text: &str) -> Result<ProposalId, ApiError> {
     )
 )]
 pub async fn list_proposals(
+    human: Option<Human>,
     State(state): State<AppState>,
     project: Project,
     ApiQuery(query): ApiQuery<ProposalListQuery>,
@@ -1087,9 +1091,20 @@ pub async fn list_proposals(
         unclaimed: query.unclaimed.unwrap_or(false),
         limit: None,
     };
-    let rows = service(&state, &project).list_proposals(filter).await?;
+    let listing = service(&state, &project)
+        .list_proposals_for(filter, human.as_ref().map(|Human(name)| name))
+        .await?;
     Ok(Json(ProposalList {
-        proposals: rows.into_iter().map(ProposalSummary::from).collect(),
+        proposals: listing
+            .proposals
+            .into_iter()
+            .map(ProposalSummary::from)
+            .collect(),
+        waiting_for_you: listing
+            .waiting_for_human
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
     }))
 }
 

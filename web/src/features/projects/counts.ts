@@ -35,7 +35,10 @@ export function lastChangeLine(overview: ProjectOverview, now: number): string {
 }
 
 /** The line under a project's name: its counts, or why the daemon has none to give. */
-export function summaryLine(project: ProjectSummary): string {
+export function summaryLine(project: ProjectSummary, now: number): string {
+  if (project.removed_at !== null) {
+    return `Removed from fold ${formatSince(now, project.removed_at)}. Its data stays in its folder.`;
+  }
   const overview = project.overview;
   if (overview) {
     return countsLine(overview);

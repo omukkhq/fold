@@ -161,8 +161,21 @@ const PROPOSAL_STATES: Record<CardProposalState, string> = {
   integrated: "integrated",
 };
 
-export function proposalStateText(state: CardProposalState, version: number) {
-  return `${PROPOSAL_STATES[state]} · v${String(version)}`;
+/** The reviewer that holds the review claim, as the proposal strip and the state text name it. */
+export function reviewerText(claim: string): string {
+  return `@${claim}`;
+}
+
+/** `waiting for review · v2`, with ` · with @review-lead` while a reviewer holds the review claim. */
+export function proposalStateText(
+  state: CardProposalState,
+  version: number,
+  reviewClaim: string | null = null,
+) {
+  const text = `${PROPOSAL_STATES[state]} · v${String(version)}`;
+  return reviewClaim === null
+    ? text
+    : `${text} · with ${reviewerText(reviewClaim)}`;
 }
 
 export function integrationText(integration: TaskIntegration): Segment[] {

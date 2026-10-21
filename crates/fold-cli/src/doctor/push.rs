@@ -18,7 +18,7 @@ pub(super) fn push_check(socket: Option<&Path>, slug: Option<&str>) -> Check {
     };
     push_verdict(
         socket
-            .and_then(|socket| listed_agents(socket, slug))
+            .and_then(|socket| get_json(socket, &format!("/api/v1/projects/{slug}/agents")))
             .as_ref(),
     )
 }
@@ -86,14 +86,12 @@ fn restart_fix(agents: &[&str]) -> String {
     )
 }
 
-/// The daemon's answer to the project's agent list, read to its end over a connection of its own.
-fn listed_agents(socket: &Path, slug: &str) -> Option<Value> {
+/// The daemon's answer to `GET path` without a human, read to its end over a connection of its own; `None` unless it is a 200 with JSON.
+pub(super) fn get_json(socket: &Path, path: &str) -> Option<Value> {
     let mut stream = UnixStream::connect(socket).ok()?;
     let _ = stream.set_read_timeout(Some(CONNECT_TIMEOUT));
     let _ = stream.set_write_timeout(Some(CONNECT_TIMEOUT));
-    let request = format!(
-        "GET /api/v1/projects/{slug}/agents HTTP/1.1\r\nHost: fold\r\nConnection: close\r\n\r\n"
-    );
+    let request = format!("GET {path} HTTP/1.1\r\nHost: fold\r\nConnection: close\r\n\r\n");
     let mut reply = Vec::new();
     stream.write_all(request.as_bytes()).ok()?;
     stream.read_to_end(&mut reply).ok()?;

@@ -220,3 +220,77 @@ async fn an_event_message_must_name_a_stored_message() {
         1
     );
 }
+
+#[cfg(test)]
+async fn close(store: &Store, message: i64) -> Result<(), String> {
+    exec(
+        store,
+        &format!(
+            "INSERT INTO message_ask_closures (message_id, reason, closed_by, created_at)
+             VALUES ({message}, 'dismissed', 'human:ana', 0)"
+        ),
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[tokio::test]
+async fn only_an_open_ask_that_no_worker_waits_on_takes_one_closure_that_never_changes() {
+    let project = seeded().await;
+    let store = project.store();
+    for sql in [
+        "INSERT INTO message_recipients (message_id, human, addressed_as) VALUES (1, 'ana', 'human')",
+        "INSERT INTO messages (id, number, thread_id, sender_kind, sender_worker_id, body, created_at, asks_human)
+         VALUES (2, 2, 2, 'worker', 1, 'which one?', 0, 1)",
+        "INSERT INTO message_recipients (message_id, human, addressed_as) VALUES (2, 'ana', 'humans')",
+        "INSERT INTO messages (id, number, thread_id, sender_kind, sender_worker_id, body, created_at, asks_human)
+         VALUES (3, 3, 3, 'worker', 1, 'answered?', 0, 1)",
+        "INSERT INTO message_recipients (message_id, human, addressed_as) VALUES (3, 'ana', 'human')",
+        "INSERT INTO messages (id, number, thread_id, reply_to, sender_kind, sender_human, body, created_at)
+         VALUES (4, 4, 3, 3, 'human', 'ana', 'yes', 0)",
+        "INSERT INTO messages (id, number, thread_id, sender_kind, sender_worker_id, body, created_at)
+         VALUES (5, 5, 5, 'worker', 1, 'Red or blue?', 0)",
+        "INSERT INTO message_recipients (message_id, human, addressed_as) VALUES (5, 'ana', 'humans')",
+        "INSERT INTO agents (id, name, created_at) VALUES (2, 'web-lead', 0)",
+        "INSERT INTO worker_processes (id, agent_id, role, session_id, state, started_by, started_at)
+         VALUES (1, 2, 'review_lead', 's-1', 'working', 'human:ana', 0)",
+        "INSERT INTO worker_permission_questions (id, kind, worker_process_id, session_id, request_id, tool, input, created_at)
+         VALUES (1, 'ask', 1, 's-1', 'r-1', 'AskUserQuestion', '{}', 0)",
+        "INSERT INTO worker_question_messages (question_id, position, message_id) VALUES (1, 1, 5)",
+    ] {
+        exec(store, sql).await.unwrap();
+    }
+    let open = "SELECT COUNT(*) FROM open_human_questions";
+    assert_eq!(count(store, open).await, 2, "m-2 and the worker's m-5");
+    let not_open = close(store, 1).await.unwrap_err();
+    assert!(
+        not_open.contains("message_ask_closures_open_only"),
+        "a report to a human is no ask: {not_open}"
+    );
+    let answered = close(store, 3).await.unwrap_err();
+    assert!(
+        answered.contains("message_ask_closures_open_only"),
+        "a human's reply already closed m-3: {answered}"
+    );
+    let worker = close(store, 5).await.unwrap_err();
+    assert!(
+        worker.contains("message_ask_closures_not_worker_question"),
+        "{worker}"
+    );
+    close(store, 2).await.unwrap();
+    assert_eq!(count(store, open).await, 1, "only the worker's m-5 waits");
+    let again = close(store, 2).await.unwrap_err();
+    assert!(again.contains("message_ask_closures_open_only"), "{again}");
+    let bad_flag = exec(
+        store,
+        "INSERT INTO messages (id, number, thread_id, sender_kind, sender_worker_id, body, created_at, asks_human)
+         VALUES (6, 6, 6, 'worker', 1, 'x', 0, 2)",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        bad_flag.constraint().as_deref(),
+        Some("messages_asks_human_flag")
+    );
+    assert_append_only(store, "message_ask_closures").await;
+}

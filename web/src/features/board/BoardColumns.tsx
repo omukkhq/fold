@@ -36,9 +36,9 @@ function Column({
     <section
       aria-label={spec.name}
       data-status={spec.status}
-      className="flex min-w-0 flex-1 flex-col gap-8"
+      className="flex min-h-0 min-w-(--width-column) flex-1 flex-col gap-8"
     >
-      <header className="flex flex-col">
+      <header className="flex shrink-0 flex-col">
         <div className="flex items-center gap-8 p-4">
           <span
             aria-hidden="true"
@@ -51,13 +51,19 @@ function Column({
         </div>
         <p className="text-meta leading-snug text-text-faint">{hint}</p>
       </header>
-      <div className="flex flex-col gap-10 pt-2">{children}</div>
+      <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto p-4">
+        {children}
+      </div>
     </section>
   );
 }
 
 function Row({ children }: { children: ReactNode }) {
-  return <div className="flex flex-1 gap-16 px-24 pt-10 pb-24">{children}</div>;
+  return (
+    <div className="flex min-h-0 flex-1 gap-16 overflow-x-auto px-24 pt-10 pb-24">
+      {children}
+    </div>
+  );
 }
 
 export function BoardColumns({

@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/v1/daemon": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The daemon's version, process and start, and the address its web interface listens on. Socket only, so a command learns the port the daemon got instead of the one its configuration asked for. */
+        get: operations["show_daemon"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/hooks/edit": {
         parameters: {
             query?: never;
@@ -79,10 +96,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every registered project and whether the daemon has it open. A project whose `.fold/` was deleted is removed from fold before the list is read, so it is not in the list. */
+        /** Every project in fold and whether the daemon has it open, ordered by slug; with `include_removed`, the projects a person removed too. A project whose `.fold/` was deleted is removed from fold before the list is read, so it is not in the list. */
         get: operations["list_projects"];
         put?: never;
-        /** Opens a project that was registered after the daemon started. Socket only; an open project answers the same again, unless its database was replaced: the daemon then closes it and opens the folder as it is now. A folder that is there without `.fold/`, as after its fold data was deleted, is removed from fold and answers `project_not_found`; a missing folder or a `.fold/` without its database keeps the project and answers `project_unavailable` with `details.reason` `folder_missing` or `database_missing`. */
+        /** Opens a project that was registered after the daemon started, for a `fld` command in its folder; a project a person removed comes back into fold first. Socket only; an open project answers the same again, unless its database was replaced: the daemon then closes it and opens the folder as it is now. A folder that is there without `.fold/`, as after its fold data was deleted, is removed from fold and answers `project_not_found`; a missing folder or a `.fold/` without its database keeps the project and answers `project_unavailable` with `details.reason` `folder_missing` or `database_missing`. */
         post: operations["open_project"];
         delete?: never;
         options?: never;
@@ -97,11 +114,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** One open project. */
+        /** One open project. Reading it notes that a person uses the project now, which orders the recent projects of the project switcher. */
         get: operations["show_project"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** A named human removes the project from fold: the daemon closes it and leaves it out of the project list, and its data stays in the folder's `.fold/`. `fld claude`, `fld new` or `fld init` in the folder, or the restore route, brings it back under its slug. Removing a removed project changes nothing. While a worker of the project runs, the removal is refused. */
+        delete: operations["remove_project"];
         options?: never;
         head?: never;
         patch?: never;
@@ -156,6 +174,23 @@ export interface paths {
         head?: never;
         /** A named human changes an area's profile. The next start of the area's lead or task workers gets it; running workers keep theirs. */
         patch: operations["update_area"];
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/asks/answered": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human marks the open asks of a thread, or of a task, answered without a reply, such as when they answered the agent elsewhere. Each closed ask appends `message.ask_closed`, and the thread, the board's question mark, Needs you and the Messages count stop waiting for it. The messages stay unchanged. */
+        post: operations["mark_asks_answered"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/projects/{slug}/board": {
@@ -355,7 +390,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, and a worker whose turns fail before they reach the model. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, and with the live `worker.output` steps `result` and `result_error`, which end a turn. */
+        /** Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, and a worker whose turns fail before they reach the model. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, and with the live `worker.output` steps `result` and `result_error`, which end a turn. */
         get: operations["list_needs_you"];
         put?: never;
         post?: never;
@@ -389,7 +424,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lists the proposals in number order. */
+        /** Lists the proposals in number order, with the ones that wait for the signed-in human's review. */
         get: operations["list_proposals"];
         put?: never;
         post?: never;
@@ -718,6 +753,23 @@ export interface paths {
         put?: never;
         /** The requester writes the next draft version instead of asking for changes. */
         post: operations["edit_request_draft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human brings back a project a person removed, while its folder holds the project's `.fold/`: it is in fold again under its slug and the daemon opens it. A project in fold stays as it is. */
+        post: operations["restore_project"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1439,6 +1491,8 @@ export interface components {
             name: string;
         };
         AttentionItem: {
+            /** @description For a `question`: one of the task's open asks is closable, so a human can mark it answered with the asks route, because it is no worker's `AskUserQuestion`, which only a reply in its thread ends. False for every other kind. */
+            closable: boolean;
             kind: components["schemas"]["AttentionKind"];
         };
         /**
@@ -1948,6 +2002,39 @@ export interface components {
             /** @description One line, not empty. */
             title: string;
         };
+        /**
+         * @description What started the daemon process.
+         * @enum {string}
+         */
+        DaemonStartedBy: "hand" | "systemd" | "launchd";
+        /** @description What the running daemon is, for `fld` and `fld doctor` to report it. */
+        DaemonView: {
+            /** @description The address and port the HTTP listener is bound to, such as `127.0.0.1:7420`. */
+            listen: string;
+            /**
+             * Format: int32
+             * @description The process id of the daemon.
+             */
+            pid: number;
+            /**
+             * @description The file name of the login shell the daemon ran at its start to read the workers' environment, such as `bash`; null when it knows none.
+             * @example bash
+             */
+            shell: string | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the moment the daemon started to run that shell; a shell startup file changed after it holds changes the workers lack until `fld restart`. Null when it ran none.
+             */
+            shell_read_at: number | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the daemon's start.
+             */
+            started_at: number;
+            started_by: components["schemas"]["DaemonStartedBy"];
+            /** @description The fold version the daemon runs, such as `0.3.0`. */
+            version: string;
+        };
         DefineAreaBody: {
             /** @description What every worker of the area must know about its kind of work, at most 8000 characters. */
             instructions?: string | null;
@@ -2062,7 +2149,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable" | "message.ask_closed";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -2132,7 +2219,7 @@ export interface components {
         ErrorEnvelope: {
             error: components["schemas"]["ErrorBody"];
         };
-        /** @description One frame of a project's event stream, told apart by `kind`: a stored event, a live workspace change, a live presence change, a live worker step, or the snapshot sent after a replay. */
+        /** @description One frame of a project's event stream, told apart by `kind`: a stored event, a live workspace change, a live presence change, a live worker step, a live message push, or the snapshot sent after a replay. */
         EventEnvelope: (components["schemas"]["DurableEvent"] & {
             /** @enum {string} */
             kind: "event";
@@ -2145,6 +2232,9 @@ export interface components {
         }) | (components["schemas"]["WorkerOutput"] & {
             /** @enum {string} */
             kind: "worker_output";
+        }) | (components["schemas"]["MessagePushed"] & {
+            /** @enum {string} */
+            kind: "message_pushed";
         }) | (components["schemas"]["Snapshot"] & {
             /** @enum {string} */
             kind: "snapshot";
@@ -2458,6 +2548,23 @@ export interface components {
             /** @example ws-9 */
             workspace: string;
         };
+        /** @description The asks a human marks answered: those of one thread, or every ask linked to one task. */
+        MarkAnsweredRequest: {
+            /** @description The task whose asks are answered, such as `T-12`. */
+            task?: string | null;
+            /** @description Any message of the thread whose asks are answered, such as `m-31`. Give `thread` or `task`, not both. */
+            thread?: string | null;
+        };
+        /** @description The asks the call marked answered. */
+        MarkedAnswered: {
+            /**
+             * @description In number order; empty when nothing waited. A worker's `AskUserQuestion` stays open, because its worker waits for a reply in the thread.
+             * @example [
+             *       "m-31"
+             *     ]
+             */
+            answered: string[];
+        };
         /** @description One option of a multiple-choice question. */
         MessageChoice: {
             /**
@@ -2468,8 +2575,25 @@ export interface components {
             /** @example Recharts */
             label: string;
         };
+        /** @description A notice about a message got through to a session or the worker process of a recipient agent for the first time, so the message's thread shows that the message waits there. It is the `data` of the live `message.pushed` event; the recipients' `pushed_at` is committed before it is sent. */
+        MessagePushed: {
+            /**
+             * @description The recipient agent whose session or worker process took the notice.
+             * @example backend
+             */
+            agent: string;
+            /** @example m-210 */
+            message: string;
+            /**
+             * @description The thread of the message: the id of its first message.
+             * @example m-208
+             */
+            thread: string;
+        };
         /** @description A stored message with public ids only. */
         MessageView: {
+            /** @description The sending agent marked the message as asking a human for an answer. A question with choices and a worker's `AskUserQuestion` message ask without the mark. */
+            asks_human: boolean;
             /** @description Plain text. */
             body: string;
             /** @description The options of a multiple-choice question, in order; empty for any other message. A human answers with a reply whose body names one option's label, or with free text. */
@@ -2533,10 +2657,18 @@ export interface components {
              */
             header: string | null;
             /**
-             * @description The human a `human_review` or `request_draft` waits for, or whose change a `human_change` is; null when any human may answer.
+             * @description The human a `human_review` or a `request_draft` waits for, or whose change a `human_change` is; null when any human may answer.
              * @example tanim
              */
             human: string | null;
+            /**
+             * @description The humans a `question` names, in name order, when none of its recipients is `humans`: it waits for each of them, as their Messages count does. Empty when any human may answer, and for every other kind.
+             * @example [
+             *       "ana",
+             *       "bob"
+             *     ]
+             */
+            humans: string[];
             kind: components["schemas"]["NeedsYouItemKind"];
             /**
              * @description The question message of a `question`.
@@ -2657,6 +2789,11 @@ export interface components {
          * @enum {string}
          */
         ProjectAttentionKind: "uncommitted_changes" | "head_moved";
+        /**
+         * @description What is at a project's folder. `present`: the folder holds `.fold/` with its database. `folder_missing`: the folder is gone, as on a disk that is not mounted; fold opens the project again when it is back. `fold_missing`: the folder is there without `.fold/`; only a removed project is listed so, since fold takes any other off by itself. `database_missing`: `.fold/` holds no database.
+         * @enum {string}
+         */
+        ProjectFolderState: "present" | "folder_missing" | "fold_missing" | "database_missing";
         /** @description The project's Git repository and the state of its remotes. */
         ProjectGit: {
             /** @description The branch every integration is committed to. */
@@ -2696,10 +2833,24 @@ export interface components {
             paused_since: number | null;
         };
         ProjectSummary: {
-            /** @description False while the project failed to open or has not been opened yet. */
+            /** @description False while the project failed to open or has not been opened yet, and for a project a person removed. */
             available: boolean;
+            /** @description What is at the project folder. */
+            folder: components["schemas"]["ProjectFolderState"];
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the project's last use: when a person last opened it or its newest event happened, whichever is later, and its registration before either. The project switcher lists the most recent first.
+             */
+            last_used_at: number;
             name: string;
             overview: components["schemas"]["ProjectOverview"] | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of when a person removed the project from fold; null while it is in fold. A removed project keeps its data in its folder's `.fold/`, and the list shows it only when asked to.
+             */
+            removed_at: number | null;
+            /** @description The project folder, which holds `.fold/`. */
+            root: string;
             slug: string;
         };
         /** @description A proposal as the requesting human sees it. */
@@ -2746,6 +2897,13 @@ export interface components {
         ProposalList: {
             /** @description In number order. */
             proposals: components["schemas"]["ProposalSummary"][];
+            /**
+             * @description The open proposals of the whole project, whatever the filter, whose current version waits for the signed-in human's review, in number order: the `human_review` items of Needs you that are theirs, which the Proposals screen marks. Empty when the request names no human.
+             * @example [
+             *       "P-3"
+             *     ]
+             */
+            waiting_for_you: string[];
         };
         ProposalReview: {
             body: string;
@@ -2978,6 +3136,11 @@ export interface components {
             delivered_at: number | null;
             /** @example frontend/ui */
             name: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds: the first time a notice about the message reached a session or the worker process of the recipient's agent, where it waits until the agent reads its inbox. Null for a human and while no notice got through.
+             */
+            pushed_at: number | null;
             /** @description For an agent recipient, whether fold can post a notice into one of the agent's sessions now; false means the agent learns of the message only when it reads its inbox. Null for a human and for an agent without a connected session. */
             reachable: boolean | null;
         };
@@ -3412,7 +3575,7 @@ export interface components {
         RevisionOriginView: "initial" | "proposal" | "pull" | "direct" | "record";
         RevisionPageView: {
             /**
-             * @description Pass it as `before` for the next page; null once the page reaches `r1`.
+             * @description Pass it as `before` for the next page; null once the page reaches the first revision, which has no parent.
              * @example r40
              */
             before: string | null;
@@ -3696,11 +3859,20 @@ export interface components {
         TaskProposal: {
             /** @description The integration checks of the current version failed, so the proposal is back with its author until a new version. */
             checks_failed: boolean;
+            /**
+             * Format: int32
+             * @description How many files the current version adds, modifies and deletes.
+             */
+            files: number;
             /** @example P-3 */
             id: string;
+            /** @description The worker that holds the open review claim; null while no reviewer holds one. */
+            review_claim: string | null;
             /** @description Newest first. */
             reviews: components["schemas"]["TaskReview"][];
             state: components["schemas"]["ProposalState"];
+            /** @description The proposal's title. */
+            title: string;
             /**
              * Format: int32
              * @description The current version.
@@ -3860,14 +4032,16 @@ export interface components {
             next: string | null;
             /**
              * Format: int64
-             * @description How many threads in the whole project hold a question to a human that no human has answered, whatever the filter; the navigation badge reads it with `limit=1`.
+             * @description How many threads hold an open ask, whatever the other filters: in the whole project, or with `mine` the threads with an open ask that waits for the signed-in human, which are the threads the listing marks `awaiting_human`. The navigation badge reads it with `mine=true&limit=1`.
              */
             total_awaiting_human: number;
         };
         /** @description A thread with every message in number order. */
         ThreadView: {
-            /** @description True while the thread holds a question to a human that no human has answered; a human reply clears it. */
+            /** @description True while the thread holds an open ask: a message an agent marked as asking a human, a question with choices or a worker's `AskUserQuestion`, with no human reply after it and not marked answered. In a `mine` listing, only an ask that waits for the signed-in human: addressed to them by name or to `humans`. */
             awaiting_human: boolean;
+            /** @description One of those asks is closable: a human can mark it answered with the asks route, because it is no worker's `AskUserQuestion`, which only a reply in the thread ends. False while `awaiting_human` is false. */
+            closable: boolean;
             /**
              * @description The id of the thread's first message.
              * @example m-31
@@ -4315,6 +4489,62 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    show_daemon: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The running daemon */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DaemonView"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     hook_edit: {
         parameters: {
             query?: never;
@@ -4598,7 +4828,10 @@ export interface operations {
     };
     list_projects: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description List the projects a person removed from fold too; they are left out without it. */
+                include_removed?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -4612,6 +4845,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectList"];
+                };
+            };
+            /** @description `invalid_request`: `include_removed` is not `true` or `false` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
@@ -4780,6 +5022,74 @@ export interface operations {
             };
             /** @description The project failed to open */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    remove_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project as the list shows it after the removal */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSummary"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found`: the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_workers_running` with the running agents in `details.workers`: pause the project or stop them first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5041,6 +5351,87 @@ export interface operations {
                 };
             };
             /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    mark_asks_answered: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarkAnsweredRequest"];
+            };
+        };
+        responses: {
+            /** @description The asks marked answered */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkedAnswered"];
+                };
+            };
+            /** @description `invalid_request`: neither or both of `thread` and `task`; `invalid_id`: an id is malformed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `message_not_found`, `task_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -6127,8 +6518,10 @@ export interface operations {
                 task?: string;
                 /** @description Threads with a message linked to this proposal, such as `P-3`. */
                 proposal?: string;
-                /** @description Only threads with a question to a human that no human has answered. */
+                /** @description Only threads with an open ask; with `mine`, an open ask that waits for the signed-in human. */
                 awaiting_human?: boolean;
+                /** @description Only the threads that concern the signed-in human: a message of the thread is from them, addressed to them by name or addressed to `humans`. Agent-to-agent threads stay readable through `task`, `proposal` and the thread route. Needs a signed-in human. */
+                mine?: boolean;
                 /** @description The `next` of the previous page. */
                 before?: string;
                 /** @description The page size: 50 when left out, at most 200. */
@@ -6161,7 +6554,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: `mine` is set and the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6170,7 +6563,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8305,6 +8698,74 @@ export interface operations {
                 };
             };
             /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    restore_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project as the list shows it after it came back */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSummary"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found`: the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` with `details.reason` `folder_missing`, `fold_missing` or `database_missing`: the folder does not hold the project, which stays removed */
             503: {
                 headers: {
                     [name: string]: unknown;

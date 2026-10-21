@@ -47,7 +47,7 @@ impl Fixture {
             projects: Projects::default(),
             clock: clock.clone(),
             assets: AssetSource::Embedded,
-            listen: "127.0.0.1".parse().unwrap(),
+            listen: "127.0.0.1:0".parse().unwrap(),
             session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
         });
         let row = ProjectRow {
@@ -625,6 +625,7 @@ async fn the_worker_environment_answers_only_on_the_socket_and_names_no_value() 
         claude: Some(claude.clone()),
         git: None,
         sign_in: vec!["ANTHROPIC_API_KEY".to_owned(), "HOME".to_owned()],
+        ..WorkerEnvironment::default()
     };
     let state: AppState = Arc::new(DaemonState {
         registry: project.registry().clone(),
@@ -633,7 +634,7 @@ async fn the_worker_environment_answers_only_on_the_socket_and_names_no_value() 
             .with_environment(environment),
         clock: Arc::new(project.clock().clone()),
         assets: AssetSource::Embedded,
-        listen: "127.0.0.1".parse().unwrap(),
+        listen: "127.0.0.1:0".parse().unwrap(),
         session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
     });
     let request = || {

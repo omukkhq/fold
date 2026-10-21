@@ -184,6 +184,64 @@ fn with_git_in_a_plain_project_turns_git_on_through_the_daemon() {
     );
 }
 
+#[cfg(test)]
+fn removed_at(registry_db: &Path, remove: bool) -> Option<i64> {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let registry = fold_store::Store::open_registry(registry_db).await.unwrap();
+        if remove {
+            let now = fold_core::Timestamp::from_millis(5).unwrap();
+            registry
+                .write(async |tx| fold_store::projects::set_removed(tx, "app", now).await)
+                .await
+                .unwrap();
+        }
+        let found = fold_store::projects::find_registration(registry.read(), "app")
+            .await
+            .unwrap()
+            .unwrap();
+        registry.close().await.unwrap();
+        found.removed_at.map(fold_core::Timestamp::as_millis)
+    })
+}
+
+#[test]
+fn with_git_in_a_removed_project_brings_it_back_and_turns_git_on() {
+    let sandbox = Sandbox::new();
+    let project = sandbox.path("app");
+    fs::create_dir(&project).unwrap();
+    fs::write(project.join("README.md"), "# app\n").unwrap();
+    let init = sandbox.fold_in(&project, &["init"]);
+    assert!(init.status.success(), "{init:?}");
+    let registry_db = sandbox.path("data/fold/registry.db");
+    assert_eq!(removed_at(&registry_db, true), Some(5));
+
+    let _daemon = sandbox.serve();
+    let socket = sandbox.socket();
+    let output = sandbox.fold_in(
+        &project,
+        &[
+            "init",
+            "--with-git",
+            "--socket",
+            socket.to_str().unwrap(),
+            "--git-name",
+            "Ana Lima",
+            "--git-email",
+            "ana@example.com",
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let text = stdout(&output);
+    assert!(
+        text.starts_with(
+            "project app is back in fold\nturned Git on in project app: main is r2, Git commit "
+        ),
+        "{text}"
+    );
+    assert_eq!(removed_at(&registry_db, false), None);
+    assert_eq!(git(&project, &["rev-list", "--count", "main"]).trim(), "2");
+}
+
 #[test]
 fn with_git_in_a_git_repository_makes_its_head_the_genesis() {
     let sandbox = Sandbox::new();

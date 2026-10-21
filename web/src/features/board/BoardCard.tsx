@@ -25,6 +25,8 @@ import { HumanReviewBadge } from "@/people/HumanReviewBadge";
 import { PersonName } from "@/people/PersonName";
 import type { LiveWorkspace } from "@/live/envelope";
 import { activityLine, liveFilesText, type ActivityLine } from "./activityLine";
+import { MarkAnswered } from "@/features/messages/MarkAnswered";
+import { taskCanMarkAnswered } from "@/features/messages/answered";
 import { attentionMark, hasKind } from "./attention";
 import {
   blockedText,
@@ -173,6 +175,7 @@ export function BoardCard({
   const kind = kindText(card);
   const blocker = blockerMark(card);
   const leadCheck = leadCheckMark(card);
+  const answerable = taskCanMarkAnswered(card.attention);
   const stalled = hasKind(card.attention, "stalled");
   const stale = hasKind(card.attention, "stale_claim");
   const hasFooter =
@@ -184,17 +187,26 @@ export function BoardCard({
       className="relative has-[a:focus-visible]:outline-2 has-[a:focus-visible]:outline-offset-2 has-[a:focus-visible]:outline-focus-ring"
     >
       {mark ? (
-        <Tooltip content={mark.tooltip}>
-          <span
-            tabIndex={0}
-            aria-label={`Needs you: ${mark.tooltip}`}
-            className="relative z-10 self-start rounded-s outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          >
-            <Badge tone="needs-you" icon={mark.icon}>
-              {mark.text}
-            </Badge>
-          </span>
-        </Tooltip>
+        <div className="flex flex-wrap items-center gap-6">
+          <Tooltip content={mark.tooltip}>
+            <span
+              tabIndex={0}
+              aria-label={`Needs you: ${mark.tooltip}`}
+              className="relative z-10 self-start rounded-s outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            >
+              <Badge tone="needs-you" icon={mark.icon}>
+                {mark.text}
+              </Badge>
+            </span>
+          </Tooltip>
+          {answerable ? (
+            <MarkAnswered
+              slug={slug}
+              scope={{ task: card.task }}
+              className="relative z-10"
+            />
+          ) : null}
+        </div>
       ) : null}
       {card.labels.length > 0 ? (
         <div className="flex flex-wrap gap-4">

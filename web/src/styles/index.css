@@ -165,6 +165,7 @@
   --width-project-state: var(--width-project-state);
   --width-needs-you: var(--width-needs-you);
   --width-transcript: var(--width-transcript);
+  --width-column: var(--width-column);
 
   --height-*: initial;
   --height-bar: var(--height-bar);

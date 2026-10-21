@@ -31,6 +31,19 @@ describe("a project fold removed", () => {
       kind: "unavailable",
       hint: null,
     });
+    expect(
+      projectProblem(
+        new ApiError("project_not_found", "removed", {
+          reason: "removed",
+          hint: "run `fld claude` in /srv/app",
+        }),
+      ),
+    ).toEqual({ kind: "removed", hint: "run `fld claude` in /srv/app" });
+    expect(
+      projectProblem(
+        new ApiError("project_not_found", "removed", { reason: "removed" }),
+      ),
+    ).toEqual({ kind: "removed", hint: null });
     expect(projectProblem(new ApiError("task_not_found", "no"))).toBeNull();
     expect(projectProblem(new Error("project_unavailable"))).toBeNull();
   });

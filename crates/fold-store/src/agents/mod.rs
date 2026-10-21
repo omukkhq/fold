@@ -10,6 +10,7 @@ use sqlx::{SqliteConnection, SqliteExecutor};
 
 use crate::columns::{optional_time, time};
 use crate::error::StoreError;
+use crate::events;
 use crate::store::WriteTx;
 use crate::workspaces::WorkspaceState;
 
@@ -31,9 +32,9 @@ pub use previous_sessions::{
     PreviousSessionRow, SessionEnd, previous_sessions, record_previous_session,
 };
 pub use questions::{
-    AnswerRow, NewQuestion, QuestionKind, QuestionRow, asked_among, asker_answered_by,
-    close_open_questions, find_question, insert_answer, insert_question, insert_question_message,
-    open_ask_of_thread, open_questions, question_by_id, question_messages, questions_of_worker,
+    AnswerRow, NewQuestion, QuestionKind, QuestionRow, asker_answered_by, close_open_questions,
+    find_question, insert_answer, insert_question, insert_question_message, open_ask_of_thread,
+    open_questions, question_by_id, question_messages, questions_of_worker,
 };
 pub use workers::{
     AreaRow, BoundWorker, NewWorkerProcess, ProcessEnd, TurnTotals, WorkerProcessRow,
@@ -168,6 +169,7 @@ pub async fn tags(
         .collect()
 }
 
+/// A child worker starts at its parent's event cursor, so its first read is not the project's whole history.
 pub async fn insert_worker(
     tx: &mut WriteTx,
     agent_id: i64,
@@ -177,7 +179,7 @@ pub async fn insert_worker(
 ) -> Result<i64, StoreError> {
     let name = name.as_str();
     let created_at = now.as_millis();
-    Ok(sqlx::query_scalar!(
+    let id = sqlx::query_scalar!(
         r#"INSERT INTO workers (agent_id, name, parent_worker_id, created_at)
            VALUES (?, ?, ?, ?) RETURNING id AS "id!: i64""#,
         agent_id,
@@ -186,7 +188,14 @@ pub async fn insert_worker(
         created_at
     )
     .fetch_one(tx.conn())
-    .await?)
+    .await?;
+    if let Some(parent_id) = parent_id {
+        let start = events::cursor(tx.conn(), parent_id).await?;
+        if start > 0 {
+            events::advance_cursor(tx, id, start).await?;
+        }
+    }
+    Ok(id)
 }
 
 /// The worker `name` of agent `agent_id`; a worker of another agent is not found.

@@ -12,6 +12,7 @@ import {
   getProposalFileDiff,
   listComments,
   listProposals,
+  type ProposalList,
   type ChangeRange,
   getCheckRun,
 } from "./proposals";
@@ -93,11 +94,22 @@ export const awaitingHumanQuery = (slug: string) =>
     staleTime: Infinity,
   });
 
+/** The proposal list and the proposals waiting for the signed-in human share one read, so the Proposals screen never fetches it twice. */
 export const proposalsQuery = (slug: string) =>
   queryOptions({
     queryKey: keys.proposals(slug),
     queryFn: () => listProposals(slug),
     staleTime: Infinity,
+    select: (list: ProposalList) => list.proposals,
+  });
+
+/** The open proposals whose current version waits for the signed-in human's review, as the daemon decides them. */
+export const proposalsWaitingQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.proposals(slug),
+    queryFn: () => listProposals(slug),
+    staleTime: Infinity,
+    select: (list: ProposalList) => list.waiting_for_you,
   });
 
 export const proposalQuery = (slug: string, id: string) =>

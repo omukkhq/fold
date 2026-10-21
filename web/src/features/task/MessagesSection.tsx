@@ -17,6 +17,8 @@ import {
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
 import { controlClasses } from "@/components/form/Field";
+import { MarkAnswered } from "@/features/messages/MarkAnswered";
+import { taskCanMarkAnswered } from "@/features/messages/answered";
 import { MessageBody } from "@/features/messages/MessageBody";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
@@ -193,6 +195,13 @@ export function MessagesSection({
           <span className="text-bar text-text-muted">
             {messageCountText(messages.length, task.task)}
           </span>
+        ) : null}
+        {taskCanMarkAnswered(task.attention) ? (
+          <MarkAnswered
+            slug={slug}
+            scope={{ task: task.task }}
+            className="ml-auto"
+          />
         ) : null}
       </SectionHead>
       <WriteError error={query.error} />

@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT e.seq AS \"seq!: i64\", e.type AS event_type, e.actor, e.task_id, e.proposal_id,\n                  e.workspace_id, e.revision_id, e.data, e.created_at\n           FROM events e\n           WHERE e.seq > ?1\n             AND (((?2 IS NULL OR e.type IN (SELECT value FROM json_each(?2)))\n                   AND (?3 IS NULL OR e.task_id = ?3)\n                   AND (?4 IS NULL OR e.proposal_id = ?4))\n                  OR (e.type = ?9\n                      AND e.actor <> (SELECT s.name FROM workers s WHERE s.id = ?10)\n                      AND EXISTS (\n                          SELECT 1 FROM messages m\n                          JOIN message_recipients r ON r.message_id = m.id\n                          JOIN workers w ON w.id = r.worker_id\n                          WHERE m.number = e.message_id\n                            AND r.delivered_at IS NULL AND r.acked_at IS NULL\n                            AND (r.worker_id = ?10 OR (?11 AND w.agent_id = ?5)))))\n             AND (e.type NOT IN (SELECT value FROM json_each(?6))\n                  OR EXISTS (\n                      SELECT 1 FROM messages m\n                      JOIN message_recipients r ON r.message_id = m.id\n                      JOIN workers w ON w.id = r.worker_id\n                      WHERE m.number = e.message_id AND w.agent_id = ?5))\n             AND (e.type NOT IN (SELECT value FROM json_each(?8))\n                  OR EXISTS (\n                      SELECT 1 FROM agents g\n                      WHERE g.id = ?5\n                        AND (e.actor = g.name OR substr(e.actor, 1, length(g.name) + 1) = g.name || '/')))\n           ORDER BY e.seq ASC\n           LIMIT ?7",
+  "describe": {
+    "columns": [
+      {
+        "name": "seq!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "seq"
+          }
+        }
+      },
+      {
+        "name": "event_type",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "type"
+          }
+        }
+      },
+      {
+        "name": "actor",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "actor"
+          }
+        }
+      },
+      {
+        "name": "task_id",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "task_id"
+          }
+        }
+      },
+      {
+        "name": "proposal_id",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "proposal_id"
+          }
+        }
+      },
+      {
+        "name": "workspace_id",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "workspace_id"
+          }
+        }
+      },
+      {
+        "name": "revision_id",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "revision_id"
+          }
+        }
+      },
+      {
+        "name": "data",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "data"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "events",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "74a08a25059a5b3600c2d752184937f636806e5693478b20a4a48af53d7f5791"
+}

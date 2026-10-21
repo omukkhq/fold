@@ -249,3 +249,62 @@ async fn an_empty_project_has_a_null_head() {
     assert_eq!(state["recent"], json!([]));
     host.daemon.shutdown().await;
 }
+
+/// A project made by `fld init` starts from the genesis `r0`, whose parent is none, so the revision pages end there and not at `r1`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_revision_pages_reach_the_genesis_r0_and_end_there() {
+    use crate::common::acceptance::{HUMAN, Harness, SLUG};
+    use axum::http::Method;
+
+    let source = TempDir::new().unwrap();
+    std::fs::write(source.path().join("README.md"), "# demo\n").unwrap();
+    let (h, _) = Harness::start_initialized(source.path()).await;
+    std::fs::write(
+        std::path::Path::new(h.root()).join("notes.md"),
+        "the plan\n",
+    )
+    .unwrap();
+    let human = fold_core::Actor::human(fold_core::HumanName::parse(HUMAN).unwrap());
+    let recorded =
+        fold_daemon::services::projects::record(&h.handle, &human, &fold_vcs::git::Git::default())
+            .await
+            .unwrap();
+    assert!(
+        matches!(
+            &recorded,
+            fold_daemon::services::projects::RecordOutcome::Recorded { revision, .. }
+                if revision.to_string() == "r2"
+        ),
+        "{recorded:?}"
+    );
+
+    let mut pages = Vec::new();
+    let mut before: Option<String> = None;
+    loop {
+        let path = match &before {
+            Some(before) => format!("/api/v1/projects/{SLUG}/revisions?limit=1&before={before}"),
+            None => format!("/api/v1/projects/{SLUG}/revisions?limit=1"),
+        };
+        let (status, page) = h.http(Method::GET, &path, None, HUMAN).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        let ids: Vec<&str> = page["revisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|revision| revision["id"].as_str().unwrap())
+            .collect();
+        pages.push((ids.join(","), page["before"].clone()));
+        match page["before"].as_str() {
+            Some(next) if pages.len() < 5 => before = Some(next.to_owned()),
+            _ => break,
+        }
+    }
+    assert_eq!(
+        pages,
+        [
+            ("r2".to_owned(), json!("r2")),
+            ("r1".to_owned(), json!("r1")),
+            ("r0".to_owned(), Value::Null),
+        ]
+    );
+}

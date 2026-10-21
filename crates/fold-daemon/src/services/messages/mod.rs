@@ -20,9 +20,12 @@ use crate::services::events::{EventBuffer, EventBus};
 #[cfg(feature = "failpoints")]
 use crate::services::fired;
 
+mod asks;
 mod inbox;
 mod threads;
 
+pub use asks::DismissScope;
+pub(crate) use inbox::record_pushed;
 pub use inbox::{InboxItem, unread_count};
 pub use threads::{
     DEFAULT_THREAD_LIMIT, Feedback, MAX_THREAD_LIMIT, ThreadPage, ThreadQuery, ThreadView,
@@ -72,6 +75,8 @@ pub struct RecipientView {
     pub addressed_as: AddressedAs,
     pub delivered_at: Option<Timestamp>,
     pub acknowledged_at: Option<Timestamp>,
+    /// The first time a notice about the message reached a session or the worker process of the recipient's agent; `None` for a human and while no notice got through.
+    pub pushed_at: Option<Timestamp>,
     /// Whether a notice to the recipient's agent would reach one of its sessions now; `None` for a human, for an agent without a connected session, and for every recipient of a service without the project's push targets.
     pub reachable: Option<bool>,
 }
@@ -95,6 +100,8 @@ pub struct MessageView {
     pub choices: Vec<Choice>,
     /// The short header of a multiple-choice question.
     pub header: Option<String>,
+    /// The sender marked the message as asking a human for an answer.
+    pub asks_human: bool,
 }
 
 fn recipient_view(row: RecipientRow) -> RecipientView {
@@ -103,6 +110,7 @@ fn recipient_view(row: RecipientRow) -> RecipientView {
         addressed_as: row.addressed_as,
         delivered_at: row.delivered_at,
         acknowledged_at: row.acked_at,
+        pushed_at: row.pushed_at,
         reachable: None,
     }
 }
@@ -121,6 +129,7 @@ fn message_view(row: MessageRow) -> MessageView {
         recipients: row.recipients.into_iter().map(recipient_view).collect(),
         choices: row.choices,
         header: row.header,
+        asks_human: row.asks_human,
     }
 }
 
@@ -217,17 +226,34 @@ impl MessageService {
         request: Option<RequestId>,
         choices: Option<MessageChoices>,
     ) -> Result<MessageView, MessageError> {
-        self.send_inner(actor, input, request, choices, false).await
+        self.send_inner(actor, input, request, choices, SendOptions::default())
+            .await
     }
 
-    /// The send of [`MessageService::send_with_choices`]. With `to_drafter` the message goes to the drafter of `request`, read in the send's own transaction, instead of to `input.to`.
+    /// [`MessageService::send_with_choices`] for a message that `asks_human` marks as asking a human for an answer: it waits for a human, as a question with choices does, until a human writes in its thread or the ask is closed. A mark without a human recipient is `invalid_request`.
+    pub async fn send_marked(
+        &self,
+        actor: &Actor,
+        input: SendMessage,
+        request: Option<RequestId>,
+        choices: Option<MessageChoices>,
+        asks_human: bool,
+    ) -> Result<MessageView, MessageError> {
+        let send = SendOptions {
+            asks_human,
+            ..SendOptions::default()
+        };
+        self.send_inner(actor, input, request, choices, send).await
+    }
+
+    /// The send of [`MessageService::send_marked`]. With `send.to_drafter` the message goes to the drafter of `request`, read in the send's own transaction, instead of to `input.to`.
     pub(super) async fn send_inner(
         &self,
         actor: &Actor,
         input: SendMessage,
         request: Option<RequestId>,
         choices: Option<MessageChoices>,
-        to_drafter: bool,
+        send: SendOptions,
     ) -> Result<MessageView, MessageError> {
         policy::can_send_message(actor).map_err(FoldError::from)?;
         let humans = projects::list_humans(self.registry.read()).await?;
@@ -265,7 +291,7 @@ impl MessageService {
                     return Err(crate::services::reviews::proposal_missing(proposal).into());
                 }
                 let to = match request {
-                    Some(request) if to_drafter => {
+                    Some(request) if send.to_drafter => {
                         let row = tasks::requests::fetch(tx.conn(), request)
                             .await?
                             .ok_or_else(|| crate::services::tasks::request_missing(request))?;
@@ -276,6 +302,9 @@ impl MessageService {
                 };
                 let directory = messages::directory(tx.conn(), humans).await?;
                 let recipients = resolve(&to, &directory, &sender).map_err(FoldError::from)?;
+                if send.asks_human && !reaches_human(&recipients) {
+                    return Err(ask_without_human().into());
+                }
                 let draft = Draft {
                     actor,
                     sender: &sender,
@@ -286,6 +315,7 @@ impl MessageService {
                     parent,
                     body: &input.body,
                     choices: choices.as_ref(),
+                    asks_human: send.asks_human,
                     recipients,
                     now,
                 };
@@ -345,6 +375,7 @@ impl MessageService {
                     parent: None,
                     body: &body,
                     choices: None,
+                    asks_human: false,
                     recipients,
                     now,
                 };
@@ -378,8 +409,32 @@ struct Draft<'a> {
     parent: Option<MessageHead>,
     body: &'a MessageBody,
     choices: Option<&'a MessageChoices>,
+    asks_human: bool,
     recipients: Vec<Recipient>,
     now: Timestamp,
+}
+
+/// How [`MessageService::send_inner`] sends beyond its input.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct SendOptions {
+    /// The message goes to the drafter of its request instead of to its `to`.
+    pub to_drafter: bool,
+    /// The sender marks the message as asking a human for an answer.
+    pub asks_human: bool,
+}
+
+fn reaches_human(recipients: &[Recipient]) -> bool {
+    recipients
+        .iter()
+        .any(|recipient| matches!(recipient.target, Target::Human(_)))
+}
+
+fn ask_without_human() -> FoldError {
+    FoldError::new(
+        codes::INVALID_REQUEST,
+        "only a message to a human asks a human for an answer",
+    )
+    .with_hint("send the ask to humans or human:<name>, or leave out asks_human")
 }
 
 /// Allocates the number, writes the message and its recipient rows, and appends `message.sent`, whose data names the recipients and never holds the body.
@@ -407,6 +462,7 @@ async fn write_message(
             proposal: draft.proposal,
             request: draft.request,
             body: draft.body.as_str(),
+            asks_human: draft.asks_human,
             now: draft.now,
         },
     )
@@ -465,11 +521,13 @@ async fn write_message(
                 addressed_as: recipient.addressed_as,
                 delivered_at: None,
                 acknowledged_at: None,
+                pushed_at: None,
                 reachable: None,
             })
             .collect(),
         choices,
         header,
+        asks_human: draft.asks_human,
     })
 }
 
@@ -492,6 +550,7 @@ pub(crate) async fn send_from_fold_in_tx(
         parent: None,
         body,
         choices: None,
+        asks_human: false,
         recipients,
         now,
     };
@@ -532,6 +591,7 @@ pub(crate) async fn ask_humans_in_tx(
         parent: None,
         body: question.body,
         choices: question.choices,
+        asks_human: false,
         recipients,
         now: question.now,
     };

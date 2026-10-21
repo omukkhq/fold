@@ -694,12 +694,15 @@ async fn threads_list_newest_activity_first_with_filters_and_pages() {
     let fixture = Fixture::new().await;
     let first = fixture
         .messages
-        .send(
+        .send_marked(
             &agent("frontend"),
             SendMessage {
                 task: Some(t(1)),
                 ..message(&["humans"], "q")
             },
+            None,
+            None,
+            true,
         )
         .await
         .unwrap()
@@ -735,7 +738,7 @@ async fn threads_list_newest_activity_first_with_filters_and_pages() {
     assert_eq!(thread.task, Some(t(1)));
     assert!(
         thread.awaiting_human,
-        "an agent's reply does not answer a question to humans"
+        "an agent's reply does not answer an ask to humans"
     );
     assert_eq!(
         thread.participants,

@@ -9,6 +9,8 @@ import {
   findThread,
   replyPlaceholder,
   replyTargets,
+  waitingCount,
+  waitingLabel,
 } from "./filters";
 
 const threads = [
@@ -114,5 +116,17 @@ describe("filterLabel", () => {
   it("names the filter and its value once set", () => {
     expect(filterLabel("Agent", undefined)).toBe("Agent");
     expect(filterLabel("Agent", "frontend")).toBe("Agent: frontend");
+  });
+});
+
+describe("the waiting filter", () => {
+  it("keeps the threads the daemon marks, and counts them as the badge does", () => {
+    expect(filterThreads(threads, { waiting: true }).map((t) => t.id)).toEqual([
+      "m-2",
+    ]);
+    expect(filterThreads(threads, { waiting: false })).toHaveLength(3);
+    expect(waitingCount(threads)).toBe(1);
+    expect(waitingLabel(1)).toBe("Waits for you (1)");
+    expect(waitingLabel(0)).toBe("Waits for you");
   });
 });

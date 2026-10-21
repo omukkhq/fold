@@ -23,6 +23,19 @@ pub fn shell_quote(path: &std::path::Path) -> String {
     }
 }
 
+/// `text` with every control character written as its Rust escape, such as `\n` or `\u{1b}`, so text that agents or remote commits wrote cannot move the cursor, change colours or end a line of the terminal.
+pub fn escape_control(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_control() {
+            escaped.extend(c.escape_default());
+        } else {
+            escaped.push(c);
+        }
+    }
+    escaped
+}
+
 /// `@ana` for the actor label `human:ana`, `@frontend` for an agent: a person as every screen shows one.
 pub fn person(actor: &str) -> String {
     format!("@{}", actor.strip_prefix("human:").unwrap_or(actor))
@@ -74,6 +87,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn control_characters_are_escaped_and_other_text_is_kept() {
+        assert_eq!(escape_control("Add login · ünïcode"), "Add login · ünïcode");
+        assert_eq!(
+            escape_control("a\nb\tc\rd\u{1b}[31m\u{7f}\u{85}"),
+            "a\\nb\\tc\\rd\\u{1b}[31m\\u{7f}\\u{85}"
+        );
+        assert_eq!(escape_control("quote ' and \\ stay"), "quote ' and \\ stay");
+        assert_eq!(escape_control(""), "");
+    }
+
+    #[test]
     fn a_person_is_written_as_at_name() {
         assert_eq!(person("human:ana"), "@ana");
         assert_eq!(person("frontend"), "@frontend");
@@ -103,7 +127,7 @@ mod tests {
 
     #[test]
     fn version_line_names_the_workspace_version() {
-        assert_eq!(version_line(), "fld 0.3.0");
+        assert_eq!(version_line(), "fld 0.4.0");
     }
 
     #[test]

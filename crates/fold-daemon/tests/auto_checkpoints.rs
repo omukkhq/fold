@@ -68,7 +68,7 @@ impl Fixture {
             projects: Projects::default(),
             clock: clock.clone(),
             assets: AssetSource::Embedded,
-            listen: "127.0.0.1".parse().unwrap(),
+            listen: "127.0.0.1:0".parse().unwrap(),
             session_lifetime: DEFAULT_SESSION_LIFETIME,
         });
         let row = ProjectRow {

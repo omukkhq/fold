@@ -48,7 +48,7 @@ impl Fixture {
             projects: Projects::default(),
             clock: clock.clone(),
             assets: AssetSource::Embedded,
-            listen: "127.0.0.1".parse().unwrap(),
+            listen: "127.0.0.1:0".parse().unwrap(),
             session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
         });
         let row = ProjectRow {
@@ -589,6 +589,25 @@ async fn reads_and_writes_return_the_declared_shapes() {
         labels,
         json!({"labels": [{"name": "main", "color": "ink"}]})
     );
+}
+
+#[tokio::test]
+async fn the_task_read_carries_the_proposal_title_files_and_review_claim() {
+    let opened = crate::proposal_tools_support::Fixture::new().await;
+    let frontend = opened.agent("frontend").await;
+    opened.proposal(&frontend, 1, "pub fn y() {}\n").await;
+    let fx = Fixture {
+        project: opened.project,
+        state: opened.state,
+        handle: opened.handle,
+    };
+
+    let view = fx.ok(Method::GET, "/tasks/T-1", None).await;
+    let proposal = &view["proposal"];
+    assert_eq!(proposal["id"], "P-1");
+    assert_eq!(proposal["title"], "Change the library");
+    assert_eq!(proposal["files"], 1);
+    assert_eq!(proposal["review_claim"], Value::Null);
 }
 
 #[tokio::test]

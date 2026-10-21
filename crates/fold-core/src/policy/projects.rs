@@ -56,6 +56,19 @@ pub fn can_enable_git(actor: &Actor) -> Result<(), PolicyDenied> {
     }
 }
 
+/// Taking a project off fold, and bringing it back, changes what every person on the host sees, so only a named human does it; an agent that thinks a project should go asks the human.
+pub fn can_remove_project(actor: &Actor) -> Result<(), PolicyDenied> {
+    if actor.is_human() {
+        Ok(())
+    } else {
+        Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only a human removes a project from fold or adds it back",
+            hint: "ask a human to do it on the projects page",
+        })
+    }
+}
+
 /// `.fold/exclude` holds the human's local rules of what is never recorded, imported or proposed. The human writes it directly; of the agents only the main agent, which talks with the human, adds a pattern, so no worker can hide files from review by excluding them.
 pub fn can_add_exclude_patterns(starter: &Starter) -> Result<(), PolicyDenied> {
     match starter {
@@ -78,6 +91,21 @@ mod tests {
     use super::*;
     use crate::actor::AgentActor;
     use crate::agents::{AgentName, HumanName, WorkerName};
+
+    #[test]
+    fn only_a_human_removes_a_project_or_adds_it_back() {
+        assert!(can_remove_project(&Actor::human(HumanName::parse("ana").unwrap())).is_ok());
+        let agent = Actor::Agent(AgentActor {
+            agent: AgentName::parse("main").unwrap(),
+            worker: WorkerName::parse("main").unwrap(),
+            tags: Vec::new(),
+        });
+        for actor in [agent, Actor::System] {
+            let denied = can_remove_project(&actor).unwrap_err();
+            assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
+            assert_eq!(denied.hint(), "ask a human to do it on the projects page");
+        }
+    }
 
     #[test]
     fn only_a_human_pulls() {

@@ -1,12 +1,12 @@
 use std::fs::{File, TryLockError};
 use std::io;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
-use fold_core::{Clock, FoldError, codes};
+use fold_core::{Clock, FoldError, Timestamp, codes};
 use fold_store::{Store, StoreError};
 use thiserror::Error;
 use tokio::net::TcpListener;
@@ -31,8 +31,8 @@ pub struct DaemonState {
     pub projects: Projects,
     pub clock: Arc<dyn Clock>,
     pub assets: AssetSource,
-    /// The IP address the HTTP listener is bound to. It fixes the auth mode at start and names the hosts the `/api` routes answer.
-    pub listen: IpAddr,
+    /// The address the HTTP listener is bound to, with the port it got. Its IP address fixes the auth mode at start and names the hosts the `/api` routes answer.
+    pub listen: SocketAddr,
     /// How long a session that `POST /api/v1/session` opens lasts.
     pub session_lifetime: Duration,
 }
@@ -40,7 +40,7 @@ pub struct DaemonState {
 impl DaemonState {
     /// True off loopback, where every guarded `/api` route needs the `fold_session` cookie of a live session. `0.0.0.0` and `::` are off loopback, so they need it even for a request from `127.0.0.1`.
     pub fn auth_required(&self) -> bool {
-        !self.listen.is_loopback()
+        !self.listen.ip().is_loopback()
     }
 }
 
@@ -51,6 +51,34 @@ impl std::fmt::Debug for DaemonState {
 }
 
 pub type AppState = Arc<DaemonState>;
+
+/// What started the daemon process: the service that `fld setup` installed, under its manager, or a person or command by hand.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum StartedBy {
+    #[default]
+    Hand,
+    Systemd,
+    Launchd,
+}
+
+/// The daemon process as it reports itself, so a command can tell an old process from the one it expects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DaemonStart {
+    pub started_at: Timestamp,
+    pub pid: u32,
+    pub started_by: StartedBy,
+}
+
+/// The facts of a state that no [`Daemon::start_on_host`] made, such as a test's.
+impl Default for DaemonStart {
+    fn default() -> Self {
+        Self {
+            started_at: Timestamp::EPOCH,
+            pid: 0,
+            started_by: StartedBy::Hand,
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum DaemonError {
@@ -103,22 +131,35 @@ impl Daemon {
         Self::start_with(config, clock, Launcher::default()).await
     }
 
-    /// [`Daemon::start_on_host`] with nothing known about the workers' environment.
+    /// [`Daemon::start_on_host`] with nothing known about the workers' environment, started by hand.
     pub async fn start_with(
         config: DaemonConfig,
         clock: Arc<dyn Clock>,
         launcher: Launcher,
     ) -> Result<RunningDaemon, DaemonError> {
-        Self::start_on_host(config, clock, launcher, WorkerEnvironment::default()).await
+        Self::start_on_host(
+            config,
+            clock,
+            launcher,
+            WorkerEnvironment::default(),
+            StartedBy::Hand,
+        )
+        .await
     }
 
-    /// Takes the host lock, opens the registry, binds the HTTP listener, opens every registered project through its start-up sequence, binds the socket, starts the jobs and the HTTP server, and only then resumes the workers of the projects, so a resumed worker's adapter finds the socket. A failed bind leaves no socket file, no worker and no open project database behind. `clock` goes to every project handle; `launcher` names the programs every worker process runs, and `environment` what the caller found about the environment they run in.
+    /// Takes the host lock, opens the registry, binds the HTTP listener, opens every registered project through its start-up sequence, binds the socket, starts the jobs and the HTTP server, and only then resumes the workers of the projects, so a resumed worker's adapter finds the socket. A failed bind leaves no socket file, no worker and no open project database behind. `clock` goes to every project handle; `launcher` names the programs every worker process runs, and `environment` what the caller found about the environment they run in, and `started_by` what started this process.
     pub async fn start_on_host(
         config: DaemonConfig,
         clock: Arc<dyn Clock>,
         launcher: Launcher,
         environment: WorkerEnvironment,
+        started_by: StartedBy,
     ) -> Result<RunningDaemon, DaemonError> {
+        let start = DaemonStart {
+            started_at: clock.now(),
+            pid: std::process::id(),
+            started_by,
+        };
         let launcher = launcher.with_own_binary();
         let lock = {
             let config = config.clone();
@@ -151,6 +192,7 @@ impl Daemon {
             projects: Projects::default()
                 .with_launcher(launcher)
                 .with_environment(environment)
+                .with_start(start)
                 .with_registry(registry.clone())
                 .with_push_files(config.push_dir()),
             registry,
@@ -159,7 +201,7 @@ impl Daemon {
                 .web_dir
                 .clone()
                 .map_or(AssetSource::Embedded, AssetSource::Dir),
-            listen: config.listen.ip(),
+            listen: http_addr,
             session_lifetime: config.session_lifetime,
         });
         let rows = match fold_store::projects::list_projects(state.registry.read()).await {

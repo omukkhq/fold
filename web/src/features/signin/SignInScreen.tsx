@@ -39,7 +39,7 @@ export function SignInScreen({ mode, redirect }: SignInScreenProps) {
     },
   };
   return (
-    <main className="flex min-h-screen items-center justify-center bg-bg px-24">
+    <main className="flex min-h-dvh items-center justify-center bg-bg px-24">
       {mode === "token" ? <TokenCard {...props} /> : <NameCard {...props} />}
     </main>
   );

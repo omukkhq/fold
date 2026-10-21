@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
@@ -8,7 +8,7 @@ use utoipa_axum::routes;
 use super::actor::Human;
 use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use super::{Project, SocketOnly};
-use crate::daemon::AppState;
+use crate::daemon::{AppState, StartedBy};
 use crate::services::projects::{
     self, PullOutcome, PushOutcome, RecordOutcome, StashOutcome, UnstashOutcome,
 };
@@ -19,7 +19,9 @@ pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list, open))
         .routes(routes!(list_humans))
-        .routes(routes!(show))
+        .routes(routes!(show_daemon))
+        .routes(routes!(show, remove))
+        .routes(routes!(restore))
         .routes(routes!(show_git, enable_git))
         .routes(routes!(collect_garbage))
         .routes(routes!(push))
@@ -33,11 +35,43 @@ pub fn routes() -> OpenApiRouter<AppState> {
 pub struct ProjectSummary {
     pub slug: String,
     pub name: String,
-    /// False while the project failed to open or has not been opened yet.
+    /// The project folder, which holds `.fold/`.
+    pub root: String,
+    /// False while the project failed to open or has not been opened yet, and for a project a person removed.
     pub available: bool,
+    /// UTC milliseconds of the project's last use: when a person last opened it or its newest event happened, whichever is later, and its registration before either. The project switcher lists the most recent first.
+    #[schema(value_type = i64)]
+    pub last_used_at: Timestamp,
+    /// UTC milliseconds of when a person removed the project from fold; null while it is in fold. A removed project keeps its data in its folder's `.fold/`, and the list shows it only when asked to.
+    #[schema(value_type = Option<i64>, required = true)]
+    pub removed_at: Option<Timestamp>,
+    /// What is at the project folder.
+    pub folder: ProjectFolderState,
     /// Null for a project that is not available, and for an open project whose store could not be read.
     #[schema(required = true)]
     pub overview: Option<ProjectOverview>,
+}
+
+/// What is at a project's folder. `present`: the folder holds `.fold/` with its database. `folder_missing`: the folder is gone, as on a disk that is not mounted; fold opens the project again when it is back. `fold_missing`: the folder is there without `.fold/`; only a removed project is listed so, since fold takes any other off by itself. `database_missing`: `.fold/` holds no database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectFolderState {
+    Present,
+    FolderMissing,
+    FoldMissing,
+    DatabaseMissing,
+}
+
+impl From<crate::projects::ProjectFolder> for ProjectFolderState {
+    fn from(folder: crate::projects::ProjectFolder) -> Self {
+        use crate::projects::ProjectFolder;
+        match folder {
+            ProjectFolder::Present => Self::Present,
+            ProjectFolder::RootMissing => Self::FolderMissing,
+            ProjectFolder::FoldMissing => Self::FoldMissing,
+            ProjectFolder::DatabaseMissing => Self::DatabaseMissing,
+        }
+    }
 }
 
 /// What the project list shows of an open project.
@@ -128,6 +162,21 @@ impl From<projects::ProjectOverview> for ProjectOverview {
     }
 }
 
+impl From<projects::ProjectEntry> for ProjectSummary {
+    fn from(entry: projects::ProjectEntry) -> Self {
+        Self {
+            slug: entry.slug,
+            name: entry.name,
+            root: entry.root.to_string_lossy().into_owned(),
+            available: entry.available,
+            last_used_at: entry.last_used_at,
+            removed_at: entry.removed_at,
+            folder: entry.folder.into(),
+            overview: entry.overview.map(Into::into),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ProjectList {
     pub projects: Vec<ProjectSummary>,
@@ -145,26 +194,34 @@ pub struct OpenedProject {
     pub name: String,
 }
 
-/// Every registered project and whether the daemon has it open. A project whose `.fold/` was deleted is removed from fold before the list is read, so it is not in the list.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ListProjectsQuery {
+    /// List the projects a person removed from fold too; they are left out without it.
+    #[serde(default)]
+    pub include_removed: bool,
+}
+
+/// Every project in fold and whether the daemon has it open, ordered by slug; with `include_removed`, the projects a person removed too. A project whose `.fold/` was deleted is removed from fold before the list is read, so it is not in the list.
 #[utoipa::path(
     get,
     path = "/api/v1/projects",
     operation_id = "list_projects",
+    params(ListProjectsQuery),
     responses(
         (status = 200, description = "The registered projects", body = ProjectList),
+        (status = 400, description = "`invalid_request`: `include_removed` is not `true` or `false`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
-pub async fn list(State(state): State<AppState>) -> Result<Json<ProjectList>, ApiError> {
-    let projects = projects::list(&state)
+pub async fn list(
+    State(state): State<AppState>,
+    ApiQuery(query): ApiQuery<ListProjectsQuery>,
+) -> Result<Json<ProjectList>, ApiError> {
+    let projects = projects::list(&state, query.include_removed)
         .await?
         .into_iter()
-        .map(|entry| ProjectSummary {
-            slug: entry.slug,
-            name: entry.name,
-            available: entry.available,
-            overview: entry.overview.map(Into::into),
-        })
+        .map(ProjectSummary::from)
         .collect();
     Ok(Json(ProjectList { projects }))
 }
@@ -193,7 +250,75 @@ pub async fn list_humans(State(state): State<AppState>) -> Result<Json<HumanList
     }))
 }
 
-/// One open project.
+/// What started the daemon process.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DaemonStartedBy {
+    /// A person or a command such as `fld serve` or `fld claude`, outside the service.
+    Hand,
+    /// The systemd user service that `fld setup` installed.
+    Systemd,
+    /// The launchd agent that `fld setup` installed.
+    Launchd,
+}
+
+impl From<StartedBy> for DaemonStartedBy {
+    fn from(started_by: StartedBy) -> Self {
+        match started_by {
+            StartedBy::Hand => Self::Hand,
+            StartedBy::Systemd => Self::Systemd,
+            StartedBy::Launchd => Self::Launchd,
+        }
+    }
+}
+
+/// What the running daemon is, for `fld` and `fld doctor` to report it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DaemonView {
+    /// The fold version the daemon runs, such as `0.3.0`.
+    pub version: String,
+    /// The address and port the HTTP listener is bound to, such as `127.0.0.1:7420`.
+    pub listen: String,
+    /// The process id of the daemon.
+    pub pid: u32,
+    /// UTC milliseconds of the daemon's start.
+    #[schema(value_type = i64)]
+    pub started_at: Timestamp,
+    pub started_by: DaemonStartedBy,
+    /// The file name of the login shell the daemon ran at its start to read the workers' environment, such as `bash`; null when it knows none.
+    #[schema(required = true, example = "bash")]
+    pub shell: Option<String>,
+    /// UTC milliseconds of the moment the daemon started to run that shell; a shell startup file changed after it holds changes the workers lack until `fld restart`. Null when it ran none.
+    #[schema(value_type = Option<i64>, required = true)]
+    pub shell_read_at: Option<Timestamp>,
+}
+
+/// The daemon's version, process and start, and the address its web interface listens on. Socket only, so a command learns the port the daemon got instead of the one its configuration asked for.
+#[utoipa::path(
+    get,
+    path = "/api/v1/daemon",
+    operation_id = "show_daemon",
+    responses(
+        (status = 200, description = "The running daemon", body = DaemonView),
+        (status = 404, description = "Not on the socket", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn show_daemon(_socket: SocketOnly, State(state): State<AppState>) -> Json<DaemonView> {
+    let start = state.projects.start();
+    let environment = state.projects.environment();
+    Json(DaemonView {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        listen: state.listen.to_string(),
+        pid: start.pid,
+        started_at: start.started_at,
+        started_by: start.started_by.into(),
+        shell: environment.shell.clone(),
+        shell_read_at: environment.shell_read_at,
+    })
+}
+
+/// One open project. Reading it notes that a person uses the project now, which orders the recent projects of the project switcher.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}",
@@ -206,13 +331,63 @@ pub async fn list_humans(State(state): State<AppState>) -> Result<Json<HumanList
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
-pub async fn show(Project(handle): Project) -> Result<Json<ProjectSummary>, ApiError> {
-    Ok(Json(ProjectSummary {
-        slug: handle.slug.clone(),
-        name: handle.name.clone(),
-        available: true,
-        overview: Some(projects::overview(&handle).await?.into()),
-    }))
+pub async fn show(
+    State(state): State<AppState>,
+    Project(handle): Project,
+) -> Result<Json<ProjectSummary>, ApiError> {
+    Ok(Json(projects::show(&state, &handle).await?.into()))
+}
+
+/// A named human removes the project from fold: the daemon closes it and leaves it out of the project list, and its data stays in the folder's `.fold/`. `fld claude`, `fld new` or `fld init` in the folder, or the restore route, brings it back under its slug. Removing a removed project changes nothing. While a worker of the project runs, the removal is refused.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/projects/{slug}",
+    operation_id = "remove_project",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "The project as the list shows it after the removal", body = ProjectSummary),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`project_not_found`: the slug is not registered", body = ErrorEnvelope),
+        (status = 409, description = "`project_workers_running` with the running agents in `details.workers`: pause the project or stop them first", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn remove(
+    human: Human,
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<Json<ProjectSummary>, ApiError> {
+    Ok(Json(
+        projects::remove(&state, &human.actor(), &slug)
+            .await?
+            .into(),
+    ))
+}
+
+/// A named human brings back a project a person removed, while its folder holds the project's `.fold/`: it is in fold again under its slug and the daemon opens it. A project in fold stays as it is.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/restore",
+    operation_id = "restore_project",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "The project as the list shows it after it came back", body = ProjectSummary),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`project_not_found`: the slug is not registered", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable` with `details.reason` `folder_missing`, `fold_missing` or `database_missing`: the folder does not hold the project, which stays removed", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn restore(
+    human: Human,
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<Json<ProjectSummary>, ApiError> {
+    Ok(Json(
+        projects::restore(&state, &human.actor(), &slug)
+            .await?
+            .into(),
+    ))
 }
 
 /// The project's Git repository and the state of its remotes.
@@ -311,7 +486,7 @@ pub async fn show_git(Project(handle): Project) -> Result<Json<ProjectGit>, ApiE
     Ok(Json(projects::git_status(&handle).await?.into()))
 }
 
-/// Opens a project that was registered after the daemon started. Socket only; an open project answers the same again, unless its database was replaced: the daemon then closes it and opens the folder as it is now. A folder that is there without `.fold/`, as after its fold data was deleted, is removed from fold and answers `project_not_found`; a missing folder or a `.fold/` without its database keeps the project and answers `project_unavailable` with `details.reason` `folder_missing` or `database_missing`.
+/// Opens a project that was registered after the daemon started, for a `fld` command in its folder; a project a person removed comes back into fold first. Socket only; an open project answers the same again, unless its database was replaced: the daemon then closes it and opens the folder as it is now. A folder that is there without `.fold/`, as after its fold data was deleted, is removed from fold and answers `project_not_found`; a missing folder or a `.fold/` without its database keeps the project and answers `project_unavailable` with `details.reason` `folder_missing` or `database_missing`.
 #[utoipa::path(
     post,
     path = "/api/v1/projects",

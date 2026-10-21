@@ -457,3 +457,70 @@ async fn fld_claude_outside_a_project_fails_with_a_hint_and_runs_nothing() {
     );
     assert!(daemons(&host.default_socket()).is_empty());
 }
+
+#[tokio::test]
+async fn fld_claude_brings_a_removed_project_back_before_claude_starts() {
+    let host = Host::new().await;
+    claude_user::add(&user_files(&host)).unwrap();
+    let registry = fold_store::Store::open_registry(&host.data_home().join("fold/registry.db"))
+        .await
+        .unwrap();
+    let now = fold_core::Timestamp::from_millis(5).unwrap();
+    registry
+        .write(async |tx| fold_store::projects::set_removed(tx, "app", now).await)
+        .await
+        .unwrap();
+
+    let output = fld_claude(&host, &[], &host.root).await;
+    let guard = DaemonGuard(daemons(&host.default_socket()));
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    assert_eq!(
+        text(&output.stdout).lines().next(),
+        Some("project app is back in fold")
+    );
+    assert_eq!(claude_args(&output)[..2], ["--name", "main"]);
+    let found = fold_store::projects::find_registration(registry.read(), "app")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.removed_at, None);
+    registry.close().await.unwrap();
+    guard.stop().await;
+}
+
+#[tokio::test]
+async fn fld_claude_notes_that_a_person_uses_the_project() {
+    let host = Host::new().await;
+    claude_user::add(&user_files(&host)).unwrap();
+    let registry = fold_store::Store::open_registry(&host.data_home().join("fold/registry.db"))
+        .await
+        .unwrap();
+    let at = |millis| fold_core::Timestamp::from_millis(millis).unwrap();
+    let far = at(i64::from(i32::MAX) * 1_000);
+    assert!(
+        registry
+            .write(async |tx| fold_store::projects::touch_project(tx, "app", at(5), far).await)
+            .await
+            .unwrap()
+    );
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+
+    let output = fld_claude(&host, &[], &host.root).await;
+    let guard = DaemonGuard(daemons(&host.default_socket()));
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let found = fold_store::projects::find_registration(registry.read(), "app")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        i128::from(found.last_used_at.as_millis()) >= before as i128,
+        "{:?}",
+        found.last_used_at
+    );
+    assert_eq!(found.removed_at, None);
+    registry.close().await.unwrap();
+    guard.stop().await;
+}

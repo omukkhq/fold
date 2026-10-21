@@ -45,7 +45,7 @@ describe("proposal reads", () => {
       },
     });
     const list = await listProposals("demo");
-    expect(list.map((p) => p.id)).toEqual(["P-1", "P-2"]);
+    expect(list.proposals.map((p) => p.id)).toEqual(["P-1", "P-2"]);
     expect(calls[0]?.search.toString()).toBe("");
   });
 

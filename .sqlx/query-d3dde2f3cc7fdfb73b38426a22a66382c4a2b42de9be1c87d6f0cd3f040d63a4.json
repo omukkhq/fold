@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT last_seq AS \"last_seq!: i64\" FROM worker_cursors WHERE worker_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "last_seq!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_cursors",
+            "name": "last_seq"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d3dde2f3cc7fdfb73b38426a22a66382c4a2b42de9be1c87d6f0cd3f040d63a4"
+}

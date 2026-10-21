@@ -19,6 +19,9 @@ pub enum StoreError {
     },
     #[error("the database was written by a newer fold (schema version {version})")]
     SchemaTooNew { version: i64 },
+    /// Only a reader that never migrates sees it; an open that migrates brings the schema up to date instead.
+    #[error("the database lacks migrations of this fold")]
+    SchemaOutdated,
     /// A caller handed the store a value it refuses to write.
     #[error("invalid input: {0}")]
     Invalid(&'static str),

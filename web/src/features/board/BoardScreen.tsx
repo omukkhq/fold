@@ -66,7 +66,7 @@ export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
   }
 
   return (
-    <div className="flex flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <PausedBanner slug={slug} />
       {asOf === null ? null : (
         <ReconnectingBanner
@@ -94,7 +94,10 @@ export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
       />
       {/* The columns dim while they show the board as of an earlier time. */}
       <div
-        className={cn("flex flex-1 flex-col", asOf !== null && "opacity-55")}
+        className={cn(
+          "flex min-h-0 flex-1 flex-col",
+          asOf !== null && "opacity-55",
+        )}
       >
         {body}
       </div>

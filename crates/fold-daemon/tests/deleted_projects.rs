@@ -27,17 +27,17 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 /// A host whose registry holds the project `app`, open in a daemon state with agent `frontend`, task `T-1` and its live workspace.
-struct Running {
+pub(crate) struct Running {
     _dir: TempDir,
-    host: HostPaths,
-    clock: ManualClock,
-    root: PathBuf,
-    state: AppState,
-    handle: Arc<ProjectHandle>,
+    pub(crate) host: HostPaths,
+    pub(crate) clock: ManualClock,
+    pub(crate) root: PathBuf,
+    pub(crate) state: AppState,
+    pub(crate) handle: Arc<ProjectHandle>,
     workspace: WorkspaceId,
 }
 
-fn frontend() -> Actor {
+pub(crate) fn frontend() -> Actor {
     let worker = WorkerName::parse("frontend").unwrap();
     Actor::Agent(AgentActor {
         agent: worker.agent(),
@@ -47,7 +47,7 @@ fn frontend() -> Actor {
 }
 
 impl Running {
-    async fn start() -> Self {
+    pub(crate) async fn start() -> Self {
         let dir = TempDir::new().unwrap();
         let host = HostPaths::new(dir.path().join("data").to_str(), None).unwrap();
         let clock = ManualClock::new();
@@ -64,7 +64,7 @@ impl Running {
             registry,
             clock: Arc::new(clock.clone()),
             assets: AssetSource::Embedded,
-            listen: "127.0.0.1".parse().unwrap(),
+            listen: "127.0.0.1:0".parse().unwrap(),
             session_lifetime: DEFAULT_SESSION_LIFETIME,
         });
         let handle = project_service::open(&state, "app").await.unwrap();
@@ -108,7 +108,7 @@ impl Running {
         Ok(created.workspace.id)
     }
 
-    fn fold_dir(&self) -> PathBuf {
+    pub(crate) fn fold_dir(&self) -> PathBuf {
         self.root.join(".fold")
     }
 
@@ -128,7 +128,7 @@ impl Running {
         (status, serde_json::from_slice(&bytes).unwrap())
     }
 
-    async fn close(self) {
+    pub(crate) async fn close(self) {
         for handle in self.state.projects.handles() {
             handle.bus.close();
             handle.stop_tasks(Duration::from_secs(5)).await;
@@ -138,12 +138,12 @@ impl Running {
     }
 }
 
-fn closed(handle: &ProjectHandle) -> bool {
+pub(crate) fn closed(handle: &ProjectHandle) -> bool {
     *handle.bus.closing().borrow() && handle.store.read().is_closed()
 }
 
 /// Every file and directory below `dir`.
-fn entries(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn entries(dir: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut pending = vec![dir.to_owned()];
     while let Some(at) = pending.pop() {
@@ -163,7 +163,7 @@ fn entries(dir: &Path) -> Vec<PathBuf> {
 }
 
 impl Running {
-    async fn registered(&self) -> bool {
+    pub(crate) async fn registered(&self) -> bool {
         fold_store::projects::find_project(self.state.registry.read(), "app")
             .await
             .unwrap()
@@ -284,7 +284,7 @@ async fn every_check_point_removes_a_project_whose_fold_was_deleted() {
         match point {
             CheckPoint::List => {
                 assert!(
-                    project_service::list(&running.state)
+                    project_service::list(&running.state, false)
                         .await
                         .unwrap()
                         .is_empty()
@@ -354,7 +354,10 @@ async fn a_project_that_keeps_its_fold_is_never_removed() {
         0
     );
     assert_eq!(
-        project_service::list(&running.state).await.unwrap().len(),
+        project_service::list(&running.state, false)
+            .await
+            .unwrap()
+            .len(),
         1
     );
     assert_eq!(running.get("").await.0, StatusCode::OK);
@@ -383,7 +386,7 @@ async fn a_fold_dir_that_cannot_be_read_is_never_removed() {
     // A root user reads the directory anyway, and the check has nothing to prove then.
     let denied = std::fs::metadata(running.fold_dir().join("fold.db")).is_err();
     let swept = project_service::sweep_deleted(&running.state).await;
-    let listed = project_service::list(&running.state).await;
+    let listed = project_service::list(&running.state, false).await;
     let (status, _) = running.get("").await;
     std::fs::set_permissions(running.fold_dir(), mode(0o755)).unwrap();
     if denied {
@@ -460,7 +463,7 @@ async fn a_missing_folder_keeps_the_project_and_it_opens_again_when_the_folder_i
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"]["code"], "project_unavailable");
     assert_eq!(body["error"]["details"]["reason"], "folder_missing");
-    let listed = project_service::list(&running.state).await.unwrap();
+    let listed = project_service::list(&running.state, false).await.unwrap();
     assert_eq!(listed.len(), 1);
     assert!(!listed[0].available);
     assert_eq!(
@@ -498,7 +501,7 @@ async fn a_folder_missing_at_the_start_opens_once_it_is_back() {
         registry: registry.clone(),
         clock: Arc::new(running.clock.clone()),
         assets: AssetSource::Embedded,
-        listen: "127.0.0.1".parse().unwrap(),
+        listen: "127.0.0.1:0".parse().unwrap(),
         session_lifetime: DEFAULT_SESSION_LIFETIME,
     });
     let row = fold_store::projects::find_project(registry.read(), "app")

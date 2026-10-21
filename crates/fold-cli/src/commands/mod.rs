@@ -1,4 +1,5 @@
 pub mod gc;
+pub mod log;
 pub mod pause;
 pub mod record;
 pub mod remote;

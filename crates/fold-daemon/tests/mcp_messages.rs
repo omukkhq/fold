@@ -157,7 +157,7 @@ fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
 }
 
 #[tokio::test]
-async fn the_four_tools_are_listed_with_described_inputs() {
+async fn the_message_tools_are_listed_with_described_inputs() {
     let fixture = Fixture::new().await;
     let client = fixture.connect("frontend").await;
     let tools = client.list_all_tools().await.unwrap();
@@ -166,6 +166,7 @@ async fn the_four_tools_are_listed_with_described_inputs() {
         "get_inbox",
         "get_thread",
         "acknowledge_message",
+        "mark_answered",
     ] {
         let tool = tools
             .iter()
@@ -456,4 +457,44 @@ async fn the_message_tools_need_a_registered_agent() {
     let result = call_raw(&client, "get_inbox", json!({})).await;
     assert_eq!(body(&result)["error"]["code"], "agent_not_registered");
     assert_eq!(footer(&result), None);
+}
+
+#[tokio::test]
+async fn an_ask_to_a_human_shows_its_mark_and_its_sender_records_an_answer_given_elsewhere() {
+    let fixture = Fixture::new().await;
+    let frontend = fixture.connect("frontend").await;
+    let backend = fixture.connect("backend").await;
+    let sent = call(
+        &frontend,
+        "send_message",
+        json!({"to": ["human:tanim", "backend"], "body": "which one?", "asks_human": true}),
+    )
+    .await;
+    assert_eq!(sent["id"], "m-1");
+    let inbox = call(&backend, "get_inbox", json!({})).await;
+    assert_eq!(inbox["messages"][0]["asks_human"], true);
+    let thread = call(&backend, "get_thread", json!({"thread": "m-1"})).await;
+    assert_eq!(thread["messages"][0]["asks_human"], true);
+    let report = call(
+        &frontend,
+        "send_message",
+        json!({"to": ["humans"], "body": "done"}),
+    )
+    .await;
+    let thread = call(&backend, "get_thread", json!({"thread": report["id"]})).await;
+    assert!(thread["messages"][0].get("asks_human").is_none());
+    let no_human = call_raw(
+        &frontend,
+        "send_message",
+        json!({"to": ["backend"], "body": "x", "asks_human": true}),
+    )
+    .await;
+    assert_eq!(body(&no_human)["error"]["code"], "invalid_request");
+    let denied = call_raw(&backend, "mark_answered", json!({"message": "m-1"})).await;
+    assert_eq!(body(&denied)["error"]["code"], "ask_close_denied");
+    assert!(body(&denied)["error"]["hint"].is_string());
+    let answered = call(&frontend, "mark_answered", json!({"message": "m-1"})).await;
+    assert_eq!(answered, json!({"answered": "m-1"}));
+    let again = call_raw(&frontend, "mark_answered", json!({"message": "m-1"})).await;
+    assert_eq!(body(&again)["error"]["code"], "ask_not_open");
 }

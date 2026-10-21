@@ -120,7 +120,7 @@ pub struct AnswerWorkerQuestionBody {
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NeedsYouItemKind {
-    /// A question with choices from an agent to the humans, or a worker's `AskUserQuestion` call, that no human has answered in its thread. A plain message to the humans is not an item.
+    /// An open ask from an agent to a human: a message the agent marked as asking, a question with choices, or a worker's `AskUserQuestion` call, with no human reply in its thread and no closure. A report to the humans is not an item.
     Question,
     /// A worker's permission question.
     Permission,
@@ -191,9 +191,12 @@ pub struct NeedsYouEntry {
     pub proposal: Option<String>,
     #[schema(required = true, example = "RQ-4")]
     pub request: Option<String>,
-    /// The human a `human_review` or `request_draft` waits for, or whose change a `human_change` is; null when any human may answer.
+    /// The human a `human_review` or a `request_draft` waits for, or whose change a `human_change` is; null when any human may answer.
     #[schema(required = true, example = "tanim")]
     pub human: Option<String>,
+    /// The humans a `question` names, in name order, when none of its recipients is `humans`: it waits for each of them, as their Messages count does. Empty when any human may answer, and for every other kind.
+    #[schema(example = json!(["ana", "bob"]))]
+    pub humans: Vec<String>,
     /// The options of a `question` with choices; empty otherwise.
     pub choices: Vec<MessageChoice>,
     /// The short header of a `question`, such as `Chart library`.
@@ -251,6 +254,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             proposal: item.proposal.map(|id| id.to_string()),
             request: item.request.map(|id| id.to_string()),
             human: item.human.map(|human| human.to_string()),
+            humans: item.humans.iter().map(ToString::to_string).collect(),
             choices: item.choices.into_iter().map(MessageChoice::from).collect(),
             header: item.header,
             title: item.title,
@@ -324,7 +328,7 @@ pub async fn answer_worker_question(
     Ok(Json(answered.into()))
 }
 
-/// Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, and a worker whose turns fail before they reach the model. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, and with the live `worker.output` steps `result` and `result_error`, which end a turn.
+/// Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, and a worker whose turns fail before they reach the model. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, and with the live `worker.output` steps `result` and `result_error`, which end a turn.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/needs-you",

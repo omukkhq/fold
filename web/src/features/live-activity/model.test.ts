@@ -101,16 +101,27 @@ describe("attention", () => {
       stalled: null,
       staleClaim: false,
     });
-    expect(attentionView([{ kind: "stalled" }], 0, 7 * 60_000)).toEqual({
+    expect(
+      attentionView([{ kind: "stalled", closable: false }], 0, 7 * 60_000),
+    ).toEqual({
       stalled: "no edits for 7 min",
       staleClaim: false,
     });
-    expect(attentionView([{ kind: "stale_claim" }], 0, 1000)).toEqual({
+    expect(
+      attentionView([{ kind: "stale_claim", closable: false }], 0, 1000),
+    ).toEqual({
       stalled: null,
       staleClaim: true,
     });
     expect(
-      attentionView([{ kind: "question" }, { kind: "human_review" }], 0, 1000),
+      attentionView(
+        [
+          { kind: "question", closable: true },
+          { kind: "human_review", closable: false },
+        ],
+        0,
+        1000,
+      ),
     ).toEqual({ stalled: null, staleClaim: false });
   });
 

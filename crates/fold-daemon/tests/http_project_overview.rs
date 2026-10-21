@@ -1,15 +1,17 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use fold_core::AgentName;
 use fold_core::tree::FlatTree;
-use fold_daemon::daemon::{AppState, DaemonState};
+use fold_daemon::daemon::{AppState, DaemonStart, DaemonState, StartedBy};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::router;
 use fold_daemon::projects::Projects;
 use fold_daemon::services::agents::AgentService;
+use fold_daemon::services::agents::environment::WorkerEnvironment;
 use fold_store::StoreError;
 use fold_store::projects::{self as registry, ProjectRow};
 use fold_store::testing::TestProject;
@@ -55,7 +57,7 @@ fn state_of(project: &TestProject) -> AppState {
         projects: Projects::default(),
         clock: Arc::new(project.clock().clone()),
         assets: AssetSource::Embedded,
-        listen: "127.0.0.1".parse().unwrap(),
+        listen: "127.0.0.1:0".parse().unwrap(),
         session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
     })
 }
@@ -155,9 +157,71 @@ async fn an_unavailable_project_lists_only_its_slug_name_and_availability() {
     assert_eq!(
         body,
         json!({"projects": [
-            {"slug": "late", "name": "Project late", "available": false, "overview": null}
+            {
+                "slug": "late",
+                "name": "Project late",
+                "root": project.paths().root().to_str().unwrap(),
+                "available": false,
+                "last_used_at": project.now().as_millis(),
+                "removed_at": null,
+                "folder": "present",
+                "overview": null
+            }
         ]})
     );
+}
+
+#[tokio::test]
+#[cfg(test)]
+async fn a_person_who_opens_a_project_makes_it_used_at_most_once_per_ten_seconds() {
+    let project = TestProject::new().await;
+    let registered = project.now().as_millis();
+    let state = state_of(&project);
+    let row = register(&project, "demo").await;
+    state
+        .projects
+        .open(&row, state.clock.clone())
+        .await
+        .unwrap();
+    let listed = async || {
+        let (status, body) = call(&state, Method::GET, "/api/v1/projects", None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body["projects"][0]["last_used_at"].as_i64().unwrap()
+    };
+    assert_eq!(listed().await, registered);
+
+    project.clock().advance(Duration::from_secs(60)).unwrap();
+    let opened = project.now().as_millis();
+    let (status, shown) = call(&state, Method::GET, "/api/v1/projects/demo", None).await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(shown["last_used_at"].as_i64(), Some(opened));
+    assert_eq!(listed().await, opened);
+
+    project.clock().advance(Duration::from_secs(5)).unwrap();
+    let (_, shown) = call(&state, Method::GET, "/api/v1/projects/demo", None).await;
+    assert_eq!(
+        shown["last_used_at"].as_i64(),
+        Some(opened),
+        "inside the period"
+    );
+    project.clock().advance(Duration::from_secs(5)).unwrap();
+    let (_, shown) = call(&state, Method::GET, "/api/v1/projects/demo", None).await;
+    assert_eq!(
+        shown["last_used_at"].as_i64(),
+        Some(project.now().as_millis())
+    );
+
+    // A new event is a use too.
+    project.clock().advance(Duration::from_secs(60)).unwrap();
+    let (status, body) = call(
+        &state,
+        Method::POST,
+        "/api/v1/projects/demo/tasks",
+        Some(json!({"title": "One"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(listed().await, project.now().as_millis());
 }
 
 #[tokio::test]
@@ -244,4 +308,58 @@ async fn the_git_route_reports_the_repository_the_remotes_and_the_last_push_of_e
     let (_, body) = call(&state, Method::GET, "/api/v1/projects/demo/git", None).await;
     assert_eq!(body["remotes"][1]["failed"], Value::Null);
     assert_eq!(body["remotes"][1]["pushed"]["revision"], "r1");
+}
+
+#[tokio::test]
+async fn the_socket_names_the_daemons_version_port_process_and_shell_read() {
+    let project = TestProject::new().await;
+    let started_at = fold_core::Timestamp::from_millis(1_790_000_000_000).unwrap();
+    let read_at = fold_core::Timestamp::from_millis(1_790_000_000_250).unwrap();
+    let state: AppState = Arc::new(DaemonState {
+        registry: project.registry().clone(),
+        projects: Projects::default()
+            .with_start(DaemonStart {
+                started_at,
+                pid: 4242,
+                started_by: StartedBy::Systemd,
+            })
+            .with_environment(WorkerEnvironment {
+                shell: Some("bash".to_owned()),
+                shell_read_at: Some(read_at),
+                ..WorkerEnvironment::default()
+            }),
+        clock: Arc::new(project.clock().clone()),
+        assets: AssetSource::Embedded,
+        listen: "127.0.0.1:47123".parse().unwrap(),
+        session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
+    });
+    let request = || {
+        Request::builder()
+            .method(Method::GET)
+            .uri("/api/v1/daemon")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let response = fold_daemon::http::socket_router(state.clone())
+        .oneshot(request())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body,
+        json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "listen": "127.0.0.1:47123",
+            "pid": 4242,
+            "started_at": 1_790_000_000_000_i64,
+            "started_by": "systemd",
+            "shell": "bash",
+            "shell_read_at": 1_790_000_000_250_i64,
+        })
+    );
+
+    let (status, body) = call(&state, Method::GET, "/api/v1/daemon", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }

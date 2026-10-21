@@ -435,7 +435,7 @@ impl Harness {
         ids(&self.call(agent, "get_inbox", json!({})).await)
     }
 
-    /// Reads every event after the agent's cursor, so its next wait starts from now.
+    /// Reads every event after the main worker's cursor, so its next wait starts from now.
     pub async fn drain_events(&self, agent: &str) {
         tokio::time::timeout(WAIT, async {
             while !self.call(agent, "get_events", json!({"limit": 500})).await["events"]
@@ -791,7 +791,7 @@ async fn open(
             .with_registry(project.registry().clone()),
         clock: clock.clone(),
         assets: AssetSource::Embedded,
-        listen: "127.0.0.1".parse().unwrap(),
+        listen: "127.0.0.1:0".parse().unwrap(),
         session_lifetime: DEFAULT_SESSION_LIFETIME,
     });
     let handle = state.projects.open(row, clock).await.unwrap();

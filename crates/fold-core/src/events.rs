@@ -154,6 +154,8 @@ define_event_types! {
     INTEGRATION_HELD = "integration.held",
     REVIEW_SCOPE_CHOSEN = "review.scope_chosen",
     WORKER_MODEL_UNREACHABLE = "worker.model_unreachable",
+    MESSAGE_PUSHED = "message.pushed",
+    MESSAGE_ASK_CLOSED = "message.ask_closed",
 }
 
 impl EventType {
@@ -169,11 +171,12 @@ impl EventType {
         self.0
     }
 
-    /// `workspace.changed`, `agent.presence_changed` and `worker.output` are the live types: they are sent on the bus and never stored.
+    /// `workspace.changed`, `agent.presence_changed`, `worker.output` and `message.pushed` are the live types: they are sent on the bus and never stored.
     pub fn is_live(self) -> bool {
         self == types::WORKSPACE_CHANGED
             || self == types::AGENT_PRESENCE_CHANGED
             || self == types::WORKER_OUTPUT
+            || self == types::MESSAGE_PUSHED
     }
 }
 

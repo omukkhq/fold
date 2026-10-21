@@ -2,8 +2,15 @@ import { ActorText } from "@/people/ActorText";
 import { HumanReviewBadge } from "@/people/HumanReviewBadge";
 import { PersonName } from "@/people/PersonName";
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
-import { Check, GitMerge, GitPullRequest, UserRoundCheck } from "lucide-react";
-import { proposalsQuery } from "@/api/queries";
+import {
+  Check,
+  GitMerge,
+  GitPullRequest,
+  UserCheck,
+  UserRoundCheck,
+} from "lucide-react";
+import { proposalsQuery, proposalsWaitingQuery } from "@/api/queries";
+import { Badge } from "@/components/badge/Badge";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
 import { Menu } from "@/components/overlay/Menu";
@@ -22,6 +29,7 @@ import {
   isNarrowed,
   listHref,
   shownState,
+  waitingLabel,
   type ClaimFilter,
   type ListSearch,
 } from "./filters";
@@ -59,10 +67,11 @@ export function ProposalsScreen({
   onSearch,
 }: ProposalsScreenProps) {
   const { data } = useSuspenseQuery(proposalsQuery(slug));
+  const { data: waitingForYou = [] } = useQuery(proposalsWaitingQuery(slug));
   const now = useNow(true, 30_000);
   const state = shownState(search);
   const counts = countByState(data);
-  const rows = filterProposals(data, search);
+  const rows = filterProposals(data, search, waitingForYou);
   const revisions = useQuery({
     ...revisionsQuery(slug),
     enabled: state === "integrated",
@@ -97,6 +106,19 @@ export function ProposalsScreen({
               },
             }))}
           />
+          <Button
+            aria-pressed={search.waiting === true}
+            variant={search.waiting === true ? "primary" : "secondary"}
+            icon={<UserCheck aria-hidden="true" size={15} />}
+            onClick={() => {
+              onSearch({
+                ...search,
+                waiting: search.waiting ? undefined : true,
+              });
+            }}
+          >
+            {waitingLabel(waitingForYou.length)}
+          </Button>
           <Button
             aria-pressed={search.conflicted === true}
             icon={<GitMerge aria-hidden="true" size={15} />}
@@ -198,6 +220,11 @@ export function ProposalsScreen({
                           <HumanReviewBadge
                             reviewer={p.human_review.reviewer}
                           />
+                        ) : null}
+                        {waitingForYou.includes(p.id) ? (
+                          <Badge tone="needs-you" icon={UserCheck}>
+                            Waits for you
+                          </Badge>
                         ) : null}
                       </span>
                     </td>

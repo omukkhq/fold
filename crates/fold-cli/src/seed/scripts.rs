@@ -365,6 +365,7 @@ fn limit_worker(tasks: &Tasks) -> Script {
                     "to": [format!("{}{HUMAN}", EventActor::HUMAN_PREFIX)],
                     "body": "Should the limit apply per client address or per token?",
                     "task": tasks.limit,
+                    "asks_human": true,
                 }),
             ),
         ],

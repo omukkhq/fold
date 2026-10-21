@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE projects SET removed_at = ? WHERE slug = ? AND removed_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "0936dd2912c3a77d12b136374d8bc29206959a838bde07ec9884e5725218c8b4"
+}

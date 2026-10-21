@@ -351,6 +351,22 @@ describe("patch rules", () => {
     expect(invalidated).toEqual([]);
   });
 
+  it("refetches only the thread of a message_pushed frame", () => {
+    applyEvent(
+      client,
+      slug,
+      guarded({
+        kind: "message_pushed",
+        message: "m-210",
+        thread: "m-208",
+        agent: "backend",
+      }),
+    );
+    expect(invalidated).toEqual([
+      JSON.stringify(keys.messagesThread(slug, "m-208")),
+    ]);
+  });
+
   it("refetches the agents and the workers when a worker's turn starts or ends", () => {
     for (const step of ["init", "result", "result_error"]) {
       invalidated = [];
@@ -624,6 +640,16 @@ describe("invalidation rules", () => {
     expect(hit(keys.task(slug, "T-1"))).toBe(false);
   });
 
+  it("refreshes the linked task, whose question attention an ask opens and its closure ends", () => {
+    for (const type of ["message.sent", "message.ask_closed"]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type, { task: "T-3" }));
+      expect(hit(keys.task(slug, "T-3")), type).toBe(true);
+      expect(hit(keys.board(slug)), type).toBe(true);
+      expect(hit(keys.needsYou(slug)), type).toBe(true);
+    }
+  });
+
   it("refreshes the request whose thread a message joins", () => {
     applyEvent(
       client,
@@ -710,6 +736,22 @@ describe("invalidation rules", () => {
     invalidated = [];
     applyEvent(client, slug, ev("checklist.item_done", { task: "T-3" }));
     expect(hit(keys.needsYou(slug))).toBe(false);
+  });
+
+  it("refreshes the proposals that wait for the human when the human review mark or a review changes", () => {
+    for (const [type, extra] of [
+      ["task.human_review_set", { task: "T-3" }],
+      ["task.human_review_cleared", { task: "T-3" }],
+      ["review.submitted", { proposal: "P-3" }],
+      ["proposal.version_added", { proposal: "P-3" }],
+    ] as const) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type, extra));
+      expect(hit(keys.proposals(slug)), type).toBe(true);
+    }
+    invalidated = [];
+    applyEvent(client, slug, ev("task.updated", { task: "T-3" }));
+    expect(hit(keys.proposals(slug))).toBe(false);
   });
 
   it("refreshes the batches for batch, proposal and review events", () => {

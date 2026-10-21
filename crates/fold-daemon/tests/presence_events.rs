@@ -236,7 +236,7 @@ async fn the_presence_job_sends_the_idle_frame_from_the_clock() {
         projects: Projects::default(),
         clock: Arc::new(clock.clone()),
         assets: AssetSource::Embedded,
-        listen: "127.0.0.1".parse().unwrap(),
+        listen: "127.0.0.1:0".parse().unwrap(),
         session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
     });
     let row = ProjectRow {

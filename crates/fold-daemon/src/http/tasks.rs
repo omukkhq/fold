@@ -105,6 +105,8 @@ pub enum AttentionKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 pub struct AttentionItem {
     pub kind: AttentionKind,
+    /// For a `question`: one of the task's open asks is closable, so a human can mark it answered with the asks route, because it is no worker's `AskUserQuestion`, which only a reply in its thread ends. False for every other kind.
+    pub closable: bool,
 }
 
 impl From<service::AttentionKind> for AttentionKind {
@@ -122,6 +124,7 @@ impl From<service::AttentionItem> for AttentionItem {
     fn from(item: service::AttentionItem) -> Self {
         Self {
             kind: item.kind.into(),
+            closable: item.closable,
         }
     }
 }
@@ -585,7 +588,14 @@ pub struct TaskReview {
 pub struct TaskProposal {
     #[schema(example = "P-3")]
     pub id: String,
+    /// The proposal's title.
+    pub title: String,
     pub state: ProposalState,
+    /// The worker that holds the open review claim; null while no reviewer holds one.
+    #[schema(required = true)]
+    pub review_claim: Option<String>,
+    /// How many files the current version adds, modifies and deletes.
+    pub files: u32,
     /// The current version.
     pub version: u32,
     /// The integration checks of the current version failed, so the proposal is back with its author until a new version.
@@ -794,6 +804,9 @@ impl From<service::TaskDetail> for TaskView {
                 .collect(),
             proposal: detail.proposal.map(|proposal| TaskProposal {
                 id: proposal.id.to_string(),
+                title: proposal.title,
+                review_claim: proposal.review_claim,
+                files: proposal.files,
                 state: proposal.standing.into(),
                 version: proposal.version,
                 checks_failed: proposal.checks_failed,
@@ -1677,8 +1690,8 @@ mod tests {
             service::AttentionKind::Stalled,
             service::AttentionKind::StaleClaim,
         ] {
-            let wire =
-                serde_json::to_value(AttentionItem::from(service::AttentionItem { kind })).unwrap();
+            let wire = serde_json::to_value(AttentionItem::from(service::AttentionItem::of(kind)))
+                .unwrap();
             assert_eq!(wire["kind"], kind.as_str());
         }
     }

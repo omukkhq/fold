@@ -3,15 +3,19 @@ import { focusRing } from "../lib/focus";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter, useRouterState } from "@tanstack/react-router";
-import { ChevronDown, FolderGit2 } from "lucide-react";
+import { ArrowRight, ChevronDown, FolderGit2 } from "lucide-react";
 import { projectsQuery } from "../api/queries";
 import { switchProjectPath } from "../routes/nav";
 import { menuContent, menuItem } from "../components/overlay/menuStyles";
+import { Mono } from "../components/mono/Mono";
+import { recentProjects } from "./projectSwitcherModel";
 
+/** The current project and a menu of the most recently used ones, with the way to every project on the projects page. */
 export function ProjectSwitcher({ slug }: { slug: string }) {
   const router = useRouter();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const projects = useQuery(projectsQuery());
+  const recent = projects.data ? recentProjects(projects.data, slug) : [];
 
   return (
     <Menu.Root>
@@ -47,12 +51,27 @@ export function ProjectSwitcher({ slug }: { slug: string }) {
               void router.navigate({ href: switchProjectPath(pathname, next) });
             }}
           >
-            {projects.data?.map((p) => (
+            {recent.map((p) => (
               <Menu.RadioItem key={p.slug} value={p.slug} className={menuItem}>
-                {p.name}
+                <span className="truncate">{p.name}</span>
+                {p.detail !== null ? (
+                  <Mono className="text-meta font-normal text-text-muted">
+                    {p.detail}
+                  </Mono>
+                ) : null}
               </Menu.RadioItem>
             ))}
           </Menu.RadioGroup>
+          <Menu.Separator className="my-4 h-px bg-border-subtle" />
+          <Menu.Item
+            className={cn(menuItem, "text-primary-text")}
+            onSelect={() => {
+              void router.navigate({ href: "/projects" });
+            }}
+          >
+            See all
+            <ArrowRight size={14} aria-hidden />
+          </Menu.Item>
         </Menu.Content>
       </Menu.Portal>
     </Menu.Root>

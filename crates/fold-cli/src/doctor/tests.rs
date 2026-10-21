@@ -1457,7 +1457,9 @@ fn a_relative_project_directory_is_made_absolute() {
         project: Some(root.join("../demo")),
         socket: None,
     };
-    let sections = collect(&args, &fixture.bare_host(), at(0), &rt()).unwrap();
+    let sections = collect(&args, &fixture.bare_host(), at(0), &rt())
+        .unwrap()
+        .sections;
     assert_eq!(
         sections[1].title,
         format!("project {}", root.canonicalize().unwrap().display())
@@ -1508,6 +1510,70 @@ fn the_report_lists_every_check_with_its_fix_line() {
 }
 
 #[test]
+fn the_summary_repeats_every_failed_and_warned_check_with_its_fix() {
+    let sections = vec![
+        Section {
+            title: "host".to_owned(),
+            checks: vec![
+                Check::ok("one", "fine"),
+                Check::warn("daemon version", "old", "`fld restart`"),
+                Check::fail("daemon claude", "signed out", "`claude auth login`"),
+            ],
+        },
+        Section {
+            title: "project demo".to_owned(),
+            checks: vec![Check::fail("database", "damaged", "restore it")],
+        },
+    ];
+    let mut out = Vec::new();
+    write_summary(&sections, &mut out).unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "summary: 2 failed, 1 warned\n  warn daemon version: fix: `fld restart`\n  fail daemon claude: fix: `claude auth login`\n  fail database (project demo): fix: restore it\n"
+    );
+    assert_eq!(
+        failed_names(&sections),
+        "daemon claude, database (project demo)"
+    );
+    let calm = vec![Section {
+        title: "host".to_owned(),
+        checks: vec![Check::ok("one", "fine")],
+    }];
+    let mut out = Vec::new();
+    write_summary(&calm, &mut out).unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "summary: every check passed\n"
+    );
+}
+
+#[test]
+fn collect_states_a_missing_daemon_in_the_header_and_adds_no_daemon_check() {
+    let fixture = Fixture::new();
+    let args = DoctorArgs {
+        project: None,
+        socket: Some(fixture.path("absent.sock")),
+    };
+    let report = collect(&args, &fixture.bare_host(), at(0), &rt()).unwrap();
+    assert!(
+        report.header[0].starts_with(&format!("fld {} at ", env!("CARGO_PKG_VERSION"))),
+        "{:?}",
+        report.header
+    );
+    assert!(
+        report.header[1].starts_with("daemon: not running; no daemon answers on "),
+        "{:?}",
+        report.header
+    );
+    let names: Vec<_> = report.sections[0]
+        .checks
+        .iter()
+        .map(|check| check.name)
+        .collect();
+    assert!(!names.contains(&"daemon version") && !names.contains(&"daemon shell"));
+}
+
+#[test]
 fn collect_checks_one_project_without_a_daemon() {
     let fixture = Fixture::new();
     let host = fixture.bare_host();
@@ -1517,7 +1583,7 @@ fn collect_checks_one_project_without_a_daemon() {
         project: Some(root.clone()),
         socket: None,
     };
-    let sections = collect(&args, &host, at(0), &rt()).unwrap();
+    let sections = collect(&args, &host, at(0), &rt()).unwrap().sections;
     assert_eq!(sections[0].title, "host");
     assert_eq!(sections[1].title, format!("project {}", root.display()));
     assert_eq!(failed(&sections), 1);
@@ -1535,13 +1601,13 @@ fn collect_reads_the_projects_from_the_registry() {
         project: None,
         socket: None,
     };
-    let none = collect(&args, &host, at(0), &runtime).unwrap();
+    let none = collect(&args, &host, at(0), &runtime).unwrap().sections;
     assert_eq!(none.len(), 1);
 
     let registry = fixture.path("data/fold/registry.db");
     std::fs::create_dir_all(registry.parent().unwrap()).unwrap();
     std::fs::write(&registry, b"garbage").unwrap();
-    let broken = collect(&args, &host, at(0), &runtime).unwrap();
+    let broken = collect(&args, &host, at(0), &runtime).unwrap().sections;
     let check = find(&broken[0].checks, "registry");
     assert_eq!(check.status, Status::Fail);
     assert!(check.fix.as_deref().unwrap().contains("registry.db"));
@@ -1563,7 +1629,7 @@ fn collect_reads_the_projects_from_the_registry() {
             .unwrap();
         store.close().await.unwrap();
     });
-    let listed = collect(&args, &host, at(0), &runtime).unwrap();
+    let listed = collect(&args, &host, at(0), &runtime).unwrap().sections;
     assert_eq!(listed.len(), 2);
     assert_eq!(listed[1].title, "project demo");
     assert_eq!(failed(&listed), 0);
@@ -1636,13 +1702,14 @@ fn the_socket_flag_beats_the_file_and_the_runtime_directory() {
 
 #[test]
 fn errors_carry_their_codes() {
+    let failed = DoctorError::ChecksFailed {
+        failed: 2,
+        names: "daemon claude, database (project demo)".to_owned(),
+    };
+    assert_eq!(failed.code(), Some("doctor_checks_failed"));
     assert_eq!(
-        DoctorError::ChecksFailed { failed: 2 }.code(),
-        Some("doctor_checks_failed")
-    );
-    assert_eq!(
-        DoctorError::ChecksFailed { failed: 2 }.to_string(),
-        "checks failed: 2"
+        failed.to_string(),
+        "checks failed: 2 (daemon claude, database (project demo))"
     );
     assert_eq!(DoctorError::Runtime(io::Error::other("x")).code(), None);
     assert_eq!(DoctorError::from(io::Error::other("x")).code(), None);

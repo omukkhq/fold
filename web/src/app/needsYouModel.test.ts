@@ -3,6 +3,7 @@ import { needsItem } from "@/test/workers";
 import {
   itemsFor,
   needsYouGroups,
+  reviewsWaitingFor,
   pathsText,
   questionText,
   titleText,
@@ -50,6 +51,38 @@ describe("itemsFor", () => {
   it("leaves out what waits for another named human", () => {
     expect(itemsFor(items, "tanim")).toHaveLength(4);
     expect(itemsFor(items, null)).toHaveLength(5);
+  });
+});
+
+describe("itemsFor a question to named humans", () => {
+  const asks = [
+    needsItem({ kind: "question", message: "m-1", humans: ["ana", "bob"] }),
+    needsItem({ kind: "question", message: "m-2" }),
+  ];
+
+  it("shows a question to ana and bob to them and not to carol, as their Messages counts do", () => {
+    const shown = (human: string) =>
+      itemsFor(asks, human).map((item) => item.message);
+    expect(shown("ana")).toEqual(["m-1", "m-2"]);
+    expect(shown("bob")).toEqual(["m-1", "m-2"]);
+    expect(shown("carol")).toEqual(["m-2"]);
+    expect(itemsFor(asks, null)).toHaveLength(2);
+  });
+});
+
+describe("reviewsWaitingFor", () => {
+  const reviews = [
+    needsItem({ kind: "human_review", proposal: "P-1", human: "tanim" }),
+    needsItem({ kind: "human_review", proposal: "P-2" }),
+    needsItem({ kind: "human_review", proposal: "P-3", human: "ana" }),
+    needsItem({ kind: "question", message: "m-4" }),
+  ];
+
+  it("counts the reviews that wait for this human or for any human", () => {
+    expect(reviewsWaitingFor(reviews, "tanim")).toBe(2);
+    expect(reviewsWaitingFor(reviews, "ana")).toBe(2);
+    expect(reviewsWaitingFor(reviews, null)).toBe(3);
+    expect(reviewsWaitingFor([], "tanim")).toBe(0);
   });
 });
 
