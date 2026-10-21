@@ -154,15 +154,14 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
         let found = registration_for_dir_on_host(&host, &cwd).await?;
         let slug = found.row.slug;
         daemon_client::connect(&config).await?;
+        // The daemon's open route notes that a person uses the project, which orders the recent projects of the web interface, and brings a project a person removed back into fold.
+        let client = DaemonClient::new(config.clone(), human.clone());
+        let body = serde_json::json!({ "slug": slug });
+        let opened = client
+            .request(Method::POST, "/api/v1/projects", Some(&body))
+            .await;
         if found.removed_at.is_some() {
-            // The daemon's open route brings a project a person removed back into fold.
-            let client = DaemonClient::new(config.clone(), human.clone());
-            let body = serde_json::json!({ "slug": slug });
-            accepted(
-                &client
-                    .request(Method::POST, "/api/v1/projects", Some(&body))
-                    .await?,
-            )?;
+            accepted(&opened?)?;
             // The note only tells; a terminal that cannot take it does not stop the session.
             let _ = crate::output::line(
                 &mut io::stdout(),
