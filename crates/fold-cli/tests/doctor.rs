@@ -305,11 +305,9 @@ async fn doctor_names_the_running_daemon_and_a_startup_file_changed_after_its_sh
     })
     .await;
     let guard = DaemonGuard(vec![i32::try_from(pid).unwrap()]);
-    // `SHELL` is /bin/sh, whose only startup file is ~/.profile; its time lies past the read without waiting for the clock.
+    // `SHELL` is /bin/sh, whose only startup file is ~/.profile. The daemon read the shell before its socket answered, so a modification time of now lies after the read and not in the future.
     let profile = std::fs::File::create(host.dir.path().join(".profile")).unwrap();
-    profile
-        .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60))
-        .unwrap();
+    profile.set_modified(std::time::SystemTime::now()).unwrap();
 
     let output = host
         .fold(&["doctor"], &host.root)

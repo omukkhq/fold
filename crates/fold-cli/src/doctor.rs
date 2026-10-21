@@ -26,7 +26,7 @@ use crate::init::host_paths;
 use crate::output;
 use crate::platform::{Host, Platform, on_path};
 use crate::serve::{self, DEFAULT_LISTEN, Dirs, FileConfig, read_file_config};
-use crate::{shell_env, status};
+use crate::status;
 use fold_cli::claude_files::{self, shadowing_files};
 use fold_cli::claude_user::{self, UserSetup};
 use fold_daemon::config::{LOCK_FILE, SOCKET_FILE};
@@ -318,13 +318,24 @@ pub(crate) fn collect(
         status::Daemon::Running { start, .. } => start.as_ref(),
         _ => None,
     };
-    let files = match (shell_of(start), host.dirs.home.as_deref()) {
-        (Some(shell), Some(home)) => daemon::startup_files(&shell, home),
+    let zdotdir = std::env::var_os("ZDOTDIR")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute());
+    let files = match (
+        start.and_then(|start| start.shell.as_deref()),
+        host.dirs.home.as_deref(),
+    ) {
+        (Some(shell), Some(home)) => daemon::startup_files(
+            shell,
+            home,
+            zdotdir.as_deref(),
+            host.dirs.config_home.as_deref(),
+        ),
         _ => Vec::new(),
     };
     sections[0]
         .checks
-        .extend(daemon::shell_verdict(start, &files));
+        .extend(daemon::shell_verdict(start, &files, now));
     let projects = match &args.project {
         Some(dir) => {
             let root = absolute_dir(dir);
@@ -362,18 +373,6 @@ pub(crate) fn collect(
         });
     }
     Ok(Report { header, sections })
-}
-
-/// The login shell whose startup files count: the one the daemon names, else the one this terminal's user has.
-fn shell_of(start: Option<&status::Start>) -> Option<String> {
-    if let Some(shell) = start.and_then(|start| start.shell.clone()) {
-        return Some(shell);
-    }
-    let passwd = std::fs::read_to_string("/etc/passwd").ok();
-    let uid = rustix::process::getuid().as_raw();
-    shell_env::login_shell(std::env::var_os("SHELL"), passwd.as_deref(), uid)
-        .as_deref()
-        .and_then(shell_env::shell_name)
 }
 
 /// The shadowing walk climbs the parents of the root, so a relative `--project` is resolved first.

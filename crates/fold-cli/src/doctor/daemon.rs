@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use fold_core::Timestamp;
 
@@ -10,6 +10,7 @@ use crate::status::{Daemon, Manager, Start, service_name};
 const VERSION_NAME: &str = "daemon version";
 const SHELL_NAME: &str = "daemon shell";
 const RESTART_FIX: &str = "`fld restart`, which reads your login shell again";
+const FUTURE_FIX: &str = "`touch` each file whose time lies in the future, which gives it the current time, then `fld restart`, which reads your login shell again";
 
 /// The lines before the checks: this fld and the daemon that answers on `socket`, or why none does. A missing daemon is stated here, never a check.
 pub(crate) fn header_lines(
@@ -122,32 +123,96 @@ pub(crate) fn version_verdict(daemon: &Daemon, fld: &str) -> Option<Check> {
     })
 }
 
-/// The startup files that `shell` reads as a login and interactive shell, in `home`: for bash the first of `~/.bash_profile`, `~/.bash_login` and `~/.profile` that exists, which is the only one bash reads, and `~/.bashrc`, which Debian's `~/.profile` reads; for zsh its four files; for any other shell `~/.profile`. Each file that exists comes as its `~` path with its modification time; its content is never read.
-pub(crate) fn startup_files(shell: &str, home: &Path) -> Vec<(String, Option<Timestamp>)> {
-    let groups: &[&[&str]] = match shell {
-        "bash" => &[&[".bash_profile", ".bash_login", ".profile"], &[".bashrc"]],
-        "zsh" => &[&[".zshenv"], &[".zprofile"], &[".zshrc"], &[".zlogin"]],
-        _ => &[&[".profile"]],
+/// The startup files that `shell` reads as a login and interactive shell, in `home`, each as a group of which the shell reads the first that exists:
+/// - bash: the first of `~/.bash_profile`, `~/.bash_login` and `~/.profile`, and `~/.bashrc`, which Debian's `~/.profile` reads;
+/// - zsh: `.zshenv`, `.zprofile`, `.zshrc` and `.zlogin` in `zdotdir`, else `home`, and `~/.zshenv`, where `ZDOTDIR` is often set;
+/// - fish: `config.fish` and each `conf.d/*.fish` in the `fish` folder of `config_home`, else `~/.config`;
+/// - tcsh: the first of `~/.tcshrc` and `~/.cshrc`, and `~/.login`; csh: `~/.cshrc` and `~/.login`;
+/// - any other shell: `~/.profile`.
+///
+/// Each file that exists comes as its path, with `~` for `home`, and its modification time; its content is never read.
+pub(crate) fn startup_files(
+    shell: &str,
+    home: &Path,
+    zdotdir: Option<&Path>,
+    config_home: Option<&Path>,
+) -> Vec<(String, Option<Timestamp>)> {
+    let in_home =
+        |names: &[&str]| -> Vec<PathBuf> { names.iter().map(|name| home.join(name)).collect() };
+    let groups: Vec<Vec<PathBuf>> = match shell {
+        "bash" => vec![
+            in_home(&[".bash_profile", ".bash_login", ".profile"]),
+            in_home(&[".bashrc"]),
+        ],
+        "zsh" => {
+            let dir = zdotdir.unwrap_or(home);
+            let mut groups = vec![in_home(&[".zshenv"])];
+            if dir != home {
+                groups.push(vec![dir.join(".zshenv")]);
+            }
+            groups.extend([".zprofile", ".zshrc", ".zlogin"].map(|name| vec![dir.join(name)]));
+            groups
+        }
+        "fish" => {
+            let dir = config_home
+                .map_or_else(|| home.join(".config"), Path::to_path_buf)
+                .join("fish");
+            let mut groups = vec![vec![dir.join("config.fish")]];
+            groups.extend(
+                fish_snippets(&dir.join("conf.d"))
+                    .into_iter()
+                    .map(|path| vec![path]),
+            );
+            groups
+        }
+        "tcsh" => vec![in_home(&[".tcshrc", ".cshrc"]), in_home(&[".login"])],
+        "csh" => vec![in_home(&[".cshrc"]), in_home(&[".login"])],
+        _ => vec![in_home(&[".profile"])],
     };
     groups
         .iter()
         .filter_map(|group| {
-            group.iter().find_map(|name| {
-                let meta = std::fs::metadata(home.join(name)).ok()?;
+            group.iter().find_map(|path| {
+                let meta = std::fs::metadata(path).ok()?;
                 let modified = meta
                     .modified()
                     .ok()
                     .and_then(|time| Timestamp::from_system_time(time).ok());
-                Some((format!("~/{name}"), modified))
+                Some((shown(path, home), modified))
             })
         })
         .collect()
 }
 
-/// When the daemon read the login shell, and whether a startup file of `files` changed after that, so the workers lack the change. `None` while no daemon answers or the daemon does not report its read; the version check names that daemon.
+/// The `*.fish` files of `dir`, sorted, which fish reads before `config.fish`.
+fn fish_snippets(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "fish")
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// `path` with `~` for `home`.
+fn shown(path: &Path, home: &Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rest) => format!("~/{}", output::escape_control(&rest.to_string_lossy())),
+        Err(_) => output::escape_control(&path.to_string_lossy()),
+    }
+}
+
+/// When the daemon read the login shell, and whether a startup file of `files` changed after that, so the workers lack the change. A file whose modification time is later than `now` cannot be compared with the read, and a restart does not change that, so it is named on its own. `None` while no daemon answers or the daemon does not report its read; the version check names that daemon.
 pub(crate) fn shell_verdict(
     start: Option<&Start>,
     files: &[(String, Option<Timestamp>)],
+    now: Timestamp,
 ) -> Option<Check> {
     let start = start?;
     let Some(read_at) = start.shell_read_at else {
@@ -161,20 +226,35 @@ pub(crate) fn shell_verdict(
         .as_deref()
         .map(|shell| format!(" ({})", output::escape_control(shell)))
         .unwrap_or_default();
-    let changed: Vec<&str> = files
-        .iter()
-        .filter(|(_, modified)| modified.is_some_and(|modified| modified > read_at))
-        .map(|(name, _)| name.as_str())
-        .collect();
+    let named = |keep: &dyn Fn(Timestamp) -> bool| -> Vec<&str> {
+        files
+            .iter()
+            .filter(|(_, modified)| modified.is_some_and(keep))
+            .map(|(name, _)| name.as_str())
+            .collect()
+    };
+    let future = named(&|modified| modified > now);
+    let changed = named(&|modified| modified > read_at && modified <= now);
+    let mut parts = Vec::new();
     if !changed.is_empty() {
-        return Some(Check::warn(
-            SHELL_NAME,
-            format!(
-                "{} changed after the daemon read your login shell{shell} at {read_at}, so the workers lack the change",
-                changed.join(", ")
-            ),
-            RESTART_FIX,
+        parts.push(format!(
+            "{} changed after the daemon read your login shell{shell} at {read_at}, so the workers lack the change",
+            changed.join(", ")
         ));
+    }
+    if !future.is_empty() {
+        parts.push(format!(
+            "the modification time of {} lies in the future, so doctor cannot tell whether the workers have its content",
+            future.join(", ")
+        ));
+    }
+    if !parts.is_empty() {
+        let fix = if future.is_empty() {
+            RESTART_FIX
+        } else {
+            FUTURE_FIX
+        };
+        return Some(Check::warn(SHELL_NAME, parts.join("; "), fix));
     }
     let names: Vec<&str> = files.iter().map(|(name, _)| name.as_str()).collect();
     Some(Check::ok(
@@ -320,7 +400,7 @@ mod tests {
     fn the_startup_files_follow_the_shell_and_bash_reads_its_first_profile() {
         let home = tempfile::TempDir::new().unwrap();
         let names = |shell: &str| -> Vec<String> {
-            startup_files(shell, home.path())
+            startup_files(shell, home.path(), None, None)
                 .into_iter()
                 .map(|(name, modified)| {
                     assert!(modified.is_some());
@@ -329,13 +409,74 @@ mod tests {
                 .collect()
         };
         assert!(names("bash").is_empty());
-        for name in [".profile", ".bashrc", ".bash_login", ".zshrc", ".zlogin"] {
+        for name in [
+            ".profile",
+            ".bashrc",
+            ".bash_login",
+            ".zshrc",
+            ".zlogin",
+            ".cshrc",
+            ".login",
+        ] {
             std::fs::write(home.path().join(name), "").unwrap();
         }
         assert_eq!(names("bash"), ["~/.bash_login", "~/.bashrc"]);
         assert_eq!(names("zsh"), ["~/.zshrc", "~/.zlogin"]);
         assert_eq!(names("sh"), ["~/.profile"]);
-        assert_eq!(names("fish"), ["~/.profile"]);
+        assert_eq!(names("csh"), ["~/.cshrc", "~/.login"]);
+        assert_eq!(names("tcsh"), ["~/.cshrc", "~/.login"]);
+        std::fs::write(home.path().join(".tcshrc"), "").unwrap();
+        assert_eq!(names("tcsh"), ["~/.tcshrc", "~/.login"]);
+        assert!(names("fish").is_empty());
+    }
+
+    #[test]
+    fn zsh_reads_its_files_in_zdotdir_and_fish_in_its_config_folder() {
+        let home = tempfile::TempDir::new().unwrap();
+        let names = |shell: &str, zdotdir: Option<&Path>, config: Option<&Path>| -> Vec<String> {
+            startup_files(shell, home.path(), zdotdir, config)
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect()
+        };
+        let zdotdir = home.path().join(".config/zsh");
+        std::fs::create_dir_all(&zdotdir).unwrap();
+        for name in [".zshenv", ".zshrc"] {
+            std::fs::write(zdotdir.join(name), "").unwrap();
+        }
+        std::fs::write(home.path().join(".zshenv"), "").unwrap();
+        assert_eq!(
+            names("zsh", Some(&zdotdir), None),
+            ["~/.zshenv", "~/.config/zsh/.zshenv", "~/.config/zsh/.zshrc"]
+        );
+        assert_eq!(names("zsh", None, None), ["~/.zshenv"]);
+
+        let fish = home.path().join(".config/fish");
+        std::fs::create_dir_all(fish.join("conf.d")).unwrap();
+        for name in [
+            "config.fish",
+            "conf.d/b.fish",
+            "conf.d/a.fish",
+            "conf.d/notes.txt",
+        ] {
+            std::fs::write(fish.join(name), "").unwrap();
+        }
+        std::fs::write(home.path().join(".profile"), "").unwrap();
+        assert_eq!(
+            names("fish", None, None),
+            [
+                "~/.config/fish/config.fish",
+                "~/.config/fish/conf.d/a.fish",
+                "~/.config/fish/conf.d/b.fish",
+            ]
+        );
+        let elsewhere = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(elsewhere.path().join("fish")).unwrap();
+        std::fs::write(elsewhere.path().join("fish/config.fish"), "").unwrap();
+        assert_eq!(
+            names("fish", None, Some(elsewhere.path())),
+            [format!("{}/fish/config.fish", elsewhere.path().display())]
+        );
     }
 
     #[test]
@@ -352,8 +493,10 @@ mod tests {
             file.set_modified(time).unwrap();
         }
         let read = Timestamp::from_system_time(read_at).unwrap();
-        let files = startup_files("bash", home.path());
-        let check = shell_verdict(Some(&start("hand", Some(read.as_millis()))), &files).unwrap();
+        let now = Timestamp::from_system_time(read_at + Duration::from_secs(120)).unwrap();
+        let files = startup_files("bash", home.path(), None, None);
+        let check =
+            shell_verdict(Some(&start("hand", Some(read.as_millis()))), &files, now).unwrap();
         assert_eq!(check.status, Status::Warn);
         assert_eq!(
             check.message,
@@ -364,7 +507,8 @@ mod tests {
         assert_eq!(check.fix.as_deref(), Some(RESTART_FIX));
 
         let older = &files[..1];
-        let check = shell_verdict(Some(&start("hand", Some(read.as_millis()))), older).unwrap();
+        let check =
+            shell_verdict(Some(&start("hand", Some(read.as_millis()))), older, now).unwrap();
         assert_eq!(check.status, Status::Ok);
         assert_eq!(
             check.message,
@@ -373,17 +517,51 @@ mod tests {
             )
         );
         assert_eq!(
-            shell_verdict(Some(&start("hand", Some(0))), &[])
+            shell_verdict(Some(&start("hand", Some(0))), &[], now)
                 .unwrap()
                 .message,
             "the daemon read your login shell (bash) at 1970-01-01T00:00:00.000Z"
         );
         assert_eq!(
-            shell_verdict(Some(&start("hand", None)), &files)
+            shell_verdict(Some(&start("hand", None)), &files, now)
                 .unwrap()
                 .status,
             Status::Ok
         );
-        assert_eq!(shell_verdict(None, &files), None);
+        assert_eq!(shell_verdict(None, &files, now), None);
+    }
+
+    #[test]
+    fn a_startup_file_whose_time_lies_in_the_future_is_named_as_such() {
+        let read = at(1_790_000_000_000);
+        let now = at(1_790_000_100_000);
+        let files = [
+            ("~/.profile".to_owned(), Some(at(1_790_000_050_000))),
+            ("~/.bashrc".to_owned(), Some(at(1_790_000_200_000))),
+        ];
+        let check =
+            shell_verdict(Some(&start("hand", Some(read.as_millis()))), &files, now).unwrap();
+        assert_eq!(check.status, Status::Warn);
+        assert_eq!(
+            check.message,
+            format!(
+                "~/.profile changed after the daemon read your login shell (bash) at {read}, so the workers lack the change; the modification time of ~/.bashrc lies in the future, so doctor cannot tell whether the workers have its content"
+            )
+        );
+        assert_eq!(check.fix.as_deref(), Some(FUTURE_FIX));
+        let only_future = shell_verdict(
+            Some(&start("hand", Some(read.as_millis()))),
+            &files[1..],
+            now,
+        )
+        .unwrap();
+        assert_eq!(only_future.status, Status::Warn);
+        assert!(
+            only_future
+                .message
+                .starts_with("the modification time of ~/.bashrc lies in the future"),
+            "{}",
+            only_future.message
+        );
     }
 }
