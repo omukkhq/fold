@@ -1,7 +1,9 @@
 import {
   skipToken,
+  useMutation,
   useQueries,
   useQuery,
+  useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
 import { useState } from "react";
@@ -26,8 +28,9 @@ import {
   sessionQuery,
   workersQuery,
 } from "@/api/queries";
+import { integrateReviewBatch } from "@/api/reviews";
 import type { WorkerProcess } from "@/api/workers";
-import { IconButton } from "@/components/button/Button";
+import { Button, IconButton } from "@/components/button/Button";
 import {
   buttonClasses,
   buttonIconClass,
@@ -62,6 +65,7 @@ import {
   type MemberRow,
   type VerdictKind,
 } from "./present";
+import { integrateFailure, integrationNote } from "./integration";
 import { projectPath } from "@/routes/paths";
 
 const HEAD =
@@ -157,6 +161,60 @@ function StopReviewer({
       busyLabel="Stopping reviewer…"
       className="items-end"
     />
+  );
+}
+
+/** The batch's integration: where it stands and, for a signed-in human, the action that integrates the ready members together. The action shows its pending state until the daemon answers, and the screen follows the batch's events after. */
+function BatchIntegration({
+  slug,
+  id,
+  note,
+  human,
+}: {
+  slug: string;
+  id: string;
+  note: ReturnType<typeof integrationNote>;
+  human: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const integrate = useMutation({
+    mutationFn: () => integrateReviewBatch(slug, id),
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: keys.reviewBatches(slug) }),
+        queryClient.invalidateQueries({ queryKey: keys.proposals(slug) }),
+        queryClient.invalidateQueries({ queryKey: keys.repository(slug) }),
+      ]);
+    },
+  });
+  return (
+    <section
+      aria-label="Integration"
+      className="flex flex-wrap items-center gap-12"
+    >
+      <p className="flex min-w-0 flex-1 items-center gap-6 text-bar text-text-muted">
+        <GitMerge aria-hidden="true" size={14} className="shrink-0" />
+        {note.text}
+      </p>
+      {human && note.canIntegrate ? (
+        <Button
+          variant="primary"
+          pending={integrate.isPending}
+          pendingLabel="Integrating…"
+          icon={<GitMerge aria-hidden="true" size={15} />}
+          onClick={() => {
+            integrate.mutate();
+          }}
+        >
+          Integrate the batch
+        </Button>
+      ) : null}
+      {integrate.isError ? (
+        <p role="alert" className="w-full text-meta font-medium text-danger">
+          {integrateFailure(integrate.error)}
+        </p>
+      ) : null}
+    </section>
   );
 }
 
@@ -366,10 +424,12 @@ export function BatchScreen({ slug, id }: { slug: string; id: string }) {
               </tbody>
             </table>
           </div>
-          <p className="flex items-center gap-6 text-bar text-text-muted">
-            <GitMerge aria-hidden="true" size={14} />
-            fold integrates each member after its approval.
-          </p>
+          <BatchIntegration
+            slug={slug}
+            id={batch.id}
+            note={integrationNote(batch)}
+            human={(session.data?.human ?? null) !== null}
+          />
         </div>
         <div className="flex w-review-panel shrink-0 flex-col gap-16">
           <section aria-label="Batch checkout" className={CARD}>
