@@ -65,15 +65,19 @@ pub struct NewWorkerProcess<'a> {
     pub now: Timestamp,
 }
 
-/// The totals one stdout line of a worker adds. `cost_micro_usd` is the new total of the row, because Claude Code reports a running total per process.
+/// The totals one stdout line of a worker adds. `reported_micro_usd` is the running total of the row's session that Claude Code reported; the token counts are the turn's own.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TurnTotals {
-    pub cost_micro_usd: u64,
+    pub reported_micro_usd: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
+    /// The turn ended in Claude Code's error.
+    pub failed: bool,
 }
 
-fn db_count(value: u64) -> i64 {
+pub(super) fn db_count(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
@@ -598,26 +602,45 @@ pub async fn forget_made_up_model(tx: &mut WriteTx, id: i64) -> Result<(), Store
     Ok(())
 }
 
-/// Counts one finished turn and makes the worker idle.
+/// Counts one finished turn, appends its `worker_turns` row with the cost [`fold_core::cost::session_turn`] finds in the reported total, adds that cost to the row and makes the worker idle.
 pub async fn record_turn(
     tx: &mut WriteTx,
     id: i64,
     totals: TurnTotals,
     now: Timestamp,
 ) -> Result<(), StoreError> {
-    let cost = db_count(totals.cost_micro_usd);
+    let before = sqlx::query!(
+        r#"SELECT cost_micro_usd AS "cost!: i64", session_cost_micro_usd AS "session!: i64"
+           FROM worker_processes WHERE id = ?"#,
+        id
+    )
+    .fetch_optional(tx.conn())
+    .await?;
+    let Some(before) = before else {
+        return Ok(());
+    };
+    let (added, session) = fold_core::cost::session_turn(
+        totals.reported_micro_usd,
+        count(before.session, "worker_processes.session_cost_micro_usd")?,
+    );
+    super::turns::insert_turn(tx, id, added, &totals, now).await?;
+    let cost = db_count(
+        count::<u64>(before.cost, "worker_processes.cost_micro_usd")?.saturating_add(added),
+    );
+    let session = db_count(session);
     let read = db_count(totals.cache_read_tokens);
     let write = db_count(totals.cache_write_tokens);
     let now = now.as_millis();
     sqlx::query!(
         "UPDATE worker_processes
-         SET turns = turns + 1, cost_micro_usd = ?2,
-             cache_read_tokens = cache_read_tokens + ?3, cache_write_tokens = cache_write_tokens + ?4,
+         SET turns = turns + 1, cost_micro_usd = ?2, session_cost_micro_usd = ?3,
+             cache_read_tokens = cache_read_tokens + ?4, cache_write_tokens = cache_write_tokens + ?5,
              state = CASE WHEN state IN ('starting', 'working') THEN 'idle' ELSE state END,
-             idle_since = CASE WHEN state IN ('starting', 'working') THEN ?5 ELSE idle_since END
+             idle_since = CASE WHEN state IN ('starting', 'working') THEN ?6 ELSE idle_since END
          WHERE id = ?1",
         id,
         cost,
+        session,
         read,
         write,
         now

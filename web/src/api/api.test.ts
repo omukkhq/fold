@@ -102,6 +102,15 @@ describe("keys", () => {
     }
   });
 
+  it("reads the project list again on the viewer's next day, under the projects prefix", () => {
+    const morning = projectsQuery(new Date(2026, 9, 21, 8).getTime()).queryKey;
+    const evening = projectsQuery(new Date(2026, 9, 21, 23).getTime()).queryKey;
+    const next = projectsQuery(new Date(2026, 9, 22, 0, 1).getTime()).queryKey;
+    expect(evening).toEqual(morning);
+    expect(next).not.toEqual(morning);
+    expect(next.slice(0, 1)).toEqual(keys.projects());
+  });
+
   it("keeps host keys out of every slug's prefix", () => {
     for (const key of [keys.projects(), keys.session()]) {
       expect(parseSlug(key[0])).toBeNull();

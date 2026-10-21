@@ -567,9 +567,11 @@ function applyWorkerOutput(
     void queryClient.invalidateQueries({ queryKey: keys.agents(slug) });
     void queryClient.invalidateQueries({ queryKey: keys.workers(slug) });
   }
-  // A turn's end changes the item of a worker that could not reach the model without a stored event: a turn that reaches the model ends it, and a failed one changes its error.
+  // A turn's end changes the item of a worker that could not reach the model without a stored event: a turn that reaches the model ends it, and a failed one changes its error. The daemon stores the turn's cost before it sends the frame, so the costs are read again too.
   if (frame.step === "result" || frame.step === "result_error") {
     void queryClient.invalidateQueries({ queryKey: keys.needsYou(slug) });
+    void queryClient.invalidateQueries({ queryKey: keys.cost(slug) });
+    void queryClient.invalidateQueries({ queryKey: keys.projects() });
   }
 }
 

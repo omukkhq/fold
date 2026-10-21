@@ -35,6 +35,7 @@ import { Textarea, TextField } from "@/components/form/controls";
 import { CommitId } from "@/components/mono/CommitId";
 import { Mono } from "@/components/mono/Mono";
 import { taskPath } from "@/features/board/card";
+import { TaskCostSection } from "@/features/cost/TaskCostSection";
 import { formatAge } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
@@ -1016,6 +1017,7 @@ export function TaskSide({ slug, task, live, now }: Props) {
       <Blocker slug={slug} task={task} now={now} />
       <HumanReview slug={slug} task={task} />
       <Dependencies slug={slug} task={task} />
+      <TaskCostSection slug={slug} task={task.task} />
       {/* An empty History draws nothing, so the group is left out for a task read without events. */}
       {task.history.length > 0 ? <History task={task} /> : null}
     </aside>

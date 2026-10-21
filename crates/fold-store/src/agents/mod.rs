@@ -19,6 +19,7 @@ mod handoffs;
 mod pause;
 mod previous_sessions;
 mod questions;
+mod turns;
 mod workers;
 
 pub use activity::agent_activity;
@@ -36,6 +37,7 @@ pub use questions::{
     find_question, insert_answer, insert_question, insert_question_message, open_ask_of_thread,
     open_questions, question_by_id, question_messages, questions_of_worker,
 };
+pub use turns::{CostSlot, CostTotals, cost_groups, cost_slots, cost_totals};
 pub use workers::{
     AreaRow, BoundWorker, NewWorkerProcess, ProcessEnd, TurnTotals, WorkerProcessRow,
     bind_proposal, bind_task, claims_held, clear_worker_pid, find_area, find_worker_process,

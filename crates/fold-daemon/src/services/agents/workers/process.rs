@@ -195,8 +195,6 @@ impl Drop for Inner {
 struct Process {
     id: i64,
     agent: AgentName,
-    /// The row's cost before this process, to which the process's running total adds.
-    base_cost: u64,
     generation: u64,
     /// The process id that the row records while this process runs.
     pid: Option<u32>,

@@ -11,6 +11,12 @@ function overview(over: Partial<ProjectOverview>): ProjectOverview {
     paused_since: null,
     paused_by: null,
     attention: [],
+    cost: {
+      all_time_micro_usd: 0,
+      today_micro_usd: 0,
+      week_micro_usd: 0,
+      all_time_tokens: 0,
+    },
     ...over,
   };
 }

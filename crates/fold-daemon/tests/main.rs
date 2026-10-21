@@ -161,6 +161,7 @@ mod task_read;
 mod task_views;
 mod tasks_service;
 mod web_tokens;
+mod worker_cost;
 mod worker_limits;
 mod worker_questions;
 mod worker_restart;

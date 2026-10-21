@@ -323,7 +323,7 @@ async fn a_task_worker_stops_when_its_last_proposal_opens_after_an_earlier_one_i
 
 #[tokio::test]
 async fn an_idle_task_worker_stops_after_its_idle_minutes_and_resumes_with_a_turn() {
-    let fake = FakeClaude::new("result");
+    let fake = FakeClaude::new("result").resuming_with("resumed");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
     areas(&harness).await;
