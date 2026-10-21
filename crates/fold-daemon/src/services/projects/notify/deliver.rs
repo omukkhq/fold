@@ -24,7 +24,7 @@ pub fn deliver(channel: &Channel, notice: &Notice) -> Result<(), FoldError> {
     }
 }
 
-/// Posts the JSON body with its signature. A redirect is not followed, so the signed body goes only to the URL a human gave.
+/// Posts the JSON body with its signature. A redirect is not followed, so the signed body goes only to the URL a human gave, and an answer outside 2xx, a redirect too, is a failed send: the receiver did not take the notice.
 fn post(url: &str, secret: &Secret, notice: &Notice) -> Result<(), FoldError> {
     let body = notice.body()?;
     let signature = sign(secret.expose().as_bytes(), &body)?;
@@ -40,7 +40,6 @@ fn post(url: &str, secret: &Secret, notice: &Notice) -> Result<(), FoldError> {
         .header(SIGNATURE_HEADER, &signature)
         .header(EVENT_HEADER, notice.event.as_str())
         .send(&body[..])
-        .map(|_| ())
         .map_err(|error| {
             failed(match error {
                 ureq::Error::StatusCode(status) => {
@@ -53,6 +52,17 @@ fn post(url: &str, secret: &Secret, notice: &Notice) -> Result<(), FoldError> {
                 }
                 _ => "the webhook receiver could not be reached".to_owned(),
             })
+        })
+        .and_then(|response| {
+            let status = response.status();
+            if status.is_success() {
+                Ok(())
+            } else {
+                Err(failed(format!(
+                    "the webhook receiver answered HTTP {}",
+                    status.as_u16()
+                )))
+            }
         })
 }
 

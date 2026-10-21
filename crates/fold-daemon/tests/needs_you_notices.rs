@@ -600,6 +600,39 @@ async fn a_failed_send_keeps_its_items_for_the_next_interval() {
 }
 
 #[tokio::test]
+async fn a_redirect_is_a_failed_send_that_keeps_its_items() {
+    let fixture = Fixture::new().await;
+    let mut moved = Receiver::start(301).await;
+    let id = fixture.webhook(&moved.url, false, 5).await;
+    let asked = fixture.ask().await;
+    assert_eq!(fixture.pass().await, 0);
+    fixture.advance(SETTLE);
+    assert_eq!(fixture.pass().await, 0, "a 301 is no delivery");
+    moved.next().await;
+    fixture.advance(Duration::from_secs(300));
+    assert_eq!(fixture.pass().await, 0);
+    assert_eq!(
+        moved.next().await.json()["items"][0]["id"],
+        asked,
+        "the item waits for the next try"
+    );
+    let (status, body) = fixture
+        .call(
+            Method::POST,
+            &format!("/api/v1/projects/demo/notify/targets/{id}/test"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert_eq!(body["error"]["code"], "notify_send_failed");
+    assert_eq!(
+        body["error"]["message"],
+        "the webhook receiver answered HTTP 301"
+    );
+    moved.next().await;
+}
+
+#[tokio::test]
 async fn an_email_target_sends_the_titles_and_links_without_the_body() {
     let fixture = Fixture::new().await;
     let (port, mut mail) = smtp_server().await;
