@@ -244,7 +244,7 @@ function Breakdown({ title, rows }: { title: string; rows: BreakdownRow[] }) {
 
 const TH =
   "px-12 py-8 text-left text-overline leading-snug font-semibold text-text-muted uppercase";
-const TD = "px-12 py-9 text-bar leading-snug text-text";
+const TD = "px-12 py-9 text-bar leading-snug whitespace-nowrap text-text";
 const NUM = "text-right tabular-nums";
 
 function TasksTable({ slug, view }: { slug: string; view: ProjectCost }) {

@@ -60,7 +60,7 @@ export function ProjectsScreen() {
             </div>
             <div className="flex flex-wrap items-center gap-16">
               {projects.length > 0 ? (
-                <p className="flex flex-col items-end">
+                <p className="flex flex-col md:items-end">
                   <span className="text-meta text-text-muted">
                     Cost of all projects
                   </span>

@@ -136,7 +136,7 @@ export interface CostChart {
 /** The most days a chart draws a bar for each; a longer range draws a bar for each week. */
 const MAX_DAY_BARS = 92;
 
-/** The starts of the chart's bars: the hours of today, the seven days of the week, or every day (or week) from the first turn to today. */
+/** The starts of the chart's bars: the hours of today, the seven days of the week, or every day (or week) from the first turn to today, and at least the last seven days. */
 function binStarts(
   range: CostRange,
   now: number,
@@ -149,10 +149,11 @@ function binStarts(
       unit: "hour",
     };
   }
+  const week = addDays(today, -6);
   const firstDay =
     range === "week" || first === null
-      ? addDays(today, -6)
-      : Math.min(localDayStart(first), today);
+      ? week
+      : Math.min(localDayStart(first), week);
   const days: number[] = [];
   for (let day = firstDay; day <= today; day = addDays(day, 1)) {
     days.push(day);

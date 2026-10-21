@@ -97,6 +97,10 @@ describe("costChart", () => {
   it("draws all time from the first turn's day, by week when it is long", () => {
     const chart = costChart(projectCost(TODAY), "all", NOW);
     expect(chart.bars.map((bar) => bar.tick)).toEqual([
+      "Oct 15",
+      "Oct 16",
+      "Oct 17",
+      "Oct 18",
       "Oct 19",
       "Oct 20",
       "Oct 21",
