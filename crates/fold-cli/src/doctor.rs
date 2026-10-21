@@ -344,11 +344,18 @@ pub(crate) fn collect(
     } else {
         projects.clone()
     };
+    let answering = socket
+        .as_deref()
+        .filter(|_| matches!(daemon, status::Daemon::Running { .. }));
     for (label, root) in projects {
         let mut checks = project_checks(&root, host, now, runtime);
         let slug = push::slug_of(&registered, &root);
         checks.push(push::push_check(socket.as_deref(), slug.as_deref()));
-        checks.push(workers::workers_check(socket.as_deref(), slug.as_deref()));
+        checks.push(workers::workers_check(
+            answering,
+            slug.as_deref(),
+            start.map(|start| start.started_at),
+        ));
         sections.push(Section {
             title: format!("project {label}"),
             checks,
