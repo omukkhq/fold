@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorReply, stubFetch } from "../../test/stubFetch";
@@ -39,6 +45,7 @@ function renderScreen() {
       <SettingsScreen slug="demo" />
     </QueryClientProvider>,
   );
+  return client;
 }
 
 describe("SettingsScreen", () => {
@@ -72,7 +79,7 @@ describe("SettingsScreen", () => {
         },
       },
     });
-    renderScreen();
+    const client = renderScreen();
     expect(await screen.findByText(/No target gets this project/)).toBeTruthy();
     const form = screen.getByRole("form", { name: "Add a project target" });
     const user = userEvent.setup();
@@ -92,6 +99,15 @@ describe("SettingsScreen", () => {
       kind: "webhook",
       url: `${HOOKS}/fold`,
     });
+    const secret = JSON.stringify(added?.body).match(/"secret":"(\w+)"/)?.[1];
+    expect(secret).toHaveLength(48);
+    await waitFor(() => {
+      expect(client.getMutationCache().getAll()).toHaveLength(0);
+    });
+    expect(within(form).getByLabelText("Signing secret")).toHaveProperty(
+      "value",
+      "",
+    );
     await user.click(
       within(list).getByRole("button", {
         name: "Send a test notice through nt-1",

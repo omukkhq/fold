@@ -44,12 +44,14 @@ export function AddTargetForm({
   const [draft, setDraft] = useState<TargetDraft>(EMPTY_DRAFT);
   const [errors, setErrors] = useState<DraftErrors>({});
   const refresh = useRefreshNotify(scope);
-  // The add stays pending until the list is read again, so the new target shows only when the daemon has it.
+  // The add stays pending until the list is read again, so the new target shows only when the daemon has it. The body holds the secret or password, so the mutation leaves the cache once it is done: no gc time, and a reset after success.
   const add = useMutation({
     mutationFn: (body: NewNotifyTarget) => addNotifyTarget(scope, body),
+    gcTime: 0,
     onSuccess: async () => {
       await refresh();
       setDraft({ ...EMPTY_DRAFT, kind: draft.kind });
+      add.reset();
     },
   });
   const set = (patch: Partial<TargetDraft>) => {
