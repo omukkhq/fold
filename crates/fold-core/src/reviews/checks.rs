@@ -145,7 +145,7 @@ struct RawSetup {
 
 /// `stage` as the file writes it: one name or a list of names.
 #[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, expecting = "proposal, integration or a list of them")]
 enum RawStage {
     One(String),
     Many(Vec<String>),
@@ -264,14 +264,14 @@ fn parse_stages(raw: Option<RawStage>, at: &str) -> Result<Vec<Stage>, FoldError
     };
     if names.is_empty() {
         return Err(invalid(format!(
-            "{at}: stage is not empty; list proposal, integration or both"
+            "{at}: stage must not be empty; list proposal, integration or both"
         )));
     }
     let mut stages = Vec::with_capacity(names.len());
     for name in &names {
         let stage = Stage::parse(name).ok_or_else(|| {
             invalid(format!(
-                "{at}: stage is proposal, integration or a list of both, not \"{name}\""
+                "{at}: stage is proposal, integration or a list of both"
             ))
         })?;
         if stages.contains(&stage) {
@@ -443,9 +443,9 @@ stage = "integration"
     #[test]
     fn an_empty_unknown_or_repeated_stage_names_its_check() {
         for (stage, part) in [
-            ("[]", "not empty"),
-            ("[\"later\"]", "not \"later\""),
-            ("\"later\"", "not \"later\""),
+            ("[]", "must not be empty"),
+            ("[\"later\"]", "proposal, integration or a list of both"),
+            ("\"later\"", "proposal, integration or a list of both"),
             ("[\"proposal\", \"proposal\"]", "proposal twice"),
             (
                 "[\"integration\", \"proposal\", \"integration\"]",
@@ -461,10 +461,21 @@ stage = "integration"
                 error.message()
             );
             assert!(error.message().contains(part), "{}", error.message());
+            assert!(!error.message().contains("later"), "{}", error.message());
         }
-        let error =
-            ChecksFile::parse("[[check]]\nname = \"t\"\nrun = \"x\"\nstage = 3\n").unwrap_err();
-        assert_eq!(error.code(), codes::CHECKS_FILE_INVALID);
+        for stage in ["3", "[\"proposal\", 3]"] {
+            let text = format!("[[check]]\nname = \"t\"\nrun = \"x\"\nstage = {stage}\n");
+            let error = ChecksFile::parse(&text).unwrap_err();
+            assert_eq!(error.code(), codes::CHECKS_FILE_INVALID, "{stage}");
+            assert!(
+                error
+                    .message()
+                    .contains("line 4: proposal, integration or a list of them"),
+                "{}",
+                error.message()
+            );
+            assert!(!error.message().contains("RawStage"), "{}", error.message());
+        }
     }
 
     #[test]
