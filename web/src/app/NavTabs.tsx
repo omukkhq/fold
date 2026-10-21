@@ -35,7 +35,10 @@ export function NavTabs({ slug }: { slug: string }) {
   const active = activeNav(pathname);
   const { data: awaiting = 0 } = useQuery(awaitingHumanQuery(slug));
   return (
-    <nav aria-label="Project" className={cn(TAB_LIST, "bg-surface px-24")}>
+    <nav
+      aria-label="Project"
+      className={cn(TAB_LIST, "shrink-0 overflow-x-auto bg-surface px-24")}
+    >
       {NAV_ENTRIES.map((entry) => {
         const Icon = ICONS[entry.id];
         const current = entry.id === active;

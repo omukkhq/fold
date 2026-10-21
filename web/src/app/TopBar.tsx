@@ -8,7 +8,7 @@ import { ThemeToggle } from "./ThemeToggle";
 
 export function TopBar({ slug }: { slug: string }) {
   return (
-    <header className="flex h-bar items-center justify-between border-b border-border-subtle bg-surface px-24">
+    <header className="flex h-bar shrink-0 items-center justify-between border-b border-border-subtle bg-surface px-24">
       <div className="flex items-center gap-14">
         <Wordmark />
         <span className="h-20 w-px bg-border" aria-hidden />

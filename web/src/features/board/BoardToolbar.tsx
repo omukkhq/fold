@@ -57,7 +57,7 @@ export function BoardToolbar({
     onSearch({ ...search, ...patch });
   };
   return (
-    <div className="flex flex-wrap items-center justify-between gap-8 px-24 pt-14 pb-6">
+    <div className="flex shrink-0 flex-wrap items-center justify-between gap-8 px-24 pt-14 pb-6">
       <div
         role="group"
         aria-label="Filters"
