@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { FOLLOW_SLACK, followResizes, isFollowing, toBottom } from "./follow";
+import {
+  FOLLOW_SLACK,
+  followNewest,
+  followResizes,
+  isFollowing,
+  toBottom,
+} from "./follow";
 
 const view = (scrollTop: number) => ({
   scrollTop,
@@ -51,6 +57,21 @@ describe("toBottom", () => {
     const box = view(0);
     toBottom(box);
     expect(box.scrollTop).toBe(1000);
+  });
+});
+
+describe("followNewest", () => {
+  it("follows again and scrolls to the reader's own message", () => {
+    const box = view(100);
+    const following = { current: false };
+    followNewest(box, following);
+    expect(following.current).toBe(true);
+    expect(box.scrollTop).toBe(1000);
+  });
+  it("follows again before the thread has a scroller", () => {
+    const following = { current: false };
+    followNewest(null, following);
+    expect(following.current).toBe(true);
   });
 });
 

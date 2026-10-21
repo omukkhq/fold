@@ -18,6 +18,7 @@ import { focusRing, insetFocusRing } from "@/lib/focus";
 import { replySchema, type ReplyValues } from "./compose";
 import {
   browserSizeObserver,
+  followNewest,
   followResizes,
   isFollowing,
   toBottom,
@@ -75,17 +76,23 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
     return followResizes(box, [box, list], following, browserSizeObserver);
   }, []);
 
-  const submit = handleSubmit(async ({ body }) => {
+  // The new message may render before or after the send resolves; the layout effect covers the later case.
+  const reply = async (replyTo: string, body: string) => {
+    await onReply(replyTo, body);
+    followNewest(scroller.current, following);
+  };
+
+  const send = async ({ body }: ReplyValues) => {
     if (!last) {
       return;
     }
     try {
-      await onReply(last.id, body.trim());
+      await reply(last.id, body.trim());
       reset();
     } catch (error) {
       setError("root", { message: failureText(error) });
     }
-  });
+  };
 
   return (
     <section
@@ -169,7 +176,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
                   <QuestionChoices
                     thread={thread}
                     question={message}
-                    onReply={onReply}
+                    onReply={reply}
                   />
                 ) : null}
               </article>
@@ -192,7 +199,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
       </div>
 
       <form
-        onSubmit={(event) => void submit(event)}
+        onSubmit={(event) => void handleSubmit(send)(event)}
         noValidate
         className="flex shrink-0 flex-col gap-6 border-t border-border-subtle px-18 py-12"
       >

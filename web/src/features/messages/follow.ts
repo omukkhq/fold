@@ -20,6 +20,17 @@ export function toBottom(box: ScrollMetrics): void {
   box.scrollTop = box.scrollHeight;
 }
 
+/** A reader who sent a message follows the thread again, so their own message comes into view. */
+export function followNewest(
+  box: ScrollMetrics | null,
+  following: { current: boolean },
+): void {
+  following.current = true;
+  if (box) {
+    toBottom(box);
+  }
+}
+
 /** The part of `ResizeObserver` that following uses, so a test can drive it. */
 export type SizeObserver<T> = new (
   callback: () => void,
