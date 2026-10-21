@@ -13,7 +13,7 @@ use fold_core::transcript::{claude_config_dir, is_session_id};
 use fold_core::{AgentName, FoldError, MAIN_TAG, ProjectPaths, codes};
 use fold_daemon::services::agents::claude::transcript_path;
 use fold_daemon::services::agents::new_session_id;
-use fold_daemon::services::projects::{ProjectError, root_for_dir_on_host, slug_for_dir_on_host};
+use fold_daemon::services::projects::{ProjectError, registration_for_dir_on_host};
 use hyper::Method;
 use thiserror::Error;
 
@@ -151,9 +151,24 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
     let human = crate::fold_name::current();
     let runtime = serve::current_thread_runtime().map_err(ClaudeError::Runtime)?;
     let root = runtime.block_on(async {
-        let root = root_for_dir_on_host(&host, &cwd).await?;
-        let slug = slug_for_dir_on_host(&host, &cwd).await?;
+        let found = registration_for_dir_on_host(&host, &cwd).await?;
+        let slug = found.row.slug;
         daemon_client::connect(&config).await?;
+        // The daemon's open route notes that a person uses the project, which orders the recent projects of the web interface, and brings a project a person removed back into fold.
+        let client = DaemonClient::new(config.clone(), human.clone());
+        let body = serde_json::json!({ "slug": slug });
+        let opened = client
+            .request(Method::POST, "/api/v1/projects", Some(&body))
+            .await;
+        if found.removed_at.is_some() {
+            accepted(&opened?)?;
+            // The note only tells; a terminal that cannot take it does not stop the session.
+            let _ = crate::output::line(
+                &mut io::stdout(),
+                &format!("project {slug} is back in fold"),
+            );
+        }
+        let root = PathBuf::from(found.row.root);
         if let Some(human) = human {
             let client = DaemonClient::new(config, Some(human));
             let path = format!("/api/v1/projects/{slug}/agents");
@@ -382,20 +397,26 @@ impl OwnSetup {
     }
 }
 
+/// The daemon's refusal of `response` as the error `fld claude` stops with.
+fn accepted(response: &Response) -> Result<(), ClaudeError> {
+    if response.is_success() {
+        return Ok(());
+    }
+    let refusal = response.refusal();
+    Err(ClaudeError::Refused {
+        code: refusal
+            .code
+            .unwrap_or_else(|| codes::INTERNAL_ERROR.to_owned()),
+        message: refusal
+            .message
+            .unwrap_or_else(|| "the daemon refused the request".to_owned()),
+        hint: refusal.hint,
+    })
+}
+
 /// Refuses before `claude` starts when another agent already has the `main` tag, which the session's adapter would get at its handshake.
 fn main_is_free(response: &Response, agent: &AgentName) -> Result<(), ClaudeError> {
-    if !response.is_success() {
-        let refusal = response.refusal();
-        return Err(ClaudeError::Refused {
-            code: refusal
-                .code
-                .unwrap_or_else(|| codes::INTERNAL_ERROR.to_owned()),
-            message: refusal
-                .message
-                .unwrap_or_else(|| "the daemon refused the request".to_owned()),
-            hint: refusal.hint,
-        });
-    }
+    accepted(response)?;
     let holder = response.body["agents"]
         .as_array()
         .into_iter()

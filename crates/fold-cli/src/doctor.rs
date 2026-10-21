@@ -904,11 +904,13 @@ fn registered_projects(
     }
 }
 
+/// The projects in fold. A project a person removed is left out: its data rests in its folder until a person brings it back, so nothing there needs a fix.
 async fn read_registry(path: &Path) -> Result<Vec<Registered>, sqlx::Error> {
     let mut conn = connect_read_only(path).await?;
-    let rows = sqlx::query!("SELECT slug, root FROM projects ORDER BY slug")
-        .fetch_all(&mut conn)
-        .await?;
+    let rows =
+        sqlx::query!("SELECT slug, root FROM projects WHERE removed_at IS NULL ORDER BY slug")
+            .fetch_all(&mut conn)
+            .await?;
     let _ = conn.close().await;
     Ok(rows
         .into_iter()

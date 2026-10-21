@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
@@ -156,9 +157,71 @@ async fn an_unavailable_project_lists_only_its_slug_name_and_availability() {
     assert_eq!(
         body,
         json!({"projects": [
-            {"slug": "late", "name": "Project late", "available": false, "overview": null}
+            {
+                "slug": "late",
+                "name": "Project late",
+                "root": project.paths().root().to_str().unwrap(),
+                "available": false,
+                "last_used_at": project.now().as_millis(),
+                "removed_at": null,
+                "folder": "present",
+                "overview": null
+            }
         ]})
     );
+}
+
+#[tokio::test]
+#[cfg(test)]
+async fn a_person_who_opens_a_project_makes_it_used_at_most_once_per_ten_seconds() {
+    let project = TestProject::new().await;
+    let registered = project.now().as_millis();
+    let state = state_of(&project);
+    let row = register(&project, "demo").await;
+    state
+        .projects
+        .open(&row, state.clock.clone())
+        .await
+        .unwrap();
+    let listed = async || {
+        let (status, body) = call(&state, Method::GET, "/api/v1/projects", None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body["projects"][0]["last_used_at"].as_i64().unwrap()
+    };
+    assert_eq!(listed().await, registered);
+
+    project.clock().advance(Duration::from_secs(60)).unwrap();
+    let opened = project.now().as_millis();
+    let (status, shown) = call(&state, Method::GET, "/api/v1/projects/demo", None).await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(shown["last_used_at"].as_i64(), Some(opened));
+    assert_eq!(listed().await, opened);
+
+    project.clock().advance(Duration::from_secs(5)).unwrap();
+    let (_, shown) = call(&state, Method::GET, "/api/v1/projects/demo", None).await;
+    assert_eq!(
+        shown["last_used_at"].as_i64(),
+        Some(opened),
+        "inside the period"
+    );
+    project.clock().advance(Duration::from_secs(5)).unwrap();
+    let (_, shown) = call(&state, Method::GET, "/api/v1/projects/demo", None).await;
+    assert_eq!(
+        shown["last_used_at"].as_i64(),
+        Some(project.now().as_millis())
+    );
+
+    // A new event is a use too.
+    project.clock().advance(Duration::from_secs(60)).unwrap();
+    let (status, body) = call(
+        &state,
+        Method::POST,
+        "/api/v1/projects/demo/tasks",
+        Some(json!({"title": "One"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(listed().await, project.now().as_millis());
 }
 
 #[tokio::test]

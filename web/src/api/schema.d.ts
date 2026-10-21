@@ -96,10 +96,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every registered project and whether the daemon has it open. A project whose `.fold/` was deleted is removed from fold before the list is read, so it is not in the list. */
+        /** Every project in fold and whether the daemon has it open, ordered by slug; with `include_removed`, the projects a person removed too. A project whose `.fold/` was deleted is removed from fold before the list is read, so it is not in the list. */
         get: operations["list_projects"];
         put?: never;
-        /** Opens a project that was registered after the daemon started. Socket only; an open project answers the same again, unless its database was replaced: the daemon then closes it and opens the folder as it is now. A folder that is there without `.fold/`, as after its fold data was deleted, is removed from fold and answers `project_not_found`; a missing folder or a `.fold/` without its database keeps the project and answers `project_unavailable` with `details.reason` `folder_missing` or `database_missing`. */
+        /** Opens a project that was registered after the daemon started, for a `fld` command in its folder; a project a person removed comes back into fold first. Socket only; an open project answers the same again, unless its database was replaced: the daemon then closes it and opens the folder as it is now. A folder that is there without `.fold/`, as after its fold data was deleted, is removed from fold and answers `project_not_found`; a missing folder or a `.fold/` without its database keeps the project and answers `project_unavailable` with `details.reason` `folder_missing` or `database_missing`. */
         post: operations["open_project"];
         delete?: never;
         options?: never;
@@ -114,11 +114,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** One open project. */
+        /** One open project. Reading it notes that a person uses the project now, which orders the recent projects of the project switcher. */
         get: operations["show_project"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** A named human removes the project from fold: the daemon closes it and leaves it out of the project list, and its data stays in the folder's `.fold/`. `fld claude`, `fld new` or `fld init` in the folder, or the restore route, brings it back under its slug. Removing a removed project changes nothing. While a worker of the project runs, the removal is refused. */
+        delete: operations["remove_project"];
         options?: never;
         head?: never;
         patch?: never;
@@ -752,6 +753,23 @@ export interface paths {
         put?: never;
         /** The requester writes the next draft version instead of asking for changes. */
         post: operations["edit_request_draft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human brings back a project a person removed, while its folder holds the project's `.fold/`: it is in fold again under its slug and the daemon opens it. A project in fold stays as it is. */
+        post: operations["restore_project"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2771,6 +2789,11 @@ export interface components {
          * @enum {string}
          */
         ProjectAttentionKind: "uncommitted_changes" | "head_moved";
+        /**
+         * @description What is at a project's folder. `present`: the folder holds `.fold/` with its database. `folder_missing`: the folder is gone, as on a disk that is not mounted; fold opens the project again when it is back. `fold_missing`: the folder is there without `.fold/`; only a removed project is listed so, since fold takes any other off by itself. `database_missing`: `.fold/` holds no database.
+         * @enum {string}
+         */
+        ProjectFolderState: "present" | "folder_missing" | "fold_missing" | "database_missing";
         /** @description The project's Git repository and the state of its remotes. */
         ProjectGit: {
             /** @description The branch every integration is committed to. */
@@ -2810,10 +2833,24 @@ export interface components {
             paused_since: number | null;
         };
         ProjectSummary: {
-            /** @description False while the project failed to open or has not been opened yet. */
+            /** @description False while the project failed to open or has not been opened yet, and for a project a person removed. */
             available: boolean;
+            /** @description What is at the project folder. */
+            folder: components["schemas"]["ProjectFolderState"];
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the project's last use: when a person last opened it or its newest event happened, whichever is later, and its registration before either. The project switcher lists the most recent first.
+             */
+            last_used_at: number;
             name: string;
             overview: components["schemas"]["ProjectOverview"] | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of when a person removed the project from fold; null while it is in fold. A removed project keeps its data in its folder's `.fold/`, and the list shows it only when asked to.
+             */
+            removed_at: number | null;
+            /** @description The project folder, which holds `.fold/`. */
+            root: string;
             slug: string;
         };
         /** @description A proposal as the requesting human sees it. */
@@ -4791,7 +4828,10 @@ export interface operations {
     };
     list_projects: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description List the projects a person removed from fold too; they are left out without it. */
+                include_removed?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -4805,6 +4845,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectList"];
+                };
+            };
+            /** @description `invalid_request`: `include_removed` is not `true` or `false` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
@@ -4973,6 +5022,74 @@ export interface operations {
             };
             /** @description The project failed to open */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    remove_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project as the list shows it after the removal */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSummary"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found`: the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_workers_running` with the running agents in `details.workers`: pause the project or stop them first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8581,6 +8698,74 @@ export interface operations {
                 };
             };
             /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    restore_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project as the list shows it after it came back */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSummary"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found`: the slug is not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` with `details.reason` `folder_missing`, `fold_missing` or `database_missing`: the folder does not hold the project, which stays removed */
             503: {
                 headers: {
                     [name: string]: unknown;

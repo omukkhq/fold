@@ -74,6 +74,29 @@ describe("route states", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
+  it("says that a person removed the project, with the daemon's hint and the way to Add back", async () => {
+    const router = setup(() =>
+      Promise.reject(
+        new ApiError("project_not_found", "removed", {
+          reason: "removed",
+          hint: "run `fld claude`, `fld new` or `fld init` in /srv/app, or add it back on the projects page",
+        }),
+      ),
+    );
+    render(<RouterProvider router={router} />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Project removed from fold");
+    expect(alert.textContent).toContain("choose Add back");
+    expect(alert.textContent).toContain("or add it back on the projects page");
+    expect(alert.textContent).not.toContain("is deleted");
+    expect(
+      screen
+        .getByRole("link", { name: "Back to projects" })
+        .getAttribute("href"),
+    ).toBe("/projects");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
   it("says what to do for a project whose database is missing, and Retry asks again", async () => {
     let calls = 0;
     const router = setup(() => {

@@ -165,3 +165,4 @@ agent_session_not_found
 transcript_not_found
 ask_not_open
 ask_close_denied
+project_workers_running

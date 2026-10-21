@@ -18,7 +18,7 @@ use crate::services::agents::environment::WorkerEnvironment;
 use crate::services::agents::{AgentService, Launcher, SeenPresence, Supervisor, code_of};
 use crate::services::events::EventBus;
 use crate::services::messages::MessageService;
-use crate::services::projects::{GitAttention, RemoteContext, load_config};
+use crate::services::projects::{GitAttention, ProjectError, RemoteContext, load_config};
 use crate::services::reviews::ReviewService;
 use crate::services::reviews::checks::{CheckPermits, CheckRunner, recover_check_runs};
 use crate::services::tasks::TaskService;
@@ -410,6 +410,22 @@ pub fn removed(slug: &str, root: &Path) -> FoldError {
     ))
 }
 
+/// The refusal of a project a person removed from fold. Its data is still in `.fold/`, and a `fld` command that registers the folder brings it back under its slug.
+pub fn removed_by_person(slug: &str, root: &Path) -> FoldError {
+    FoldError::new(
+        codes::PROJECT_NOT_FOUND,
+        format!(
+            "project {slug} was removed from fold; its data stays in {}",
+            ProjectPaths::new(root).fold_dir().display()
+        ),
+    )
+    .with_hint(format!(
+        "run `fld claude`, `fld new` or `fld init` in {}, or add it back on the projects page",
+        root.display()
+    ))
+    .with_details([("reason", serde_json::json!("removed"))])
+}
+
 fn unavailable(slug: &str) -> FoldError {
     FoldError::new(
         codes::PROJECT_UNAVAILABLE,
@@ -543,6 +559,10 @@ impl Projects {
         if let Some(handle) = self.current(&row.slug).await {
             return Ok((handle, false));
         }
+        // Read again under the open lock, which a removal holds too, so an open that read the row before a person removed it does not open the project again.
+        if self.removed_by_person(&row.slug).await {
+            return Err(removed_by_person(&row.slug, root));
+        }
         let folder = project_folder(root).await;
         if folder != ProjectFolder::Present {
             // A missing folder or database keeps the registration: the folder can come back, and the database can be restored.
@@ -669,6 +689,56 @@ impl Projects {
         }
         tracing::warn!(project = %slug, root = %root.display(), "the project folder has no .fold; fold removed the project");
         true
+    }
+
+    /// True when the registry marks `slug` removed. A registry that cannot be read, or a daemon state without one, counts as not removed.
+    async fn removed_by_person(&self, slug: &str) -> bool {
+        let Some(registry) = &self.registry else {
+            return false;
+        };
+        matches!(
+            fold_store::projects::find_registration(registry.read(), slug).await,
+            Ok(Some(registration)) if registration.removed_at.is_some()
+        )
+    }
+
+    /// Takes the project `slug` off fold for a person, under the open lock: in one write to `registry` its row gets the removed mark, and an open handle closes with its workers, live state, jobs and store and leaves the slot, as the daemon's stop closes a project. Nothing in the folder is written or deleted besides what that close keeps in `.fold/`. While a worker process of the project runs, nothing changes and the refusal names the workers. False when the registry holds no project `slug` in fold.
+    pub async fn remove_for_person(
+        &self,
+        registry: &Store,
+        slug: &str,
+        now: fold_core::Timestamp,
+    ) -> Result<bool, ProjectError> {
+        let _opening = self.opening.lock().await;
+        if let Some(Slot::Open(handle)) = self.slot(slug) {
+            let running = handle.workers.running_agents();
+            if !running.is_empty() {
+                let names: Vec<&str> = running.iter().map(fold_core::AgentName::as_str).collect();
+                return Err(FoldError::new(
+                    codes::PROJECT_WORKERS_RUNNING,
+                    format!("project {slug} has running workers: {}", names.join(", ")),
+                )
+                .with_hint(
+                    "pause the project's agents or stop its workers, then remove the project",
+                )
+                .with_details([("workers", serde_json::json!(names))])
+                .into());
+            }
+        }
+        let marked = registry
+            .write(async |tx| fold_store::projects::set_removed(tx, slug, now).await)
+            .await?;
+        if !marked {
+            return Ok(false);
+        }
+        self.mark_away(slug, false);
+        unpoisoned(self.removed.write()).remove(slug);
+        let slot = unpoisoned(self.slots.write()).remove(slug);
+        if let Some(Slot::Open(handle)) = slot {
+            handle.close().await;
+        }
+        tracing::info!(project = %slug, "a person removed the project from fold");
+        Ok(true)
     }
 
     /// The root of `slug` when fold removed that project because its `.fold/` was gone and no answer for the slug has told it yet.

@@ -2,7 +2,7 @@ import { useRouter, type ErrorComponentProps } from "@tanstack/react-router";
 import { ErrorBanner } from "../components/states/ErrorBanner";
 import { Skeleton } from "../components/states/Skeleton";
 import { projectProblem } from "./projectGone";
-import { ProjectNotFound } from "./ProjectNotFound";
+import { ProjectNotFound, ProjectRemoved } from "./ProjectNotFound";
 import { ProjectUnavailable } from "./ProjectUnavailable";
 
 export function RoutePending() {
@@ -19,6 +19,9 @@ export function RouteError({ error }: Pick<ErrorComponentProps, "error">) {
   const problem = projectProblem(error);
   if (problem?.kind === "gone") {
     return <ProjectNotFound />;
+  }
+  if (problem?.kind === "removed") {
+    return <ProjectRemoved hint={problem.hint} />;
   }
   if (problem) {
     return (

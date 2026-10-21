@@ -65,20 +65,36 @@ describe("lastChangeLine", () => {
 });
 
 describe("summaryLine", () => {
-  const base = { slug: "demo", name: "demo" };
+  const base = {
+    slug: "demo",
+    name: "demo",
+    root: "/home/ana/demo",
+    last_used_at: 0,
+    removed_at: null,
+    folder: "present" as const,
+  };
 
   it("gives the counts of a project with an overview", () => {
     expect(
-      summaryLine({ ...base, available: true, overview: overview({}) }),
+      summaryLine({ ...base, available: true, overview: overview({}) }, 0),
     ).toBe("0 tasks");
   });
 
   it("tells an open project without an overview from one that is not open", () => {
-    expect(summaryLine({ ...base, available: true, overview: null })).toBe(
+    expect(summaryLine({ ...base, available: true, overview: null }, 0)).toBe(
       "Could not read this project.",
     );
-    expect(summaryLine({ ...base, available: false, overview: null })).toBe(
+    expect(summaryLine({ ...base, available: false, overview: null }, 0)).toBe(
       "Could not open this project.",
     );
+  });
+
+  it("says when a person removed the project and that its data stays", () => {
+    expect(
+      summaryLine(
+        { ...base, available: false, overview: null, removed_at: 1_000 },
+        61_000,
+      ),
+    ).toBe("Removed from fold 1 min ago. Its data stays in its folder.");
   });
 });

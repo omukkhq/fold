@@ -518,3 +518,48 @@ fn name_sets_the_slug_and_a_new_folder_gets_only_an_empty_foldignore() {
     assert!(!project.join(".gitignore").exists());
     assert!(!project.join(".git").exists());
 }
+
+#[tokio::test]
+async fn init_in_the_folder_of_a_removed_project_brings_it_back_under_its_slug() {
+    let sandbox = Arc::new(Sandbox::new());
+    let project = sandbox.path("scratch");
+    let first = fold_blocking(
+        sandbox.clone(),
+        vec!["init".to_owned(), project.to_str().unwrap().to_owned()],
+    )
+    .await;
+    assert!(first.status.success(), "{}", stdout(&first));
+    let registry = Store::open_registry(&sandbox.registry_path())
+        .await
+        .unwrap();
+    let now = fold_core::Timestamp::from_millis(5).unwrap();
+    registry
+        .write(async |tx| fold_store::projects::set_removed(tx, "scratch", now).await)
+        .await
+        .unwrap();
+
+    let sandbox_in = sandbox.clone();
+    let root = project.clone();
+    let again = tokio::task::spawn_blocking(move || sandbox_in.fold_in(&root, &["init"], &[]))
+        .await
+        .unwrap();
+    assert!(
+        again.status.success(),
+        "{}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+    let printed = stdout(&again);
+    assert!(
+        printed.starts_with(&format!(
+            "project scratch at {} is back in fold, with the data its .fold kept\n",
+            project.canonicalize().unwrap().display()
+        )),
+        "{printed}"
+    );
+    let found = fold_store::projects::find_registration(registry.read(), "scratch")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.removed_at, None);
+    registry.close().await.unwrap();
+}

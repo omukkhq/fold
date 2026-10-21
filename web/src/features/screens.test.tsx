@@ -51,6 +51,20 @@ function renderAt(path: string) {
   return router;
 }
 
+/** A project in fold as the list gives it, open, with no overview. */
+function summary(slug: string, name: string) {
+  return {
+    slug,
+    name,
+    root: `/home/ana/${slug}`,
+    available: true,
+    last_used_at: 0,
+    removed_at: null as number | null,
+    folder: "present",
+    overview: null,
+  };
+}
+
 describe("Projects screen", () => {
   it("lists the projects with counts, agents and head, links an available one to its board and marks one that did not open", async () => {
     stubFetch({
@@ -59,9 +73,7 @@ describe("Projects screen", () => {
         body: {
           projects: [
             {
-              slug: "demo",
-              name: "Demo",
-              available: true,
+              ...summary("demo", "Demo"),
               overview: {
                 counts: {
                   backlog: 2,
@@ -76,7 +88,7 @@ describe("Projects screen", () => {
                 attention: [],
               },
             },
-            { slug: "archive", name: "Archive", available: false },
+            { ...summary("archive", "Archive"), available: false },
           ],
         },
       },
@@ -86,10 +98,165 @@ describe("Projects screen", () => {
     expect(demo.getAttribute("href")).toBe("/p/demo/board");
     expect(within(demo).getByText(/17 tasks/)).toBeTruthy();
     expect(within(demo).getByText(/main r5/)).toBeTruthy();
-    expect(within(demo).getByText("@frontend")).toBeTruthy();
+    // The chip line keeps a hidden copy of each chip to measure.
+    expect(within(demo).getAllByText("@frontend")).toHaveLength(2);
     expect(within(demo).getByText(/changed \d+ s ago/)).toBeTruthy();
     expect(screen.getByText("Could not open this project.")).toBeTruthy();
     expect(screen.queryByRole("link", { name: /Archive/ })).toBeNull();
+  });
+
+  it("shows +N for the agent chips that do not fit and gives a screen reader their names", async () => {
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(100);
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(250);
+    stubFetch({
+      "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+      "GET /api/v1/projects": {
+        body: {
+          projects: [
+            {
+              ...summary("demo", "Demo"),
+              overview: {
+                counts: {
+                  backlog: 0,
+                  todo: 0,
+                  in_progress: 0,
+                  review: 0,
+                  done: 0,
+                },
+                agents: ["alpha", "beta", "gamma", "delta"].map((name) => ({
+                  name,
+                  presence: "active",
+                })),
+                head: "r1",
+                last_change_at: Date.now(),
+                attention: [],
+              },
+            },
+          ],
+        },
+      },
+      "GET /api/v1/projects/demo/git": errorReply(404, "git_not_found"),
+    });
+    renderAt("/projects");
+    const demo = await screen.findByRole("link", {
+      name: /3 more agents: @beta, @gamma, @delta/,
+    });
+    const more = within(demo).getByText("+3");
+    expect(more.getAttribute("aria-hidden")).toBe("true");
+    expect(more.parentElement?.getAttribute("title")).toBe(
+      "3 more agents: @beta, @gamma, @delta",
+    );
+  });
+
+  it("searches every project by name, slug or folder, the removed ones too, and adds a removed one back", async () => {
+    let removed: number | null = 5;
+    const calls = stubFetch({
+      "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+      "GET /api/v1/projects": () => ({
+        body: {
+          projects: [
+            { ...summary("web", "Web shop"), available: false },
+            {
+              ...summary("old", "Old site"),
+              available: removed === null,
+              removed_at: removed,
+            },
+            {
+              ...summary("away", "Away"),
+              available: false,
+              folder: "folder_missing",
+            },
+          ],
+        },
+      }),
+      "POST /api/v1/projects/old/restore": () => {
+        removed = null;
+        return { body: { ...summary("old", "Old site") } };
+      },
+      "GET /api/v1/projects/old/git": errorReply(404, "git_not_found"),
+    });
+    renderAt("/projects");
+    const list = await screen.findByRole("list", { name: "Projects" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+    expect(within(list).queryByText("Old site")).toBeNull();
+    expect(within(list).getByText("folder missing")).toBeTruthy();
+    expect(within(list).getByText("/home/ana/away")).toBeTruthy();
+
+    await userEvent.type(
+      screen.getByRole("searchbox", { name: "Search projects" }),
+      "OLD",
+    );
+    const results = screen.getByRole("list", { name: "Search results" });
+    expect(within(results).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(results).getByText("removed")).toBeTruthy();
+    expect(within(results).getByText("/home/ana/old")).toBeTruthy();
+    await userEvent.click(
+      within(results).getByRole("button", {
+        name: "Add Old site back to fold",
+      }),
+    );
+    expect(
+      await within(results).findByRole("button", {
+        name: "Remove Old site from fold",
+      }),
+    ).toBeTruthy();
+    expect(calls.map((call) => call.method)).toContain("POST");
+
+    await userEvent.clear(screen.getByRole("searchbox"));
+    await userEvent.type(screen.getByRole("searchbox"), "nothing");
+    expect(
+      screen.getByRole("region", { name: "No project matches" }),
+    ).toBeTruthy();
+  });
+
+  it("removes a project only after the dialog that says its data stays, and shows a refusal there", async () => {
+    let refuse = true;
+    let removed: number | null = null;
+    stubFetch({
+      "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+      "GET /api/v1/projects": () => ({
+        body: {
+          projects: [
+            {
+              ...summary("web", "Web shop"),
+              available: false,
+              removed_at: removed,
+            },
+          ],
+        },
+      }),
+      "DELETE /api/v1/projects/web": () => {
+        if (refuse) {
+          return errorReply(409, "project_workers_running");
+        }
+        removed = 9;
+        return { body: { ...summary("web", "Web shop"), removed_at: 9 } };
+      },
+    });
+    renderAt("/projects");
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Remove Web shop from fold" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Remove Web shop from fold?",
+    });
+    expect(within(dialog).getByText("/home/ana/web")).toBeTruthy();
+    expect(within(dialog).getByText("fld claude")).toBeTruthy();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Remove from fold" }),
+    );
+    expect((await within(dialog).findByRole("alert")).textContent).toContain(
+      "Pause the project's agents",
+    );
+
+    refuse = false;
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Remove from fold" }),
+    );
+    expect(
+      await screen.findByRole("region", { name: "No projects yet" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("shows the empty state with the next step when there are no projects", async () => {
@@ -281,7 +448,9 @@ describe("A project fold removed", () => {
     stubFetch({
       "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
       "GET /api/v1/projects": {
-        body: { projects: [{ slug: "demo", name: "Demo", available: false }] },
+        body: {
+          projects: [{ ...summary("demo", "Demo"), available: false }],
+        },
       },
       "GET /api/v1/projects/nobs": errorReply(404, "project_not_found"),
     });
@@ -325,6 +494,49 @@ describe("A project fold removed", () => {
     expect(alert.textContent).toContain("Project not found");
     expect(screen.queryByText(/did not arrive/)).toBeNull();
     expect(screen.queryByRole("region", { name: "No agents yet" })).toBeNull();
+  });
+});
+
+describe("The top bar", () => {
+  it("links the wordmark to the projects page and switches among the five most recent projects", async () => {
+    const slugs = ["a", "b", "c", "d", "e", "f"];
+    const shell = shellRoutes(slugs);
+    const projects = slugs.map((slug, index) => ({
+      ...summary(slug, slug === "c" ? "f" : slug),
+      last_used_at: index,
+    }));
+    stubFetch({
+      ...shell,
+      "GET /api/v1/projects": { body: { projects } },
+      "GET /api/v1/projects/demo": {
+        body: { slug: "demo", name: "demo", available: true },
+      },
+      "GET /api/v1/projects/f/workers": { body: workerList() },
+      "GET /api/v1/projects/f/events": () => new Promise<StubReply>(() => {}),
+    });
+    renderAt("/p/f/agents");
+    const wordmark = await screen.findByRole("link", {
+      name: "fold, all projects",
+    });
+    expect(wordmark.getAttribute("href")).toBe("/projects");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Project f, switch project" }),
+    );
+    const items = await screen.findAllByRole("menuitemradio");
+    // Two listed projects named f show their slugs beside the name.
+    expect(items.map((item) => item.textContent)).toEqual([
+      "ff",
+      "e",
+      "d",
+      "fc",
+      "b",
+    ]);
+    expect(items[0]?.getAttribute("aria-checked")).toBe("true");
+    await userEvent.click(screen.getByRole("menuitem", { name: "See all" }));
+    expect(
+      await screen.findByRole("heading", { name: "Projects" }),
+    ).toBeTruthy();
   });
 });
 

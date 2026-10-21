@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT slug, name, root FROM projects ORDER BY slug",
+  "query": "SELECT slug, name, root, COALESCE(last_used_at, created_at) AS \"last_used_at!: i64\", removed_at\n           FROM projects ORDER BY slug",
   "describe": {
     "columns": [
       {
@@ -35,6 +35,23 @@
             "name": "root"
           }
         }
+      },
+      {
+        "name": "last_used_at!: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "removed_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "removed_at"
+          }
+        }
       }
     ],
     "parameters": {
@@ -43,8 +60,10 @@
     "nullable": [
       false,
       false,
-      false
+      false,
+      false,
+      true
     ]
   },
-  "hash": "16556dea12ffb0f39074d5dc65e02995a23fa5ef162f8428985e2b276ec790f0"
+  "hash": "6652d465a15fbd31dfeeb39ed6f8d81192e2cef38552e754af6e1830e2f548d8"
 }

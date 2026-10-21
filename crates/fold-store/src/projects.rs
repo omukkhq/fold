@@ -13,31 +13,161 @@ pub struct ProjectRow {
     pub root: String,
 }
 
-/// Every registered project, ordered by slug.
+/// A registry row with when a person last used the project and whether a person removed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Registration {
+    pub row: ProjectRow,
+    /// When a person last opened the project, or when it was registered.
+    pub last_used_at: Timestamp,
+    /// When a person removed the project from fold; `None` while it is in fold.
+    pub removed_at: Option<Timestamp>,
+}
+
+struct RegistrationRecord {
+    slug: String,
+    name: String,
+    root: String,
+    last_used_at: i64,
+    removed_at: Option<i64>,
+}
+
+impl TryFrom<RegistrationRecord> for Registration {
+    type Error = StoreError;
+
+    fn try_from(record: RegistrationRecord) -> Result<Self, StoreError> {
+        Ok(Self {
+            row: ProjectRow {
+                slug: record.slug,
+                name: record.name,
+                root: record.root,
+            },
+            last_used_at: time(record.last_used_at, "projects.last_used_at")?,
+            removed_at: optional_time(record.removed_at, "projects.removed_at")?,
+        })
+    }
+}
+
+/// Every row of the registry, removed projects too, ordered by slug.
+pub async fn list_registrations(pool: &SqlitePool) -> Result<Vec<Registration>, StoreError> {
+    sqlx::query_as!(
+        RegistrationRecord,
+        r#"SELECT slug, name, root, COALESCE(last_used_at, created_at) AS "last_used_at!: i64", removed_at
+           FROM projects ORDER BY slug"#
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(Registration::try_from)
+    .collect()
+}
+
+/// The row of `slug`, also when the project was removed.
+pub async fn find_registration(
+    pool: &SqlitePool,
+    slug: &str,
+) -> Result<Option<Registration>, StoreError> {
+    sqlx::query_as!(
+        RegistrationRecord,
+        r#"SELECT slug, name, root, COALESCE(last_used_at, created_at) AS "last_used_at!: i64", removed_at
+           FROM projects WHERE slug = ?"#,
+        slug
+    )
+    .fetch_optional(pool)
+    .await?
+    .map(Registration::try_from)
+    .transpose()
+}
+
+/// The row registered at `root`, also when the project was removed. `root` must be the canonical path `insert_project` stored.
+pub async fn find_registration_by_root(
+    pool: &SqlitePool,
+    root: &str,
+) -> Result<Option<Registration>, StoreError> {
+    sqlx::query_as!(
+        RegistrationRecord,
+        r#"SELECT slug, name, root, COALESCE(last_used_at, created_at) AS "last_used_at!: i64", removed_at
+           FROM projects WHERE root = ?"#,
+        root
+    )
+    .fetch_optional(pool)
+    .await?
+    .map(Registration::try_from)
+    .transpose()
+}
+
+/// Marks `slug` removed at `now`. False when the registry does not hold it or it is removed already.
+pub async fn set_removed(tx: &mut WriteTx, slug: &str, now: Timestamp) -> Result<bool, StoreError> {
+    let now = now.as_millis();
+    let result = sqlx::query!(
+        "UPDATE projects SET removed_at = ? WHERE slug = ? AND removed_at IS NULL",
+        now,
+        slug
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Clears the removed mark of `slug`, so the project is in fold again under its slug. False when the registry does not hold it or it is not removed.
+pub async fn clear_removed(tx: &mut WriteTx, slug: &str) -> Result<bool, StoreError> {
+    let result = sqlx::query!(
+        "UPDATE projects SET removed_at = NULL WHERE slug = ? AND removed_at IS NOT NULL",
+        slug
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Sets `last_used_at` of `slug` to `now` unless it is already later than `stale_before`, so a screen that reads the project again and again writes the registry at most once per period. True when the row changed.
+pub async fn touch_project(
+    tx: &mut WriteTx,
+    slug: &str,
+    now: Timestamp,
+    stale_before: Timestamp,
+) -> Result<bool, StoreError> {
+    let now = now.as_millis();
+    let stale_before = stale_before.as_millis();
+    let result = sqlx::query!(
+        "UPDATE projects SET last_used_at = ? WHERE slug = ? AND (last_used_at IS NULL OR last_used_at <= ?)",
+        now,
+        slug,
+        stale_before
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Every project in fold, ordered by slug; a project a person removed is left out.
 pub async fn list_projects(pool: &SqlitePool) -> Result<Vec<ProjectRow>, StoreError> {
     Ok(sqlx::query_as!(
         ProjectRow,
-        "SELECT slug, name, root FROM projects ORDER BY slug"
+        "SELECT slug, name, root FROM projects WHERE removed_at IS NULL ORDER BY slug"
     )
     .fetch_all(pool)
     .await?)
 }
 
-pub async fn find_project(pool: &SqlitePool, slug: &str) -> Result<Option<ProjectRow>, StoreError> {
+/// The project `slug` while it is in fold; `None` also when a person removed it.
+pub async fn find_project(
+    executor: impl SqliteExecutor<'_>,
+    slug: &str,
+) -> Result<Option<ProjectRow>, StoreError> {
     Ok(sqlx::query_as!(
         ProjectRow,
-        "SELECT slug, name, root FROM projects WHERE slug = ?",
+        "SELECT slug, name, root FROM projects WHERE slug = ? AND removed_at IS NULL",
         slug
     )
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?)
 }
 
-/// The project registered at `root`, which must be the canonical path `insert_project` stored.
+/// The project in fold registered at `root`, which must be the canonical path `insert_project` stored; `None` also when a person removed it.
 pub async fn find_by_root(pool: &SqlitePool, root: &str) -> Result<Option<ProjectRow>, StoreError> {
     Ok(sqlx::query_as!(
         ProjectRow,
-        "SELECT slug, name, root FROM projects WHERE root = ?",
+        "SELECT slug, name, root FROM projects WHERE root = ? AND removed_at IS NULL",
         root
     )
     .fetch_optional(pool)
@@ -59,10 +189,11 @@ pub async fn insert_project(
 ) -> Result<(), StoreError> {
     let created_at = now.as_millis();
     sqlx::query!(
-        "INSERT INTO projects (slug, name, root, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO projects (slug, name, root, created_at, last_used_at) VALUES (?, ?, ?, ?, ?)",
         project.slug,
         project.name,
         project.root,
+        created_at,
         created_at
     )
     .execute(tx.conn())

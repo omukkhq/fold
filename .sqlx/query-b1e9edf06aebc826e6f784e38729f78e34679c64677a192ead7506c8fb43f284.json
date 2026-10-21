@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE projects SET last_used_at = ? WHERE slug = ? AND (last_used_at IS NULL OR last_used_at <= ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "b1e9edf06aebc826e6f784e38729f78e34679c64677a192ead7506c8fb43f284"
+}

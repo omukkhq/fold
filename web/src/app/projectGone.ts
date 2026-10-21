@@ -10,21 +10,27 @@ export function isProjectGone(error: unknown): boolean {
 /** Why fold cannot show a project, by the error code and, for `project_unavailable`, its `details.reason`. */
 export type ProjectProblem =
   | { kind: "gone" }
+  | { kind: "removed"; hint: string | null }
   | {
       kind: "folder_missing" | "database_missing" | "unavailable";
       hint: string | null;
     };
 
-/** The problem of a project screen's error, or null for an error of the screen itself. */
+/** The problem of a project screen's error, or null for an error of the screen itself. A project a person removed from fold is `removed`, with the daemon's hint of how it comes back. */
 export function projectProblem(error: unknown): ProjectProblem | null {
-  if (isProjectGone(error)) {
-    return { kind: "gone" };
-  }
-  if (!(error instanceof ApiError) || error.code !== "project_unavailable") {
+  if (!(error instanceof ApiError)) {
     return null;
   }
   const hint =
     typeof error.details.hint === "string" ? error.details.hint : null;
+  if (error.code === "project_not_found") {
+    return error.details.reason === "removed"
+      ? { kind: "removed", hint }
+      : { kind: "gone" };
+  }
+  if (error.code !== "project_unavailable") {
+    return null;
+  }
   const reason = error.details.reason;
   return reason === "folder_missing" || reason === "database_missing"
     ? { kind: reason, hint }

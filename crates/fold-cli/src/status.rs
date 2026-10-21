@@ -74,6 +74,8 @@ pub(crate) struct Project {
 pub(crate) enum Registered {
     /// The name and the slug of the registered project.
     Listed(String, String),
+    /// The name and the slug of a project a person removed from fold; its data stays in the folder.
+    Removed(String, String),
     Unlisted,
     /// The registry is missing, locked, of another schema version or unreadable, so the status names no project.
     Unknown,
@@ -220,7 +222,10 @@ fn project(dirs: &Dirs, cwd: &Path) -> Option<Project> {
             })
         })
         .map_or(Registered::Unknown, |row| match row {
-            Ok(row) => Registered::Listed(row.name, row.slug),
+            Ok(found) if found.removed_at.is_some() => {
+                Registered::Removed(found.row.name, found.row.slug)
+            }
+            Ok(found) => Registered::Listed(found.row.name, found.row.slug),
             Err(error) if error.code() == Some(codes::PROJECT_NOT_FOUND) => Registered::Unlisted,
             Err(_) => Registered::Unknown,
         });
@@ -345,6 +350,14 @@ pub(crate) fn lines(status: &Status, fld: &str) -> Vec<String> {
             registered: Registered::Listed(name, slug),
         }) => lines.push(format!(
             "project: {} ({slug}) in {}",
+            output::escape_control(name),
+            output::escape_control(&root.to_string_lossy())
+        )),
+        Some(Project {
+            root,
+            registered: Registered::Removed(name, slug),
+        }) => lines.push(format!(
+            "project: {} ({slug}) in {}, removed from fold; fld claude or fld init there brings it back",
             output::escape_control(name),
             output::escape_control(&root.to_string_lossy())
         )),
@@ -523,6 +536,14 @@ mod tests {
         assert_eq!(
             lines(&status(Daemon::NotRunning, None, odd), "0.3.0")[3],
             "project: A\\u{1b}[2Jpp (app) in /home/ana/app"
+        );
+        let removed = Some(Project {
+            root: PathBuf::from("/home/ana/app"),
+            registered: Registered::Removed("App".to_owned(), "app".to_owned()),
+        });
+        assert_eq!(
+            lines(&status(Daemon::NotRunning, None, removed), "0.3.0")[3],
+            "project: App (app) in /home/ana/app, removed from fold; fld claude or fld init there brings it back"
         );
         let unlisted = Some(Project {
             root: PathBuf::from("/home/ana/app"),
