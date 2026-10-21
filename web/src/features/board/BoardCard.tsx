@@ -192,7 +192,7 @@ export function BoardCard({
             <span
               tabIndex={0}
               aria-label={`Needs you: ${mark.tooltip}`}
-              className="relative z-10 self-start rounded-s outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="relative z-10 self-start rounded-s focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
               <Badge tone="needs-you" icon={mark.icon}>
                 {mark.text}
