@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 
+use fold_core::claims::stale_cutoff;
 use fold_core::dag::Dag;
 use fold_core::readiness::{Candidate, ready_order, unblock_count};
 use fold_core::roles::{
@@ -15,6 +16,7 @@ use fold_store::{StoreError, tasks};
 use super::{Supervisor, lock, resume, reviewer_batch};
 use crate::services::agents::AgentError;
 use crate::services::agents::workers::code_of;
+use crate::services::projects::load_config;
 
 /// The turn a worker that was working gets after a daemon restart resumed its session.
 pub const RESTART_TURN: &str = "fold restarted while you were working. Check your claims and your workspace, then continue your work.";
@@ -242,12 +244,12 @@ impl Supervisor {
         (!parts.is_empty()).then(|| parts.join("\n\n"))
     }
 
-    /// The work that waits for a lead, see [`catch_up_turn`]. A claim hides its task or proposal only while its worker runs or is among `kept`, the workers the same start runs again. A read that fails is logged and names nothing, so the lead still runs.
+    /// The work that waits for a lead, see [`catch_up_turn`]. A claim hides its task or proposal while its worker runs or is among `kept`, the workers the same start runs again; a review claim whose lease has not run out hides its proposal also when its reviewer has ended, since fold resumes that reviewer for a new version. A read that fails is logged and names nothing, so the lead still runs.
     async fn catch_up(&self, row: &WorkerProcessRow, kept: &BTreeSet<AgentName>) -> Option<String> {
         match self.waiting_for(row, kept).await {
             Ok(text) => text,
             Err(error) => {
-                tracing::warn!(agent = %row.agent, code = error.log_code(), "could not read the work that waits for a lead");
+                tracing::warn!(agent = %row.agent, code = code_of(&error), "could not read the work that waits for a lead");
                 None
             }
         }
@@ -257,7 +259,7 @@ impl Supervisor {
         &self,
         row: &WorkerProcessRow,
         kept: &BTreeSet<AgentName>,
-    ) -> Result<Option<String>, StoreError> {
+    ) -> Result<Option<String>, AgentError> {
         let holds = |worker: &WorkerName| {
             let agent = worker.agent();
             kept.contains(&agent) || self.is_running(&agent)
@@ -295,7 +297,11 @@ impl Supervisor {
                 (ready_order(&candidates), Vec::new())
             }
             Role::ReviewLead => {
-                let open = reviews::list_proposals(read, Some(ProposalState::Open), None).await?;
+                let lease_minutes = load_config(&self.inner.paths).await?.lease_minutes;
+                let live_after = stale_cutoff(self.inner.clock.now(), lease_minutes);
+                let open =
+                    reviews::list_proposals(read, Some(ProposalState::Open), Some(live_after))
+                        .await?;
                 let mut proposals = Vec::new();
                 for proposal in open {
                     let waits = waits_for_review(&proposal)

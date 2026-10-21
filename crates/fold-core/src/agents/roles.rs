@@ -453,7 +453,7 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
     }
 }
 
-/// What waits for a lead whose process starts again in its own session: for an area lead the ready tasks of its area in the ready order, for the review lead the open proposals that have no verdict on their current version. A claim hides a task or proposal only while its worker runs or the same start runs it again, because a start moves the claim of a worker that has ended.
+/// What waits for a lead whose process starts again in its own session: for an area lead the ready tasks of its area in the ready order, for the review lead the open proposals that have no verdict on their current version and no live review claim. A task claim hides its task only while its worker runs or the same start runs it again, because a start moves the claim of a worker that has ended. A review claim hides its proposal until its lease runs out, also when its reviewer has ended: fold resumes that reviewer for a new version, so the proposal is not the review lead's work.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatchUpFacts<'a> {
     pub role: Role,
@@ -489,7 +489,7 @@ pub fn catch_up_turn(facts: &CatchUpFacts<'_>) -> Option<String> {
             ))
         }
         Role::ReviewLead if !facts.proposals.is_empty() => Some(format!(
-            "These open proposals wait for a review: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, then review them yourself or give them to reviewers with start_worker, which also moves the claim of a reviewer that has ended.",
+            "These open proposals wait for a review and nobody holds a live review claim of them: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, and give them to reviewers with start_worker, which also moves a stale claim. Leave a proposal whose reviewer holds a live claim to that reviewer: fold resumes it for a new version.",
             listed(facts.proposals.iter().map(ToString::to_string).collect())
         )),
         Role::AreaLead | Role::ReviewLead | Role::TaskWorker | Role::Reviewer => None,
@@ -1066,7 +1066,11 @@ mod tests {
             ..facts(Role::ReviewLead, &[], &proposals)
         })
         .unwrap();
-        assert!(review.contains("wait for a review: P-4."), "{review}");
+        assert!(
+            review.contains("nobody holds a live review claim of them: P-4."),
+            "{review}"
+        );
+        assert!(!review.contains("yourself"), "{review}");
         assert!(
             review.contains("list_proposals") && review.contains("start_worker"),
             "{review}"
