@@ -1,4 +1,4 @@
-use fold_core::messages::line_excerpt;
+use fold_core::messages::{line_excerpt, text_lines};
 use fold_core::reviews::Side;
 use fold_core::{
     Actor, AddressedAs, FoldError, MessageBody, ProposalId, Recipient, Target, codes, policy,
@@ -54,7 +54,10 @@ impl ReviewService {
             .await?
             .ok_or_else(|| unknown_path(&location, version))?;
         let (excerpt, excerpt_cut) = line_excerpt(&text, location.start_line, location.end_line)
-            .ok_or_else(|| range_refusal(&location, Some(fold_vcs::diff::line_count(&text))))?;
+            .ok_or_else(|| {
+                let count = u32::try_from(text_lines(&text).len()).unwrap_or(u32::MAX);
+                range_refusal(&location, Some(count))
+            })?;
         let lines = MessageLines {
             version,
             path: location.path,

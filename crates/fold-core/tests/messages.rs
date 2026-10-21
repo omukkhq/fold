@@ -595,3 +595,18 @@ fn a_long_line_excerpt_keeps_its_first_lines() {
     assert!(cut);
     assert_eq!(excerpt.chars().count(), MAX_EXCERPT_CHARS);
 }
+
+#[test]
+fn a_lone_carriage_return_ends_a_line_of_an_excerpt() {
+    use fold_core::messages::{line_excerpt, text_lines};
+    let text = "one\rtwo\r\nthree\nfour";
+    assert_eq!(text_lines(text), ["one", "two", "three", "four"]);
+    assert_eq!(text_lines("a\n\r\n"), ["a", ""]);
+    assert!(text_lines("").is_empty());
+    assert_eq!(
+        line_excerpt(text, 2, 3),
+        Some(("two\nthree".to_owned(), false))
+    );
+    assert_eq!(line_excerpt(text, 4, 4), Some(("four".to_owned(), false)));
+    assert_eq!(line_excerpt(text, 4, 5), None);
+}

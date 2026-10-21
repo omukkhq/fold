@@ -546,18 +546,48 @@ pub const MAX_EXCERPT_LINES: usize = 100;
 /// The most characters a question's excerpt keeps.
 pub const MAX_EXCERPT_CHARS: usize = 20_000;
 
-/// A question's excerpt: lines `start..=end` of `text`, 1-based and joined by newlines without their line endings, and whether it was cut. A run longer than [`MAX_EXCERPT_LINES`] lines or [`MAX_EXCERPT_CHARS`] characters keeps its first lines, and a first line longer than that its first characters. `None` when the run is not a forward run from line 1 inside the text.
+/// The lines of `text` without their endings, split as the diff numbers them: a line ends at `\r\n`, at a lone `\r` or at `\n`, and text after the last ending is one more line.
+pub fn text_lines(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\r' => {
+                lines.push(&text[start..index]);
+                index += if bytes.get(index + 1) == Some(&b'\n') {
+                    2
+                } else {
+                    1
+                };
+                start = index;
+            }
+            b'\n' => {
+                lines.push(&text[start..index]);
+                index += 1;
+                start = index;
+            }
+            _ => index += 1,
+        }
+    }
+    if start < text.len() {
+        lines.push(&text[start..]);
+    }
+    lines
+}
+
+/// A question's excerpt: lines `start..=end` of `text` as [`text_lines`] splits it, 1-based and joined by newlines, and whether it was cut. A run longer than [`MAX_EXCERPT_LINES`] lines or [`MAX_EXCERPT_CHARS`] characters keeps its first lines, and a first line longer than that its first characters. `None` when the run is not a forward run from line 1 inside the text.
 pub fn line_excerpt(text: &str, start: u32, end: u32) -> Option<(String, bool)> {
     if start == 0 || start > end {
         return None;
     }
     let skip = usize::try_from(start - 1).ok()?;
     let wanted = usize::try_from(end - start).ok()?.checked_add(1)?;
-    let lines: Vec<&str> = text
-        .lines()
+    let lines: Vec<&str> = text_lines(text)
+        .into_iter()
         .skip(skip)
         .take(wanted)
-        .map(|line| line.strip_suffix('\r').unwrap_or(line))
         .collect();
     if lines.len() < wanted {
         return None;
