@@ -3135,7 +3135,7 @@ export interface components {
              */
             delivered_at: number | null;
             /**
-             * @description The lead that fold sent the message on to because this recipient, a stopped task worker, could not start to answer it; the sender itself when the sender is that lead. Null while fold has not sent it on.
+             * @description The lead that fold sent the message on to because this recipient, a stopped worker, could not start to answer it; the sender itself when the sender is that lead. Null while fold has not sent it on.
              * @example web-lead
              */
             forwarded_to: string | null;

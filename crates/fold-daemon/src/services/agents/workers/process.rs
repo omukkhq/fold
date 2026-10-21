@@ -181,9 +181,9 @@ struct Inner {
     held_lost: Mutex<HashMap<AgentName, Option<String>>>,
     /// Set when the daemon started while the project was paused, so the resume of the pause resumes the workers that could not reach fold, as the daemon start would have.
     unreachable_owed: AtomicBool,
-    /// The task workers that fold started again to answer a message, which stop once they have answered.
+    /// The workers that fold started again to answer a message, which stop once they have answered.
     answering: Mutex<HashSet<AgentName>>,
-    /// The task workers whose start for a message is under way, so two events start one.
+    /// The workers whose start for a message is under way, so two events start one.
     message_starts: Mutex<HashSet<AgentName>>,
 }
 

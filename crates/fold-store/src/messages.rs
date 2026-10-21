@@ -47,7 +47,7 @@ pub struct RecipientRow {
     pub acked_at: Option<Timestamp>,
     /// The first time a notice about the message reached the recipient's agent.
     pub pushed_at: Option<Timestamp>,
-    /// The worker fold sent the message on to because this recipient, a stopped task worker, could not start to answer it.
+    /// The worker fold sent the message on to because this recipient, a stopped worker, could not start to answer it.
     pub forwarded_to: Option<WorkerName>,
 }
 
@@ -395,10 +395,10 @@ pub async fn mark_pushed(
     Ok(done.rows_affected())
 }
 
-/// A message to a stopped or failed task worker that it has not read, that no notice reached and that fold has not sent on: the worker must start again to answer it.
+/// A message to a stopped or failed worker that it has not read, that no notice reached and that fold has not settled by sending it on: the worker must start again to answer it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwedMessage {
-    /// The recipient task worker's agent.
+    /// The recipient worker's agent.
     pub agent: AgentName,
     pub message: MessageId,
     pub thread: MessageId,
@@ -406,10 +406,12 @@ pub struct OwedMessage {
     pub sender: Sender,
 }
 
-/// Every [`OwedMessage`] in message number order. Only rows addressed to the agent or to one of its workers by name count, so a message to a tag or to every agent starts no stopped worker, and fold's own messages never do.
+/// Every [`OwedMessage`] in message number order, of `agent` alone when it is given. Only rows addressed to the agent or to one of its workers by name count, so a message to a tag or to every agent starts no stopped worker, and fold's own messages never do. An agent with a connected session, or with a session opened since its process stopped, such as one a person runs in a terminal of their own, is left out: that session takes the message, and a second process must not run beside it.
 pub async fn owed_to_stopped(
     executor: impl SqliteExecutor<'_>,
+    agent: Option<&AgentName>,
 ) -> Result<Vec<OwedMessage>, StoreError> {
+    let agent = agent.map(AgentName::as_str);
     let rows = sqlx::query!(
         r#"SELECT DISTINCT g.name AS "agent!: String", m.number AS "number!: i64",
                   m.thread_id AS "thread!: i64", t.number AS "task?: i64", m.sender_kind,
@@ -421,11 +423,16 @@ pub async fn owed_to_stopped(
            JOIN worker_processes p ON p.agent_id = k.agent_id
            LEFT JOIN workers sw ON sw.id = m.sender_worker_id
            LEFT JOIN tasks t ON t.id = m.task_id
-           WHERE p.role = 'task_worker' AND p.state IN ('stopped', 'failed')
+           WHERE p.state IN ('stopped', 'failed') AND (?1 IS NULL OR g.name = ?1)
              AND r.addressed_as IN ('agent', 'worker') AND m.sender_kind <> 'fold'
              AND r.delivered_at IS NULL AND r.acked_at IS NULL AND r.pushed_at IS NULL
-             AND r.forwarded_to IS NULL
-           ORDER BY m.number, g.name"#
+             AND r.forwarded_at IS NULL
+             AND NOT EXISTS (
+                 SELECT 1 FROM sessions s
+                 WHERE s.agent_id = g.id AND (s.ended_at IS NULL OR s.started_at > p.stopped_at)
+             )
+           ORDER BY m.number, g.name"#,
+        agent
     )
     .fetch_all(executor)
     .await?;
@@ -453,26 +460,26 @@ pub async fn owed_to_stopped(
         .collect()
 }
 
-/// Records on `agent`'s rows of `message` that fold sent the message on to `to`, where no forward is recorded yet, and returns how many rows it set.
+/// Records on `agent`'s rows of `message` that fold settled them at `now`, because the stopped worker could not start to answer it: sent on to `to`, or held with nobody to take it when `to` is `None`. Rows settled before keep their record. Returns how many rows it set.
 pub async fn mark_forwarded(
     tx: &mut WriteTx,
     message: MessageId,
     agent: &AgentName,
-    to: &WorkerName,
+    to: Option<&WorkerName>,
     now: Timestamp,
 ) -> Result<u64, StoreError> {
     let message = message.to_db();
     let agent = agent.as_str();
-    let to_agent = to.agent();
-    let to_agent = to_agent.as_str();
-    let to = to.as_str();
+    let to_agent = to.map(WorkerName::agent);
+    let to_agent = to_agent.as_ref().map(AgentName::as_str);
+    let to = to.map(WorkerName::as_str);
     let now = now.as_millis();
     let done = sqlx::query!(
         "UPDATE message_recipients
          SET forwarded_to = (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id
                              WHERE a.name = ?4 AND w.name = ?3),
              forwarded_at = ?1
-         WHERE forwarded_to IS NULL
+         WHERE forwarded_at IS NULL
            AND message_id = (SELECT id FROM messages WHERE number = ?2)
            AND worker_id IN (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id
                              WHERE a.name = ?5)",

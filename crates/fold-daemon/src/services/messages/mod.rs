@@ -81,7 +81,7 @@ pub struct RecipientView {
     pub pushed_at: Option<Timestamp>,
     /// Whether a notice to the recipient's agent would reach one of its sessions now; `None` for a human, for an agent without a connected session, and for every recipient of a service without the project's push targets.
     pub reachable: Option<bool>,
-    /// The lead fold sent the message on to because the recipient, a stopped task worker, could not start to answer it; the sender itself when the sender is that lead.
+    /// The lead fold sent the message on to because the recipient, a stopped worker, could not start to answer it; the sender itself when the sender is that lead.
     pub forwarded_to: Option<WorkerName>,
 }
 

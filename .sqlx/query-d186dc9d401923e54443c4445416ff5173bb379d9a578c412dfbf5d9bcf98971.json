@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT DISTINCT g.name AS \"agent!: String\", m.number AS \"number!: i64\",\n                  m.thread_id AS \"thread!: i64\", t.number AS \"task?: i64\", m.sender_kind,\n                  sw.name AS \"worker?: String\", m.sender_human\n           FROM message_recipients r\n           JOIN messages m ON m.id = r.message_id\n           JOIN workers k ON k.id = r.worker_id\n           JOIN agents g ON g.id = k.agent_id\n           JOIN worker_processes p ON p.agent_id = k.agent_id\n           LEFT JOIN workers sw ON sw.id = m.sender_worker_id\n           LEFT JOIN tasks t ON t.id = m.task_id\n           WHERE p.role = 'task_worker' AND p.state IN ('stopped', 'failed')\n             AND r.addressed_as IN ('agent', 'worker') AND m.sender_kind <> 'fold'\n             AND r.delivered_at IS NULL AND r.acked_at IS NULL AND r.pushed_at IS NULL\n             AND r.forwarded_to IS NULL\n           ORDER BY m.number, g.name",
+  "query": "SELECT DISTINCT g.name AS \"agent!: String\", m.number AS \"number!: i64\",\n                  m.thread_id AS \"thread!: i64\", t.number AS \"task?: i64\", m.sender_kind,\n                  sw.name AS \"worker?: String\", m.sender_human\n           FROM message_recipients r\n           JOIN messages m ON m.id = r.message_id\n           JOIN workers k ON k.id = r.worker_id\n           JOIN agents g ON g.id = k.agent_id\n           JOIN worker_processes p ON p.agent_id = k.agent_id\n           LEFT JOIN workers sw ON sw.id = m.sender_worker_id\n           LEFT JOIN tasks t ON t.id = m.task_id\n           WHERE p.state IN ('stopped', 'failed') AND (?1 IS NULL OR g.name = ?1)\n             AND r.addressed_as IN ('agent', 'worker') AND m.sender_kind <> 'fold'\n             AND r.delivered_at IS NULL AND r.acked_at IS NULL AND r.pushed_at IS NULL\n             AND r.forwarded_at IS NULL\n             AND NOT EXISTS (\n                 SELECT 1 FROM sessions s\n                 WHERE s.agent_id = g.id AND (s.ended_at IS NULL OR s.started_at > p.stopped_at)\n             )\n           ORDER BY m.number, g.name",
   "describe": {
     "columns": [
       {
@@ -82,7 +82,7 @@
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 1
     },
     "nullable": [
       false,
@@ -94,5 +94,5 @@
       true
     ]
   },
-  "hash": "16e14fdbc64edda38c1607776e351986dc9f12022ea442011701064eb6aea744"
+  "hash": "d186dc9d401923e54443c4445416ff5173bb379d9a578c412dfbf5d9bcf98971"
 }

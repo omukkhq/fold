@@ -1,29 +1,43 @@
 use fold_core::{
-    Actor, AddressedAs, AgentName, AreaName, MessageBody, Recipient, Sender, Target, TaskId,
-    Timestamp, WorkerName,
+    Actor, AddressedAs, AgentName, MessageBody, Recipient, Role, Sender, Target, TaskId, Timestamp,
+    WorkerName,
 };
+use fold_store::agents::WorkerProcessRow;
 use fold_store::messages::{self, OwedMessage};
 use fold_store::{StoreError, WriteTx, agents, tasks};
 
 use super::{Draft, MessageError, write_message};
 use crate::services::events::EventBuffer;
 
-/// Sends `owed.message` on, because its recipient, the stopped task worker of `owed.agent` in `area`, cannot start to answer it. It goes to the lead of the area of the message's task, else of the worker's `area`, or to the main agent for a task of the area Main and for an area without a lead: the lead gets a row of the message, the worker's row records the forward, and fold says so in the thread to the sender and the lead. When the sender is that lead, the message only goes back to it. Returns the lead's worker; `None`, with nothing written, when the project has no lead and no main agent. The caller publishes the buffer after the commit.
+/// Sends `owed.message` on, because its recipient, the stopped worker of `worker`, cannot start to answer it: a task worker's message goes to the lead of the area of the message's task, else of the worker's area, a reviewer's to the review lead, and a lead's, or one that finds no lead, to the main agent. The lead gets a row of the message, the worker's row records the forward, and fold says so in the thread to the sender and the lead. When the sender is that lead, the message only goes back to it. With nobody to take it, the worker's row records that and fold tells the sender. Returns the lead's worker. The caller publishes the buffer after the commit.
 pub(crate) async fn forward_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
     owed: &OwedMessage,
-    area: Option<&AreaName>,
+    worker: &WorkerProcessRow,
     now: Timestamp,
 ) -> Result<Option<WorkerName>, MessageError> {
-    let Some(lead) = lead_of(tx, owed.task, area).await? else {
-        return Ok(None);
+    let (sender, sender_agent) = match &owed.sender {
+        Sender::Human(name) => (
+            Recipient {
+                target: Target::Human(name.clone()),
+                addressed_as: AddressedAs::Human,
+            },
+            None,
+        ),
+        Sender::Worker(sender) => (
+            Recipient {
+                target: Target::Worker(sender.clone()),
+                addressed_as: AddressedAs::Worker,
+            },
+            Some(sender.agent()),
+        ),
+        Sender::Fold => return Ok(None),
     };
-    let lead = WorkerName::main(&lead);
     let head = messages::find(tx.conn(), owed.message)
         .await?
         .ok_or(StoreError::Corrupt("messages.number"))?;
-    let worker = messages::get(tx.conn(), owed.message)
+    let recipient = messages::get(tx.conn(), owed.message)
         .await?
         .and_then(|row| {
             row.recipients
@@ -34,46 +48,36 @@ pub(crate) async fn forward_in_tx(
                 })
         })
         .unwrap_or_else(|| WorkerName::main(&owed.agent));
-    let (sender, back) = match &owed.sender {
-        Sender::Human(name) => (
-            Recipient {
-                target: Target::Human(name.clone()),
-                addressed_as: AddressedAs::Human,
-            },
-            false,
-        ),
-        Sender::Worker(sender) => (
-            Recipient {
-                target: Target::Worker(sender.clone()),
-                addressed_as: AddressedAs::Worker,
-            },
-            sender.agent() == lead.agent(),
-        ),
-        Sender::Fold => return Ok(None),
-    };
+    let lead = lead_of(tx, owed.task, worker)
+        .await?
+        .filter(|lead| *lead != owed.agent)
+        .map(|lead| WorkerName::main(&lead));
     let mut recipients = vec![sender];
-    if !back {
-        let to_lead = Recipient {
-            target: Target::Worker(lead.clone()),
-            addressed_as: AddressedAs::Agent,
-        };
-        if !messages::is_recipient(tx.conn(), owed.message, &lead).await? {
-            messages::insert_recipient(tx, owed.message, &to_lead).await?;
+    let text = match &lead {
+        None => format!(
+            "@{recipient} cannot start now to answer {}, and no lead can take it, so it stays unread.",
+            owed.message
+        ),
+        Some(lead) if sender_agent.as_ref() == Some(&lead.agent()) => format!(
+            "@{recipient} cannot start now to answer {}, so it stays unread. Answer it yourself or start the worker again.",
+            owed.message
+        ),
+        Some(lead) => {
+            let to_lead = Recipient {
+                target: Target::Worker(lead.clone()),
+                addressed_as: AddressedAs::Agent,
+            };
+            if !messages::is_recipient(tx.conn(), owed.message, lead).await? {
+                messages::insert_recipient(tx, owed.message, &to_lead).await?;
+            }
+            recipients.push(to_lead);
+            format!(
+                "@{recipient} cannot start now, so fold sent {} on to @{lead}.",
+                owed.message
+            )
         }
-        recipients.push(to_lead);
-    }
-    messages::mark_forwarded(tx, owed.message, &owed.agent, &lead, now).await?;
-    let text = if back {
-        format!(
-            "@{worker} cannot start now to answer {}, so it stays unread. Answer it yourself or start the worker again.",
-            owed.message
-        )
-    } else {
-        format!(
-            "@{worker} cannot start now, so fold sent {} on to @{lead}.",
-            owed.message
-        )
     };
+    messages::mark_forwarded(tx, owed.message, &owed.agent, lead.as_ref(), now).await?;
     let body = MessageBody::parse(text)?;
     write_message(
         tx,
@@ -94,37 +98,59 @@ pub(crate) async fn forward_in_tx(
         },
     )
     .await?;
-    Ok(Some(lead))
+    Ok(lead)
 }
 
-/// The lead of the area that `task` belongs to by its labels, else of `area`; the agent that holds the main tag for a task of the area Main and when no area names a lead.
+/// The lead that takes a message to the stopped worker of `worker`; see [`forward_in_tx`].
 async fn lead_of(
     tx: &mut WriteTx,
     task: Option<TaskId>,
-    area: Option<&AreaName>,
-) -> Result<Option<AgentName>, MessageError> {
+    worker: &WorkerProcessRow,
+) -> Result<Option<AgentName>, StoreError> {
+    let lead = match worker.role {
+        Role::TaskWorker => area_lead(tx, task, worker).await?,
+        Role::Reviewer => agents::review_lead(tx.conn()).await?,
+        Role::AreaLead | Role::ReviewLead => None,
+    };
+    match lead {
+        Some(lead) => Ok(Some(lead)),
+        None => main_agent(tx).await,
+    }
+}
+
+/// The lead of the area that `task` belongs to by its labels, else of the worker's own area; `None` for a task of the area Main and when no area names a lead.
+async fn area_lead(
+    tx: &mut WriteTx,
+    task: Option<TaskId>,
+    worker: &WorkerProcessRow,
+) -> Result<Option<AgentName>, StoreError> {
     let labels = match task {
         Some(task) => tasks::labels_for_conn(tx.conn(), task).await?,
         None => Vec::new(),
     };
-    if !labels.iter().any(|label| label.name.is_main()) {
-        let of_task = agents::list_areas(tx.conn())
-            .await?
-            .into_iter()
-            .find(|row| labels.iter().any(|label| label.name == row.label))
-            .and_then(|row| row.lead);
-        let of_worker = match area.filter(|area| !area.is_main()) {
-            Some(area) => agents::find_area(tx.conn(), area)
-                .await?
-                .and_then(|row| row.lead),
-            None => None,
-        };
-        if let Some(lead) = of_task.or(of_worker) {
-            return Ok(Some(lead));
-        }
+    if labels.iter().any(|label| label.name.is_main()) {
+        return Ok(None);
     }
-    let directory = messages::directory(tx.conn(), Vec::new()).await?;
-    Ok(directory
+    let of_task = agents::list_areas(tx.conn())
+        .await?
+        .into_iter()
+        .find(|row| labels.iter().any(|label| label.name == row.label))
+        .and_then(|row| row.lead);
+    if of_task.is_some() {
+        return Ok(of_task);
+    }
+    match worker.area.as_ref().filter(|area| !area.is_main()) {
+        Some(area) => Ok(agents::find_area(tx.conn(), area)
+            .await?
+            .and_then(|row| row.lead)),
+        None => Ok(None),
+    }
+}
+
+/// The agent that holds the main tag.
+async fn main_agent(tx: &mut WriteTx) -> Result<Option<AgentName>, StoreError> {
+    Ok(messages::directory(tx.conn(), Vec::new())
+        .await?
         .agents
         .into_iter()
         .find(|agent| agent.tags.iter().any(fold_core::Tag::is_main))

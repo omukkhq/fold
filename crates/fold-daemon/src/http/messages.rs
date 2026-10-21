@@ -40,7 +40,7 @@ pub struct RecipientView {
     /// For an agent recipient, whether fold can post a notice into one of the agent's sessions now; false means the agent learns of the message only when it reads its inbox. Null for a human and for an agent without a connected session.
     #[schema(required = true)]
     pub reachable: Option<bool>,
-    /// The lead that fold sent the message on to because this recipient, a stopped task worker, could not start to answer it; the sender itself when the sender is that lead. Null while fold has not sent it on.
+    /// The lead that fold sent the message on to because this recipient, a stopped worker, could not start to answer it; the sender itself when the sender is that lead. Null while fold has not sent it on.
     #[schema(required = true, example = "web-lead")]
     pub forwarded_to: Option<String>,
 }

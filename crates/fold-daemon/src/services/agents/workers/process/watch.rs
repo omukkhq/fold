@@ -394,7 +394,7 @@ pub(super) async fn watch_done(
         if let Some(agent) = super::message::answering_agent(&event) {
             supervisor.stop_if_answered(&agent).await;
         }
-        // A message to a stopped task worker starts it; one sent while it was stopping waits for its stop.
+        // A message to a stopped worker starts it; one sent while it was stopping waits for its stop.
         if event.event_type == types::MESSAGE_SENT
             || event.event_type == types::WORKER_STOPPED
             || event.event_type == types::WORKER_FAILED
