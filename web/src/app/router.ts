@@ -13,6 +13,8 @@ export function createAppRouter(queryClient: QueryClient) {
     defaultNotFoundComponent: NotFound,
     defaultPendingMs: 150,
     defaultPendingMinMs: 250,
+    // The screens scroll inside the shell's main, not the window, so a navigation resets main.
+    scrollToTopSelectors: ["main"],
   });
 }
 
