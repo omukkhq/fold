@@ -340,6 +340,13 @@ async fn a_tree_is_recorded_when_a_row_of_the_workspace_or_its_task_holds_it() {
         CheckpointReason::Quiet,
     )
     .await;
+    checkpoint(
+        store,
+        one.workspace,
+        seed::tree("explicit"),
+        CheckpointReason::Explicit,
+    )
+    .await;
     store
         .write(async |tx| {
             prune_auto(tx, one.workspace, 1, Timestamp::EPOCH).await?;
@@ -375,14 +382,15 @@ async fn a_tree_is_recorded_when_a_row_of_the_workspace_or_its_task_holds_it() {
         let tree = seed::tree(label);
         async move { tree_recorded(store.read(), workspace, &tree).await.unwrap() }
     };
-    for label in ["revision tree", "kept", "changeset", "version"] {
+    for label in ["revision tree", "explicit", "changeset", "version"] {
         assert!(recorded(one.workspace, label).await, "{label}");
     }
-    for label in ["pruned", "other"] {
+    // An automatic checkpoint is no record: pruning beyond the kept number can remove it later.
+    for label in ["pruned", "kept", "other"] {
         assert!(!recorded(one.workspace, label).await, "{label}");
     }
     assert!(recorded(two.workspace, "revision tree").await);
-    for label in ["kept", "changeset", "version"] {
+    for label in ["explicit", "changeset", "version"] {
         assert!(!recorded(two.workspace, label).await, "{label}");
     }
 }

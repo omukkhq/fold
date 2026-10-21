@@ -49,7 +49,7 @@ pub enum CheckpointReason {
     HumanEdit,
     /// The tree of a reviewer's fix of a proposal version, made in its review checkout, which the task worker's next sync or restore writes into the workspace.
     ReviewFix,
-    /// The files a closed workspace held that fold had not recorded, taken just before fold removes its directory.
+    /// The files a closed workspace held that fold had not recorded, taken just before fold removes its directory. It is explicit, so the pruning of automatic checkpoints never removes the only record of those files; it goes with the workspace's other checkpoints after `closed_workspace_days`.
     BeforeRemoval,
 }
 
@@ -99,7 +99,8 @@ impl CheckpointReason {
         match self {
             CheckpointReason::Explicit
             | CheckpointReason::HumanEdit
-            | CheckpointReason::ReviewFix => CheckpointKind::Explicit,
+            | CheckpointReason::ReviewFix
+            | CheckpointReason::BeforeRemoval => CheckpointKind::Explicit,
             _ => CheckpointKind::Auto,
         }
     }

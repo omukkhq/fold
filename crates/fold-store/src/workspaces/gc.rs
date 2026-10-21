@@ -133,7 +133,7 @@ pub async fn closed_checkpoints_due<'e>(
         .collect()
 }
 
-/// Whether fold already holds `tree` for the workspace: as the tree of its base revision, of an unpruned checkpoint, of one of its changesets, or of a version of a proposal of its task. A closed workspace whose files are such a tree loses nothing when its directory goes.
+/// Whether fold already holds `tree` for the workspace: as the tree of its base revision, of an unpruned explicit checkpoint, of one of its changesets, or of a version of a proposal of its task. A closed workspace whose files are such a tree loses nothing when its directory goes. An automatic checkpoint does not count, because pruning beyond `auto_checkpoints_kept` can remove it later.
 pub async fn tree_recorded<'e>(
     db: impl SqliteExecutor<'e>,
     workspace: WorkspaceId,
@@ -146,7 +146,7 @@ pub async fn tree_recorded<'e>(
              WHERE w.number = ?1 AND r.tree_hash = ?2
              UNION ALL
              SELECT 1 FROM workspaces w JOIN checkpoints c ON c.workspace_id = w.id
-             WHERE w.number = ?1 AND c.pruned_at IS NULL AND c.tree_hash = ?2
+             WHERE w.number = ?1 AND c.kind = 'explicit' AND c.pruned_at IS NULL AND c.tree_hash = ?2
              UNION ALL
              SELECT 1 FROM workspaces w JOIN changesets c ON c.workspace_id = w.id
              WHERE w.number = ?1 AND c.tree_hash = ?2

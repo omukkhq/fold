@@ -11,7 +11,7 @@ use crate::reviews_support::{Fixture, by, p, t, ws};
 use fold_core::events::types;
 use fold_core::reviews::Verdict;
 use fold_core::roles::Role;
-use fold_core::{Actor, AgentActor, EventActor, MAIN_TAG, NewEvent, Tag};
+use fold_core::{Actor, AgentActor, EventActor, MAIN_TAG, NewEvent, Tag, Timestamp};
 use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::events::EventBuffer;
 use fold_daemon::services::projects::gc;
@@ -20,7 +20,7 @@ use fold_daemon::services::workspaces::{DirectoryRemoval, follow_closed_workspac
 use fold_store::StoreError;
 use fold_store::projects::ProjectRow;
 use fold_store::testing::eventually;
-use fold_store::workspaces::{CheckpointReason, list_checkpoints};
+use fold_store::workspaces::{CheckpointKind, CheckpointReason, list_checkpoints, prune_auto};
 use fold_vcs::compare::load_flat;
 use fold_vcs::objects::ObjectStore;
 use serde_json::json;
@@ -366,4 +366,61 @@ async fn a_tracked_file_the_final_checkpoint_cannot_read_keeps_the_directory() {
     );
     assert!(!fx.task_dir().exists());
     assert_eq!(final_checkpoints(&fx).await, 1);
+}
+
+#[tokio::test]
+async fn files_only_an_automatic_checkpoint_holds_get_a_final_checkpoint_that_auto_pruning_keeps() {
+    let fx = Fixture::new().await;
+    let author = by(&fx.frontend.worker);
+    fx.workspaces.create_workspace(&author, t(1)).await.unwrap();
+    let start = fx
+        .workspaces
+        .record_checkpoint(&author, ws(1), None)
+        .await
+        .unwrap();
+    fx.write("src/lib.rs", UNRECORDED);
+    // After the two restores the files are the first restore's safety checkpoint, which is automatic.
+    let back = fx
+        .workspaces
+        .restore_checkpoint(&author, start.id)
+        .await
+        .unwrap();
+    fx.workspaces
+        .restore_checkpoint(&author, back.safety)
+        .await
+        .unwrap();
+    fx.workspaces
+        .abandon_workspace(&author, ws(1), "the plan changed")
+        .await
+        .unwrap();
+
+    let removal = fx.workspaces.remove_closed_directory(ws(1)).await.unwrap();
+    let DirectoryRemoval::Removed {
+        checkpoint: Some(last),
+    } = removal
+    else {
+        panic!("an automatic checkpoint is no record: {removal:?}");
+    };
+    fx.project
+        .store()
+        .write(async |tx| prune_auto(tx, ws(1), 0, Timestamp::EPOCH).await)
+        .await
+        .unwrap();
+    let kept = list_checkpoints(fx.project.store().read(), ws(1), false)
+        .await
+        .unwrap();
+    assert!(kept.iter().all(|checkpoint| checkpoint.id != back.safety));
+    let last = kept
+        .into_iter()
+        .find(|checkpoint| checkpoint.id == last)
+        .unwrap();
+    assert_eq!(last.reason, CheckpointReason::BeforeRemoval);
+    assert_eq!(last.kind, CheckpointKind::Explicit);
+    let objects = ObjectStore::open(&fx.project.paths().fold_dir()).unwrap();
+    let files = load_flat(&objects, &last.tree).unwrap();
+    let lib = objects
+        .read(&files[b"src/lib.rs".as_slice()].hash)
+        .unwrap()
+        .payload;
+    assert_eq!(lib, UNRECORDED.as_bytes());
 }
