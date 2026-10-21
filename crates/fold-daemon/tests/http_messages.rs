@@ -624,7 +624,7 @@ async fn a_task_s_mine_listing_holds_the_human_s_threads_with_the_agents_replies
 }
 
 #[cfg(test)]
-async fn readers(fixture: &Fixture, task: &str) -> Vec<(String, String, bool)> {
+async fn readers(fixture: &Fixture, task: &str) -> Vec<(String, String)> {
     let (status, body) = fixture.get(&format!("/tasks/{task}/readers")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     body["readers"]
@@ -635,15 +635,14 @@ async fn readers(fixture: &Fixture, task: &str) -> Vec<(String, String, bool)> {
             (
                 reader["name"].as_str().unwrap().to_owned(),
                 reader["role"].as_str().unwrap().to_owned(),
-                reader["stopped"].as_bool().unwrap(),
             )
         })
         .collect()
 }
 
 #[cfg(test)]
-fn reader(name: &str, role: &str, stopped: bool) -> (String, String, bool) {
-    (name.to_owned(), role.to_owned(), stopped)
+fn reader(name: &str, role: &str) -> (String, String) {
+    (name.to_owned(), role.to_owned())
 }
 
 #[tokio::test]
@@ -653,15 +652,15 @@ async fn a_task_offers_its_claim_holder_its_area_lead_and_the_main_agent_as_read
     let store = &fixture.handle.store;
     assert_eq!(
         readers(&fixture, "T-1").await,
-        [reader("frontend", "area_lead", true)],
-        "the lead's process is stopped, and the project has no main agent yet"
+        [reader("frontend", "area_lead")],
+        "the project has no main agent yet"
     );
     crate::common::roles::give_main_tag(store, "review").await;
     assert_eq!(
         readers(&fixture, "T-1").await,
         [
-            reader("frontend", "area_lead", true),
-            reader("review", "main_agent", false),
+            reader("frontend", "area_lead"),
+            reader("review", "main_agent"),
         ],
         "without a claim the area lead is the default"
     );
@@ -673,11 +672,11 @@ async fn a_task_offers_its_claim_holder_its_area_lead_and_the_main_agent_as_read
     assert_eq!(
         readers(&fixture, "T-1").await,
         [
-            reader("frontend/ui", "claim_holder", true),
-            reader("frontend", "area_lead", true),
-            reader("review", "main_agent", false),
+            reader("frontend/ui", "claim_holder"),
+            reader("frontend", "area_lead"),
+            reader("review", "main_agent"),
         ],
-        "the claim holder comes first, stopped with its agent's process"
+        "the claim holder comes first"
     );
     for (labels, title) in [(vec![], "no area"), (vec![LabelName::main()], "main")] {
         fixture
@@ -695,12 +694,12 @@ async fn a_task_offers_its_claim_holder_its_area_lead_and_the_main_agent_as_read
     }
     assert_eq!(
         readers(&fixture, "T-3").await,
-        [reader("review", "main_agent", false)],
+        [reader("review", "main_agent")],
         "a task in no area has no lead"
     );
     assert_eq!(
         readers(&fixture, "T-4").await,
-        [reader("review", "main_agent", false)],
+        [reader("review", "main_agent")],
         "a task of Main has the main agent alone"
     );
     crate::common::roles::give_claim(
@@ -712,7 +711,7 @@ async fn a_task_offers_its_claim_holder_its_area_lead_and_the_main_agent_as_read
     .await;
     assert_eq!(
         readers(&fixture, "T-4").await,
-        [reader("review", "claim_holder", false)],
+        [reader("review", "claim_holder")],
         "the main agent that builds a task of Main is listed once"
     );
     let (status, body) = fixture.get("/tasks/T-9/readers").await;

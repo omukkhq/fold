@@ -5,7 +5,7 @@ use fold_core::claims::is_stale;
 use fold_core::events::types;
 use fold_core::reviews::ProposalStanding;
 use fold_core::status::status_reason;
-use fold_core::tasks::areas::{ReaderRole, areas_conflict, feedback_readers};
+use fold_core::tasks::areas::{FeedbackReader, areas_conflict, feedback_readers};
 use fold_core::{
     AgentName, AreaName, ChangesetId, ChecklistName, DependencyOrigin, Event, HoldMark, LabelName,
     ProposalId, RevisionId, TaskId, TaskKind, TaskStatus, TaskTitle, Timestamp, WorkerName,
@@ -26,15 +26,6 @@ use super::{
     ChecklistItemView, ClaimView, HumanReviewMark, LabelView, REPORT_LIMIT, ReportView, TaskError,
     TaskService, TaskView, area_labels, label_view, task_not_found, view,
 };
-
-/// A reader of a human's feedback on a task.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TaskReader {
-    pub name: WorkerName,
-    pub role: ReaderRole,
-    /// fold supervises the reader's agent and its process is stopped or failed, so the message waits until the process runs again.
-    pub stopped: bool,
-}
 
 /// How many Done cards the board returns: the most recently completed ones. The Done column's `total` counts them all.
 pub const BOARD_DONE_LIMIT: usize = 20;
@@ -484,7 +475,7 @@ impl TaskService {
     }
 
     /// The readers a human's feedback on the task goes to, the default first, as [`feedback_readers`] chooses them, read in one read transaction.
-    pub async fn readers(&self, id: TaskId) -> Result<Vec<TaskReader>, TaskError> {
+    pub async fn readers(&self, id: TaskId) -> Result<Vec<FeedbackReader>, TaskError> {
         let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
         tasks::fetch(&mut tx, id)
             .await?
@@ -514,17 +505,7 @@ impl TaskService {
             .filter(|agent| main.contains(&agent.id))
             .map(|agent| agent.name)
             .collect();
-        let mut readers = Vec::new();
-        for reader in feedback_readers(holder.as_ref(), &labels, &areas, &main_agents) {
-            let stopped = agents::find_worker_process(&mut tx, &reader.name.agent())
-                .await?
-                .is_some_and(|process| !process.state.is_running());
-            readers.push(TaskReader {
-                name: reader.name,
-                role: reader.role,
-                stopped,
-            });
-        }
+        let readers = feedback_readers(holder.as_ref(), &labels, &areas, &main_agents);
         tx.commit().await.map_err(StoreError::from)?;
         Ok(readers)
     }

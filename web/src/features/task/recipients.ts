@@ -19,10 +19,9 @@ export function readerRecipient(reader: TaskReader): FeedbackRecipient {
     : { kind: "agent", name: reader.name };
 }
 
-/** `web-t12 (claim holder, stopped)`. */
+/** `web-t12 (claim holder)`. */
 export function readerLabel(reader: TaskReader): string {
-  const role = ROLES[reader.role];
-  return `${reader.name} (${reader.stopped ? `${role}, stopped` : role})`;
+  return `${reader.name} (${ROLES[reader.role]})`;
 }
 
 /** The feedback box's reader options in the daemon's order, the default first; none before the readers are read. */

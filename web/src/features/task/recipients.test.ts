@@ -7,23 +7,15 @@ import {
   recipientOptions,
 } from "./recipients";
 
-const holder: TaskReader = {
-  name: "web-t12",
-  role: "claim_holder",
-  stopped: true,
-};
-const lead: TaskReader = {
-  name: "web-lead",
-  role: "area_lead",
-  stopped: false,
-};
-const main: TaskReader = { name: "main", role: "main_agent", stopped: false };
+const holder: TaskReader = { name: "web-t12", role: "claim_holder" };
+const lead: TaskReader = { name: "web-lead", role: "area_lead" };
+const main: TaskReader = { name: "main", role: "main_agent" };
 
 describe("recipientOptions", () => {
-  it("keeps the daemon's order, the claim holder first and marked stopped", () => {
+  it("keeps the daemon's order, the claim holder first", () => {
     const options = recipientOptions([holder, lead, main]);
     expect(options.map((o) => o.label)).toEqual([
-      "web-t12 (claim holder, stopped)",
+      "web-t12 (claim holder)",
       "web-lead (area lead)",
       "main (main agent)",
     ]);
@@ -48,10 +40,8 @@ describe("readerRecipient", () => {
 });
 
 describe("readerLabel", () => {
-  it("names a stopped lead", () => {
-    expect(readerLabel({ ...lead, stopped: true })).toBe(
-      "web-lead (area lead, stopped)",
-    );
+  it("names the reader and its role", () => {
+    expect(readerLabel(lead)).toBe("web-lead (area lead)");
   });
 });
 

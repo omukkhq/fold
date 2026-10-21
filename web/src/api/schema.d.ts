@@ -3908,8 +3908,6 @@ export interface components {
              */
             name: string;
             role: components["schemas"]["ReaderRole"];
-            /** @description fold supervises the reader's agent and its process is stopped or failed, so the message waits until the process runs again. */
-            stopped: boolean;
         };
         TaskReaders: {
             /** @description The default reader first: the claim holder, else the area lead, else the main agent. Each worker once, under its first role. */

@@ -66,7 +66,7 @@ pub fn can_change_human_review(actor: &Actor) -> bool {
 pub use views::{
     Activity, BOARD_DONE_LIMIT, Board, BoardCard, BoardColumn, CardProposal, ChangesetSummary,
     ChecklistCounts, DetailChecklist, DetailEdge, DetailItem, GraphTask, HISTORY_LIMIT, TaskDetail,
-    TaskIntegration, TaskProposal, TaskReader, TaskRef, WorkspaceInfo,
+    TaskIntegration, TaskProposal, TaskRef, WorkspaceInfo,
 };
 
 /// Refusals carry a stable code; anything else is a database failure.

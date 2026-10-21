@@ -442,10 +442,10 @@ function registerDaemon(): void {
     return ok({
       readers: [
         ...(holder
-          ? [{ name: holder, role: "claim_holder", stopped: true }]
+          ? [{ name: holder, role: "claim_holder" }]
           : []),
-        ...(lead ? [{ name: lead, role: "area_lead", stopped: false }] : []),
-        { name: "main", role: "main_agent", stopped: false },
+        ...(lead ? [{ name: lead, role: "area_lead" }] : []),
+        { name: "main", role: "main_agent" },
       ],
     });
   });
@@ -1819,7 +1819,7 @@ describe("the human edits", () => {
           .getAllByRole("option")
           .map((option) => option.textContent),
       ).toEqual([
-        "frontend/ui (claim holder, stopped)",
+        "frontend/ui (claim holder)",
         "web-lead (area lead)",
         "main (main agent)",
       ]);

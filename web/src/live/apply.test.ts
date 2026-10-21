@@ -321,7 +321,7 @@ describe("patch rules", () => {
       { name: "frontend", presence: "active", working: 1, stalled: 0 },
     ]);
     const readers = {
-      readers: [{ name: "frontend", role: "area_lead", stopped: false }],
+      readers: [{ name: "frontend", role: "area_lead" }],
     };
     client.setQueryData(keys.taskReaders(slug, "T-2"), readers);
     applyEvent(
@@ -715,12 +715,12 @@ describe("invalidation rules", () => {
     }
   });
 
-  it("refreshes a task's feedback readers when the task, its claim or a worker changes", () => {
+  it("refreshes a task's feedback readers when the task, its claim, a worker or the main tag changes", () => {
     for (const [type, extra] of [
       ["task.updated", { task: "T-3" }],
       ["task.human_review_set", { task: "T-3" }],
       ["claim.acquired", { task: "T-3" }],
-      ["worker.stopped", {}],
+      ["worker.started", {}],
       ["agent.tag_added", {}],
     ] as const) {
       invalidated = [];

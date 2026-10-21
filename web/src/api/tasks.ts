@@ -404,7 +404,7 @@ export const labelsQuery = (slug: string) =>
     staleTime: Infinity,
   });
 
-/** Under the agents prefix, so a worker or agent event refreshes the stopped marks and the main agent; a task or claim event of the task refreshes it too. */
+/** Under the agents prefix, so a worker or agent event refreshes the area leads and the main agent; a task or claim event of the task refreshes it too. */
 export const taskReadersQuery = (slug: string, task: string) =>
   queryOptions({
     queryKey: keys.taskReaders(slug, task),

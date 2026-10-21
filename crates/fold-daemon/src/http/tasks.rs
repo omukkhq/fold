@@ -1151,8 +1151,6 @@ pub struct TaskReader {
     #[schema(example = "web-t12")]
     pub name: String,
     pub role: ReaderRole,
-    /// fold supervises the reader's agent and its process is stopped or failed, so the message waits until the process runs again.
-    pub stopped: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -1189,7 +1187,6 @@ pub async fn task_readers(
             .map(|reader| TaskReader {
                 name: reader.name.to_string(),
                 role: reader.role.into(),
-                stopped: reader.stopped,
             })
             .collect(),
     }))

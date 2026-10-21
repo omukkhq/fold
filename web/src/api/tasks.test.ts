@@ -78,7 +78,7 @@ describe("reads", () => {
 
   it("reads the readers of the task's feedback", async () => {
     const readers = {
-      readers: [{ name: "web-lead", role: "area_lead", stopped: false }],
+      readers: [{ name: "web-lead", role: "area_lead" }],
     };
     daemon.on(`GET ${P}/tasks/T-2/readers`, ok(readers));
     expect(await getTaskReaders("demo", "T-2")).toEqual(readers);
