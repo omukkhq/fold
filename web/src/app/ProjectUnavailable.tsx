@@ -30,7 +30,7 @@ export function ProjectUnavailable({
   problem,
   onRetry,
 }: {
-  problem: Exclude<ProjectProblem, { kind: "gone" }>;
+  problem: Exclude<ProjectProblem, { kind: "gone" | "removed" }>;
   onRetry: () => void;
 }) {
   const { title, text } = TEXTS[problem.kind];
