@@ -165,6 +165,7 @@ async fn serve_stdio(options: Options) -> Result<(), StubError> {
         tools: None,
         turns: 0,
         calls: 0,
+        turn_start_calls: 0,
         base_cost,
         out: tokio::io::stdout(),
     };
@@ -240,6 +241,8 @@ struct Stub<W> {
     turns: u32,
     /// The tool calls this process made, which number their ids.
     calls: u32,
+    /// The tool calls this process had made when its current turn began.
+    turn_start_calls: u32,
     /// The session's running cost before this process.
     base_cost: f64,
     out: W,
@@ -276,6 +279,7 @@ impl<W: AsyncWrite + Unpin> Stub<W> {
                 }
             };
             self.turns += 1;
+            self.turn_start_calls = self.calls;
             self.emit(&json!({
                 "type": "system",
                 "subtype": "init",
@@ -587,7 +591,11 @@ impl<W: AsyncWrite + Unpin> Stub<W> {
             "session_id": session,
             "total_cost_usd": total,
             "duration_ms": 0,
-            "usage": usage(),
+            "usage": if turns == 0 {
+                usage()
+            } else {
+                turn_usage(self.calls.saturating_sub(self.turn_start_calls))
+            },
             "result": reply,
         }))
         .await
@@ -617,6 +625,16 @@ impl<W: AsyncWrite + Unpin> Stub<W> {
 /// A made-up cost of the process's turns, which the session's running total adds up as Claude Code's does, so a seeded project's cost view has numbers: 1.25 cents a turn and 0.4 cents a tool call.
 fn running_cost(turns: u32, calls: u32) -> f64 {
     f64::from(turns) * 0.0125 + f64::from(calls) * 0.004
+}
+
+/// Made-up token counts of one turn that made `calls` tool calls, as Claude Code reports a turn's own usage in its result, so a seeded project's cost view has tokens.
+fn turn_usage(calls: u32) -> Value {
+    json!({
+        "input_tokens": 40,
+        "output_tokens": 500 + 200 * calls,
+        "cache_read_input_tokens": 20_000 + 8_000 * calls,
+        "cache_creation_input_tokens": 2_000 + 500 * calls,
+    })
 }
 
 fn usage() -> Value {
@@ -851,6 +869,7 @@ mod tests {
             tools: None,
             turns: 0,
             calls: 0,
+            turn_start_calls: 0,
             base_cost: 0.0,
             out: Vec::new(),
         }
@@ -1043,6 +1062,35 @@ mod tests {
         assert!((total - 0.0625).abs() < 1e-9, "{total}");
         let state = read_state(&dir.path().join(STATE_FILE)).await.unwrap();
         assert!((state.costs["s-1"] - 0.0625).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn a_result_reports_the_usage_of_its_own_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut stub = stub(dir.path(), &json!({"turns": []}), false, &[]);
+        let usage_of = |stub: &Stub<Vec<u8>>| {
+            let text = String::from_utf8(stub.out.clone()).unwrap();
+            let result: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+            result["usage"].clone()
+        };
+        stub.result(true, "error_during_execution", None)
+            .await
+            .unwrap();
+        assert_eq!(usage_of(&stub)["output_tokens"], 0, "no turn ran");
+        stub.turns = 1;
+        stub.calls = 2;
+        stub.result(false, "success", Some("ok")).await.unwrap();
+        assert_eq!(usage_of(&stub), turn_usage(2));
+        stub.turns = 2;
+        stub.turn_start_calls = 2;
+        stub.calls = 3;
+        stub.result(false, "success", Some("ok")).await.unwrap();
+        assert_eq!(
+            usage_of(&stub),
+            turn_usage(1),
+            "the second turn reports its own call, not the process's three"
+        );
+        assert_eq!(turn_usage(1)["cache_read_input_tokens"], 28_000);
     }
 
     #[test]
