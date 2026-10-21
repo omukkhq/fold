@@ -97,6 +97,12 @@ export const keys = {
   /** Each worker's latest step, written only by the event stream. */
   workerSteps: (slug: string) => [slug, "worker-steps"] as const,
   needsYou: (slug: string) => [slug, "needs-you"] as const,
+  /** Every cost read of the project, under one prefix, which the end of a worker's turn refreshes. */
+  cost: (slug: string) => [slug, "cost"] as const,
+  projectCost: (slug: string, range: string) =>
+    [slug, "cost", "project", range] as const,
+  taskCost: (slug: string, task: string) =>
+    [slug, "cost", "task", task] as const,
   reviewBatches: (slug: string) => [slug, "review-batches"] as const,
   /** Under the batches prefix, so every event that refreshes the batches also refreshes the open batch. */
   reviewBatch: (slug: string, batch: string) =>

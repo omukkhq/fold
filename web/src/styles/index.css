@@ -169,6 +169,7 @@
 
   --height-*: initial;
   --height-bar: var(--height-bar);
+  --height-chart: var(--height-chart);
 }
 
 @layer base {

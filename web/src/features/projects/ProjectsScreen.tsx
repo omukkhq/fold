@@ -12,6 +12,7 @@ import { Wordmark } from "@/components/Wordmark";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
+import { allProjectsCost, projectCostLines } from "../cost/cost";
 import { GitStatus } from "../git/GitStatus";
 import { lastChangeLine, summaryLine } from "./counts";
 import { AddBackProject } from "./AddBackProject";
@@ -57,10 +58,22 @@ export function ProjectsScreen() {
                 Every project this fold daemon serves on this machine.
               </p>
             </div>
-            <p className="flex items-center gap-8 rounded-m bg-sunken px-12 py-7 text-bar text-text-muted">
-              Add a project:
-              <Mono className="text-text">fld init &lt;dir&gt;</Mono>
-            </p>
+            <div className="flex flex-wrap items-center gap-16">
+              {projects.length > 0 ? (
+                <p className="flex flex-col items-end">
+                  <span className="text-meta text-text-muted">
+                    Cost of all projects
+                  </span>
+                  <span className="text-item-title leading-snug font-semibold text-text tabular-nums">
+                    {allProjectsCost(projects)}
+                  </span>
+                </p>
+              ) : null}
+              <p className="flex items-center gap-8 rounded-m bg-sunken px-12 py-7 text-bar text-text-muted">
+                Add a project:
+                <Mono className="text-text">fld init &lt;dir&gt;</Mono>
+              </p>
+            </div>
           </div>
           {projects.length > 0 ? (
             <label className="flex items-center gap-8 rounded-m bg-surface px-12 py-9 inset-ring inset-ring-border has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-focus-ring">
@@ -123,6 +136,7 @@ function ProjectCard({
   query: string;
 }) {
   const { overview } = project;
+  const cost = projectCostLines(overview);
   const mark = projectMark(project);
   const actions = projectActions(project);
   const blocker = addBackBlocker(project);
@@ -184,6 +198,16 @@ function ProjectCard({
                 {lastChangeLine(overview, now)}
               </span>
             </span>
+            {cost ? (
+              <span className="flex shrink-0 flex-col md:items-end">
+                <span className="text-item-title leading-snug font-semibold text-text tabular-nums">
+                  {cost.total}
+                </span>
+                <span className="text-meta whitespace-nowrap text-text-muted">
+                  {cost.recent}
+                </span>
+              </span>
+            ) : null}
           </div>
           <ChevronRight
             aria-hidden

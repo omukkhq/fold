@@ -13,8 +13,8 @@ afterEach(() => {
 });
 
 describe("projects", () => {
-  it("lists the registered projects", async () => {
-    stubFetch({
+  it("lists the registered projects with the cost of the viewer's own days", async () => {
+    const calls = stubFetch({
       "GET /api/v1/projects": {
         body: {
           projects: [
@@ -28,6 +28,16 @@ describe("projects", () => {
       true,
       false,
     ]);
+    const today = Number(calls[0]?.search.get("today"));
+    const week = Number(calls[0]?.search.get("week"));
+    expect(new Date(today).getHours()).toBe(0);
+    expect(today).toBeLessThanOrEqual(Date.now());
+    expect(new Date(week).getDate()).toBe(
+      new Date(
+        new Date(today).setDate(new Date(today).getDate() - 6),
+      ).getDate(),
+    );
+    expect(calls[0]?.search.get("include_removed")).toBe("true");
   });
 
   it("pauses and resumes the agents of a project", async () => {

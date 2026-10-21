@@ -86,6 +86,11 @@ describe("Projects screen", () => {
                 head: "r5",
                 last_change_at: Date.now() - 12_000,
                 attention: [],
+                cost: {
+                  all_time_micro_usd: 12_340_000,
+                  today_micro_usd: 1_200_000,
+                  week_micro_usd: 5_670_000,
+                },
               },
             },
             { ...summary("archive", "Archive"), available: false },
@@ -101,6 +106,9 @@ describe("Projects screen", () => {
     // The chip line keeps a hidden copy of each chip to measure.
     expect(within(demo).getAllByText("@frontend")).toHaveLength(2);
     expect(within(demo).getByText(/changed \d+ s ago/)).toBeTruthy();
+    expect(within(demo).getByText("$12.34")).toBeTruthy();
+    expect(within(demo).getByText("today $1.20 · 7 days $5.67")).toBeTruthy();
+    expect(screen.getByText("Cost of all projects")).toBeTruthy();
     expect(screen.getByText("Could not open this project.")).toBeTruthy();
     expect(screen.queryByRole("link", { name: /Archive/ })).toBeNull();
   });
@@ -130,6 +138,11 @@ describe("Projects screen", () => {
                 head: "r1",
                 last_change_at: Date.now(),
                 attention: [],
+                cost: {
+                  all_time_micro_usd: 0,
+                  today_micro_usd: 0,
+                  week_micro_usd: 0,
+                },
               },
             },
           ],

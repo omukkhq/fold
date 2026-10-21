@@ -25,6 +25,8 @@ import type { AgentsSearch } from "@/features/workers/search";
 import { applyEvent } from "@/live/apply";
 import { agent } from "@/test/agents";
 import { byContent } from "@/test/content";
+import { projectCost } from "@/test/cost";
+import { localDayStart } from "@/format/days";
 import { errorReply, stubFetch, type StubReply } from "@/test/stubFetch";
 import {
   areaEntry,
@@ -513,5 +515,65 @@ describe("AgentsScreen", () => {
     await userEvent.click(within(panel).getByRole("button", { name: "Deny" }));
     const alert = await within(panel).findByRole("alert");
     expect(alert.textContent).toContain("code: permission_question_closed");
+  });
+
+  it("opens the Cost tab with its range, its totals, its tables and the main agent's note", async () => {
+    const calls = stubFetch(
+      routes({
+        [`GET ${BASE}/cost`]: { body: projectCost(localDayStart(Date.now())) },
+      }),
+    );
+    const searches: AgentsSearch[] = [];
+    await setup([], team, { tab: "cost", range: "week" }, (next) => {
+      searches.push(next);
+    });
+    const totals = await screen.findByRole("list", { name: "Totals" });
+    expect(within(totals).getByText("$10.00")).toBeTruthy();
+    expect(within(totals).getByText("60% · 2 workers")).toBeTruthy();
+    const since = calls.find((call) => call.path === `${BASE}/cost`)?.search;
+    expect(Number(since?.get("since"))).toBeLessThan(Date.now());
+    expect(screen.getByRole("region", { name: "Cost by day" })).toBeTruthy();
+    const tasks = screen.getByRole("region", { name: "Tasks" });
+    expect(
+      within(tasks).getByRole("link", { name: /T-12/ }).getAttribute("href"),
+    ).toBe("/p/demo/t/T-12");
+    expect(within(tasks).getAllByText("—").length).toBeGreaterThan(0);
+    const workers = screen.getByRole("region", { name: "Workers" });
+    expect(within(workers).getByText("stopped")).toBeTruthy();
+    expect(screen.getByText(/does not supervise/)).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: "Last 7 days" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    await userEvent.click(screen.getByRole("button", { name: "Today" }));
+    await userEvent.click(screen.getByRole("button", { name: "All time" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Team" }));
+    expect(searches.slice(0, 2)).toEqual([
+      { tab: "cost", range: "today" },
+      { tab: "cost" },
+    ]);
+    expect(searches.at(-1)).toEqual({});
+  });
+
+  it("says when the range has no cost and shows a failed read with its code", async () => {
+    stubFetch(
+      routes({
+        [`GET ${BASE}/cost`]: {
+          body: projectCost(0, {
+            total: { cost_micro_usd: 0, turns: 0, workers: 0 },
+          }),
+        },
+      }),
+    );
+    await setup([], team, { tab: "cost" });
+    expect(await screen.findByText("No cost in this range")).toBeTruthy();
+    cleanup();
+    stubFetch(
+      routes({ [`GET ${BASE}/cost`]: errorReply(503, "project_unavailable") }),
+    );
+    await setup([], team, { tab: "cost" });
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("project_unavailable");
   });
 });
