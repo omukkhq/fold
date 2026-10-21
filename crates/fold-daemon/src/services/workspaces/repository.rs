@@ -128,7 +128,7 @@ pub struct RepositoryState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevisionPage {
     pub revisions: Vec<RevisionSummary>,
-    /// Pass it as `before` for the next page; `None` once the page reaches `r1`.
+    /// Pass it as `before` for the next page; `None` once the page reaches the first revision, which has no parent.
     pub before: Option<RevisionId>,
 }
 
@@ -166,11 +166,11 @@ impl WorkspaceService {
             .clamp(1, workspaces::MAX_PAGE);
         let rows = workspaces::list_recent(self.store.read(), limit, before).await?;
         let revisions: Vec<RevisionSummary> = rows.into_iter().map(RevisionSummary::from).collect();
-        // Every revision's parent is numbered one lower, so the page ends at r1 exactly when its last number is 1.
+        // Only the first revision of the history has no parent: the genesis `r0`, or `r1` in a project made before the genesis existed.
         let before = revisions
             .last()
-            .map(|last| last.number)
-            .filter(|last| last.number() > 1);
+            .filter(|last| last.parent.is_some())
+            .map(|last| last.number);
         Ok(RevisionPage { revisions, before })
     }
 

@@ -3436,7 +3436,7 @@ export interface components {
         RevisionOriginView: "initial" | "proposal" | "pull" | "direct" | "record";
         RevisionPageView: {
             /**
-             * @description Pass it as `before` for the next page; null once the page reaches `r1`.
+             * @description Pass it as `before` for the next page; null once the page reaches the first revision, which has no parent.
              * @example r40
              */
             before: string | null;

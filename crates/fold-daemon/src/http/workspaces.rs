@@ -143,7 +143,7 @@ impl From<RepositoryState> for RepositoryView {
 pub struct RevisionPageView {
     /// Newest first.
     pub revisions: Vec<RevisionView>,
-    /// Pass it as `before` for the next page; null once the page reaches `r1`.
+    /// Pass it as `before` for the next page; null once the page reaches the first revision, which has no parent.
     #[schema(value_type = Option<String>, required = true, example = "r40")]
     pub before: Option<RevisionId>,
 }
