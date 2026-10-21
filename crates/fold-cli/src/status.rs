@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -216,6 +217,25 @@ fn service_name(manager: Manager) -> String {
     }
 }
 
+/// The address a browser on this machine opens for a listener bound to `listen`: a listener on every address, `0.0.0.0` or `::`, answers on loopback too, while a browser cannot open the unspecified address itself.
+fn web_url(listen: &str) -> String {
+    match listen.parse::<SocketAddr>() {
+        Ok(SocketAddr::V4(addr)) if addr.ip().is_unspecified() => {
+            format!(
+                "http://{}",
+                SocketAddr::from((Ipv4Addr::LOCALHOST, addr.port()))
+            )
+        }
+        Ok(SocketAddr::V6(addr)) if addr.ip().is_unspecified() => {
+            format!(
+                "http://{}",
+                SocketAddr::from((Ipv6Addr::LOCALHOST, addr.port()))
+            )
+        }
+        _ => format!("http://{listen}"),
+    }
+}
+
 /// The lines after the version line; `fld` is the version of this fld.
 pub(crate) fn lines(status: &Status, fld: &str) -> Vec<String> {
     let mut lines = Vec::new();
@@ -240,7 +260,8 @@ pub(crate) fn lines(status: &Status, fld: &str) -> Vec<String> {
             listen: Some(listen),
         } => {
             lines.push(format!(
-                "daemon: running fold {version}, web interface http://{listen}"
+                "daemon: running fold {version}, web interface {}",
+                web_url(listen)
             ));
             if version != fld {
                 lines.push(format!(
@@ -518,6 +539,23 @@ mod tests {
                 version: None,
                 listen: None
             }
+        );
+    }
+
+    #[test]
+    fn a_daemon_on_every_address_is_named_by_its_loopback_address() {
+        assert_eq!(web_url("0.0.0.0:7420"), "http://127.0.0.1:7420");
+        assert_eq!(web_url("[::]:7420"), "http://[::1]:7420");
+        assert_eq!(web_url("127.0.0.1:7420"), "http://127.0.0.1:7420");
+        assert_eq!(web_url("192.168.1.5:7420"), "http://192.168.1.5:7420");
+        assert_eq!(web_url("[::1]:9000"), "http://[::1]:9000");
+        let everywhere = Daemon::Running {
+            version: Some("0.3.0".to_owned()),
+            listen: Some("0.0.0.0:7420".to_owned()),
+        };
+        assert_eq!(
+            lines(&status(everywhere, None, None), "0.3.0")[0],
+            "daemon: running fold 0.3.0, web interface http://127.0.0.1:7420"
         );
     }
 
