@@ -1,3 +1,4 @@
+pub mod cost;
 pub mod gc;
 pub mod log;
 pub mod pause;
