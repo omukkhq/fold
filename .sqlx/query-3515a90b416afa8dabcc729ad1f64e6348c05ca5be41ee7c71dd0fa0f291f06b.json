@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE notify_targets_seen SET last_sent_at = ?2 WHERE target = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "3515a90b416afa8dabcc729ad1f64e6348c05ca5be41ee7c71dd0fa0f291f06b"
+}

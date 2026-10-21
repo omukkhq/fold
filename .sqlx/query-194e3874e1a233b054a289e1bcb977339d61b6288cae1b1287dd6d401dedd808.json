@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT target AS \"target!: i64\", last_sent_at FROM notify_targets_seen",
+  "describe": {
+    "columns": [
+      {
+        "name": "target!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_targets_seen",
+            "name": "target"
+          }
+        }
+      },
+      {
+        "name": "last_sent_at",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_targets_seen",
+            "name": "last_sent_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "194e3874e1a233b054a289e1bcb977339d61b6288cae1b1287dd6d401dedd808"
+}

@@ -1,3 +1,5 @@
+pub mod notify;
+
 use fold_core::{HumanName, Timestamp, WebTokenId};
 use sqlx::{SqliteExecutor, SqlitePool};
 

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM notify_targets_seen WHERE target = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "965212e9ce9a926c7bd071411aaf2eaa6361ff3075c66f2eec5dc5a4ce51625e"
+}

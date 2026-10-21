@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM notify_items WHERE key = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "9d7ad0913cfa1510b831030c18b29077b24ab25c11b9c7950bc083f64e696c8b"
+}

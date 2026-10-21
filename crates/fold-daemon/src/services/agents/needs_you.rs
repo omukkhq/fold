@@ -61,6 +61,26 @@ pub enum Screen {
 }
 
 impl NeedsYouKind {
+    /// The kind's wire name, as the Needs you list and the notices name it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NeedsYouKind::Question => "question",
+            NeedsYouKind::Permission => "permission",
+            NeedsYouKind::HumanReview => "human_review",
+            NeedsYouKind::RequestDraft => "request_draft",
+            NeedsYouKind::HumanTask => "human_task",
+            NeedsYouKind::Blocker => "blocker",
+            NeedsYouKind::HumanChange => "human_change",
+            NeedsYouKind::HeadMoved => "head_moved",
+            NeedsYouKind::FolderHeld => "folder_held",
+            NeedsYouKind::UnstashConflicted => "unstash_conflicted",
+            NeedsYouKind::ChecksFileInvalidOnMain => "checks_file_invalid_on_main",
+            NeedsYouKind::WorkerUnreachable => "worker_unreachable",
+            NeedsYouKind::WorkerModelUnreachable => "worker_model_unreachable",
+            NeedsYouKind::ClaudeNotFound => "claude_not_found",
+        }
+    }
+
     pub fn screen(self) -> Screen {
         match self {
             NeedsYouKind::Question => Screen::Messages,
@@ -128,7 +148,7 @@ impl NeedsYouItem {
         item
     }
 
-    fn new(kind: NeedsYouKind, since: Timestamp) -> Self {
+    pub(crate) fn new(kind: NeedsYouKind, since: Timestamp) -> Self {
         Self {
             kind,
             since,

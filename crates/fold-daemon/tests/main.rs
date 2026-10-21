@@ -118,6 +118,7 @@ mod mcp_tasks;
 mod mcp_wait_for_events;
 mod mcp_workspace_tools;
 mod mcp_workspaces;
+mod needs_you_notices;
 mod no_proposal_tasks;
 mod notifications;
 mod one_area;

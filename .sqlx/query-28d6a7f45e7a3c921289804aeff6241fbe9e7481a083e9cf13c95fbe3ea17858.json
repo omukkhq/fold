@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO notify_items (key, seen_at) VALUES (?1, ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "28d6a7f45e7a3c921289804aeff6241fbe9e7481a083e9cf13c95fbe3ea17858"
+}

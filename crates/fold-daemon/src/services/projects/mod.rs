@@ -57,6 +57,7 @@ mod enable_git;
 mod folder;
 mod gc;
 mod git_status;
+pub mod notify;
 mod pull;
 mod record;
 mod remote;

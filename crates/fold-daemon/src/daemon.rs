@@ -194,7 +194,8 @@ impl Daemon {
                 .with_environment(environment)
                 .with_start(start)
                 .with_registry(registry.clone())
-                .with_push_files(config.push_dir()),
+                .with_push_files(config.push_dir())
+                .with_notify_dir(config.notify_dir()),
             registry,
             clock: clock.clone(),
             assets: config
@@ -245,6 +246,7 @@ impl Daemon {
             jobs::spawn_auto_integrate(state.clone(), jobs::AUTO_INTEGRATE_TICK, stopped.clone());
         let worker_idle =
             jobs::spawn_worker_idle(state.clone(), jobs::WORKER_IDLE_TICK, stopped.clone());
+        let notify = jobs::spawn_notify(state.clone(), jobs::NOTIFY_TICK, stopped.clone());
         let http = tokio::spawn(serve_http(listener, http::router(state.clone()), stopped));
         for handle in &opened {
             resume_workers(handle).await;
@@ -264,6 +266,7 @@ impl Daemon {
             stalls,
             auto_integrate,
             worker_idle,
+            notify,
             stop,
             _lock: lock,
         })
@@ -303,6 +306,7 @@ pub struct RunningDaemon {
     stalls: Job,
     auto_integrate: Job,
     worker_idle: Job,
+    notify: Job,
     stop: watch::Sender<bool>,
     /// The advisory lock lives as long as this file is open.
     _lock: File,
@@ -336,6 +340,7 @@ impl RunningDaemon {
         self.stalls.stopped(DRAIN_TIMEOUT).await;
         self.auto_integrate.stopped(DRAIN_TIMEOUT).await;
         self.worker_idle.stopped(DRAIN_TIMEOUT).await;
+        self.notify.stopped(DRAIN_TIMEOUT).await;
         let handles = self.state.projects.handles();
         // The projects end their workers at the same time, so the stop that systemd and `fld restart` wait for does not grow with the number of projects.
         let mut stops = tokio::task::JoinSet::new();

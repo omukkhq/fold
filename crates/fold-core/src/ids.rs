@@ -312,6 +312,12 @@ define_id!(
     WebTokenId,
     "wt-"
 );
+define_id!(
+    @prefixed
+    /// The public id of a notification target. One number space covers the host's default targets and every project's own, so a target is named without its scope, and a removed target's number is never handed out again.
+    NotifyTargetId,
+    "nt-"
+);
 
 #[cfg(test)]
 mod tests {

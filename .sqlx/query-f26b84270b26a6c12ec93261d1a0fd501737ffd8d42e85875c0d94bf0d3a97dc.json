@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO notify_sent (target, key) SELECT ?1, key FROM notify_items",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "f26b84270b26a6c12ec93261d1a0fd501737ffd8d42e85875c0d94bf0d3a97dc"
+}

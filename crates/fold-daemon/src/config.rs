@@ -28,6 +28,11 @@ impl DaemonConfig {
         self.data_dir.join("push")
     }
 
+    /// The notification settings of the host and of every project, with their secrets, outside every project folder.
+    pub fn notify_dir(&self) -> PathBuf {
+        self.data_dir.join("notify")
+    }
+
     pub fn lock_path(&self) -> PathBuf {
         self.runtime_dir.join(LOCK_FILE)
     }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO notify_targets_seen (target, last_sent_at) VALUES (?1, NULL)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "41b6d77798b93650567ccb13e48c2c5061d51a493184bd1945e07a50b38131ba"
+}

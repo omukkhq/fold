@@ -1,3 +1,4 @@
+use crate::services::projects::notify::NotifySettings;
 use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -463,6 +464,8 @@ pub struct Projects {
     away: RwLock<HashSet<String>>,
     /// The daemon's folder of kept push targets, one subfolder per project slug; `None` keeps them in memory only.
     push_files: Option<PathBuf>,
+    /// The notification settings of the host and its projects; `None` sends no notices.
+    notify: Option<NotifySettings>,
 }
 
 impl Projects {
@@ -507,6 +510,17 @@ impl Projects {
     pub fn with_push_files(mut self, dir: PathBuf) -> Self {
         self.push_files = Some(dir);
         self
+    }
+
+    /// Keeps the notification settings of the host and its projects below `dir`.
+    #[must_use]
+    pub fn with_notify_dir(mut self, dir: PathBuf) -> Self {
+        self.notify = Some(NotifySettings::new(dir));
+        self
+    }
+
+    pub fn notify(&self) -> Option<&NotifySettings> {
+        self.notify.as_ref()
     }
 
     pub fn slot(&self, slug: &str) -> Option<Slot> {

@@ -182,6 +182,10 @@ define_codes! {
     ASK_NOT_OPEN = "ask_not_open",
     ASK_CLOSE_DENIED = "ask_close_denied",
     PROJECT_WORKERS_RUNNING = "project_workers_running",
+    NOTIFY_TARGET_NOT_FOUND = "notify_target_not_found",
+    INVALID_NOTIFY_TARGET = "invalid_notify_target",
+    NOTIFY_SEND_FAILED = "notify_send_failed",
+    NOTIFY_SETTINGS_IO = "notify_settings_io",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

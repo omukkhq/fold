@@ -4,6 +4,19 @@ use crate::error::codes;
 use super::PolicyDenied;
 use super::workers::Starter;
 
+/// A notification target sends what waits for a human to an address outside fold, and its secret signs or opens that channel, so only a named human adds, removes or tests one; an agent that could add a target could send fold's activity anywhere.
+pub fn can_change_notifications(actor: &Actor) -> Result<(), PolicyDenied> {
+    if actor.is_human() {
+        Ok(())
+    } else {
+        Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only a human changes where fold sends its notices",
+            hint: "ask a human to run `fld notify` or open the project's settings in fold's web interface",
+        })
+    }
+}
+
 /// Bringing the remote branch into main changes main outside any proposal, so only a named human runs `fld pull`.
 pub fn can_pull(actor: &Actor) -> Result<(), PolicyDenied> {
     if actor.is_human() {
