@@ -1035,3 +1035,54 @@ async fn a_claim_in_the_last_quarter_of_its_lease_shows_in_the_next_footer() {
         "the call that showed the claim renewed it"
     );
 }
+
+#[tokio::test]
+async fn a_message_the_agent_has_read_never_wakes_its_next_filtered_wait() {
+    let fx = Fixture::new().await;
+    let backend = fx.connect("backend").await;
+    for _ in 0..3 {
+        send_as_human(&fx, "backend").await;
+    }
+    let inbox = call(&backend, "get_inbox", json!({})).await;
+    assert_eq!(
+        inbox["messages"].as_array().map(Vec::len),
+        Some(3),
+        "{inbox}"
+    );
+    let filter = json!({"types": ["proposal.opened"], "timeout_s": 1});
+    assert_eq!(
+        call(&backend, "wait_for_events", filter.clone()).await,
+        json!({"timed_out": true}),
+        "the first wait of an agent that never waited skips the messages it read"
+    );
+    let unread = send_as_human(&fx, "backend").await;
+    let woke = call(&backend, "wait_for_events", filter).await;
+    assert_eq!(woke["messages"], json!([unread.to_string()]));
+}
+
+#[tokio::test]
+async fn a_worker_never_wakes_for_its_own_message_and_a_main_worker_wakes_for_its_childs() {
+    let fx = Fixture::new().await;
+    let backend = fx.connect("backend").await;
+    call(&backend, "register_worker", json!({"name": "sub"})).await;
+    let filter = json!({"types": ["proposal.opened"], "timeout_s": 1});
+    call(
+        &backend,
+        "send_message",
+        json!({"to": ["backend/sub"], "body": "take the parser"}),
+    )
+    .await;
+    assert_eq!(
+        call(&backend, "wait_for_events", filter.clone()).await,
+        json!({"timed_out": true}),
+        "the main worker's message to its child"
+    );
+    let report = call(
+        &backend,
+        "send_message",
+        json!({"to": ["backend"], "body": "the parser is done", "as": "backend/sub"}),
+    )
+    .await;
+    let woke = call(&backend, "wait_for_events", filter).await;
+    assert_eq!(woke["messages"], json!([report["id"]]), "{woke}");
+}

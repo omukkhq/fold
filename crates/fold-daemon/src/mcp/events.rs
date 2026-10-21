@@ -108,14 +108,14 @@ fn page_json(page: &EventPage) -> Value {
     })
 }
 
-/// The page of a wait, with the messages in it that wait for the worker, or for any worker of its agent when it is the main worker, and the call that reads them.
+/// The page of a wait, with the messages in it that wait for the worker, or for any worker of its agent when it is the main worker, apart from those the worker sent, and the call that reads them.
 fn wait_json(worker: &WorkerRow, page: &EventPage) -> Value {
     let mut result = page_json(page);
     let agent = worker.name.agent();
     let mut for_others = false;
     let mut waiting: Vec<&str> = Vec::new();
     for event in &page.events {
-        if event.event_type != types::MESSAGE_SENT {
+        if event.event_type != types::MESSAGE_SENT || event.actor.as_str() == worker.name.as_str() {
             continue;
         }
         let recipients: Vec<&str> = event

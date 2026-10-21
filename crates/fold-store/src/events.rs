@@ -171,7 +171,7 @@ pub struct Reach<'a> {
     pub wake: Option<MessageWake>,
 }
 
-/// An event of `event_type` is selected past the filter when the worker row `worker_id` receives the message it names, or with `every_worker` when any worker of the agent does.
+/// An event of `event_type` is selected past the filter when the worker row `worker_id` receives the message it names, or with `every_worker` when any worker of the agent does, on a row that no inbox read or acknowledgement has reached yet, and only when that worker did not send it: a wait wakes for a new message, never for one the agent has seen or its own.
 #[derive(Debug, Clone, Copy)]
 pub struct MessageWake {
     pub event_type: EventType,
@@ -209,11 +209,13 @@ pub async fn read_reaching(
                    AND (?3 IS NULL OR e.task_id = ?3)
                    AND (?4 IS NULL OR e.proposal_id = ?4))
                   OR (e.type = ?9
+                      AND e.actor <> (SELECT s.name FROM workers s WHERE s.id = ?10)
                       AND EXISTS (
                           SELECT 1 FROM messages m
                           JOIN message_recipients r ON r.message_id = m.id
                           JOIN workers w ON w.id = r.worker_id
                           WHERE m.number = e.message_id
+                            AND r.delivered_at IS NULL AND r.acked_at IS NULL
                             AND (r.worker_id = ?10 OR (?11 AND w.agent_id = ?5)))))
              AND (e.type NOT IN (SELECT value FROM json_each(?6))
                   OR EXISTS (

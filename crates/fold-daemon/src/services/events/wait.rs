@@ -64,7 +64,7 @@ impl EventService {
         self.start_wait(agent_id, None, query).await
     }
 
-    /// [`EventService::wait`] for `worker`, which a sent message it receives also ends, whatever the filter says: a notice that fold pushes into a session waits there until the tool call returns. A main worker also wakes for the messages to its agent's other workers, because its session takes their notices and its inbox can read them.
+    /// [`EventService::wait`] for `worker`, which a new message it receives and did not send itself also ends, whatever the filter says: a notice that fold pushes into a session waits there until the tool call returns. A main worker also wakes for the messages to its agent's other workers, because its session takes their notices and its inbox can read them.
     pub async fn wait_as(
         &self,
         worker: &WorkerRow,
