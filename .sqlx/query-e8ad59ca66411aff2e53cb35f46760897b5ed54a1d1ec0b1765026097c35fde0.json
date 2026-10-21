@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO notify_sent (target, key)\n             SELECT ?1, key FROM notify_items WHERE key = ?2\n             AND EXISTS (SELECT 1 FROM notify_targets_seen WHERE target = ?1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "e8ad59ca66411aff2e53cb35f46760897b5ed54a1d1ec0b1765026097c35fde0"
+}

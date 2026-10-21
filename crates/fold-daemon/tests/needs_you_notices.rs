@@ -566,6 +566,48 @@ async fn the_host_targets_serve_a_project_without_its_own_and_a_new_target_hears
 }
 
 #[tokio::test]
+async fn a_pass_without_a_target_writes_nothing_and_a_new_target_hears_only_later_items() {
+    let fixture = Fixture::new().await;
+    let state = async || {
+        let mut conn = fixture.handle.store.read().acquire().await.unwrap();
+        fold_store::projects::notify::notify_state(&mut conn)
+            .await
+            .unwrap()
+    };
+    let before = fixture.ask().await;
+    assert_eq!(fixture.pass().await, 0);
+    assert_eq!(
+        state().await,
+        fold_store::projects::notify::NotifyState::default(),
+        "no target applies, so the pass records nothing"
+    );
+
+    fixture.advance(Duration::from_secs(1));
+    let mut receiver = Receiver::start(200).await;
+    let id = fixture.webhook(&receiver.url, false, 10).await;
+    assert_eq!(fixture.pass().await, 0);
+    let recorded = state().await;
+    let target: fold_core::NotifyTargetId = id.parse().unwrap();
+    assert!(
+        recorded
+            .sent
+            .contains(&(target, format!("question:{before}"))),
+        "the item open before the target counts as sent: {recorded:?}"
+    );
+    fixture.advance(SETTLE);
+    assert_eq!(fixture.pass().await, 0);
+
+    let later = fixture.ask().await;
+    assert_eq!(fixture.pass().await, 0);
+    fixture.advance(SETTLE);
+    assert_eq!(fixture.pass().await, 1);
+    let post = receiver.next().await.json();
+    assert_eq!(post["items"].as_array().unwrap().len(), 1);
+    assert_eq!(post["items"][0]["id"], later);
+    assert!(receiver.none_waiting());
+}
+
+#[tokio::test]
 async fn a_failed_send_keeps_its_items_for_the_next_interval() {
     let fixture = Fixture::new().await;
     let mut broken = Receiver::start(500).await;

@@ -50,12 +50,12 @@ pub async fn notify_state(conn: &mut SqliteConnection) -> Result<NotifyState, St
     Ok(state)
 }
 
-/// Records `open`, the keys of the items in Needs you now: a new key gets `now` as its time, and a key that is gone loses its row with every send of it.
+/// Records `open`, the keys of the items in Needs you now: a new key gets `now` as its time, and a key that is gone loses its row with every send of it. Returns the keys recorded before, of the items that stay open and the ones that went.
 pub async fn sync_notify_items(
     tx: &mut WriteTx,
     open: &BTreeSet<String>,
     now: Timestamp,
-) -> Result<(), StoreError> {
+) -> Result<BTreeSet<String>, StoreError> {
     let known: BTreeSet<String> = sqlx::query_scalar!(r#"SELECT key AS "key!" FROM notify_items"#)
         .fetch_all(tx.conn())
         .await?
@@ -76,13 +76,13 @@ pub async fn sync_notify_items(
             .execute(tx.conn())
             .await?;
     }
-    Ok(())
+    Ok(known)
 }
 
-/// Makes `applying` the targets that apply to the project. A target that stops applying loses its rows; one that starts applying gets a row without a send and counts every open item as sent, so it hears only of items that come after.
+/// Makes the keys of `applying` the targets that apply to the project. A target that stops applying loses its rows; one that starts applying gets a row without a send and counts the open items of its key set as sent, so it hears only of items that come after. Runs after [`sync_notify_items`], so the key sets name recorded items.
 pub async fn sync_notify_targets(
     tx: &mut WriteTx,
-    applying: &BTreeSet<NotifyTargetId>,
+    applying: &BTreeMap<NotifyTargetId, BTreeSet<String>>,
 ) -> Result<(), StoreError> {
     let known = sqlx::query_scalar!(r#"SELECT target AS "target!: i64" FROM notify_targets_seen"#)
         .fetch_all(tx.conn())
@@ -90,13 +90,16 @@ pub async fn sync_notify_targets(
         .into_iter()
         .map(target_id)
         .collect::<Result<BTreeSet<_>, _>>()?;
-    for target in known.difference(applying) {
+    for target in known.iter().filter(|target| !applying.contains_key(target)) {
         let number = target.to_db();
         sqlx::query!("DELETE FROM notify_targets_seen WHERE target = ?1", number)
             .execute(tx.conn())
             .await?;
     }
-    for target in applying.difference(&known) {
+    for (target, seen) in applying
+        .iter()
+        .filter(|(target, _)| !known.contains(target))
+    {
         let number = target.to_db();
         sqlx::query!(
             "INSERT INTO notify_targets_seen (target, last_sent_at) VALUES (?1, NULL)",
@@ -104,9 +107,24 @@ pub async fn sync_notify_targets(
         )
         .execute(tx.conn())
         .await?;
+        mark_sent(tx, number, seen).await?;
+    }
+    Ok(())
+}
+
+/// The items of `keys` that are still open count as sent to the target `number`.
+async fn mark_sent<'k>(
+    tx: &mut WriteTx,
+    number: i64,
+    keys: impl IntoIterator<Item = &'k String>,
+) -> Result<(), StoreError> {
+    for key in keys {
         sqlx::query!(
-            "INSERT INTO notify_sent (target, key) SELECT ?1, key FROM notify_items",
-            number
+            "INSERT OR IGNORE INTO notify_sent (target, key)
+             SELECT ?1, key FROM notify_items WHERE key = ?2
+             AND EXISTS (SELECT 1 FROM notify_targets_seen WHERE target = ?1)",
+            number,
+            key
         )
         .execute(tx.conn())
         .await?;
@@ -132,17 +150,7 @@ pub async fn record_notify_send(
     .execute(tx.conn())
     .await?;
     if delivered {
-        for key in keys {
-            sqlx::query!(
-                "INSERT OR IGNORE INTO notify_sent (target, key)
-                 SELECT ?1, key FROM notify_items WHERE key = ?2
-                 AND EXISTS (SELECT 1 FROM notify_targets_seen WHERE target = ?1)",
-                number,
-                key
-            )
-            .execute(tx.conn())
-            .await?;
-        }
+        mark_sent(tx, number, keys).await?;
     }
     Ok(())
 }

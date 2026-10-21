@@ -34,13 +34,17 @@ pub struct NotifyPass {
     pub next_due: Option<Timestamp>,
 }
 
-/// One look at the project's Needs you: records which items are open, makes the targets that apply now the known ones, and sends each target whose items are due one notice of all its pending items, oldest first. A target that starts to apply counts the items open before as sent. A send that fails leaves its items pending until the interval after it. Every send is logged with the target's id and the item count, never a title, address or secret.
+/// One look at the project's Needs you: records which items are open, makes the targets that apply now the known ones, and sends each target whose items are due one notice of all its pending items, oldest first. A pass with no target that applies reads and writes nothing more. A target that starts to apply counts as sent every open item that an earlier pass recorded or that came before the target was added, so it hears only of items that come after. A send that fails leaves its items pending until the interval after it. Every send is logged with the target's id and the item count, never a title, address or secret.
 pub async fn notify_pass(
     handle: &ProjectHandle,
     settings: &NotifySettings,
     listen: SocketAddr,
 ) -> Result<NotifyPass, FoldError> {
     let (targets, _) = settings.applying(&handle.slug).await?;
+    let mut pass = NotifyPass::default();
+    if targets.is_empty() {
+        return Ok(pass);
+    }
     let items = with_folder_attention(
         handle.agents().needs_you().await.map_err(FoldError::from)?,
         handle.git_attention.head_moved(),
@@ -51,13 +55,25 @@ pub async fn notify_pass(
         open.entry(item_key(&item)).or_insert(item);
     }
     let keys: BTreeSet<String> = open.keys().cloned().collect();
-    let ids = targets.iter().map(|target| target.id).collect();
     let now = handle.clock.now();
     handle
         .store
         .write(async |tx| {
-            sync_notify_targets(tx, &ids).await?;
-            sync_notify_items(tx, &keys, now).await
+            let recorded = sync_notify_items(tx, &keys, now).await?;
+            let applying = targets
+                .iter()
+                .map(|target| {
+                    let seen = open
+                        .iter()
+                        .filter(|(key, item)| {
+                            recorded.contains(*key) || item.since < target.created_at
+                        })
+                        .map(|(key, _)| key.clone())
+                        .collect();
+                    (target.id, seen)
+                })
+                .collect();
+            sync_notify_targets(tx, &applying).await
         })
         .await
         .map_err(from_store)?;
@@ -69,10 +85,6 @@ pub async fn notify_pass(
         .map_err(|error| from_store(error.into()))?;
     let state = notify_state(&mut conn).await.map_err(from_store)?;
     drop(conn);
-    let mut pass = NotifyPass::default();
-    if targets.is_empty() {
-        return Ok(pass);
-    }
     let base = link_base(settings, listen).await?;
     for target in targets {
         let mut pending: Vec<(&String, Timestamp)> = state
