@@ -50,7 +50,11 @@ const proposal = {
 describe("the proposal strip of the task dialog", () => {
   it("links to the proposal screen and says it waits for this human", async () => {
     await mount(
-      taskView("T-1", { proposal, attention: [{ kind: "human_review" }] }),
+      taskView("T-1", {
+        status: "review",
+        proposal,
+        attention: [{ kind: "human_review" }],
+      }),
     );
     const link = screen.getByRole("link", { name: "Go to proposal" });
     expect(link.getAttribute("href")).toBe("/p/demo/proposals/P-7");
@@ -63,6 +67,7 @@ describe("the proposal strip of the task dialog", () => {
   it("is neutral while a reviewer holds the version", async () => {
     await mount(
       taskView("T-1", {
+        status: "review",
         proposal: { ...proposal, review_claim: "review-lead" },
       }),
     );
@@ -70,8 +75,11 @@ describe("the proposal strip of the task dialog", () => {
     expect(screen.getByLabelText("Proposal").className).toContain("bg-sunken");
   });
 
-  it("is absent without an open proposal", async () => {
-    await mount(taskView("T-1"));
+  it("is absent without an open proposal and outside Review", async () => {
+    await mount(taskView("T-1", { status: "review" }));
+    expect(screen.queryByRole("link", { name: "Go to proposal" })).toBeNull();
+    cleanup();
+    await mount(taskView("T-1", { status: "in_progress", proposal }));
     expect(screen.queryByRole("link", { name: "Go to proposal" })).toBeNull();
   });
 });

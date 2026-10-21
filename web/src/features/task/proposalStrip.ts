@@ -4,7 +4,7 @@ import { reviewerText } from "./text";
 
 export interface ProposalStrip {
   proposal: string;
-  /** `P-7 v2 waits for your review`, `P-7 v2 is with @review-lead` or `P-7 v2 waits for a reviewer`. */
+  /** `P-7 v2 waits for your review`, `P-7 v2 is approved`, `P-7 v2 is with @review-lead` or `P-7 v2 waits for a reviewer`. */
   lead: string;
   /** `· Add the form · 3 files`; empty while the read names neither. */
   rest: string;
@@ -17,14 +17,15 @@ function files(count: number): string {
 }
 
 /**
- * The strip under the status row that leads to the proposal screen. It shows while the task has a proposal that is
- * not integrated. The lead says who waits: this human first, else the reviewer that holds the review claim, else any reviewer.
+ * The strip under the status row that leads to the proposal screen. It shows only while the task is in Review, because
+ * outside Review the next move on the proposal belongs to its author or the proposal is integrated. The lead says who
+ * has the version: this human first, then an approval, then the reviewer that holds the review claim, else any reviewer.
  */
 export function proposalStrip(
-  task: Pick<TaskDetail, "attention" | "proposal">,
+  task: Pick<TaskDetail, "attention" | "proposal" | "status">,
 ): ProposalStrip | null {
   const { proposal } = task;
-  if (proposal === null || proposal.state === "integrated") {
+  if (proposal === null || task.status !== "review") {
     return null;
   }
   const waitsForYou = hasKind(task.attention, "human_review");
@@ -32,6 +33,8 @@ export function proposalStrip(
   let wait = "waits for a reviewer";
   if (waitsForYou) {
     wait = "waits for your review";
+  } else if (proposal.state === "approved") {
+    wait = "is approved";
   } else if (proposal.review_claim !== null) {
     wait = `is with ${reviewerText(proposal.review_claim)}`;
   }
