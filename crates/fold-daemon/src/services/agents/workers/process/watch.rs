@@ -160,8 +160,11 @@ impl Supervisor {
                 ended = Some(windows);
                 let totals = TurnTotals {
                     cost_micro_usd: process.base_cost.saturating_add(micro_usd(total_cost_usd)),
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
                     cache_read_tokens: usage.cache_read_input_tokens,
                     cache_write_tokens: usage.cache_creation_input_tokens,
+                    failed: error.is_some(),
                 };
                 self.end_turn(process, totals, error.as_ref()).await
             }

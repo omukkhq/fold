@@ -466,6 +466,7 @@ async fn the_row_follows_its_process_through_turns_stops_and_restarts() {
                     cost_micro_usd: 30,
                     cache_read_tokens: 5,
                     cache_write_tokens: 7,
+                    ..TurnTotals::default()
                 },
                 at(20),
             )

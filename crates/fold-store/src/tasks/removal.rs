@@ -4,7 +4,7 @@ use sqlx::SqliteConnection;
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
-/// What a task has left behind that `delete_task` may not erase. Workspaces and proposals count in any state and of any kind; a message counts when it names the task.
+/// What a task has left behind that `delete_task` may not erase. Workspaces and proposals count in any state and of any kind; a message counts when it names the task, and a worker's turn when it counts for the task.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TaskHistory {
     pub workspace: bool,
@@ -12,11 +12,17 @@ pub struct TaskHistory {
     pub completion: bool,
     pub message: bool,
     pub report: bool,
+    pub turn: bool,
 }
 
 impl TaskHistory {
     pub fn any(self) -> bool {
-        self.workspace || self.proposal || self.completion || self.message || self.report
+        self.workspace
+            || self.proposal
+            || self.completion
+            || self.message
+            || self.report
+            || self.turn
     }
 }
 
@@ -27,7 +33,8 @@ pub async fn history(conn: &mut SqliteConnection, task: TaskId) -> Result<TaskHi
                   EXISTS (SELECT 1 FROM proposals p WHERE p.task_id = t.id) AS "proposal!: bool",
                   EXISTS (SELECT 1 FROM completions c WHERE c.task_id = t.id) AS "completion!: bool",
                   EXISTS (SELECT 1 FROM messages m WHERE m.task_id = t.id) AS "message!: bool",
-                  EXISTS (SELECT 1 FROM task_reports r WHERE r.task_id = t.id) AS "report!: bool"
+                  EXISTS (SELECT 1 FROM task_reports r WHERE r.task_id = t.id) AS "report!: bool",
+                  EXISTS (SELECT 1 FROM worker_turns x WHERE x.task_id = t.id) AS "turn!: bool"
            FROM tasks t WHERE t.number = ?"#,
         number
     )
@@ -39,6 +46,7 @@ pub async fn history(conn: &mut SqliteConnection, task: TaskId) -> Result<TaskHi
         completion: row.completion,
         message: row.message,
         report: row.report,
+        turn: row.turn,
     }))
 }
 

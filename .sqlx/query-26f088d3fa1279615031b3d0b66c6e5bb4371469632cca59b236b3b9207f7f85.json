@@ -1,0 +1,35 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COALESCE(SUM(cost_micro_usd), 0) AS \"all_time!: i64\",\n                  COALESCE(SUM(CASE WHEN created_at >= ?1 THEN cost_micro_usd END), 0) AS \"today!: i64\",\n                  COALESCE(SUM(CASE WHEN created_at >= ?2 THEN cost_micro_usd END), 0) AS \"week!: i64\"\n           FROM worker_turns",
+  "describe": {
+    "columns": [
+      {
+        "name": "all_time!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "today!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "week!: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "26f088d3fa1279615031b3d0b66c6e5bb4371469632cca59b236b3b9207f7f85"
+}

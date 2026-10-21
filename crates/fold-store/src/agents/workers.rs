@@ -65,15 +65,19 @@ pub struct NewWorkerProcess<'a> {
     pub now: Timestamp,
 }
 
-/// The totals one stdout line of a worker adds. `cost_micro_usd` is the new total of the row, because Claude Code reports a running total per process.
+/// The totals one stdout line of a worker adds. `cost_micro_usd` is the new total of the row, because Claude Code reports a running total per process; the token counts are the turn's own.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TurnTotals {
     pub cost_micro_usd: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
+    /// The turn ended in Claude Code's error.
+    pub failed: bool,
 }
 
-fn db_count(value: u64) -> i64 {
+pub(super) fn db_count(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
@@ -598,13 +602,26 @@ pub async fn forget_made_up_model(tx: &mut WriteTx, id: i64) -> Result<(), Store
     Ok(())
 }
 
-/// Counts one finished turn and makes the worker idle.
+/// Counts one finished turn, appends its `worker_turns` row with the cost it added to the row's total, and makes the worker idle. A total below the row's counts as a turn that cost nothing.
 pub async fn record_turn(
     tx: &mut WriteTx,
     id: i64,
     totals: TurnTotals,
     now: Timestamp,
 ) -> Result<(), StoreError> {
+    let before = sqlx::query_scalar!(
+        r#"SELECT cost_micro_usd AS "cost!: i64" FROM worker_processes WHERE id = ?"#,
+        id
+    )
+    .fetch_optional(tx.conn())
+    .await?;
+    let Some(before) = before else {
+        return Ok(());
+    };
+    let added = totals
+        .cost_micro_usd
+        .saturating_sub(count(before, "worker_processes.cost_micro_usd")?);
+    super::turns::insert_turn(tx, id, added, &totals, now).await?;
     let cost = db_count(totals.cost_micro_usd);
     let read = db_count(totals.cache_read_tokens);
     let write = db_count(totals.cache_write_tokens);
