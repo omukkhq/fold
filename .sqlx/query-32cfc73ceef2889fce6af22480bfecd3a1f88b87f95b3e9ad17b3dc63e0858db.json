@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE review_plans\n         SET state = 'started', started_at = ?4,\n             started_agent_id = (SELECT id FROM agents WHERE name = ?2),\n             review_batch_id = (SELECT id FROM review_batches WHERE number = ?3)\n         WHERE number = ?1 AND state = 'open'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "32cfc73ceef2889fce6af22480bfecd3a1f88b87f95b3e9ad17b3dc63e0858db"
+}

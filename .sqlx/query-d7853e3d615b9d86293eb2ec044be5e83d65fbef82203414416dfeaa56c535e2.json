@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.number AS \"number!: i64\"\n           FROM review_plan_members m\n           JOIN review_plans r ON r.id = m.plan_id\n           WHERE m.task_id = (SELECT id FROM tasks WHERE number = ?) AND m.released_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_plans",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d7853e3d615b9d86293eb2ec044be5e83d65fbef82203414416dfeaa56c535e2"
+}

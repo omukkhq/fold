@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE review_plans SET wait_ended_at = ?2\n         WHERE number = ?1 AND state = 'open' AND wait_ended_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "a3cdcb226852e4115ff52bdb5416c5cb29cb4565ec800fb93ae25cb881a71aa0"
+}

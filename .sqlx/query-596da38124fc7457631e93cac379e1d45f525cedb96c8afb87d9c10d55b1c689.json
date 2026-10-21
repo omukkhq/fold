@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO review_plan_members (plan_id, task_id, proposal_id, version_id, added_at, joined_at)\n                 SELECT r.id, t.id, p.id, v.id, ?5, ?5\n                 FROM review_plans r, tasks t, proposals p JOIN proposal_versions v ON v.proposal_id = p.id\n                 WHERE r.number = ?1 AND t.number = ?2 AND p.number = ?3 AND v.version = ?4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "596da38124fc7457631e93cac379e1d45f525cedb96c8afb87d9c10d55b1c689"
+}

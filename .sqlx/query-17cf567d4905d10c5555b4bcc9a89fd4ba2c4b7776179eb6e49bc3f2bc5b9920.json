@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.number AS \"task!: i64\", p.number AS \"proposal?: i64\", v.version AS \"version?: i64\",\n                  m.added_at, m.joined_at, m.released_at, m.release_reason\n           FROM review_plan_members m\n           JOIN review_plans r ON r.id = m.plan_id\n           JOIN tasks t ON t.id = m.task_id\n           LEFT JOIN proposals p ON p.id = m.proposal_id\n           LEFT JOIN proposal_versions v ON v.id = m.version_id\n           WHERE r.number = ?\n           ORDER BY m.added_at, t.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "task!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "proposal?: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "version?: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "added_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_plan_members",
+            "name": "added_at"
+          }
+        }
+      },
+      {
+        "name": "joined_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_plan_members",
+            "name": "joined_at"
+          }
+        }
+      },
+      {
+        "name": "released_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_plan_members",
+            "name": "released_at"
+          }
+        }
+      },
+      {
+        "name": "release_reason",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_plan_members",
+            "name": "release_reason"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "17cf567d4905d10c5555b4bcc9a89fd4ba2c4b7776179eb6e49bc3f2bc5b9920"
+}

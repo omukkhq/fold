@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE review_plans SET state = 'ended', ended_at = ?2 WHERE number = ?1 AND state = 'open'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "d4d1d7734f4afe6d7ca6d364cb2684d26b2198a6eee9cf2544e7a976ff585de2"
+}

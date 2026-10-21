@@ -30,6 +30,7 @@ mod registry;
 mod removal;
 mod requests_schema;
 mod review_batches_schema;
+mod review_plans_schema;
 mod reviews_schema;
 mod revision_reads;
 mod revisions;

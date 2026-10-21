@@ -19,6 +19,7 @@ pub mod checks;
 mod claims;
 mod human_edits;
 mod integrations;
+pub mod plans;
 mod scopes;
 mod summaries;
 

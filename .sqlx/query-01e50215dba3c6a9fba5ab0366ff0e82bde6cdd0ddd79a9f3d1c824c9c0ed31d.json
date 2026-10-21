@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.number AS \"plan!: i64\", t.number AS \"task!: i64\", p.number AS \"proposal?: i64\"\n           FROM review_plan_members m\n           JOIN review_plans r ON r.id = m.plan_id\n           JOIN tasks t ON t.id = m.task_id\n           LEFT JOIN proposals p ON p.id = m.proposal_id\n           WHERE m.released_at IS NULL AND r.state = 'open'\n           ORDER BY r.number, t.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "plan!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_plans",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "task!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "proposal?: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "01e50215dba3c6a9fba5ab0366ff0e82bde6cdd0ddd79a9f3d1c824c9c0ed31d"
+}
