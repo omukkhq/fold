@@ -469,7 +469,14 @@ function invalidationKeys(
           ]
         : [keys.requests(slug), ...requestKey, keys.needsYou(slug)];
     default:
-      return [keys.messages(slug), board, ...requestKey, keys.needsYou(slug)];
+      // A message to a human can open an ask, and a reply or a closure ends one, so the linked task's question attention changes with it.
+      return [
+        keys.messages(slug),
+        board,
+        ...taskKey,
+        ...requestKey,
+        keys.needsYou(slug),
+      ];
   }
 }
 

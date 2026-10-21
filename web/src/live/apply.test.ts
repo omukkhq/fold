@@ -624,6 +624,16 @@ describe("invalidation rules", () => {
     expect(hit(keys.task(slug, "T-1"))).toBe(false);
   });
 
+  it("refreshes the linked task, whose question attention an ask opens and its closure ends", () => {
+    for (const type of ["message.sent", "message.ask_closed"]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type, { task: "T-3" }));
+      expect(hit(keys.task(slug, "T-3")), type).toBe(true);
+      expect(hit(keys.board(slug)), type).toBe(true);
+      expect(hit(keys.needsYou(slug)), type).toBe(true);
+    }
+  });
+
   it("refreshes the request whose thread a message joins", () => {
     applyEvent(
       client,
