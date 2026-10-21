@@ -287,8 +287,13 @@ impl FoldServer {
             .map_err(from_agent)
     }
 
-    /// Adds to `counts` the sources taken before the call when `before_call` is true, the others when it is false.
-    async fn counts(&self, before_call: bool, mut counts: FooterCounts) -> FooterCounts {
+    /// Adds to `counts` the sources taken before the call when `before_call` is true, the others when it is false, each for the worker that the call's `as` names.
+    async fn counts(
+        &self,
+        before_call: bool,
+        as_worker: Option<&WorkerName>,
+        mut counts: FooterCounts,
+    ) -> FooterCounts {
         let session = self.session().await;
         for source in self
             .footer
@@ -296,7 +301,8 @@ impl FoldServer {
             .filter(|s| s.before_call() == before_call)
         {
             let part = source.part();
-            counts = counts.with(part, counts.get(part) + source.count(&session).await);
+            let count = source.count_as(&session, as_worker).await;
+            counts = counts.with(part, counts.get(part) + count);
         }
         counts
     }
@@ -433,7 +439,14 @@ impl ServerHandler for FoldServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let arrived = self.counts(true, FooterCounts::default()).await;
+        // A call whose `as` is not a worker name fails with its own error; its footer counts for the main worker.
+        let footer_worker = request
+            .arguments
+            .as_ref()
+            .and_then(|arguments| as_worker(arguments).ok().flatten());
+        let arrived = self
+            .counts(true, footer_worker.as_ref(), FooterCounts::default())
+            .await;
         let mut result = match self.run(&request, &context).await {
             Ok(Some(value)) => CallToolResult::success(vec![ContentBlock::text(value.to_string())]),
             // The specification answers an unknown tool with a JSON-RPC error; its data carries the hint a tool error would.
@@ -447,7 +460,7 @@ impl ServerHandler for FoldServer {
             }
             Err(error) => tool_error(&error),
         };
-        if let Some(line) = footer(&self.counts(false, arrived).await) {
+        if let Some(line) = footer(&self.counts(false, footer_worker.as_ref(), arrived).await) {
             result.content.push(ContentBlock::text(line));
         }
         Ok(result.into())

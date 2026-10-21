@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT last_seq AS \"last_seq!: i64\" FROM agent_cursors WHERE agent_id = ?",
+  "query": "SELECT last_seq AS \"last_seq!: i64\" FROM worker_cursors WHERE worker_id = ?",
   "describe": {
     "columns": [
       {
@@ -9,7 +9,7 @@
         "type_info": "Integer",
         "origin": {
           "Table": {
-            "table": "agent_cursors",
+            "table": "worker_cursors",
             "name": "last_seq"
           }
         }
@@ -22,5 +22,5 @@
       false
     ]
   },
-  "hash": "2096185f0da8da62fd0ed014f5497657ffbc7d296b6d87433ec49b2d06769d71"
+  "hash": "d3dde2f3cc7fdfb73b38426a22a66382c4a2b42de9be1c87d6f0cd3f040d63a4"
 }

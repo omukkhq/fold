@@ -41,11 +41,11 @@ pub enum WaitStep {
     TimedOut,
 }
 
-/// One agent waiting for matching events. It subscribed to the bus before it read the table, so no event commits unseen between the two; dropping it drops the subscription. The bus only says that something new exists: each read is one bounded page from the table after the agent's cursor, so a wait never loads the backlog.
+/// One worker waiting for matching events. It subscribed to the bus before it read the table, so no event commits unseen between the two; dropping it drops the subscription. The bus only says that something new exists: each read is one bounded page from the table after the worker's cursor, so a wait never loads the backlog.
 #[derive(Debug)]
 pub struct Waiter {
     service: EventService,
-    agent_id: i64,
+    worker: WorkerRow,
     filter: EventFilter,
     wake: Option<MessageWake>,
     receiver: broadcast::Receiver<BusMessage>,
@@ -59,9 +59,9 @@ pub struct Waiter {
 }
 
 impl EventService {
-    /// Starts a wait for the agent with row id `agent_id` and reads the first page after its cursor. The deadline and the ticks run on `tokio::time`, so tests drive them with a paused clock.
-    pub async fn wait(&self, agent_id: i64, query: &WaitQuery) -> Result<Waiter, EventsError> {
-        self.start_wait(agent_id, None, query).await
+    /// Starts a wait for `worker` and reads the first page after its cursor. The deadline and the ticks run on `tokio::time`, so tests drive them with a paused clock.
+    pub async fn wait(&self, worker: &WorkerRow, query: &WaitQuery) -> Result<Waiter, EventsError> {
+        self.start_wait(worker, None, query).await
     }
 
     /// [`EventService::wait`] for `worker`, which a new message it receives and did not send itself also ends, whatever the filter says: a notice that fold pushes into a session waits there until the tool call returns. A main worker also wakes for the messages to its agent's other workers, because its session takes their notices and its inbox can read them.
@@ -70,8 +70,7 @@ impl EventService {
         worker: &WorkerRow,
         query: &WaitQuery,
     ) -> Result<Waiter, EventsError> {
-        self.start_wait(worker.agent_id, Some(wake_of(worker)), query)
-            .await
+        self.start_wait(worker, Some(wake_of(worker)), query).await
     }
 
     /// The messages of `page` that wait for `worker` by the rule that wakes its wait, so a page that the filter matched names no message the worker has read, acknowledged or sent.
@@ -97,7 +96,7 @@ impl EventService {
 
     async fn start_wait(
         &self,
-        agent_id: i64,
+        worker: &WorkerRow,
         wake: Option<MessageWake>,
         query: &WaitQuery,
     ) -> Result<Waiter, EventsError> {
@@ -112,13 +111,13 @@ impl EventService {
             .clamp(1, MAX_TIMEOUT_S);
         let receiver = self.bus().subscribe();
         let closing = self.bus().closing();
-        let first = self.page(agent_id, &filter, wake).await?;
+        let first = self.page(worker, &filter, wake).await?;
         let now = Instant::now();
         let mut ticks = tokio::time::interval_at(now + TICK, TICK);
         ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
         Ok(Waiter {
             service: self.clone(),
-            agent_id,
+            worker: worker.clone(),
             filter,
             wake,
             receiver,
@@ -133,13 +132,13 @@ impl EventService {
 
     async fn page(
         &self,
-        agent_id: i64,
+        worker: &WorkerRow,
         filter: &EventFilter,
         wake: Option<MessageWake>,
     ) -> Result<EventPage, EventsError> {
         cursor_page(
             self.store(),
-            agent_id,
+            worker,
             filter,
             DEFAULT_LIMIT as usize,
             Some(wake),
@@ -188,7 +187,7 @@ impl Waiter {
             }
             let page = self
                 .service
-                .page(self.agent_id, &self.filter, self.wake)
+                .page(&self.worker, &self.filter, self.wake)
                 .await?;
             if !page.events.is_empty() {
                 return Ok(WaitStep::Events(page));

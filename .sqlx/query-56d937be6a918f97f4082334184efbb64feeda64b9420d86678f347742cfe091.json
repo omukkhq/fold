@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE worker_cursors SET last_seq = ?3 WHERE worker_id = ?1 AND last_seq = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "56d937be6a918f97f4082334184efbb64feeda64b9420d86678f347742cfe091"
+}

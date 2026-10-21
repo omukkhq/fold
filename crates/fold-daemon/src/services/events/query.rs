@@ -1,5 +1,6 @@
 use fold_core::events::types;
 use fold_core::{AgentName, Event, EventFilter, EventType, FoldError, ProposalId, TaskId, codes};
+use fold_store::agents::WorkerRow;
 use fold_store::events::{MessageWake, Reach};
 use fold_store::{Store, StoreError, events};
 use serde_json::json;
@@ -24,7 +25,7 @@ pub enum EventsError {
 /// A request for stored events as a transport receives it. The service parses it, so every transport refuses the same input with the same `invalid_event_filter`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EventQuery {
-    /// Read after this `seq` and leave the cursor alone; `None` reads after the agent's cursor.
+    /// Read after this `seq` and leave the cursor alone; `None` reads after the worker's cursor.
     pub after: Option<u64>,
     /// Exact declared event types; empty matches every type.
     pub types: Vec<String>,
@@ -128,10 +129,10 @@ pub async fn history(
     Ok(HistoryPage { events, before })
 }
 
-/// The events after the agent's cursor (0 when it has none), and the cursor moved to the highest `seq` returned in the same write transaction. A query with an explicit `after` is [`query`] and leaves the cursor alone.
+/// The events after the worker's cursor (0 when it has none), and the cursor moved to the highest `seq` returned in the same write transaction. A query with an explicit `after` is [`query`] and leaves the cursor alone.
 pub async fn read_since_cursor(
     store: &Store,
-    agent_id: i64,
+    worker: &WorkerRow,
     query: &EventQuery,
 ) -> Result<EventPage, EventsError> {
     if query.after.is_some() {
@@ -143,7 +144,7 @@ pub async fn read_since_cursor(
         query.proposal.as_deref(),
     )?;
     let limit = parse_limit(query.limit)?;
-    cursor_page(store, agent_id, &filter, limit, None).await
+    cursor_page(store, worker, &filter, limit, None).await
 }
 
 fn page(events: Vec<Event>, start: u64) -> EventPage {
@@ -151,19 +152,19 @@ fn page(events: Vec<Event>, start: u64) -> EventPage {
     EventPage { events, next }
 }
 
-/// Reads after the stored cursor, keeps at most `limit` matching events and moves the cursor to the last one kept. With `recipients`, a sent message is kept only when a worker of the agent receives it, and an acknowledgement only when a worker of the agent made it: acknowledging changes only the acknowledging worker's inbox. A `Some` wake inside it also keeps the sent messages its worker receives whatever the filter says. The page is one read-pool query; the single writer is taken only to move the cursor, and only while the cursor still stands where the read started, so two reads of one agent never return the same event. A read that lost that race reads again from where the other one left the cursor.
+/// Reads after the worker's stored cursor, keeps at most `limit` matching events and moves the cursor to the last one kept. With `recipients`, a sent message is kept only when a worker of the worker's agent receives it, and an acknowledgement only when a worker of the agent made it: acknowledging changes only the acknowledging worker's inbox. A `Some` wake inside it also keeps the sent messages its worker receives whatever the filter says. The page is one read-pool query; the single writer is taken only to move the cursor, and only while the cursor still stands where the read started, so two reads of one worker never return the same event. A read that lost that race reads again from where the other one left the cursor. Each worker has its own cursor, so the reads of a main worker and its children never take each other's events.
 pub(super) async fn cursor_page(
     store: &Store,
-    agent_id: i64,
+    worker: &WorkerRow,
     filter: &EventFilter,
     limit: usize,
     recipients: Option<Option<MessageWake>>,
 ) -> Result<EventPage, EventsError> {
     loop {
-        let start = events::cursor(store.read(), agent_id).await?;
+        let start = events::cursor(store.read(), worker.id).await?;
         let kept = if let Some(wake) = recipients {
             let reach = Reach {
-                agent_id,
+                agent_id: worker.agent_id,
                 message_types: &[types::MESSAGE_SENT],
                 own_types: &[types::MESSAGE_ACKNOWLEDGED],
                 wake,
@@ -177,7 +178,7 @@ pub(super) async fn cursor_page(
             return Ok(page);
         }
         let moved = store
-            .write(async |tx| events::move_cursor(tx, agent_id, start, page.next).await)
+            .write(async |tx| events::move_cursor(tx, worker.id, start, page.next).await)
             .await?;
         if moved {
             return Ok(page);
@@ -188,7 +189,7 @@ pub(super) async fn cursor_page(
 /// The most new events the footer counts; a larger number shows as `100+`.
 pub const NEW_EVENTS_CAP: u64 = 100;
 
-/// Queries and cursors of one project's events. Reading never appends an event and never changes task state; the only write is the agent's cursor.
+/// Queries and cursors of one project's events. Reading never appends an event and never changes task state; the only write is the reading worker's cursor.
 #[derive(Debug, Clone)]
 pub struct EventService {
     store: Store,
@@ -208,24 +209,24 @@ impl EventService {
         &self.bus
     }
 
-    /// `get_events` for the agent with row id `agent_id`.
+    /// `get_events` for `worker`, after its own cursor.
     pub async fn get_events(
         &self,
-        agent_id: i64,
+        worker: &WorkerRow,
         query: &EventQuery,
     ) -> Result<EventPage, EventsError> {
-        read_since_cursor(&self.store, agent_id, query).await
+        read_since_cursor(&self.store, worker, query).await
     }
 
-    /// How many events after the agent's cursor concern it by the rule of `fold_core::concerns`, counted up to one more than [`NEW_EVENTS_CAP`]. It only reads, in one read transaction, so building a footer never moves the cursor and never loads the events it counts.
+    /// How many events after the worker's cursor concern its agent by the rule of `fold_core::concerns`, counted up to one more than [`NEW_EVENTS_CAP`]. It only reads, in one read transaction, so building a footer never moves the cursor and never loads the events it counts.
     pub async fn new_event_count(
         &self,
-        agent_id: i64,
+        worker: &WorkerRow,
         agent: &AgentName,
     ) -> Result<u64, EventsError> {
         let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
-        let after = events::cursor(&mut *tx, agent_id).await?;
-        let facts = events::agent_facts(&mut tx, agent_id, agent).await?;
+        let after = events::cursor(&mut *tx, worker.id).await?;
+        let facts = events::agent_facts(&mut tx, worker.agent_id, agent).await?;
         let mut tasks = facts.claimed.clone();
         tasks.extend(facts.prerequisites.iter().copied());
         let mut proposals = facts.authored.clone();

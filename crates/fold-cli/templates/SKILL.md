@@ -51,7 +51,7 @@ You get news in four ways:
 - `wait_for_events(types?, task?, proposal?, timeout_s?)` blocks until a matching event arrives or the time runs out. The default is 300 s and the most is 1500 s. Use it to wait for a proposal, a review or a dependency, and not to poll. A new message to you also ends the wait, whatever `types` says: the result names it in `messages`, so call `get_inbox`.
 - The Stop hook continues your turn once when messages are unread.
 
-`get_events(after?, types?, task?, proposal?, limit?)` reads events. Without `after` it resumes from your cursor and moves the cursor. With an explicit `after` it leaves the cursor as it is. A session that was closed reads the events it missed through its cursor.
+`get_events(after?, types?, task?, proposal?, limit?)` reads events. Without `after` it resumes from your cursor and moves the cursor. With an explicit `after` it leaves the cursor as it is. Each worker has its own cursor: a call with `as` reads after that worker's cursor and moves only it, so the waits of a main worker and its workers never take each other's events. A session that was closed reads the events it missed through its cursor.
 
 ## Orchestrating
 
