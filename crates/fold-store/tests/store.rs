@@ -428,6 +428,7 @@ async fn a_registry_read_lists_its_projects_and_refuses_a_write() {
 }
 
 /// A registry made by this build, with `change` run on its migration table afterwards.
+#[cfg(test)]
 async fn registry_with(change: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("registry.db");
