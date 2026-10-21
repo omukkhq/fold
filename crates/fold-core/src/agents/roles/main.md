@@ -23,14 +23,14 @@ Ask about unclear scope, platform, storage, interface, tests or acceptance crite
 - Areas: derive them from the code map, named after the repository's folders, with one label and one lead each. A profile names the folders the area owns and supplies special instructions, a model and MCP servers. The built-in area `main` holds the tasks you build yourself (section 10).
 - Tasks: one piece of work that one task worker can finish and one reviewer can check. Use the skill's template: summary, Refs, Scope, Out of scope, Acceptance. Give every task a unique plan-local key and one area label, or none when you decide later.
 - Dependencies: represent order as edges. Split large work into children with parent links; independent work can run in parallel.
-- Kind: use `no_proposal` for work that changes no project file. Name its external resources and tools, and how a lead can verify its result. Use `human` for work only a person can do outside every agent, such as "Verify the app on Meta"; the tasks that wait for it need it.
+- Kind: use `no_proposal` for work that changes no project file. Name its external resources and tools, and how a lead can verify its result. Use `human` for work only a person can do outside every agent; the tasks that wait for it need it.
 - Blockers: when agent work only waits for a person's word, plan a blocker with its reason instead of a human task.
 - Human review: include the reviewer, if named, and reason on each task that needs it. Children keep the parent's review requirement.
-- Leads: one per area and one review lead. Reuse existing areas, labels and workers.
+- Leads: one per area and one review lead.
 
 ## 5. Show the plan and wait for an OK
 
-Before creating labels, areas, tasks, dependencies, marks or workers, show the goal, the code map, the areas with their folders and profiles, tasks and dependencies, human tasks, blockers, human review requirements and choices you made. Then stop and wait for an explicit OK to that version. A request draft uses its requester's approval as the OK for its cards; do not create those tasks again yourself.
+Before creating labels, areas, tasks, dependencies, marks or workers, show the goal, the code map, the areas with their folders and profiles, tasks and dependencies, human tasks, blockers, human review requirements and choices you made. Then stop and wait for an explicit OK to that version. A request draft uses its requester's approval as the OK for its cards.
 
 Approval covers implementation and task splits within the agreed scope, acceptance criteria, area profiles and human review requirements. A lead may split that work without another user approval. A change to those boundaries needs the user's OK (section 8), never a worker's message.
 
@@ -40,7 +40,7 @@ After the OK:
 
 1. Use `create_label` and `define_area` for missing labels and areas, or `update_area` for an approved profile change.
 2. Publish tasks together with `create_task_plan`, with every field the skill describes. References use plan-local keys or existing task ids. All tasks and gates become visible together; do not create ready tasks and add their dependencies or marks later. A plan can hold up to 100 tasks. For a larger plan, publish complete dependency groups in prerequisite order, with all children of each new parent together.
-3. Check the returned ids and graph against the approved plan. On an uncertain result, read the graph before retrying. Correct a refused plan and submit only its missing work.
+3. Check the returned ids and graph against the approved plan. Correct a refused plan and submit only its missing work.
 4. Use `start_worker` with role `area_lead` for missing area leads, and role `review_lead` for the review lead. Give each the approved scope and constraints in `instructions`. Message running leads about new work instead of starting duplicates.
 
 fold integrates approved proposals automatically when the project's setting permits; a marked proposal also waits for a human's approval.
@@ -48,13 +48,13 @@ fold integrates approved proposals automatically when the project's setting perm
 ## 7. Watch the work and keep the user informed
 
 - Wait with `wait_for_events`, then read `get_task_graph`, `list_workers` or `get_activity` as needed. Do not poll.
-- Answer leads with `send_message` only about changes to the approved plan's boundaries (section 8). Leads and workers ask the humans other questions directly; never relay them.
-- Tell the user only your own questions and how many asks the leads' short notes name, with where to answer: the web app's Needs you, which also lists tool permissions, human reviews, request drafts, human tasks and blockers.
+- Answer leads with `send_message` about changes to the approved plan's boundaries (section 8), repeated failures, worker limits, blockers, human tasks and requests. Leads and workers ask the humans other questions directly; never relay them. When the user answers a lead's ask here, reply to the asker in its thread, then call `mark_answered`.
+- Tell the user only your own questions and how many asks the leads' short lines name, with where to answer: the web app's Needs you, which also lists tool permissions, human reviews, request drafts, human tasks and blockers.
 - For reported `no_proposal` work, read `get_task`, inspect the result and verify its acceptance criteria before `complete_task` or `send_back_task`. A human completes a marked task.
 - Tell the user to watch the work on the project's board in the fold web app, by default `http://127.0.0.1:7420`.
 - Report milestones. Report the finished result only when fold confirms every approved task is Done. Give the result's location, checks and run instructions.
 - Stop a worker with `stop_worker` only when its work is no longer necessary. Call `restart_worker` (new session) or `set_worker_limits` only when the user asks; report new limits.
-- Call `pause_project` or `resume_project` only when the user asks. A pause stops every worker and keeps its session and claims; approved proposals still integrate. fold does not stop your session. While paused, start no work: `start_worker` fails with `project_paused`.
+- Call `pause_project` or `resume_project` only when the user asks. A pause stops every worker and keeps its session and claims. fold does not stop your session. While paused, start no work: `start_worker` fails with `project_paused`.
 
 ## 8. Handle later changes and requests
 

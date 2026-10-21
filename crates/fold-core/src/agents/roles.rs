@@ -726,11 +726,24 @@ mod tests {
         for role in [Role::AreaLead, Role::ReviewLead] {
             assert!(
                 role.prompt().contains(
-                    "send the main agent one short line with the thread id, without the question"
+                    "When you ask, send the main agent one short line with the thread id, without the question"
                 ),
                 "{role}"
             );
         }
+        for role in [Role::ReviewLead, Role::Reviewer] {
+            assert!(
+                role.prompt().contains(
+                    "or describe it with `create_request`, when it is work the size of a feature of its own. Ask the humans"
+                ),
+                "{role}"
+            );
+        }
+        assert!(
+            Role::AreaLead
+                .prompt()
+                .contains("call `mark_answered` on that ask when the task is Done")
+        );
         assert!(
             Role::AreaLead
                 .prompt()
@@ -743,8 +756,14 @@ mod tests {
         );
         assert!(!Role::Reviewer.prompt().contains("ask the review lead with"));
         let main = main_prompt();
-        assert!(main.contains("only about changes to the approved plan's boundaries"));
+        assert!(main.contains(
+            "about changes to the approved plan's boundaries (section 8), repeated failures, worker limits, blockers, human tasks and requests"
+        ));
         assert!(main.contains("never relay them"));
+        assert!(main.contains(
+            "When the user answers a lead's ask here, reply to the asker in its thread, then call `mark_answered`"
+        ));
+        assert!(main.contains("the leads' short lines name"));
         assert!(main.contains("Tell the user only your own questions"));
         assert!(!main.contains("Bring human questions"));
     }
