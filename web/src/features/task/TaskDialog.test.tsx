@@ -441,9 +441,7 @@ function registerDaemon(): void {
     )?.lead;
     return ok({
       readers: [
-        ...(holder
-          ? [{ name: holder, role: "claim_holder" }]
-          : []),
+        ...(holder ? [{ name: holder, role: "claim_holder" }] : []),
         ...(lead ? [{ name: lead, role: "area_lead" }] : []),
         { name: "main", role: "main_agent" },
       ],
@@ -1895,12 +1893,22 @@ describe("the task's messages", () => {
     expect(within(messages).getByText("1 waits for you")).toBeTruthy();
     const head = within(messages).getByRole("button", { name: "Messages" });
     expect(head.getAttribute("aria-expanded")).toBe("false");
-    expect(within(messages).queryByText("Use the short copy")).toBeNull();
+    const body = document.getElementById(
+      head.getAttribute("aria-controls") ?? "",
+    );
+    expect(body?.hidden).toBe(true);
     expect(
-      within(messages).queryByRole("combobox", { name: "Feedback" }),
+      body?.contains(within(messages).getByText("Use the short copy")),
+    ).toBe(true);
+    expect(
+      within(messages).queryByRole("combobox", {
+        name: "Feedback",
+        hidden: false,
+      }),
     ).toBeNull();
     await userEvent.click(head);
     expect(head.getAttribute("aria-expanded")).toBe("true");
+    expect(body?.hidden).toBe(false);
     const threads = within(messages)
       .getAllByRole("listitem")
       .filter((item) => item.parentElement?.tagName === "UL");
@@ -1925,8 +1933,24 @@ describe("the task's messages", () => {
           call.path.includes("mine=true"),
       ),
     ).toBe(true);
+    await userEvent.type(
+      within(messages).getByRole("combobox", { name: "Feedback" }),
+      "Half drafted",
+    );
     await userEvent.click(head);
-    expect(within(messages).queryByText("Which font?")).toBeNull();
+    expect(body?.hidden).toBe(true);
+    expect(
+      within(messages).queryByRole("combobox", {
+        name: "Feedback",
+        hidden: false,
+      }),
+    ).toBeNull();
+    await userEvent.click(head);
+    expect(
+      within(messages).getByRole<HTMLTextAreaElement>("combobox", {
+        name: "Feedback",
+      }).value,
+    ).toBe("Half drafted");
   }, 15_000);
 });
 

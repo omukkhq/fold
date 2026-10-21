@@ -217,7 +217,7 @@ function Thread({ slug, thread }: { slug: string; thread: TaskThread }) {
   );
 }
 
-/** The task's threads that the signed-in human takes part in, each with every message, and the feedback box that adds one from the human. The section opens on a click; its head counts the threads once they are read and says how many wait for the human. */
+/** The task's threads that the signed-in human takes part in, each with every message, and the feedback box that adds one from the human. The section opens on a click; its head counts the threads once they are read and says how many wait for the human. A collapse only hides the body, so a draft in the feedback box stays. */
 export function MessagesSection({
   slug,
   task,
@@ -270,23 +270,21 @@ export function MessagesSection({
         ) : null}
       </div>
       <WriteError error={query.error} />
-      {open ? (
-        <div id={bodyId} className="flex flex-col gap-10">
-          {threads.length > 0 ? (
-            <ul className="flex flex-col gap-14">
-              {threads.map((thread) => (
-                <Thread key={thread.id} slug={slug} thread={thread} />
-              ))}
-            </ul>
-          ) : null}
-          {query.data?.more ? (
-            <p className="text-bar text-text-muted">
-              {olderNotListed(threads.length, "threads")}
-            </p>
-          ) : null}
-          <FeedbackBox slug={slug} task={task.task} holder={holder} />
-        </div>
-      ) : null}
+      <div id={bodyId} hidden={!open} className="flex flex-col gap-10">
+        {threads.length > 0 ? (
+          <ul className="flex flex-col gap-14">
+            {threads.map((thread) => (
+              <Thread key={thread.id} slug={slug} thread={thread} />
+            ))}
+          </ul>
+        ) : null}
+        {query.data?.more ? (
+          <p className="text-bar text-text-muted">
+            {olderNotListed(threads.length, "threads")}
+          </p>
+        ) : null}
+        <FeedbackBox slug={slug} task={task.task} holder={holder} />
+      </div>
     </section>
   );
 }
