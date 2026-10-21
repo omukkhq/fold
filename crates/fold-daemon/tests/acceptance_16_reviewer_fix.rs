@@ -39,9 +39,7 @@ async fn acceptance_16_the_reviewer_fixes_the_proposal_in_its_checkout_and_integ
     let proposal = harness
         .propose("backend", &work, "Add the login endpoint")
         .await;
-    harness
-        .call("review", "claim_review", json!({"id": proposal}))
-        .await;
+    harness.give_review("review", &proposal).await;
     let checkout = harness
         .call("review", "create_review_checkout", json!({"id": proposal}))
         .await;

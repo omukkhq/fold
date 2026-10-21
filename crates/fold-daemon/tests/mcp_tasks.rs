@@ -1049,7 +1049,7 @@ async fn a_plan_that_fails_at_its_fiftieth_task_creates_none_of_them() {
 async fn only_a_planner_publishes_a_plan_and_a_lead_only_for_its_own_area() {
     let fx = Fixture::new().await;
     let review = fx.connect("review").await;
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     let outsider = fx.connect("outsider").await;
     give_role(
         fx.project.store(),

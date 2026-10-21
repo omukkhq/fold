@@ -10,7 +10,7 @@ use fold_daemon::services::workspaces::check_stalls;
 use fold_store::testing::eventually;
 use serde_json::{Value, json};
 
-use crate::auto_integrate::{Running, approve, head, review_lead, state_of};
+use crate::auto_integrate::{Running, approve, head, reviewer, state_of};
 use crate::common::acceptance::{HUMAN, Harness, WAIT};
 use crate::proposal_tools_support::{Fixture, human, t};
 use crate::worker_resume::{
@@ -271,7 +271,7 @@ async fn a_daemon_restart_while_paused_stays_paused_and_resumes_no_worker() {
 async fn approved_proposals_still_integrate_while_paused() {
     let fx = Fixture::new().await;
     let author = fx.agent("frontend").await;
-    let review = review_lead(&fx, "review").await;
+    let review = reviewer(&fx, "review").await;
     fx.workspaces()
         .create_workspace(&author, t(1))
         .await

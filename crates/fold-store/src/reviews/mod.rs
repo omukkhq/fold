@@ -838,7 +838,7 @@ pub async fn review_facts(
                         holds_main: row.holds_main,
                         role,
                     };
-                    if standing.decides_reviews() {
+                    if standing.acts_on_reviews() {
                         Approver::DecidingAgent
                     } else {
                         Approver::OtherAgent

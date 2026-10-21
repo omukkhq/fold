@@ -421,7 +421,7 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
         ),
         (Role::AreaLead, None) => format!("fold started you as {}, an area lead.", facts.name),
         (Role::ReviewLead, _) => format!(
-            "fold started you as {}, the review lead. Review the open proposals yourself, or give one proposal or a group of related proposals to a reviewer with start_worker.",
+            "fold started you as {}, the review lead. Give each open proposal, or a group of related proposals, to a reviewer with start_worker; you never review a proposal yourself.",
             facts.name
         ),
         (Role::TaskWorker, _) => format!(
@@ -777,8 +777,8 @@ mod tests {
 
     #[test]
     fn reviewer_prompts_require_current_evidence_and_handle_omitted_verdicts() {
-        for role in [Role::ReviewLead, Role::Reviewer] {
-            let prompt = role.prompt();
+        {
+            let prompt = Role::Reviewer.prompt();
             assert!(prompt.contains("acceptance criteria"));
             assert!(prompt.contains("`submit_review_fix`"));
             assert!(prompt.contains("The kind of fix decides, not its size."));
@@ -795,15 +795,17 @@ mod tests {
                 prompt
                     .contains("public API, a schema, a migration, or security or permission code")
             );
-            assert!(!prompt.contains("Change review:"), "{role:?}");
-            assert!(!prompt.contains("Full review:"), "{role:?}");
+            assert!(!prompt.contains("Change review:"));
+            assert!(!prompt.contains("Full review:"));
         }
         let worker = Role::TaskWorker.prompt();
         assert!(worker.contains("call `run_checks` for the task before `create_proposal`"));
         assert!(worker.contains("Wait for `checks.finished` with `wait_for_events`"));
         let lead = Role::ReviewLead.prompt();
-        assert!(lead.contains("before taking claims or creating a batch"));
         assert!(lead.contains("You decide the scope when you assign the review"));
+        assert!(lead.contains("never resolve it yourself"));
+        assert!(lead.contains("`base_conflicts`"));
+        assert!(lead.contains("public API, a schema, a migration, or security or permission code"));
         assert!(lead.contains("`set_review_scope`"));
         assert!(
             Role::Reviewer
@@ -811,6 +813,40 @@ mod tests {
                 .contains("Follow the scope you get.")
         );
         assert!(lead.contains("makes a batch of the group for it, in the same step"));
+    }
+
+    #[test]
+    fn the_review_lead_gives_every_review_to_a_reviewer() {
+        let lead = Role::ReviewLead.prompt();
+        assert!(lead.contains("`review_lead_delegates`"));
+        assert!(lead.contains("You never review a proposal yourself"));
+        assert!(lead.contains("start a new reviewer for them"));
+        assert!(lead.contains("fold resumes the reviewer that holds its review claim"));
+        for tool in ["`create_batch_checkout`", "`submit_review_fix`"] {
+            assert!(lead.contains(tool), "{tool}");
+        }
+        for self_review in [
+            "self-review",
+            "Approve only",
+            "Never edit a batch checkout.",
+        ] {
+            assert!(!lead.contains(self_review), "{self_review}");
+        }
+        assert!(
+            Role::Reviewer
+                .prompt()
+                .contains("fold resumes you in the same session for that version")
+        );
+        let turn = first_turn(&StartFacts {
+            role: Role::ReviewLead,
+            name: &AgentName::parse("review").unwrap(),
+            area: None,
+            tasks: &[],
+            proposals: &[],
+            batch: None,
+            instructions: None,
+        });
+        assert!(turn.contains("you never review a proposal yourself"));
     }
 
     #[test]

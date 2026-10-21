@@ -99,7 +99,7 @@ handoff_at = 60                      # area_lead and review_lead only: the perce
 ```
 
 - The top-level numbers must be whole numbers above 0. A worker limit has no upper bound, and 0 lets no worker of its role start; the leads are outside the limits, and a lower limit never stops a running worker.
-- `automatic = true` integrates a proposal once the review lead, a reviewer, the main agent or a human approved it, nothing asks for changes, a human approved it when the task is marked, and every prerequisite task is Done.
+- `automatic = true` integrates a proposal once a reviewer, the main agent or a human approved it, nothing asks for changes, a human approved it when the task is marked, and every prerequisite task is Done.
 - A role without `mcp` loads every server the user's own Claude Code loads. With `mcp`, the worker gets the fold server and each named server of the project's `.mcp.json`; servers of the user's own configuration are never copied.
 - An older file with `remote` and `push_on_integrate` in `[git]` is read as `[remotes.origin]` on the `[git]` branch.
 

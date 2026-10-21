@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::common::roles::{give_batch, give_role};
+use crate::common::roles::{give_batch, give_main_tag, give_role};
 use crate::proposal_tools_support::{Fixture, t};
 use fold_core::roles::Role;
 use fold_daemon::mcp::FoldServer;
@@ -105,20 +105,13 @@ async fn a_reviewer_never_makes_a_batch_and_reviews_the_one_its_lead_gives_it() 
     let delegate = connect(&fx, "delegate").await;
     give_role(&fx.handle.store, "lead", Role::ReviewLead, None).await;
     give_role(&fx.handle.store, "delegate", Role::Reviewer, None).await;
-    ok(
+    let lead_refused = err(
         &lead,
         "create_review_batch",
         json!({"proposals": ["P-1", "P-2"]}),
     )
     .await;
-    for proposal in ["P-1", "P-2"] {
-        ok(
-            &lead,
-            "remove_from_batch",
-            json!({"id": "rb-1", "proposal": proposal}),
-        )
-        .await;
-    }
+    assert_eq!(lead_refused["code"], "review_lead_delegates");
     let refused = err(
         &delegate,
         "create_review_batch",
@@ -138,10 +131,61 @@ async fn a_reviewer_never_makes_a_batch_and_reviews_the_one_its_lead_gives_it() 
         fx.handle.clock.now(),
     )
     .await;
-    assert_eq!(batch.to_string(), "rb-2");
-    let view = ok(&delegate, "get_review_batch", json!({"id": "rb-2"})).await;
+    assert_eq!(batch.to_string(), "rb-1");
+    let view = ok(&delegate, "get_review_batch", json!({"id": "rb-1"})).await;
     assert_eq!(view["holder"], "delegate");
-    ok(&delegate, "create_batch_checkout", json!({"id": "rb-2"})).await;
+    ok(&delegate, "create_batch_checkout", json!({"id": "rb-1"})).await;
+}
+
+/// The review lead gives every review to a reviewer: each review command refuses it through MCP with review_lead_delegates and a hint that names start_worker, also for a batch it could read.
+#[tokio::test]
+async fn the_review_lead_is_refused_every_review_command() {
+    let fx = Fixture::new().await;
+    two_proposals(&fx).await;
+    let lead = connect(&fx, "lead").await;
+    connect(&fx, "delegate").await;
+    give_role(&fx.handle.store, "lead", Role::ReviewLead, None).await;
+    give_role(&fx.handle.store, "delegate", Role::Reviewer, None).await;
+    give_batch(
+        &fx.handle.store,
+        "delegate",
+        &[p(1), p(2)],
+        fx.handle.clock.now(),
+    )
+    .await;
+    for (tool, arguments) in [
+        ("claim_review", json!({"id": "P-1"})),
+        ("create_review_checkout", json!({"id": "P-1"})),
+        (
+            "submit_review",
+            json!({"id": "P-1", "version": 1, "verdict": "approve", "body": "fine"}),
+        ),
+        (
+            "submit_review_fix",
+            json!({"id": "P-1", "version": 1, "fixes": [{"path": "src/one.rs", "reason": "a typo"}], "checks": "cargo test: ok"}),
+        ),
+        ("create_review_batch", json!({"proposals": ["P-1", "P-2"]})),
+        ("create_batch_checkout", json!({"id": "rb-1"})),
+        (
+            "submit_batch_review",
+            json!({"id": "rb-1", "verdicts": [{"proposal": "P-1", "verdict": "approve"}, {"proposal": "P-2", "verdict": "approve"}]}),
+        ),
+    ] {
+        let refused = err(&lead, tool, arguments).await;
+        assert_eq!(
+            refused["code"], "review_lead_delegates",
+            "{tool}: {refused}"
+        );
+        assert!(
+            refused["hint"].as_str().unwrap().contains("start_worker"),
+            "{tool}: {refused}"
+        );
+    }
+    for tool in ["list_proposals", "list_review_batches"] {
+        ok(&lead, tool, json!({})).await;
+    }
+    ok(&lead, "get_proposal", json!({"id": "P-1"})).await;
+    ok(&lead, "get_proposal_diff", json!({"id": "P-1"})).await;
 }
 
 #[tokio::test]
@@ -220,11 +264,11 @@ async fn a_new_task_worker_session_recovers_its_existing_workspace_and_proposal(
 }
 
 #[tokio::test]
-async fn a_reviewer_batches_checks_out_and_reviews_two_proposals_through_the_tools() {
+async fn the_main_agent_batches_checks_out_and_reviews_two_proposals_through_the_tools() {
     let fx = Fixture::new().await;
     two_proposals(&fx).await;
     let review = connect(&fx, "review").await;
-    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    give_main_tag(&fx.handle.store, "review").await;
 
     let created = ok(
         &review,
@@ -314,11 +358,12 @@ async fn a_member_synced_with_a_newer_main_counts_only_its_own_change() {
     let fx = Fixture::new().await;
     two_proposals(&fx).await;
     let review = connect(&fx, "review").await;
-    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
-    ok(
-        &review,
-        "create_review_batch",
-        json!({"proposals": ["P-1", "P-2"]}),
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
+    give_batch(
+        &fx.handle.store,
+        "review",
+        &[p(1), p(2)],
+        fx.handle.clock.now(),
     )
     .await;
     ok(
@@ -373,16 +418,17 @@ async fn the_batch_tools_explain_their_refusals() {
     let fx = Fixture::new().await;
     two_proposals(&fx).await;
     let review = connect(&fx, "review").await;
-    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
 
     let id = err(&review, "get_review_batch", json!({"id": "P-1"})).await;
     assert_eq!(id["code"], "invalid_id");
     let missing = err(&review, "get_review_batch", json!({"id": "rb-4"})).await;
     assert_eq!(missing["code"], "review_batch_not_found");
-    ok(
-        &review,
-        "create_review_batch",
-        json!({"proposals": ["P-1", "P-2"]}),
+    give_batch(
+        &fx.handle.store,
+        "review",
+        &[p(1), p(2)],
+        fx.handle.clock.now(),
     )
     .await;
     let verdict = err(

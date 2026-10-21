@@ -1,8 +1,6 @@
 #![cfg(test)]
 
-use crate::reviews_support::{
-    Fixture, LEASE_MINUTES, agent, by, details, human, names, p, refusal, t,
-};
+use crate::reviews_support::{Fixture, LEASE_MINUTES, by, details, human, names, p, refusal, t};
 use fold_core::events::types;
 use fold_core::{EventActor, TaskStatus, codes};
 use fold_store::tasks::claims;
@@ -10,19 +8,21 @@ use serde_json::json;
 
 #[tokio::test]
 async fn claim_review_is_atomic_and_the_loser_gets_already_claimed() {
+    // Only the main agent claims a review itself, so its two workers race for it.
     let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
+    let other = fx.subagent(&fx.backend, "r2").await;
     let before = fx.last_seq().await;
-    let (backend, review) = (by(&fx.backend.worker), by(&fx.review.worker));
+    let (backend, second_worker) = (by(&fx.backend.worker), by(&other));
     let (first, second) = (fx.service(), fx.service());
 
     let (left, right) = tokio::join!(
         first.claim_review(&backend, p(1)),
-        second.claim_review(&review, p(1))
+        second.claim_review(&second_worker, p(1))
     );
 
     let (winner, loser, lost) = match (left, right) {
-        (Ok(view), lost @ Err(_)) => (view.holder, "review", refusal(lost)),
+        (Ok(view), lost @ Err(_)) => (view.holder, "backend/r2", refusal(lost)),
         (lost @ Err(_), Ok(view)) => (view.holder, "backend", refusal(lost)),
         other => panic!("exactly one claim must win, got {other:?}"),
     };
@@ -37,7 +37,7 @@ async fn claim_review_is_atomic_and_the_loser_gets_already_claimed() {
             .await,
         1
     );
-    let loser_actor = agent(loser);
+    let loser_actor = worker_actor(loser);
     let error = refusal(fx.reviews.claim_review(&loser_actor, p(1)).await);
     assert_eq!(error.code(), codes::ALREADY_CLAIMED);
     assert_eq!(
@@ -50,7 +50,7 @@ async fn claim_review_is_atomic_and_the_loser_gets_already_claimed() {
     fx.advance(1);
     let again = fx
         .reviews
-        .claim_review(&agent(winner.as_str()), p(1))
+        .claim_review(&worker_actor(winner.as_str()), p(1))
         .await
         .unwrap();
     assert_eq!(again.holder, winner);
@@ -148,19 +148,16 @@ async fn stale_review_claim_is_taken_over_by_the_next_claim() {
         .await
         .unwrap();
 
+    let other = fx.subagent(&fx.backend, "r2").await;
     fx.advance(LEASE_MINUTES - 1);
-    let error = refusal(fx.reviews.claim_review(&by(&fx.review.worker), p(1)).await);
+    let error = refusal(fx.reviews.claim_review(&by(&other), p(1)).await);
     assert_eq!(error.code(), codes::ALREADY_CLAIMED);
 
     fx.advance(1);
     let before = fx.last_seq().await;
-    let taken = fx
-        .reviews
-        .claim_review(&by(&fx.review.worker), p(1))
-        .await
-        .unwrap();
+    let taken = fx.reviews.claim_review(&by(&other), p(1)).await.unwrap();
 
-    assert_eq!(taken.holder, fx.review.worker.name);
+    assert_eq!(taken.holder, other.name);
     assert_eq!(taken.acquired_at, fx.project.now());
     assert!(first.acquired_at < taken.acquired_at);
     assert_eq!(
@@ -178,21 +175,18 @@ async fn stale_review_claim_is_taken_over_by_the_next_claim() {
         1
     );
     let summary = fx.reviews.get_proposal(p(1), None).await.unwrap().summary;
-    assert_eq!(summary.review_claim, Some(fx.review.worker.name.clone()));
+    assert_eq!(summary.review_claim, Some(other.name.clone()));
     let appended = fx.events_after(before).await;
     assert_eq!(names(&appended), ["claim.taken_over", "claim.acquired"]);
-    assert_eq!(
-        appended[0].actor,
-        EventActor::worker(&fx.review.worker.name)
-    );
+    assert_eq!(appended[0].actor, EventActor::worker(&other.name));
     assert_eq!(appended[0].proposal, Some(p(1)));
     assert_eq!(
         appended[0].data,
-        json!({"kind": "review", "proposal": "P-1", "from": "backend", "to": "review"})
+        json!({"kind": "review", "proposal": "P-1", "from": "backend", "to": "backend/r2"})
     );
     assert_eq!(
         appended[1].data,
-        json!({"kind": "review", "proposal": "P-1", "worker": "review"})
+        json!({"kind": "review", "proposal": "P-1", "worker": "backend/r2"})
     );
     assert_eq!(fx.status(1).await, TaskStatus::Review);
 }
@@ -222,7 +216,8 @@ async fn any_tool_call_renews_a_review_claim() {
         1
     );
     fx.advance(LEASE_MINUTES - 1);
-    let error = refusal(fx.reviews.claim_review(&by(&fx.review.worker), p(1)).await);
+    let other = fx.subagent(&fx.backend, "r2").await;
+    let error = refusal(fx.reviews.claim_review(&by(&other), p(1)).await);
     assert_eq!(error.code(), codes::ALREADY_CLAIMED);
     assert_eq!(details(&error)["holder"], json!("backend/r1"));
 }
@@ -321,12 +316,12 @@ async fn release_review_is_for_the_holder_agent_and_frees_the_proposal() {
 
     let view = fx
         .reviews
-        .claim_review(&by(&fx.review.worker), p(1))
+        .claim_review(&by(&fx.backend.worker), p(1))
         .await
         .unwrap();
-    assert_eq!(view.holder, fx.review.worker.name);
+    assert_eq!(view.holder, fx.backend.worker.name);
     fx.reviews
-        .release_review(&by(&fx.review.worker), p(1), Some(" "))
+        .release_review(&by(&fx.backend.worker), p(1), Some(" "))
         .await
         .unwrap();
     assert_eq!(
@@ -352,7 +347,8 @@ async fn the_lease_is_read_from_the_project_configuration() {
 
     std::fs::write(&config, "lease_minutes = 0\n").unwrap();
     let broken = fx.configured_service();
-    let error = refusal(broken.claim_review(&by(&fx.review.worker), p(1)).await);
+    let other = fx.subagent(&fx.backend, "r2").await;
+    let error = refusal(broken.claim_review(&by(&other), p(1)).await);
     assert_eq!(error.code(), codes::INVALID_CONFIG);
     assert_eq!(error.hint(), Some("ask a human to fix .fold/config.toml"));
     assert_eq!(
@@ -363,8 +359,18 @@ async fn the_lease_is_read_from_the_project_configuration() {
     std::fs::write(&config, "lease_minutes = 2\n").unwrap();
     let taken = fx
         .configured_service()
-        .claim_review(&by(&fx.review.worker), p(1))
+        .claim_review(&by(&other), p(1))
         .await
         .unwrap();
-    assert_eq!(taken.holder, fx.review.worker.name);
+    assert_eq!(taken.holder, other.name);
+}
+
+/// The actor of the worker `name`, such as `backend/r2`, of its own agent.
+fn worker_actor(name: &str) -> fold_core::Actor {
+    let worker = fold_core::WorkerName::parse(name).unwrap();
+    fold_core::Actor::Agent(fold_core::AgentActor {
+        agent: worker.agent(),
+        worker,
+        tags: Vec::new(),
+    })
 }

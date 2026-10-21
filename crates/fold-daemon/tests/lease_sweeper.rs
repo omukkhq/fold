@@ -120,7 +120,7 @@ impl Fixture {
         let agents = handle.agents();
         let frontend = register(&agents, "frontend").await;
         let backend = register(&agents, "backend").await;
-        // `frontend` leads the area of the tasks; `backend` stays free to be the review lead.
+        // `frontend` leads the area of the tasks; `backend` stays free to be a reviewer.
         let (lead, area) = crate::common::roles::WORK_AREAS[0];
         give_role(&handle.store, lead, Role::AreaLead, Some(area)).await;
         for _ in 0..2 {
@@ -305,7 +305,7 @@ impl Fixture {
         (status, column.status.as_str().to_owned())
     }
 
-    /// Opens a proposal of `T-1` from its workspace and lets `backend`, as the review lead, claim its review.
+    /// Opens a proposal of `T-1` from its workspace and gives `backend`, as a reviewer, its review claim.
     async fn review_claim(&self, dir: &std::path::Path) -> ProposalId {
         let reviews = ReviewService::new(
             self.handle.store.clone(),
@@ -323,11 +323,14 @@ impl Fixture {
             .unwrap()
             .summary
             .id;
-        give_role(&self.handle.store, "backend", Role::ReviewLead, None).await;
-        reviews
-            .claim_review(&by(&self.backend.worker), proposal)
-            .await
-            .unwrap();
+        give_role(&self.handle.store, "backend", Role::Reviewer, None).await;
+        crate::common::roles::give_review_claim(
+            &self.handle.store,
+            "backend",
+            proposal,
+            self.project.now(),
+        )
+        .await;
         proposal
     }
 }

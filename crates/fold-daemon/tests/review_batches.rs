@@ -37,7 +37,7 @@ fn details(error: &FoldError) -> Value {
     error.details().cloned().map_or(Value::Null, Value::Object)
 }
 
-/// Four open proposals, each by its own agent, and the reviewer `review`, the review lead. `T-1` needs `T-3`, so the merge order of all four is P-2, P-3, P-1, P-4.
+/// Four open proposals, each by its own agent, and `review`, the main agent, which makes a batch itself. `T-1` needs `T-3`, so the merge order of all four is P-2, P-3, P-1, P-4.
 ///
 /// - P-1 (T-1): `README.md` gains a first line, and `src/one.rs` is new.
 /// - P-2 (T-2): `README.md` gains a last line, and `src/two.rs` is new.
@@ -107,7 +107,8 @@ impl Scene {
             .await
             .unwrap();
         fx.agent("review").await;
-        give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+        // Only the main agent makes a batch itself; a reviewer gets its batch from the review lead's start.
+        crate::common::roles::give_main_tag(&fx.handle.store, "review").await;
         let review = Actor::Agent(AgentActor {
             agent: AgentName::parse("review").unwrap(),
             worker: WorkerName::parse("review").unwrap(),

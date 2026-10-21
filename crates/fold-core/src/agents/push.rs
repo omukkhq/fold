@@ -98,7 +98,7 @@ pub fn request_of(event: &Event) -> Option<RequestId> {
 
 /// The notices one committed event sends. An agent never hears about what its own workers did, and an event that misses an id its rule names sends nothing.
 pub fn notice_for(event: &Event, ctx: &PushContext) -> Vec<Notice> {
-    let rules = match human_change_rules(event, ctx) {
+    let rules = match human_change_rules(event, ctx).or_else(|| review_rules(event, ctx)) {
         Some(rules) => rules,
         None => rule(event, ctx).into_iter().collect(),
     };
@@ -301,26 +301,6 @@ fn listed(items: &[String], count: usize, one: &str, many: &str, spelled: bool) 
 
 fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'static str)> {
     let kind = event.event_type;
-    if kind == types::PROPOSAL_OPENED {
-        let proposal = event.proposal?;
-        let text = match event.task {
-            Some(task) => format!("{proposal} opened for {task}"),
-            None => format!("{proposal} opened"),
-        };
-        return Some((reviewers(ctx), text, "claim_review"));
-    }
-    if kind == types::PROPOSAL_VERSION_ADDED {
-        let proposal = event.proposal?;
-        let text = match event
-            .data
-            .get("version")
-            .and_then(serde_json::Value::as_u64)
-        {
-            Some(version) => format!("{proposal} has version {version}"),
-            None => format!("{proposal} has a new version"),
-        };
-        return Some((reviewers(ctx), text, "create_review_checkout"));
-    }
     if kind == types::PROPOSAL_HUMAN_EDITED {
         let proposal = event.proposal?;
         let version = event.data.get("version")?.as_u64()?;
@@ -341,15 +321,6 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
                 "the reviewer fixed {proposal} as version {version}; sync your workspace before you work in it"
             ),
             "sync_workspace",
-        ));
-    }
-    if kind == types::PROPOSAL_REVIEW_AGAIN_REQUESTED {
-        let proposal = event.proposal?;
-        let version = event.data.get("version")?.as_u64()?;
-        return Some((
-            reviewers(ctx),
-            format!("a human sent {proposal} version {version} for review again"),
-            "create_review_checkout",
         ));
     }
     if kind == types::INTEGRATION_SUCCEEDED {
@@ -662,14 +633,48 @@ fn approved_text(request: RequestId, tasks: &[TaskId]) -> String {
 }
 
 /// Every review lead but the author's agent, then the holder of the review claim. No review lead hears of a proposal of a task of Main.
-fn reviewers(ctx: &PushContext) -> Vec<AgentName> {
-    ctx.review_leads
+/// A proposal that needs a review reaches the review lead, which gives the review to a reviewer with `start_worker`, and the holder of its review claim, which checks out the version to review. A new version, or one a human sent for review again, reaches the review lead only while nobody holds the claim: fold resumes a holder that has ended for that version. No review lead hears of a proposal of a task of Main or of its own proposal.
+fn review_rules(
+    event: &Event,
+    ctx: &PushContext,
+) -> Option<Vec<(Vec<AgentName>, String, &'static str)>> {
+    let kind = event.event_type;
+    let proposal = event.proposal?;
+    let (text, leads_too) = if kind == types::PROPOSAL_OPENED {
+        let text = match event.task {
+            Some(task) => format!("{proposal} opened for {task}"),
+            None => format!("{proposal} opened"),
+        };
+        (text, true)
+    } else if kind == types::PROPOSAL_VERSION_ADDED {
+        let text = match event
+            .data
+            .get("version")
+            .and_then(serde_json::Value::as_u64)
+        {
+            Some(version) => format!("{proposal} has version {version}"),
+            None => format!("{proposal} has a new version"),
+        };
+        (text, ctx.review_claim.is_none())
+    } else if kind == types::PROPOSAL_REVIEW_AGAIN_REQUESTED {
+        let version = event.data.get("version")?.as_u64()?;
+        let text = format!("a human sent {proposal} version {version} for review again");
+        (text, ctx.review_claim.is_none())
+    } else {
+        return None;
+    };
+    let leads = ctx
+        .review_leads
         .iter()
-        .filter(|_| !ctx.main_task)
+        .filter(|_| leads_too && !ctx.main_task)
         .filter(|agent| ctx.author.as_ref() != Some(*agent))
-        .chain(&ctx.review_claim)
         .cloned()
-        .collect()
+        .collect();
+    let holder = ctx.review_claim.iter().cloned().collect();
+    Some(vec![
+        (leads, text.clone(), "start_worker"),
+        (holder, text, "create_review_checkout"),
+    ])
 }
 
 /// `review.submitted` names its verdict in `data.verdict`, with the values of `reviews.verdict`.
@@ -758,13 +763,13 @@ mod tests {
             vec![
                 row(
                     "lead",
-                    "fold: P-3 opened for T-12. Call claim_review.",
-                    "claim_review"
+                    "fold: P-3 opened for T-12. Call start_worker.",
+                    "start_worker"
                 ),
                 row(
                     "review",
-                    "fold: P-3 opened for T-12. Call claim_review.",
-                    "claim_review"
+                    "fold: P-3 opened for T-12. Call start_worker.",
+                    "start_worker"
                 ),
             ]
         );
@@ -1353,7 +1358,7 @@ mod tests {
         };
         assert_eq!(
             notice_for(&taskless, &ctx())[0].text,
-            "fold: P-3 opened. Call claim_review."
+            "fold: P-3 opened. Call start_worker."
         );
     }
 
@@ -1426,7 +1431,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_version_reaches_the_claim_holder_and_the_review_leads() {
+    fn a_new_version_reaches_the_claim_holder_or_without_one_the_review_leads() {
         let event = with_data(
             event(types::PROPOSAL_VERSION_ADDED, "frontend/ui"),
             json!({"version": 2, "changeset": "C-4"}),
@@ -1434,9 +1439,18 @@ mod tests {
         let text = "fold: P-3 has version 2. Call create_review_checkout.";
         assert_eq!(
             sent(&notice_for(&event, &ctx())),
+            vec![row("review", text, "create_review_checkout")]
+        );
+        let unclaimed = PushContext {
+            review_claim: None,
+            ..ctx()
+        };
+        let text = "fold: P-3 has version 2. Call start_worker.";
+        assert_eq!(
+            sent(&notice_for(&event, &unclaimed)),
             vec![
-                row("lead", text, "create_review_checkout"),
-                row("review", text, "create_review_checkout"),
+                row("lead", text, "start_worker"),
+                row("review", text, "start_worker"),
             ]
         );
         let bare = with_data(event.clone(), json!({}));
@@ -1468,9 +1482,18 @@ mod tests {
             "fold: a human sent P-3 version 4 for review again. Call create_review_checkout.";
         assert_eq!(
             sent(&notice_for(&again, &ctx())),
+            vec![row("review", text, "create_review_checkout")]
+        );
+        let unclaimed = PushContext {
+            review_claim: None,
+            ..ctx()
+        };
+        let text = "fold: a human sent P-3 version 4 for review again. Call start_worker.";
+        assert_eq!(
+            sent(&notice_for(&again, &unclaimed)),
             vec![
-                row("lead", text, "create_review_checkout"),
-                row("review", text, "create_review_checkout"),
+                row("lead", text, "start_worker"),
+                row("review", text, "start_worker"),
             ]
         );
         for kind in [

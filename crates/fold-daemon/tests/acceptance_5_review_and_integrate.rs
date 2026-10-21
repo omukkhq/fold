@@ -49,10 +49,7 @@ async fn acceptance_5_backend_proposal_is_reviewed_and_integrated_with_no_card_m
     assert_eq!(listed[0]["author"], "backend");
     assert_eq!(listed[0]["claim"], Value::Null);
 
-    let claim = harness
-        .call("review", "claim_review", json!({"id": proposal}))
-        .await;
-    assert_eq!(claim["holder"], "review");
+    harness.give_review("review", &proposal).await;
     let checkout = harness
         .call("review", "create_review_checkout", json!({"id": proposal}))
         .await;

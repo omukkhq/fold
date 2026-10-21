@@ -114,7 +114,7 @@ pub async fn give_review_claim(store: &Store, agent: &str, proposal: ProposalId,
         .unwrap();
 }
 
-/// Makes a review batch of `proposals`, in the order given, for the main worker of `agent` with the review claim of each member at `now`, as the review lead's `start_worker` makes it for a reviewer that fold starts with two or more proposals; for an agent whose worker process [`give_role`] recorded.
+/// Makes a review batch of `proposals`, in the order given, for the main worker of `agent` with the review claim of each member at `now`, as the review lead's `start_worker` makes it for a reviewer that fold starts with two or more proposals; for an agent whose worker process [`give_role`] recorded. A member whose review claim the worker holds already keeps it.
 pub async fn give_batch(
     store: &Store,
     agent: &str,
@@ -131,7 +131,12 @@ pub async fn give_batch(
                 let row = fold_store::reviews::get_proposal(tx.conn(), *proposal)
                     .await?
                     .unwrap();
-                fold_store::reviews::insert_review_claim(tx, *proposal, worker, now).await?;
+                let held = fold_store::reviews::unreleased_review_claim(tx.conn(), *proposal)
+                    .await?
+                    .is_some_and(|claim| claim.worker_id == worker);
+                if !held {
+                    fold_store::reviews::insert_review_claim(tx, *proposal, worker, now).await?;
+                }
                 batches::insert_member(tx, batch, *proposal, row.current_version, position).await?;
             }
             Ok::<_, StoreError>(batch)

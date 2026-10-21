@@ -281,7 +281,7 @@ async fn a_task_worker_stops_when_its_last_proposal_opens_after_an_earlier_one_i
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
-    give_role(&harness.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&harness.handle.store, "review", Role::Reviewer, None).await;
     areas(&harness).await;
     harness
         .call(
@@ -1611,7 +1611,7 @@ async fn a_review_lead_gives_an_ended_reviewers_review_again_and_a_marked_propos
             json!({"proposals": ["P-3", "P-2"]}),
         )
         .await;
-    assert_eq!(own["code"], codes::INVALID_REQUEST, "{own}");
+    assert_eq!(own["code"], codes::REVIEW_LEAD_DELEGATES, "{own}");
     let unclaimed = harness
         .call(MAIN, "get_proposal", json!({"id": "P-2"}))
         .await;
@@ -1705,7 +1705,7 @@ async fn a_task_worker_stops_when_its_task_is_done_unless_it_holds_another_claim
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
-    give_role(&harness.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&harness.handle.store, "review", Role::Reviewer, None).await;
     areas(&harness).await;
     for title in ["Style the page", "Print the page"] {
         harness

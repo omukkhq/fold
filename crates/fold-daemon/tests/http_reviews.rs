@@ -125,7 +125,7 @@ async fn an_agent_approval_waits_for_the_human_the_mark_names() {
     let fx = with_p1().await;
     let p1 = fold_core::ProposalId::from_number(1).unwrap();
     let review = fx.agent("review").await;
-    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
     // A human is known once a request named them.
     send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
     fx.reviews()
@@ -382,7 +382,7 @@ async fn the_proposal_diff_since_an_earlier_version_leaves_out_what_main_gained(
         .detail()
         .unwrap();
     let review = fx.agent("review").await;
-    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
     fx.reviews()
         .submit_review(
             &review,
@@ -804,7 +804,7 @@ async fn integrate_refusals_answer_with_their_gate_codes() {
         "a human integrates a marked task only after a reviewer agent approved it"
     );
     let review = fx.agent("review").await;
-    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
     fx.reviews()
         .submit_review(
             &review,

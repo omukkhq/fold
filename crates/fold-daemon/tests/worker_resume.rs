@@ -72,11 +72,11 @@ async fn until_resumed(harness: &Harness, count: usize) -> Vec<(Option<String>, 
     .await
 }
 
-/// Area `web` over label `ui` with one task per title, its lead `web-lead`, and the task worker `web-worker` that the lead started for every task, connected and waiting for work. `review` is the review lead.
+/// Area `web` over label `ui` with one task per title, its lead `web-lead`, and the task worker `web-worker` that the lead started for every task, connected and waiting for work. `review` is a reviewer.
 pub async fn task_worker_for(fake: &FakeClaude, titles: &[&str], state: WorkerState) -> Harness {
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
-    give_role(&harness.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&harness.handle.store, "review", Role::Reviewer, None).await;
     harness
         .call(MAIN, "create_label", json!({"name": "ui", "color": "sage"}))
         .await;
@@ -468,13 +468,7 @@ async fn a_batch_review_resumes_the_task_worker_once_with_every_member_it_wrote(
     menu.write(&[("menu.html", "<p>menu</p>\n")]);
     harness.propose(TASK_WORKER, &menu, "Draw the menu").await;
     until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
-    harness
-        .call(
-            "review",
-            "create_review_batch",
-            json!({"proposals": ["P-1", "P-2"]}),
-        )
-        .await;
+    harness.give_batch("review", &["P-1", "P-2"]).await;
     harness
         .call(
             "review",
