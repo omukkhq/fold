@@ -25,7 +25,7 @@ import type { AgentsSearch } from "@/features/workers/search";
 import { applyEvent } from "@/live/apply";
 import { agent } from "@/test/agents";
 import { byContent } from "@/test/content";
-import { projectCost } from "@/test/cost";
+import { projectCost, tokens } from "@/test/cost";
 import { localDayStart } from "@/format/days";
 import { errorReply, stubFetch, type StubReply } from "@/test/stubFetch";
 import {
@@ -532,14 +532,34 @@ describe("AgentsScreen", () => {
     expect(within(totals).getByText("60% · 2 workers")).toBeTruthy();
     const since = calls.find((call) => call.path === `${BASE}/cost`)?.search;
     expect(Number(since?.get("since"))).toBeLessThan(Date.now());
+    expect(
+      within(totals).getByText("2.0M tokens · 160.0k output"),
+    ).toBeTruthy();
     expect(screen.getByRole("region", { name: "Cost by day" })).toBeTruthy();
+    const tokens = screen.getByRole("region", { name: "Tokens" });
+    expect(within(tokens).getByText("Cache read")).toBeTruthy();
+    expect(
+      within(tokens).getByText("87% of the input came from the prompt cache"),
+    ).toBeTruthy();
+    const measure = screen.getByRole("group", { name: "Measure" });
+    await userEvent.click(
+      within(measure).getByRole("button", { name: "Tokens" }),
+    );
+    expect(
+      within(measure)
+        .getByRole("button", { name: "Tokens" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(screen.getByRole("region", { name: "Tokens by day" })).toBeTruthy();
     const tasks = screen.getByRole("region", { name: "Tasks" });
+    expect(within(tasks).getByText("1.1M")).toBeTruthy();
     expect(
       within(tasks).getByRole("link", { name: /T-12/ }).getAttribute("href"),
     ).toBe("/p/demo/t/T-12");
     expect(within(tasks).getAllByText("—").length).toBeGreaterThan(0);
     const workers = screen.getByRole("region", { name: "Workers" });
     expect(within(workers).getByText("stopped")).toBeTruthy();
+    expect(within(workers).getByText("64.0k")).toBeTruthy();
     expect(screen.getByText(/does not supervise/)).toBeTruthy();
     expect(
       screen
@@ -561,7 +581,12 @@ describe("AgentsScreen", () => {
       routes({
         [`GET ${BASE}/cost`]: {
           body: projectCost(0, {
-            total: { cost_micro_usd: 0, turns: 0, workers: 0 },
+            total: {
+              cost_micro_usd: 0,
+              tokens: tokens(0),
+              turns: 0,
+              workers: 0,
+            },
           }),
         },
       }),

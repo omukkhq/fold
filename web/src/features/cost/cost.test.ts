@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectSummary } from "@/api/projects";
-import { projectCost, taskCost } from "@/test/cost";
+import { projectCost, taskCost, tokens } from "@/test/cost";
 import {
   allProjectsCost,
   areaRows,
+  barLabel,
   costChart,
   costTiles,
   isCostRange,
@@ -16,6 +17,8 @@ import {
   showsTick,
   taskCostSection,
   taskRows,
+  tokensCard,
+  tokensText,
   workerRows,
 } from "./cost";
 
@@ -40,17 +43,37 @@ describe("ranges", () => {
 describe("costTiles", () => {
   it("sums the reviews of the review lead and the reviewers and names the first turn", () => {
     expect(costTiles(projectCost(TODAY))).toEqual([
-      { label: "Total", amount: "$10.00", detail: "since Oct 19 · 40 turns" },
-      { label: "Task workers", amount: "$6.00", detail: "60% · 2 workers" },
-      { label: "Reviews", amount: "$2.00", detail: "20% · 2 workers" },
-      { label: "Leads", amount: "$2.00", detail: "20% · 1 worker" },
+      {
+        label: "Total",
+        amount: "$10.00",
+        detail: "since Oct 19 · 40 turns",
+        tokens: "2.0M tokens · 160.0k output",
+      },
+      {
+        label: "Task workers",
+        amount: "$6.00",
+        detail: "60% · 2 workers",
+        tokens: "1.2M tokens · 96.0k output",
+      },
+      {
+        label: "Reviews",
+        amount: "$2.00",
+        detail: "20% · 2 workers",
+        tokens: "400.0k tokens · 32.0k output",
+      },
+      {
+        label: "Leads",
+        amount: "$2.00",
+        detail: "20% · 1 worker",
+        tokens: "400.0k tokens · 32.0k output",
+      },
     ]);
   });
 
   it("says when there is no turn", () => {
     const empty = projectCost(TODAY, {
       first_turn_at: null,
-      total: { cost_micro_usd: 0, turns: 0, workers: 0 },
+      total: { cost_micro_usd: 0, tokens: tokens(0), turns: 0, workers: 0 },
     });
     expect(costTiles(empty)[0]?.detail).toBe("no turns yet");
     expect(isEmptyCost(empty)).toBe(true);
@@ -64,16 +87,44 @@ describe("costChart", () => {
     expect(chart.title).toBe("Cost by hour");
     expect(chart.bars).toHaveLength(24);
     const nine = chart.bars[9];
-    expect(nine?.total).toBe(1_500_000);
+    expect(nine?.cost).toBe(1_500_000);
+    expect(nine?.tokens).toBe(300_000);
     expect(nine?.roles).toEqual([
-      { role: "task_worker", cost: 1_000_000 },
-      { role: "reviewer", cost: 500_000 },
+      { role: "task_worker", cost: 1_000_000, tokens: 200_000 },
+      { role: "reviewer", cost: 500_000, tokens: 100_000 },
     ]);
     expect(nine?.height).toBe(1);
     expect(nine?.tick).toBe("09");
     expect(nine?.title).toBe("09:00 today");
     expect(chart.bars[14]?.height).toBeCloseTo(1 / 6);
-    expect(chart.bars[0]?.total).toBe(0);
+    expect(chart.bars[0]?.cost).toBe(0);
+    if (nine) {
+      expect(barLabel(nine)).toBe("09:00 today: $1.50 · 300.0k tokens");
+    }
+  });
+
+  it("measures the bars by tokens when asked", () => {
+    const view = projectCost(TODAY, {
+      slots: [
+        {
+          start: TODAY + 9 * 60 * 60 * 1000,
+          role: "task_worker",
+          cost_micro_usd: 1_000_000,
+          tokens: 100,
+        },
+        {
+          start: TODAY + 10 * 60 * 60 * 1000,
+          role: "reviewer",
+          cost_micro_usd: 100,
+          tokens: 400,
+        },
+      ],
+    });
+    const chart = costChart(view, "today", NOW, "tokens");
+    expect(chart.title).toBe("Tokens by hour");
+    expect(chart.bars[9]?.height).toBe(0.25);
+    expect(chart.bars[10]?.height).toBe(1);
+    expect(costChart(view, "today", NOW).bars[9]?.height).toBe(1);
   });
 
   it("draws the last seven days by weekday", () => {
@@ -88,7 +139,7 @@ describe("costChart", () => {
       "Tue",
       "Wed",
     ]);
-    expect(chart.bars.map((bar) => bar.total)).toEqual([
+    expect(chart.bars.map((bar) => bar.cost)).toEqual([
       0, 0, 0, 0, 3_000_000, 0, 1_750_000,
     ]);
     expect(chart.bars[6]?.title).toBe("Wed Oct 21");
@@ -103,18 +154,20 @@ describe("costChart", () => {
             start: TODAY + 23 * 60 * 60 * 1000,
             role: "task_worker",
             cost_micro_usd: 700_000,
+            tokens: 0,
           },
           {
             start: TODAY - 60 * 60 * 1000,
             role: "reviewer",
             cost_micro_usd: 300_000,
+            tokens: 0,
           },
         ],
       }),
       "all",
       NOW,
     );
-    expect(chart.bars.slice(-2).map((bar) => bar.total)).toEqual([
+    expect(chart.bars.slice(-2).map((bar) => bar.cost)).toEqual([
       300_000, 700_000,
     ]);
   });
@@ -138,6 +191,7 @@ describe("costChart", () => {
             start: new Date(2026, 3, 2).getTime(),
             role: "area_lead",
             cost_micro_usd: 7,
+            tokens: 0,
           },
         ],
       }),
@@ -146,7 +200,7 @@ describe("costChart", () => {
     );
     expect(long.title).toBe("Cost by week");
     expect(long.bars[0]?.title).toBe("Week of Apr 1");
-    expect(long.bars[0]?.total).toBe(7);
+    expect(long.bars[0]?.cost).toBe(7);
     const none = costChart(
       projectCost(TODAY, { first_turn_at: null, slots: [] }),
       "all",
@@ -241,6 +295,7 @@ describe("breakdowns", () => {
         build: "$4.00",
         review: "$1.50",
         total: "$5.50",
+        tokens: "1.1M",
       },
     ]);
     expect(more).toBe(1);
@@ -258,6 +313,8 @@ describe("breakdowns", () => {
         model: "claude-sonnet-5",
         turns: "14",
         cost: "$4.00",
+        tokens: "800.0k",
+        output: "64.0k",
         ended: true,
       },
       {
@@ -267,9 +324,48 @@ describe("breakdowns", () => {
         model: "—",
         turns: "6",
         cost: "$1.50",
+        tokens: "300.0k",
+        output: "24.0k",
         ended: false,
       },
     ]);
+  });
+});
+
+describe("tokens", () => {
+  it("read as thousands and millions", () => {
+    expect(tokensText(0)).toBe("0");
+    expect(tokensText(999)).toBe("999");
+    expect(tokensText(1_000)).toBe("1.0k");
+    expect(tokensText(64_546)).toBe("64.5k");
+    expect(tokensText(999_949)).toBe("999.9k");
+    expect(tokensText(999_950)).toBe("1.0M");
+    expect(tokensText(12_345_678)).toBe("12.3M");
+  });
+
+  it("split into their four parts and the share the prompt cache held", () => {
+    expect(tokensCard(projectCost(TODAY))).toEqual({
+      total: "2.0M",
+      parts: [
+        { key: "cache_read", label: "Cache read", amount: "1.6M", fill: 0.8 },
+        {
+          key: "cache_write",
+          label: "Cache write",
+          amount: "200.0k",
+          fill: 0.1,
+        },
+        { key: "output", label: "Output", amount: "160.0k", fill: 0.08 },
+        { key: "input", label: "Input", amount: "40.0k", fill: 0.02 },
+      ],
+      cacheLine: "87% of the input came from the prompt cache",
+    });
+    const none = tokensCard(
+      projectCost(TODAY, {
+        total: { cost_micro_usd: 0, tokens: tokens(0), turns: 0, workers: 0 },
+      }),
+    );
+    expect(none.parts.every((part) => part.fill === 0)).toBe(true);
+    expect(none.cacheLine).toBe("0% of the input came from the prompt cache");
   });
 });
 
@@ -277,6 +373,7 @@ describe("taskCostSection", () => {
   it("splits build and review and says what each worker did", () => {
     expect(taskCostSection(taskCost())).toEqual({
       total: "$5.00",
+      tokens: "1.0M tokens · 800.0k from the cache · 80.0k output",
       buildPart: 0.8,
       build: "$4.00",
       review: "$1.00",
@@ -285,11 +382,13 @@ describe("taskCostSection", () => {
           name: "web-worker",
           line: "task worker · claude-sonnet-5 · 14 turns · built the task",
           amount: "$4.00",
+          tokens: "800.0k tokens",
         },
         {
           name: "reviewer-1",
           line: "reviewer · unknown model · 6 turns · reviewed P-3, P-4",
           amount: "$1.00",
+          tokens: "200.0k tokens",
         },
       ],
     });
@@ -307,6 +406,7 @@ describe("taskCostSection", () => {
             proposals: [],
             turns: 1,
             cost_micro_usd: 0,
+            tokens: tokens(0),
           },
         ],
       }),
@@ -321,6 +421,7 @@ describe("project cost", () => {
     all_time_micro_usd: 12_340_000,
     today_micro_usd: 1_200_000,
     week_micro_usd: 5_670_000,
+    all_time_tokens: 1_234_000,
   };
   const project = (all: number | null): ProjectSummary => ({
     slug: "web",
@@ -349,6 +450,7 @@ describe("project cost", () => {
     expect(projectCostLines(project(12_340_000).overview)).toEqual({
       total: "$12.34",
       recent: "today $1.20 · 7 days $5.67",
+      tokens: "1.2M tokens",
     });
     expect(projectCostLines(null)).toBeNull();
   });
@@ -356,6 +458,6 @@ describe("project cost", () => {
   it("adds up the projects the list could read", () => {
     expect(
       allProjectsCost([project(1_000_000), project(null), project(2_500_000)]),
-    ).toBe("$3.50");
+    ).toEqual({ cost: "$3.50", tokens: "2.5M tokens" });
   });
 });

@@ -36,6 +36,7 @@ const CARD =
 
 export function ProjectsScreen() {
   const { data: projects } = useSuspenseQuery(projectsQuery());
+  const total = allProjectsCost(projects);
   // The clock is read once per mount: the change times are a snapshot.
   const now = useNow(true, 30_000);
   const [query, setQuery] = useState("");
@@ -65,7 +66,10 @@ export function ProjectsScreen() {
                     Cost of all projects
                   </span>
                   <span className="text-item-title leading-snug font-semibold text-text tabular-nums">
-                    {allProjectsCost(projects)}
+                    {total.cost}
+                  </span>
+                  <span className="text-meta text-text-muted tabular-nums">
+                    {total.tokens}
                   </span>
                 </p>
               ) : null}
@@ -205,6 +209,9 @@ function ProjectCard({
                 </span>
                 <span className="text-meta whitespace-nowrap text-text-muted">
                   {cost.recent}
+                </span>
+                <span className="text-meta whitespace-nowrap text-text-muted tabular-nums">
+                  {cost.tokens}
                 </span>
               </span>
             ) : null}

@@ -1,4 +1,4 @@
-import type { ProjectCost, TaskCost } from "@/api/cost";
+import type { ProjectCost, TaskCost, TokenCounts } from "@/api/cost";
 import type { ProjectOverview, ProjectSummary } from "@/api/projects";
 import type { WorkerRole } from "@/api/workers";
 import {
@@ -48,6 +48,37 @@ export function shareText(part: number, total: number): string {
   return `${String(Math.round((part / total) * 100))}%`;
 }
 
+/** `980`, `64.5k` or `1.2M` tokens. */
+export function tokensText(count: number): string {
+  if (count < 1000) return String(count);
+  const thousands = Math.round(count / 100) / 10;
+  if (thousands < 1000) return `${thousands.toFixed(1)}k`;
+  return `${(Math.round(count / 100_000) / 10).toFixed(1)}M`;
+}
+
+/** `1.2M tokens · 98.0k output`. */
+function tokensLine(tokens: TokenCounts): string {
+  return `${tokensText(tokens.total)} tokens · ${tokensText(tokens.output)} output`;
+}
+
+const NO_TOKENS: TokenCounts = {
+  input: 0,
+  output: 0,
+  cache_read: 0,
+  cache_write: 0,
+  total: 0,
+};
+
+function addTokens(a: TokenCounts, b: TokenCounts): TokenCounts {
+  return {
+    input: a.input + b.input,
+    output: a.output + b.output,
+    cache_read: a.cache_read + b.cache_read,
+    cache_write: a.cache_write + b.cache_write,
+    total: a.total + b.total,
+  };
+}
+
 /** The part of `max` a bar fills, from 0 to 1. */
 function fraction(part: number, max: number): number {
   return max === 0 ? 0 : part / max;
@@ -57,6 +88,8 @@ export interface CostTile {
   label: string;
   amount: string;
   detail: string;
+  /** Its tokens and their output, such as `1.2M tokens · 98.0k output`. */
+  tokens: string;
 }
 
 /** The four totals: everything, then the task workers, the reviews (the review lead and the reviewers) and the area leads, each with its share and its workers. */
@@ -69,15 +102,17 @@ export function costTiles(view: ProjectCost): CostTile[] {
         (acc, entry) => ({
           cost: acc.cost + entry.cost_micro_usd,
           workers: acc.workers + entry.workers,
+          tokens: addTokens(acc.tokens, entry.tokens),
         }),
-        { cost: 0, workers: 0 },
+        { cost: 0, workers: 0, tokens: NO_TOKENS },
       );
   const part = (label: string, roles: readonly WorkerRole[]): CostTile => {
-    const { cost, workers } = sum(roles);
+    const { cost, workers, tokens } = sum(roles);
     return {
       label,
       amount: costText(cost),
       detail: `${shareText(cost, total)} · ${plural(workers, "worker")}`,
+      tokens: tokensLine(tokens),
     };
   };
   return [
@@ -88,6 +123,7 @@ export function costTiles(view: ProjectCost): CostTile[] {
         view.first_turn_at === null
           ? "no turns yet"
           : `since ${dayText(view.first_turn_at)} · ${plural(view.total.turns, "turn")}`,
+      tokens: tokensLine(view.total.tokens),
     },
     part("Task workers", ["task_worker"]),
     part("Reviews", ["review_lead", "reviewer"]),
@@ -114,6 +150,15 @@ export function roleRowName(role: WorkerRole): string {
   return ROLE_ROWS[role];
 }
 
+/** What the chart's bars measure. */
+export type ChartMeasure = "cost" | "tokens";
+
+export const CHART_MEASURES: readonly { value: ChartMeasure; label: string }[] =
+  [
+    { value: "cost", label: "Cost" },
+    { value: "tokens", label: "Tokens" },
+  ];
+
 export interface CostBar {
   /** The start of the bar's hour or day, in UTC milliseconds. */
   start: number;
@@ -121,11 +166,17 @@ export interface CostBar {
   tick: string;
   /** The bar's hour or day in words, for its tooltip. */
   title: string;
-  total: number;
+  cost: number;
+  tokens: number;
   /** Each role with a turn in the bar, in [`CHART_ROLES`] order. */
-  roles: { role: WorkerRole; cost: number }[];
-  /** The part of the tallest bar this one fills, from 0 to 1. */
+  roles: { role: WorkerRole; cost: number; tokens: number }[];
+  /** The part of the tallest bar of the measure this one fills, from 0 to 1. */
   height: number;
+}
+
+/** The bar's text equivalent: its hour or day, its cost and its tokens. */
+export function barLabel(bar: CostBar): string {
+  return `${bar.title}: ${costText(bar.cost)} · ${tokensText(bar.tokens)} tokens`;
 }
 
 export interface CostChart {
@@ -167,14 +218,20 @@ function binStarts(
   };
 }
 
-/** The cost by hour (today) or by day, split by role, in the viewer's own hours and days. A slot belongs to the last bar that starts at or before it. */
+interface Sum {
+  cost: number;
+  tokens: number;
+}
+
+/** The cost or the tokens by hour (today) or by day, split by role, in the viewer's own hours and days. A slot belongs to the last bar that starts at or before it. */
 export function costChart(
   view: ProjectCost,
   range: CostRange,
   now: number,
+  measure: ChartMeasure = "cost",
 ): CostChart {
   const { starts, unit } = binStarts(range, now, view.first_turn_at);
-  const sums = starts.map(() => new Map<WorkerRole, number>());
+  const sums = starts.map(() => new Map<WorkerRole, Sum>());
   for (const slot of view.slots) {
     let index = -1;
     for (let at = 0; at < starts.length; at += 1) {
@@ -182,16 +239,26 @@ export function costChart(
     }
     const bin = sums[index];
     if (bin) {
-      bin.set(slot.role, (bin.get(slot.role) ?? 0) + slot.cost_micro_usd);
+      const known = bin.get(slot.role) ?? { cost: 0, tokens: 0 };
+      bin.set(slot.role, {
+        cost: known.cost + slot.cost_micro_usd,
+        tokens: known.tokens + slot.tokens,
+      });
     }
   }
   const totals = sums.map((bin) =>
-    [...bin.values()].reduce((sum, cost) => sum + cost, 0),
+    [...bin.values()].reduce(
+      (sum, part) => ({
+        cost: sum.cost + part.cost,
+        tokens: sum.tokens + part.tokens,
+      }),
+      { cost: 0, tokens: 0 },
+    ),
   );
-  const max = Math.max(0, ...totals);
+  const max = Math.max(0, ...totals.map((total) => total[measure]));
   const bars = starts.map((start, index) => {
-    const bin = sums[index] ?? new Map<WorkerRole, number>();
-    const total = totals[index] ?? 0;
+    const bin = sums[index] ?? new Map<WorkerRole, Sum>();
+    const total = totals[index] ?? { cost: 0, tokens: 0 };
     return {
       start,
       tick:
@@ -206,21 +273,18 @@ export function costChart(
           : unit === "week"
             ? `Week of ${dayText(start)}`
             : `${weekdayText(start)} ${dayText(start)}`,
-      total,
+      cost: total.cost,
+      tokens: total.tokens,
       roles: CHART_ROLES.flatMap((role) => {
-        const cost = bin.get(role) ?? 0;
-        return cost > 0 ? [{ role, cost }] : [];
+        const part = bin.get(role);
+        return part ? [{ role, cost: part.cost, tokens: part.tokens }] : [];
       }),
-      height: fraction(total, max),
+      height: fraction(total[measure], max),
     };
   });
+  const what = measure === "cost" ? "Cost" : "Tokens";
   return {
-    title:
-      unit === "hour"
-        ? "Cost by hour"
-        : unit === "week"
-          ? "Cost by week"
-          : "Cost by day",
+    title: `${what} by ${unit}`,
     bars,
   };
 }
@@ -294,6 +358,7 @@ export interface TaskRow {
   build: string;
   review: string;
   total: string;
+  tokens: string;
 }
 
 /** The most expensive tasks first, at most `limit` of them, and how many more there are. A task without a review cost shows no review amount. */
@@ -313,6 +378,7 @@ export function taskRows(
           ? NO_VALUE
           : costText(task.review_micro_usd),
       total: costText(task.total_micro_usd),
+      tokens: tokensText(task.tokens.total),
     })),
     more: view.tasks.length - shown.length,
   };
@@ -325,6 +391,8 @@ export interface WorkerRow {
   model: string;
   turns: string;
   cost: string;
+  tokens: string;
+  output: string;
   /** The worker has no process now, but its turns stay counted. */
   ended: boolean;
 }
@@ -344,6 +412,8 @@ export function workerRows(view: ProjectCost): WorkerRow[] {
     model: worker.model ?? NO_VALUE,
     turns: String(worker.turns),
     cost: costText(worker.cost_micro_usd),
+    tokens: tokensText(worker.tokens.total),
+    output: tokensText(worker.tokens.output),
     ended: worker.state === "stopped" || worker.state === "failed",
   }));
 }
@@ -353,19 +423,64 @@ export function isEmptyCost(view: ProjectCost): boolean {
   return view.total.turns === 0;
 }
 
+export interface TokenPart {
+  key: "cache_read" | "cache_write" | "output" | "input";
+  label: string;
+  amount: string;
+  /** The part of all the tokens this one is, from 0 to 1. */
+  fill: number;
+}
+
+export interface TokensCard {
+  total: string;
+  /** Cache reads, cache writes, output and input, in the order the bar draws them. */
+  parts: TokenPart[];
+  /** How much of the input the prompt cache held, such as `92% of the input came from the prompt cache`. */
+  cacheLine: string;
+}
+
+/** The tokens of the range: the total, its four parts and how much of the input came from the prompt cache. The input is everything the model read: the cache reads and writes and the input the cache did not hold. */
+export function tokensCard(view: ProjectCost): TokensCard {
+  const tokens = view.total.tokens;
+  const part = (
+    key: TokenPart["key"],
+    label: string,
+    count: number,
+  ): TokenPart => ({
+    key,
+    label,
+    amount: tokensText(count),
+    fill: fraction(count, tokens.total),
+  });
+  const read = tokens.cache_read + tokens.cache_write + tokens.input;
+  return {
+    total: tokensText(tokens.total),
+    parts: [
+      part("cache_read", "Cache read", tokens.cache_read),
+      part("cache_write", "Cache write", tokens.cache_write),
+      part("output", "Output", tokens.output),
+      part("input", "Input", tokens.input),
+    ],
+    cacheLine: `${shareText(tokens.cache_read, read)} of the input came from the prompt cache`,
+  };
+}
+
 export interface TaskCostSection {
   total: string;
+  /** `1.2M tokens · 1.0M from the cache · 98.0k output`. */
+  tokens: string;
   /** The part of the total its build is, from 0 to 1; 0 for a task that cost nothing. */
   buildPart: number;
   build: string;
   review: string;
-  rows: { name: string; line: string; amount: string }[];
+  rows: { name: string; line: string; amount: string; tokens: string }[];
 }
 
 /** The task screen's cost section: the total, the build and review parts and one row per worker, with what it did. */
 export function taskCostSection(cost: TaskCost): TaskCostSection {
   return {
     total: costText(cost.total_micro_usd),
+    tokens: `${tokensText(cost.tokens.total)} tokens · ${tokensText(cost.tokens.cache_read)} from the cache · ${tokensText(cost.tokens.output)} output`,
     buildPart: fraction(cost.build_micro_usd, cost.total_micro_usd),
     build: costText(cost.build_micro_usd),
     review: costText(cost.review_micro_usd),
@@ -385,29 +500,38 @@ export function taskCostSection(cost: TaskCost): TaskCostSection {
           did,
         ].join(" · "),
         amount: costText(worker.cost_micro_usd),
+        tokens: `${tokensText(worker.tokens.total)} tokens`,
       };
     }),
   };
 }
 
-/** A project card's cost: the total of all time, and today and the last seven days under it. */
+/** A project card's cost: the total of all time, and today and the last seven days and the tokens of all time under it. */
 export function projectCostLines(
   overview: ProjectOverview | null,
-): { total: string; recent: string } | null {
+): { total: string; recent: string; tokens: string } | null {
   if (overview === null) return null;
   const { cost } = overview;
   return {
     total: costText(cost.all_time_micro_usd),
     recent: `today ${costText(cost.today_micro_usd)} · 7 days ${costText(cost.week_micro_usd)}`,
+    tokens: `${tokensText(cost.all_time_tokens)} tokens`,
   };
 }
 
-/** The total of every project whose overview the list read. */
-export function allProjectsCost(projects: readonly ProjectSummary[]): string {
-  return costText(
+/** The cost and the tokens of every project whose overview the list read. */
+export function allProjectsCost(projects: readonly ProjectSummary[]): {
+  cost: string;
+  tokens: string;
+} {
+  const sum = (read: (cost: ProjectOverview["cost"]) => number) =>
     projects.reduce(
-      (sum, project) => sum + (project.overview?.cost.all_time_micro_usd ?? 0),
+      (total, project) =>
+        total + (project.overview ? read(project.overview.cost) : 0),
       0,
-    ),
-  );
+    );
+  return {
+    cost: costText(sum((cost) => cost.all_time_micro_usd)),
+    tokens: `${tokensText(sum((cost) => cost.all_time_tokens))} tokens`,
+  };
 }

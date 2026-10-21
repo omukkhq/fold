@@ -1,6 +1,6 @@
 use axum::Json;
 use axum::extract::Path;
-use fold_core::cost::{Amount, CostPart, TaskCostReport};
+use fold_core::cost::{Amount, CostPart, TaskCostReport, Tokens};
 use fold_core::{TaskId, Timestamp};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -33,11 +33,36 @@ pub struct CostQuery {
     pub since: Option<i64>,
 }
 
+/// The tokens of turns, each turn's own from the usage Claude Code reported for it, so a resumed session counts none twice. A stop's interrupt adds none.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TokenCounts {
+    /// Input tokens that the prompt cache did not hold.
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    /// All four added up.
+    pub total: u64,
+}
+
+impl From<Tokens> for TokenCounts {
+    fn from(tokens: Tokens) -> Self {
+        Self {
+            input: tokens.input,
+            output: tokens.output,
+            cache_read: tokens.cache_read,
+            cache_write: tokens.cache_write,
+            total: tokens.total(),
+        }
+    }
+}
+
 /// A sum of turns.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CostAmount {
     /// Millionths of a US dollar, as Claude Code reported them.
     pub cost_micro_usd: u64,
+    pub tokens: TokenCounts,
     pub turns: u64,
     /// How many workers ran the turns.
     pub workers: u64,
@@ -47,6 +72,7 @@ impl From<Amount> for CostAmount {
     fn from(amount: Amount) -> Self {
         Self {
             cost_micro_usd: amount.cost_micro_usd,
+            tokens: amount.tokens.into(),
             turns: amount.turns,
             workers: amount.workers,
         }
@@ -57,6 +83,7 @@ impl From<Amount> for CostAmount {
 pub struct RoleCost {
     pub role: WorkerRole,
     pub cost_micro_usd: u64,
+    pub tokens: TokenCounts,
     pub turns: u64,
     pub workers: u64,
 }
@@ -67,6 +94,7 @@ pub struct AreaCost {
     #[schema(required = true, example = "web")]
     pub area: Option<String>,
     pub cost_micro_usd: u64,
+    pub tokens: TokenCounts,
     pub turns: u64,
     pub workers: u64,
 }
@@ -77,6 +105,7 @@ pub struct ModelCost {
     #[schema(required = true, example = "claude-sonnet-5")]
     pub model: Option<String>,
     pub cost_micro_usd: u64,
+    pub tokens: TokenCounts,
     pub turns: u64,
     pub workers: u64,
 }
@@ -96,6 +125,7 @@ pub struct WorkerCost {
     pub model: Option<String>,
     pub turns: u64,
     pub cost_micro_usd: u64,
+    pub tokens: TokenCounts,
 }
 
 /// What one task cost in the range: `build` is its task workers' turns, `review` the turns of the reviewers of its proposals.
@@ -110,6 +140,7 @@ pub struct TaskCost {
     pub build_micro_usd: u64,
     pub review_micro_usd: u64,
     pub total_micro_usd: u64,
+    pub tokens: TokenCounts,
     pub turns: u64,
 }
 
@@ -121,6 +152,8 @@ pub struct CostSlot {
     pub start: Timestamp,
     pub role: WorkerRole,
     pub cost_micro_usd: u64,
+    /// Every token of the slot's turns.
+    pub tokens: u64,
 }
 
 /// What the project's supervised workers cost since `since`, from the values Claude Code reported for each turn; fold keeps no price table. The main agent is the user's own Claude Code session, which fold does not supervise, so its cost is not here.
@@ -168,6 +201,7 @@ impl From<ProjectCost> for ProjectCostView {
                 .map(|(role, amount)| RoleCost {
                     role: role.into(),
                     cost_micro_usd: amount.cost_micro_usd,
+                    tokens: amount.tokens.into(),
                     turns: amount.turns,
                     workers: amount.workers,
                 })
@@ -178,6 +212,7 @@ impl From<ProjectCost> for ProjectCostView {
                 .map(|(area, amount)| AreaCost {
                     area: name(area),
                     cost_micro_usd: amount.cost_micro_usd,
+                    tokens: amount.tokens.into(),
                     turns: amount.turns,
                     workers: amount.workers,
                 })
@@ -188,6 +223,7 @@ impl From<ProjectCost> for ProjectCostView {
                 .map(|(model, amount)| ModelCost {
                     model,
                     cost_micro_usd: amount.cost_micro_usd,
+                    tokens: amount.tokens.into(),
                     turns: amount.turns,
                     workers: amount.workers,
                 })
@@ -203,6 +239,7 @@ impl From<ProjectCost> for ProjectCostView {
                     model: worker.model,
                     turns: worker.turns,
                     cost_micro_usd: worker.cost_micro_usd,
+                    tokens: worker.tokens.into(),
                 })
                 .collect(),
             tasks: report
@@ -215,6 +252,7 @@ impl From<ProjectCost> for ProjectCostView {
                     area: name(task.area),
                     build_micro_usd: task.build_micro_usd,
                     review_micro_usd: task.review_micro_usd,
+                    tokens: task.tokens.into(),
                     turns: task.turns,
                 })
                 .collect(),
@@ -224,6 +262,7 @@ impl From<ProjectCost> for ProjectCostView {
                     start: slot.start,
                     role: slot.role.into(),
                     cost_micro_usd: slot.cost_micro_usd,
+                    tokens: slot.tokens,
                 })
                 .collect(),
             slot_minutes: u32::try_from(slot_millis / 60_000).unwrap_or(15),
@@ -276,6 +315,7 @@ pub struct TaskWorkerCost {
     pub proposals: Vec<String>,
     pub turns: u64,
     pub cost_micro_usd: u64,
+    pub tokens: TokenCounts,
 }
 
 /// What one task cost in all: its task workers' turns and the turns of the reviewers of its proposals, from the values Claude Code reported.
@@ -286,6 +326,7 @@ pub struct TaskCostView {
     pub build_micro_usd: u64,
     pub review_micro_usd: u64,
     pub total_micro_usd: u64,
+    pub tokens: TokenCounts,
     pub turns: u64,
     /// The builders first, then the reviewers, each in the order they first worked on the task.
     pub workers: Vec<TaskWorkerCost>,
@@ -299,6 +340,7 @@ fn task_cost_view(task: TaskId, report: TaskCostReport) -> TaskCostView {
         total_micro_usd: report
             .build_micro_usd
             .saturating_add(report.review_micro_usd),
+        tokens: report.tokens.into(),
         turns: report.turns,
         workers: report
             .workers
@@ -314,6 +356,7 @@ fn task_cost_view(task: TaskId, report: TaskCostReport) -> TaskCostView {
                 proposals: row.proposals.iter().map(ToString::to_string).collect(),
                 turns: row.turns,
                 cost_micro_usd: row.cost_micro_usd,
+                tokens: row.tokens.into(),
             })
             .collect(),
     }

@@ -1,6 +1,18 @@
-import type { ProjectCost, TaskCost } from "@/api/cost";
+import type { ProjectCost, TaskCost, TokenCounts } from "@/api/cost";
 
 const HOUR = 60 * 60 * 1000;
+
+/** Tokens that add up to `total`, a multiple of 100: 80% cache reads, 10% cache writes, 8% output and 2% input. */
+export function tokens(total: number): TokenCounts {
+  const part = total / 100;
+  return {
+    cache_read: part * 80,
+    cache_write: part * 10,
+    output: part * 8,
+    input: part * 2,
+    total,
+  };
+}
 
 /** A week of turns: a lead, two task workers on T-12 and T-3, a reviewer of T-12 and the review lead. `today` is the viewer's local midnight. */
 export function projectCost(
@@ -9,26 +21,74 @@ export function projectCost(
 ): ProjectCost {
   return {
     since: null,
-    total: { cost_micro_usd: 10_000_000, turns: 40, workers: 5 },
+    total: {
+      cost_micro_usd: 10_000_000,
+      tokens: tokens(2_000_000),
+      turns: 40,
+      workers: 5,
+    },
     first_turn_at: today - 2 * 24 * HOUR + 9 * HOUR,
     by_role: [
-      { role: "area_lead", cost_micro_usd: 2_000_000, turns: 10, workers: 1 },
-      { role: "review_lead", cost_micro_usd: 500_000, turns: 4, workers: 1 },
-      { role: "task_worker", cost_micro_usd: 6_000_000, turns: 20, workers: 2 },
-      { role: "reviewer", cost_micro_usd: 1_500_000, turns: 6, workers: 1 },
+      {
+        role: "area_lead",
+        cost_micro_usd: 2_000_000,
+        tokens: tokens(400_000),
+        turns: 10,
+        workers: 1,
+      },
+      {
+        role: "review_lead",
+        cost_micro_usd: 500_000,
+        tokens: tokens(100_000),
+        turns: 4,
+        workers: 1,
+      },
+      {
+        role: "task_worker",
+        cost_micro_usd: 6_000_000,
+        tokens: tokens(1_200_000),
+        turns: 20,
+        workers: 2,
+      },
+      {
+        role: "reviewer",
+        cost_micro_usd: 1_500_000,
+        tokens: tokens(300_000),
+        turns: 6,
+        workers: 1,
+      },
     ],
     by_area: [
-      { area: "web", cost_micro_usd: 8_000_000, turns: 30, workers: 3 },
-      { area: null, cost_micro_usd: 2_000_000, turns: 10, workers: 2 },
+      {
+        area: "web",
+        cost_micro_usd: 8_000_000,
+        tokens: tokens(1_600_000),
+        turns: 30,
+        workers: 3,
+      },
+      {
+        area: null,
+        cost_micro_usd: 2_000_000,
+        tokens: tokens(400_000),
+        turns: 10,
+        workers: 2,
+      },
     ],
     by_model: [
       {
         model: "claude-sonnet-5",
         cost_micro_usd: 7_000_000,
+        tokens: tokens(1_400_000),
         turns: 30,
         workers: 4,
       },
-      { model: null, cost_micro_usd: 3_000_000, turns: 10, workers: 1 },
+      {
+        model: null,
+        cost_micro_usd: 3_000_000,
+        tokens: tokens(600_000),
+        turns: 10,
+        workers: 1,
+      },
     ],
     workers: [
       {
@@ -39,6 +99,7 @@ export function projectCost(
         model: "claude-sonnet-5",
         turns: 14,
         cost_micro_usd: 4_000_000,
+        tokens: tokens(800_000),
       },
       {
         name: "reviewer-1",
@@ -48,6 +109,7 @@ export function projectCost(
         model: null,
         turns: 6,
         cost_micro_usd: 1_500_000,
+        tokens: tokens(300_000),
       },
     ],
     tasks: [
@@ -58,6 +120,7 @@ export function projectCost(
         build_micro_usd: 4_000_000,
         review_micro_usd: 1_500_000,
         total_micro_usd: 5_500_000,
+        tokens: tokens(1_100_000),
         turns: 20,
       },
       {
@@ -67,6 +130,7 @@ export function projectCost(
         build_micro_usd: 2_000_000,
         review_micro_usd: 0,
         total_micro_usd: 2_000_000,
+        tokens: tokens(400_000),
         turns: 6,
       },
     ],
@@ -75,17 +139,25 @@ export function projectCost(
         start: today + 9 * HOUR,
         role: "task_worker",
         cost_micro_usd: 1_000_000,
+        tokens: 200_000,
       },
       {
         start: today + 9 * HOUR + 15 * 60 * 1000,
         role: "reviewer",
         cost_micro_usd: 500_000,
+        tokens: 100_000,
       },
-      { start: today + 14 * HOUR, role: "area_lead", cost_micro_usd: 250_000 },
+      {
+        start: today + 14 * HOUR,
+        role: "area_lead",
+        cost_micro_usd: 250_000,
+        tokens: 50_000,
+      },
       {
         start: today - 2 * 24 * HOUR + 9 * HOUR,
         role: "task_worker",
         cost_micro_usd: 3_000_000,
+        tokens: 600_000,
       },
     ],
     slot_minutes: 15,
@@ -99,6 +171,7 @@ export function taskCost(over: Partial<TaskCost> = {}): TaskCost {
     build_micro_usd: 4_000_000,
     review_micro_usd: 1_000_000,
     total_micro_usd: 5_000_000,
+    tokens: tokens(1_000_000),
     turns: 20,
     workers: [
       {
@@ -109,6 +182,7 @@ export function taskCost(over: Partial<TaskCost> = {}): TaskCost {
         proposals: [],
         turns: 14,
         cost_micro_usd: 4_000_000,
+        tokens: tokens(800_000),
       },
       {
         name: "reviewer-1",
@@ -118,6 +192,7 @@ export function taskCost(over: Partial<TaskCost> = {}): TaskCost {
         proposals: ["P-3", "P-4"],
         turns: 6,
         cost_micro_usd: 1_000_000,
+        tokens: tokens(200_000),
       },
     ],
     ...over,

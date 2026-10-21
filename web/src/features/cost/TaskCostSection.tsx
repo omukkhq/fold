@@ -41,6 +41,9 @@ export function TaskCostSection({
         </p>
       ) : (
         <div className="flex flex-col gap-10">
+          <p className="text-meta text-text-muted tabular-nums">
+            {section.tokens}
+          </p>
           <div className="flex flex-col gap-6">
             <div
               aria-hidden="true"
@@ -82,8 +85,13 @@ export function TaskCostSection({
                     {row.line}
                   </span>
                 </span>
-                <span className="text-bar font-semibold text-text tabular-nums">
-                  {row.amount}
+                <span className="flex flex-col items-end gap-2">
+                  <span className="text-bar font-semibold text-text tabular-nums">
+                    {row.amount}
+                  </span>
+                  <span className="text-meta whitespace-nowrap text-text-muted tabular-nums">
+                    {row.tokens}
+                  </span>
                 </span>
               </li>
             ))}

@@ -194,6 +194,13 @@ async fn a_stopped_and_resumed_task_worker_keeps_every_turn_in_the_project_and_t
             "proposals": [],
             "turns": 2,
             "cost_micro_usd": second.cost_micro_usd,
+            "tokens": {
+                "input": 4 + 2,
+                "output": 86 + 134,
+                "cache_read": 37675 + 26871,
+                "cache_write": 12751 + 210,
+                "total": 77733,
+            },
         }])
     );
 
@@ -313,4 +320,21 @@ async fn a_resumed_session_counts_only_what_its_running_total_grew_by() {
     assert_eq!(amount(&recent["workers"], "name", "web-worker"), 378);
     let of_task = get(&harness, &format!("/api/v1/projects/{SLUG}/cost/tasks/T-1")).await;
     assert_eq!(of_task["build_micro_usd"], 6514);
+    // The resumed turn's own usage, not the session's running `modelUsage` of 321934 cache reads.
+    let tokens = json!({
+        "input": 2,
+        "output": 134,
+        "cache_read": 26871,
+        "cache_write": 210,
+        "total": 27217,
+    });
+    assert_eq!(of_task["tokens"], tokens);
+    assert_eq!(of_task["workers"][0]["tokens"], tokens);
+    let worker = recent["workers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == "web-worker")
+        .unwrap();
+    assert_eq!(worker["tokens"], tokens);
 }

@@ -7,6 +7,10 @@ import { apiErrorCode } from "@/api/errors";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
 import { Mono } from "@/components/mono/Mono";
+import {
+  SEGMENT_LIST,
+  segmentClasses,
+} from "@/components/segments/segmentStyles";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { FailurePanel } from "@/components/states/FailurePanel";
 import { Skeleton } from "@/components/states/Skeleton";
@@ -16,7 +20,10 @@ import { focusRing } from "@/lib/focus";
 import { useNow } from "@/live/useNow";
 import {
   areaRows,
+  barLabel,
   type BreakdownRow,
+  CHART_MEASURES,
+  type ChartMeasure,
   type CostBar,
   costChart,
   costText,
@@ -29,6 +36,9 @@ import {
   roleRows,
   showsTick,
   taskRows,
+  type TokenPart,
+  tokensCard,
+  tokensText,
   workerRows,
 } from "./cost";
 
@@ -123,10 +133,14 @@ function CostContent({
               {tile.amount}
             </span>
             <span className="text-meta text-text-muted">{tile.detail}</span>
+            <span className="text-meta text-text-muted tabular-nums">
+              {tile.tokens}
+            </span>
           </li>
         ))}
       </ul>
       <Chart view={view} range={range} now={now} />
+      <TokensPanel view={view} />
       <div className="grid grid-cols-1 gap-12 lg:grid-cols-3">
         <Breakdown title="By role" rows={roleRows(view)} />
         <Breakdown title="By area" rows={areaRows(view)} />
@@ -147,10 +161,31 @@ function Chart({
   range: CostRange;
   now: number;
 }) {
-  const chart = costChart(view, range, now);
+  const [measure, setMeasure] = useState<ChartMeasure>("cost");
+  const chart = costChart(view, range, now, measure);
   return (
     <section aria-label={chart.title} className={PANEL}>
-      <h2 className={PANEL_TITLE}>{chart.title}</h2>
+      <div className="flex flex-wrap items-center justify-between gap-12">
+        <h2 className={PANEL_TITLE}>{chart.title}</h2>
+        <div role="group" aria-label="Measure" className={SEGMENT_LIST}>
+          {CHART_MEASURES.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              aria-pressed={measure === option.value}
+              onClick={() => {
+                setMeasure(option.value);
+              }}
+              className={cn(
+                segmentClasses(measure === option.value),
+                focusRing,
+              )}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
       <RadixTooltip.Provider delayDuration={0}>
         <div className="flex flex-col gap-6">
           <div className="flex h-chart items-end gap-2 border-b border-border-subtle">
@@ -181,7 +216,7 @@ function ChartBar({ bar }: { bar: CostBar }) {
       <RadixTooltip.Trigger asChild>
         <button
           type="button"
-          aria-label={`${bar.title}: ${costText(bar.total)}`}
+          aria-label={barLabel(bar)}
           className={cn(
             "flex h-full min-w-0 flex-1 items-end rounded-t-s hover:bg-sunken",
             focusRing,
@@ -199,17 +234,71 @@ function ChartBar({ bar }: { bar: CostBar }) {
           className="z-10 flex flex-col gap-2 rounded-s bg-ink px-8 py-6 text-meta text-on-ink"
         >
           <span className="font-semibold">
-            {bar.title} · {costText(bar.total)}
+            {bar.title} · {costText(bar.cost)} · {tokensText(bar.tokens)} tokens
           </span>
           {bar.roles.map((part) => (
             <span key={part.role} className="flex justify-between gap-12">
               <span>{roleRowName(part.role)}</span>
-              <span className="tabular-nums">{costText(part.cost)}</span>
+              <span className="tabular-nums">
+                {costText(part.cost)} · {tokensText(part.tokens)}
+              </span>
             </span>
           ))}
         </RadixTooltip.Content>
       </RadixTooltip.Portal>
     </RadixTooltip.Root>
+  );
+}
+
+const TOKEN_FILL: Record<TokenPart["key"], string> = {
+  cache_read: "bg-primary",
+  cache_write: "bg-primary-muted",
+  output: "bg-secondary",
+  input: "bg-border",
+};
+
+function TokensPanel({ view }: { view: ProjectCost }) {
+  const card = tokensCard(view);
+  return (
+    <section aria-label="Tokens" className={PANEL}>
+      <div className="flex flex-wrap items-baseline justify-between gap-12">
+        <h2 className={PANEL_TITLE}>Tokens</h2>
+        <span className="text-screen leading-snug font-semibold text-text tabular-nums">
+          {card.total}
+        </span>
+      </div>
+      <div
+        aria-hidden="true"
+        className="flex h-6 gap-2 overflow-hidden rounded-full bg-sunken"
+      >
+        {card.parts.map((part) =>
+          part.fill > 0 ? (
+            <span
+              key={part.key}
+              className={cn("h-full", TOKEN_FILL[part.key])}
+              style={{ width: `${String(part.fill * 100)}%` }}
+            />
+          ) : null,
+        )}
+      </div>
+      <dl className="grid grid-cols-2 gap-12 lg:grid-cols-4">
+        {card.parts.map((part) => (
+          <div key={part.key} className="flex flex-col gap-2">
+            <dt className="flex items-center gap-6 text-meta text-text-muted">
+              <span
+                aria-hidden="true"
+                className={cn("size-7 rounded-full", TOKEN_FILL[part.key])}
+              />
+              {part.label}
+            </dt>
+            <dd className="text-body font-semibold text-text tabular-nums">
+              {part.amount}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <p className="text-meta text-text-muted">{card.cacheLine}</p>
+    </section>
   );
 }
 
@@ -285,6 +374,7 @@ function TasksTable({ slug, view }: { slug: string; view: ProjectCost }) {
                 <th className={cn(TH, NUM)}>Build</th>
                 <th className={cn(TH, NUM)}>Review</th>
                 <th className={cn(TH, NUM)}>Total</th>
+                <th className={cn(TH, NUM)}>Tokens</th>
               </tr>
             </thead>
             <tbody>
@@ -315,6 +405,9 @@ function TasksTable({ slug, view }: { slug: string; view: ProjectCost }) {
                     {row.review}
                   </td>
                   <td className={cn(TD, NUM, "font-semibold")}>{row.total}</td>
+                  <td className={cn(TD, NUM, "text-text-muted")}>
+                    {row.tokens}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -344,6 +437,8 @@ function WorkersTable({ view }: { view: ProjectCost }) {
               <th className={TH}>Area</th>
               <th className={TH}>Model</th>
               <th className={cn(TH, NUM)}>Turns</th>
+              <th className={cn(TH, NUM)}>Tokens</th>
+              <th className={cn(TH, NUM)}>Output</th>
               <th className={cn(TH, NUM)}>Cost</th>
             </tr>
           </thead>
@@ -369,6 +464,8 @@ function WorkersTable({ view }: { view: ProjectCost }) {
                   <Mono className="text-meta">{row.model}</Mono>
                 </td>
                 <td className={cn(TD, NUM)}>{row.turns}</td>
+                <td className={cn(TD, NUM, "text-text-muted")}>{row.tokens}</td>
+                <td className={cn(TD, NUM, "text-text-muted")}>{row.output}</td>
                 <td className={cn(TD, NUM, "font-semibold")}>{row.cost}</td>
               </tr>
             ))}

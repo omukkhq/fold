@@ -50,14 +50,45 @@ pub struct TurnGroup {
     pub subject: Option<(TaskId, String)>,
     pub turns: u64,
     pub cost_micro_usd: u64,
+    pub tokens: Tokens,
     pub first_at: Timestamp,
     pub last_at: Timestamp,
 }
 
-/// A sum of turns: their cost, how many there were and how many workers ran them.
+/// The tokens of turns, each turn's own from the usage Claude Code reported for it, so a resumed session counts none twice. A stop's interrupt adds none, as it adds no turn.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Tokens {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+}
+
+impl Tokens {
+    /// Every token the model read or wrote: the input, the cache reads and writes, and the output.
+    pub fn total(&self) -> u64 {
+        self.input
+            .saturating_add(self.output)
+            .saturating_add(self.cache_read)
+            .saturating_add(self.cache_write)
+    }
+
+    #[must_use]
+    pub fn plus(self, other: Self) -> Self {
+        Self {
+            input: self.input.saturating_add(other.input),
+            output: self.output.saturating_add(other.output),
+            cache_read: self.cache_read.saturating_add(other.cache_read),
+            cache_write: self.cache_write.saturating_add(other.cache_write),
+        }
+    }
+}
+
+/// A sum of turns: their cost and tokens, how many there were and how many workers ran them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Amount {
     pub cost_micro_usd: u64,
+    pub tokens: Tokens,
     pub turns: u64,
     pub workers: u64,
 }
@@ -73,6 +104,7 @@ pub struct WorkerCost {
     pub model: Option<String>,
     pub turns: u64,
     pub cost_micro_usd: u64,
+    pub tokens: Tokens,
 }
 
 /// What one task cost: `build` is the turns of its task workers, `review` the turns of the reviewers of its proposals.
@@ -84,6 +116,7 @@ pub struct TaskCost {
     pub area: Option<AreaName>,
     pub build_micro_usd: u64,
     pub review_micro_usd: u64,
+    pub tokens: Tokens,
     pub turns: u64,
 }
 
@@ -123,6 +156,7 @@ fn area_of(group: &TurnGroup) -> Option<AreaName> {
 fn add<K: Ord>(sums: &mut BTreeMap<K, (Amount, Vec<AgentName>)>, key: K, group: &TurnGroup) {
     let (amount, agents) = sums.entry(key).or_default();
     amount.cost_micro_usd = amount.cost_micro_usd.saturating_add(group.cost_micro_usd);
+    amount.tokens = amount.tokens.plus(group.tokens);
     amount.turns = amount.turns.saturating_add(group.turns);
     if !agents.contains(&group.agent) {
         agents.push(group.agent.clone());
@@ -162,12 +196,14 @@ pub fn report(groups: &[TurnGroup]) -> CostReport {
                     model: group.model.clone(),
                     turns: 0,
                     cost_micro_usd: 0,
+                    tokens: Tokens::default(),
                 },
                 group.last_at,
             )
         });
         worker.turns = worker.turns.saturating_add(group.turns);
         worker.cost_micro_usd = worker.cost_micro_usd.saturating_add(group.cost_micro_usd);
+        worker.tokens = worker.tokens.plus(group.tokens);
         if group.last_at > *newest {
             *newest = group.last_at;
             worker.model = group.model.clone();
@@ -179,9 +215,11 @@ pub fn report(groups: &[TurnGroup]) -> CostReport {
                 area: None,
                 build_micro_usd: 0,
                 review_micro_usd: 0,
+                tokens: Tokens::default(),
                 turns: 0,
             });
             entry.turns = entry.turns.saturating_add(group.turns);
+            entry.tokens = entry.tokens.plus(group.tokens);
             if group.proposal.is_some() {
                 entry.review_micro_usd =
                     entry.review_micro_usd.saturating_add(group.cost_micro_usd);
@@ -251,6 +289,7 @@ pub struct TaskWorkerCost {
     pub proposals: Vec<ProposalId>,
     pub turns: u64,
     pub cost_micro_usd: u64,
+    pub tokens: Tokens,
 }
 
 /// What one task cost, with one row per worker: the builds first, then the reviews, each in the order the workers first worked on it.
@@ -258,6 +297,7 @@ pub struct TaskWorkerCost {
 pub struct TaskCostReport {
     pub build_micro_usd: u64,
     pub review_micro_usd: u64,
+    pub tokens: Tokens,
     pub turns: u64,
     pub workers: Vec<TaskWorkerCost>,
 }
@@ -283,6 +323,7 @@ pub fn task_report(groups: &[TurnGroup]) -> TaskCostReport {
             }
         }
         report.turns = report.turns.saturating_add(group.turns);
+        report.tokens = report.tokens.plus(group.tokens);
         let index = match rows
             .iter()
             .position(|(row, _, _)| row.agent == group.agent && row.part == part)
@@ -298,6 +339,7 @@ pub fn task_report(groups: &[TurnGroup]) -> TaskCostReport {
                         proposals: Vec::new(),
                         turns: 0,
                         cost_micro_usd: 0,
+                        tokens: Tokens::default(),
                     },
                     group.first_at,
                     group.last_at,
@@ -308,6 +350,7 @@ pub fn task_report(groups: &[TurnGroup]) -> TaskCostReport {
         let (row, first, last) = &mut rows[index];
         row.turns = row.turns.saturating_add(group.turns);
         row.cost_micro_usd = row.cost_micro_usd.saturating_add(group.cost_micro_usd);
+        row.tokens = row.tokens.plus(group.tokens);
         if let Some(proposal) = group.proposal
             && !row.proposals.contains(&proposal)
         {
@@ -349,6 +392,7 @@ mod tests {
             subject: None,
             turns: 1,
             cost_micro_usd: cost,
+            tokens: tokens(1),
             first_at: at(10),
             last_at: at(20),
         }
@@ -365,6 +409,16 @@ mod tests {
         group.proposal = ProposalId::from_number(proposal);
         group.subject = Some((TaskId::from_number(task).unwrap(), title.to_owned()));
         group
+    }
+
+    /// The tokens of `turns` groups of [`group`].
+    fn tokens(turns: u64) -> Tokens {
+        Tokens {
+            input: turns,
+            output: 2 * turns,
+            cache_read: 30 * turns,
+            cache_write: 4 * turns,
+        }
     }
 
     fn area(name: &str) -> Option<AreaName> {
@@ -442,6 +496,7 @@ mod tests {
             report.total,
             Amount {
                 cost_micro_usd: 750,
+                tokens: tokens(6),
                 turns: 6,
                 workers: 5
             }
@@ -459,6 +514,7 @@ mod tests {
             role(Role::TaskWorker),
             Amount {
                 cost_micro_usd: 550,
+                tokens: tokens(3),
                 turns: 3,
                 workers: 2
             }
@@ -471,6 +527,7 @@ mod tests {
                     area("web"),
                     Amount {
                         cost_micro_usd: 600,
+                        tokens: tokens(3),
                         turns: 3,
                         workers: 2
                     }
@@ -479,6 +536,7 @@ mod tests {
                     None,
                     Amount {
                         cost_micro_usd: 100,
+                        tokens: tokens(2),
                         turns: 2,
                         workers: 2
                     }
@@ -487,6 +545,7 @@ mod tests {
                     area("api"),
                     Amount {
                         cost_micro_usd: 50,
+                        tokens: tokens(1),
                         turns: 1,
                         workers: 1
                     }
@@ -500,6 +559,7 @@ mod tests {
                     Some("sonnet".to_owned()),
                     Amount {
                         cost_micro_usd: 450,
+                        tokens: tokens(5),
                         turns: 5,
                         workers: 5
                     }
@@ -508,6 +568,7 @@ mod tests {
                     Some("opus".to_owned()),
                     Amount {
                         cost_micro_usd: 300,
+                        tokens: tokens(1),
                         turns: 1,
                         workers: 1
                     }
@@ -545,6 +606,9 @@ mod tests {
             ]
         );
         assert_eq!(report.tasks[1].total_micro_usd(), 280);
+        assert_eq!(report.tasks[1].tokens, tokens(2));
+        assert_eq!(report.workers[0].tokens, tokens(2));
+        assert_eq!(tokens(2).total(), 74);
         assert_eq!(report.tasks[1].turns, 2);
     }
 
@@ -599,6 +663,8 @@ mod tests {
             ),
             (100, 17, 5)
         );
+        assert_eq!(report.tokens, tokens(5));
+        assert_eq!(report.workers[0].tokens, tokens(2));
         type Row<'a> = (&'a str, CostPart, u64, u64, Vec<String>, Option<&'a str>);
         let rows: Vec<Row> = report
             .workers

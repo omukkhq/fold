@@ -1,4 +1,4 @@
-use fold_core::cost::TurnGroup;
+use fold_core::cost::{Tokens, TurnGroup};
 use fold_core::{AgentName, AreaName, ProposalId, Role, TaskId, Timestamp, WorkerState};
 use sqlx::SqliteExecutor;
 
@@ -84,6 +84,10 @@ pub async fn cost_groups(
                   COALESCE(t.number, pt.number) AS "subject?: i64",
                   COALESCE(t.title, pt.title) AS "title?: String",
                   SUM(1 - x.interrupted) AS "turns!: i64", SUM(x.cost_micro_usd) AS "cost!: i64",
+                  SUM(x.input_tokens * (1 - x.interrupted)) AS "input!: i64",
+                  SUM(x.output_tokens * (1 - x.interrupted)) AS "output!: i64",
+                  SUM(x.cache_read_tokens * (1 - x.interrupted)) AS "cache_read!: i64",
+                  SUM(x.cache_write_tokens * (1 - x.interrupted)) AS "cache_write!: i64",
                   MIN(x.created_at) AS "first_at!: i64", MAX(x.created_at) AS "last_at!: i64"
            FROM worker_turns x
            JOIN worker_processes w ON w.id = x.worker_process_id
@@ -132,6 +136,12 @@ pub async fn cost_groups(
                 },
                 turns: count(row.turns, "worker_turns")?,
                 cost_micro_usd: count(row.cost, "worker_turns.cost_micro_usd")?,
+                tokens: Tokens {
+                    input: count(row.input, "worker_turns.input_tokens")?,
+                    output: count(row.output, "worker_turns.output_tokens")?,
+                    cache_read: count(row.cache_read, "worker_turns.cache_read_tokens")?,
+                    cache_write: count(row.cache_write, "worker_turns.cache_write_tokens")?,
+                },
                 first_at: time(row.first_at, "worker_turns.created_at")?,
                 last_at: time(row.last_at, "worker_turns.created_at")?,
             })
@@ -145,6 +155,8 @@ pub struct CostSlot {
     pub start: Timestamp,
     pub role: Role,
     pub cost_micro_usd: u64,
+    /// Every token of the slot's turns, as [`Tokens::total`] counts them.
+    pub tokens: u64,
 }
 
 /// The cost of the turns that ended at or after `since` by slot of `slot_millis` and role, oldest first; a slot without a turn is left out.
@@ -156,7 +168,9 @@ pub async fn cost_slots(
     let since = since.map_or(i64::MIN, Timestamp::as_millis);
     let rows = sqlx::query!(
         r#"SELECT (created_at / ?2) * ?2 AS "start!: i64", role AS "role!: String",
-                  SUM(cost_micro_usd) AS "cost!: i64"
+                  SUM(cost_micro_usd) AS "cost!: i64",
+                  SUM((input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) * (1 - interrupted))
+                      AS "tokens!: i64"
            FROM worker_turns WHERE created_at >= ?1
            GROUP BY created_at / ?2, role
            ORDER BY created_at / ?2, role"#,
@@ -171,17 +185,19 @@ pub async fn cost_slots(
                 start: time(row.start, "worker_turns.created_at")?,
                 role: Role::parse(&row.role).ok_or(StoreError::Corrupt("worker_turns.role"))?,
                 cost_micro_usd: count(row.cost, "worker_turns.cost_micro_usd")?,
+                tokens: count(row.tokens, "worker_turns.input_tokens")?,
             })
         })
         .collect()
 }
 
-/// The cost of every turn, and of the turns that ended at or after `today` and `week`.
+/// The cost of every turn, and of the turns that ended at or after `today` and `week`, with every token of all of them, as [`Tokens::total`] counts them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CostTotals {
     pub all_time: u64,
     pub today: u64,
     pub week: u64,
+    pub all_time_tokens: u64,
 }
 
 pub async fn cost_totals(
@@ -194,7 +210,9 @@ pub async fn cost_totals(
     let row = sqlx::query!(
         r#"SELECT COALESCE(SUM(cost_micro_usd), 0) AS "all_time!: i64",
                   COALESCE(SUM(CASE WHEN created_at >= ?1 THEN cost_micro_usd END), 0) AS "today!: i64",
-                  COALESCE(SUM(CASE WHEN created_at >= ?2 THEN cost_micro_usd END), 0) AS "week!: i64"
+                  COALESCE(SUM(CASE WHEN created_at >= ?2 THEN cost_micro_usd END), 0) AS "week!: i64",
+                  COALESCE(SUM((input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) * (1 - interrupted)), 0)
+                      AS "tokens!: i64"
            FROM worker_turns"#,
         today,
         week
@@ -205,5 +223,6 @@ pub async fn cost_totals(
         all_time: count(row.all_time, "worker_turns.cost_micro_usd")?,
         today: count(row.today, "worker_turns.cost_micro_usd")?,
         week: count(row.week, "worker_turns.cost_micro_usd")?,
+        all_time_tokens: count(row.tokens, "worker_turns.input_tokens")?,
     })
 }

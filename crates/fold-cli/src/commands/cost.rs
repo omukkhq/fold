@@ -164,6 +164,38 @@ fn dollars(micro: u64) -> String {
     format!("${}.{:02}", cents / 100, cents % 100)
 }
 
+/// `980`, `64.5k` or `1.2M` tokens.
+fn tokens_text(count: u64) -> String {
+    let tenths = |unit: u64| (u128::from(count) * 10 + u128::from(unit) / 2) / u128::from(unit);
+    if count < 1_000 {
+        return count.to_string();
+    }
+    let thousands = tenths(1_000);
+    if thousands < 10_000 {
+        return format!("{}.{}k", thousands / 10, thousands % 10);
+    }
+    let millions = tenths(1_000_000);
+    format!("{}.{}M", millions / 10, millions % 10)
+}
+
+/// The total of the `tokens` of `value`.
+fn token_total(value: &Value) -> Result<u64, RemoteError> {
+    number(&value["tokens"], "total")
+}
+
+/// The line of the range's tokens: all of them, then the cache reads and writes, the output and the input the cache did not hold.
+fn tokens_line(report: &Value) -> Result<String, RemoteError> {
+    let tokens = &report["total"]["tokens"];
+    Ok(format!(
+        "TOKENS  {} · {} cache read · {} cache write · {} output · {} input",
+        tokens_text(number(tokens, "total")?),
+        tokens_text(number(tokens, "cache_read")?),
+        tokens_text(number(tokens, "cache_write")?),
+        tokens_text(number(tokens, "output")?),
+        tokens_text(number(tokens, "input")?)
+    ))
+}
+
 fn number(value: &Value, key: &str) -> Result<u64, RemoteError> {
     value[key].as_u64().ok_or(RemoteError::Answer)
 }
@@ -293,11 +325,12 @@ fn by_role(report: &Value) -> Result<Vec<String>, RemoteError> {
             role_name(text(entry, "role").ok_or(RemoteError::Answer)?).to_owned(),
             dollars(cost),
             share(cost, total),
+            format!("{} tokens", tokens_text(token_total(entry)?)),
             workers_text(number(entry, "workers")?),
         ]);
     }
     let mut lines = vec!["BY ROLE".to_owned()];
-    lines.extend(table(&rows, &[1, 2]));
+    lines.extend(table(&rows, &[1, 2, 3]));
     Ok(lines)
 }
 
@@ -374,7 +407,7 @@ fn by_task(report: &Value, limit: Option<usize>) -> Result<Vec<String>, RemoteEr
         "TASKS"
     };
     let mut rows = vec![
-        [heading, "BUILD", "REVIEW", "TOTAL"]
+        [heading, "BUILD", "REVIEW", "TOTAL", "TOKENS"]
             .map(str::to_owned)
             .to_vec(),
     ];
@@ -393,9 +426,10 @@ fn by_task(report: &Value, limit: Option<usize>) -> Result<Vec<String>, RemoteEr
                 dollars(review)
             },
             dollars(number(entry, "total_micro_usd")?),
+            tokens_text(token_total(entry)?),
         ]);
     }
-    let mut lines = headed_table(&rows, &[1, 2, 3]);
+    let mut lines = headed_table(&rows, &[1, 2, 3, 4]);
     if tasks.is_empty() {
         lines.push("  no task has a turn yet".to_owned());
     }
@@ -453,6 +487,7 @@ fn summary_lines(
             dollars(cost(week)?)
         ),
         since_line(&all.body)?,
+        tokens_line(&all.body)?,
     ];
     lines.extend(sections(&all.body, by)?);
     lines.push(DAYS_NOTE.to_owned());
@@ -473,6 +508,7 @@ fn range_lines(
             dollars(number(&report["total"], "cost_micro_usd")?)
         ),
         since_line(report)?,
+        tokens_line(report)?,
     ];
     lines.extend(sections(report, by)?);
     Ok(lines)
@@ -545,8 +581,12 @@ mod tests {
         Response { status: 200, body }
     }
 
+    fn tokens(turns: u64) -> Value {
+        json!({"input": turns, "output": 10 * turns, "cache_read": 1_000 * turns, "cache_write": 100 * turns, "total": 1_111 * turns})
+    }
+
     fn amount(cost: u64, turns: u64, workers: u64) -> Value {
-        json!({"cost_micro_usd": cost, "turns": turns, "workers": workers})
+        json!({"cost_micro_usd": cost, "tokens": tokens(turns), "turns": turns, "workers": workers})
     }
 
     fn with(mut base: Value, key: &str, value: Value) -> Value {
@@ -577,8 +617,8 @@ mod tests {
                 {"name": "reviewer-1", "role": "reviewer", "area": null, "state": "stopped", "model": null, "turns": 3, "cost_micro_usd": 1_000_000},
             ],
             "tasks": [
-                {"task": "T-12", "title": "Add the login form", "area": "web", "build_micro_usd": 3_000_000, "review_micro_usd": 1_000_000, "total_micro_usd": 4_000_000, "turns": 6},
-                {"task": "T-3", "title": "Fix\u{1b}[2J", "area": "web", "build_micro_usd": 1_994_999, "review_micro_usd": 0, "total_micro_usd": 1_994_999, "turns": 3},
+                {"task": "T-12", "title": "Add the login form", "area": "web", "build_micro_usd": 3_000_000, "review_micro_usd": 1_000_000, "total_micro_usd": 4_000_000, "tokens": {"input": 1, "output": 2, "cache_read": 60_000, "cache_write": 3_997, "total": 64_000}, "turns": 6},
+                {"task": "T-3", "title": "Fix\u{1b}[2J", "area": "web", "build_micro_usd": 1_994_999, "review_micro_usd": 0, "total_micro_usd": 1_994_999, "tokens": tokens(1), "turns": 3},
             ],
             "slots": [],
             "slot_minutes": 15,
@@ -596,6 +636,17 @@ mod tests {
         assert_eq!(share(1, 3), "33%");
         assert_eq!(share(2, 3), "67%");
         assert_eq!(share(5, 0), "0%");
+    }
+
+    #[test]
+    fn tokens_read_as_thousands_and_millions() {
+        assert_eq!(tokens_text(0), "0");
+        assert_eq!(tokens_text(999), "999");
+        assert_eq!(tokens_text(1_000), "1.0k");
+        assert_eq!(tokens_text(64_546), "64.5k");
+        assert_eq!(tokens_text(999_949), "999.9k");
+        assert_eq!(tokens_text(999_950), "1.0M");
+        assert_eq!(tokens_text(12_345_678), "12.3M");
     }
 
     #[test]
@@ -635,20 +686,21 @@ mod tests {
             [
                 "COST  $10.00 all time · $1.20 today · $5.67 last 7 days",
                 "since 2026-10-14T08:00:00.000Z · 4 workers · 12 turns",
+                "TOKENS  13.3k · 12.0k cache read · 1.2k cache write · 120 output · 12 input",
                 "",
                 "BY ROLE",
-                "  Area leads     $4.00   40%   1 worker",
-                "  Review lead    $0.00    0%   0 workers",
-                "  Task workers   $5.00   50%   2 workers",
-                "  Reviewers      $1.00   10%   1 worker",
+                "  Area leads     $4.00   40%   3.3k tokens   1 worker",
+                "  Review lead    $0.00    0%      0 tokens   0 workers",
+                "  Task workers   $5.00   50%   6.7k tokens   2 workers",
+                "  Reviewers      $1.00   10%   3.3k tokens   1 worker",
                 "",
                 "BY AREA",
                 "  web                   $9.00   90%",
                 "  Reviews (all areas)   $1.00   10%",
                 "",
-                "TOP TASKS                   BUILD   REVIEW   TOTAL",
-                "  T-12 Add the login form   $3.00    $1.00   $4.00",
-                "  T-3 Fix\\u{1b}[2J          $1.99        -   $1.99",
+                "TOP TASKS                   BUILD   REVIEW   TOTAL   TOKENS",
+                "  T-12 Add the login form   $3.00    $1.00   $4.00    64.0k",
+                "  T-3 Fix\\u{1b}[2J          $1.99        -   $1.99     1.1k",
                 "",
                 MAIN_NOTE,
                 DAYS_NOTE,
@@ -665,6 +717,7 @@ mod tests {
             [
                 "COST  $10.00 since 2026-10-20T00:00:00.000Z",
                 "since 2026-10-14T08:00:00.000Z · 4 workers · 12 turns",
+                "TOKENS  13.3k · 12.0k cache read · 1.2k cache write · 120 output · 12 input",
                 "",
                 "WORKER         ROLE        AREA   MODEL             TURNS    COST",
                 "  web-lead     area lead   web    claude-sonnet-5       3   $4.00",
@@ -675,13 +728,13 @@ mod tests {
             ]
         );
         let model = range_lines(&ok(report(10_000_000)), start, Some(Split::Model)).unwrap();
-        assert_eq!(model[4], "  claude-sonnet-5   12 turns   $10.00   100%");
+        assert_eq!(model[5], "  claude-sonnet-5   12 turns   $10.00   100%");
         let area = range_lines(&ok(report(10_000_000)), start, Some(Split::Area)).unwrap();
-        assert_eq!(area[3], "BY AREA");
+        assert_eq!(area[4], "BY AREA");
         let role = range_lines(&ok(report(10_000_000)), start, Some(Split::Role)).unwrap();
-        assert_eq!(role[3], "BY ROLE");
+        assert_eq!(role[4], "BY ROLE");
         let tasks = range_lines(&ok(report(10_000_000)), start, Some(Split::Task)).unwrap();
-        assert!(tasks[3].starts_with("TASKS"));
+        assert!(tasks[4].starts_with("TASKS"));
     }
 
     #[test]
@@ -702,7 +755,7 @@ mod tests {
         let models = range_lines(&ok(empty), start, Some(Split::Model)).unwrap();
         assert!(models.contains(&"  no turns".to_owned()));
 
-        let task = json!({"task": "T-1", "title": "t", "area": null, "build_micro_usd": 1, "review_micro_usd": 0, "total_micro_usd": 1, "turns": 1});
+        let task = json!({"task": "T-1", "title": "t", "area": null, "build_micro_usd": 1, "review_micro_usd": 0, "total_micro_usd": 1, "tokens": tokens(1), "turns": 1});
         let many = with(report(1), "tasks", json!(vec![task; TOP_TASKS + 2]));
         let lines = summary_lines(&ok(many.clone()), &ok(many.clone()), &ok(many), None).unwrap();
         assert!(lines.contains(&"  2 more; fld cost --by task lists every task".to_owned()));

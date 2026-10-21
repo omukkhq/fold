@@ -48,6 +48,12 @@ describe("TaskCostSection", () => {
     const section = await screen.findByRole("region", { name: "Cost" });
     expect(await within(section).findByText("$5.00")).toBeTruthy();
     expect(within(section).getByText("Build $4.00")).toBeTruthy();
+    expect(
+      within(section).getByText(
+        "1.0M tokens · 800.0k from the cache · 80.0k output",
+      ),
+    ).toBeTruthy();
+    expect(within(section).getByText("800.0k tokens")).toBeTruthy();
     expect(within(section).getByText("Review $1.00")).toBeTruthy();
     expect(
       within(section).getByText(

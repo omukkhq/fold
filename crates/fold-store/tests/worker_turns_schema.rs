@@ -299,6 +299,16 @@ async fn the_cost_groups_slots_and_totals_count_every_worker_in_its_range() {
         ]
     );
     assert_eq!(all[1].state, WorkerState::Stopped);
+    assert_eq!(
+        all[1].tokens,
+        fold_core::cost::Tokens {
+            input: 6,
+            output: 8,
+            cache_read: 10,
+            cache_write: 12
+        },
+        "each turn's own usage, summed"
+    );
     assert_eq!(all[1].task, TaskId::from_number(2));
     assert_eq!(all[2].proposal, ProposalId::from_number(4));
     assert_eq!(
@@ -329,33 +339,37 @@ async fn the_cost_groups_slots_and_totals_count_every_worker_in_its_range() {
             CostSlot {
                 start: at(0),
                 role: Role::AreaLead,
-                cost_micro_usd: 100
+                cost_micro_usd: 100,
+                tokens: 18
             },
             CostSlot {
                 start: at(SLOT_MILLIS),
                 role: Role::TaskWorker,
-                cost_micro_usd: 260
+                cost_micro_usd: 260,
+                tokens: 36
             },
             CostSlot {
                 start: at(3 * SLOT_MILLIS),
                 role: Role::Reviewer,
-                cost_micro_usd: 40
+                cost_micro_usd: 40,
+                tokens: 18
             },
         ]
     );
-    let slot = |role: Role, cost_micro_usd: u64| CostSlot {
+    let slot = |role: Role, cost_micro_usd: u64, tokens: u64| CostSlot {
         start: at(0),
         role,
         cost_micro_usd,
+        tokens,
     };
     assert_eq!(
         agents::cost_slots(store.read(), None, LONG_SLOT_MILLIS)
             .await
             .unwrap(),
         [
-            slot(Role::AreaLead, 100),
-            slot(Role::Reviewer, 40),
-            slot(Role::TaskWorker, 260),
+            slot(Role::AreaLead, 100, 18),
+            slot(Role::Reviewer, 40, 18),
+            slot(Role::TaskWorker, 260, 36),
         ],
         "an hour slot holds the first three quarter hours"
     );
@@ -366,7 +380,8 @@ async fn the_cost_groups_slots_and_totals_count_every_worker_in_its_range() {
         CostTotals {
             all_time: 400,
             today: 300,
-            week: 40
+            week: 40,
+            all_time_tokens: 72
         }
     );
 }
@@ -417,6 +432,7 @@ async fn a_stops_interrupt_keeps_its_cost_but_is_not_a_turn() {
     let lead = process(&store, 1, Role::AreaLead, Some(21)).await;
     let failed = |reported: u64| TurnTotals {
         reported_micro_usd: reported,
+        input_tokens: 7,
         failed: true,
         ..TurnTotals::default()
     };
@@ -446,6 +462,10 @@ async fn a_stops_interrupt_keeps_its_cost_but_is_not_a_turn() {
         (groups[0].turns, groups[0].cost_micro_usd),
         (2, 150),
         "the interrupt's cost counts, its turn does not"
+    );
+    assert_eq!(
+        groups[0].tokens.input, 10,
+        "a failed turn adds its tokens; an interrupt adds none, as it adds no turn"
     );
     let refused = exec(
         &store,

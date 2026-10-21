@@ -11,6 +11,7 @@ export type TaskCost = Schemas["TaskCostView"];
 export type TaskWorkerCost = Schemas["TaskWorkerCost"];
 export type CostSlot = Schemas["CostSlot"];
 export type WorkerCost = Schemas["WorkerCost"];
+export type TokenCounts = Schemas["TokenCounts"];
 
 /** What the project's supervised workers cost since `since` (UTC milliseconds), or in all with `null`. */
 export function getProjectCost(

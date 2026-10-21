@@ -1502,6 +1502,7 @@ export interface components {
             area: string | null;
             /** Format: int64 */
             cost_micro_usd: number;
+            tokens: components["schemas"]["TokenCounts"];
             /** Format: int64 */
             turns: number;
             /** Format: int64 */
@@ -2028,6 +2029,7 @@ export interface components {
              * @description Millionths of a US dollar, as Claude Code reported them.
              */
             cost_micro_usd: number;
+            tokens: components["schemas"]["TokenCounts"];
             /** Format: int64 */
             turns: number;
             /**
@@ -2051,6 +2053,11 @@ export interface components {
              * @description UTC milliseconds of the start of the slot.
              */
             start: number;
+            /**
+             * Format: int64
+             * @description Every token of the slot's turns.
+             */
+            tokens: number;
         };
         CreateLabelBody: {
             /**
@@ -2719,6 +2726,7 @@ export interface components {
              * @example claude-sonnet-5
              */
             model: string | null;
+            tokens: components["schemas"]["TokenCounts"];
             /** Format: int64 */
             turns: number;
             /** Format: int64 */
@@ -2884,6 +2892,11 @@ export interface components {
         ProjectCostTotals: {
             /** Format: int64 */
             all_time_micro_usd: number;
+            /**
+             * Format: int64
+             * @description Every token of every turn, each turn's own from the usage Claude Code reported.
+             */
+            all_time_tokens: number;
             /**
              * Format: int64
              * @description The turns that ended since the start of the day the list was asked for with `today`, else since midnight UTC.
@@ -3750,6 +3763,7 @@ export interface components {
             /** Format: int64 */
             cost_micro_usd: number;
             role: components["schemas"]["WorkerRole"];
+            tokens: components["schemas"]["TokenCounts"];
             /** Format: int64 */
             turns: number;
             /** Format: int64 */
@@ -3963,6 +3977,7 @@ export interface components {
             /** @example T-12 */
             task: string;
             title: string;
+            tokens: components["schemas"]["TokenCounts"];
             /** Format: int64 */
             total_micro_usd: number;
             /** Format: int64 */
@@ -3976,6 +3991,7 @@ export interface components {
             review_micro_usd: number;
             /** @example T-12 */
             task: string;
+            tokens: components["schemas"]["TokenCounts"];
             /** Format: int64 */
             total_micro_usd: number;
             /** Format: int64 */
@@ -4193,6 +4209,7 @@ export interface components {
             /** @description The proposals of the task a reviewer reviewed, such as `P-3`, in number order; empty for a build. */
             proposals: string[];
             role: components["schemas"]["WorkerRole"];
+            tokens: components["schemas"]["TokenCounts"];
             /** Format: int64 */
             turns: number;
         };
@@ -4263,6 +4280,25 @@ export interface components {
              * @example T-12
              */
             task: string | null;
+        };
+        /** @description The tokens of turns, each turn's own from the usage Claude Code reported for it, so a resumed session counts none twice. A stop's interrupt adds none. */
+        TokenCounts: {
+            /** Format: int64 */
+            cache_read: number;
+            /** Format: int64 */
+            cache_write: number;
+            /**
+             * Format: int64
+             * @description Input tokens that the prompt cache did not hold.
+             */
+            input: number;
+            /** Format: int64 */
+            output: number;
+            /**
+             * Format: int64
+             * @description All four added up.
+             */
+            total: number;
         };
         /** @description Off loopback, a web token from `fld token create`. */
         TokenSignIn: {
@@ -4356,6 +4392,7 @@ export interface components {
             name: string;
             role: components["schemas"]["WorkerRole"];
             state: components["schemas"]["WorkerProcessState"];
+            tokens: components["schemas"]["TokenCounts"];
             /** Format: int64 */
             turns: number;
         };

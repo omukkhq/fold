@@ -81,7 +81,7 @@ enum Command {
     Worker(commands::worker::WorkerArgs),
     /// List main's revisions, newest first, as the web app's repository screen shows them: id, title, task, author, time and Git commit
     Log(commands::log::LogArgs),
-    /// Print what the project's supervised workers cost, from the values Claude Code reported: the total of all time, today and the last 7 days, by role, by area and the top tasks; --since, --by and --task narrow it
+    /// Print what the project's supervised workers cost, from the values Claude Code reported: the total of all time, today and the last 7 days, the tokens, by role, by area and the top tasks; --since, --by and --task narrow it
     Cost(commands::cost::CostArgs),
     /// Print the path of an agent's Claude Code transcript, the file of its current session; --tail N prints the file's last N lines instead
     Transcript(commands::transcript::TranscriptArgs),

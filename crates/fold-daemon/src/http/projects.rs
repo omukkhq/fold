@@ -107,6 +107,8 @@ pub struct ProjectCostTotals {
     pub today_micro_usd: u64,
     /// The turns that ended since the start of the week the list was asked for with `week`, else since midnight UTC six days ago.
     pub week_micro_usd: u64,
+    /// Every token of every turn, each turn's own from the usage Claude Code reported.
+    pub all_time_tokens: u64,
 }
 
 /// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `uncommitted_changes`: the project folder has changes that no revision records, which the human records with `fld record` or puts aside with `fld stash`; such a change on a path main changed, or the conflict markers of `fld unstash`, keep the whole folder where it is until then. `head_moved`: the Git branch or HEAD shows a change fold did not make, such as another branch checked out, a reset or a stash, so the project folder stops following main until the human brings the branch back.
@@ -174,6 +176,7 @@ impl From<projects::ProjectOverview> for ProjectOverview {
                 all_time_micro_usd: overview.cost.all_time,
                 today_micro_usd: overview.cost.today,
                 week_micro_usd: overview.cost.week,
+                all_time_tokens: overview.cost.all_time_tokens,
             },
         }
     }

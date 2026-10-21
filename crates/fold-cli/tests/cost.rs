@@ -26,10 +26,11 @@ async fn fld_cost_prints_a_new_projects_empty_totals_and_refuses_an_unknown_task
     let text = String::from_utf8(cost.stdout).unwrap();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(
-        lines[..4],
+        lines[..5],
         [
             "COST  $0.00 all time · $0.00 today · $0.00 last 7 days",
             "0 workers · 0 turns",
+            "TOKENS  0 · 0 cache read · 0 cache write · 0 output · 0 input",
             "",
             "BY ROLE"
         ],
@@ -51,6 +52,7 @@ async fn fld_cost_prints_a_new_projects_empty_totals_and_refuses_an_unknown_task
     assert!(json.status.success(), "{json:?}");
     let body: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
     assert_eq!(body["total"]["cost_micro_usd"], 0);
+    assert_eq!(body["total"]["tokens"]["total"], 0);
     assert!(body["since"].is_i64(), "{body}");
 
     let missing = host

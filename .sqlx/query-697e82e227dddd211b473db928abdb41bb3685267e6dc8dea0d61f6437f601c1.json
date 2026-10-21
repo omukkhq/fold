@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT g.name AS \"agent!: String\", w.role AS \"role!: String\", a.name AS \"area?: String\",\n                  w.state AS \"state!: String\", x.model AS \"model?: String\",\n                  t.number AS \"task?: i64\", p.number AS \"proposal?: i64\",\n                  COALESCE(t.number, pt.number) AS \"subject?: i64\",\n                  COALESCE(t.title, pt.title) AS \"title?: String\",\n                  SUM(1 - x.interrupted) AS \"turns!: i64\", SUM(x.cost_micro_usd) AS \"cost!: i64\",\n                  MIN(x.created_at) AS \"first_at!: i64\", MAX(x.created_at) AS \"last_at!: i64\"\n           FROM worker_turns x\n           JOIN worker_processes w ON w.id = x.worker_process_id\n           JOIN agents g ON g.id = w.agent_id\n           LEFT JOIN areas a ON a.id = x.area_id\n           LEFT JOIN tasks t ON t.id = x.task_id\n           LEFT JOIN proposals p ON p.id = x.proposal_id\n           LEFT JOIN tasks pt ON pt.id = p.task_id\n           WHERE x.created_at >= ?1 AND (?2 IS NULL OR t.number = ?2 OR pt.number = ?2)\n           GROUP BY x.worker_process_id, x.model, x.task_id, x.proposal_id\n           ORDER BY x.worker_process_id, MIN(x.created_at)",
+  "query": "SELECT g.name AS \"agent!: String\", w.role AS \"role!: String\", a.name AS \"area?: String\",\n                  w.state AS \"state!: String\", x.model AS \"model?: String\",\n                  t.number AS \"task?: i64\", p.number AS \"proposal?: i64\",\n                  COALESCE(t.number, pt.number) AS \"subject?: i64\",\n                  COALESCE(t.title, pt.title) AS \"title?: String\",\n                  SUM(1 - x.interrupted) AS \"turns!: i64\", SUM(x.cost_micro_usd) AS \"cost!: i64\",\n                  SUM(x.input_tokens * (1 - x.interrupted)) AS \"input!: i64\",\n                  SUM(x.output_tokens * (1 - x.interrupted)) AS \"output!: i64\",\n                  SUM(x.cache_read_tokens * (1 - x.interrupted)) AS \"cache_read!: i64\",\n                  SUM(x.cache_write_tokens * (1 - x.interrupted)) AS \"cache_write!: i64\",\n                  MIN(x.created_at) AS \"first_at!: i64\", MAX(x.created_at) AS \"last_at!: i64\"\n           FROM worker_turns x\n           JOIN worker_processes w ON w.id = x.worker_process_id\n           JOIN agents g ON g.id = w.agent_id\n           LEFT JOIN areas a ON a.id = x.area_id\n           LEFT JOIN tasks t ON t.id = x.task_id\n           LEFT JOIN proposals p ON p.id = x.proposal_id\n           LEFT JOIN tasks pt ON pt.id = p.task_id\n           WHERE x.created_at >= ?1 AND (?2 IS NULL OR t.number = ?2 OR pt.number = ?2)\n           GROUP BY x.worker_process_id, x.model, x.task_id, x.proposal_id\n           ORDER BY x.worker_process_id, MIN(x.created_at)",
   "describe": {
     "columns": [
       {
@@ -105,14 +105,38 @@
         "origin": "Expression"
       },
       {
-        "name": "first_at!: i64",
+        "name": "input!: i64",
         "ordinal": 11,
         "type_info": "Integer",
         "origin": "Expression"
       },
       {
-        "name": "last_at!: i64",
+        "name": "output!: i64",
         "ordinal": 12,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "cache_read!: i64",
+        "ordinal": 13,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "cache_write!: i64",
+        "ordinal": 14,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "first_at!: i64",
+        "ordinal": 15,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "last_at!: i64",
+        "ordinal": 16,
         "type_info": "Integer",
         "origin": "Expression"
       }
@@ -133,8 +157,12 @@
       false,
       false,
       false,
+      false,
+      false,
+      false,
+      false,
       false
     ]
   },
-  "hash": "802b37084d4e1d8beda7c2cff1d82cd5534c085460d879be6c7a5b5418f4dcfc"
+  "hash": "697e82e227dddd211b473db928abdb41bb3685267e6dc8dea0d61f6437f601c1"
 }
