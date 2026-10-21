@@ -10,11 +10,3 @@ FROM workers w
 JOIN agent_cursors c ON c.agent_id = w.agent_id;
 
 DROP TABLE agent_cursors;
-
--- A new child worker has read what its parent has read, so its first read is not the project's whole history.
-CREATE TRIGGER worker_cursors_from_parent AFTER INSERT ON workers
-WHEN NEW.parent_worker_id IS NOT NULL
-BEGIN
-    INSERT INTO worker_cursors (worker_id, last_seq)
-    SELECT NEW.id, last_seq FROM worker_cursors WHERE worker_id = NEW.parent_worker_id;
-END;

@@ -53,7 +53,7 @@ fn new_event(event_type: EventType, by: &str) -> NewEvent {
 struct Agent {
     name: AgentName,
     main: WorkerRow,
-    _ctx: SessionContext,
+    ctx: SessionContext,
 }
 
 #[cfg(test)]
@@ -95,11 +95,7 @@ impl Fixture {
             .await
             .unwrap();
         let main = self.agents.resolve_worker(&ctx, None).await.unwrap();
-        Agent {
-            name,
-            main,
-            _ctx: ctx,
-        }
+        Agent { name, main, ctx }
     }
 
     async fn create_tasks(&self, count: u32) {
@@ -478,6 +474,59 @@ async fn two_agents_keep_independent_cursors() {
         .await
         .unwrap();
     assert_eq!(seqs(&page), added);
+}
+
+#[tokio::test]
+async fn a_new_child_worker_starts_at_its_parents_cursor() {
+    let fx = Fixture::new().await;
+    let backend = fx.register("backend").await;
+    let frontend = fx.register("frontend").await;
+    fx.catch_up(&backend).await;
+    let at = fx.cursor(&backend).await;
+    let sub = fx
+        .agents
+        .register_worker(&backend.ctx, "sub", None)
+        .await
+        .unwrap()
+        .worker;
+    let cursor_of =
+        async |worker: &WorkerRow| events::cursor(fx.store().read(), worker.id).await.unwrap();
+    assert_eq!(cursor_of(&sub).await, at);
+    fx.commit(vec![new_event(types::MAIN_ADVANCED, "fold")])
+        .await;
+    fx.events
+        .get_events(&sub, &EventQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        fx.cursor(&backend).await,
+        at,
+        "the child's read moves only its own cursor"
+    );
+    let deeper = fx
+        .agents
+        .register_worker(&backend.ctx, "x", Some(&sub.name))
+        .await
+        .unwrap()
+        .worker;
+    assert_eq!(cursor_of(&deeper).await, cursor_of(&sub).await);
+    assert!(cursor_of(&deeper).await > at);
+    let ui = fx
+        .agents
+        .register_worker(&frontend.ctx, "ui", None)
+        .await
+        .unwrap()
+        .worker;
+    let page = fx
+        .events
+        .get_events(&ui, &EventQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        page.events.first().map(|event| event.seq),
+        Some(1),
+        "a child of a worker that read nothing reads from the start"
+    );
 }
 
 #[tokio::test]

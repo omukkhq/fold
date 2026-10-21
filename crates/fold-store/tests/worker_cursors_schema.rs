@@ -73,29 +73,6 @@ async fn every_worker_of_an_agent_starts_where_the_agent_cursor_stood() {
 }
 
 #[tokio::test]
-async fn a_new_child_worker_starts_at_its_parents_cursor() {
-    let (_dir, _paths, store) = open().await;
-    for sql in [
-        "INSERT INTO agents (id, name, created_at) VALUES (1, 'backend', 0), (2, 'frontend', 0)",
-        "INSERT INTO workers (id, agent_id, name, created_at) VALUES (10, 1, 'backend', 0), (20, 2, 'frontend', 0)",
-        "INSERT INTO worker_cursors (worker_id, last_seq) VALUES (10, 40)",
-        "INSERT INTO workers (id, agent_id, name, parent_worker_id, created_at) VALUES (11, 1, 'backend/sub', 10, 0), (21, 2, 'frontend/ui', 20, 0)",
-    ] {
-        exec(&store, sql).await.unwrap();
-    }
-    assert_eq!(
-        cursors(&store).await,
-        [(10, 40), (11, 40)],
-        "a child of a worker without a cursor starts with none"
-    );
-    store
-        .write(async |tx| events::advance_cursor(tx, 11, 45).await)
-        .await
-        .unwrap();
-    assert_eq!(cursors(&store).await, [(10, 40), (11, 45)]);
-}
-
-#[tokio::test]
 async fn a_worker_has_one_cursor() {
     let (_dir, _paths, store) = open().await;
     for sql in [
