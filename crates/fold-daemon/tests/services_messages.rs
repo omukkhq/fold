@@ -538,6 +538,16 @@ async fn feedback_goes_to_the_claim_holder_by_default() {
     assert_eq!(events[0].actor.as_str(), "human:tanim");
 
     fixture.tasks.release_task(&ui, t(1)).await.unwrap();
+    let view = fixture
+        .messages
+        .send_feedback(&human("ana"), t(1), body("ping"), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        recipients(&view),
+        pairs(&[("frontend", AddressedAs::Agent)]),
+        "after the release the area lead reads it"
+    );
     fixture
         .tasks
         .claim_task(&agent("backend"), t(1))
@@ -552,31 +562,65 @@ async fn feedback_goes_to_the_claim_holder_by_default() {
 }
 
 #[tokio::test]
-async fn feedback_takes_a_chosen_recipient_and_needs_one() {
+async fn feedback_takes_a_chosen_reader_and_needs_one() {
     let fixture = Fixture::new().await;
     let view = fixture
         .messages
         .send_feedback(
             &human("tanim"),
             t(2),
-            body("for reviewers"),
-            Some(to(&["tag:review"])),
+            body("for the lead"),
+            Some(to(&["frontend"])),
         )
         .await
         .unwrap();
     assert_eq!(
         recipients(&view),
-        pairs(&[("backend", AddressedAs::Tag), ("review", AddressedAs::Tag)])
+        pairs(&[("frontend", AddressedAs::Agent)])
     );
     let error = refusal(
         fixture
             .messages
-            .send_feedback(&human("tanim"), t(1), body("anyone?"), None)
+            .send_feedback(
+                &human("tanim"),
+                t(2),
+                body("for reviewers"),
+                Some(to(&["frontend", "tag:review"])),
+            )
             .await
             .unwrap_err(),
     );
-    assert_eq!(error.code(), codes::RECIPIENT_NOT_FOUND);
-    assert_eq!(details(&error), json!({"task": "T-1"}));
+    assert_eq!(error.code(), codes::RECIPIENT_NOT_READER);
+    assert_eq!(
+        details(&error),
+        json!({"task": "T-2", "to": ["tag:review"], "readers": ["frontend"]})
+    );
+    assert!(error.hint().is_some());
+    fixture
+        .tasks
+        .create_task(
+            &agent("frontend"),
+            CreateTask {
+                title: TaskTitle::parse("no area").unwrap(),
+                description: TaskDescription::new(""),
+                labels: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let error = refusal(
+        fixture
+            .messages
+            .send_feedback(&human("tanim"), t(3), body("anyone?"), None)
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(
+        error.code(),
+        codes::RECIPIENT_NOT_FOUND,
+        "a task in no area of a project without a main agent has no reader"
+    );
+    assert_eq!(details(&error), json!({"task": "T-3"}));
     let error = fixture
         .messages
         .send_feedback(&human("tanim"), t(9), body("x"), None)

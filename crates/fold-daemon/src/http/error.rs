@@ -159,6 +159,7 @@ fn status_of(code: &str) -> Option<StatusCode> {
         codes::CHECKS_RUNNING | codes::PROJECT_WORKERS_RUNNING => Some(StatusCode::CONFLICT),
         codes::ASK_NOT_OPEN => Some(StatusCode::CONFLICT),
         codes::ASK_CLOSE_DENIED => Some(StatusCode::FORBIDDEN),
+        codes::RECIPIENT_NOT_READER => Some(StatusCode::CONFLICT),
         _ => None,
     }
 }
@@ -344,6 +345,7 @@ mod tests {
             (codes::ALREADY_CLAIMED, StatusCode::CONFLICT),
             (codes::MESSAGE_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::RECIPIENT_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::RECIPIENT_NOT_READER, StatusCode::CONFLICT),
             (codes::PROPOSAL_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::UNKNOWN_HUMAN, StatusCode::NOT_FOUND),
             (codes::HUMAN_REVIEW_ALREADY_SET, StatusCode::CONFLICT),

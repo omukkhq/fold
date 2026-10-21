@@ -32,6 +32,11 @@ name = "acceptance"
 run = "make acceptance"
 stage = "integration"
 timeout = "2h"
+
+[[check]]
+name = "build"
+run = "cargo build --workspace"
+stage = ["proposal", "integration"]
 ```
 
 Keys. Every key is known, and a misspelt key refuses the whole file with `checks_file_invalid`, whose message names the line or the check:
@@ -42,7 +47,7 @@ Keys. Every key is known, and a misspelt key refuses the whole file with `checks
   - `run`: the shell command, at most 4000 characters. It runs as `sh -c` in the check directory, with stdin closed and without fold's agent and human variables. A fold call from inside a check acts only as the agent of the worker that asked for the run, never as a human.
   - `files`: optional. A regular expression, not a glob, searched anywhere in each changed path; `'^web/'` matches the folder `web` at the root and `'\.rs$'` every Rust file. A check whose pattern matches no changed path is `skipped`. Without it the check always runs.
   - `required`: optional, `true` by default. A check with `required = false` shows its result and never blocks.
-  - `stage`: optional, `proposal` (the default) or `integration`.
+  - `stage`: optional, `proposal` (the default), `integration`, or a list such as `["proposal", "integration"]` to run the check in both stages under one name. A string is a list of one. An empty list, an unknown name or a repeated name refuses the file.
   - `timeout`: optional, a whole number with `s`, `m` or `h`, such as `"90s"`, `"10m"` or `"2h"`, from 1s to 24h. The default is 30 minutes. fold stops a command's whole process group at its timeout (`timed_out`), and at its end, so a server that a test started ends with it.
 
 The file is at most 256 KiB. Prefer one check per tool or part of the repository with a `files` pattern, so a change of the docs runs no test suite.
@@ -90,7 +95,7 @@ max_per_area = 2                     # optional: task workers of one area at onc
 
 [roles.task_worker]                  # also area_lead, review_lead and reviewer
 model = "sonnet"                     # passed to Claude Code as --model
-cache_ttl = "5m"                     # "1h" or "5m": "1h" for leads and reviewers and "5m" for task workers by default
+cache_ttl = "5m"                     # "1h" or "5m": "1h" for leads and "5m" for reviewers and task workers by default
 idle_minutes = 15                    # task_worker and reviewer only: an idle worker stops after this long
 mcp = ["fold", "pencil"]             # the servers the role may load: fold and servers of the project's .mcp.json
 
@@ -154,6 +159,7 @@ Work in the project folder:
 - `fld pause` and `fld resume`: stop every worker of the project, keeping its session and claims, and run them again.
 - `fld worker restart NAME [--instructions TEXT]`: start the worker `NAME` of any role again in a new Claude Code session, for example when its session is broken; it keeps its name, claims and workers, and its old session id stays in its previous sessions.
 - `fld log [-n N] [--oneline]`: list main's revisions, newest first, as the web app's repository screen shows them: the revision id with main's head marked, the title by origin (the proposal and its title, a pull, a direct change, a record or the genesis), the task, the author, the time in UTC and the Git commit. `-n` sets how many (20 by default, at most 1000); `--oneline` prints only the id and the title.
+- `fld cost [--since WHEN] [--by SPLIT] [--task T-N] [--json]`: print what the project's supervised workers cost, from the values Claude Code reported: the total of all time, today and the last 7 days (UTC days), the tokens (cache read, cache write, output and input), then by role, by area and the top tasks with their build and review cost and their tokens. `--since` takes today, 12h, 7d, a date or an RFC 3339 time; `--by` prints one split in full (role, area, model, worker or task); `--task` prints one task's cost per worker; `--json` prints the daemon's answer. The main agent's own session is not supervised, so its cost is not counted.
 - `fld transcript AGENT [--tail N]`: print the path of the agent's Claude Code transcript, the file of its current session: the main agent's recorded session, or the session fold runs for a worker. `--tail N` prints the file's last N lines instead; fld reads them itself, and the daemon never opens a transcript.
 
 Maintenance and access:

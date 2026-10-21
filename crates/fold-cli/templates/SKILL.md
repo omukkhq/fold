@@ -7,7 +7,7 @@ description: Work in a fold project. Use it for tasks, workspaces, proposals, re
 
 fold plans, builds, reviews and integrates the work of this project. Every action goes through the tools of the `fold` MCP server, and the daemon decides what each tool may do. A task has a status that fold calculates from its dependencies, claims, workspaces and proposals. You never set a status.
 
-`REFERENCE.md` next to this file holds what surrounds this workflow, with exact formats and examples: `fold-checks.toml`, `.fold/config.toml` and role prompts, area profiles and the area `main`, ignore files, the human's `fld` commands, the web app's screens and an index of the tools by purpose. Read its section before you write or review checks, plan config or an area profile, or tell the user what to run.
+`REFERENCE.md` next to this file holds what surrounds this workflow, with exact formats and examples: `fold-checks.toml`, `.fold/config.toml` and role prompts, area profiles and the area `main`, ignore files, the human's `fld` commands, the web app's screens and an index of the tools by purpose. A check that must run in both stages takes `stage = ["proposal", "integration"]` and keeps one name. Read its section before you write or review checks, plan config or an area profile, or tell the user what to run.
 
 Each section below describes part of the workflow. The main agent plans and runs the team, area leads manage their tasks, task workers build them, and reviewers review proposals. A worker that fold supervises keeps its assigned role and assignments. Tool availability does not grant another role's authority. A session opened by hand claims no task and no review; it may comment on reviews and send messages within its actual permissions.
 

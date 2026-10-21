@@ -22,6 +22,7 @@ mod fresh;
 mod gate;
 mod launch;
 mod lines;
+mod message;
 mod questions;
 mod refresh;
 mod restart;
@@ -180,6 +181,10 @@ struct Inner {
     held_lost: Mutex<HashMap<AgentName, Option<String>>>,
     /// Set when the daemon started while the project was paused, so the resume of the pause resumes the workers that could not reach fold, as the daemon start would have.
     unreachable_owed: AtomicBool,
+    /// The workers that fold started again to answer a message, which stop once they have answered.
+    answering: Mutex<HashSet<AgentName>>,
+    /// The workers whose start for a message is under way, so two events start one.
+    message_starts: Mutex<HashSet<AgentName>>,
 }
 
 impl Drop for Inner {
@@ -195,8 +200,6 @@ impl Drop for Inner {
 struct Process {
     id: i64,
     agent: AgentName,
-    /// The row's cost before this process, to which the process's running total adds.
-    base_cost: u64,
     generation: u64,
     /// The process id that the row records while this process runs.
     pid: Option<u32>,
@@ -239,6 +242,8 @@ impl Supervisor {
                 registry: Mutex::new(None),
                 held_lost: Mutex::new(HashMap::new()),
                 unreachable_owed: AtomicBool::new(false),
+                answering: Mutex::new(HashSet::new()),
+                message_starts: Mutex::new(HashSet::new()),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();

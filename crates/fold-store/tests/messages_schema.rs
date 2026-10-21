@@ -294,3 +294,82 @@ async fn only_an_open_ask_that_no_worker_waits_on_takes_one_closure_that_never_c
     );
     assert_append_only(store, "message_ask_closures").await;
 }
+
+#[tokio::test]
+async fn a_row_that_waits_unread_before_the_forward_columns_never_starts_a_worker() {
+    let dir = tempfile::tempdir().unwrap();
+    let before = dir.path().join("before");
+    std::fs::create_dir(&before).unwrap();
+    let source = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations/project"));
+    for entry in std::fs::read_dir(source).unwrap() {
+        let name = entry.unwrap().file_name().into_string().unwrap();
+        let version: u32 = name.split('_').next().unwrap().parse().unwrap();
+        if name.ends_with(".sql") && version < 55 {
+            std::fs::copy(source.join(&name), before.join(&name)).unwrap();
+        }
+    }
+    let paths = fold_core::ProjectPaths::new(dir.path().join("project"));
+    std::fs::create_dir_all(paths.db().parent().unwrap()).unwrap();
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(paths.db())
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let mut conn = <sqlx::SqliteConnection as sqlx::Connection>::connect_with(&options)
+        .await
+        .unwrap();
+    sqlx::migrate::Migrator::new(before.as_path())
+        .await
+        .unwrap()
+        .run(&mut conn)
+        .await
+        .unwrap();
+    for sql in [
+        "INSERT INTO agents (id, name, created_at) VALUES (1, 'web-worker', 0)",
+        "INSERT INTO workers (id, agent_id, name, created_at) VALUES (1, 1, 'web-worker', 0)",
+        "INSERT INTO worker_processes (agent_id, role, session_id, state, started_by, started_at, stopped_at)
+         VALUES (1, 'reviewer', '00000000-0000-4000-9000-000000000001', 'stopped', 'main', 0, 1)",
+        "INSERT INTO messages (id, number, thread_id, sender_kind, sender_human, body, created_at)
+         VALUES (1, 1, 1, 'human', 'tanim', 'old', 0), (2, 2, 2, 'human', 'tanim', 'read', 0)",
+        "INSERT INTO message_recipients (message_id, worker_id, addressed_as, delivered_at) VALUES (1, 1, 'agent', NULL), (2, 1, 'agent', 5)",
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+    }
+    <sqlx::SqliteConnection as sqlx::Connection>::close(conn)
+        .await
+        .unwrap();
+
+    let store = Store::open_project(&paths).await.unwrap();
+    assert!(
+        fold_store::messages::owed_to_stopped(store.read(), None)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the unread row of m-1 is settled"
+    );
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM message_recipients WHERE forwarded_at IS NOT NULL AND forwarded_to IS NULL"
+        )
+        .await,
+        1
+    );
+    for sql in [
+        "INSERT INTO messages (id, number, thread_id, sender_kind, sender_human, body, created_at) VALUES (3, 3, 3, 'human', 'tanim', 'new', 9)",
+        "INSERT INTO message_recipients (message_id, worker_id, addressed_as) VALUES (3, 1, 'agent')",
+    ] {
+        exec(&store, sql).await.unwrap();
+    }
+    let owed = fold_store::messages::owed_to_stopped(store.read(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        owed.iter()
+            .map(|owed| owed.message.to_string())
+            .collect::<Vec<_>>(),
+        ["m-3"]
+    );
+}
