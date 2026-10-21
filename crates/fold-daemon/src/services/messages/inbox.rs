@@ -1,7 +1,7 @@
 use fold_core::events::types;
 use fold_core::{
-    Actor, AddressedAs, AgentActor, Choice, FoldError, MessageId, NewEvent, ProposalId, RequestId,
-    Sender, TaskId, Timestamp, WorkerName, policy,
+    Actor, AddressedAs, AgentActor, AgentName, Choice, FoldError, MessageId, NewEvent, ProposalId,
+    RequestId, Sender, TaskId, Timestamp, WorkerName, policy,
 };
 use fold_store::agents::WorkerRow;
 use fold_store::messages::{self, InboxRow};
@@ -132,6 +132,19 @@ impl MessageService {
 /// The unacknowledged rows of every worker of the agent `agent_id`, read from the read pool: the unread part of the footer.
 pub async fn unread_count(store: &Store, agent_id: i64) -> Result<u64, MessageError> {
     Ok(messages::unread_count(store.read(), agent_id).await?)
+}
+
+/// Sets `pushed_at` on `agent`'s rows of the message that the event `seq` names: a notice about it reached a session or the worker process of the agent at `now`. It appends no event, as reading an inbox appends none.
+pub(crate) async fn record_pushed(
+    store: &Store,
+    agent: &AgentName,
+    seq: u64,
+    now: Timestamp,
+) -> Result<(), MessageError> {
+    store
+        .write(async |tx| messages::mark_pushed(tx, seq, agent, now).await)
+        .await?;
+    Ok(())
 }
 
 async fn acting_worker(tx: &mut WriteTx, agent: &AgentActor) -> Result<WorkerRow, MessageError> {

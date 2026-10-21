@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use fold_core::push::{MAX_NOTICE_LEN, Notice, PushContext, is_pushed, notice_for, request_of};
 use fold_core::requests::{Requester, deputy};
-use fold_core::{AgentName, Event, FoldError, Tag, TaskId, TaskKind, TaskStatus, Timestamp, codes};
+use fold_core::{
+    AgentName, Clock, Event, FoldError, Tag, TaskId, TaskKind, TaskStatus, Timestamp, codes,
+};
 use fold_store::agents::AgentRow;
 use fold_store::reviews;
 use fold_store::tasks::{claims, requests};
@@ -137,6 +139,15 @@ struct Inner {
     pending: Mutex<HashMap<AgentName, Pending>>,
     /// Unset keeps the targets in memory only.
     files: OnceLock<TargetFiles>,
+    /// Unset records no push time.
+    recorder: OnceLock<Recorder>,
+}
+
+/// Where a notice about a message that got through is recorded, as the recipients' `pushed_at`.
+#[derive(Clone)]
+struct Recorder {
+    store: Store,
+    clock: Arc<dyn Clock>,
 }
 
 struct Pending {
@@ -199,8 +210,14 @@ impl PushTargets {
                 connect,
                 pending: Mutex::new(HashMap::new()),
                 files: OnceLock::new(),
+                recorder: OnceLock::new(),
             }),
         }
+    }
+
+    /// Records in `store` when a notice about a message reaches the recipient's agent, from now on. The first call decides.
+    pub fn record_pushes_in(&self, store: Store, clock: Arc<dyn Clock>) {
+        let _ = self.inner.recorder.set(Recorder { store, clock });
     }
 
     /// Keeps each registered agent's newest socket and token in `dir`, the daemon's folder for this project, from now on. The first call decides; the project's open makes it before any session can reach the targets.
@@ -371,6 +388,7 @@ impl PushTargets {
                     }
                     return;
                 }
+                record(&targets, &agent, &notice).await;
             }
         });
     }
@@ -453,6 +471,11 @@ impl PushTargets {
 
     /// Queues each notice on its supervised worker's stdin, else on every socket of its agent: a worker's own session-start hook can report an inbox socket too, and the notice must reach the worker once. `seq` is the event the notice is about and goes into the log line of a failed post. A notice that is not one short line of envelope-safe text is dropped here.
     pub fn deliver(&self, notices: &[Notice], seq: u64) {
+        self.queue(notices, seq, false);
+    }
+
+    /// [`PushTargets::deliver`]; with `record`, the first post of each notice that gets through sets `pushed_at` on its agent's rows of the message that the event `seq` names.
+    fn queue(&self, notices: &[Notice], seq: u64, record: bool) {
         let agents = lock(&self.inner.agents);
         let stdin = lock(&self.inner.stdin);
         for notice in notices {
@@ -464,6 +487,7 @@ impl PushTargets {
                 queue.push(Queued {
                     text: Arc::from(notice.text.as_str()),
                     seq,
+                    record,
                 });
                 continue;
             }
@@ -475,6 +499,7 @@ impl PushTargets {
                 target.queue.push(Queued {
                     text: Arc::from(notice.text.as_str()),
                     seq,
+                    record,
                 });
             }
         }
@@ -492,6 +517,25 @@ impl PushTargets {
     }
 }
 
+/// Sets `pushed_at` for a notice about a message that just got through; a failure is logged with the agent and the event's seq alone.
+async fn record(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued) {
+    if !notice.record {
+        return;
+    }
+    let Some(recorder) = targets
+        .upgrade()
+        .and_then(|inner| inner.recorder.get().cloned())
+    else {
+        return;
+    };
+    let now = recorder.clock.now();
+    if let Err(error) =
+        crate::services::messages::record_pushed(&recorder.store, agent, notice.seq, now).await
+    {
+        tracing::warn!(agent = %agent, seq = notice.seq, code = error.log_code(), "session push could not record a delivered notice");
+    }
+}
+
 /// The session shows the sender only when the content rebuilds to the same bytes, so the text holds no newline and never names the envelope tag.
 fn postable(text: &str) -> bool {
     !text.is_empty()
@@ -504,6 +548,8 @@ fn postable(text: &str) -> bool {
 struct Queued {
     text: Arc<str>,
     seq: u64,
+    /// The notice is about a sent message, whose recipients' `pushed_at` its first successful post sets.
+    record: bool,
 }
 
 #[derive(Default)]
@@ -602,6 +648,7 @@ impl Sender {
         while let Some(notice) = self.queue.next().await {
             let Err(error) = self.post(&notice.text).await else {
                 self.queue.failing.store(false, Ordering::Relaxed);
+                record(&self.targets, &self.agent, &notice).await;
                 continue;
             };
             if matches!(
@@ -841,8 +888,9 @@ fn remove_temporary(dir: &Path) -> io::Result<()> {
 /// The project's push delivery.
 pub type PushTask = ProjectTask;
 
-/// Starts the delivery task of one project: it reads each event from the bus, which carries an event only after its commit, and queues the notices the event sends. Push is a hint: it writes nothing to the database, and an event committed while no socket was registered is never replayed.
-pub fn run(store: Store, bus: &EventBus, targets: PushTargets) -> PushTask {
+/// Starts the delivery task of one project: it reads each event from the bus, which carries an event only after its commit, and queues the notices the event sends. Push is a hint: an event committed while no socket was registered is never replayed. The only write is the recipients' `pushed_at` once a notice about a message gets through.
+pub fn run(store: Store, clock: Arc<dyn Clock>, bus: &EventBus, targets: PushTargets) -> PushTask {
+    targets.record_pushes_in(store.clone(), clock);
     let receiver = bus.subscribe();
     ProjectTask::spawn(deliver_events(store, receiver, bus.closing(), targets))
 }
@@ -873,7 +921,11 @@ async fn deliver_events(
             continue;
         }
         match context(&store, &event).await {
-            Ok(ctx) => targets.deliver(&notice_for(&event, &ctx), event.seq),
+            Ok(ctx) => targets.queue(
+                &notice_for(&event, &ctx),
+                event.seq,
+                event.event_type == fold_core::events::types::MESSAGE_SENT,
+            ),
             Err(error) => tracing::warn!(
                 seq = event.seq,
                 code = error.log_code(),
@@ -1234,6 +1286,7 @@ mod tests {
             queue.push(Queued {
                 text: Arc::from("n"),
                 seq,
+                record: false,
             });
         }
         let seqs: Vec<u64> = lock(&queue.state)
@@ -1246,6 +1299,7 @@ mod tests {
         queue.push(Queued {
             text: Arc::from("n"),
             seq: 21,
+            record: false,
         });
         assert!(lock(&queue.state).pending.is_empty());
     }

@@ -198,7 +198,12 @@ impl Fixture {
             .write(async |tx| projects::insert_human(tx, &ana, now).await)
             .await
             .unwrap();
-        let push = push::run(project.store().clone(), &bus, targets.clone());
+        let push = push::run(
+            project.store().clone(),
+            Arc::new(project.clock().clone()),
+            &bus,
+            targets.clone(),
+        );
         Self {
             project,
             dir: TempDir::new().unwrap(),
@@ -1240,4 +1245,85 @@ async fn the_agents_and_their_messages_show_who_a_notice_can_reach() {
             ("gone".to_owned(), push::PushReach::Unreachable),
         ]
     );
+}
+
+/// Each recipient's `pushed_at` in the thread of `message`, read until `done` holds them.
+#[cfg(test)]
+async fn pushed(
+    fixture: &Fixture,
+    message: fold_core::MessageId,
+    done: impl Fn(&[(String, Option<i64>)]) -> bool,
+) -> Vec<(String, Option<i64>)> {
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let thread = fixture.messages.thread_view(message).await.unwrap();
+            let times: Vec<(String, Option<i64>)> = thread.messages[0]
+                .recipients
+                .iter()
+                .map(|r| (r.name.to_string(), r.pushed_at.map(|at| at.as_millis())))
+                .collect();
+            if done(&times) {
+                return times;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the push times within the wait")
+}
+
+#[tokio::test]
+async fn a_notice_that_gets_through_records_its_push_time_on_the_agents_rows() {
+    let fixture = Fixture::new().await;
+    let mut backend = fixture.inbox("backend", "backend.sock").await;
+    let blocked = Inbox::bind(fixture.path("blocked.sock"));
+    set_mode(&blocked.path, 0o000);
+    fixture
+        .agents
+        .register_push_target(&name("lead"), blocked.path.clone(), TOKEN)
+        .await
+        .unwrap();
+    let posted = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = Arc::clone(&posted);
+    fixture.targets.register_stdin(
+        &name("docs"),
+        Arc::new(move |text: &str| {
+            sink.lock().unwrap().push(text.to_owned());
+            true
+        }),
+    );
+    fixture
+        .targets
+        .register_stdin(&name("frontend"), Arc::new(|_: &str| false));
+    let sent = fixture
+        .messages
+        .send(
+            &Actor::human(HumanName::parse("ana").unwrap()),
+            SendMessage {
+                to: Address::parse_all(&["backend", "docs", "lead", "frontend/ui"]).unwrap(),
+                body: MessageBody::parse("who hears this").unwrap(),
+                task: None,
+                proposal: None,
+                reply_to: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(backend.next().await, wire(TOKEN, &inbox_text(1)));
+    let now = fixture.project.now().as_millis();
+    let times = pushed(&fixture, sent.id, |times| {
+        times.iter().filter(|(_, at)| at.is_some()).count() == 2
+    })
+    .await;
+    assert_eq!(
+        times,
+        [
+            ("backend".to_owned(), Some(now)),
+            ("docs".to_owned(), Some(now)),
+            ("lead".to_owned(), None),
+            ("frontend/ui".to_owned(), None),
+        ],
+        "a socket post and a worker's stdin record it; a failed post and a gone process do not"
+    );
+    assert_eq!(posted.lock().unwrap().len(), 1);
 }

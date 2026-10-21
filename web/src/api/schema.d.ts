@@ -2978,6 +2978,11 @@ export interface components {
             delivered_at: number | null;
             /** @example frontend/ui */
             name: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds: the first time a notice about the message reached a session or the worker process of the recipient's agent, where it waits until the agent reads its inbox. Null for a human and while no notice got through.
+             */
+            pushed_at: number | null;
             /** @description For an agent recipient, whether fold can post a notice into one of the agent's sessions now; false means the agent learns of the message only when it reads its inbox. Null for a human and for an agent without a connected session. */
             reachable: boolean | null;
         };

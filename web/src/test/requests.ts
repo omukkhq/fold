@@ -103,6 +103,7 @@ export function requestMessage(
         addressed_as: "agent",
         delivered_at: null,
         acknowledged_at: null,
+        pushed_at: null,
         reachable: null,
       },
     ],

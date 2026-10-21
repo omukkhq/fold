@@ -68,6 +68,38 @@ describe("delivery", () => {
       ).note,
     ).toBe(null);
   });
+  it("says that a message waits in a busy agent's session once fold pushed its notice", () => {
+    const waiting = recipient("backend-lead", { pushed_at: NOW });
+    const state = recipientState(waiting, NOW);
+    expect(state).toMatchObject({
+      lead: "waiting for",
+      actor: "backend-lead",
+      note: "it is busy until its current step ends",
+    });
+    expect(state.at).toMatch(/^\d\d:\d\d:\d\d$/);
+    expect(
+      recipientState(
+        recipient("backend-lead", { pushed_at: NOW, reachable: false }),
+        NOW,
+      ).lead,
+    ).toBe("waiting for");
+    expect(
+      recipientState(
+        recipient("backend-lead", { pushed_at: NOW, delivered_at: NOW }),
+        NOW,
+      ).lead,
+    ).toBe("delivered to");
+    expect(
+      recipientState(
+        recipient("backend-lead", {
+          pushed_at: NOW,
+          delivered_at: NOW,
+          acknowledged_at: NOW,
+        }),
+        NOW,
+      ).lead,
+    ).toBe("acknowledged by");
+  });
   it("has a line per recipient", () => {
     const lines = deliveryLines(message, NOW);
     expect(lines).toHaveLength(4);

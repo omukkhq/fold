@@ -3,7 +3,7 @@ import type { MessageView, RecipientView } from "@/api/messages";
 import { isHumanName } from "@/people/names";
 import { actorSegment, seg, type Segment } from "@/people/segments";
 
-/** One recipient's delivery: `acknowledged by` / `read by` (a human) / `delivered to` / `not delivered to`, the recipient, the time the daemon recorded, if any, and a note when fold cannot tell the agent that the message waits. */
+/** One recipient's delivery: `acknowledged by` / `read by` (a human) / `delivered to` (the agent read its inbox) / `waiting for` (the notice reached the agent's session, which takes it when its current step ends) / `not delivered to`, the recipient, the time the daemon recorded, if any, and a note that says why the message waits. */
 export interface Delivery {
   lead: string;
   actor: string;
@@ -26,6 +26,15 @@ export function recipientState(r: RecipientView, now: number): Delivery {
       actor: r.name,
       at: formatAsOf(now, r.delivered_at),
       note: null,
+    };
+  }
+  // A notice that got through stays in the session even when a later post to the agent fails.
+  if (r.pushed_at !== null) {
+    return {
+      lead: "waiting for",
+      actor: r.name,
+      at: formatAsOf(now, r.pushed_at),
+      note: "it is busy until its current step ends",
     };
   }
   return {
