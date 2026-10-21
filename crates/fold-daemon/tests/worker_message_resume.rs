@@ -319,3 +319,37 @@ async fn a_message_from_the_lead_that_cannot_start_the_worker_goes_back_to_the_l
     );
     assert_eq!(fake.runs_of(TASK_WORKER).len(), 1);
 }
+
+#[tokio::test]
+async fn a_message_about_a_task_of_the_area_main_goes_on_to_the_main_agent() {
+    let fake = FakeClaude::new("result");
+    let (harness, _work) =
+        proposed_by_a_task_worker(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    harness
+        .call(
+            MAIN,
+            "update_task",
+            json!({"id": "T-1", "labels": ["main"]}),
+        )
+        .await;
+    std::fs::write(
+        std::path::Path::new(harness.root()).join(".fold/config.toml"),
+        "[workers]\ntask_worker = 0\n",
+    )
+    .unwrap();
+
+    let message = feedback(&harness, "Why a page?").await;
+    let row = until_recipient(&harness, &message, TASK_WORKER, |row| {
+        !row["forwarded_to"].is_null()
+    })
+    .await;
+    assert_eq!(row["forwarded_to"], MAIN, "{row}");
+    until_recipient(&harness, &message, MAIN, |_| true).await;
+    let note = until_forward_note(&harness, &message).await;
+    assert_eq!(names(&note), [format!("human:{HUMAN}").as_str(), MAIN]);
+    assert_eq!(
+        note["body"],
+        format!("@{TASK_WORKER} cannot start now, so fold sent {message} on to @{MAIN}.")
+    );
+    assert_eq!(fake.runs_of(TASK_WORKER).len(), 1);
+}
