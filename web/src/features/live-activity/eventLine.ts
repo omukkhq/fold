@@ -656,6 +656,15 @@ const SPECS: Record<EventType, Spec> = {
       return `acknowledged ${ids[0] ?? "a message"}`;
     },
   },
+  "message.ask_closed": {
+    icon: Check,
+    text: (e) => {
+      const message = text(e.data.message) ?? "an ask";
+      return e.data.reason === "dismissed"
+        ? `marked ${message} answered`
+        : `recorded that ${message} was answered elsewhere`;
+    },
+  },
   "request.created": {
     icon: MessageSquare,
     text: (e) => `created ${requestOf(e)}`,

@@ -21,6 +21,7 @@ import { mentionRoutes } from "@/test/mentionRoutes";
 import { daemon } from "@/test/daemon";
 import { message, recipient, thread as baseThread } from "@/test/messages";
 import { ApiError } from "@/api/errors";
+import type { ThreadView } from "@/api/messages";
 import { ThreadPanel } from "./ThreadPanel";
 
 afterEach(() => {
@@ -42,6 +43,7 @@ const thread = baseThread(MESSAGE, {
   task: "T-12",
   participants: ["human:tanim", "frontend/ui"],
   awaiting_human: true,
+  closable: true,
   last_at: NOW,
   messages: [
     message(MESSAGE, {
@@ -54,13 +56,14 @@ const thread = baseThread(MESSAGE, {
 
 async function setup(
   onReply: (replyTo: string, body: string) => Promise<void>,
+  shown: ThreadView = thread,
 ) {
   const root = createRootRoute();
   const index = createRoute({
     getParentRoute: () => root,
     path: "/",
     component: () => (
-      <ThreadPanel slug="demo" thread={thread} now={NOW} onReply={onReply} />
+      <ThreadPanel slug="demo" thread={shown} now={NOW} onReply={onReply} />
     ),
   });
   const router = createRouter({
@@ -76,6 +79,26 @@ async function setup(
 }
 
 describe("ThreadPanel", () => {
+  it("marks the thread's asks answered and says when another human answered first", async () => {
+    daemon.on("POST /api/v1/projects/demo/asks/answered", {
+      status: 200,
+      body: { answered: [] },
+    });
+    await setup(() => Promise.resolve());
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark answered" }),
+    );
+    expect(await screen.findByText("It was already answered.")).toBeTruthy();
+    expect(
+      daemon.made("POST /api/v1/projects/demo/asks/answered")[0]?.body,
+    ).toEqual({ thread: MESSAGE });
+  });
+
+  it("offers only the reply box while only a worker's question waits", async () => {
+    await setup(() => Promise.resolve(), { ...thread, closable: false });
+    expect(screen.queryByRole("button", { name: "Mark answered" })).toBeNull();
+  });
+
   it("suggests the files of a workspace after @ws-9:", async () => {
     mentionRoutes();
     await setup(vi.fn(() => Promise.resolve()));

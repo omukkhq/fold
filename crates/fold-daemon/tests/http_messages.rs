@@ -141,17 +141,35 @@ impl Fixture {
         router(self.state.clone())
     }
 
+    /// A message to a human is marked as asking for an answer.
     async fn send(&self, from: &str, to: &[&str], task: Option<u32>, proposal: Option<u32>) {
+        self.send_reply(from, to, task, proposal, None).await;
+    }
+
+    async fn send_reply(
+        &self,
+        from: &str,
+        to: &[&str],
+        task: Option<u32>,
+        proposal: Option<u32>,
+        reply_to: Option<&str>,
+    ) {
+        let asks = to
+            .iter()
+            .any(|entry| *entry == "humans" || entry.starts_with("human:"));
         self.messages
-            .send(
+            .send_marked(
                 &agent(from),
                 SendMessage {
                     to: Address::parse_all(to).unwrap(),
                     body: MessageBody::parse("text").unwrap(),
                     task: task.map(|n| TaskId::from_number(n).unwrap()),
                     proposal: proposal.map(|n| ProposalId::from_number(n).unwrap()),
-                    reply_to: None,
+                    reply_to: reply_to.map(|id| id.parse().unwrap()),
                 },
+                None,
+                None,
+                asks,
             )
             .await
             .unwrap();
@@ -261,6 +279,7 @@ async fn the_list_filters_by_agent_task_proposal_and_awaiting_human() {
     assert_eq!(
         keys,
         [
+            "asks_human",
             "body",
             "choices",
             "header",
@@ -307,6 +326,90 @@ async fn the_list_filters_by_agent_task_proposal_and_awaiting_human() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
         assert_eq!(code(&body), expected, "{query}");
     }
+}
+
+#[tokio::test]
+async fn mine_lists_only_the_threads_that_concern_the_signed_in_human() {
+    let fixture = Fixture::new().await;
+    fixture
+        .send("frontend", &["human:tanim"], Some(1), None)
+        .await;
+    fixture.send("backend", &["review"], None, None).await;
+    fixture.send("review", &["humans"], None, None).await;
+    fixture.send("frontend", &["human:ana"], None, None).await;
+    fixture.send("backend", &["frontend"], Some(2), None).await;
+    let (status, sent) = fixture
+        .feedback(
+            &[COOKIE],
+            json!({"body": "about T-2", "task": "T-2", "to": ["backend"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    fixture
+        .send_reply("backend", &["frontend"], None, None, Some("m-2"))
+        .await;
+    fixture
+        .send_reply(
+            "frontend",
+            &["backend", "human:tanim"],
+            None,
+            None,
+            Some("m-7"),
+        )
+        .await;
+    let mine = async |query: &str| {
+        call(
+            fixture.http(),
+            Method::GET,
+            &format!("{BASE}/messages?mine=true{query}"),
+            &[COOKIE],
+            None,
+        )
+        .await
+    };
+    let (status, body) = mine("").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        thread_ids(&body),
+        ["m-2", "m-6", "m-3", "m-1"],
+        "a thread the human joined later, a message to humans, their own feedback and a message to them by name"
+    );
+    let awaiting: Vec<&str> = body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|thread| thread["awaiting_human"] == true)
+        .map(|thread| thread["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(awaiting, ["m-2", "m-3", "m-1"]);
+    assert_eq!(
+        body["total_awaiting_human"], 3,
+        "the ask to ana is not tanim's"
+    );
+    let (_, waiting) = mine("&awaiting_human=true").await;
+    assert_eq!(thread_ids(&waiting), ["m-2", "m-3", "m-1"]);
+    let (_, page) = mine("&limit=2").await;
+    assert_eq!(thread_ids(&page), ["m-2", "m-6"]);
+    assert_eq!(page["next"], "m-6");
+    assert_eq!(page["total_awaiting_human"], 3);
+    let (_, rest) = mine("&limit=2&before=m-6").await;
+    assert_eq!(thread_ids(&rest), ["m-3", "m-1"]);
+    let (_, all) = fixture.get("/messages").await;
+    assert_eq!(
+        thread_ids(&all).len(),
+        6,
+        "without mine every thread is listed"
+    );
+    assert_eq!(all["total_awaiting_human"], 4);
+    let (_, task) = fixture.get("/messages?task=T-2").await;
+    assert_eq!(
+        thread_ids(&task),
+        ["m-6", "m-5"],
+        "the task screen keeps the agents' threads"
+    );
+    let (status, refused) = fixture.get("/messages?mine=true").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{refused}");
+    assert_eq!(code(&refused), "human_name_required");
 }
 
 #[tokio::test]

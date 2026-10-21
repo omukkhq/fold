@@ -163,3 +163,5 @@ worker_claim_denied
 main_area
 agent_session_not_found
 transcript_not_found
+ask_not_open
+ask_close_denied

@@ -35,6 +35,18 @@ impl AttentionKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AttentionItem {
     pub kind: AttentionKind,
+    /// For a `Question`: one of the task's open asks is closable, so a human can mark it answered, because it is no worker's `AskUserQuestion`, which only a reply in its thread ends. False for every other kind.
+    pub closable: bool,
+}
+
+impl AttentionItem {
+    /// An item of `kind` that marks nothing closable.
+    pub fn of(kind: AttentionKind) -> Self {
+        Self {
+            kind,
+            closable: false,
+        }
+    }
 }
 
 /// The attention items of each task in `task_ids`, read in one read transaction of `read`; `stalled` holds the tasks whose workspace is stalled, from [`stalled_tasks`]. No item depends on the time of the read: the lease sweeper marks a stale claim and the stall job sets the stalled flag. Every id gets an entry; an empty list means nothing needs a person.
@@ -66,25 +78,20 @@ pub async fn attention_in(
         .iter()
         .map(|id| {
             let mut items = Vec::new();
-            if questions.contains(id) {
+            if let Some(&closable) = questions.get(id) {
                 items.push(AttentionItem {
                     kind: AttentionKind::Question,
+                    closable,
                 });
             }
             if human_review.contains(id) {
-                items.push(AttentionItem {
-                    kind: AttentionKind::HumanReview,
-                });
+                items.push(AttentionItem::of(AttentionKind::HumanReview));
             }
             if stalled.contains(id) {
-                items.push(AttentionItem {
-                    kind: AttentionKind::Stalled,
-                });
+                items.push(AttentionItem::of(AttentionKind::Stalled));
             }
             if stale_claims.contains(id) {
-                items.push(AttentionItem {
-                    kind: AttentionKind::StaleClaim,
-                });
+                items.push(AttentionItem::of(AttentionKind::StaleClaim));
             }
             (*id, items)
         })

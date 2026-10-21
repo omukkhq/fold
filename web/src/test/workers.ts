@@ -101,6 +101,7 @@ export function needsItem(fields: Partial<NeedsYouItem> = {}): NeedsYouItem {
     proposal: null,
     request: null,
     human: null,
+    humans: [],
     choices: [],
     header: null,
     title: null,

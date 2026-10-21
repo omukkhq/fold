@@ -142,6 +142,15 @@ pub async fn awaiting_human_review(read: &Store) -> Result<Vec<AwaitingHumanRevi
     Ok(waiting)
 }
 
+/// The open proposals whose current version waits for `human`'s review, in proposal number order: those of `waiting` whose mark names `human` or no one, as Needs you shows them to that human.
+pub fn waiting_for(waiting: &[AwaitingHumanReview], human: &HumanName) -> Vec<ProposalId> {
+    waiting
+        .iter()
+        .filter(|waiting| waiting.reviewer.as_ref().is_none_or(|named| named == human))
+        .map(|waiting| waiting.proposal)
+        .collect()
+}
+
 /// [`awaiting_human_review`] on `tx`, so a caller reads it inside a read transaction of its own.
 pub async fn awaiting_human_review_in(
     tx: &mut SqliteConnection,

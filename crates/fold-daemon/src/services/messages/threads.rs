@@ -1,9 +1,9 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use fold_core::messages::reply_addresses;
 use fold_core::{
-    Actor, Address, AgentName, FoldError, MessageBody, MessageId, ProposalId, RequestId, Sender,
-    TaskId, Timestamp, WorkerName, codes, policy,
+    Actor, Address, AgentName, FoldError, HumanName, MessageBody, MessageId, ProposalId, RequestId,
+    Sender, TaskId, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::SqliteConnection;
 use fold_store::StoreError;
@@ -29,6 +29,8 @@ pub struct ThreadQuery {
     pub agent: Option<String>,
     pub task: Option<String>,
     pub proposal: Option<String>,
+    /// Only the threads that concern this human: a message of the thread is from them, addressed to them by name or addressed to `humans`. It also makes `awaiting_human` and the count mean the asks that wait for this human.
+    pub human: Option<HumanName>,
     pub awaiting_human: bool,
     /// The `next` of the previous page.
     pub before: Option<String>,
@@ -48,8 +50,10 @@ pub struct ThreadView {
     pub request: Option<RequestId>,
     /// Every sender and recipient, in the order they first appear.
     pub participants: Vec<String>,
-    /// The thread holds a question to a human that no human has answered.
+    /// The thread holds an open ask; in a listing for one human, an open ask that waits for that human.
     pub awaiting_human: bool,
+    /// One of those asks is closable: a human can mark it answered, because it is no worker's `AskUserQuestion`, which only a reply in the thread ends.
+    pub closable: bool,
     pub last_at: Timestamp,
     pub messages: Vec<MessageView>,
 }
@@ -59,7 +63,7 @@ pub struct ThreadView {
 pub struct ThreadPage {
     pub items: Vec<ThreadView>,
     pub next: Option<MessageId>,
-    /// Threads with a question to a human that no human has answered, in the whole project whatever the filter.
+    /// Threads with an open ask in the whole project whatever the other filters; in a listing for one human, the threads with an open ask that waits for that human.
     pub total_awaiting_human: u64,
 }
 
@@ -85,7 +89,7 @@ impl MessageService {
         heads.truncate(limit as usize);
         let ids: Vec<MessageId> = heads.iter().map(|head| head.thread).collect();
         let rows = messages::threads(&mut tx, &ids).await?;
-        let awaiting = messages::threads_awaiting_human(&mut *tx).await?;
+        let awaiting = messages::threads_awaiting_human(&mut *tx, filter.human.as_ref()).await?;
         let connected = self.connected(&mut tx).await?;
         tx.commit().await.map_err(StoreError::from)?;
         let mut items: Vec<ThreadView> = group(rows)
@@ -191,7 +195,10 @@ impl MessageService {
         body: MessageBody,
         to: Option<Vec<Address>>,
     ) -> Result<MessageView, MessageError> {
-        let to_drafter = to.is_none();
+        let send = super::SendOptions {
+            to_drafter: to.is_none(),
+            asks_human: false,
+        };
         self.send_inner(
             actor,
             SendMessage {
@@ -203,7 +210,7 @@ impl MessageService {
             },
             Some(request),
             None,
-            to_drafter,
+            send,
         )
         .await
     }
@@ -265,6 +272,7 @@ fn parse_query(query: &ThreadQuery) -> Result<(ThreadFilter, u32), FoldError> {
                 .as_deref()
                 .map(str::parse::<ProposalId>)
                 .transpose()?,
+            human: query.human.clone(),
             awaiting_human: query.awaiting_human,
             before: query
                 .before
@@ -293,21 +301,22 @@ fn last_number(thread: &ThreadView) -> Option<MessageId> {
 }
 
 /// `rows` are the messages of thread `id` in number order.
-/// The one thread a single-thread read shows, as the set [`thread_view`] takes: holding `thread` when it waits for a human.
+/// The one thread a single-thread read shows, as the map [`thread_view`] takes: holding `thread`, with whether one of its asks is closable, when it waits for a human.
 async fn awaiting_set(
     conn: &mut SqliteConnection,
     thread: MessageId,
-) -> Result<BTreeSet<MessageId>, StoreError> {
-    Ok(
-        if messages::thread_awaits_human(&mut *conn, thread).await? {
-            BTreeSet::from([thread])
-        } else {
-            BTreeSet::new()
-        },
-    )
+) -> Result<BTreeMap<MessageId, bool>, StoreError> {
+    Ok(messages::thread_awaits_human(&mut *conn, thread)
+        .await?
+        .map(|closable| BTreeMap::from([(thread, closable)]))
+        .unwrap_or_default())
 }
 
-fn thread_view(id: MessageId, rows: Vec<MessageRow>, awaiting: &BTreeSet<MessageId>) -> ThreadView {
+fn thread_view(
+    id: MessageId,
+    rows: Vec<MessageRow>,
+    awaiting: &BTreeMap<MessageId, bool>,
+) -> ThreadView {
     let mut seen = HashSet::new();
     let mut participants = Vec::new();
     for row in &rows {
@@ -329,7 +338,8 @@ fn thread_view(id: MessageId, rows: Vec<MessageRow>, awaiting: &BTreeSet<Message
         proposal: messages.iter().find_map(|message| message.proposal),
         request: messages.iter().find_map(|message| message.request),
         participants,
-        awaiting_human: awaiting.contains(&id),
+        awaiting_human: awaiting.contains_key(&id),
+        closable: awaiting.get(&id).copied().unwrap_or(false),
         last_at: messages
             .last()
             .map_or(Timestamp::EPOCH, |message| message.sent_at),

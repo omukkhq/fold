@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT MAX(NOT EXISTS (SELECT 1 FROM worker_question_messages w WHERE w.message_id = q.id))\n                      AS \"closable: bool\"\n           FROM open_human_questions q WHERE q.thread_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "closable: bool",
+        "ordinal": 0,
+        "type_info": "Null",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "ccd18573707d7f02a81beb5c73702014c1403894fc9f94d76b6659591497f7fb"
+}

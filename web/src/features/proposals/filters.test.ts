@@ -9,6 +9,7 @@ import {
   listHref,
   parseListSearch,
   shownState,
+  waitingLabel,
 } from "./filters";
 
 function summary(
@@ -105,5 +106,30 @@ describe("list helpers", () => {
     expect(claimLabel(undefined)).toBe("Any claim");
     expect(claimLabel("claimed")).toBe("Claimed");
     expect(claimLabel("unclaimed")).toBe("Unclaimed");
+  });
+});
+
+describe("the waiting filter", () => {
+  it("keeps only the proposals the daemon names as waiting for you", () => {
+    expect(
+      ids(filterProposals(all, { waiting: true }, ["P-4", "P-1"])),
+    ).toEqual(["P-4"]);
+    expect(filterProposals(all, { waiting: true })).toEqual([]);
+    expect(ids(filterProposals(all, {}, ["P-4"]))).toEqual([
+      "P-3",
+      "P-4",
+      "P-2",
+    ]);
+  });
+
+  it("travels in the address and narrows the list", () => {
+    expect(parseListSearch({ waiting: "true" })).toEqual({ waiting: true });
+    expect(parseListSearch({ waiting: "no" })).toEqual({});
+    expect(listHref("demo", { waiting: true })).toBe(
+      "/p/demo/proposals?waiting=true",
+    );
+    expect(isNarrowed({ waiting: true })).toBe(true);
+    expect(waitingLabel(2)).toBe("Waits for you (2)");
+    expect(waitingLabel(0)).toBe("Waits for you");
   });
 });

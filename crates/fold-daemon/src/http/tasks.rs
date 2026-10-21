@@ -105,6 +105,8 @@ pub enum AttentionKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 pub struct AttentionItem {
     pub kind: AttentionKind,
+    /// For a `question`: one of the task's open asks is closable, so a human can mark it answered with the asks route, because it is no worker's `AskUserQuestion`, which only a reply in its thread ends. False for every other kind.
+    pub closable: bool,
 }
 
 impl From<service::AttentionKind> for AttentionKind {
@@ -122,6 +124,7 @@ impl From<service::AttentionItem> for AttentionItem {
     fn from(item: service::AttentionItem) -> Self {
         Self {
             kind: item.kind.into(),
+            closable: item.closable,
         }
     }
 }
@@ -1687,8 +1690,8 @@ mod tests {
             service::AttentionKind::Stalled,
             service::AttentionKind::StaleClaim,
         ] {
-            let wire =
-                serde_json::to_value(AttentionItem::from(service::AttentionItem { kind })).unwrap();
+            let wire = serde_json::to_value(AttentionItem::from(service::AttentionItem::of(kind)))
+                .unwrap();
             assert_eq!(wire["kind"], kind.as_str());
         }
     }

@@ -17,7 +17,9 @@ const BASE = "/api/v1/projects/demo";
 
 describe("the workspace seam", () => {
   it("lists the workspaces with their attention items", async () => {
-    const entry = workspaceEntry("ws-1", { attention: [{ kind: "stalled" }] });
+    const entry = workspaceEntry("ws-1", {
+      attention: [{ kind: "stalled", closable: false }],
+    });
     stubFetch({
       [`GET ${BASE}/workspaces`]: { body: { workspaces: [entry] } },
     });

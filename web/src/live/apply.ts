@@ -358,8 +358,11 @@ function invalidationKeys(
     case "label":
       return [board, keys.labels(slug), ...taskKey];
     case "task":
-      // Needs you lists human tasks in Todo and tasks with a blocker, which any task event can add or remove.
-      return [board, ...taskKey, keys.needsYou(slug)];
+      // Needs you lists human tasks in Todo and tasks with a blocker, which any task event can add or remove; the human review mark also decides which proposals wait for the human.
+      return type === "task.human_review_set" ||
+        type === "task.human_review_cleared"
+        ? [board, ...taskKey, keys.needsYou(slug), keys.proposals(slug)]
+        : [board, ...taskKey, keys.needsYou(slug)];
     case "dependency":
     case "checklist":
       return [board, ...taskKey];
@@ -466,7 +469,14 @@ function invalidationKeys(
           ]
         : [keys.requests(slug), ...requestKey, keys.needsYou(slug)];
     default:
-      return [keys.messages(slug), board, ...requestKey, keys.needsYou(slug)];
+      // A message to a human can open an ask, and a reply or a closure ends one, so the linked task's question attention changes with it.
+      return [
+        keys.messages(slug),
+        board,
+        ...taskKey,
+        ...requestKey,
+        keys.needsYou(slug),
+      ];
   }
 }
 
