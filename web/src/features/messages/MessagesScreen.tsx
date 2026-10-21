@@ -10,6 +10,7 @@ import {
   Bot,
   Check,
   GitPullRequest,
+  MessageCircle,
   MessageSquarePlus,
   MessagesSquare,
   SearchX,
@@ -33,6 +34,8 @@ import {
   filterLabel,
   filterOptions,
   filterThreads,
+  waitingCount,
+  waitingLabel,
   type ThreadFilter,
 } from "./filters";
 import { FeedbackDialog } from "./FeedbackDialog";
@@ -89,6 +92,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
     agent: search.agent,
     task: search.task,
     proposal: search.proposal,
+    waiting: search.waiting,
   };
   const options = filterOptions(data);
   const visible = filterThreads(data, filter);
@@ -118,9 +122,9 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
             Messages
           </h1>
           <p className="text-body text-text-muted">
-            Feedback from humans and messages from agents without native
-            messaging. Claude Code sessions talk to each other in their own
-            terminals.
+            The threads that concern you: your feedback, and messages from
+            agents to you or to every human. Agents&apos; messages to each other
+            are on each task and in Activity.
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-6">
@@ -156,6 +160,20 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
               />
             );
           })}
+          <Button
+            icon={<MessageCircle aria-hidden="true" size={15} />}
+            aria-pressed={search.waiting === true}
+            variant={search.waiting === true ? "primary" : "secondary"}
+            onClick={() => {
+              go({
+                ...search,
+                thread: undefined,
+                waiting: search.waiting === true ? undefined : true,
+              });
+            }}
+          >
+            {waitingLabel(waitingCount(data))}
+          </Button>
           <Button
             icon={<MessageSquarePlus aria-hidden="true" size={14} />}
             onClick={() => {

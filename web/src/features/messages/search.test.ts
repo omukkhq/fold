@@ -27,6 +27,12 @@ describe("normalizeSearch", () => {
       }),
     ).toEqual({});
     expect(normalizeSearch({ agent: "x".repeat(81) })).toEqual({});
+    expect(normalizeSearch({ waiting: "yes" })).toEqual({});
+  });
+  it("keeps the waiting filter in each form the router may hand over", () => {
+    for (const waiting of ["1", 1, true]) {
+      expect(normalizeSearch({ waiting })).toEqual({ waiting: true });
+    }
   });
 });
 
@@ -35,6 +41,9 @@ describe("messagesHref", () => {
     expect(messagesHref("demo", {})).toBe("/p/demo/messages");
     expect(messagesHref("demo", { agent: "a/b", thread: "m-1" })).toBe(
       "/p/demo/messages?agent=a%2Fb&thread=m-1",
+    );
+    expect(messagesHref("demo", { waiting: true })).toBe(
+      "/p/demo/messages?waiting=1",
     );
   });
 });

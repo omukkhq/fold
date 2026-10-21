@@ -529,7 +529,8 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
             "send_message",
             "get_inbox",
             "get_thread",
-            "acknowledge_message"
+            "acknowledge_message",
+            "mark_answered"
         ]
     );
     for tool in &tools {

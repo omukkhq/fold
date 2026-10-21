@@ -8,7 +8,7 @@ use utoipa_axum::routes;
 use super::actor::Human;
 use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use super::{Project, SocketOnly};
-use crate::daemon::AppState;
+use crate::daemon::{AppState, StartedBy};
 use crate::services::projects::{
     self, PullOutcome, PushOutcome, RecordOutcome, StashOutcome, UnstashOutcome,
 };
@@ -250,16 +250,50 @@ pub async fn list_humans(State(state): State<AppState>) -> Result<Json<HumanList
     }))
 }
 
-/// What the running daemon is, for `fld` to report its status.
+/// What started the daemon process.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DaemonStartedBy {
+    /// A person or a command such as `fld serve` or `fld claude`, outside the service.
+    Hand,
+    /// The systemd user service that `fld setup` installed.
+    Systemd,
+    /// The launchd agent that `fld setup` installed.
+    Launchd,
+}
+
+impl From<StartedBy> for DaemonStartedBy {
+    fn from(started_by: StartedBy) -> Self {
+        match started_by {
+            StartedBy::Hand => Self::Hand,
+            StartedBy::Systemd => Self::Systemd,
+            StartedBy::Launchd => Self::Launchd,
+        }
+    }
+}
+
+/// What the running daemon is, for `fld` and `fld doctor` to report it.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct DaemonView {
     /// The fold version the daemon runs, such as `0.3.0`.
     pub version: String,
     /// The address and port the HTTP listener is bound to, such as `127.0.0.1:7420`.
     pub listen: String,
+    /// The process id of the daemon.
+    pub pid: u32,
+    /// UTC milliseconds of the daemon's start.
+    #[schema(value_type = i64)]
+    pub started_at: Timestamp,
+    pub started_by: DaemonStartedBy,
+    /// The file name of the login shell the daemon ran at its start to read the workers' environment, such as `bash`; null when it knows none.
+    #[schema(required = true, example = "bash")]
+    pub shell: Option<String>,
+    /// UTC milliseconds of the moment the daemon started to run that shell; a shell startup file changed after it holds changes the workers lack until `fld restart`. Null when it ran none.
+    #[schema(value_type = Option<i64>, required = true)]
+    pub shell_read_at: Option<Timestamp>,
 }
 
-/// The daemon's version and the address its web interface listens on. Socket only, so a command learns the port the daemon got instead of the one its configuration asked for.
+/// The daemon's version, process and start, and the address its web interface listens on. Socket only, so a command learns the port the daemon got instead of the one its configuration asked for.
 #[utoipa::path(
     get,
     path = "/api/v1/daemon",
@@ -271,9 +305,16 @@ pub struct DaemonView {
     )
 )]
 pub async fn show_daemon(_socket: SocketOnly, State(state): State<AppState>) -> Json<DaemonView> {
+    let start = state.projects.start();
+    let environment = state.projects.environment();
     Json(DaemonView {
         version: env!("CARGO_PKG_VERSION").to_owned(),
         listen: state.listen.to_string(),
+        pid: start.pid,
+        started_at: start.started_at,
+        started_by: start.started_by.into(),
+        shell: environment.shell.clone(),
+        shell_read_at: environment.shell_read_at,
     })
 }
 

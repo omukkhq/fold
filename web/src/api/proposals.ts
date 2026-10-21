@@ -48,13 +48,15 @@ function base(slug: string, id: string) {
   return { path: { slug, id } };
 }
 
-export async function listProposals(slug: string): Promise<ProposalSummary[]> {
-  const { proposals } = await unwrap(
+/** Every proposal in number order, and the ids of the open ones whose current version waits for the signed-in human's review. */
+export type ProposalList = Schemas["ProposalList"];
+
+export async function listProposals(slug: string): Promise<ProposalList> {
+  return unwrap(
     api.GET("/api/v1/projects/{slug}/proposals", {
       params: { path: { slug } },
     }),
   );
-  return proposals;
 }
 
 /** The proposal with the gate report for the signed-in human and the current version; null for a proposal the project does not have. */

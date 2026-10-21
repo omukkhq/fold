@@ -670,6 +670,11 @@ async fn move_cursor_moves_only_from_where_the_cursor_stands() {
         "INSERT INTO agents (id, name, created_at) VALUES (1, 'fe', 0)",
     )
     .await;
+    exec(
+        &project,
+        "INSERT INTO workers (id, agent_id, name, created_at) VALUES (1, 1, 'fe', 0)",
+    )
+    .await;
     let mv = async |from: u64, to: u64| {
         project
             .store()

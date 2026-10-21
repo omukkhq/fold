@@ -155,6 +155,19 @@ async fn an_agent_approval_waits_for_the_human_the_mark_names() {
     let answer = send(&fx, Method::GET, "/proposals", None, &[]).await;
     assert_eq!(row(&answer)["latest_verdict"], "approve");
     assert_eq!(row(&answer)["human_approved"], false);
+    assert_eq!(answer.body["waiting_for_you"], json!([]), "no human named");
+    let waiting = async |human: (&'static str, &'static str)| {
+        send(&fx, Method::GET, "/proposals?state=closed", None, &[human])
+            .await
+            .body["waiting_for_you"]
+            .clone()
+    };
+    assert_eq!(
+        waiting(TANIM).await,
+        json!(["P-1"]),
+        "whatever the filter, P-1 waits for the human the mark names"
+    );
+    assert_eq!(waiting(ANA).await, json!([]));
     let answer = send(
         &fx,
         Method::POST,
@@ -174,6 +187,7 @@ async fn an_agent_approval_waits_for_the_human_the_mark_names() {
     )
     .await;
     assert_eq!(answer.body["summary"]["human_approved"], true);
+    assert_eq!(waiting(TANIM).await, json!([]), "tanim's approval stands");
     let detail = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
     assert_eq!(detail.body["summary"]["latest_verdict"], "approve");
     assert_eq!(detail.body["summary"]["human_approved"], true);

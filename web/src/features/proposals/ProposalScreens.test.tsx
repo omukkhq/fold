@@ -39,6 +39,7 @@ import {
   revision,
 } from "@/test/proposals";
 import { ThemeProvider } from "@/theme/ThemeProvider";
+import { needsItem } from "@/test/workers";
 
 vi.mock("@/api/client", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/api/client")>();
@@ -260,7 +261,31 @@ function summaries(slug: string): ProposalSummary[] {
 function routes(): void {
   daemon.shell(["demo", "ledger"]);
   daemon.on("GET /api/v1/projects/:slug/proposals", (call) =>
-    ok({ proposals: summaries(call.params.slug ?? "") }),
+    ok({
+      proposals: summaries(call.params.slug ?? ""),
+      waiting_for_you: call.params.slug === "demo" ? ["P-4"] : [],
+    }),
+  );
+  daemon.on("GET /api/v1/projects/:slug/needs-you", (call) =>
+    ok({
+      items:
+        call.params.slug === "demo"
+          ? [
+              needsItem({
+                kind: "human_review",
+                screen: "proposal",
+                proposal: "P-4",
+                human: "tanim",
+              }),
+              needsItem({
+                kind: "human_review",
+                screen: "proposal",
+                proposal: "P-5",
+                human: "ana",
+              }),
+            ]
+          : [],
+    }),
   );
   daemon.on("GET /api/v1/projects/:slug/proposals/:id", (call) => {
     const found = proposals.get(call.params.id ?? "");
@@ -492,6 +517,29 @@ describe("Proposals list", () => {
     await waitFor(async () => {
       expect(rowIds(await table())).toEqual(["P-6"]);
     });
+  });
+
+  it("marks the proposals that wait for your review, counts them on the tab and shows only them with the filter", async () => {
+    const user = userEvent.setup();
+    const { router } = renderAt("/p/demo/proposals");
+    const rows = await table();
+    const marked = within(rows)
+      .getAllByText("Waits for you")
+      .map((mark) => mark.closest("tr")?.querySelector("td")?.textContent);
+    expect(marked).toEqual(["P-4"]);
+    const nav = screen.getByRole("navigation", { name: "Project" });
+    expect(
+      (
+        await within(nav).findByRole("status", {
+          name: "1 proposal waits for your review",
+        })
+      ).textContent,
+    ).toBe("1");
+    await user.click(screen.getByRole("button", { name: "Waits for you (1)" }));
+    await waitFor(async () => {
+      expect(rowIds(await table())).toEqual(["P-4"]);
+    });
+    expect(router.state.location.search).toEqual({ waiting: true });
   });
 
   it("shows a proposal an agent opens without a reload", async () => {

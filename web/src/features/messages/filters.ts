@@ -5,6 +5,8 @@ export interface ThreadFilter {
   agent?: string;
   task?: string;
   proposal?: string;
+  /** Only the threads with an ask that waits for you, as the daemon marks them. */
+  waiting?: boolean;
 }
 
 /** The threads that match every set field, newest first. An agent matches by taking part in the thread. */
@@ -17,7 +19,8 @@ export function filterThreads(
       (t) =>
         (filter.agent === undefined || t.participants.includes(filter.agent)) &&
         (filter.task === undefined || t.task === filter.task) &&
-        (filter.proposal === undefined || t.proposal === filter.proposal),
+        (filter.proposal === undefined || t.proposal === filter.proposal) &&
+        (filter.waiting !== true || t.awaiting_human),
     )
     .sort((a, b) => b.last_at - a.last_at);
 }
@@ -26,6 +29,16 @@ function sorted(values: Iterable<string>): string[] {
   return [...new Set(values)].sort((a, b) =>
     a.localeCompare(b, undefined, { numeric: true }),
   );
+}
+
+/** How many listed threads the daemon marks as waiting for you: the threads the Messages tab badge counts. */
+export function waitingCount(threads: readonly ThreadView[]): number {
+  return threads.filter((t) => t.awaiting_human).length;
+}
+
+/** The waiting filter's text, with the number of threads it shows. */
+export function waitingLabel(count: number): string {
+  return count === 0 ? "Waits for you" : `Waits for you (${String(count)})`;
 }
 
 /** What each filter can pick, taken from the threads themselves. */

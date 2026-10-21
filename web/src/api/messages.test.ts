@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorReply, stubFetch } from "../test/stubFetch";
 import { isApiError } from "./errors";
-import { countAwaitingHuman, listThreads, sendMessage } from "./messages";
+import {
+  countAwaitingHuman,
+  listThreads,
+  markAnswered,
+  sendMessage,
+} from "./messages";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -21,6 +26,7 @@ describe("listThreads", () => {
     expect(items.map((t) => t.id)).toEqual(["m-50", "m-30"]);
     expect(more).toBe(false);
     expect(calls[0]?.search.get("limit")).toBe("200");
+    expect(calls[0]?.search.get("mine")).toBe("true");
   });
 });
 
@@ -62,7 +68,7 @@ describe("sendMessage", () => {
 });
 
 describe("countAwaitingHuman", () => {
-  it("reads the project-wide count from a page of one thread", async () => {
+  it("reads the signed-in human's count from a page of one thread", async () => {
     const calls = stubFetch({
       "GET /api/v1/projects/demo/messages": {
         body: { items: [thread("m-9")], next: "m-9", total_awaiting_human: 3 },
@@ -70,5 +76,37 @@ describe("countAwaitingHuman", () => {
     });
     await expect(countAwaitingHuman("demo")).resolves.toBe(3);
     expect(calls[0]?.search.get("limit")).toBe("1");
+    expect(calls[0]?.search.get("mine")).toBe("true");
+  });
+});
+
+describe("markAnswered", () => {
+  it("posts the thread or the task and answers with the closed asks", async () => {
+    const calls = stubFetch({
+      "POST /api/v1/projects/demo/asks/answered": {
+        body: { answered: ["m-3", "m-4"] },
+      },
+    });
+    await expect(markAnswered("demo", { thread: "m-4" })).resolves.toEqual([
+      "m-3",
+      "m-4",
+    ]);
+    await markAnswered("demo", { task: "T-2" });
+    expect(calls.map((call) => call.body)).toEqual([
+      { thread: "m-4" },
+      { task: "T-2" },
+    ]);
+  });
+
+  it("rejects with the daemon's code for an unknown task", async () => {
+    stubFetch({
+      "POST /api/v1/projects/demo/asks/answered": errorReply(
+        404,
+        "task_not_found",
+      ),
+    });
+    await expect(markAnswered("demo", { task: "T-9" })).rejects.toSatisfy(
+      (e: unknown) => isApiError(e, "task_not_found"),
+    );
   });
 });

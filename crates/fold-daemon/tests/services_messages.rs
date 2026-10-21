@@ -594,22 +594,36 @@ async fn feedback_takes_a_chosen_recipient_and_needs_one() {
 }
 
 #[tokio::test]
-async fn awaiting_human_drops_a_question_once_a_human_replies() {
+async fn awaiting_human_drops_an_ask_once_a_human_replies() {
     let fixture = Fixture::new().await;
     let question = fixture
         .messages
-        .send(
+        .send_marked(
             &agent("frontend/ui"),
             SendMessage {
                 task: Some(t(1)),
                 ..message(&["human:tanim", "backend"], "which colour?")
             },
+            None,
+            None,
+            true,
         )
         .await
         .unwrap();
     let broadcast = fixture
         .messages
-        .send(&agent("backend"), message(&["humans"], "anyone around?"))
+        .send_marked(
+            &agent("backend"),
+            message(&["humans"], "anyone around?"),
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+    fixture
+        .messages
+        .send(&agent("backend"), message(&["humans"], "the build passes"))
         .await
         .unwrap();
     fixture

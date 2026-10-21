@@ -32,6 +32,7 @@ export function message(
     request: null,
     choices: [],
     header: null,
+    asks_human: false,
     ...fields,
   };
 }
@@ -47,6 +48,7 @@ export function thread(
     request: null,
     participants: ["human:tanim", "frontend"],
     awaiting_human: false,
+    closable: false,
     last_at: 0,
     messages: [],
     ...fields,

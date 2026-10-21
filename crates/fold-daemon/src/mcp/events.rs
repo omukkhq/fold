@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use fold_core::{Event, FoldError};
+use fold_core::{Event, FoldError, WorkerName};
 use fold_store::agents::WorkerRow;
 use fold_store::events::WaitingMessage;
 use rmcp::RoleServer;
@@ -142,7 +142,7 @@ pub async fn get_events(
     };
     let page = server
         .events
-        .get_events(worker.agent_id, &query)
+        .get_events(worker, &query)
         .await
         .map_err(from_events)?;
     Ok(page_json(&page))
@@ -206,7 +206,7 @@ pub async fn wait_for_events(
     }
 }
 
-/// The `new events` part of the footer: the events after the agent's cursor that concern it.
+/// The `new events` part of the footer: the events after the calling worker's cursor that concern its agent.
 pub struct NewEventsFooter {
     agents: AgentService,
     events: EventService,
@@ -227,21 +227,37 @@ impl FooterSource for NewEventsFooter {
         &'a self,
         session: &'a SessionContext,
     ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
+        self.count_as(session, None)
+    }
+
+    /// A call whose `as` names no worker of the agent fails with its own error, so its footer counts for the main worker.
+    fn count_as<'a>(
+        &'a self,
+        session: &'a SessionContext,
+        as_worker: Option<&'a WorkerName>,
+    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
         Box::pin(async move {
-            if session.agent.is_none() {
+            let Some(agent) = session.agent.as_ref() else {
                 return 0;
-            }
-            let agent = match self.agents.require_agent(session).await {
-                Ok(agent) => agent,
-                Err(error) => {
-                    tracing::warn!(
-                        code = from_agent(error).code(),
-                        "could not count new events"
-                    );
-                    return 0;
-                }
             };
-            match self.events.new_event_count(agent.id, &agent.name).await {
+            let named = match as_worker {
+                Some(name) => self.agents.resolve_worker(session, Some(name)).await.ok(),
+                None => None,
+            };
+            let worker = match named {
+                Some(worker) => worker,
+                None => match self.agents.resolve_worker(session, None).await {
+                    Ok(worker) => worker,
+                    Err(error) => {
+                        tracing::warn!(
+                            code = from_agent(error).code(),
+                            "could not count new events"
+                        );
+                        return 0;
+                    }
+                },
+            };
+            match self.events.new_event_count(&worker, agent).await {
                 Ok(count) => count,
                 Err(error) => {
                     tracing::warn!(

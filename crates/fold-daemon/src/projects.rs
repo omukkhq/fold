@@ -10,7 +10,7 @@ use fold_store::projects::ProjectRow;
 use fold_vcs::git::Git;
 use fold_vcs::platform::Capabilities;
 
-use crate::daemon::DRAIN_TIMEOUT;
+use crate::daemon::{DRAIN_TIMEOUT, DaemonStart};
 use crate::jobs::{self, AutoCommit};
 use crate::live::{LiveConfig, LiveState};
 use crate::push::{self, PushTargets, PushTask};
@@ -451,6 +451,8 @@ pub struct Projects {
     launcher: Launcher,
     /// What the daemon found at its start about the environment of the workers.
     environment: WorkerEnvironment,
+    /// When and how the daemon process started.
+    start: DaemonStart,
     /// The host registry, whose humans a worker's `AskUserQuestion` call reaches, and from which a project whose `.fold/` is gone is removed.
     registry: Option<Store>,
     /// The runs of checks that may go at once across every project.
@@ -474,6 +476,16 @@ impl Projects {
     pub fn with_environment(mut self, environment: WorkerEnvironment) -> Self {
         self.environment = environment;
         self
+    }
+
+    #[must_use]
+    pub fn with_start(mut self, start: DaemonStart) -> Self {
+        self.start = start;
+        self
+    }
+
+    pub fn start(&self) -> DaemonStart {
+        self.start
     }
 
     pub fn launcher(&self) -> &Launcher {

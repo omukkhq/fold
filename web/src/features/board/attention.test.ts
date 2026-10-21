@@ -4,7 +4,7 @@ import type { AttentionItem, AttentionKind } from "@/api/board";
 import { attentionMark, attentionSpec, hasKind } from "./attention";
 
 const items = (...kinds: AttentionKind[]): AttentionItem[] =>
-  kinds.map((kind) => ({ kind }));
+  kinds.map((kind) => ({ kind, closable: kind === "question" }));
 
 describe("attentionSpec", () => {
   it("maps each kind to its badge and text", () => {

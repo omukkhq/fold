@@ -5,12 +5,13 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use fold_core::AgentName;
 use fold_core::tree::FlatTree;
-use fold_daemon::daemon::{AppState, DaemonState};
+use fold_daemon::daemon::{AppState, DaemonStart, DaemonState, StartedBy};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::router;
 use fold_daemon::projects::Projects;
 use fold_daemon::services::agents::AgentService;
+use fold_daemon::services::agents::environment::WorkerEnvironment;
 use fold_store::StoreError;
 use fold_store::projects::{self as registry, ProjectRow};
 use fold_store::testing::TestProject;
@@ -310,11 +311,23 @@ async fn the_git_route_reports_the_repository_the_remotes_and_the_last_push_of_e
 }
 
 #[tokio::test]
-async fn the_socket_names_the_daemons_version_and_the_port_it_listens_on() {
+async fn the_socket_names_the_daemons_version_port_process_and_shell_read() {
     let project = TestProject::new().await;
+    let started_at = fold_core::Timestamp::from_millis(1_790_000_000_000).unwrap();
+    let read_at = fold_core::Timestamp::from_millis(1_790_000_000_250).unwrap();
     let state: AppState = Arc::new(DaemonState {
         registry: project.registry().clone(),
-        projects: Projects::default(),
+        projects: Projects::default()
+            .with_start(DaemonStart {
+                started_at,
+                pid: 4242,
+                started_by: StartedBy::Systemd,
+            })
+            .with_environment(WorkerEnvironment {
+                shell: Some("bash".to_owned()),
+                shell_read_at: Some(read_at),
+                ..WorkerEnvironment::default()
+            }),
         clock: Arc::new(project.clock().clone()),
         assets: AssetSource::Embedded,
         listen: "127.0.0.1:47123".parse().unwrap(),
@@ -336,7 +349,15 @@ async fn the_socket_names_the_daemons_version_and_the_port_it_listens_on() {
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(
         body,
-        json!({"version": env!("CARGO_PKG_VERSION"), "listen": "127.0.0.1:47123"})
+        json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "listen": "127.0.0.1:47123",
+            "pid": 4242,
+            "started_at": 1_790_000_000_000_i64,
+            "started_by": "systemd",
+            "shell": "bash",
+            "shell_read_at": 1_790_000_000_250_i64,
+        })
     );
 
     let (status, body) = call(&state, Method::GET, "/api/v1/daemon", None).await;

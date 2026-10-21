@@ -220,6 +220,12 @@ describe("eventLine", () => {
       "acknowledged 2 messages",
     );
     expect(line("message.acknowledged")).toBe("acknowledged a message");
+    expect(
+      line("message.ask_closed", { message: "m-31", reason: "dismissed" }),
+    ).toBe("marked m-31 answered");
+    expect(line("message.ask_closed", { reason: "answered_elsewhere" })).toBe(
+      "recorded that an ask was answered elsewhere",
+    );
     expect(line("request.created", { request: "RQ-4" })).toBe("created RQ-4");
     expect(line("request.created")).toBe("created a request");
     expect(line("request.claimed", { request: "RQ-4" })).toBe("claimed RQ-4");

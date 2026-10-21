@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS \"worker?: String\",\n                  m.sender_human, t.number AS \"task?: i64\", p.number AS \"proposal?: i64\",\n                  rq.number AS \"request?: i64\", m.body, m.created_at\n           FROM messages m\n           LEFT JOIN workers w ON w.id = m.sender_worker_id\n           LEFT JOIN tasks t ON t.id = m.task_id\n           LEFT JOIN proposals p ON p.id = m.proposal_id\n           LEFT JOIN requests rq ON rq.id = m.request_id\n           WHERE m.number IN (SELECT value FROM json_each(?))\n           ORDER BY m.number",
+  "query": "SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS \"worker?: String\",\n                  m.sender_human, t.number AS \"task?: i64\", p.number AS \"proposal?: i64\",\n                  rq.number AS \"request?: i64\", m.body, m.created_at,\n                  m.asks_human AS \"asks_human!: bool\"\n           FROM messages m\n           LEFT JOIN workers w ON w.id = m.sender_worker_id\n           LEFT JOIN tasks t ON t.id = m.task_id\n           LEFT JOIN proposals p ON p.id = m.proposal_id\n           LEFT JOIN requests rq ON rq.id = m.request_id\n           WHERE m.number IN (SELECT value FROM json_each(?))\n           ORDER BY m.number",
   "describe": {
     "columns": [
       {
@@ -123,6 +123,17 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "name": "asks_human!: bool",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "asks_human"
+          }
+        }
       }
     ],
     "parameters": {
@@ -139,8 +150,9 @@
       true,
       true,
       false,
+      false,
       false
     ]
   },
-  "hash": "2501588e148abd1ea9f035f7e03569aa67ae6fb2fcc2b9ced9003505974fbe0b"
+  "hash": "3bcb4d1d1a48e30f93e0e24b76c76d2239bdab35fed1b5b27a10b2debebae6b1"
 }

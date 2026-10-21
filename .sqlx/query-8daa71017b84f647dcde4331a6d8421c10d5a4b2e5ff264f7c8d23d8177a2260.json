@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT q.thread_id AS \"thread!: i64\",\n                  MAX(NOT EXISTS (SELECT 1 FROM worker_question_messages w WHERE w.message_id = q.id))\n                      AS \"closable!: bool\"\n           FROM open_human_questions q\n           WHERE ?1 IS NULL OR EXISTS (\n                     SELECT 1 FROM message_recipients r\n                     WHERE r.message_id = q.id AND (r.human = ?1 OR r.addressed_as = 'humans'))\n           GROUP BY q.thread_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "thread!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "closable!: bool",
+        "ordinal": 1,
+        "type_info": "Null",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "8daa71017b84f647dcde4331a6d8421c10d5a4b2e5ff264f7c8d23d8177a2260"
+}

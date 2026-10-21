@@ -126,6 +126,7 @@ fn all_equals_the_plans_event_types() {
         "review.scope_chosen",
         "worker.model_unreachable",
         "message.pushed",
+        "message.ask_closed",
     ]);
     assert_eq!(declared, expected);
 }

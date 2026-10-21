@@ -174,13 +174,13 @@ Host config. `$XDG_CONFIG_HOME/fold/daemon.toml` (else `~/.config/fold/daemon.to
 
 The daemon serves the web app at `http://127.0.0.1:7420` by default. On loopback a person only types a name once per browser; off loopback the sign-in asks for a token from `fld token create`. Each project has these tabs, and every write a person makes there goes through the same commands as an agent's:
 
-- Board: the five columns of the tasks, with search and the Attention and Blocked only filters. The board is read only; cards move when fold's state changes. New task opens a form (title, description, area and labels, who does the work), which suggests a request first.
+- Board: the five columns of the tasks, with search and the Attention and Blocked only filters. The board is read only; cards move when fold's state changes. A card with a question for you has Mark answered, for an answer you gave elsewhere. New task opens a form (title, description, area and labels, who does the work), which suggests a request first.
 - Task (a card): edit the title, description, area and labels; edit the checklist; add and remove dependencies; set, change and clear a blocker; require or turn off human review; Mark Done on a human task; Complete task or Send back on a reported `no_proposal` task; send feedback to the task's agents; archive the task. It also shows the workspace, checkpoints, changesets, the proposal and the working changes.
 - Activity: live workspaces, review checkouts and the event stream.
-- Proposals: the list, and each proposal's diff (full or since the last review), its check runs and conflicts. A person comments on lines, approves the version, requests changes, integrates, edits a file into a new version and sends that version for review again. A batch page shows a review batch's members and stops its reviewer.
+- Proposals: the list, with the proposals that wait for your review marked Waits for you, counted on the tab and shown alone by a filter, and each proposal's diff (full or since the last review), its check runs and conflicts. A person comments on lines, approves the version, requests changes, integrates, edits a file into a new version and sends that version for review again. A batch page shows a review batch's members and stops its reviewer.
 - Requests: create a request with attachments; on a request, approve a draft, request changes, edit the draft into a new version, close it and answer its clarification thread.
 - Agents: the main agent, the leads and their workers with state, model, turns, cost and context. Start an area lead or the review lead, stop a worker, start a worker in a new session, and allow or deny a worker's tool permission.
-- Messages: threads filtered by agent, task or proposal; reply, answer a question with its choices or free text, and send feedback.
+- Messages: the threads that concern you, filtered by agent, task or proposal, or to those marked Waits for you, which the tab's count counts; reply, answer a question with its choices or free text, mark a thread's questions answered, and send feedback. Agents' messages to each other are on each task and in Activity.
 - Repository: revisions, the tree, files and a compare of two revisions.
 
 The top bar switches project, pauses and resumes the agents, and opens Needs you, which lists what waits for a human, each with a link to the screen that handles it: Questions, Permissions, Reviews, Request drafts, Human tasks, Blockers, Your changes (a conflicting change from the project folder), Git branch, Project folder (unrecorded changes in files main changed), Unstash conflict, Checks file and Worker connection (a worker that needs `fld restart`). The web app has no settings screen: config, areas, worker limits and tokens change through `.fold/config.toml`, the fold tools and `fld`.
@@ -191,7 +191,7 @@ Every fold tool by purpose; the skill holds their arguments and workflows.
 
 - Identity and agents: `register_agent`, `register_worker`, `list_agents`, `get_activity`.
 - Areas and workers: `define_area`, `update_area`, `start_worker`, `stop_worker`, `list_workers`, `set_worker_limits`, `write_handoff`, `restart_worker`, `pause_project`, `resume_project`.
-- Messages and events: `send_message`, `get_inbox`, `get_thread`, `acknowledge_message`, `get_events`, `wait_for_events`.
+- Messages and events: `send_message`, `get_inbox`, `get_thread`, `acknowledge_message`, `mark_answered`, `get_events`, `wait_for_events`.
 - Tasks: `get_task_graph`, `get_ready_tasks`, `get_task`, `create_task`, `create_task_plan`, `update_task`, `delete_task`, `archive_task`, `add_dependency`, `remove_dependency`, `create_label`, `set_blocker`, `clear_blocker`, `require_human_review`.
 - Checklists: `add_checklist_item`, `update_checklist_item`, `move_checklist_item`, `remove_checklist_item`.
 - Claims and completion: `claim_task`, `release_task`, `takeover_claim`, `report_task`, `complete_task`, `send_back_task`.

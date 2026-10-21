@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.number AS \"task!: i64\",\n                  MAX(NOT EXISTS (SELECT 1 FROM worker_question_messages w WHERE w.message_id = q.id))\n                      AS \"closable!: bool\"\n           FROM open_human_questions q\n           JOIN tasks t ON t.id = q.task_id\n           GROUP BY t.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "task!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "closable!: bool",
+        "ordinal": 1,
+        "type_info": "Null",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "fcd35953d6c0b422ae18c7f5e16de2bb378d7076f9635946e5b3f25d6e3ab1d9"
+}

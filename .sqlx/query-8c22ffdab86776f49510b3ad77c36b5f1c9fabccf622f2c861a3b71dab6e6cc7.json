@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO worker_cursors (worker_id, last_seq) VALUES (?1, ?2)\n             ON CONFLICT (worker_id) DO UPDATE SET last_seq = excluded.last_seq\n             WHERE worker_cursors.last_seq = 0",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "8c22ffdab86776f49510b3ad77c36b5f1c9fabccf622f2c861a3b71dab6e6cc7"
+}

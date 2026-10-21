@@ -400,30 +400,3 @@ pub async fn asker_answered_by(
     name.map(|name| AgentName::parse(&name).map_err(|_| StoreError::Corrupt("agents.name")))
         .transpose()
 }
-
-/// The messages among `messages` that carry a worker's `AskUserQuestion` call.
-pub async fn asked_among(
-    executor: impl SqliteExecutor<'_>,
-    messages: &[MessageId],
-) -> Result<Vec<MessageId>, StoreError> {
-    let numbers = serde_json::to_string(
-        &messages
-            .iter()
-            .map(|message| message.to_db())
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|_| StoreError::Invalid("message numbers"))?;
-    let found = sqlx::query_scalar!(
-        r#"SELECT m.number AS "number!: i64" FROM worker_question_messages q
-           JOIN messages m ON m.id = q.message_id
-           WHERE m.number IN (SELECT value FROM json_each(?1))
-           ORDER BY m.number"#,
-        numbers
-    )
-    .fetch_all(executor)
-    .await?;
-    found
-        .into_iter()
-        .map(|number| MessageId::try_from_db(number).ok_or(StoreError::Corrupt("messages.number")))
-        .collect()
-}

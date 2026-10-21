@@ -9,7 +9,7 @@ use fold_core::reviews::{HumanReviewMark, ReviewFact, Verdict, human_approval_st
 use fold_core::status::ProposalFact;
 use fold_core::tree::ChangeCounts;
 use fold_core::{
-    Actor, AgentActor, ChangesetId, CheckRunId, EventActor, FoldError, IdKind, NewEvent,
+    Actor, AgentActor, ChangesetId, CheckRunId, EventActor, FoldError, HumanName, IdKind, NewEvent,
     ProposalId, RevisionId, TaskId, TaskStatus, Timestamp, WorkerName, WorkspaceId, codes, policy,
 };
 use fold_store::reviews::{
@@ -23,6 +23,7 @@ use serde_json::json;
 
 use super::batches::close_batch_of;
 use super::checks::{GateDecision, Waiting};
+use super::human_review::{awaiting_human_review_in, waiting_for};
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
 use crate::services::page_limit;
@@ -177,6 +178,14 @@ pub struct ProposalFilter {
     pub unclaimed: bool,
     /// Only the newest this many, lowered to [`MAX_PROPOSAL_LIST`]; 0 is `invalid_request` and `None` lists all.
     pub limit: Option<u32>,
+}
+
+/// A proposal listing and the proposals that wait for one human's review.
+#[derive(Debug, Clone)]
+pub struct ProposalListing {
+    pub proposals: Vec<ProposalSummary>,
+    /// In number order.
+    pub waiting_for_human: Vec<ProposalId>,
 }
 
 /// The most proposals one listing returns.
@@ -461,6 +470,15 @@ impl ReviewService {
         &self,
         filter: ProposalFilter,
     ) -> Result<Vec<ProposalSummary>, ReviewError> {
+        Ok(self.list_proposals_for(filter, None).await?.proposals)
+    }
+
+    /// [`ReviewService::list_proposals`], with the open proposals of the whole project whatever the filter that wait for `human`'s review, read in the same read transaction so both agree. None wait when `human` is `None`.
+    pub async fn list_proposals_for(
+        &self,
+        filter: ProposalFilter,
+        human: Option<&HumanName>,
+    ) -> Result<ProposalListing, ReviewError> {
         let limit = page_limit(filter.limit, MAX_PROPOSAL_LIST)?;
         let unclaimed_at = if filter.unclaimed {
             Some(stale_cutoff(self.clock.now(), self.lease_minutes().await?))
@@ -473,16 +491,23 @@ impl ReviewService {
             let keep = usize::try_from(limit).unwrap_or(usize::MAX);
             rows.drain(..rows.len().saturating_sub(keep));
         }
-        let mut out = Vec::with_capacity(rows.len());
+        let mut proposals = Vec::with_capacity(rows.len());
         for row in rows {
             let facts = match row.human_review {
                 Some(_) => reviews::review_facts(&mut *tx, row.id, row.current_version).await?,
                 None => Vec::new(),
             };
-            out.push(ProposalSummary::new(row, &facts));
+            proposals.push(ProposalSummary::new(row, &facts));
         }
+        let waiting_for_human = match human {
+            Some(human) => waiting_for(&awaiting_human_review_in(&mut tx).await?, human),
+            None => Vec::new(),
+        };
         tx.commit().await.map_err(StoreError::from)?;
-        Ok(out)
+        Ok(ProposalListing {
+            proposals,
+            waiting_for_human,
+        })
     }
 
     /// A proposal with every version and the conflict report of the selected one. `version` selects one of them, else the current one is selected.

@@ -29,6 +29,9 @@ export function normalizeSearch(raw: Record<string, unknown>): MessagesSearch {
   if (task !== undefined) search.task = task;
   if (proposal !== undefined) search.proposal = proposal;
   if (thread !== undefined) search.thread = thread;
+  if (raw.waiting === "1" || raw.waiting === 1 || raw.waiting === true) {
+    search.waiting = true;
+  }
   return search;
 }
 
@@ -39,5 +42,6 @@ export function messagesHref(slug: string, search: MessagesSearch): string {
     const value = search[key];
     if (value !== undefined) params.set(key, value);
   }
+  if (search.waiting === true) params.set("waiting", "1");
   return withQuery(projectPath(slug, "messages"), params);
 }
