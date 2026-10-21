@@ -16,7 +16,7 @@ use fold_daemon::push::{
     self, CONNECT_TIMEOUT, Connect, MAX_TARGETS, PushTargets, PushTask, PushToken, QUEUE_LEN,
 };
 use fold_daemon::services::agents::{AgentError, AgentService, SessionContext};
-use fold_daemon::services::events::{EventBuffer, EventBus};
+use fold_daemon::services::events::{BusMessage, EventBuffer, EventBus};
 use fold_daemon::services::messages::{MessageService, SendMessage};
 use fold_daemon::services::tasks::{CreateTask, TaskService};
 use fold_store::testing::TestProject;
@@ -1295,6 +1295,7 @@ async fn a_notice_that_gets_through_records_its_push_time_on_the_agents_rows() {
     fixture
         .targets
         .register_stdin(&name("frontend"), Arc::new(|_: &str| false));
+    let mut bus = fixture.bus.subscribe();
     let sent = fixture
         .messages
         .send(
@@ -1310,6 +1311,37 @@ async fn a_notice_that_gets_through_records_its_push_time_on_the_agents_rows() {
         .await
         .unwrap();
     assert_eq!(backend.next().await, wire(TOKEN, &inbox_text(1)));
+    let mut told = Vec::new();
+    while told.len() < 2 {
+        let message = tokio::time::timeout(WAIT, bus.recv())
+            .await
+            .expect("a message.pushed within the wait")
+            .unwrap();
+        let BusMessage::Live(event) = message else {
+            continue;
+        };
+        assert_eq!(event.event_type, types::MESSAGE_PUSHED);
+        assert_eq!(event.data["message"], json!(sent.id.to_string()));
+        assert_eq!(event.data["thread"], json!(sent.thread.to_string()));
+        let agent = event.data["agent"].as_str().unwrap().to_owned();
+        let thread = fixture.messages.thread_view(sent.id).await.unwrap();
+        let row = thread.messages[0]
+            .recipients
+            .iter()
+            .find(|r| r.name.to_string() == agent)
+            .unwrap();
+        assert!(
+            row.pushed_at.is_some(),
+            "{agent} is committed before the frame"
+        );
+        told.push(agent);
+    }
+    told.sort();
+    assert_eq!(
+        told,
+        ["backend", "docs"],
+        "one frame per agent that took the notice"
+    );
     let now = fixture.project.now().as_millis();
     let times = pushed(&fixture, sent.id, |times| {
         times.iter().filter(|(_, at)| at.is_some()).count() == 2

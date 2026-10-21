@@ -61,6 +61,14 @@ const step = () =>
     tool: "Bash",
     text_length: null,
   })}\n\n`;
+/** A `message_pushed` frame is live as well. */
+const pushed = () =>
+  `data: ${JSON.stringify({
+    kind: "message_pushed",
+    message: "m-210",
+    thread: "m-208",
+    agent: "backend",
+  })}\n\n`;
 const snap = (seq: number) =>
   `data: ${JSON.stringify({ kind: "snapshot", seq, workspaces: [] })}\n\n`;
 const label = (e: EventEnvelope) => {
@@ -72,6 +80,9 @@ const label = (e: EventEnvelope) => {
   }
   if (e.kind === "worker_output") {
     return `step ${e.agent} ${e.step}`;
+  }
+  if (e.kind === "message_pushed") {
+    return `pushed ${e.message} ${e.agent}`;
   }
   return `event ${String(e.seq)}`;
 };
@@ -399,6 +410,23 @@ describe("startStream", () => {
       "open",
       "event 4",
       "step web-worker tool_use",
+      "event 5",
+    ]);
+    h.pipes[0]?.end();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.cursors).toEqual([null, 5]);
+    h.handle.stop();
+  });
+
+  it("delivers a message_pushed frame without moving the cursor", async () => {
+    const h = harness();
+    await vi.advanceTimersByTimeAsync(0);
+    h.pipes[0]?.push(frame(4) + pushed() + frame(5));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.log).toEqual([
+      "open",
+      "event 4",
+      "pushed m-210 backend",
       "event 5",
     ]);
     h.pipes[0]?.end();

@@ -362,25 +362,24 @@ pub async fn mark_delivered(
     Ok(())
 }
 
-/// Sets `pushed_at` on the rows of `agent`'s workers for the message that the event `seq` names, where they have none, and returns how many rows it set. A row keeps the time of the first notice that got through.
+/// Sets `pushed_at` on the rows of `agent`'s workers for `message`, where they have none, and returns how many rows it set. A row keeps the time of the first notice that got through.
 pub async fn mark_pushed(
     tx: &mut WriteTx,
-    seq: u64,
+    message: MessageId,
     agent: &AgentName,
     now: Timestamp,
 ) -> Result<u64, StoreError> {
-    let seq = i64::try_from(seq).map_err(|_| StoreError::Invalid("seq is out of range"))?;
+    let message = message.to_db();
     let agent = agent.as_str();
     let now = now.as_millis();
     let done = sqlx::query!(
         "UPDATE message_recipients SET pushed_at = ?1
          WHERE pushed_at IS NULL
-           AND message_id = (SELECT m.id FROM events e JOIN messages m ON m.number = e.message_id
-                             WHERE e.seq = ?2)
+           AND message_id = (SELECT id FROM messages WHERE number = ?2)
            AND worker_id IN (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id
                              WHERE a.name = ?3)",
         now,
-        seq,
+        message,
         agent
     )
     .execute(tx.conn())

@@ -103,6 +103,25 @@ describe("isEventEnvelope", () => {
     }
   });
 
+  it("accepts a message_pushed frame and refuses a malformed one", () => {
+    expect(
+      isEventEnvelope({
+        kind: "message_pushed",
+        message: "m-210",
+        thread: "m-208",
+        agent: "backend",
+      }),
+    ).toBe(true);
+    for (const bad of [
+      { kind: "message_pushed", thread: "m-208", agent: "backend" },
+      { kind: "message_pushed", message: "m-210", agent: "backend" },
+      { kind: "message_pushed", message: "m-210", thread: "m-208" },
+      { kind: "message_pushed", message: 210, thread: "m-208", agent: "b" },
+    ]) {
+      expect(isEventEnvelope(bad), JSON.stringify(bad)).toBe(false);
+    }
+  });
+
   it("accepts a worker_output frame and refuses a malformed one", () => {
     expect(
       isEventEnvelope({

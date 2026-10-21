@@ -125,6 +125,7 @@ fn all_equals_the_plans_event_types() {
         "integration.held",
         "review.scope_chosen",
         "worker.model_unreachable",
+        "message.pushed",
     ]);
     assert_eq!(declared, expected);
 }
@@ -174,14 +175,15 @@ fn parse_accepts_declared_names_and_refuses_the_rest() {
 }
 
 #[test]
-fn workspace_changed_presence_changed_and_worker_output_are_the_live_types() {
+fn workspace_changed_presence_changed_worker_output_and_message_pushed_are_the_live_types() {
     let live: Vec<_> = EventType::ALL.iter().filter(|t| t.is_live()).collect();
     assert_eq!(
         live,
         vec![
             &types::WORKSPACE_CHANGED,
             &types::AGENT_PRESENCE_CHANGED,
-            &types::WORKER_OUTPUT
+            &types::WORKER_OUTPUT,
+            &types::MESSAGE_PUSHED
         ]
     );
 }

@@ -2132,7 +2132,7 @@ export interface components {
         ErrorEnvelope: {
             error: components["schemas"]["ErrorBody"];
         };
-        /** @description One frame of a project's event stream, told apart by `kind`: a stored event, a live workspace change, a live presence change, a live worker step, or the snapshot sent after a replay. */
+        /** @description One frame of a project's event stream, told apart by `kind`: a stored event, a live workspace change, a live presence change, a live worker step, a live message push, or the snapshot sent after a replay. */
         EventEnvelope: (components["schemas"]["DurableEvent"] & {
             /** @enum {string} */
             kind: "event";
@@ -2145,6 +2145,9 @@ export interface components {
         }) | (components["schemas"]["WorkerOutput"] & {
             /** @enum {string} */
             kind: "worker_output";
+        }) | (components["schemas"]["MessagePushed"] & {
+            /** @enum {string} */
+            kind: "message_pushed";
         }) | (components["schemas"]["Snapshot"] & {
             /** @enum {string} */
             kind: "snapshot";
@@ -2467,6 +2470,21 @@ export interface components {
             description: string | null;
             /** @example Recharts */
             label: string;
+        };
+        /** @description A notice about a message got through to a session or the worker process of a recipient agent for the first time, so the message's thread shows that the message waits there. It is the `data` of the live `message.pushed` event; the recipients' `pushed_at` is committed before it is sent. */
+        MessagePushed: {
+            /**
+             * @description The recipient agent whose session or worker process took the notice.
+             * @example backend
+             */
+            agent: string;
+            /** @example m-210 */
+            message: string;
+            /**
+             * @description The thread of the message: the id of its first message.
+             * @example m-208
+             */
+            thread: string;
         };
         /** @description A stored message with public ids only. */
         MessageView: {

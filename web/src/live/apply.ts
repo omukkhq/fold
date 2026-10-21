@@ -628,6 +628,13 @@ export function applyEvent(
     applyWorkerOutput(queryClient, slug, event);
     return;
   }
+  // The thread's delivery lines read `pushed_at`, which the daemon committed before it sent the frame.
+  if (event.kind === "message_pushed") {
+    void queryClient.invalidateQueries({
+      queryKey: keys.messagesThread(slug, event.thread),
+    });
+    return;
+  }
   const durable: DurableEvent = {
     seq: event.seq,
     type: event.type,

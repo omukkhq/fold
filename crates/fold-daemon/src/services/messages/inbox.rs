@@ -134,17 +134,16 @@ pub async fn unread_count(store: &Store, agent_id: i64) -> Result<u64, MessageEr
     Ok(messages::unread_count(store.read(), agent_id).await?)
 }
 
-/// Sets `pushed_at` on `agent`'s rows of the message that the event `seq` names: a notice about it reached a session or the worker process of the agent at `now`. It appends no event, as reading an inbox appends none.
+/// Sets `pushed_at` on `agent`'s rows of `message` that have none, because a notice about it reached a session or the worker process of the agent at `now`, and returns how many rows it set. It appends no stored event, as reading an inbox appends none; the caller sends the live `message.pushed` after the commit.
 pub(crate) async fn record_pushed(
     store: &Store,
     agent: &AgentName,
-    seq: u64,
+    message: MessageId,
     now: Timestamp,
-) -> Result<(), MessageError> {
-    store
-        .write(async |tx| messages::mark_pushed(tx, seq, agent, now).await)
-        .await?;
-    Ok(())
+) -> Result<u64, MessageError> {
+    Ok(store
+        .write(async |tx| messages::mark_pushed(tx, message, agent, now).await)
+        .await?)
 }
 
 async fn acting_worker(tx: &mut WriteTx, agent: &AgentActor) -> Result<WorkerRow, MessageError> {
