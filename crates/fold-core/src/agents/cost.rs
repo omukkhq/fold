@@ -2,6 +2,17 @@ use std::collections::BTreeMap;
 
 use crate::{AgentName, AreaName, ProposalId, Role, TaskId, Timestamp, WorkerState};
 
+/// What one turn of a session cost, and the session's running total after it. Claude Code reports the running total of the session in each result, and `--resume` goes on from the total the session had, so a turn costs what the total grew by. A total below `session_total` comes from a process that counted again from nothing, so all of it is the turn's; a total of 0 is a result without a count, such as an answer to an interrupt, and changes nothing.
+pub fn session_turn(reported: u64, session_total: u64) -> (u64, u64) {
+    if reported >= session_total {
+        (reported - session_total, reported)
+    } else if reported == 0 {
+        (0, session_total)
+    } else {
+        (reported, reported)
+    }
+}
+
 /// The turns of one worker with one model for one subject: a task its task worker built, or a proposal its reviewer reviewed with that proposal's task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnGroup {
@@ -339,6 +350,15 @@ mod tests {
 
     fn area(name: &str) -> Option<AreaName> {
         Some(AreaName::parse(name).unwrap())
+    }
+
+    #[test]
+    fn a_turn_costs_what_the_sessions_total_grew_by() {
+        assert_eq!(session_turn(2970, 0), (2970, 2970));
+        assert_eq!(session_turn(6514, 6136), (378, 6514));
+        assert_eq!(session_turn(6136, 6136), (0, 6136));
+        assert_eq!(session_turn(0, 6136), (0, 6136));
+        assert_eq!(session_turn(300, 6136), (300, 300));
     }
 
     #[test]

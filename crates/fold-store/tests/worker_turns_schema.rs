@@ -51,7 +51,7 @@ async fn process(store: &Store, agent_id: i64, role: Role, area_id: Option<i64>)
         .unwrap()
 }
 
-/// Ends a turn of row `id` whose process reports the running total `total`.
+/// Ends a turn of row `id` whose process reports the session's running total `total`.
 #[cfg(test)]
 async fn turn(store: &Store, id: i64, total: u64, millis: i64) {
     store
@@ -60,7 +60,7 @@ async fn turn(store: &Store, id: i64, total: u64, millis: i64) {
                 tx,
                 id,
                 TurnTotals {
-                    cost_micro_usd: total,
+                    reported_micro_usd: total,
                     input_tokens: 3,
                     output_tokens: 4,
                     cache_read_tokens: 5,
@@ -96,8 +96,17 @@ async fn each_turn_appends_the_cost_it_added_and_the_row_keeps_its_totals() {
     turn(&store, lead, 300, 1_000).await;
     turn(&store, lead, 450, 2_000).await;
     turn(&store, lead, 450, 3_000).await;
-    // A process whose total starts again lower than the row's counts the turn as free.
+    // A process whose total starts again from nothing counts all of it for the turn.
     turn(&store, lead, 100, 4_000).await;
+    // A result without a count, such as an interrupt's answer, keeps the session's total.
+    turn(&store, lead, 0, 4_500).await;
+    turn(&store, lead, 130, 4_600).await;
+    // A new session counts from nothing.
+    store
+        .write(async |tx| agents::refresh_session(tx, lead, "s-2", at(4_700)).await)
+        .await
+        .unwrap();
+    turn(&store, lead, 80, 5_000).await;
     let turns = sqlx::query_as::<_, (i64, String, Option<i64>, Option<String>, i64, i64, i64, i64, i64, i64)>(
         "SELECT cost_micro_usd, role, area_id, model, input_tokens, output_tokens, cache_read_tokens,
                 cache_write_tokens, failed, created_at
@@ -108,7 +117,18 @@ async fn each_turn_appends_the_cost_it_added_and_the_row_keeps_its_totals() {
     .await
     .unwrap();
     let costs: Vec<(i64, i64)> = turns.iter().map(|row| (row.0, row.9)).collect();
-    assert_eq!(costs, [(300, 1_000), (150, 2_000), (0, 3_000), (0, 4_000)]);
+    assert_eq!(
+        costs,
+        [
+            (300, 1_000),
+            (150, 2_000),
+            (0, 3_000),
+            (100, 4_000),
+            (0, 4_500),
+            (30, 4_600),
+            (80, 5_000)
+        ]
+    );
     let first = &turns[0];
     assert_eq!(
         (first.1.as_str(), first.2, first.3.as_deref()),
@@ -118,13 +138,20 @@ async fn each_turn_appends_the_cost_it_added_and_the_row_keeps_its_totals() {
         (first.4, first.5, first.6, first.7, first.8),
         (3, 4, 5, 6, 0)
     );
-    assert_eq!(subjects(&store, lead).await, [(None, None); 4]);
+    assert_eq!(subjects(&store, lead).await, [(None, None); 7]);
     let mut conn = store.read().acquire().await.unwrap();
     let row = agents::find_worker_process(&mut conn, &AgentName::parse("web-lead").unwrap())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!((row.turns, row.cost_micro_usd), (4, 100));
+    assert_eq!((row.turns, row.cost_micro_usd), (7, 660));
+    let session: i64 =
+        sqlx::query_scalar("SELECT session_cost_micro_usd FROM worker_processes WHERE id = ?")
+            .bind(lead)
+            .fetch_one(store.read())
+            .await
+            .unwrap();
+    assert_eq!(session, 80);
 }
 
 #[tokio::test]

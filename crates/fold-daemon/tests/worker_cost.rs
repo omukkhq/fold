@@ -82,7 +82,7 @@ async fn web_area(harness: &mut Harness) {
 
 #[tokio::test]
 async fn a_stopped_and_resumed_task_worker_keeps_every_turn_in_the_project_and_task_cost() {
-    let fake = FakeClaude::new("result");
+    let fake = FakeClaude::new("result").resuming_with("resumed");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     web_area(&mut harness).await;
     until_idle_after(&harness, "web-lead", 1).await;
@@ -228,4 +228,58 @@ async fn a_stopped_and_resumed_task_worker_keeps_every_turn_in_the_project_and_t
         today >= second.cost_micro_usd - first.cost_micro_usd && today < all_time,
         "{cost}"
     );
+}
+
+/// Claude Code's `--resume` goes on from the session's running total: the recorded session ends its interrupted turn at $0.00613623 and its resumed turn at $0.00651414, so the resumed turn cost only what the total grew by.
+#[tokio::test]
+async fn a_resumed_session_counts_only_what_its_running_total_grew_by() {
+    let fake = FakeClaude::new("interrupt").resuming_with("resumed");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    web_area(&mut harness).await;
+    until_idle_after(&harness, "web-lead", 1).await;
+    harness
+        .call(
+            "web-lead",
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-1"]}),
+        )
+        .await;
+    let first = until_idle_after(&harness, "web-worker", 1).await;
+    assert_eq!(first.cost_micro_usd, 6136);
+
+    let clock = harness.project.clock().clone();
+    harness
+        .handle
+        .workers
+        .sweep_idle(clock.advance(Duration::from_secs(15 * 60)).unwrap())
+        .await
+        .unwrap();
+    let resumed_at = clock.now();
+    harness
+        .handle
+        .agents()
+        .resume_worker(
+            &Actor::human(HumanName::parse("ana").unwrap()),
+            &name("web-worker"),
+            "Go on.".to_owned(),
+        )
+        .await
+        .unwrap();
+    let second = until_idle_after(&harness, "web-worker", 2).await;
+    assert_eq!(
+        second.cost_micro_usd, 6514,
+        "6136 and the 378 of the resumed turn"
+    );
+
+    let recent = get(
+        &harness,
+        &format!(
+            "/api/v1/projects/{SLUG}/cost?since={}",
+            resumed_at.as_millis()
+        ),
+    )
+    .await;
+    assert_eq!(amount(&recent["workers"], "name", "web-worker"), 378);
+    let of_task = get(&harness, &format!("/api/v1/projects/{SLUG}/cost/tasks/T-1")).await;
+    assert_eq!(of_task["build_micro_usd"], 6514);
 }

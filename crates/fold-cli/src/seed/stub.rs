@@ -113,6 +113,9 @@ struct State {
     sessions: Vec<String>,
     turn: usize,
     vars: BTreeMap<String, String>,
+    /// The running cost each session reported last, from which a `--resume` of it goes on, as Claude Code's does.
+    #[serde(default)]
+    costs: BTreeMap<String, f64>,
 }
 
 /// Plays Claude Code for fold's supervisor: answers the control requests and runs the agent's script, one script turn per user turn, through the `fold` server of `--mcp-config`. It exits when stdin closes, and with an error once a step fails, so the worker ends `failed`.
@@ -144,6 +147,11 @@ async fn serve_stdio(options: Options) -> Result<(), StubError> {
     if !options.resume && !state.sessions.contains(&options.session) {
         state.sessions.push(options.session.clone());
     }
+    let base_cost = if options.resume {
+        state.costs.get(&options.session).copied().unwrap_or(0.0)
+    } else {
+        0.0
+    };
     let (sender, lines) = mpsc::unbounded_channel();
     tokio::spawn(read_stdin(sender));
     let mut stub = Stub {
@@ -157,6 +165,7 @@ async fn serve_stdio(options: Options) -> Result<(), StubError> {
         tools: None,
         turns: 0,
         calls: 0,
+        base_cost,
         out: tokio::io::stdout(),
     };
     stub.save().await?;
@@ -231,6 +240,8 @@ struct Stub<W> {
     turns: u32,
     /// The tool calls this process made, which number their ids.
     calls: u32,
+    /// The session's running cost before this process.
+    base_cost: f64,
     out: W,
 }
 
@@ -565,13 +576,16 @@ impl<W: AsyncWrite + Unpin> Stub<W> {
     ) -> Result<(), StubError> {
         let session = self.options.session.clone();
         let turns = self.turns;
+        let total = self.base_cost + running_cost(turns, self.calls);
+        self.state.costs.insert(session.clone(), total);
+        self.save().await?;
         self.emit(&json!({
             "type": "result",
             "subtype": subtype,
             "is_error": is_error,
             "num_turns": turns,
             "session_id": session,
-            "total_cost_usd": running_cost(turns, self.calls),
+            "total_cost_usd": total,
             "duration_ms": 0,
             "usage": usage(),
             "result": reply,
@@ -600,7 +614,7 @@ impl<W: AsyncWrite + Unpin> Stub<W> {
     }
 }
 
-/// A made-up running cost of the process, as Claude Code reports a running total in each result, so a seeded project's cost view has numbers: 1.25 cents a turn and 0.4 cents a tool call.
+/// A made-up cost of the process's turns, which the session's running total adds up as Claude Code's does, so a seeded project's cost view has numbers: 1.25 cents a turn and 0.4 cents a tool call.
 fn running_cost(turns: u32, calls: u32) -> f64 {
     f64::from(turns) * 0.0125 + f64::from(calls) * 0.004
 }
@@ -837,6 +851,7 @@ mod tests {
             tools: None,
             turns: 0,
             calls: 0,
+            base_cost: 0.0,
             out: Vec::new(),
         }
     }
@@ -1013,6 +1028,21 @@ mod tests {
             std::fs::read_to_string(elsewhere.join("kept.txt")).unwrap(),
             "kept\n"
         );
+    }
+
+    #[tokio::test]
+    async fn a_resumed_process_goes_on_from_its_sessions_running_cost() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut stub = stub(dir.path(), &json!({"turns": []}), true, &[]);
+        stub.base_cost = 0.05;
+        stub.turns = 1;
+        stub.result(false, "success", Some("ok")).await.unwrap();
+        let text = String::from_utf8(stub.out.clone()).unwrap();
+        let result: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+        let total = result["total_cost_usd"].as_f64().unwrap();
+        assert!((total - 0.0625).abs() < 1e-9, "{total}");
+        let state = read_state(&dir.path().join(STATE_FILE)).await.unwrap();
+        assert!((state.costs["s-1"] - 0.0625).abs() < 1e-9);
     }
 
     #[test]

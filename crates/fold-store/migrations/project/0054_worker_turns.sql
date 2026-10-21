@@ -1,4 +1,4 @@
--- One finished turn of a supervised worker, with what Claude Code reported for it: the cost the turn added to the process's running total and the turn's own token counts, at the time the turn ended. A turn counts for the one task or proposal it worked on, or for none. The worker's role and area are copied from its row, so a sum by role or area needs no join; the model is the one the row named when the turn ended.
+-- One finished turn of a supervised worker, with what Claude Code reported for it: the cost the turn added to the session's running total and the turn's own token counts, at the time the turn ended. A turn counts for the one task or proposal it worked on, or for none. The worker's role and area are copied from its row, so a sum by role or area needs no join; the model is the one the row named when the turn ended.
 CREATE TABLE worker_turns (
     id INTEGER PRIMARY KEY,
     worker_process_id INTEGER NOT NULL REFERENCES worker_processes (id),
@@ -38,3 +38,7 @@ CREATE TRIGGER worker_turns_no_delete BEFORE DELETE ON worker_turns
 BEGIN
     SELECT RAISE(ABORT, 'worker_turns is append-only');
 END;
+
+-- The running total that Claude Code last reported for the row's current session. A `--resume` goes on from the session's total, so each turn adds what that total grew by; a new session starts it at 0.
+ALTER TABLE worker_processes ADD COLUMN session_cost_micro_usd INTEGER NOT NULL DEFAULT 0
+    CONSTRAINT worker_processes_session_cost_count CHECK (session_cost_micro_usd >= 0);
