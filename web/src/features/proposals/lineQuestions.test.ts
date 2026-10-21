@@ -51,7 +51,7 @@ function question(fields: Partial<LineQuestion> = {}): LineQuestion {
 }
 
 describe("lineQuestions", () => {
-  it("reads each question about the proposal's lines, oldest first, answered once a worker of a recipient's agent writes after it", () => {
+  it("reads each question about the proposal's lines, oldest first, answered once an agent writes after it", () => {
     const asked = message("m-12", {
       thread: "m-12",
       sender: "human:tanim",
@@ -112,6 +112,36 @@ describe("lineQuestions", () => {
       }),
     ];
     expect(lineQuestions(threads, "P-4").map((q) => q.answered)).toEqual([
+      false,
+    ]);
+  });
+
+  it("any agent's later message answers a question, and fold's notice does not", () => {
+    const asked = (id: string) =>
+      message(id, {
+        thread: id,
+        sender: "human:tanim",
+        proposal: "P-4",
+        recipients: [recipient("backend/db")],
+        lines: lines(),
+      });
+    const threads = [
+      thread("m-1", {
+        messages: [
+          asked("m-1"),
+          message("m-2", { thread: "m-1", sender: "fold" }),
+          message("m-3", { thread: "m-1", sender: "web-lead" }),
+        ],
+      }),
+      thread("m-4", {
+        messages: [
+          asked("m-4"),
+          message("m-5", { thread: "m-4", sender: "fold" }),
+        ],
+      }),
+    ];
+    expect(lineQuestions(threads, "P-4").map((q) => q.answered)).toEqual([
+      true,
       false,
     ]);
   });

@@ -15,7 +15,7 @@ export interface LineQuestion {
   range: DiffSelection;
   /** The workers the question went to. */
   to: string[];
-  /** A worker of a recipient's agent wrote in the thread after the question. */
+  /** An agent wrote in the thread after the question: the author, or the lead the question went on to. */
   answered: boolean;
 }
 
@@ -23,10 +23,9 @@ function idNumber(id: string): number {
   return Number(id.slice(id.indexOf("-") + 1));
 }
 
-/** The agent of a worker such as `frontend/ui`; any other sender, such as `human:ana`, stays as it is. */
-function agentOf(sender: string): string {
-  const slash = sender.indexOf("/");
-  return slash < 0 ? sender : sender.slice(0, slash);
+/** A sender is a worker, `human:<name>` or `fold`. */
+function isAgent(sender: string): boolean {
+  return sender !== "fold" && !sender.startsWith("human:");
 }
 
 /** The questions about lines of `proposal` in `threads`, oldest first. */
@@ -40,11 +39,9 @@ export function lineQuestions(
         const lines = message.lines;
         if (lines === null || message.proposal !== proposal) return [];
         const to = message.recipients.map((r) => r.name);
-        const agents = to.map(agentOf);
         const answered = thread.messages.some(
           (later) =>
-            idNumber(later.id) > idNumber(message.id) &&
-            agents.includes(agentOf(later.sender)),
+            idNumber(later.id) > idNumber(message.id) && isAgent(later.sender),
         );
         const question: LineQuestion = {
           id: message.id,
