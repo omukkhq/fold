@@ -1,3 +1,4 @@
+import { reviewerText } from "./proposalStrip";
 import type {
   HumanReviewMark,
   CardProposalState,
@@ -161,8 +162,16 @@ const PROPOSAL_STATES: Record<CardProposalState, string> = {
   integrated: "integrated",
 };
 
-export function proposalStateText(state: CardProposalState, version: number) {
-  return `${PROPOSAL_STATES[state]} · v${String(version)}`;
+/** `waiting for review · v2`, with ` · with @review-lead` while a reviewer holds the review claim. */
+export function proposalStateText(
+  state: CardProposalState,
+  version: number,
+  reviewClaim: string | null = null,
+) {
+  const text = `${PROPOSAL_STATES[state]} · v${String(version)}`;
+  return reviewClaim === null
+    ? text
+    : `${text} · with ${reviewerText(reviewClaim)}`;
 }
 
 export function integrationText(integration: TaskIntegration): Segment[] {

@@ -276,3 +276,21 @@ fn only_a_human_may_change_the_human_review_mark() {
         "frontend"
     )));
 }
+
+#[tokio::test]
+async fn the_proposal_of_the_task_read_names_its_title_files_and_review_claim() {
+    let fx = Fixture::new().await;
+    fx.proposal().await;
+    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    let review = fx.agents.actor(&fx.review.ctx, None).await.unwrap();
+
+    let open = fx.tasks.get_view(t(1)).await.unwrap().proposal.unwrap();
+    assert!(!open.title.is_empty());
+    assert!(open.files >= 1);
+    assert_eq!(open.review_claim, None);
+
+    fx.reviews.claim_review(&review, p(1)).await.unwrap();
+    let claimed = fx.tasks.get_view(t(1)).await.unwrap().proposal.unwrap();
+    assert_eq!(claimed.review_claim.as_deref(), Some("review"));
+    assert_eq!((claimed.title, claimed.files), (open.title, open.files));
+}

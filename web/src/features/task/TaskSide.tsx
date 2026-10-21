@@ -276,7 +276,11 @@ function Proposal({ slug, task }: { slug: string; task: TaskDetail }) {
           <p className="flex items-center gap-8 text-bar text-text">
             <Mono href={proposalPath(slug, proposal.id)}>{proposal.id}</Mono>
             <span className="text-text-muted">
-              {proposalStateText(proposal.state, proposal.version)}
+              {proposalStateText(
+                proposal.state,
+                proposal.version,
+                proposal.review_claim,
+              )}
             </span>
           </p>
           {proposal.reviews.length > 0 ? (

@@ -3696,11 +3696,20 @@ export interface components {
         TaskProposal: {
             /** @description The integration checks of the current version failed, so the proposal is back with its author until a new version. */
             checks_failed: boolean;
+            /**
+             * Format: int32
+             * @description How many files the current version adds, modifies and deletes.
+             */
+            files: number;
             /** @example P-3 */
             id: string;
+            /** @description The worker that holds the open review claim; null while no reviewer holds one. */
+            review_claim: string | null;
             /** @description Newest first. */
             reviews: components["schemas"]["TaskReview"][];
             state: components["schemas"]["ProposalState"];
+            /** @description The proposal's title. */
+            title: string;
             /**
              * Format: int32
              * @description The current version.

@@ -585,7 +585,14 @@ pub struct TaskReview {
 pub struct TaskProposal {
     #[schema(example = "P-3")]
     pub id: String,
+    /// The proposal's title.
+    pub title: String,
     pub state: ProposalState,
+    /// The worker that holds the open review claim; null while no reviewer holds one.
+    #[schema(required = true)]
+    pub review_claim: Option<String>,
+    /// How many files the current version adds, modifies and deletes.
+    pub files: u32,
     /// The current version.
     pub version: u32,
     /// The integration checks of the current version failed, so the proposal is back with its author until a new version.
@@ -794,6 +801,9 @@ impl From<service::TaskDetail> for TaskView {
                 .collect(),
             proposal: detail.proposal.map(|proposal| TaskProposal {
                 id: proposal.id.to_string(),
+                title: proposal.title,
+                review_claim: proposal.review_claim,
+                files: proposal.files,
                 state: proposal.standing.into(),
                 version: proposal.version,
                 checks_failed: proposal.checks_failed,

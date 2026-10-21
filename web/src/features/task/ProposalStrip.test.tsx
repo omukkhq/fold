@@ -38,6 +38,9 @@ async function mount(task: TaskDetail) {
 
 const proposal = {
   id: "P-7",
+  title: "Add the form",
+  review_claim: null,
+  files: 3,
   state: "open" as const,
   version: 2,
   checks_failed: false,

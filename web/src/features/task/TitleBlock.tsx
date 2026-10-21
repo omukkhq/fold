@@ -129,9 +129,16 @@ function ProposalStrip({ slug, task }: { slug: string; task: TaskDetail }) {
         size={15}
         className="shrink-0 text-secondary-text"
       />
-      <span className="min-w-0 flex-1 truncate text-bar font-semibold text-text">
+      <span className="shrink-0 text-bar font-semibold text-text">
         {strip.lead}
       </span>
+      {strip.rest ? (
+        <span className="min-w-0 flex-1 truncate text-bar text-text-muted">
+          {strip.rest}
+        </span>
+      ) : (
+        <span className="flex-1" />
+      )}
       <LinkButton href={proposalPath(slug, strip.proposal)} icon={ArrowRight}>
         Go to proposal
       </LinkButton>
