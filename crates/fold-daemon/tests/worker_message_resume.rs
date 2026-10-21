@@ -287,3 +287,35 @@ async fn a_task_worker_whose_session_is_gone_sends_the_message_on_to_the_area_le
         WorkerState::Failed
     );
 }
+
+#[tokio::test]
+async fn a_message_from_the_lead_that_cannot_start_the_worker_goes_back_to_the_lead() {
+    let fake = FakeClaude::new("result");
+    let (harness, _work) =
+        proposed_by_a_task_worker(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    fill_the_area(&harness).await;
+
+    let message = harness
+        .send("web-lead", &[TASK_WORKER], "Did you test the page?")
+        .await;
+    let row = until_recipient(&harness, &message, TASK_WORKER, |row| {
+        !row["forwarded_to"].is_null()
+    })
+    .await;
+    assert_eq!(row["forwarded_to"], "web-lead", "{row}");
+    let note = until_forward_note(&harness, &message).await;
+    assert_eq!(names(&note), ["web-lead"]);
+    assert_eq!(
+        note["body"],
+        format!(
+            "@{TASK_WORKER} cannot start now to answer {message}, so it stays unread. Answer it yourself or start the worker again."
+        )
+    );
+    let sent = thread(&harness, &message).await;
+    assert_eq!(
+        names(&sent["messages"][0]),
+        [TASK_WORKER],
+        "the lead gets no row of its own message"
+    );
+    assert_eq!(fake.runs_of(TASK_WORKER).len(), 1);
+}
