@@ -4,7 +4,7 @@ Thank you for helping. The GitHub repository is a read-only mirror of our intern
 
 ## Report a bug or ask for a feature
 
-Open an [issue on GitHub](https://github.com/omukkhq/fold/issues). For a bug, give the `fld --version` output, the steps that cause it, what you expected and what happened. `fld doctor` output helps too.
+Open an [issue on GitHub](https://github.com/omukkhq/fold/issues). For a bug, give the `fld --version` output, the full output of `fld doctor`, the steps that cause it, what you expected and what happened.
 
 ## Report a security problem
 

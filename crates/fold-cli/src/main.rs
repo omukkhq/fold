@@ -309,7 +309,7 @@ mod tests {
             panic!("expected a parse failure, got {result:?}");
         };
         assert_eq!(error.kind(), ErrorKind::DisplayVersion);
-        assert_eq!(error.to_string().trim(), "fld 0.3.0");
+        assert_eq!(error.to_string().trim(), "fld 0.4.0");
         assert!(out.is_empty());
     }
 

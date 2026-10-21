@@ -36,7 +36,7 @@ Install fold on **Linux AMD64 (x86_64)**, **Linux ARM64 (aarch64)**, or **macOS 
 curl -fsSL https://omukk.dev/fold/install.sh | sh
 ```
 
-The script installs `fld` into `~/.local/bin`. Run it again to update fold, then run `fld restart` so a running daemon uses the new version. To choose another folder or a specific release, set `FOLD_INSTALL_DIR` or `FOLD_VERSION`, for example `FOLD_VERSION=v0.2.1`.
+The script installs `fld` into `~/.local/bin`. Run it again to update fold, then run `fld restart` so a running daemon uses the new version. To choose another folder or a specific release, set `FOLD_INSTALL_DIR` or `FOLD_VERSION`, for example `FOLD_VERSION=v0.3.0`.
 
 To uninstall fold, run:
 
@@ -69,7 +69,9 @@ fld claude
 
 The first time you use fld on a device, it asks for the name that fold shows for you, and keeps it for every project. Set `FOLD_HUMAN` to use another name.
 
-`fld init` adds fold's section to the project's agent instructions and the fold skill to the project. The first `fld claude` or `fld setup` asks once to add the fold connection and hooks to your Claude Code user configuration. `fld claude` starts the daemon when needed and opens your main agent session. To start the daemon at login instead, run `fld setup` once: it installs a systemd user service on Linux and a launchd agent on macOS.
+`fld init` adds fold's section to the project's agent instructions and the fold skill to the project. The first `fld claude` or `fld setup` asks once to add the fold connection and hooks to your Claude Code user configuration. `fld claude` starts the daemon when needed and opens your main agent session. To start the daemon at login instead, run `fld setup` once: it installs a systemd user service on Linux and a launchd agent on macOS. Run `fld` alone to see the daemon's state, its version and web address, and the project of the current folder.
+
+The **Projects** page lists the projects in fold, and a search by name, slug, or folder also finds the removed ones. **Remove** takes a project off fold while no worker of the project runs, and leaves its data in its folder; `fld claude`, `fld new`, or `fld init` in that folder, or **Add back** in the search, brings it back.
 
 ### Describe the work
 
@@ -79,7 +81,7 @@ Tell the main agent what you want to build, the constraints, and how you will ch
 
 The main agent presents a plan for your approval, then starts the agents that build and review it.
 
-Open **[127.0.0.1:7420](http://127.0.0.1:7420)** in your browser to follow the project. The board shows tasks across **Backlog**, **Todo**, **In Progress**, **Review**, and **Done**. **Needs you** brings together questions, permissions, reviews, and other items that need your decision.
+Open **[127.0.0.1:7420](http://127.0.0.1:7420)** in your browser to follow the project. The board shows tasks across **Backlog**, **Todo**, **In Progress**, **Review**, and **Done**. **Needs you** brings together questions, permissions, reviews, and other items that need your decision. **Messages** shows the threads with you, and **Mark answered** closes an agent's question that you answered somewhere else, for example to the main agent, unless the agent waits for your reply. The **Messages** and **Proposals** tabs count the threads and proposals that wait for you.
 
 ## How it works
 
@@ -146,7 +148,9 @@ Run these commands inside your project:
 | `fld unstash` | Bring the newest stashed changes back into the project folder. If they conflict, fix the conflict markers, then run `fld record`. |
 | `fld setup` | Start the daemon at login. |
 | `fld restart` | Restart the daemon after an update, so the new version takes over. Workers continue in their sessions. |
-| `fld doctor` | Check the installation, daemon, and projects, with suggested fixes. |
+| `fld` | Show fold's status: the version, whether the daemon runs and where, the service, and the current project. |
+| `fld log` | List main's revisions, newest first: `fld log -n 50` shows more, and `fld log --oneline` shows one line each. |
+| `fld doctor` | Check the installation, daemon, and projects, with suggested fixes. It names the running daemon and its version, says why workers cannot sign in, and repeats every problem with its fix at the end. |
 | `fld transcript` | Find an agent's Claude Code transcript: `fld transcript <agent>` prints the path of the file of its current session, and `fld transcript <agent> --tail N` prints the file's last N lines. |
 | `fld gc` | Delete objects that nothing refers to, prune old automatic checkpoints, and remove the folders of workspaces closed for longer than `closed_workspace_days` (14 days by default). The daemon also runs it every day; `fld gc` needs a running daemon. `fld gc --dry-run` counts what a run would remove and changes nothing. |
 | `fld token` | Manage the tokens that sign a person in to the web interface off localhost: `fld token create`, `fld token list`, and `fld token revoke`. |
@@ -156,7 +160,7 @@ A project pause stops workers; approved proposals can still integrate.
 
 ## Help and contributions
 
-Report bugs and request features through [GitHub Issues](https://github.com/omukkhq/fold/issues). For a bug report, include `fld --version`, your system, and the steps to reproduce it. `fld doctor` can help identify setup problems.
+Report bugs and request features through [GitHub Issues](https://github.com/omukkhq/fold/issues). For a bug report, include `fld --version`, your system, the full output of `fld doctor`, and the steps to reproduce it.
 
 The GitHub repository is a read-only mirror. We accept code patches by email; [CONTRIBUTING.md](CONTRIBUTING.md) explains the process and the development setup.
 
