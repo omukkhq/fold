@@ -79,7 +79,7 @@ struct Common {
 
 #[derive(Args, Debug)]
 struct WebhookArgs {
-    /// The http or https URL that receives the posts
+    /// The https URL that receives the posts; http only to localhost or a loopback address
     url: String,
     /// Read the signing secret from the first line of standard input; without it fld makes one and prints it once
     #[arg(long)]
@@ -94,7 +94,7 @@ enum Security {
     Tls,
     /// A plain connection that STARTTLS upgrades first, port 587 by default
     Starttls,
-    /// No TLS, for a relay on a trusted network, port 25 by default; it takes no password
+    /// No TLS, only for a relay on localhost or a loopback address, port 25 by default; it takes no password
     None,
 }
 

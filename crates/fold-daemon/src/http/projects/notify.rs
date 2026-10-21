@@ -49,7 +49,7 @@ pub enum NotifyTargetKind {
     Email,
 }
 
-/// How an email target reaches its SMTP server: `tls` from the first byte (port 465 by default), `starttls` on a plain connection that is upgraded first (port 587), `none` for a relay on a trusted network (port 25), which takes no password.
+/// How an email target reaches its SMTP server: `tls` from the first byte (port 465 by default), `starttls` on a plain connection that is upgraded first (port 587), `none` only for a relay on this machine (localhost or a loopback address, port 25), which takes no password.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NotifySecurity {
@@ -310,7 +310,7 @@ pub async fn set_host_notify(
     request_body = NewNotifyTargetBody,
     responses(
         (status = 201, description = "The new target", body = NotifyTargetEntry),
-        (status = 400, description = "`invalid_notify_target` or `invalid_request`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_notify_target`, `plaintext_notify_target` (an http:// webhook or an SMTP server without TLS off this machine) or `invalid_request`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 500, description = "`notify_settings_io` or internal error", body = ErrorEnvelope),
     )
@@ -446,7 +446,7 @@ pub async fn show_project_notify(
     request_body = NewNotifyTargetBody,
     responses(
         (status = 201, description = "The new target", body = NotifyTargetEntry),
-        (status = 400, description = "`invalid_notify_target` or `invalid_request`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_notify_target`, `plaintext_notify_target` (an http:// webhook or an SMTP server without TLS off this machine) or `invalid_request`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`project_not_found`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),

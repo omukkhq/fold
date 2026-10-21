@@ -202,7 +202,7 @@ pub enum SmtpSecurity {
     Tls,
     /// A plain connection that `STARTTLS` must upgrade before anything else is sent, usually on port 587.
     Starttls,
-    /// No TLS, for a relay on a trusted network. Such a target takes no password, so a password never travels in the clear.
+    /// No TLS, only for a relay on this machine (localhost or a loopback address), so the mail never crosses the network unencrypted. Such a target takes no password.
     None,
 }
 
@@ -261,6 +261,52 @@ pub fn check_webhook_url(url: &str) -> Result<(), FoldError> {
         return Err(invalid("the webhook URL has no host"));
     }
     Ok(())
+}
+
+/// True for `localhost` and a loopback address (`127.0.0.0/8`, `::1`), with or without the brackets of an IPv6 address: the only hosts a notice goes to without TLS, since the bytes never leave the machine.
+pub fn is_loopback_host(host: &str) -> bool {
+    let host = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(host);
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+fn plaintext(message: &str, hint: &str) -> FoldError {
+    FoldError::new(codes::PLAINTEXT_NOTIFY_TARGET, message).with_hint(hint)
+}
+
+/// A webhook URL that [`check_webhook_url`] took: `https`, or `http` only to a loopback host, because a notice's titles and links would cross the network unencrypted.
+pub fn check_webhook_transport(url: &str) -> Result<(), FoldError> {
+    let Some(rest) = url.strip_prefix("http://") else {
+        return Ok(());
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = match authority.strip_prefix('[') {
+        Some(bracketed) => bracketed.split(']').next().unwrap_or_default(),
+        None => authority.split(':').next().unwrap_or_default(),
+    };
+    if is_loopback_host(host) {
+        return Ok(());
+    }
+    Err(plaintext(
+        "an http:// webhook sends the notices unencrypted, so it must be on this machine",
+        "give an https:// URL, or http:// only to localhost or a loopback address",
+    ))
+}
+
+/// An SMTP server without TLS only on a loopback host, because the mail would cross the network unencrypted.
+pub fn check_smtp_transport(host: &str, security: SmtpSecurity) -> Result<(), FoldError> {
+    if security != SmtpSecurity::None || is_loopback_host(host) {
+        return Ok(());
+    }
+    Err(plaintext(
+        "an SMTP server without TLS gets the mail unencrypted, so it must be on this machine",
+        "choose the security tls or starttls, or none only for a relay on localhost or a loopback address",
+    ))
 }
 
 /// The URL as lists show it: its scheme, host and port, and `/…` when a path or a query follows, which can hold a token.
@@ -470,6 +516,47 @@ mod tests {
         assert_eq!(shown_url("http://127.0.0.1:9000"), "http://127.0.0.1:9000");
         assert_eq!(shown_url("http://127.0.0.1:9000/"), "http://127.0.0.1:9000");
         assert_eq!(shown_url("https://h?token=1"), "https://h/…");
+    }
+
+    #[test]
+    fn plain_text_goes_only_to_a_loopback_host() {
+        for local in [
+            "http://127.0.0.1:9000/x",
+            "http://127.8.9.1",
+            "http://localhost:80/hook",
+            "http://LOCALHOST",
+            "http://[::1]:9/x",
+            "https://hooks.example.com/x",
+            "https://10.0.0.5/x",
+        ] {
+            assert!(check_webhook_transport(local).is_ok(), "{local}");
+        }
+        for remote in [
+            "http://hooks.example.com/x",
+            "http://10.0.0.5:8080",
+            "http://128.0.0.1",
+            "http://[::2]/x",
+            "http://localhost.example.com",
+        ] {
+            let error = check_webhook_transport(remote).unwrap_err();
+            assert_eq!(error.code(), codes::PLAINTEXT_NOTIFY_TARGET, "{remote}");
+            assert!(!error.message().contains(remote), "{remote}");
+        }
+        for host in ["127.0.0.1", "localhost", "::1", "[::1]"] {
+            assert!(
+                check_smtp_transport(host, SmtpSecurity::None).is_ok(),
+                "{host}"
+            );
+        }
+        assert_eq!(
+            check_smtp_transport("smtp.example.com", SmtpSecurity::None)
+                .unwrap_err()
+                .code(),
+            codes::PLAINTEXT_NOTIFY_TARGET
+        );
+        for security in [SmtpSecurity::Tls, SmtpSecurity::Starttls] {
+            assert!(check_smtp_transport("smtp.example.com", security).is_ok());
+        }
     }
 
     #[test]

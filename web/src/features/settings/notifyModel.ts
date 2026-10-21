@@ -53,7 +53,7 @@ export const SECURITY_OPTIONS: readonly {
 }[] = [
   { value: "starttls", label: "STARTTLS (port 587)" },
   { value: "tls", label: "TLS (port 465)" },
-  { value: "none", label: "None, for a trusted relay (port 25)" },
+  { value: "none", label: "None, for a relay on this machine (port 25)" },
 ];
 
 const SECURITY_NAMES: Record<NotifySecurity, string> = {
@@ -67,6 +67,21 @@ const WEB_ADDRESS = /^https?:\/\/[^\s/?#@]+(?:[/?#]\S*)?$/i;
 const EMAIL = /^[^\s@,;<>"]+@[^\s@,;<>"]+$/;
 const HOST = /^[a-z0-9.\-_:[\]]+$/i;
 const SPACE = /\s/;
+
+const IPV4_LOOPBACK = /^127(?:\.\d{1,3}){3}$/;
+
+/** True for `localhost` and a loopback address, the only hosts a notice goes to without TLS; the daemon checks the same again. */
+export function isLoopbackHost(host: string): boolean {
+  const bare = host.replace(/^\[(.*)\]$/, "$1").toLowerCase();
+  return bare === "localhost" || bare === "::1" || IPV4_LOOPBACK.test(bare);
+}
+
+/** The host of an http or https address, without its port or the brackets of an IPv6 address. */
+export function urlHost(url: string): string {
+  const authority = url.replace(/^https?:\/\//i, "").split(/[/?#]/)[0] ?? "";
+  const bracketed = /^\[([^\]]*)\]/.exec(authority);
+  return bracketed ? (bracketed[1] ?? "") : (authority.split(":")[0] ?? "");
+}
 
 function wholeNumber(text: string): number | null {
   return /^\d+$/.test(text) ? Number(text) : null;
@@ -82,8 +97,12 @@ function intervalError(text: string): string | undefined {
 
 function webhookErrors(draft: TargetDraft): DraftErrors {
   const errors: DraftErrors = {};
-  if (!WEB_ADDRESS.test(draft.url.trim())) {
+  const url = draft.url.trim();
+  if (!WEB_ADDRESS.test(url)) {
     errors.url = "Give the full address, starting with https or http.";
+  } else if (/^http:/i.test(url) && !isLoopbackHost(urlHost(url))) {
+    errors.url =
+      "An http address sends the notices unencrypted: give an https address, or http only to localhost.";
   }
   const secret = draft.secret;
   if (secret.length < MIN_SECRET || secret.length > MAX_SECRET) {
@@ -102,6 +121,12 @@ function emailErrors(draft: TargetDraft): DraftErrors {
   if (!HOST.test(draft.smtpHost.trim())) {
     errors.smtpHost =
       "Give the server's host name alone, such as smtp.example.com.";
+  } else if (
+    draft.security === "none" &&
+    !isLoopbackHost(draft.smtpHost.trim())
+  ) {
+    errors.smtpHost =
+      "Without TLS the mail goes unencrypted: choose TLS or STARTTLS, or give a relay on localhost.";
   }
   if (draft.smtpPort !== "") {
     const port = wholeNumber(draft.smtpPort);
@@ -231,7 +256,8 @@ export function notifyFailure(error: unknown): Failure {
             : `The test notice was not sent: ${reason}.`,
       };
     }
-    case "invalid_notify_target": {
+    case "invalid_notify_target":
+    case "plaintext_notify_target": {
       const reason = daemonMessage(error);
       return {
         code,

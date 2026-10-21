@@ -771,6 +771,23 @@ async fn the_routes_never_show_a_secret_and_only_a_human_changes_targets() {
     assert_eq!(test.json()["project"]["slug"], "demo");
     assert_eq!(test.json()["items"], json!([]));
 
+    for plain in [
+        json!({"kind": "webhook", "url": "http://hooks.example.com/x", "secret": SECRET}),
+        json!({
+            "kind": "email",
+            "to": "team@example.com",
+            "from": "fold@example.com",
+            "smtp_host": "smtp.example.com",
+            "security": "none",
+        }),
+    ] {
+        let (status, body) = fixture
+            .call(Method::POST, "/api/v1/notify/targets", Some(plain))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "plaintext_notify_target");
+        assert!(!body.to_string().contains("hooks.example.com"), "{body}");
+    }
     let (status, body) = fixture
         .call(
             Method::POST,

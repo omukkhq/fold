@@ -160,7 +160,9 @@ fn status_of(code: &str) -> Option<StatusCode> {
         codes::ASK_NOT_OPEN => Some(StatusCode::CONFLICT),
         codes::ASK_CLOSE_DENIED => Some(StatusCode::FORBIDDEN),
         codes::NOTIFY_TARGET_NOT_FOUND => Some(StatusCode::NOT_FOUND),
-        codes::INVALID_NOTIFY_TARGET => Some(StatusCode::BAD_REQUEST),
+        codes::INVALID_NOTIFY_TARGET | codes::PLAINTEXT_NOTIFY_TARGET => {
+            Some(StatusCode::BAD_REQUEST)
+        }
         codes::NOTIFY_SEND_FAILED => Some(StatusCode::BAD_GATEWAY),
         codes::NOTIFY_SETTINGS_IO => Some(StatusCode::INTERNAL_SERVER_ERROR),
         _ => None,
@@ -304,6 +306,7 @@ mod tests {
             (codes::CHECK_RUN_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::NOTIFY_TARGET_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::INVALID_NOTIFY_TARGET, StatusCode::BAD_REQUEST),
+            (codes::PLAINTEXT_NOTIFY_TARGET, StatusCode::BAD_REQUEST),
             (codes::NOTIFY_SEND_FAILED, StatusCode::BAD_GATEWAY),
             (codes::CHECKS_FILE_INVALID, StatusCode::UNPROCESSABLE_ENTITY),
             (codes::CHECKS_RUNNING, StatusCode::CONFLICT),

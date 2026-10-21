@@ -2915,7 +2915,7 @@ export interface components {
         /** @enum {string} */
         NoticeReach: "stdin" | "socket" | "failing" | "unreachable";
         /**
-         * @description How an email target reaches its SMTP server: `tls` from the first byte (port 465 by default), `starttls` on a plain connection that is upgraded first (port 587), `none` for a relay on a trusted network (port 25), which takes no password.
+         * @description How an email target reaches its SMTP server: `tls` from the first byte (port 465 by default), `starttls` on a plain connection that is upgraded first (port 587), `none` only for a relay on this machine (localhost or a loopback address, port 25), which takes no password.
          * @enum {string}
          */
         NotifySecurity: "tls" | "starttls" | "none";
@@ -5194,7 +5194,7 @@ export interface operations {
                     "application/json": components["schemas"]["NotifyTargetEntry"];
                 };
             };
-            /** @description `invalid_notify_target` or `invalid_request` */
+            /** @description `invalid_notify_target`, `plaintext_notify_target` (an http:// webhook or an SMTP server without TLS off this machine) or `invalid_request` */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -7309,7 +7309,7 @@ export interface operations {
                     "application/json": components["schemas"]["NotifyTargetEntry"];
                 };
             };
-            /** @description `invalid_notify_target` or `invalid_request` */
+            /** @description `invalid_notify_target`, `plaintext_notify_target` (an http:// webhook or an SMTP server without TLS off this machine) or `invalid_request` */
             400: {
                 headers: {
                     [name: string]: unknown;

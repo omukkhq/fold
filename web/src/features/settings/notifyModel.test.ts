@@ -5,6 +5,7 @@ import {
   EMPTY_DRAFT,
   checkDraft,
   checkWebUrl,
+  isLoopbackHost,
   notifyFailure,
   projectStatus,
   secretFrom,
@@ -86,6 +87,49 @@ describe("checkDraft", () => {
         /1 to 1440 minutes/,
       );
     }
+  });
+
+  it("sends without TLS only to this machine", () => {
+    for (const host of [
+      "localhost",
+      "LOCALHOST",
+      "127.0.0.1",
+      "127.9.8.7",
+      "::1",
+      "[::1]",
+    ]) {
+      expect(isLoopbackHost(host)).toBe(true);
+    }
+    for (const host of [
+      "128.0.0.1",
+      "10.0.0.5",
+      "localhost.example.com",
+      "::2",
+      "",
+    ]) {
+      expect(isLoopbackHost(host)).toBe(false);
+    }
+    for (const url of [
+      "http://127.0.0.1:9000/hook",
+      "http://localhost/hook",
+      "http://[::1]:9/x",
+      "https://10.0.0.5/x",
+    ]) {
+      expect(checkDraft(webhook({ url })).errors).toBeUndefined();
+    }
+    for (const url of [
+      "http://hooks.example.com/x",
+      "HTTP://10.0.0.5:80",
+      "http://[::2]/x",
+    ]) {
+      expect(checkDraft(webhook({ url })).errors?.url).toMatch(/unencrypted/);
+    }
+    expect(
+      checkDraft(email({ security: "none", smtpHost: "127.0.0.1" })).errors,
+    ).toBeUndefined();
+    expect(checkDraft(email({ security: "none" })).errors?.smtpHost).toMatch(
+      /unencrypted/,
+    );
   });
 
   it("builds an email body with empty optional fields as null", () => {
@@ -222,6 +266,14 @@ describe("notifyFailure", () => {
         new ApiError("invalid_notify_target", "the URL has no host"),
       ).text,
     ).toBe("The daemon refused the target: the URL has no host.");
+    expect(
+      notifyFailure(
+        new ApiError("plaintext_notify_target", "it must be on this machine"),
+      ),
+    ).toEqual({
+      code: "plaintext_notify_target",
+      text: "The daemon refused the target: it must be on this machine.",
+    });
     expect(notifyFailure(new ApiError("invalid_notify_target", "")).text).toBe(
       "The daemon refused a field of the target.",
     );

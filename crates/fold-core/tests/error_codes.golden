@@ -170,3 +170,4 @@ notify_target_not_found
 invalid_notify_target
 notify_send_failed
 notify_settings_io
+plaintext_notify_target

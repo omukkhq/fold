@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use fold_core::projects::notify::{
     DEFAULT_INTERVAL_MINUTES, MAX_ADDRESS_LEN, MAX_SECRET_LEN, SmtpSecurity, check_email,
-    check_interval, check_secret, check_smtp_host, check_webhook_url,
+    check_interval, check_secret, check_smtp_host, check_smtp_transport, check_webhook_transport,
+    check_webhook_url,
 };
 use fold_core::{FoldError, HumanName, NotifyTargetId, Timestamp, codes};
 use serde::{Deserialize, Serialize};
@@ -158,6 +159,7 @@ impl NewTarget {
             NewChannel::Webhook { url, secret } => {
                 let url = url.trim().to_owned();
                 check_webhook_url(&url)?;
+                check_webhook_transport(&url)?;
                 check_secret(&secret)?;
                 Channel::Webhook {
                     url,
@@ -181,6 +183,7 @@ impl NewTarget {
                 check_email(&to)?;
                 check_email(&from)?;
                 check_smtp_host(&smtp_host)?;
+                check_smtp_transport(&smtp_host, security)?;
                 let smtp_port = smtp_port.unwrap_or_else(|| security.default_port());
                 if smtp_port == 0 {
                     return Err(invalid("the SMTP port must be 1 to 65535"));
@@ -511,13 +514,38 @@ mod tests {
             (mail.to.as_str(), mail.smtp_port, mail.username),
             ("team@example.com", 587, None)
         );
-        let error = email(SmtpSecurity::None, Some("pw"))
+        let local = |security, password| {
+            let mut new = email(security, password);
+            if let NewChannel::Email { smtp_host, .. } = &mut new.channel {
+                "127.0.0.1".clone_into(smtp_host);
+            }
+            new
+        };
+        let error = local(SmtpSecurity::None, Some("pw"))
             .checked(id(3), &ana(), Timestamp::EPOCH)
             .unwrap_err();
         assert_eq!(error.code(), codes::INVALID_NOTIFY_TARGET);
         assert!(
-            email(SmtpSecurity::None, None)
+            local(SmtpSecurity::None, None)
                 .checked(id(3), &ana(), Timestamp::EPOCH)
+                .is_ok()
+        );
+        for refused in [
+            email(SmtpSecurity::None, None),
+            email(SmtpSecurity::None, Some("pw")),
+            webhook("http://hooks.example.com/x", "0123456789abcdef"),
+        ] {
+            assert_eq!(
+                refused
+                    .checked(id(4), &ana(), Timestamp::EPOCH)
+                    .unwrap_err()
+                    .code(),
+                codes::PLAINTEXT_NOTIFY_TARGET
+            );
+        }
+        assert!(
+            webhook("http://localhost:9/x", "0123456789abcdef")
+                .checked(id(4), &ana(), Timestamp::EPOCH)
                 .is_ok()
         );
     }

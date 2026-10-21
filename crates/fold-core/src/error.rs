@@ -186,6 +186,7 @@ define_codes! {
     INVALID_NOTIFY_TARGET = "invalid_notify_target",
     NOTIFY_SEND_FAILED = "notify_send_failed",
     NOTIFY_SETTINGS_IO = "notify_settings_io",
+    PLAINTEXT_NOTIFY_TARGET = "plaintext_notify_target",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

@@ -103,7 +103,7 @@ const FOLD_TOOLS: [&str; 92] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 160] = [
+const FOLD_ERROR_CODES: [&str; 165] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -264,6 +264,11 @@ const FOLD_ERROR_CODES: [&str; 160] = [
     "main_area",
     "ask_not_open",
     "ask_close_denied",
+    "notify_target_not_found",
+    "invalid_notify_target",
+    "notify_send_failed",
+    "notify_settings_io",
+    "plaintext_notify_target",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.

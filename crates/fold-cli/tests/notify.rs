@@ -92,6 +92,29 @@ async fn fld_notify_adds_lists_tests_and_removes_targets_and_keeps_secrets_priva
         "nt-2 webhook https://hooks.example.com/… every 10 minutes\n"
     );
 
+    for refused in [
+        &["notify", "add", "webhook", "http://hooks.example.com/x"][..],
+        &[
+            "notify",
+            "add",
+            "email",
+            "--to",
+            "team@example.com",
+            "--from",
+            "fold@example.com",
+            "--smtp-host",
+            "smtp.example.com",
+            "--security",
+            "none",
+        ][..],
+    ] {
+        let mut command = host.fold(refused, &root);
+        let output = command.env("FOLD_HUMAN", "ana").output().await.unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert!(error.contains("plaintext_notify_target"), "{error}");
+    }
+
     let web = run(&["notify", "web-url", "https://fold.example.com"])
         .output()
         .await
