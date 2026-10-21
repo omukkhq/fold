@@ -10,6 +10,7 @@ use crate::status::{Daemon, Manager, Start, service_name};
 const VERSION_NAME: &str = "daemon version";
 const SHELL_NAME: &str = "daemon shell";
 const RESTART_FIX: &str = "`fld restart`, which reads your login shell again";
+const BASHRC: &[u8] = b".bashrc";
 const FUTURE_FIX: &str = "`touch` each file whose time lies in the future, which gives it the current time, then `fld restart`, which reads your login shell again";
 
 /// The lines before the checks: this fld and the daemon that answers on `socket`, or why none does. A missing daemon is stated here, never a check.
@@ -124,13 +125,13 @@ pub(crate) fn version_verdict(daemon: &Daemon, fld: &str) -> Option<Check> {
 }
 
 /// The startup files that `shell` reads as a login and interactive shell, in `home`, each as a group of which the shell reads the first that exists:
-/// - bash: the first of `~/.bash_profile`, `~/.bash_login` and `~/.profile`, and `~/.bashrc`, which Debian's `~/.profile` reads;
+/// - bash: the first of `~/.bash_profile`, `~/.bash_login` and `~/.profile`, and `~/.bashrc` when that file holds the text `.bashrc`, since a login shell reads `~/.bashrc` only when its profile file calls it;
 /// - zsh: `.zshenv`, `.zprofile`, `.zshrc` and `.zlogin` in `zdotdir`, else `home`, and `~/.zshenv`, where `ZDOTDIR` is often set;
 /// - fish: `config.fish` and each `conf.d/*.fish` in the `fish` folder of `config_home`, else `~/.config`;
 /// - tcsh: the first of `~/.tcshrc` and `~/.cshrc`, and `~/.login`; csh: `~/.cshrc` and `~/.login`;
 /// - any other shell: `~/.profile`.
 ///
-/// Each file that exists comes as its path, with `~` for `home`, and its modification time; its content is never read.
+/// Each file that exists comes as its path, with `~` for `home`, and its modification time. Of the contents, only bash's profile file is searched, for that text; nothing of it is shown.
 pub(crate) fn startup_files(
     shell: &str,
     home: &Path,
@@ -140,10 +141,20 @@ pub(crate) fn startup_files(
     let in_home =
         |names: &[&str]| -> Vec<PathBuf> { names.iter().map(|name| home.join(name)).collect() };
     let groups: Vec<Vec<PathBuf>> = match shell {
-        "bash" => vec![
-            in_home(&[".bash_profile", ".bash_login", ".profile"]),
-            in_home(&[".bashrc"]),
-        ],
+        "bash" => {
+            let profile = in_home(&[".bash_profile", ".bash_login", ".profile"])
+                .into_iter()
+                .find(|path| path.exists());
+            let calls_bashrc = profile
+                .as_deref()
+                .and_then(|path| std::fs::read(path).ok())
+                .is_some_and(|text| text.windows(BASHRC.len()).any(|window| window == BASHRC));
+            let mut groups = vec![profile.into_iter().collect()];
+            if calls_bashrc {
+                groups.push(in_home(&[".bashrc"]));
+            }
+            groups
+        }
         "zsh" => {
             let dir = zdotdir.unwrap_or(home);
             let mut groups = vec![in_home(&[".zshenv"])];
@@ -420,6 +431,12 @@ mod tests {
         ] {
             std::fs::write(home.path().join(name), "").unwrap();
         }
+        assert_eq!(names("bash"), ["~/.bash_login"]);
+        std::fs::write(
+            home.path().join(".bash_login"),
+            "[ -f ~/.bashrc ] && . ~/.bashrc\n",
+        )
+        .unwrap();
         assert_eq!(names("bash"), ["~/.bash_login", "~/.bashrc"]);
         assert_eq!(names("zsh"), ["~/.zshrc", "~/.zlogin"]);
         assert_eq!(names("sh"), ["~/.profile"]);
@@ -483,8 +500,13 @@ mod tests {
     fn a_startup_file_newer_than_the_shell_read_warns_with_the_restart() {
         let home = tempfile::TempDir::new().unwrap();
         let read_at = SystemTime::now();
+        std::fs::write(home.path().join(".profile"), ". \"$HOME/.bashrc\"\n").unwrap();
+        std::fs::write(home.path().join(".bashrc"), "").unwrap();
         for (name, offset) in [(".profile", -60), (".bashrc", 60)] {
-            let file = File::create(home.path().join(name)).unwrap();
+            let file = File::options()
+                .write(true)
+                .open(home.path().join(name))
+                .unwrap();
             let time = if offset < 0 {
                 read_at - Duration::from_secs(60)
             } else {
@@ -529,6 +551,25 @@ mod tests {
             Status::Ok
         );
         assert_eq!(shell_verdict(None, &files, now), None);
+
+        let file = File::options()
+            .write(true)
+            .truncate(true)
+            .open(home.path().join(".profile"))
+            .unwrap();
+        file.set_modified(read_at - Duration::from_secs(60))
+            .unwrap();
+        let files = startup_files("bash", home.path(), None, None);
+        assert_eq!(files.len(), 1, "{files:?}");
+        let uncalled =
+            shell_verdict(Some(&start("hand", Some(read.as_millis()))), &files, now).unwrap();
+        assert_eq!(uncalled.status, Status::Ok);
+        assert_eq!(uncalled.fix, None);
+        assert!(
+            !uncalled.message.contains(".bashrc"),
+            "{}",
+            uncalled.message
+        );
     }
 
     #[test]
