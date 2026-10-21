@@ -339,3 +339,20 @@ async fn message_lines_name_a_version_of_the_message_proposal() {
     exec(store, &lines(2, 1, 2, 3)).await.unwrap();
     assert_append_only(store, "message_line_refs").await;
 }
+
+#[test]
+fn the_debug_form_of_message_lines_leaves_out_the_excerpt() {
+    let lines = fold_store::messages::MessageLines {
+        version: 2,
+        path: "web/src/board.ts".to_owned(),
+        side: fold_core::reviews::Side::New,
+        start_line: 4,
+        end_line: 5,
+        excerpt: "const secret = 1;".to_owned(),
+        excerpt_cut: false,
+    };
+    let debug = format!("{lines:?}");
+    assert!(!debug.contains("secret"), "{debug}");
+    assert!(debug.contains("web/src/board.ts"), "{debug}");
+    assert!(debug.contains("excerpt_len: 17"), "{debug}");
+}

@@ -73,8 +73,8 @@ pub struct MessageRow {
     pub lines: Option<MessageLines>,
 }
 
-/// A run of lines of one file of a proposal version that a message asks about, 1-based and inclusive, in the version's base tree (`Old`) or its own tree (`New`). The version belongs to the message's proposal.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A run of lines of one file of a proposal version that a message asks about, 1-based and inclusive, in the version's base tree (`Old`) or its own tree (`New`). The version belongs to the message's proposal. The excerpt is file content, which is never logged, so the `Debug` form gives its length alone.
+#[derive(Clone, PartialEq, Eq)]
 pub struct MessageLines {
     pub version: u32,
     pub path: String,
@@ -85,6 +85,20 @@ pub struct MessageLines {
     pub excerpt: String,
     /// `excerpt` holds only the first lines of the run.
     pub excerpt_cut: bool,
+}
+
+impl std::fmt::Debug for MessageLines {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MessageLines")
+            .field("version", &self.version)
+            .field("path", &self.path)
+            .field("side", &self.side)
+            .field("start_line", &self.start_line)
+            .field("end_line", &self.end_line)
+            .field("excerpt_len", &self.excerpt.len())
+            .field("excerpt_cut", &self.excerpt_cut)
+            .finish()
+    }
 }
 
 /// Inserts the message. A sender worker, task or proposal that does not exist leaves its column empty, which the sender check or the caller's earlier lookup refuses.
