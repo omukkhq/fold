@@ -1086,3 +1086,37 @@ async fn a_worker_never_wakes_for_its_own_message_and_a_main_worker_wakes_for_it
     let woke = call(&backend, "wait_for_events", filter).await;
     assert_eq!(woke["messages"], json!([report["id"]]), "{woke}");
 }
+
+#[tokio::test]
+async fn a_wait_names_no_message_the_worker_has_read_or_sent() {
+    let fx = Fixture::new().await;
+    let backend = fx.connect("backend").await;
+    call(&backend, "register_worker", json!({"name": "sub"})).await;
+    let read = send_as_human(&fx, "backend").await;
+    call(&backend, "get_inbox", json!({})).await;
+    let own = call(
+        &backend,
+        "send_message",
+        json!({"to": ["backend/sub"], "body": "take the parser"}),
+    )
+    .await;
+    let unfiltered = json!({"timeout_s": 1});
+    let woke = call(&backend, "wait_for_events", unfiltered.clone()).await;
+    let named: Vec<&Value> = woke["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["type"] == "message.sent")
+        .map(|event| &event["data"]["message"])
+        .collect();
+    assert_eq!(named, [&json!(read.to_string()), &own["id"]], "{woke}");
+    assert_eq!(woke.get("messages"), None, "{woke}");
+    assert_eq!(woke.get("hint"), None, "{woke}");
+    let unread = send_as_human(&fx, "backend").await;
+    let woke = call(&backend, "wait_for_events", unfiltered).await;
+    assert_eq!(woke["messages"], json!([unread.to_string()]));
+    assert_eq!(
+        woke["hint"],
+        json!("a message waits for you; call get_inbox")
+    );
+}

@@ -1,9 +1,9 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use fold_core::events::types;
-use fold_core::{Event, FoldError, WorkerName};
+use fold_core::{Event, FoldError};
 use fold_store::agents::WorkerRow;
+use fold_store::events::WaitingMessage;
 use rmcp::RoleServer;
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, ProgressNotificationParam, Tool};
@@ -108,42 +108,21 @@ fn page_json(page: &EventPage) -> Value {
     })
 }
 
-/// The page of a wait, with the messages in it that wait for the worker, or for any worker of its agent when it is the main worker, apart from those the worker sent, and the call that reads them.
-fn wait_json(worker: &WorkerRow, page: &EventPage) -> Value {
+/// The page of a wait, with the messages in it that wait for the worker and the call that reads them.
+fn wait_json(page: &EventPage, waiting: &[WaitingMessage]) -> Value {
     let mut result = page_json(page);
-    let agent = worker.name.agent();
-    let mut for_others = false;
-    let mut waiting: Vec<&str> = Vec::new();
-    for event in &page.events {
-        if event.event_type != types::MESSAGE_SENT || event.actor.as_str() == worker.name.as_str() {
-            continue;
-        }
-        let recipients: Vec<&str> = event
-            .data
-            .get("recipients")
-            .and_then(Value::as_array)
-            .map(|names| names.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
-        let own = recipients.contains(&worker.name.as_str());
-        let sibling = worker.name.is_main()
-            && recipients
-                .iter()
-                .any(|name| WorkerName::parse(name).is_ok_and(|other| other.belongs_to(&agent)));
-        if let Some(message) = event.data.get("message").and_then(Value::as_str)
-            && (own || sibling)
-        {
-            waiting.push(message);
-            for_others |= !own;
-        }
-    }
     if waiting.is_empty() {
         return result;
     }
-    result["messages"] = json!(waiting);
-    result["hint"] = json!(if for_others {
-        "a message waits for a worker of your agent; call get_inbox with include_workers"
-    } else {
+    let ids: Vec<String> = waiting
+        .iter()
+        .map(|message| message.id.to_string())
+        .collect();
+    result["messages"] = json!(ids);
+    result["hint"] = json!(if waiting.iter().all(|message| message.own) {
         "a message waits for you; call get_inbox"
+    } else {
+        "a message waits for a worker of your agent; call get_inbox with include_workers"
     });
     result
 }
@@ -195,7 +174,14 @@ pub async fn wait_for_events(
             () = context.ct.cancelled() => return Ok(json!({"cancelled": true})),
         };
         match step {
-            WaitStep::Events(page) => return Ok(wait_json(worker, &page)),
+            WaitStep::Events(page) => {
+                let waiting = server
+                    .events
+                    .waiting_messages(worker, &page)
+                    .await
+                    .map_err(from_events)?;
+                return Ok(wait_json(&page, &waiting));
+            }
             WaitStep::TimedOut => return Ok(json!({"timed_out": true})),
             WaitStep::Tick(count) => {
                 let session = server.session().await;

@@ -179,6 +179,53 @@ pub struct MessageWake {
     pub every_worker: bool,
 }
 
+/// A message of a wait's page that waits for the waking worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WaitingMessage {
+    pub id: MessageId,
+    /// The waking worker has a row of it; otherwise only another worker of its agent has.
+    pub own: bool,
+}
+
+/// The messages that the events `seqs` name and that select an event past the filter by the rule of [`MessageWake`] now, in seq order.
+pub async fn waiting_messages(
+    executor: impl SqliteExecutor<'_>,
+    seqs: &[u64],
+    agent_id: i64,
+    wake: MessageWake,
+) -> Result<Vec<WaitingMessage>, StoreError> {
+    let seqs = json_list(seqs.iter(), |seq| (*seq).into());
+    let wake_type = wake.event_type.as_str();
+    let rows = sqlx::query!(
+        r#"SELECT m.number AS "number!: i64", MAX(r.worker_id = ?2) AS "own!: bool"
+           FROM events e
+           JOIN messages m ON m.number = e.message_id
+           JOIN message_recipients r ON r.message_id = m.id
+           JOIN workers w ON w.id = r.worker_id
+           WHERE e.seq IN (SELECT value FROM json_each(?1))
+             AND e.type = ?5
+             AND e.actor <> (SELECT s.name FROM workers s WHERE s.id = ?2)
+             AND r.delivered_at IS NULL AND r.acked_at IS NULL
+             AND (r.worker_id = ?2 OR (?3 AND w.agent_id = ?4))
+           GROUP BY m.number
+           ORDER BY MIN(e.seq)"#,
+        seqs,
+        wake.worker_id,
+        wake.every_worker,
+        agent_id,
+        wake_type
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let id =
+                MessageId::try_from_db(row.number).ok_or(StoreError::Corrupt("messages.number"))?;
+            Ok(WaitingMessage { id, own: row.own })
+        })
+        .collect()
+}
+
 /// [`read_after`] for one reader: the filter's events that reach the agent by the rules of [`Reach`], and the wake's message events whatever the filter says, so one query returns the page an agent's wait keeps.
 pub async fn read_reaching(
     executor: impl SqliteExecutor<'_>,
