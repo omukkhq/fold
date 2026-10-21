@@ -3,12 +3,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use fold_cli::daemon_client::{self, Response};
+use fold_core::Timestamp;
 use fold_daemon::services::projects::row_for_dir_on_host;
 
 use crate::doctor::run_briefly;
 use crate::platform::{Host, LAUNCH_AGENT_LABEL};
 use crate::serve::{self, Dirs};
 use crate::{init, output};
+use serde::Deserialize;
 
 /// How long the probe of the daemon and each query of the service manager may take, so a bare `fld` answers at once even when the daemon or the manager hangs.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -24,11 +26,23 @@ pub(crate) enum Daemon {
     NotRunning,
     /// Something accepts connections on the socket but gave no answer fld can read; the text says what went wrong.
     Silent(String),
-    /// `version` and `listen` are `None` for a daemon older than the route that reports them.
+    /// `version` and `listen` are `None` for a daemon older than the route that reports them, and `start` for one older than the fields of its process.
     Running {
         version: Option<String>,
         listen: Option<String>,
+        start: Option<Start>,
     },
+}
+
+/// The daemon's process and its read of the login shell, as the daemon route reports them.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct Start {
+    pub(crate) pid: u32,
+    pub(crate) started_at: Timestamp,
+    /// `hand`, `systemd` or `launchd`.
+    pub(crate) started_by: String,
+    pub(crate) shell: Option<String>,
+    pub(crate) shell_read_at: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,7 +111,7 @@ fn first_line(text: &str) -> String {
 }
 
 /// Asks the daemon on `socket` what it is, without a human and without starting one.
-fn probe(socket: &Path) -> Daemon {
+pub(crate) fn probe(socket: &Path) -> Daemon {
     let runtime = match serve::current_thread_runtime() {
         Ok(runtime) => runtime,
         Err(error) => return Daemon::Silent(format!("cannot start the async runtime: {error}")),
@@ -127,6 +141,10 @@ fn running(response: &Response) -> Daemon {
     Daemon::Running {
         version: text("version"),
         listen: text("listen"),
+        start: response
+            .is_success()
+            .then(|| Start::deserialize(&response.body).ok())
+            .flatten(),
     }
 }
 
@@ -184,7 +202,7 @@ fn project(dirs: &Dirs, cwd: &Path) -> Option<Project> {
     Some(Project { root, registered })
 }
 
-fn service_name(manager: Manager) -> String {
+pub(crate) fn service_name(manager: Manager) -> String {
     match manager {
         Manager::Systemd => "the systemd user service fold.service".to_owned(),
         Manager::Launchd => format!("the launchd agent {LAUNCH_AGENT_LABEL}"),
@@ -213,6 +231,7 @@ pub(crate) fn lines(status: &Status, fld: &str) -> Vec<String> {
         Daemon::Running {
             version: Some(version),
             listen: Some(listen),
+            ..
         } => {
             lines.push(format!(
                 "daemon: running fold {version}, web interface http://{listen}"
@@ -321,6 +340,7 @@ mod tests {
         Daemon::Running {
             version: Some(version.to_owned()),
             listen: Some("127.0.0.1:7420".to_owned()),
+            start: None,
         }
     }
 
@@ -364,6 +384,7 @@ mod tests {
         let old = Daemon::Running {
             version: None,
             listen: None,
+            start: None,
         };
         let shown = lines(&status(old, None, None), "0.3.0");
         assert!(shown[0].contains("older than this fld"), "{shown:?}");
@@ -469,6 +490,28 @@ mod tests {
             body: json!({"version": "0.3.0", "listen": "127.0.0.1:7420"}),
         };
         assert_eq!(super::running(&answer), running("0.3.0"));
+        let full = Response {
+            status: 200,
+            body: json!({
+                "version": "0.3.0",
+                "listen": "127.0.0.1:7420",
+                "pid": 4242,
+                "started_at": 1_000,
+                "started_by": "systemd",
+                "shell": "bash",
+                "shell_read_at": 1_250,
+            }),
+        };
+        let Daemon::Running {
+            start: Some(start), ..
+        } = super::running(&full)
+        else {
+            panic!("no start");
+        };
+        assert_eq!(start.pid, 4242);
+        assert_eq!(start.started_by, "systemd");
+        assert_eq!(start.shell.as_deref(), Some("bash"));
+        assert_eq!(start.shell_read_at.map(Timestamp::as_millis), Some(1_250));
         let refused = Response {
             status: 404,
             body: json!({"error": {"code": "not_found", "message": "no route"}}),
@@ -477,7 +520,8 @@ mod tests {
             super::running(&refused),
             Daemon::Running {
                 version: None,
-                listen: None
+                listen: None,
+                start: None,
             }
         );
     }

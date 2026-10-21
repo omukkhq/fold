@@ -9,6 +9,7 @@ use hyper::Method;
 use serde::Deserialize;
 
 use super::Check;
+use crate::shell_env::SHELL_TIMEOUT;
 
 /// How long doctor waits for the daemon's answer, which runs `claude` twice with a limit of 10 seconds each, at the same time.
 const DAEMON_TIMEOUT: Duration = Duration::from_secs(15);
@@ -77,8 +78,27 @@ fn source_text(source: &str) -> &'static str {
 /// The fix when the daemon's `PATH` lacks a program: the daemon reads the login shell again at its next start.
 const PATH_FIX: &str = "install Claude Code, or add its folder to PATH in your shell's startup files (such as ~/.profile or ~/.zprofile), then `fld restart`";
 
-/// Whether the daemon runs a `claude` that its workers can use: one on the `PATH` it gives them, recent enough and signed in there.
-pub(crate) fn daemon_claude_verdict(report: &DaemonReport) -> Check {
+/// Why the daemon did not take the login shell's environment, in words, from the problem name the daemon reports.
+pub(crate) fn shell_problem_words(problem: &str) -> String {
+    match problem {
+        "timed_out" => format!(
+            "your login shell took longer than {} s",
+            SHELL_TIMEOUT.as_secs()
+        ),
+        "no_claude" => "your login shell's PATH has no claude".to_owned(),
+        "failed" => {
+            "your login shell exited with an error or printed nothing fold could read".to_owned()
+        }
+        "no_shell" => "fold found no login shell".to_owned(),
+        other => format!(
+            "of the shell problem {}",
+            crate::output::escape_control(other)
+        ),
+    }
+}
+
+/// Whether the daemon runs a `claude` that its workers can use: one on the `PATH` it gives them, recent enough and signed in there. `terminal` holds the sign-in variables of this terminal, by name, so a signed-out claude names those the workers lack.
+pub(crate) fn daemon_claude_verdict(report: &DaemonReport, terminal: &BTreeSet<String>) -> Check {
     let environment = match report {
         DaemonReport::NotRunning => {
             return Check::ok(
@@ -99,7 +119,12 @@ pub(crate) fn daemon_claude_verdict(report: &DaemonReport) -> Check {
     let shell = environment
         .shell_problem
         .as_deref()
-        .map(|problem| format!("; your login shell gave none it could use ({problem})"))
+        .map(|problem| {
+            format!(
+                "; the workers lack your login shell's environment, because {}",
+                shell_problem_words(problem)
+            )
+        })
         .unwrap_or_default();
     let Some(claude) = &environment.claude else {
         return Check::fail(
@@ -147,7 +172,8 @@ pub(crate) fn daemon_claude_verdict(report: &DaemonReport) -> Check {
         Some(false) => Check::fail(
             CLAUDE_NAME,
             format!(
-                "claude {version} at {claude} is not signed in with {source}, so every worker turn fails"
+                "claude {version} at {claude} is not signed in with {source}, so every worker turn fails{}{shell}",
+                lacking(environment, terminal)
             ),
             "`claude auth login`, or give the daemon the sign-in variables of your shell (see daemon environment), then `fld restart`",
         ),
@@ -159,6 +185,19 @@ pub(crate) fn daemon_claude_verdict(report: &DaemonReport) -> Check {
             "`claude auth login`, then `fld restart`",
         ),
     }
+}
+
+/// The sign-in variables that `terminal` sets and the workers' environment lacks, as a clause of the check's message; empty when it lacks none.
+fn lacking(environment: &WorkerEnvironment, terminal: &BTreeSet<String>) -> String {
+    let workers = sign_in_names(environment.sign_in_variables.iter().map(String::as_str));
+    let lacks: Vec<&str> = terminal.difference(&workers).map(String::as_str).collect();
+    if lacks.is_empty() {
+        return String::new();
+    }
+    format!(
+        "; the workers lack {}, which this terminal sets",
+        lacks.join(", ")
+    )
 }
 
 /// The sorted sign-in variable names among `names`.
@@ -279,21 +318,24 @@ mod tests {
 
     #[test]
     fn a_daemon_whose_workers_can_run_claude_is_ok_and_names_where_it_looked() {
-        let check = daemon_claude_verdict(&report(|_| {}));
+        let check = daemon_claude_verdict(&report(|_| {}), &BTreeSet::new());
         assert_eq!(check.status, Status::Ok, "{check:?}");
         assert_eq!(
             check.message,
             "workers run claude 2.1.301 at /home/ana/.local/bin/claude, signed in, with your login shell's environment; git at /usr/bin/git"
         );
-        let fallback = daemon_claude_verdict(&report(|environment| {
-            environment.source = "setup".to_owned();
-            environment.shell_problem = Some("timed_out".to_owned());
-            environment.git = None;
-        }));
+        let fallback = daemon_claude_verdict(
+            &report(|environment| {
+                environment.source = "setup".to_owned();
+                environment.shell_problem = Some("timed_out".to_owned());
+                environment.git = None;
+            }),
+            &BTreeSet::new(),
+        );
         assert_eq!(fallback.status, Status::Ok);
         assert!(
             fallback.message.contains(
-                "with the environment that fld setup saved; your login shell gave none it could use (timed_out); no git on its PATH"
+                "with the environment that fld setup saved; the workers lack your login shell's environment, because your login shell took longer than 10 s; no git on its PATH"
             ),
             "{}",
             fallback.message
@@ -302,40 +344,94 @@ mod tests {
 
     #[test]
     fn a_daemon_without_claude_or_signed_out_fails_and_an_old_or_odd_claude_warns() {
-        let missing = daemon_claude_verdict(&report(|environment| {
-            environment.source = "daemon".to_owned();
-            environment.shell_problem = Some("no_claude".to_owned());
-            environment.claude = None;
-        }));
+        let none = BTreeSet::new();
+        let missing = daemon_claude_verdict(
+            &report(|environment| {
+                environment.source = "daemon".to_owned();
+                environment.shell_problem = Some("no_claude".to_owned());
+                environment.claude = None;
+            }),
+            &none,
+        );
         assert_eq!(missing.status, Status::Fail);
         assert_eq!(
             missing.message,
-            "the daemon finds no claude on the PATH of the daemon's own environment, so no worker can start; your login shell gave none it could use (no_claude)"
+            "the daemon finds no claude on the PATH of the daemon's own environment, so no worker can start; the workers lack your login shell's environment, because your login shell's PATH has no claude"
         );
         assert!(missing.fix.unwrap().contains("fld restart"));
-        let signed_out = daemon_claude_verdict(&report(|environment| {
-            environment.signed_in = Some(false);
-        }));
+        let signed_out = daemon_claude_verdict(
+            &report(|environment| {
+                environment.signed_in = Some(false);
+            }),
+            &none,
+        );
         assert_eq!(signed_out.status, Status::Fail);
-        assert!(signed_out.message.contains("is not signed in"));
+        assert_eq!(
+            signed_out.message,
+            "claude 2.1.301 at /home/ana/.local/bin/claude is not signed in with your login shell's environment, so every worker turn fails"
+        );
         for (version, signed_in) in [
             (None, Some(true)),
             (Some("2.0.1"), Some(true)),
             (Some("2.1.301"), None),
         ] {
-            let check = daemon_claude_verdict(&report(|environment| {
-                environment.version = version.map(str::to_owned);
-                environment.signed_in = signed_in;
-            }));
+            let check = daemon_claude_verdict(
+                &report(|environment| {
+                    environment.version = version.map(str::to_owned);
+                    environment.signed_in = signed_in;
+                }),
+                &none,
+            );
             assert_eq!(check.status, Status::Warn, "{version:?} {signed_in:?}");
         }
         assert_eq!(
-            daemon_claude_verdict(&DaemonReport::NotRunning).status,
+            daemon_claude_verdict(&DaemonReport::NotRunning, &none).status,
             Status::Ok
         );
-        let old = daemon_claude_verdict(&DaemonReport::Unknown);
+        let old = daemon_claude_verdict(&DaemonReport::Unknown, &none);
         assert_eq!(old.status, Status::Warn);
         assert_eq!(old.fix.as_deref(), Some("`fld restart`"));
+    }
+
+    #[test]
+    fn a_signed_out_claude_names_the_variables_the_workers_lack_and_why_the_shell_was_not_used() {
+        let terminal = sign_in_names(["HOME", "CLAUDE_CODE_OAUTH_TOKEN", "PATH"]);
+        let check = daemon_claude_verdict(
+            &report(|environment| {
+                environment.source = "setup".to_owned();
+                environment.shell_problem = Some("timed_out".to_owned());
+                environment.signed_in = Some(false);
+                environment.sign_in_variables = vec!["HOME".to_owned()];
+            }),
+            &terminal,
+        );
+        assert_eq!(check.status, Status::Fail);
+        assert_eq!(
+            check.message,
+            "claude 2.1.301 at /home/ana/.local/bin/claude is not signed in with the environment that fld setup saved, so every worker turn fails; the workers lack CLAUDE_CODE_OAUTH_TOKEN, which this terminal sets; the workers lack your login shell's environment, because your login shell took longer than 10 s"
+        );
+        assert!(!check.message.contains("PATH"));
+    }
+
+    #[test]
+    fn each_shell_problem_reads_as_words() {
+        assert_eq!(
+            shell_problem_words("timed_out"),
+            "your login shell took longer than 10 s"
+        );
+        assert_eq!(
+            shell_problem_words("no_claude"),
+            "your login shell's PATH has no claude"
+        );
+        assert_eq!(
+            shell_problem_words("failed"),
+            "your login shell exited with an error or printed nothing fold could read"
+        );
+        assert_eq!(shell_problem_words("no_shell"), "fold found no login shell");
+        assert_eq!(
+            shell_problem_words("new\u{1b}"),
+            "of the shell problem new\\u{1b}"
+        );
     }
 
     #[test]
