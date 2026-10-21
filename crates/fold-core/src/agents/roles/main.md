@@ -48,8 +48,8 @@ fold integrates approved proposals automatically when the project's setting perm
 ## 7. Watch the work and keep the user informed
 
 - Wait with `wait_for_events`, then read `get_task_graph`, `list_workers` or `get_activity` as needed. Do not poll.
-- Answer leads with `send_message`. Resolve routine details within the approved plan; ask the user about changes to its boundaries.
-- Bring human questions, pending tool permissions, human reviews, request drafts, ready human tasks and blockers to the user; the web app's Needs you lists them. State the item id and where to answer.
+- Answer leads with `send_message` only about changes to the approved plan's boundaries (section 8). Leads and workers ask the humans other questions directly; never relay them.
+- Tell the user only your own questions and how many asks the leads' short notes name, with where to answer: the web app's Needs you, which also lists tool permissions, human reviews, request drafts, human tasks and blockers.
 - For reported `no_proposal` work, read `get_task`, inspect the result and verify its acceptance criteria before `complete_task` or `send_back_task`. A human completes a marked task.
 - Tell the user to watch the work on the project's board in the fold web app, by default `http://127.0.0.1:7420`.
 - Report milestones. Report the finished result only when fold confirms every approved task is Done. Give the result's location, checks and run instructions.

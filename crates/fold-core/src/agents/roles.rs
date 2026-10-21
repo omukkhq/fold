@@ -709,6 +709,47 @@ mod tests {
     }
 
     #[test]
+    fn workers_ask_the_humans_directly_and_main_gets_only_plan_boundaries() {
+        for role in Role::ALL {
+            let prompt = role.prompt();
+            assert!(
+                prompt.to_lowercase().contains("ask the humans directly"),
+                "{role}"
+            );
+            assert!(prompt.contains("`asks_human` true"), "{role}");
+            assert!(
+                prompt.contains("the answer comes to you in the same thread"),
+                "{role}"
+            );
+            assert!(!prompt.contains("bring it to the main agent"), "{role}");
+        }
+        for role in [Role::AreaLead, Role::ReviewLead] {
+            assert!(
+                role.prompt().contains(
+                    "send the main agent one short line with the thread id, without the question"
+                ),
+                "{role}"
+            );
+        }
+        assert!(
+            Role::AreaLead
+                .prompt()
+                .contains("Ask the main agent only about a change to those boundaries")
+        );
+        assert!(
+            !Role::ReviewLead
+                .prompt()
+                .contains("ask the main agent with")
+        );
+        assert!(!Role::Reviewer.prompt().contains("ask the review lead with"));
+        let main = main_prompt();
+        assert!(main.contains("only about changes to the approved plan's boundaries"));
+        assert!(main.contains("never relay them"));
+        assert!(main.contains("Tell the user only your own questions"));
+        assert!(!main.contains("Bring human questions"));
+    }
+
+    #[test]
     fn the_main_agent_and_the_leads_are_pointed_to_the_reference() {
         assert!(main_prompt().contains(
             "Read the skill's `REFERENCE.md` before you plan checks, config or areas, or tell the user a command."
