@@ -8,14 +8,16 @@ import { Mono } from "@/components/mono/Mono";
 import { Wordmark } from "@/components/Wordmark";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { cn } from "@/lib/cn";
-import { PersonName } from "@/people/PersonName";
 import { focusRing } from "@/lib/focus";
 import { GitStatus } from "../git/GitStatus";
 import { lastChangeLine, summaryLine } from "./counts";
+import { ProjectAgentChips } from "./ProjectAgentChips";
 import { projectPath } from "@/routes/paths";
 
+/** At phone width the agents and the change time go below the name; from `md` they are columns beside it. */
+const LINE = "flex flex-col gap-10 md:flex-row md:items-center md:gap-20";
 const ROW =
-  "flex items-center gap-20 rounded-l bg-surface px-20 py-16 inset-ring inset-ring-border-subtle";
+  "rounded-l bg-surface px-20 py-16 inset-ring inset-ring-border-subtle";
 const CARD =
   "flex flex-col overflow-hidden rounded-l bg-surface inset-ring inset-ring-border-subtle";
 
@@ -25,11 +27,11 @@ export function ProjectsScreen() {
   const now = useNow(true, 30_000);
   return (
     <div className="flex min-h-screen flex-col bg-bg">
-      <header className="flex h-bar items-center justify-between border-b border-border-subtle bg-surface px-24">
+      <header className="flex h-bar items-center justify-between border-b border-border-subtle bg-surface px-16 md:px-24">
         <Wordmark />
         <ThemeToggle />
       </header>
-      <main className="flex flex-col px-40 py-40">
+      <main className="flex flex-col px-16 py-24 md:px-40 md:py-40">
         <div className="mx-auto flex w-content max-w-full flex-col gap-20">
           <div className="flex flex-wrap items-end justify-between gap-16">
             <div className="flex flex-col gap-4">
@@ -61,8 +63,8 @@ export function ProjectsScreen() {
                 const content = (
                   <>
                     <div className="flex min-w-0 flex-1 flex-col gap-4">
-                      <span className="flex items-center gap-10">
-                        <span className="text-item-title leading-snug font-semibold text-text">
+                      <span className="flex min-w-0 items-center gap-10">
+                        <span className="truncate text-item-title leading-snug font-semibold text-text">
                           {project.name}
                         </span>
                         <Mono className="text-meta text-text-muted">
@@ -75,46 +77,36 @@ export function ProjectsScreen() {
                     </div>
                     {overview ? (
                       <>
-                        <div className="flex w-project-agents shrink-0 items-center gap-6">
-                          {overview.agents.length === 0 ? (
-                            <span className="text-code text-text-muted">
-                              no agents connected
-                            </span>
-                          ) : (
-                            overview.agents.map((agent) => (
-                              <span
-                                key={agent.name}
-                                className="flex items-center gap-5 rounded-full px-8 py-2 text-code inset-ring inset-ring-border"
-                              >
-                                <PersonName name={agent.name} />
-                              </span>
-                            ))
-                          )}
-                        </div>
-                        <span className="flex w-project-state shrink-0 items-center justify-end gap-6 text-code">
-                          <span
-                            aria-hidden
-                            className={cn(
-                              "size-7 rounded-full",
-                              overview.agents.length > 0
-                                ? "bg-primary"
-                                : "bg-status-backlog",
-                            )}
+                        <div className="flex min-w-0 items-center gap-16 md:contents">
+                          <ProjectAgentChips
+                            agents={overview.agents}
+                            className="flex-1 md:w-project-agents md:flex-none md:shrink-0"
                           />
-                          <span
-                            className={
-                              overview.agents.length > 0
-                                ? "text-primary-text"
-                                : "text-text-muted"
-                            }
-                          >
-                            {lastChangeLine(overview, now)}
+                          <span className="flex shrink-0 items-center justify-end gap-6 text-code whitespace-nowrap md:w-project-state">
+                            <span
+                              aria-hidden
+                              className={cn(
+                                "size-7 rounded-full",
+                                overview.agents.length > 0
+                                  ? "bg-primary"
+                                  : "bg-status-backlog",
+                              )}
+                            />
+                            <span
+                              className={
+                                overview.agents.length > 0
+                                  ? "text-primary-text"
+                                  : "text-text-muted"
+                              }
+                            >
+                              {lastChangeLine(overview, now)}
+                            </span>
                           </span>
-                        </span>
+                        </div>
                         <ChevronRight
                           aria-hidden
                           size={16}
-                          className="text-text-faint"
+                          className="hidden shrink-0 text-text-faint md:block"
                         />
                       </>
                     ) : null}
@@ -127,7 +119,8 @@ export function ProjectsScreen() {
                         <HrefLink
                           href={projectPath(project.slug, "board")}
                           className={cn(
-                            "flex items-center gap-20 rounded-t-l px-20 pt-16 pb-12 hover:bg-sunken",
+                            LINE,
+                            "rounded-t-l px-20 pt-16 pb-12 hover:bg-sunken",
                             focusRing,
                           )}
                         >
@@ -139,7 +132,9 @@ export function ProjectsScreen() {
                         />
                       </div>
                     ) : (
-                      <div className={cn(ROW, "opacity-60")}>{content}</div>
+                      <div className={cn(LINE, ROW, "opacity-60")}>
+                        {content}
+                      </div>
                     )}
                   </li>
                 );

@@ -86,7 +86,8 @@ describe("Projects screen", () => {
     expect(demo.getAttribute("href")).toBe("/p/demo/board");
     expect(within(demo).getByText(/17 tasks/)).toBeTruthy();
     expect(within(demo).getByText(/main r5/)).toBeTruthy();
-    expect(within(demo).getByText("@frontend")).toBeTruthy();
+    // The chip line keeps a hidden copy of each chip to measure.
+    expect(within(demo).getAllByText("@frontend")).toHaveLength(2);
     expect(within(demo).getByText(/changed \d+ s ago/)).toBeTruthy();
     expect(screen.getByText("Could not open this project.")).toBeTruthy();
     expect(screen.queryByRole("link", { name: /Archive/ })).toBeNull();
