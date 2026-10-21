@@ -100,7 +100,7 @@ idle_minutes = 15                    # task_worker and reviewer only: an idle wo
 mcp = ["fold", "pencil"]             # the servers the role may load: fold and servers of the project's .mcp.json
 
 [roles.review_lead]
-handoff_at = 60                      # area_lead and review_lead only: the percent of the context window past which fold refreshes the lead through a hand-off note
+handoff_at = 50                      # area_lead and review_lead only: the percent of the context window past which fold refreshes the lead through a hand-off note; without it, 85% of the window below 220k tokens and 60% from 220k
 ```
 
 - The top-level numbers must be whole numbers above 0. A worker limit has no upper bound, and 0 lets no worker of its role start; the leads are outside the limits, and a lower limit never stops a running worker.
@@ -186,7 +186,7 @@ The daemon serves the web app at `http://127.0.0.1:7420` by default. On loopback
 - Proposals: the list, with the proposals that wait for your review marked Waits for you, counted on the tab and shown alone by a filter, and each proposal's diff (full or since the last review), its check runs and conflicts. A person comments on lines, approves the version, requests changes, integrates, edits a file into a new version and sends that version for review again. A batch page shows a review batch's members and stops its reviewer.
 - Requests: create a request with attachments; on a request, approve a draft, request changes, edit the draft into a new version, close it and answer its clarification thread.
 - Agents: the main agent, the leads and their workers with state, model, turns, cost and context. Start an area lead or the review lead, stop a worker, start a worker in a new session, and allow or deny a worker's tool permission.
-- Messages: the threads that concern you, filtered by agent, task or proposal, or to those marked Waits for you, which the tab's count counts; reply, answer a question with its choices or free text, mark a thread's questions answered, and send feedback. Agents' messages to each other are on each task and in Activity.
+- Messages: the threads that concern you, filtered by agent, task or proposal, or to those marked Waits for you, which the tab's count counts; reply, answer a question with its choices or free text, mark a thread's questions answered, and send feedback. Agents' messages to each other are on each task and in Activity. The leads, the reviewers and the task workers ask the humans directly with `asks_human`, so their questions wait in Needs you under Questions, and a reply goes back to the asker in the same thread, never through the main agent.
 - Repository: revisions, the tree, files and a compare of two revisions.
 
 The top bar switches project, pauses and resumes the agents, and opens Needs you, which lists what waits for a human, each with a link to the screen that handles it: Questions, Permissions, Reviews, Request drafts, Human tasks, Blockers, Your changes (a conflicting change from the project folder), Git branch, Project folder (unrecorded changes in files main changed), Unstash conflict, Checks file and Worker connection (a worker that needs `fld restart`). The web app has no settings screen: config, areas, worker limits and tokens change through `.fold/config.toml`, the fold tools and `fld`.

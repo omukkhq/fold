@@ -11,8 +11,10 @@ mod profile;
 
 pub use answers::{PermissionBehavior, ask_answer_turn, permission_answer_turn};
 pub use handoff::{
-    HANDOFF_REQUEST, HANDOFF_TURNS, MAX_HANDOFF_CHARS, RefreshFacts, SUMMARY_ITEMS,
-    SummaryProposal, SummaryTask, check_handoff, handoff_due, handoff_overdue, refresh_turn,
+    DEFAULT_HANDOFF_LARGE_PERCENT, DEFAULT_HANDOFF_LARGE_WINDOW, DEFAULT_HANDOFF_SMALL_PERCENT,
+    HANDOFF_REQUEST, HANDOFF_TURNS, HandoffAt, MAX_HANDOFF_CHARS, RefreshFacts, SUMMARY_ITEMS,
+    SummaryProposal, SummaryTask, check_handoff, default_handoff_percent, handoff_due,
+    handoff_overdue, refresh_turn,
 };
 pub use profile::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, FieldChange, MAX_AREA_INSTRUCTIONS_CHARS,
@@ -706,6 +708,74 @@ mod tests {
                 < 1800,
             "the prompt stays in context every turn"
         );
+    }
+
+    #[test]
+    fn workers_ask_the_humans_directly_and_main_gets_only_plan_boundaries() {
+        for role in Role::ALL {
+            let prompt = role.prompt();
+            assert!(
+                prompt.to_lowercase().contains("ask the humans directly"),
+                "{role}"
+            );
+            assert!(prompt.contains("`asks_human` true"), "{role}");
+            assert!(
+                prompt.contains("the answer comes to you in the same thread"),
+                "{role}"
+            );
+            assert!(!prompt.contains("bring it to the main agent"), "{role}");
+        }
+        for role in [Role::AreaLead, Role::ReviewLead] {
+            assert!(
+                role.prompt().contains(
+                    "When you ask, send the main agent one short line with the thread id, without the question"
+                ),
+                "{role}"
+            );
+        }
+        for role in [Role::ReviewLead, Role::Reviewer] {
+            assert!(
+                role.prompt().contains(
+                    "or describe it with `create_request`, when it is work the size of a feature of its own. Ask the humans"
+                ),
+                "{role}"
+            );
+        }
+        assert!(
+            Role::AreaLead
+                .prompt()
+                .contains("call `mark_answered` on that ask when the task is Done")
+        );
+        assert!(
+            Role::AreaLead
+                .prompt()
+                .contains("Ask the main agent only about a change to those boundaries")
+        );
+        assert!(
+            !Role::ReviewLead
+                .prompt()
+                .contains("ask the main agent with")
+        );
+        assert!(!Role::Reviewer.prompt().contains("ask the review lead with"));
+        let main = main_prompt();
+        assert!(main.contains(
+            "about changes to the approved plan's boundaries (section 8), repeated failures, worker limits, blockers, human tasks and requests"
+        ));
+        assert!(main.contains("never relay their questions"));
+        assert!(main.contains(
+            "Ask the user yourself about your own responsibilities: the plan and its boundaries, project-wide settings, and project checks"
+        ));
+        assert!(main.contains(
+            "Bring pending tool permissions, human reviews, request drafts, ready human tasks and blockers to the user, with each item id"
+        ));
+        assert!(shared_prompt().contains(
+            "Ask the humans directly about your own work; the main agent asks the user about the plan"
+        ));
+        assert!(main.contains(
+            "When the user answers a lead's ask here, reply to the asker in its thread, then call `mark_answered`"
+        ));
+        assert!(main.contains("the leads' short lines name"));
+        assert!(!main.contains("Bring human questions"));
     }
 
     #[test]
