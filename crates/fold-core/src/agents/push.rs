@@ -335,9 +335,15 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
     if kind == types::INTEGRATION_SUCCEEDED {
         let proposal = event.proposal?;
         let agents = ctx.author.iter().chain(&ctx.reviewer).cloned().collect();
+        let with = event
+            .data
+            .get("batch")
+            .and_then(serde_json::Value::as_str)
+            .map(|batch| format!(" with batch {batch}"))
+            .unwrap_or_default();
         let text = match event.revision {
-            Some(revision) => format!("{proposal} integrated as {revision}"),
-            None => format!("{proposal} integrated"),
+            Some(revision) => format!("{proposal} integrated{with} as {revision}"),
+            None => format!("{proposal} integrated{with}"),
         };
         return Some((agents, text, "get_inbox"));
     }
@@ -1741,6 +1747,15 @@ mod tests {
         };
         assert!(is_pushed(&pull));
         assert!(notice_for(&pull, &ctx()).is_empty());
+        let batched = Event {
+            revision: Some(crate::ids::RevisionId::from_number(6).unwrap()),
+            data: json!({"batch": "rb-2"}),
+            ..event(types::INTEGRATION_SUCCEEDED, "fold")
+        };
+        assert_eq!(
+            sent(&notice_for(&batched, &ctx()))[0].1,
+            "fold: P-3 integrated with batch rb-2 as r6. Call get_inbox."
+        );
     }
 
     #[test]

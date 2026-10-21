@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT q.id AS \"id!: i64\", b.number AS \"batch!: i64\", q.actor\n           FROM review_batch_requests q JOIN review_batches b ON b.id = q.batch_id\n           WHERE q.ended_at IS NULL\n           ORDER BY q.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batch_requests",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "batch!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batches",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "actor",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_batch_requests",
+            "name": "actor"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "ad8c6d708951aad47e978ee1f7b4483543809eb72c99795ed310b6eeb2cdffe7"
+}

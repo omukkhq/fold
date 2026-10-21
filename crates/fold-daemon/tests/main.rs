@@ -43,6 +43,7 @@ mod auto_checkpoints;
 mod auto_integrate;
 #[cfg(feature = "failpoints")]
 mod auto_integrate_failpoints;
+mod batch_integration;
 mod checklists_service;
 mod checks;
 #[cfg(feature = "failpoints")]

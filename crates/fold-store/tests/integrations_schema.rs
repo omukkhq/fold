@@ -54,6 +54,7 @@ fn proposal_attempt(number: u32) -> NewIntegration<'static> {
             proposal: ProposalId::from_number(1).unwrap(),
             version: 1,
             remote_commit: None,
+            batch: None,
         },
         actor: "review",
         created_at: now(),
@@ -180,6 +181,7 @@ async fn a_sync_tasks_proposal_carries_its_remote_commit() {
             proposal: ProposalId::from_number(1).unwrap(),
             version: 1,
             remote_commit: Some("0123abcd"),
+            batch: None,
         },
         ..proposal_attempt(2)
     };

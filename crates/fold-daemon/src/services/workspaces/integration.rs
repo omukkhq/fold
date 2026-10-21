@@ -9,9 +9,9 @@ use tokio::sync::{OwnedMutexGuard, OwnedRwLockReadGuard};
 
 use super::{WorkspaceError, WorkspaceService, blocking, open_objects};
 
-/// The locks one integration attempt holds from its first object write until its transaction commits: the operation lock of the task workspace it archives, so no sync, restore or record writes there meanwhile, and the project's object lock shared, so garbage collection keeps the objects the new revision names.
+/// The locks one integration attempt holds from its first object write until its transaction commits: the operation lock of each task workspace it archives, so no sync, restore or record writes there meanwhile, and the project's object lock shared, so garbage collection keeps the objects the new revisions name.
 pub(crate) struct IntegrationLocks {
-    _held: (Option<OwnedMutexGuard<()>>, OwnedRwLockReadGuard<()>),
+    _held: (Vec<OwnedMutexGuard<()>>, OwnedRwLockReadGuard<()>),
 }
 
 impl WorkspaceService {
@@ -20,13 +20,24 @@ impl WorkspaceService {
         &self,
         workspace: Option<WorkspaceId>,
     ) -> IntegrationLocks {
-        let op = match workspace {
-            Some(workspace) => Some(self.ops.lock(workspace).await),
-            None => None,
-        };
+        self.lock_for_batch_integration(workspace.into_iter().collect())
+            .await
+    }
+
+    /// [`WorkspaceService::lock_for_integration`] for the task workspaces of a batch's members, taken in workspace number order so two holders never wait for each other.
+    pub(crate) async fn lock_for_batch_integration(
+        &self,
+        mut workspaces: Vec<WorkspaceId>,
+    ) -> IntegrationLocks {
+        workspaces.sort();
+        workspaces.dedup();
+        let mut ops = Vec::with_capacity(workspaces.len());
+        for workspace in workspaces {
+            ops.push(self.ops.lock(workspace).await);
+        }
         let objects = self.objects.clone().read_owned().await;
         IntegrationLocks {
-            _held: (op, objects),
+            _held: (ops, objects),
         }
     }
 

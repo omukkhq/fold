@@ -471,11 +471,13 @@ async fn integrate_project(
     handle.slug.clone()
 }
 
-/// A verdict, alone or in a batch review, a changed or cleared mark, a removed dependency, a status change, which covers a prerequisite becoming Done, an added tag, because an approval counts by the `main` tag and the role its agent holds now, and a move of main, which can fix the checks file that holds the integrations or clear fold's own failure to run the checks on the earlier main.
+/// A verdict, alone or in a batch review, a changed or cleared mark, a removed dependency, a status change, which covers a prerequisite becoming Done, an added tag, because an approval counts by the `main` tag and the role its agent holds now, and a move of main, which can fix the checks file that holds the integrations or clear fold's own failure to run the checks on the earlier main. A closed proposal and a closed batch can give the last member of a batch its final state, or let the members of a batch that ended without a review go on their own.
 fn can_make_ready(event_type: EventType) -> bool {
     [
         types::REVIEW_SUBMITTED,
         types::REVIEW_BATCH_SUBMITTED,
+        types::REVIEW_BATCH_CLOSED,
+        types::PROPOSAL_CLOSED,
         types::TASK_HUMAN_REVIEW_SET,
         types::TASK_HUMAN_REVIEW_CLEARED,
         types::AGENT_TAG_ADDED,

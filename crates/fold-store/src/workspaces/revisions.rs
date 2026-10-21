@@ -1,6 +1,8 @@
 use fold_core::object::ObjectHash;
 use fold_core::revision::{Revision, StoredRevision};
-use fold_core::{ChangesetId, IdKind, IntegrationId, ProposalId, RevisionId, TaskId, Timestamp};
+use fold_core::{
+    ChangesetId, IdKind, IntegrationId, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp,
+};
 use sqlx::{Executor, Sqlite, SqlitePool};
 
 use super::refs;
@@ -50,6 +52,8 @@ pub struct IntegrationInfo {
     pub changeset: Option<ChangesetId>,
     /// The Git commit message the main agent wrote for a direct change.
     pub message: Option<String>,
+    /// The review batch whose members integrated together with this proposal.
+    pub batch: Option<ReviewBatchId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -303,6 +307,7 @@ struct RawRow {
     agent: Option<String>,
     worker: Option<String>,
     git_commit: Option<String>,
+    batch_number: Option<i64>,
 }
 
 async fn one<'e, E>(executor: E, number: RevisionId) -> Result<Option<RevisionRow>, StoreError>
@@ -338,7 +343,7 @@ where
                   pr.number AS "proposal_number?: i64", pr.title AS "proposal_title?",
                   v.version AS "version?: i64", t.number AS "task_number?: i64",
                   t.title AS "task_title?", a.name AS "agent?", w.name AS "worker?",
-                  rc."commit" AS "git_commit?"
+                  rc."commit" AS "git_commit?", rb.number AS "batch_number?: i64"
            FROM revisions r
            LEFT JOIN revisions p ON p.id = r.parent_id
            LEFT JOIN integrations i ON i.id = r.integration_id
@@ -350,6 +355,7 @@ where
            LEFT JOIN revision_commits rc ON rc.revision_id = r.id
            LEFT JOIN changesets cs ON cs.id = i.changeset_id
            LEFT JOIN human_changes hc ON hc.integration_id = i.id
+           LEFT JOIN review_batches rb ON rb.id = i.review_batch_id
            WHERE r.number BETWEEN ?1 AND ?2
            ORDER BY r.number ASC
            LIMIT ?3"#,
@@ -382,7 +388,7 @@ where
                   pr.number AS "proposal_number?: i64", pr.title AS "proposal_title?",
                   v.version AS "version?: i64", t.number AS "task_number?: i64",
                   t.title AS "task_title?", a.name AS "agent?", w.name AS "worker?",
-                  rc."commit" AS "git_commit?"
+                  rc."commit" AS "git_commit?", rb.number AS "batch_number?: i64"
            FROM revisions r
            LEFT JOIN revisions p ON p.id = r.parent_id
            LEFT JOIN integrations i ON i.id = r.integration_id
@@ -394,6 +400,7 @@ where
            LEFT JOIN revision_commits rc ON rc.revision_id = r.id
            LEFT JOIN changesets cs ON cs.id = i.changeset_id
            LEFT JOIN human_changes hc ON hc.integration_id = i.id
+           LEFT JOIN review_batches rb ON rb.id = i.review_batch_id
            WHERE r.number <= ?1
            ORDER BY r.number DESC
            LIMIT ?2"#,
@@ -429,6 +436,13 @@ fn row(raw: RawRow) -> Result<RevisionRow, StoreError> {
                 })
                 .transpose()?,
             message: raw.integration_message,
+            batch: raw
+                .batch_number
+                .map(|number| {
+                    ReviewBatchId::try_from_db(number)
+                        .ok_or(StoreError::Corrupt("review_batches.number"))
+                })
+                .transpose()?,
             proposal: match (
                 raw.proposal_number,
                 raw.proposal_title,

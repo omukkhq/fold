@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO integrations\n             (number, kind, proposal_id, version_id, remote_commit, result, revision_id, report, actor, created_at,\n              changeset_id, message, review_batch_id)\n         VALUES (\n             ?1, ?2,\n             (SELECT id FROM proposals WHERE number = ?3),\n             (SELECT v.id FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id\n              WHERE p.number = ?3 AND v.version = ?4),\n             ?5, ?6,\n             CASE WHEN ?7 THEN (SELECT COALESCE(MAX(id), 0) + 1 FROM revisions) END,\n             ?8, ?9, ?10,\n             (SELECT id FROM changesets WHERE number = ?11),\n             ?12,\n             (SELECT id FROM review_batches WHERE number = ?13)\n         )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 13
+    },
+    "nullable": []
+  },
+  "hash": "7c142b1da6f3cb91910fe775308d12b43923d891f422920c2c5c5cb2c3cd7281"
+}

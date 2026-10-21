@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE review_batch_requests SET ended_at = ?2 WHERE id = ?1 AND ended_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "40fe4261d0ee8f08d11cbe1a829466012350908dbc410b3c2b1f61a1fd79c0e3"
+}

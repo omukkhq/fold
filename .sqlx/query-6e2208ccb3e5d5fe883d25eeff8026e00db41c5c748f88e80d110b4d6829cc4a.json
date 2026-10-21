@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO review_batch_requests (batch_id, actor, created_at)\n           SELECT b.id, ?2, ?3 FROM review_batches b WHERE b.number = ?1\n           RETURNING id AS \"id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batch_requests",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "6e2208ccb3e5d5fe883d25eeff8026e00db41c5c748f88e80d110b4d6829cc4a"
+}

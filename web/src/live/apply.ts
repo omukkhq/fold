@@ -426,6 +426,10 @@ function invalidationKeys(
         ...taskKey,
         repository,
         board,
+        // A batch's queued integration and each member's integration change what the batch screen says about its integration.
+        ...(typeof event.data.batch === "string"
+          ? [keys.reviewBatches(slug)]
+          : []),
         // Needs you lists main's invalid checks file from the first integration it holds.
         ...(event.type === "integration.held" ? [keys.needsYou(slug)] : []),
       ];

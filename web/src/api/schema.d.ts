@@ -827,6 +827,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/reviews/batches/{id}/integrate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human integrates the approved members of a submitted batch together, once every member has its final state: one run of the integration checks on their merge with main, then one revision per member in one transaction. A member that conflicts goes back alone; a failed run integrates the members one at a time. */
+        post: operations["integrate_review_batch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/reviews/checkouts": {
         parameters: {
             query?: never;
@@ -1508,6 +1525,35 @@ export interface components {
             task: string;
             title: string;
         };
+        BatchIntegrationResult: {
+            /** @example rb-3 */
+            batch: string;
+            /** @description Each member's integration in the order it ran. */
+            members: components["schemas"]["BatchMemberResult"][];
+            result: components["schemas"]["BatchIntegrationResultKind"];
+            /**
+             * @description The failed check run of the members together, for `one_at_a_time`.
+             * @example cr-9
+             */
+            run: string | null;
+        };
+        /** @enum {string} */
+        BatchIntegrationResultKind: "together" | "one_at_a_time" | "nothing" | "queued";
+        /** @description What one member's integration did. */
+        BatchMemberResult: {
+            /** @example P-3 */
+            proposal: string;
+            result: components["schemas"]["BatchMemberResultKind"];
+            /** @example r18 */
+            revision: string | null;
+            /**
+             * @description The member's own failed check run.
+             * @example cr-9
+             */
+            run: string | null;
+        };
+        /** @enum {string} */
+        BatchMemberResultKind: "succeeded" | "conflicted" | "checks_failed";
         /**
          * @description A human's answer to a worker's permission question.
          * @enum {string}
@@ -2150,7 +2196,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable" | "message.ask_closed" | "review.plan_created" | "review.plan_changed" | "review.plan_joined" | "review.plan_left" | "review.plan_wait_ended" | "review.plan_started" | "review.plan_ended";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable" | "message.ask_closed" | "review.plan_created" | "review.plan_changed" | "review.plan_joined" | "review.plan_left" | "review.plan_wait_ended" | "review.plan_started" | "review.plan_ended" | "review.batch_integrated";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -3355,6 +3401,7 @@ export interface components {
             holder: string;
             /** @example rb-3 */
             id: string;
+            integration: components["schemas"]["ReviewBatchIntegration"];
             /** @description Every member the batch has had, in merge order. */
             members: components["schemas"]["ReviewBatchMember"][];
             state: components["schemas"]["ReviewBatchState"];
@@ -3399,6 +3446,37 @@ export interface components {
              */
             number: number;
         };
+        /** @description Whether the approved members of a submitted batch integrate together now, wait for the others, or did. */
+        ReviewBatchIntegration: {
+            /**
+             * @description While `ready`: the members that integrate together, in merge order.
+             * @example [
+             *       "P-3",
+             *       "P-5"
+             *     ]
+             */
+            members: string[];
+            outcome: components["schemas"]["ReviewBatchOutcome"] | null;
+            /**
+             * @description While `waiting`: the members without a final state.
+             * @example [
+             *       "P-4"
+             *     ]
+             */
+            pending: string[];
+            /** @description While `ready`: a request to integrate the batch waits in the integration queue. */
+            queued: boolean;
+            /** @description Once `ended`: the members published together, in revision order. */
+            revisions: components["schemas"]["ReviewBatchRevision"][];
+            /**
+             * @description Once `ended`: the one check run of the members together, when integration checks ran.
+             * @example cr-9
+             */
+            run: string | null;
+            state: components["schemas"]["ReviewBatchIntegrationState"];
+        };
+        /** @enum {string} */
+        ReviewBatchIntegrationState: "not_submitted" | "waiting" | "ready" | "ended";
         ReviewBatchList: {
             /** @description In number order. */
             batches: components["schemas"]["ReviewBatch"][];
@@ -3426,6 +3504,20 @@ export interface components {
             /**
              * Format: int32
              * @description The version the batch reviews: the one the proposal had when it joined.
+             */
+            version: number;
+        };
+        /** @enum {string} */
+        ReviewBatchOutcome: "together" | "one_at_a_time" | "none";
+        /** @description A member the batch published together with the others. */
+        ReviewBatchRevision: {
+            /** @example P-3 */
+            proposal: string;
+            /** @example r18 */
+            revision: string;
+            /**
+             * Format: int32
+             * @description The version that was integrated.
              */
             version: number;
         };
@@ -3603,6 +3695,11 @@ export interface components {
         RevisionView: {
             /** @description The agent whose proposal was integrated, the human who pulled, or the main worker that made a direct change. */
             author: string | null;
+            /**
+             * @description The review batch whose approved members integrated together with this proposal, each as its own revision.
+             * @example rb-3
+             */
+            batch: string | null;
             /** @description The Git commit the revision became in the project folder's repository `.git`; null until it is written, just after the integration. */
             commit: string | null;
             /**
@@ -9011,6 +9108,94 @@ export interface operations {
                 };
             };
             /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    integrate_review_batch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The review batch id, such as rb-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Integrated together, one at a time, nothing to integrate, or queued behind other integrations when the project has integration checks */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BatchIntegrationResult"];
+                };
+            };
+            /** @description `invalid_request` (`details.reason` is `batch_not_submitted`, `batch_waiting` with `details.pending`, `batch_integrated`, or `integration_queued`), `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `review_batch_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `head_moved` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error, or `workspace_io` with `details.reason` `fold_failed` when fold itself could not run the integration checks */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable`, or `integration_failed` (`details.cause`) */
             503: {
                 headers: {
                     [name: string]: unknown;

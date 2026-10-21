@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use fold_core::object::ObjectHash;
 use fold_core::tree::{EntryKind, FlatTree};
-use fold_core::{ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId};
+use fold_core::{ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkspaceId};
 use fold_store::workspaces::{self, IntegrationKind, RevisionRow};
 use fold_vcs::browse::{self, DirEntry, FileContent, FlatDirEntry};
 use fold_vcs::compare::{self as vcs, FileChange, State, Totals};
@@ -60,6 +60,8 @@ pub struct RevisionSummary {
     pub pull: Option<String>,
     /// The Git commit the revision became in the project folder's repository `.git`; `None` until it is written.
     pub commit: Option<String>,
+    /// The review batch whose members integrated together with this proposal.
+    pub batch: Option<ReviewBatchId>,
 }
 
 impl From<RevisionRow> for RevisionSummary {
@@ -105,6 +107,7 @@ impl From<RevisionRow> for RevisionSummary {
                     .map(str::to_owned),
             },
             author,
+            batch: integration.as_ref().and_then(|info| info.batch),
             pull: integration
                 .filter(|info| info.kind != IntegrationKind::Record)
                 .and_then(|info| info.remote_commit),

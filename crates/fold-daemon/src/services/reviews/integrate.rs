@@ -11,8 +11,8 @@ use fold_core::reviews::{Approver, ReviewFact, Verdict, latest_verdict};
 use fold_core::revision::{Revision, StoredRevision};
 use fold_core::{
     Actor, AddressedAs, AgentActor, ChangesetId, CheckRunId, EventActor, EventError, FoldError,
-    HumanName, IdKind, IntegrationId, MessageBody, NewEvent, ProposalId, Recipient, RevisionId,
-    Target, TaskId, Timestamp, WorkerName, WorkspaceId, codes, policy,
+    HumanName, IdKind, IntegrationId, MessageBody, NewEvent, ProposalId, Recipient, ReviewBatchId,
+    RevisionId, Target, TaskId, Timestamp, WorkerName, WorkspaceId, codes, policy,
 };
 use fold_store::reviews::checks;
 use fold_store::reviews::{
@@ -25,6 +25,7 @@ use fold_store::{StoreError, WriteTx, agents, counters, tasks, workspaces};
 use fold_vcs::integrate::MergeOutcome;
 use serde_json::json;
 
+use super::batch_integration::BatchIntegration;
 use super::checks::{
     HeldRequest, Integrating, IntegrationChecks, PassedRun, Verdict as RunVerdict, end_run_in_tx,
     fold_failed_refusal,
@@ -44,7 +45,7 @@ use crate::services::workspaces::{
 };
 
 /// How many times the procedure starts again from reading main when main moved under it.
-const ATTEMPTS: usize = 3;
+pub(super) const ATTEMPTS: usize = 3;
 
 /// The longest remote commit id: a SHA-256 Git object id in hex.
 const MAX_COMMIT_CHARS: usize = 64;
@@ -128,7 +129,7 @@ pub enum DirectOutcome {
 
 impl Integrated {
     /// What the procedure did, for its caller; `None` for an integration that main's invalid checks file holds.
-    fn outcome(self) -> Option<IntegrationOutcome> {
+    pub(super) fn outcome(self) -> Option<IntegrationOutcome> {
         match self {
             Integrated::Succeeded(revision) => Some(IntegrationOutcome::Succeeded { revision }),
             Integrated::Conflicted(conflicts) => Some(IntegrationOutcome::Conflicted(conflicts)),
@@ -146,7 +147,7 @@ pub struct AutomaticIntegration {
 }
 
 #[derive(Clone, Copy)]
-enum IntegrationRequest<'a> {
+pub(super) enum IntegrationRequest<'a> {
     Proposal {
         proposal: ProposalId,
         expected_version: Option<u32>,
@@ -158,7 +159,7 @@ enum IntegrationRequest<'a> {
     Record(&'a RecordIntegration),
 }
 
-enum Integrated {
+pub(super) enum Integrated {
     Succeeded(RevisionId),
     Conflicted(Vec<Conflict>),
     ChecksFailed(CheckRunId),
@@ -167,7 +168,7 @@ enum Integrated {
 }
 
 /// Why an attempt stopped. `Retry` rolls the transaction back and starts again from reading main.
-enum Step {
+pub(super) enum Step {
     Retry,
     Failed(ReviewError),
 }
@@ -203,15 +204,15 @@ impl From<FoldError> for Step {
 }
 
 /// What one attempt merges and what its transaction records.
-struct Plan {
-    base_tree: ObjectHash,
-    other_tree: ObjectHash,
+pub(super) struct Plan {
+    pub(super) base_tree: ObjectHash,
+    pub(super) other_tree: ObjectHash,
     /// The task workspace or main workspace the transaction archives; its operation lock is held from the merge until the commit.
-    workspace: Option<WorkspaceId>,
-    subject: Subject,
+    pub(super) workspace: Option<WorkspaceId>,
+    pub(super) subject: Subject,
 }
 
-enum Subject {
+pub(super) enum Subject {
     Proposal {
         proposal: ProposalId,
         task: TaskId,
@@ -385,7 +386,7 @@ impl ReviewService {
     }
 
     /// Serves one stored request in its turn and ends it.
-    fn serve_queued(
+    pub(super) fn serve_queued(
         &self,
         id: i64,
         actor: Actor,
@@ -453,6 +454,7 @@ impl ReviewService {
             );
             queued += 1;
         }
+        queued += self.requeue_batch_requests().await?;
         if queued > 0 {
             tracing::info!(
                 queued,
@@ -566,11 +568,33 @@ impl ReviewService {
         )
     }
 
-    /// Integrates, as fold, every open proposal whose current version is ready: an agent that decides reviews or a human approved it, the latest verdict asks for no changes, a marked task has a human approval the mark accepts, and every prerequisite is Done. Each integration is the same procedure a deciding agent runs. The open proposals are looked at in number order and looked at again after each integration, so a prerequisite's integration lets the proposals that need it follow in the same call. A proposal flagged with a conflict waits for its next version, which clears the flag. A failed attempt is logged by its code and left for the next call. Returns the integrations in the order they ran; a conflicted one recorded `integration.conflicted` and left its proposal open.
+    /// Integrates, as fold, every open proposal whose current version is ready: an agent that decides reviews or a human approved it, the latest verdict asks for no changes, a marked task has a human approval the mark accepts, and every prerequisite is Done. Each integration is the same procedure a deciding agent runs. A submitted review batch whose members all have their final state takes its turn first, its ready members together; the members a batch holds back, while it is open or waits for a member, are left to it. The open proposals are looked at in number order and looked at again after each integration, so a prerequisite's integration lets the proposals that need it follow in the same call. A proposal flagged with a conflict waits for its next version, which clears the flag. A failed attempt is logged by its code and left for the next call. Returns the integrations in the order they ran; a conflicted one recorded `integration.conflicted` and left its proposal open.
     pub async fn integrate_ready(&self) -> Result<Vec<AutomaticIntegration>, ReviewError> {
         let mut done = Vec::new();
         let mut passed = HashSet::new();
-        while let Some((proposal, version)) = self.next_ready(&passed).await? {
+        let mut turned = HashSet::new();
+        loop {
+            let holds = self.batch_holds().await?;
+            if let Some(&batch) = holds.ready.iter().find(|batch| !turned.contains(*batch)) {
+                turned.insert(batch);
+                match self.integrate_batch_automatically(batch).await {
+                    Ok(turn) => done.extend(
+                        turn.into_iter()
+                            .flat_map(BatchIntegration::into_members)
+                            .map(|member| AutomaticIntegration {
+                                proposal: member.proposal,
+                                outcome: member.outcome,
+                            }),
+                    ),
+                    Err(error) => {
+                        tracing::warn!(batch = %batch, code = error.log_code(), "the automatic integration of a review batch failed; the next trigger tries again");
+                    }
+                }
+                continue;
+            }
+            let Some((proposal, version)) = self.next_ready(&passed, &holds.held).await? else {
+                break;
+            };
             passed.insert(proposal);
             let request = IntegrationRequest::Proposal {
                 proposal,
@@ -593,10 +617,11 @@ impl ReviewService {
         Ok(done)
     }
 
-    /// The lowest-numbered open proposal outside `passed` that is not flagged with a conflict or failed integration checks, whose integration checks fold did not fail to run on this version and main, and that passes every gate for the automatic caller, with its current version.
+    /// The lowest-numbered open proposal outside `passed` and outside `held`, the members a review batch holds back to integrate together, that is not flagged with a conflict or failed integration checks, whose integration checks fold did not fail to run on this version and main, and that passes every gate for the automatic caller, with its current version.
     async fn next_ready(
         &self,
         passed: &HashSet<ProposalId>,
+        held: &HashSet<ProposalId>,
     ) -> Result<Option<(ProposalId, u32)>, ReviewError> {
         let head = workspaces::head(self.store.read())
             .await?
@@ -610,6 +635,7 @@ impl ReviewService {
             if row.conflicted
                 || row.checks_failed
                 || passed.contains(&row.id)
+                || held.contains(&row.id)
                 || row.latest_verdict != Some(Verdict::Approve)
             {
                 continue;
@@ -636,13 +662,22 @@ impl ReviewService {
         Ok(ready)
     }
 
-    /// The one procedure behind both kinds. The project's integration mutex is held throughout, so two integrations never run at the same time; an attempt that finds main moved starts again, three times at most.
+    /// The one procedure behind every kind. The project's integration mutex is held throughout, so two integrations never run at the same time.
     async fn integrate(
         &self,
         actor: &Actor,
         request: IntegrationRequest<'_>,
     ) -> Result<Integrated, ReviewError> {
         let _serial = self.integration.lock().await;
+        self.integrate_locked(actor, request).await
+    }
+
+    /// [`ReviewService::integrate`] for a caller that holds the integration mutex already, such as a batch's integration that integrates some members on their own in the same turn. An attempt that finds main moved starts again, three times at most.
+    pub(super) async fn integrate_locked(
+        &self,
+        actor: &Actor,
+        request: IntegrationRequest<'_>,
+    ) -> Result<Integrated, ReviewError> {
         let mut carried = None;
         for _ in 0..ATTEMPTS {
             let attempt = self.attempt(actor, request, &mut carried).await;
@@ -741,6 +776,7 @@ impl ReviewService {
                 head: head.number,
                 head_tree: head.tree_hash,
                 merged: tree,
+                batch: None,
             };
             match self.integration_checks(actor, at, carried).await? {
                 IntegrationChecks::None => {}
@@ -793,6 +829,7 @@ impl ReviewService {
             now,
             human: human.as_ref(),
             checks: carried.as_ref(),
+            batch: None,
         };
         let archived = self
             .store
@@ -922,6 +959,7 @@ impl ReviewService {
                         proposal,
                         version,
                         remote_commit: None,
+                        batch: None,
                     },
                     actor: label.as_str(),
                     created_at: now,
@@ -1017,7 +1055,7 @@ fn record_plan(actor: &Actor, record: &RecordIntegration) -> Result<Plan, Step> 
 }
 
 /// The caller of a stored queue request: a named human or an agent's worker. Its rights are read again from the database when its turn comes, so no tag is carried.
-fn queued_actor(label: &str) -> Option<Actor> {
+pub(super) fn queued_actor(label: &str) -> Option<Actor> {
     let actor = EventActor::parse(label).ok()?;
     if let Some(name) = actor.human_name() {
         return HumanName::parse(name).ok().map(Actor::human);
@@ -1151,7 +1189,7 @@ impl ReviewService {
 
 impl ReviewService {
     /// The conflicted human change an integration onto `tree` brings onto main, when one waits: the change whose merge the main workspace of a direct change holds, or one whose changes `tree` holds already. A record of the human closes the waiting change itself.
-    async fn human_resolution(
+    pub(super) async fn human_resolution(
         &self,
         plan: &Plan,
         tree: ObjectHash,
@@ -1307,23 +1345,25 @@ pub(super) fn caller_facts(
     }
 }
 
-/// The inputs of the one write transaction of an attempt.
-struct Commit<'a> {
-    actor: &'a Actor,
-    plan: &'a Plan,
-    /// The head the attempt read and merged onto.
-    head: RevisionId,
-    stored: &'a StoredRevision,
-    integration: IntegrationId,
-    now: Timestamp,
+/// The inputs of the one write transaction of an attempt, or of one member's part of a batch's transaction.
+pub(super) struct Commit<'a> {
+    pub(super) actor: &'a Actor,
+    pub(super) plan: &'a Plan,
+    /// The head the attempt read and merged onto; for a batch member, the revision of the member before it.
+    pub(super) head: RevisionId,
+    pub(super) stored: &'a StoredRevision,
+    pub(super) integration: IntegrationId,
+    pub(super) now: Timestamp,
     /// The conflicted human change the integration brings onto main.
-    human: Option<&'a HumanResolution>,
+    pub(super) human: Option<&'a HumanResolution>,
     /// The passed integration checks of the merged tree, ended in this transaction.
-    checks: Option<&'a PassedRun>,
+    pub(super) checks: Option<&'a PassedRun>,
+    /// The submitted review batch whose members integrate together in this transaction.
+    pub(super) batch: Option<ReviewBatchId>,
 }
 
 /// A conflicted human change that an integration brings onto main, with the data of its `human_change.resolved` event: the human, and the files, open workspaces and leads it touches.
-struct HumanResolution {
+pub(super) struct HumanResolution {
     /// The row id of the waiting change.
     id: i64,
     data: serde_json::Value,
@@ -1331,7 +1371,7 @@ struct HumanResolution {
 
 impl Commit<'_> {
     /// Step 6. Returns the workspaces it archived, whose live state stops after the commit.
-    async fn run(
+    pub(super) async fn run(
         &self,
         tx: &mut WriteTx,
         buffer: &mut EventBuffer,
@@ -1372,15 +1412,20 @@ impl Commit<'_> {
                     proposal: *proposal,
                     version: *version,
                     remote_commit: remote_commit.as_deref(),
+                    batch: self.batch,
                 };
+                let mut data = json!({
+                    "integration": self.integration.to_string(),
+                    "kind": "proposal",
+                    "version": version,
+                });
+                if let Some(batch) = self.batch {
+                    data["batch"] = json!(batch.to_string());
+                }
                 let succeeded = NewEvent::new(types::INTEGRATION_SUCCEEDED, label.clone())?
                     .task(*task)
                     .proposal(*proposal)
-                    .data(json!({
-                        "integration": self.integration.to_string(),
-                        "kind": "proposal",
-                        "version": version,
-                    }))?;
+                    .data(data)?;
                 self.advance(tx, buffer, &label, subject, succeeded).await?;
                 self.complete(tx, buffer, &label, facts).await?
             }
@@ -1628,14 +1673,18 @@ impl Commit<'_> {
                 }))?;
             buffer.append(tx, &submitted, self.now).await?;
         }
+        let mut data = json!({
+            "version": version,
+            "integration": self.integration.to_string(),
+        });
+        if let Some(batch) = self.batch {
+            data["batch"] = json!(batch.to_string());
+        }
         let integrated = NewEvent::new(types::PROPOSAL_INTEGRATED, label.clone())?
             .task(task)
             .proposal(proposal)
             .revision(revision)
-            .data(json!({
-                "version": version,
-                "integration": self.integration.to_string(),
-            }))?;
+            .data(data)?;
         buffer.append(tx, &integrated, self.now).await?;
         let mut archived = reviews::live_review_workspaces(tx.conn(), proposal).await?;
         retire_proposal(

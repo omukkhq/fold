@@ -6,7 +6,7 @@ use fold_core::reviews::checks::{
 };
 use fold_core::{
     Actor, AddressedAs, CheckRunId, EventActor, FoldError, IdKind, MessageBody, NewEvent,
-    ProposalId, Recipient, RevisionId, Target, TaskId, WorkerName, codes,
+    ProposalId, Recipient, ReviewBatchId, RevisionId, Target, TaskId, WorkerName, codes,
 };
 use fold_store::reviews::checks::{self, CheckRunRow, NewCheckRun};
 use fold_store::reviews::{self};
@@ -57,6 +57,8 @@ pub(crate) struct Integrating {
     pub head: RevisionId,
     pub head_tree: ObjectHash,
     pub merged: ObjectHash,
+    /// The submitted batch whose members merge together into `merged`; the run is stored on `proposal`, the last of them. A failed run of a batch sends nobody back: the caller integrates the members one at a time.
+    pub batch: Option<ReviewBatchId>,
 }
 
 impl ReviewService {
@@ -96,8 +98,12 @@ impl ReviewService {
                     fault: false,
                 };
                 let verdict = Verdict::failed(RunReason::ChecksFileInvalid);
-                self.send_back_for_checks(actor, at, &run, &[invalid], verdict)
-                    .await?;
+                if at.batch.is_some() {
+                    self.end_run_alone(&run, &[invalid], verdict).await?;
+                } else {
+                    self.send_back_for_checks(actor, at, &run, &[invalid], verdict)
+                        .await?;
+                }
                 return Ok(IntegrationChecks::Failed(run.id));
             }
         };
@@ -153,15 +159,19 @@ impl ReviewService {
         drop(permit);
         drop(held);
         if verdict == fault {
-            self.end_fold_failed(&run, &results, verdict).await?;
+            self.end_run_alone(&run, &results, verdict).await?;
             return Ok(IntegrationChecks::FoldFailed(run.id));
         }
         if verdict.state == RunState::Passed {
             *carried = Some(PassedRun { run, results });
             return Ok(IntegrationChecks::Passed);
         }
-        self.send_back_for_checks(actor, at, &run, &results, verdict)
-            .await?;
+        if at.batch.is_some() {
+            self.end_run_alone(&run, &results, verdict).await?;
+        } else {
+            self.send_back_for_checks(actor, at, &run, &results, verdict)
+                .await?;
+        }
         Ok(IntegrationChecks::Failed(run.id))
     }
 
@@ -204,8 +214,8 @@ impl ReviewService {
         Ok(())
     }
 
-    /// Ends a run that fold itself could not complete as `stopped` with `fold_failed`, in a write of its own. The proposal is not flagged and nobody is sent back: the caller tells whoever asked for the integration, who asks again once the fault is fixed.
-    async fn end_fold_failed(
+    /// Ends a run in a write of its own, with nobody sent back: a run that fold itself could not complete, stopped as `fold_failed`, whose caller tells whoever asked for the integration, who asks again once the fault is fixed, or the failed run of a batch, whose caller integrates the members one at a time.
+    async fn end_run_alone(
         &self,
         run: &CheckRunRow,
         results: &[CommandResult],
@@ -279,16 +289,20 @@ impl ReviewService {
                     evidence: None,
                 };
                 checks::insert_run(tx, &new, now).await?;
+                let mut data = json!({
+                    "run": id.to_string(),
+                    "stage": Stage::Integration.as_str(),
+                    "purpose": Purpose::Integrate.as_str(),
+                    "version": at.version,
+                });
+                if let Some(batch) = at.batch {
+                    data["batch"] = json!(batch.to_string());
+                }
                 let event = NewEvent::new(fold_core::events::types::CHECKS_STARTED, label.clone())?
                     .task(at.task)
                     .proposal(at.proposal)
                     .revision(at.head)
-                    .data(json!({
-                        "run": id.to_string(),
-                        "stage": Stage::Integration.as_str(),
-                        "purpose": Purpose::Integrate.as_str(),
-                        "version": at.version,
-                    }))?;
+                    .data(data)?;
                 buffer.append(tx, &event, now).await?;
                 checks::get_run(tx.conn(), id)
                     .await?
@@ -504,6 +518,7 @@ mod tests {
             head: RevisionId::from_number(5).unwrap(),
             head_tree: ObjectHash::from_bytes([1; 32]),
             merged: ObjectHash::from_bytes([2; 32]),
+            batch: None,
         };
         let run = CheckRunRow {
             id: CheckRunId::from_number(9).unwrap(),
