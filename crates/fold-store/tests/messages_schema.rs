@@ -294,3 +294,48 @@ async fn only_an_open_ask_that_no_worker_waits_on_takes_one_closure_that_never_c
     );
     assert_append_only(store, "message_ask_closures").await;
 }
+
+#[tokio::test]
+async fn message_lines_name_a_version_of_the_message_proposal() {
+    let project = seeded().await;
+    let store = project.store();
+    for sql in [
+        "INSERT INTO tasks (id, number, title, created_by, created_at, updated_at) VALUES (1, 1, 'one', 'frontend', 0, 0)",
+        "INSERT INTO revisions (id, number, hash, tree_hash, created_at) VALUES (1, 1, 'h1', 't1', 0)",
+        "INSERT INTO workspaces (id, number, task_id, worker_id, kind, path, base_revision_id, state, created_at) VALUES (1, 1, 1, 1, 'task', 'ws/t-1', 1, 'active', 0)",
+        "INSERT INTO changesets (id, number, workspace_id, task_id, base_revision_id, tree_hash, message, created_by, created_at) VALUES (1, 1, 1, 1, 1, 't2', 'm', 'frontend', 0)",
+        "INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 1, 1, 1, 'p', 0, 0)",
+        "INSERT INTO proposals (id, number, task_id, author_worker_id, title, state, close_reason, created_at, updated_at) VALUES (2, 2, 1, 1, 'q', 'closed', 'gone', 0, 0)",
+        "INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at) VALUES (1, 1, 1, 1, 't2', 1, 'frontend', 0), (2, 2, 1, 1, 't2', 1, 'frontend', 0)",
+        "INSERT INTO messages (id, number, thread_id, sender_kind, sender_human, proposal_id, body, created_at) VALUES (2, 2, 2, 'human', 'tanim', 1, 'why', 0)",
+    ] {
+        exec(store, sql).await.unwrap();
+    }
+    let lines = |message: u32, version: u32, start: u32, end: u32| {
+        format!(
+            "INSERT INTO message_line_refs (message_id, version_id, path, side, start_line, end_line, excerpt, excerpt_cut)
+             VALUES ({message}, {version}, 'a.rs', 'new', {start}, {end}, 'x', 0)"
+        )
+    };
+    let other = exec(store, &lines(2, 2, 1, 1)).await.unwrap_err();
+    assert!(
+        other
+            .to_string()
+            .contains("message_line_refs_same_proposal"),
+        "{other}"
+    );
+    let no_proposal = exec(store, &lines(1, 1, 1, 1)).await.unwrap_err();
+    assert!(
+        no_proposal
+            .to_string()
+            .contains("message_line_refs_same_proposal"),
+        "{no_proposal}"
+    );
+    let backwards = exec(store, &lines(2, 1, 3, 2)).await.unwrap_err();
+    assert_eq!(
+        backwards.constraint().as_deref(),
+        Some("message_line_refs_range_order")
+    );
+    exec(store, &lines(2, 1, 2, 3)).await.unwrap();
+    assert_append_only(store, "message_line_refs").await;
+}

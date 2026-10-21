@@ -1,0 +1,187 @@
+#![cfg(test)]
+
+use axum::http::{Method, StatusCode};
+use serde_json::{Value, json};
+
+use crate::common::acceptance::{HUMAN, Harness};
+
+const FILE: &str = "web/src/board.ts";
+const CONTENT: &str = "export const a = 1;\nexport const b = 2;\nexport const c = 3;\n";
+
+async fn http(
+    h: &Harness,
+    method: Method,
+    path: &str,
+    body: Option<&Value>,
+) -> (StatusCode, Value) {
+    h.http(method, &format!("/api/v1/projects/demo{path}"), body, HUMAN)
+        .await
+}
+
+async fn get(h: &Harness, path: &str) -> Value {
+    let (status, body) = http(h, Method::GET, path, None).await;
+    assert_eq!(status, StatusCode::OK, "{path}: {body}");
+    body
+}
+
+/// What a question must leave unchanged: the proposal's turn, verdict, review claim and reviews, its comments, and the task's status.
+async fn review_state(h: &Harness, proposal: &str, task: &str) -> Value {
+    let detail = get(h, &format!("/proposals/{proposal}")).await;
+    let comments = get(h, &format!("/proposals/{proposal}/comments")).await;
+    let task = get(h, &format!("/tasks/{task}")).await;
+    json!({
+        "summary": detail["summary"],
+        "reviews": detail["reviews"],
+        "comments": comments["comments"],
+        "status": task["status"],
+    })
+}
+
+#[tokio::test]
+async fn acceptance_21_a_human_asks_the_author_about_lines_of_the_diff() {
+    let h = Harness::start().await;
+    let task = h.create_task("frontend", "board numbers").await;
+    let work = h.start_work("frontend", &task).await;
+    work.write(&[(FILE, CONTENT)]);
+    let proposal = h.propose("frontend", &work, "Board numbers").await;
+    h.call("frontend", "get_inbox", json!({})).await;
+    let before = review_state(&h, &proposal, &task).await;
+    let reviews_before = h
+        .events()
+        .await
+        .iter()
+        .filter(|event| event.kind.starts_with("review."))
+        .count();
+
+    let ask = json!({"version": 1, "path": FILE, "side": "new", "start_line": 2, "end_line": 3, "body": "Why two constants here?"});
+    let (status, sent) = http(
+        &h,
+        Method::POST,
+        &format!("/proposals/{proposal}/questions"),
+        Some(&ask),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    let question = sent["id"].as_str().unwrap().to_owned();
+    assert_eq!(sent["sender"], format!("human:{HUMAN}"));
+    assert_eq!(sent["task"], task.as_str());
+    assert_eq!(sent["proposal"], proposal.as_str());
+    assert_eq!(sent["recipients"][0]["name"], "frontend");
+    assert_eq!(
+        sent["lines"],
+        json!({"version": 1, "path": FILE, "side": "new", "start_line": 2, "end_line": 3,
+               "excerpt": "export const b = 2;\nexport const c = 3;", "excerpt_cut": false})
+    );
+
+    // The author reads the question with the lines in its inbox and in the thread.
+    let inbox = h.call("frontend", "get_inbox", json!({})).await;
+    let item = inbox["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["id"] == question.as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(item["proposal"], proposal.as_str());
+    assert_eq!(
+        item["lines"],
+        json!({"version": 1, "path": FILE, "side": "new", "start_line": 2, "end_line": 3,
+               "text": "export const b = 2;\nexport const c = 3;"})
+    );
+    let thread = h
+        .call("frontend", "get_thread", json!({"thread": question}))
+        .await;
+    assert_eq!(thread["messages"][0]["lines"], item["lines"]);
+
+    // The question writes no review, verdict or comment and leaves the turn and the status as they were.
+    assert_eq!(review_state(&h, &proposal, &task).await, before);
+    let reviews_after = h
+        .events()
+        .await
+        .iter()
+        .filter(|event| event.kind.starts_with("review."))
+        .count();
+    assert_eq!(reviews_after, reviews_before);
+
+    // The author answers in the thread, which the proposal's listing shows with the lines.
+    let answer = h
+        .send_with(
+            "frontend",
+            json!({"to": [format!("human:{HUMAN}")], "body": "One per column.", "reply_to": question}),
+        )
+        .await;
+    let listing = get(&h, &format!("/messages?proposal={proposal}")).await;
+    let threads = listing["items"].as_array().unwrap();
+    let asked = threads
+        .iter()
+        .find(|thread| thread["id"] == question.as_str())
+        .unwrap();
+    let ids: Vec<&str> = asked["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|message| message["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [question.as_str(), answer.as_str()]);
+    assert_eq!(asked["messages"][0]["lines"]["start_line"], 2);
+    assert_eq!(asked["messages"][1]["lines"], Value::Null);
+    assert_eq!(review_state(&h, &proposal, &task).await, before);
+}
+
+#[tokio::test]
+async fn acceptance_21_a_question_names_lines_that_exist() {
+    let h = Harness::start().await;
+    let task = h.create_task("frontend", "board numbers").await;
+    let work = h.start_work("frontend", &task).await;
+    work.write(&[(FILE, CONTENT)]);
+    let proposal = h.propose("frontend", &work, "Board numbers").await;
+    let path = format!("/proposals/{proposal}/questions");
+    for (ask, status, code) in [
+        (
+            json!({"version": 1, "path": FILE, "side": "new", "start_line": 3, "end_line": 4, "body": "why"}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_comment_range",
+        ),
+        (
+            json!({"version": 1, "path": FILE, "side": "old", "start_line": 1, "end_line": 1, "body": "why"}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unknown_comment_path",
+        ),
+        (
+            json!({"version": 2, "path": FILE, "side": "new", "start_line": 1, "end_line": 1, "body": "why"}),
+            StatusCode::NOT_FOUND,
+            "proposal_not_found",
+        ),
+        (
+            json!({"version": 1, "path": "../x", "side": "new", "start_line": 1, "end_line": 1, "body": "why"}),
+            StatusCode::BAD_REQUEST,
+            "invalid_path",
+        ),
+        (
+            json!({"version": 1, "path": FILE, "side": "new", "start_line": 1, "end_line": 1, "body": "  "}),
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+        ),
+    ] {
+        let (answer, body) = http(&h, Method::POST, &path, Some(&ask)).await;
+        assert_eq!(
+            (answer, body["error"]["code"].as_str().unwrap()),
+            (status, code),
+            "{ask}"
+        );
+    }
+    let (status, body) = http(&h, Method::POST, "/proposals/P-9/questions", Some(&json!({"version": 1, "path": FILE, "side": "new", "start_line": 1, "end_line": 1, "body": "why"}))).await;
+    assert_eq!(
+        (status, body["error"]["code"].as_str().unwrap()),
+        (StatusCode::NOT_FOUND, "proposal_not_found")
+    );
+    let listing = get(&h, &format!("/messages?proposal={proposal}")).await;
+    let from_human = listing["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|thread| thread["messages"].as_array().unwrap())
+        .filter(|message| message["sender"] == format!("human:{HUMAN}"))
+        .count();
+    assert_eq!(from_human, 0);
+}

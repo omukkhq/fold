@@ -8,7 +8,7 @@ use fold_core::{
     HumanName, IdKind, MessageBody, MessageChoices, MessageId, NewEvent, ProposalId, Recipient,
     RequestId, Sender, Target, TaskId, Timestamp, WorkerName, codes, policy,
 };
-use fold_store::messages::{self, MessageHead, MessageRow, NewMessage, RecipientRow};
+use fold_store::messages::{self, MessageHead, MessageLines, MessageRow, NewMessage, RecipientRow};
 use fold_store::tasks::claims;
 use fold_store::{Store, StoreError, WriteTx, agents, counters, projects, reviews, tasks};
 use serde_json::json;
@@ -102,6 +102,8 @@ pub struct MessageView {
     pub header: Option<String>,
     /// The sender marked the message as asking a human for an answer.
     pub asks_human: bool,
+    /// The lines of a version of the message's proposal that the message asks about.
+    pub lines: Option<MessageLines>,
 }
 
 fn recipient_view(row: RecipientRow) -> RecipientView {
@@ -130,6 +132,7 @@ fn message_view(row: MessageRow) -> MessageView {
         choices: row.choices,
         header: row.header,
         asks_human: row.asks_human,
+        lines: row.lines,
     }
 }
 
@@ -316,6 +319,7 @@ impl MessageService {
                     body: &input.body,
                     choices: choices.as_ref(),
                     asks_human: send.asks_human,
+                    lines: None,
                     recipients,
                     now,
                 };
@@ -376,6 +380,7 @@ impl MessageService {
                     body: &body,
                     choices: None,
                     asks_human: false,
+                    lines: None,
                     recipients,
                     now,
                 };
@@ -410,6 +415,8 @@ struct Draft<'a> {
     body: &'a MessageBody,
     choices: Option<&'a MessageChoices>,
     asks_human: bool,
+    /// The lines of a version of `proposal` the message asks about.
+    lines: Option<MessageLines>,
     recipients: Vec<Recipient>,
     now: Timestamp,
 }
@@ -479,6 +486,9 @@ async fn write_message(
         .and_then(MessageChoices::header)
         .map(str::to_owned);
     messages::insert_choices(tx, id, &choices, header.as_deref()).await?;
+    if let (Some(lines), Some(proposal)) = (&draft.lines, draft.proposal) {
+        messages::insert_lines(tx, id, proposal, lines).await?;
+    }
     let names: Vec<String> = draft
         .recipients
         .iter()
@@ -528,6 +538,7 @@ async fn write_message(
         choices,
         header,
         asks_human: draft.asks_human,
+        lines: draft.lines,
     })
 }
 
@@ -551,8 +562,44 @@ pub(crate) async fn send_from_fold_in_tx(
         body,
         choices: None,
         asks_human: false,
+        lines: None,
         recipients,
         now,
+    };
+    write_message(tx, buffer, draft).await
+}
+
+/// A human's question to `to` about `lines` of a version of `links.1`, linked to the proposal and its task `links.0`.
+pub(crate) struct LineQuestion<'a> {
+    pub actor: &'a Actor,
+    pub to: Recipient,
+    pub links: (TaskId, ProposalId),
+    pub body: &'a MessageBody,
+    pub lines: MessageLines,
+    pub now: Timestamp,
+}
+
+/// Sends a question about lines of a proposal version inside the caller's transaction, as one message that starts its own thread. The caller knows the recipient worker exists and publishes the buffer after the commit.
+pub(crate) async fn ask_about_lines_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    question: LineQuestion<'_>,
+) -> Result<MessageView, MessageError> {
+    let sender = Sender::of(question.actor);
+    let draft = Draft {
+        actor: question.actor,
+        sender: &sender,
+        task: Some(question.links.0),
+        proposal: Some(question.links.1),
+        request: None,
+        join: None,
+        parent: None,
+        body: question.body,
+        choices: None,
+        asks_human: false,
+        lines: Some(question.lines),
+        recipients: vec![question.to],
+        now: question.now,
     };
     write_message(tx, buffer, draft).await
 }
@@ -592,6 +639,7 @@ pub(crate) async fn ask_humans_in_tx(
         body: question.body,
         choices: question.choices,
         asks_human: false,
+        lines: None,
         recipients,
         now: question.now,
     };

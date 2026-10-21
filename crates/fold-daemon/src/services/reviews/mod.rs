@@ -23,6 +23,7 @@ mod human_review;
 mod integrate;
 mod notify;
 mod proposals;
+mod questions;
 mod review_fixes;
 mod scopes;
 mod verdicts;

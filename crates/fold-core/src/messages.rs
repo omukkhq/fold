@@ -539,3 +539,47 @@ pub fn chosen_answer(choices: &[String], reply: &str) -> String {
         .cloned()
         .unwrap_or_else(|| reply.to_owned())
 }
+
+/// The most lines of a run that a question about lines of a proposal keeps as its excerpt.
+pub const MAX_EXCERPT_LINES: usize = 100;
+
+/// The most characters a question's excerpt keeps.
+pub const MAX_EXCERPT_CHARS: usize = 20_000;
+
+/// A question's excerpt: lines `start..=end` of `text`, 1-based and joined by newlines without their line endings, and whether it was cut. A run longer than [`MAX_EXCERPT_LINES`] lines or [`MAX_EXCERPT_CHARS`] characters keeps its first lines, and a first line longer than that its first characters. `None` when the run is not a forward run from line 1 inside the text.
+pub fn line_excerpt(text: &str, start: u32, end: u32) -> Option<(String, bool)> {
+    if start == 0 || start > end {
+        return None;
+    }
+    let skip = usize::try_from(start - 1).ok()?;
+    let wanted = usize::try_from(end - start).ok()?.checked_add(1)?;
+    let lines: Vec<&str> = text
+        .lines()
+        .skip(skip)
+        .take(wanted)
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .collect();
+    if lines.len() < wanted {
+        return None;
+    }
+    let mut excerpt = String::new();
+    let mut chars = 0;
+    let mut kept = 0;
+    for line in lines.iter().take(MAX_EXCERPT_LINES) {
+        let separator = usize::from(kept > 0);
+        let length = line.chars().count();
+        if chars + separator + length > MAX_EXCERPT_CHARS {
+            if kept == 0 {
+                excerpt.extend(line.chars().take(MAX_EXCERPT_CHARS));
+            }
+            return Some((excerpt, true));
+        }
+        if kept > 0 {
+            excerpt.push('\n');
+        }
+        excerpt.push_str(line);
+        chars += separator + length;
+        kept += 1;
+    }
+    Some((excerpt, kept < wanted))
+}

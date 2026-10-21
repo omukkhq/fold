@@ -33,6 +33,7 @@ export function message(
     choices: [],
     header: null,
     asks_human: false,
+    lines: null,
     ...fields,
   };
 }

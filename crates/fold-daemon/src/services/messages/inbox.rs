@@ -4,7 +4,7 @@ use fold_core::{
     RequestId, Sender, TaskId, Timestamp, WorkerName, policy,
 };
 use fold_store::agents::WorkerRow;
-use fold_store::messages::{self, InboxRow};
+use fold_store::messages::{self, InboxRow, MessageLines};
 use fold_store::{Store, WriteTx, agents};
 use serde_json::json;
 
@@ -37,6 +37,8 @@ pub struct InboxItem {
     pub header: Option<String>,
     /// The sender marked the message as asking a human for an answer.
     pub asks_human: bool,
+    /// The lines of a version of the message's proposal that the message asks about.
+    pub lines: Option<MessageLines>,
 }
 
 fn item(row: InboxRow, now: Timestamp) -> InboxItem {
@@ -57,6 +59,7 @@ fn item(row: InboxRow, now: Timestamp) -> InboxItem {
         choices: message.choices,
         header: message.header,
         asks_human: message.asks_human,
+        lines: message.lines,
     }
 }
 

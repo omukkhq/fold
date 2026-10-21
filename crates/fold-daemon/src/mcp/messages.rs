@@ -6,6 +6,7 @@ use fold_core::{
     TaskId, Timestamp, codes,
 };
 use fold_store::agents::WorkerRow;
+use fold_store::messages::MessageLines;
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -150,7 +151,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_INBOX,
-            "Read your unacknowledged messages in id order. Reading does not acknowledge: a message comes back on every call until acknowledge_message.",
+            "Read your unacknowledged messages in id order. Reading does not acknowledge: a message comes back on every call until acknowledge_message. A message with `lines` is a human's question about those lines of your proposal; answer it with send_message and reply_to.",
             schema_for_type::<GetInboxInput>(),
         ),
         Tool::new(
@@ -224,6 +225,9 @@ fn inbox_json(item: &InboxItem) -> Value {
     if item.asks_human {
         object.insert("asks_human".into(), json!(true));
     }
+    if let Some(lines) = &item.lines {
+        object.insert("lines".into(), lines_json(lines));
+    }
     object.insert("sent_at".into(), json!(millis(item.sent_at)));
     Value::Object(object)
 }
@@ -259,8 +263,27 @@ fn thread_json(message: &MessageView) -> Value {
     if message.asks_human {
         object.insert("asks_human".into(), json!(true));
     }
+    if let Some(lines) = &message.lines {
+        object.insert("lines".into(), lines_json(lines));
+    }
     object.insert("sent_at".into(), json!(millis(message.sent_at)));
     Value::Object(object)
+}
+
+/// The lines of the message's proposal a human asks its author about, with their text; `excerpt_cut` appears only when the text holds just the first lines.
+fn lines_json(lines: &MessageLines) -> Value {
+    let mut object = json!({
+        "version": lines.version,
+        "path": lines.path,
+        "side": lines.side.as_str(),
+        "start_line": lines.start_line,
+        "end_line": lines.end_line,
+        "text": lines.excerpt,
+    });
+    if lines.excerpt_cut {
+        object["excerpt_cut"] = json!(true);
+    }
+    object
 }
 
 fn millis(time: Timestamp) -> i64 {

@@ -10,6 +10,7 @@ use utoipa_axum::routes;
 use super::Project;
 use super::actor::Human;
 use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
+use super::reviews::CommentSide;
 use crate::daemon::AppState;
 use crate::services::messages::{self as service, DismissScope, Feedback, ThreadQuery};
 
@@ -74,6 +75,42 @@ pub struct MessageView {
     pub header: Option<String>,
     /// The sending agent marked the message as asking a human for an answer. A question with choices and a worker's `AskUserQuestion` message ask without the mark.
     pub asks_human: bool,
+    /// The lines of a version of the message's proposal that a human's question to its author is about; null for any other message.
+    #[schema(required = true)]
+    pub lines: Option<MessageLines>,
+}
+
+/// A run of lines of one file of a proposal version, with their text.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MessageLines {
+    /// The version of the message's proposal.
+    pub version: u32,
+    #[schema(example = "web/src/board.ts")]
+    pub path: String,
+    /// `old` reads the version's base, `new` the version.
+    pub side: CommentSide,
+    /// From 1.
+    pub start_line: u32,
+    /// Inclusive.
+    pub end_line: u32,
+    /// The lines joined by newlines, without their line endings.
+    pub excerpt: String,
+    /// The excerpt holds only the first lines of the run: at most 100 lines and 20000 characters.
+    pub excerpt_cut: bool,
+}
+
+impl From<fold_store::messages::MessageLines> for MessageLines {
+    fn from(lines: fold_store::messages::MessageLines) -> Self {
+        Self {
+            version: lines.version,
+            path: lines.path,
+            side: lines.side.into(),
+            start_line: lines.start_line,
+            end_line: lines.end_line,
+            excerpt: lines.excerpt,
+            excerpt_cut: lines.excerpt_cut,
+        }
+    }
 }
 
 /// One option of a multiple-choice question.
@@ -126,6 +163,7 @@ impl From<service::MessageView> for MessageView {
                 .collect(),
             header: message.header,
             asks_human: message.asks_human,
+            lines: message.lines.map(Into::into),
         }
     }
 }

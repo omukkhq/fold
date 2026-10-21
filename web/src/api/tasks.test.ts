@@ -425,6 +425,7 @@ describe("the task's messages", () => {
     choices: [],
     header: null,
     asks_human: false,
+    lines: null,
     ...over,
   });
   const thread = (messages: MessageView[]) => ({
