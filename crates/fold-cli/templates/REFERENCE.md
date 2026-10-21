@@ -90,7 +90,7 @@ max_per_area = 2                     # optional: task workers of one area at onc
 
 [roles.task_worker]                  # also area_lead, review_lead and reviewer
 model = "sonnet"                     # passed to Claude Code as --model
-cache_ttl = "5m"                     # "1h" or "5m": "1h" for leads and reviewers and "5m" for task workers by default
+cache_ttl = "5m"                     # "1h" or "5m": "1h" for leads and "5m" for reviewers and task workers by default
 idle_minutes = 15                    # task_worker and reviewer only: an idle worker stops after this long
 mcp = ["fold", "pencil"]             # the servers the role may load: fold and servers of the project's .mcp.json
 
