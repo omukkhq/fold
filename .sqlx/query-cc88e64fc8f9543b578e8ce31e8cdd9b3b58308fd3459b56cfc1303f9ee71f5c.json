@@ -1,0 +1,57 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT slug, name, root, COALESCE(last_used_at, created_at) AS \"last_used_at!: i64\"\n           FROM projects WHERE slug = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "slug",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "root",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "root"
+          }
+        }
+      },
+      {
+        "name": "last_used_at!: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "cc88e64fc8f9543b578e8ce31e8cdd9b3b58308fd3459b56cfc1303f9ee71f5c"
+}

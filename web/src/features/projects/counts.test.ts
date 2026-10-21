@@ -65,7 +65,7 @@ describe("lastChangeLine", () => {
 });
 
 describe("summaryLine", () => {
-  const base = { slug: "demo", name: "demo" };
+  const base = { slug: "demo", name: "demo", last_used_at: 0 };
 
   it("gives the counts of a project with an overview", () => {
     expect(

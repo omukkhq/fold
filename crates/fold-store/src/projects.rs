@@ -13,6 +13,81 @@ pub struct ProjectRow {
     pub root: String,
 }
 
+/// A registry row with when a person last used the project.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectUse {
+    pub row: ProjectRow,
+    /// When a person last opened the project, or when it was registered.
+    pub last_used_at: Timestamp,
+}
+
+/// Every registered project with its last use, ordered by slug.
+pub async fn list_project_uses(pool: &SqlitePool) -> Result<Vec<ProjectUse>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT slug, name, root, COALESCE(last_used_at, created_at) AS "last_used_at!: i64"
+           FROM projects ORDER BY slug"#
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(ProjectUse {
+                row: ProjectRow {
+                    slug: row.slug,
+                    name: row.name,
+                    root: row.root,
+                },
+                last_used_at: time(row.last_used_at, "projects.last_used_at")?,
+            })
+        })
+        .collect()
+}
+
+/// The registry row of `slug` with its last use.
+pub async fn find_project_use(
+    pool: &SqlitePool,
+    slug: &str,
+) -> Result<Option<ProjectUse>, StoreError> {
+    let row = sqlx::query!(
+        r#"SELECT slug, name, root, COALESCE(last_used_at, created_at) AS "last_used_at!: i64"
+           FROM projects WHERE slug = ?"#,
+        slug
+    )
+    .fetch_optional(pool)
+    .await?;
+    row.map(|row| {
+        Ok(ProjectUse {
+            row: ProjectRow {
+                slug: row.slug,
+                name: row.name,
+                root: row.root,
+            },
+            last_used_at: time(row.last_used_at, "projects.last_used_at")?,
+        })
+    })
+    .transpose()
+}
+
+/// Sets `last_used_at` of `slug` to `now` unless it is already later than `stale_before`, so a screen that reads the project again and again writes the registry at most once per period. True when the row changed.
+pub async fn touch_project(
+    tx: &mut WriteTx,
+    slug: &str,
+    now: Timestamp,
+    stale_before: Timestamp,
+) -> Result<bool, StoreError> {
+    let now = now.as_millis();
+    let stale_before = stale_before.as_millis();
+    let result = sqlx::query!(
+        "UPDATE projects SET last_used_at = ? WHERE slug = ? AND (last_used_at IS NULL OR last_used_at <= ?)",
+        now,
+        slug,
+        stale_before
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
 /// Every registered project, ordered by slug.
 pub async fn list_projects(pool: &SqlitePool) -> Result<Vec<ProjectRow>, StoreError> {
     Ok(sqlx::query_as!(
@@ -59,10 +134,11 @@ pub async fn insert_project(
 ) -> Result<(), StoreError> {
     let created_at = now.as_millis();
     sqlx::query!(
-        "INSERT INTO projects (slug, name, root, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO projects (slug, name, root, created_at, last_used_at) VALUES (?, ?, ?, ?, ?)",
         project.slug,
         project.name,
         project.root,
+        created_at,
         created_at
     )
     .execute(tx.conn())

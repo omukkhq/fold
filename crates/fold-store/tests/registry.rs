@@ -67,3 +67,53 @@ async fn a_repeated_slug_or_root_is_a_unique_violation() {
         assert!(error.unique_violation());
     }
 }
+
+#[tokio::test]
+async fn a_project_is_used_when_registered_and_each_touch_after_the_period_moves_it() {
+    let (_dir, store) = registry_store().await;
+    let at = |millis| Timestamp::from_millis(millis).unwrap();
+    for (project, now) in [(row("alpha", "/a"), at(5)), (row("beta", "/b"), at(7))] {
+        store
+            .write(async |tx| projects::insert_project(tx, &project, now).await)
+            .await
+            .unwrap();
+    }
+    let uses = async || -> Vec<(String, i64)> {
+        projects::list_project_uses(store.read())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|entry| (entry.row.slug, entry.last_used_at.as_millis()))
+            .collect()
+    };
+    assert_eq!(
+        uses().await,
+        [("alpha".to_owned(), 5), ("beta".to_owned(), 7)]
+    );
+    let touch = async |slug: &'static str, now, stale_before| {
+        store
+            .write(async |tx| projects::touch_project(tx, slug, at(now), at(stale_before)).await)
+            .await
+            .unwrap()
+    };
+    assert!(touch("alpha", 20, 10).await);
+    assert!(
+        !touch("alpha", 25, 15).await,
+        "a use inside the period is kept"
+    );
+    assert!(!touch("none", 25, 15).await);
+    assert_eq!(
+        uses().await,
+        [("alpha".to_owned(), 20), ("beta".to_owned(), 7)]
+    );
+    let found = projects::find_project_use(store.read(), "alpha")
+        .await
+        .unwrap();
+    assert_eq!(found.map(|entry| entry.last_used_at), Some(at(20)));
+    assert_eq!(
+        projects::find_project_use(store.read(), "none")
+            .await
+            .unwrap(),
+        None
+    );
+}

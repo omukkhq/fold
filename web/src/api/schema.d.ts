@@ -114,7 +114,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** One open project. */
+        /** One open project. Reading it notes that a person uses the project now, which orders the recent projects of the project switcher. */
         get: operations["show_project"];
         put?: never;
         post?: never;
@@ -2740,6 +2740,11 @@ export interface components {
         ProjectSummary: {
             /** @description False while the project failed to open or has not been opened yet. */
             available: boolean;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the project's last use: when a person last opened it or its newest event happened, whichever is later, and its registration before either. The project switcher lists the most recent first.
+             */
+            last_used_at: number;
             name: string;
             overview: components["schemas"]["ProjectOverview"] | null;
             slug: string;

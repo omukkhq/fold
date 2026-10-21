@@ -1470,6 +1470,8 @@ pub struct ProjectEntry {
     pub slug: String,
     pub name: String,
     pub available: bool,
+    /// When a person last opened the project or its newest event happened, whichever is later; the registration time before either.
+    pub last_used_at: Timestamp,
     /// Read from the store of an open project; `None` for an unavailable one, and for an open one whose store could not be read.
     pub overview: Option<ProjectOverview>,
 }
@@ -1645,9 +1647,9 @@ pub async fn overview(handle: &ProjectHandle) -> Result<ProjectOverview, Project
 
 /// Every registered project, ordered by slug, with the overview of each open one. A project whose overview cannot be read is listed without it, so one damaged store does not hide the others. A project whose folder is there without `.fold/` is removed from fold first and is not listed.
 pub async fn list(state: &DaemonState) -> Result<Vec<ProjectEntry>, ProjectError> {
-    let rows = projects::list_projects(state.registry.read()).await?;
-    let mut entries = Vec::with_capacity(rows.len());
-    for row in rows {
+    let uses = projects::list_project_uses(state.registry.read()).await?;
+    let mut entries = Vec::with_capacity(uses.len());
+    for projects::ProjectUse { row, last_used_at } in uses {
         if project_folder(Path::new(&row.root)).await == ProjectFolder::FoldMissing
             && state.projects.remove_if_deleted(&row).await
         {
@@ -1665,12 +1667,61 @@ pub async fn list(state: &DaemonState) -> Result<Vec<ProjectEntry>, ProjectError
         };
         entries.push(ProjectEntry {
             available,
+            last_used_at: last_use(last_used_at, overview.as_ref()),
             overview,
             slug: row.slug,
             name: row.name,
         });
     }
     Ok(entries)
+}
+
+/// How long a person's use of a project stands before the next one is written, so a screen that reads the project again and again writes the registry at most once per period.
+const USE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// One open project as the project list shows it, for a person who opens it now: the registry notes the use, at most once per [`USE_INTERVAL`]. A use that cannot be written is logged and the project is shown with the use before it, so the registry never fails the read.
+pub async fn show(
+    state: &DaemonState,
+    handle: &ProjectHandle,
+) -> Result<ProjectEntry, ProjectError> {
+    let overview = overview(handle).await?;
+    let used = match note_use(state, &handle.slug).await {
+        Ok(used) => used,
+        Err(error) => {
+            tracing::warn!(project = %handle.slug, code = error.log_code(), "the use of the project could not be noted");
+            None
+        }
+    };
+    Ok(ProjectEntry {
+        slug: handle.slug.clone(),
+        name: handle.name.clone(),
+        available: true,
+        last_used_at: last_use(used.unwrap_or(Timestamp::EPOCH), Some(&overview)),
+        overview: Some(overview),
+    })
+}
+
+/// Notes that a person uses `slug` now, unless a use inside the last [`USE_INTERVAL`] stands, and returns the project's last use; `None` for a slug the registry does not hold.
+pub async fn note_use(state: &DaemonState, slug: &str) -> Result<Option<Timestamp>, ProjectError> {
+    let Some(found) = projects::find_project_use(state.registry.read(), slug).await? else {
+        return Ok(None);
+    };
+    let now = state.clock.now();
+    let stale_before = now.checked_sub(USE_INTERVAL).unwrap_or(Timestamp::EPOCH);
+    if found.last_used_at > stale_before {
+        return Ok(Some(found.last_used_at));
+    }
+    let touched = state
+        .registry
+        .write(async |tx| projects::touch_project(tx, slug, now, stale_before).await)
+        .await?;
+    Ok(Some(if touched { now } else { found.last_used_at }))
+}
+
+fn last_use(used: Timestamp, overview: Option<&ProjectOverview>) -> Timestamp {
+    overview
+        .and_then(|overview| overview.last_change_at)
+        .map_or(used, |changed| changed.max(used))
 }
 
 /// The open handle of `slug` for a request. A handle whose database was replaced or is missing, or whose folder is missing, is closed and the project is unavailable, with what to do for its folder; a project whose folder is there without `.fold/`, open or not, is removed from fold and is `project_not_found`, like a slug the registry does not hold.
@@ -1779,6 +1830,17 @@ async fn remove_deleted_rows(registry: &Store) -> Result<Vec<String>, ProjectErr
 
 /// Opens a project that `fld init` registered after the daemon started. An open project returns its handle again; a slug the registry does not hold is `project_not_found`.
 pub async fn open(state: &DaemonState, slug: &str) -> Result<Arc<ProjectHandle>, ProjectError> {
+    let handle = open_registered(state, slug).await?;
+    if let Err(error) = note_use(state, slug).await {
+        tracing::warn!(project = %slug, code = error.log_code(), "the use of the project could not be noted");
+    }
+    Ok(handle)
+}
+
+async fn open_registered(
+    state: &DaemonState,
+    slug: &str,
+) -> Result<Arc<ProjectHandle>, ProjectError> {
     let row = projects::find_project(state.registry.read(), slug)
         .await?
         .ok_or_else(|| match state.projects.take_removed(slug) {
@@ -1797,7 +1859,7 @@ pub async fn open_for_dir(
     cwd: &Path,
 ) -> Result<Arc<ProjectHandle>, ProjectError> {
     let slug = slug_for_dir(&state.registry, cwd).await?;
-    open(state, &slug).await
+    open_registered(state, &slug).await
 }
 
 /// The slug of the registered project whose root holds `cwd`, the nearest one when roots nest.

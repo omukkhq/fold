@@ -36,6 +36,9 @@ pub struct ProjectSummary {
     pub name: String,
     /// False while the project failed to open or has not been opened yet.
     pub available: bool,
+    /// UTC milliseconds of the project's last use: when a person last opened it or its newest event happened, whichever is later, and its registration before either. The project switcher lists the most recent first.
+    #[schema(value_type = i64)]
+    pub last_used_at: Timestamp,
     /// Null for a project that is not available, and for an open project whose store could not be read.
     #[schema(required = true)]
     pub overview: Option<ProjectOverview>,
@@ -129,6 +132,18 @@ impl From<projects::ProjectOverview> for ProjectOverview {
     }
 }
 
+impl From<projects::ProjectEntry> for ProjectSummary {
+    fn from(entry: projects::ProjectEntry) -> Self {
+        Self {
+            slug: entry.slug,
+            name: entry.name,
+            available: entry.available,
+            last_used_at: entry.last_used_at,
+            overview: entry.overview.map(Into::into),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ProjectList {
     pub projects: Vec<ProjectSummary>,
@@ -160,12 +175,7 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<ProjectList>, Ap
     let projects = projects::list(&state)
         .await?
         .into_iter()
-        .map(|entry| ProjectSummary {
-            slug: entry.slug,
-            name: entry.name,
-            available: entry.available,
-            overview: entry.overview.map(Into::into),
-        })
+        .map(ProjectSummary::from)
         .collect();
     Ok(Json(ProjectList { projects }))
 }
@@ -221,7 +231,7 @@ pub async fn show_daemon(_socket: SocketOnly, State(state): State<AppState>) -> 
     })
 }
 
-/// One open project.
+/// One open project. Reading it notes that a person uses the project now, which orders the recent projects of the project switcher.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}",
@@ -234,13 +244,11 @@ pub async fn show_daemon(_socket: SocketOnly, State(state): State<AppState>) -> 
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
-pub async fn show(Project(handle): Project) -> Result<Json<ProjectSummary>, ApiError> {
-    Ok(Json(ProjectSummary {
-        slug: handle.slug.clone(),
-        name: handle.name.clone(),
-        available: true,
-        overview: Some(projects::overview(&handle).await?.into()),
-    }))
+pub async fn show(
+    State(state): State<AppState>,
+    Project(handle): Project,
+) -> Result<Json<ProjectSummary>, ApiError> {
+    Ok(Json(projects::show(&state, &handle).await?.into()))
 }
 
 /// The project's Git repository and the state of its remotes.

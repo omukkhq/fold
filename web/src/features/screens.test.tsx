@@ -329,6 +329,52 @@ describe("A project fold removed", () => {
   });
 });
 
+describe("The top bar", () => {
+  it("links the wordmark to the projects page and switches among the five most recent projects", async () => {
+    const slugs = ["a", "b", "c", "d", "e", "f"];
+    const shell = shellRoutes(slugs);
+    const projects = slugs.map((slug, index) => ({
+      slug,
+      name: slug === "c" ? "f" : slug,
+      available: true,
+      last_used_at: index,
+      overview: null,
+    }));
+    stubFetch({
+      ...shell,
+      "GET /api/v1/projects": { body: { projects } },
+      "GET /api/v1/projects/demo": {
+        body: { slug: "demo", name: "demo", available: true },
+      },
+      "GET /api/v1/projects/f/workers": { body: workerList() },
+      "GET /api/v1/projects/f/events": () => new Promise<StubReply>(() => {}),
+    });
+    renderAt("/p/f/agents");
+    const wordmark = await screen.findByRole("link", {
+      name: "fold, all projects",
+    });
+    expect(wordmark.getAttribute("href")).toBe("/projects");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Project f, switch project" }),
+    );
+    const items = await screen.findAllByRole("menuitemradio");
+    // Two listed projects named f show their slugs beside the name.
+    expect(items.map((item) => item.textContent)).toEqual([
+      "ff",
+      "e",
+      "d",
+      "fc",
+      "b",
+    ]);
+    expect(items[0]?.getAttribute("aria-checked")).toBe("true");
+    await userEvent.click(screen.getByRole("menuitem", { name: "See all" }));
+    expect(
+      await screen.findByRole("heading", { name: "Projects" }),
+    ).toBeTruthy();
+  });
+});
+
 describe("Repository screen", () => {
   it("opens a mentioned folder as the tree at that folder and a mentioned file as a file", async () => {
     renderRepository(undefined, REVISIONS, "assets");
