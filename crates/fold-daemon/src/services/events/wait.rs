@@ -1,6 +1,9 @@
 use std::time::Duration;
 
 use fold_core::EventFilter;
+use fold_core::events::types;
+use fold_store::agents::WorkerRow;
+use fold_store::events::MessageWake;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::watch;
 use tokio::time::{Instant, Interval, MissedTickBehavior};
@@ -44,6 +47,7 @@ pub struct Waiter {
     service: EventService,
     agent_id: i64,
     filter: EventFilter,
+    wake: Option<MessageWake>,
     receiver: broadcast::Receiver<BusMessage>,
     closing: watch::Receiver<bool>,
     /// The page the first read found, returned by the first [`Waiter::next`].
@@ -57,6 +61,29 @@ pub struct Waiter {
 impl EventService {
     /// Starts a wait for the agent with row id `agent_id` and reads the first page after its cursor. The deadline and the ticks run on `tokio::time`, so tests drive them with a paused clock.
     pub async fn wait(&self, agent_id: i64, query: &WaitQuery) -> Result<Waiter, EventsError> {
+        self.start_wait(agent_id, None, query).await
+    }
+
+    /// [`EventService::wait`] for `worker`, which a sent message it receives also ends, whatever the filter says: a notice that fold pushes into a session waits there until the tool call returns. A main worker also wakes for the messages to its agent's other workers, because its session takes their notices and its inbox can read them.
+    pub async fn wait_as(
+        &self,
+        worker: &WorkerRow,
+        query: &WaitQuery,
+    ) -> Result<Waiter, EventsError> {
+        let wake = MessageWake {
+            event_type: types::MESSAGE_SENT,
+            worker_id: worker.id,
+            every_worker: worker.name.is_main(),
+        };
+        self.start_wait(worker.agent_id, Some(wake), query).await
+    }
+
+    async fn start_wait(
+        &self,
+        agent_id: i64,
+        wake: Option<MessageWake>,
+        query: &WaitQuery,
+    ) -> Result<Waiter, EventsError> {
         let filter = parse_filter(
             &query.types,
             query.task.as_deref(),
@@ -68,7 +95,7 @@ impl EventService {
             .clamp(1, MAX_TIMEOUT_S);
         let receiver = self.bus().subscribe();
         let closing = self.bus().closing();
-        let first = self.page(agent_id, &filter).await?;
+        let first = self.page(agent_id, &filter, wake).await?;
         let now = Instant::now();
         let mut ticks = tokio::time::interval_at(now + TICK, TICK);
         ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -76,6 +103,7 @@ impl EventService {
             service: self.clone(),
             agent_id,
             filter,
+            wake,
             receiver,
             closing,
             ready: (!first.events.is_empty()).then_some(first),
@@ -86,13 +114,25 @@ impl EventService {
         })
     }
 
-    async fn page(&self, agent_id: i64, filter: &EventFilter) -> Result<EventPage, EventsError> {
-        cursor_page(self.store(), agent_id, filter, DEFAULT_LIMIT as usize, true).await
+    async fn page(
+        &self,
+        agent_id: i64,
+        filter: &EventFilter,
+        wake: Option<MessageWake>,
+    ) -> Result<EventPage, EventsError> {
+        cursor_page(
+            self.store(),
+            agent_id,
+            filter,
+            DEFAULT_LIMIT as usize,
+            Some(wake),
+        )
+        .await
     }
 }
 
 impl Waiter {
-    /// Returns the matching events as soon as there are any, a tick every [`TICK`], or `TimedOut` at the deadline or once the project's bus closes. A matching event brings every match committed with it, because the page is read from the table after the cursor. The bus is polled before the deadline, so a match that is ready when the deadline passes is still returned.
+    /// Returns the matching events, and the sent messages of the wake, as soon as there are any, a tick every [`TICK`], or `TimedOut` at the deadline or once the project's bus closes. A matching event brings every match committed with it, because the page is read from the table after the cursor. The bus is polled before the deadline, so a match that is ready when the deadline passes is still returned.
     pub async fn next(&mut self) -> Result<WaitStep, EventsError> {
         if let Some(page) = self.ready.take() {
             return Ok(WaitStep::Events(page));
@@ -102,7 +142,10 @@ impl Waiter {
                 biased;
                 _ = self.closing.wait_for(|closed| *closed) => return Ok(WaitStep::TimedOut),
                 message = self.receiver.recv() => match message {
-                    Ok(BusMessage::Durable(event)) => self.filter.matches(&event),
+                    Ok(BusMessage::Durable(event)) => {
+                        self.filter.matches(&event)
+                            || self.wake.is_some_and(|wake| wake.event_type == event.event_type)
+                    }
                     Ok(BusMessage::Live(_)) => false,
                     // The table holds whatever the bus dropped.
                     Err(RecvError::Lagged(_)) => true,
@@ -117,7 +160,10 @@ impl Waiter {
             if !read {
                 continue;
             }
-            let page = self.service.page(self.agent_id, &self.filter).await?;
+            let page = self
+                .service
+                .page(self.agent_id, &self.filter, self.wake)
+                .await?;
             if !page.events.is_empty() {
                 return Ok(WaitStep::Events(page));
             }

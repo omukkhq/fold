@@ -527,6 +527,107 @@ async fn a_sent_message_wakes_its_recipient_and_no_other_agent() {
     assert_eq!(body(&missed), json!({"timed_out": true}));
 }
 
+#[cfg(test)]
+fn wait_in_background(
+    session: &Session,
+    arguments: Value,
+) -> tokio::task::JoinHandle<CallToolResult> {
+    let client = session.client.clone();
+    tokio::spawn(async move {
+        client
+            .call_tool(params("wait_for_events", arguments))
+            .await
+            .unwrap()
+    })
+}
+
+#[cfg(test)]
+async fn send_as_human(fx: &Fixture, to: &str) -> MessageId {
+    fx.messages()
+        .send(
+            &Actor::human(HumanName::parse("ana").unwrap()),
+            SendMessage {
+                to: Address::parse_all(&[to]).unwrap(),
+                body: MessageBody::parse("are you there?").unwrap(),
+                task: None,
+                proposal: None,
+                reply_to: None,
+            },
+        )
+        .await
+        .unwrap()
+        .id
+}
+
+#[tokio::test]
+async fn a_filtered_wait_ends_for_a_new_message_to_the_waiter_only() {
+    let fx = Fixture::new().await;
+    let backend = fx.connect("backend").await;
+    let frontend = fx.connect("frontend").await;
+    let filter = json!({"types": ["worker.stopped", "proposal.opened"], "timeout_s": 2});
+    let reached = wait_in_background(&backend, filter.clone());
+    let missed = wait_in_background(&frontend, filter);
+    subscribed(&fx.bus, 2).await;
+    let sent = send_as_human(&fx, "backend").await;
+    let reached = tokio::time::timeout(WAIT, reached).await.unwrap().unwrap();
+    assert_eq!(reached.is_error, Some(false));
+    let woke = body(&reached);
+    assert_eq!(woke["events"][0]["type"], json!("message.sent"));
+    assert_eq!(woke["messages"], json!([sent.to_string()]));
+    assert_eq!(
+        woke["hint"],
+        json!("a message waits for you; call get_inbox")
+    );
+    let footer = reached.content.last().unwrap().as_text().unwrap();
+    assert!(footer.text.starts_with("fold: 1 unread"), "{}", footer.text);
+    assert_eq!(fx.cursor(&backend).await, woke["next"].as_u64().unwrap());
+    let missed = tokio::time::timeout(WAIT, missed).await.unwrap().unwrap();
+    assert_eq!(body(&missed), json!({"timed_out": true}));
+    let again = call(
+        &backend,
+        "wait_for_events",
+        json!({"types": ["proposal.opened"], "timeout_s": 1}),
+    )
+    .await;
+    assert_eq!(
+        again,
+        json!({"timed_out": true}),
+        "the cursor passed the message"
+    );
+}
+
+#[tokio::test]
+async fn a_main_worker_wakes_for_its_workers_and_a_child_only_for_itself() {
+    let fx = Fixture::new().await;
+    let backend = fx.connect("backend").await;
+    call(&backend, "register_worker", json!({"name": "sub"})).await;
+    let filter = |worker: Option<&str>| {
+        let mut arguments = json!({"types": ["proposal.opened"], "timeout_s": 2});
+        if let Some(worker) = worker {
+            arguments["as"] = json!(worker);
+        }
+        arguments
+    };
+    let main = wait_in_background(&backend, filter(None));
+    subscribed(&fx.bus, 1).await;
+    let to_sub = send_as_human(&fx, "backend/sub").await;
+    let main = body(&tokio::time::timeout(WAIT, main).await.unwrap().unwrap());
+    assert_eq!(main["messages"], json!([to_sub.to_string()]));
+    assert_eq!(
+        main["hint"],
+        json!("a message waits for a worker of your agent; call get_inbox with include_workers")
+    );
+    let child = wait_in_background(&backend, filter(Some("backend/sub")));
+    subscribed(&fx.bus, 1).await;
+    send_as_human(&fx, "backend").await;
+    let child = body(&tokio::time::timeout(WAIT, child).await.unwrap().unwrap());
+    assert_eq!(
+        child,
+        json!({"timed_out": true}),
+        "a message to the main worker"
+    );
+}
+
 #[tokio::test]
 async fn a_bad_filter_is_refused_before_the_wait_starts() {
     let fx = Fixture::new().await;

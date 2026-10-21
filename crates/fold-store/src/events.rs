@@ -159,14 +159,32 @@ pub async fn after(pool: &SqlitePool, after: u64, limit: usize) -> Result<Vec<Ev
     read_after(pool, after, &EventFilter::default(), limit).await
 }
 
-/// [`read_after`] for the agent with row id `agent_id`: an event of one of `message_types` is selected only when a worker of the agent receives the message it names in `events.message_id`, and an event of one of `own_types` only when a worker of the agent performed it, so one query returns the page an agent's wait keeps.
+/// Who reads a wait's page, and which events reach them besides the filter's.
+#[derive(Debug, Clone, Copy)]
+pub struct Reach<'a> {
+    pub agent_id: i64,
+    /// An event of one of these types is selected only when a worker of the agent receives the message it names in `events.message_id`.
+    pub message_types: &'a [EventType],
+    /// An event of one of these types is selected only when a worker of the agent performed it.
+    pub own_types: &'a [EventType],
+    /// The messages that end a wait whatever its filter says.
+    pub wake: Option<MessageWake>,
+}
+
+/// An event of `event_type` is selected past the filter when the worker row `worker_id` receives the message it names, or with `every_worker` when any worker of the agent does.
+#[derive(Debug, Clone, Copy)]
+pub struct MessageWake {
+    pub event_type: EventType,
+    pub worker_id: i64,
+    pub every_worker: bool,
+}
+
+/// [`read_after`] for one reader: the filter's events that reach the agent by the rules of [`Reach`], and the wake's message events whatever the filter says, so one query returns the page an agent's wait keeps.
 pub async fn read_reaching(
     executor: impl SqliteExecutor<'_>,
     after: u64,
     filter: &EventFilter,
-    agent_id: i64,
-    message_types: &[EventType],
-    own_types: &[EventType],
+    reach: Reach<'_>,
     limit: usize,
 ) -> Result<Vec<Event>, StoreError> {
     let after = seq_param(after)?;
@@ -175,17 +193,28 @@ pub async fn read_reaching(
         (!filter.types.is_empty()).then(|| json_list(filter.types.iter(), |t| t.as_str().into()));
     let task = filter.task.map(TaskId::to_db);
     let proposal = filter.proposal.map(ProposalId::to_db);
-    let message_types = json_list(message_types.iter(), |t| t.as_str().into());
-    let own_types = json_list(own_types.iter(), |t| t.as_str().into());
+    let agent_id = reach.agent_id;
+    let message_types = json_list(reach.message_types.iter(), |t| t.as_str().into());
+    let own_types = json_list(reach.own_types.iter(), |t| t.as_str().into());
+    let wake_type = reach.wake.map(|wake| wake.event_type.as_str());
+    let wake_worker = reach.wake.map(|wake| wake.worker_id);
+    let wake_every = reach.wake.is_some_and(|wake| wake.every_worker);
     let rows = sqlx::query_as!(
         EventRecord,
         r#"SELECT e.seq AS "seq!: i64", e.type AS event_type, e.actor, e.task_id, e.proposal_id,
                   e.workspace_id, e.revision_id, e.data, e.created_at
            FROM events e
            WHERE e.seq > ?1
-             AND (?2 IS NULL OR e.type IN (SELECT value FROM json_each(?2)))
-             AND (?3 IS NULL OR e.task_id = ?3)
-             AND (?4 IS NULL OR e.proposal_id = ?4)
+             AND (((?2 IS NULL OR e.type IN (SELECT value FROM json_each(?2)))
+                   AND (?3 IS NULL OR e.task_id = ?3)
+                   AND (?4 IS NULL OR e.proposal_id = ?4))
+                  OR (e.type = ?9
+                      AND EXISTS (
+                          SELECT 1 FROM messages m
+                          JOIN message_recipients r ON r.message_id = m.id
+                          JOIN workers w ON w.id = r.worker_id
+                          WHERE m.number = e.message_id
+                            AND (r.worker_id = ?10 OR (?11 AND w.agent_id = ?5)))))
              AND (e.type NOT IN (SELECT value FROM json_each(?6))
                   OR EXISTS (
                       SELECT 1 FROM messages m
@@ -206,7 +235,10 @@ pub async fn read_reaching(
         agent_id,
         message_types,
         limit,
-        own_types
+        own_types,
+        wake_type,
+        wake_worker,
+        wake_every
     )
     .fetch_all(executor)
     .await?;

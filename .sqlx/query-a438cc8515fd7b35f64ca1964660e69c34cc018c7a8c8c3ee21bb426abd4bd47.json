@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT e.seq AS \"seq!: i64\", e.type AS event_type, e.actor, e.task_id, e.proposal_id,\n                  e.workspace_id, e.revision_id, e.data, e.created_at\n           FROM events e\n           WHERE e.seq > ?1\n             AND (?2 IS NULL OR e.type IN (SELECT value FROM json_each(?2)))\n             AND (?3 IS NULL OR e.task_id = ?3)\n             AND (?4 IS NULL OR e.proposal_id = ?4)\n             AND (e.type NOT IN (SELECT value FROM json_each(?6))\n                  OR EXISTS (\n                      SELECT 1 FROM messages m\n                      JOIN message_recipients r ON r.message_id = m.id\n                      JOIN workers w ON w.id = r.worker_id\n                      WHERE m.number = e.message_id AND w.agent_id = ?5))\n             AND (e.type NOT IN (SELECT value FROM json_each(?8))\n                  OR EXISTS (\n                      SELECT 1 FROM agents g\n                      WHERE g.id = ?5\n                        AND (e.actor = g.name OR substr(e.actor, 1, length(g.name) + 1) = g.name || '/')))\n           ORDER BY e.seq ASC\n           LIMIT ?7",
+  "query": "SELECT e.seq AS \"seq!: i64\", e.type AS event_type, e.actor, e.task_id, e.proposal_id,\n                  e.workspace_id, e.revision_id, e.data, e.created_at\n           FROM events e\n           WHERE e.seq > ?1\n             AND (((?2 IS NULL OR e.type IN (SELECT value FROM json_each(?2)))\n                   AND (?3 IS NULL OR e.task_id = ?3)\n                   AND (?4 IS NULL OR e.proposal_id = ?4))\n                  OR (e.type = ?9\n                      AND EXISTS (\n                          SELECT 1 FROM messages m\n                          JOIN message_recipients r ON r.message_id = m.id\n                          JOIN workers w ON w.id = r.worker_id\n                          WHERE m.number = e.message_id\n                            AND (r.worker_id = ?10 OR (?11 AND w.agent_id = ?5)))))\n             AND (e.type NOT IN (SELECT value FROM json_each(?6))\n                  OR EXISTS (\n                      SELECT 1 FROM messages m\n                      JOIN message_recipients r ON r.message_id = m.id\n                      JOIN workers w ON w.id = r.worker_id\n                      WHERE m.number = e.message_id AND w.agent_id = ?5))\n             AND (e.type NOT IN (SELECT value FROM json_each(?8))\n                  OR EXISTS (\n                      SELECT 1 FROM agents g\n                      WHERE g.id = ?5\n                        AND (e.actor = g.name OR substr(e.actor, 1, length(g.name) + 1) = g.name || '/')))\n           ORDER BY e.seq ASC\n           LIMIT ?7",
   "describe": {
     "columns": [
       {
@@ -104,7 +104,7 @@
       }
     ],
     "parameters": {
-      "Right": 8
+      "Right": 11
     },
     "nullable": [
       false,
@@ -118,5 +118,5 @@
       false
     ]
   },
-  "hash": "defdcc7069f79c7f8124621dbe4ae616d13f8bcc6feb0e73edd37c63d20d37c3"
+  "hash": "a438cc8515fd7b35f64ca1964660e69c34cc018c7a8c8c3ee21bb426abd4bd47"
 }

@@ -1,7 +1,8 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use fold_core::{Event, FoldError};
+use fold_core::events::types;
+use fold_core::{Event, FoldError, WorkerName};
 use fold_store::agents::WorkerRow;
 use rmcp::RoleServer;
 use rmcp::handler::server::common::schema_for_type;
@@ -46,7 +47,7 @@ pub struct GetEventsInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct WaitForEventsInput {
-    /// Wake only for these exact event types, such as proposal.integrated. Leave it out to wake for every type.
+    /// Wake only for these exact event types, such as proposal.integrated. Leave it out to wake for every type. A new message to you ends the wait whatever this says.
     #[serde(default)]
     pub types: Vec<String>,
     /// Wake only for events about this task, such as T-12.
@@ -72,7 +73,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             WAIT_FOR_EVENTS,
-            "Block until a matching event arrives after your cursor, then return it with every match committed with it and move your cursor to the last one, past the events a filter left out. Use it instead of polling get_events.",
+            "Block until a matching event arrives after your cursor, then return it with every match committed with it and move your cursor to the last one, past the events a filter left out. A new message to you also ends the wait, whatever the filter says; the result then names it, so call get_inbox. Use it instead of polling get_events.",
             schema_for_type::<WaitForEventsInput>(),
         ),
     ]
@@ -105,6 +106,46 @@ fn page_json(page: &EventPage) -> Value {
         "events": page.events.iter().map(event_json).collect::<Vec<_>>(),
         "next": page.next,
     })
+}
+
+/// The page of a wait, with the messages in it that wait for the worker, or for any worker of its agent when it is the main worker, and the call that reads them.
+fn wait_json(worker: &WorkerRow, page: &EventPage) -> Value {
+    let mut result = page_json(page);
+    let agent = worker.name.agent();
+    let mut for_others = false;
+    let mut waiting: Vec<&str> = Vec::new();
+    for event in &page.events {
+        if event.event_type != types::MESSAGE_SENT {
+            continue;
+        }
+        let recipients: Vec<&str> = event
+            .data
+            .get("recipients")
+            .and_then(Value::as_array)
+            .map(|names| names.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let own = recipients.contains(&worker.name.as_str());
+        let sibling = worker.name.is_main()
+            && recipients
+                .iter()
+                .any(|name| WorkerName::parse(name).is_ok_and(|other| other.belongs_to(&agent)));
+        if let Some(message) = event.data.get("message").and_then(Value::as_str)
+            && (own || sibling)
+        {
+            waiting.push(message);
+            for_others |= !own;
+        }
+    }
+    if waiting.is_empty() {
+        return result;
+    }
+    result["messages"] = json!(waiting);
+    result["hint"] = json!(if for_others {
+        "a message waits for a worker of your agent; call get_inbox with include_workers"
+    } else {
+        "a message waits for you; call get_inbox"
+    });
+    result
 }
 
 pub async fn get_events(
@@ -144,7 +185,7 @@ pub async fn wait_for_events(
     };
     let mut waiter = server
         .events
-        .wait(worker.agent_id, &query)
+        .wait_as(worker, &query)
         .await
         .map_err(from_events)?;
     let progress = context.meta.get_progress_token();
@@ -154,7 +195,7 @@ pub async fn wait_for_events(
             () = context.ct.cancelled() => return Ok(json!({"cancelled": true})),
         };
         match step {
-            WaitStep::Events(page) => return Ok(page_json(&page)),
+            WaitStep::Events(page) => return Ok(wait_json(worker, &page)),
             WaitStep::TimedOut => return Ok(json!({"timed_out": true})),
             WaitStep::Tick(count) => {
                 let session = server.session().await;
