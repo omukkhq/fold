@@ -16,6 +16,7 @@ import { formatAsOf } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { replySchema, type ReplyValues } from "./compose";
+import { isFollowing } from "./follow";
 import { deliveryLines, recipientActors } from "./delivery";
 import { replyPlaceholder } from "./filters";
 import { MessageBody } from "./MessageBody";
@@ -51,10 +52,11 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
   });
 
   const scroller = useRef<HTMLDivElement>(null);
-  // A thread opens at its newest message, and a new message scrolls into view.
+  const following = useRef(true);
+  // A thread opens at its newest message; a new message scrolls into view only for a reader at the bottom.
   useEffect(() => {
     const el = scroller.current;
-    if (el) {
+    if (el && following.current) {
       el.scrollTop = el.scrollHeight;
     }
   }, [thread.messages.length]);
@@ -103,6 +105,9 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
 
       <div
         ref={scroller}
+        onScroll={(event) => {
+          following.current = isFollowing(event.currentTarget);
+        }}
         role="region"
         aria-label="Messages"
         tabIndex={0}
