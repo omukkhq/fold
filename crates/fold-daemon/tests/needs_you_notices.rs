@@ -213,9 +213,8 @@ struct Fixture {
 }
 
 impl Fixture {
-    async fn new() -> Self {
-        let project = TestProject::new().await;
-        let data = tempfile::tempdir().unwrap();
+    /// A daemon state that opens the project with the notification settings in `data`, as a start of the daemon does.
+    async fn open(project: &TestProject, data: &TempDir) -> (AppState, Arc<ProjectHandle>) {
         let clock = Arc::new(project.clock().clone());
         let state: AppState = Arc::new(DaemonState {
             registry: project.registry().clone(),
@@ -231,6 +230,29 @@ impl Fixture {
             root: project.paths().root().to_string_lossy().into_owned(),
         };
         let handle = state.projects.open(&row, clock).await.unwrap();
+        (state, handle)
+    }
+
+    /// Closes the project as a stopping daemon does and opens it again in a new daemon state.
+    async fn restart(&mut self) {
+        self.handle.bus.close();
+        self.handle.store.close().await.unwrap();
+        let (state, handle) = Self::open(&self.project, &self._data).await;
+        self.messages = MessageService::new(
+            handle.store.clone(),
+            state.registry.clone(),
+            handle.bus.clone(),
+            handle.clock.clone(),
+        );
+        self.settings = state.projects.notify().unwrap().clone();
+        self.state = state;
+        self.handle = handle;
+    }
+
+    async fn new() -> Self {
+        let project = TestProject::new().await;
+        let data = tempfile::tempdir().unwrap();
+        let (state, handle) = Self::open(&project, &data).await;
         let now = project.now();
         let tanim = HumanName::parse("tanim").unwrap();
         project
@@ -742,4 +764,37 @@ async fn the_routes_never_show_a_secret_and_only_a_human_changes_targets() {
     assert_eq!(status, StatusCode::OK);
     let (_, host) = fixture.call(Method::GET, "/api/v1/notify", None).await;
     assert_eq!(host["link_base"], "http://127.0.0.1:7420");
+}
+
+#[tokio::test]
+async fn a_restart_repeats_no_notice_and_keeps_what_waits() {
+    let mut fixture = Fixture::new().await;
+    let mut receiver = Receiver::start(200).await;
+    fixture.webhook(&receiver.url, false, 10).await;
+    let first = fixture.ask().await;
+    assert_eq!(fixture.pass().await, 0);
+    fixture.advance(SETTLE);
+    assert_eq!(fixture.pass().await, 1);
+    assert_eq!(receiver.next().await.json()["items"][0]["id"], first);
+    let second = fixture.ask().await;
+    assert_eq!(fixture.pass().await, 0);
+
+    fixture.restart().await;
+    fixture.advance(SETTLE);
+    assert_eq!(
+        fixture.pass().await,
+        0,
+        "the interval after the first send still holds"
+    );
+    fixture.advance(Duration::from_secs(600));
+    assert_eq!(fixture.pass().await, 1);
+    let post = receiver.next().await.json();
+    let ids: Vec<&str> = post["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [second.as_str()], "the sent item is not sent again");
+    assert!(receiver.none_waiting());
 }
