@@ -569,23 +569,26 @@ pub(crate) async fn send_from_fold_in_tx(
     write_message(tx, buffer, draft).await
 }
 
-/// A human's question to `to` about `lines` of a version of `links.1`, linked to the proposal and its task `links.0`.
+/// A human's question to the worker `to` about `lines` of a version of `links.1`, linked to the proposal and its task `links.0`.
 pub(crate) struct LineQuestion<'a> {
     pub actor: &'a Actor,
-    pub to: Recipient,
+    pub to: WorkerName,
     pub links: (TaskId, ProposalId),
     pub body: &'a MessageBody,
     pub lines: MessageLines,
     pub now: Timestamp,
 }
 
-/// Sends a question about lines of a proposal version inside the caller's transaction, as one message that starts its own thread. The caller knows the recipient worker exists and publishes the buffer after the commit.
+/// Sends a question about lines of a proposal version inside the caller's transaction, as one message that starts its own thread. The worker is resolved as any other send resolves it. The caller publishes the buffer after the commit.
 pub(crate) async fn ask_about_lines_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
     question: LineQuestion<'_>,
 ) -> Result<MessageView, MessageError> {
     let sender = Sender::of(question.actor);
+    let directory = messages::directory(tx.conn(), Vec::new()).await?;
+    let recipients = resolve(&[Address::of_worker(&question.to)], &directory, &sender)
+        .map_err(FoldError::from)?;
     let draft = Draft {
         actor: question.actor,
         sender: &sender,
@@ -598,7 +601,7 @@ pub(crate) async fn ask_about_lines_in_tx(
         choices: None,
         asks_human: false,
         lines: Some(question.lines),
-        recipients: vec![question.to],
+        recipients,
         now: question.now,
     };
     write_message(tx, buffer, draft).await

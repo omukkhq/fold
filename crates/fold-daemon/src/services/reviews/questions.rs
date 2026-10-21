@@ -1,8 +1,6 @@
 use fold_core::messages::{line_excerpt, text_lines};
 use fold_core::reviews::Side;
-use fold_core::{
-    Actor, AddressedAs, FoldError, MessageBody, ProposalId, Recipient, Target, codes, policy,
-};
+use fold_core::{Actor, FoldError, MessageBody, ProposalId, codes, policy};
 use fold_store::messages::MessageLines;
 use fold_store::reviews;
 use fold_store::tasks::claims;
@@ -78,10 +76,7 @@ impl ReviewService {
                 };
                 let question = LineQuestion {
                     actor,
-                    to: Recipient {
-                        target: Target::Worker(author),
-                        addressed_as: AddressedAs::Worker,
-                    },
+                    to: author,
                     links: (row.task, proposal),
                     body: &body,
                     lines,

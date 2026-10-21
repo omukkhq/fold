@@ -223,3 +223,39 @@ async fn acceptance_21_a_question_about_an_integrated_proposal_goes_to_its_autho
     assert_eq!(sent["recipients"][0]["name"], "frontend");
     assert_eq!(sent["lines"]["excerpt"], "export const a = 1;");
 }
+
+#[tokio::test]
+async fn acceptance_21_a_question_goes_to_the_worker_holding_the_task() {
+    // `frontend` leads its area and writes the proposal; `backend` is the main agent, which claims a task of any area.
+    let mut h = Harness::start_without_leads().await;
+    h.lead_area("frontend").await;
+    h.make_main("backend").await;
+    let task = h.create_task("frontend", "board numbers").await;
+    let work = h.start_work("frontend", &task).await;
+    work.write(&[(FILE, CONTENT)]);
+    let proposal = h.propose("frontend", &work, "Board numbers").await;
+    h.call("frontend", "release_task", json!({"id": task}))
+        .await;
+    let claimed = h.call("backend", "claim_task", json!({"id": task})).await;
+    assert_eq!(claimed["holder"], "backend");
+
+    let ask = json!({"version": 1, "path": FILE, "side": "new", "start_line": 1, "end_line": 1, "body": "Why a constant?"});
+    let (status, sent) = http(
+        &h,
+        Method::POST,
+        &format!("/proposals/{proposal}/questions"),
+        Some(&ask),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    let recipients: Vec<&str> = sent["recipients"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|recipient| recipient["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(recipients, ["backend"]);
+    let question = sent["id"].as_str().unwrap();
+    assert!(h.inbox("backend").await.iter().any(|id| id == question));
+    assert!(!h.inbox("frontend").await.iter().any(|id| id == question));
+}
