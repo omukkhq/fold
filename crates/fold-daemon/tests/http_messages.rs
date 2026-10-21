@@ -574,6 +574,55 @@ async fn feedback_needs_a_named_human_and_a_task_or_reply() {
     assert_eq!(messages, 0);
 }
 
+#[tokio::test]
+async fn a_task_s_mine_listing_holds_the_human_s_threads_with_the_agents_replies() {
+    let fixture = Fixture::new().await;
+    fixture.send("frontend", &["backend"], Some(1), None).await;
+    let (status, sent) = fixture
+        .feedback(
+            &[COOKIE],
+            json!({"body": "shorter copy", "task": "T-1", "to": ["backend"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    fixture
+        .send_reply("backend", &["frontend"], None, None, Some("m-2"))
+        .await;
+    fixture
+        .send("frontend", &["human:ana"], Some(1), None)
+        .await;
+    fixture.send("frontend", &["humans"], Some(1), None).await;
+    fixture.send("frontend", &["humans"], Some(2), None).await;
+    let (status, body) = call(
+        fixture.http(),
+        Method::GET,
+        &format!("{BASE}/messages?mine=true&task=T-1"),
+        &[COOKIE],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        thread_ids(&body),
+        ["m-5", "m-2"],
+        "an ask to humans and the human's own feedback; the agents' thread, ana's thread and T-2's ask are left out"
+    );
+    let feedback = &body["items"][1];
+    let ids: Vec<&str> = feedback["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|message| message["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        ["m-2", "m-3"],
+        "the agent's reply is part of the thread"
+    );
+    assert_eq!(body["items"][0]["awaiting_human"], true);
+    assert_eq!(feedback["awaiting_human"], false);
+}
+
 #[cfg(test)]
 async fn readers(fixture: &Fixture, task: &str) -> Vec<(String, String, bool)> {
     let (status, body) = fixture.get(&format!("/tasks/{task}/readers")).await;

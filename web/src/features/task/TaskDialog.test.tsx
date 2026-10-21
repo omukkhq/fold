@@ -449,24 +449,30 @@ function registerDaemon(): void {
       ],
     });
   });
-  daemon.on(`GET ${P}/:slug/messages`, (call) =>
-    ok({
-      items: call.path.includes("task=T-2")
-        ? linked.map((message) => ({
-            id: message.thread,
-            awaiting_human: false,
-            last_at: message.sent_at,
-            messages: [message],
-            participants: [message.sender],
-            proposal: null,
-            request: null,
-            task: "T-2",
-          }))
-        : [],
+  // The daemon keeps the threads the signed-in human takes part in; every message of `linked` is in one, and a thread waits while one of its messages asks the human.
+  daemon.on(`GET ${P}/:slug/messages`, (call) => {
+    const mine =
+      call.path.includes("task=T-2") && call.path.includes("mine=true");
+    const threads = [...new Set(linked.map((m) => m.thread))].map((id) => {
+      const messages = linked.filter((m) => m.thread === id);
+      return {
+        id,
+        awaiting_human: messages.some((m) => m.asks_human),
+        closable: false,
+        last_at: messages.at(-1)?.sent_at ?? 0,
+        messages,
+        participants: messages.map((m) => m.sender),
+        proposal: null,
+        request: null,
+        task: "T-2",
+      };
+    });
+    return ok({
+      items: mine ? threads.reverse() : [],
       next: null,
       total_awaiting_human: 0,
-    }),
-  );
+    });
+  });
   daemon.on(`POST ${P}/:slug/feedback`, (call) => {
     const body = call.body as { body: string };
     linked = [
@@ -546,6 +552,15 @@ async function openTask(task = "T-2", title = TITLE) {
 const region = (dialog: HTMLElement, name: string) =>
   within(dialog).getByRole("region", { name });
 
+/** The Messages section opens on a click on its head. */
+async function openMessages(dialog: HTMLElement): Promise<HTMLElement> {
+  const messages = region(dialog, "Messages");
+  await userEvent.click(
+    within(messages).getByRole("button", { name: "Messages" }),
+  );
+  return messages;
+}
+
 /** Opens the task once the side column has read the areas, which decide its Area and Labels groups. */
 async function openLabels(task = "T-2", title = TITLE) {
   const opened = await openTask(task, title);
@@ -590,7 +605,7 @@ describe("the task dialog route", () => {
     ).toBeNull();
     expect(
       await within(region(dialog, "Messages")).findByText(
-        "0 linked to T-2",
+        "0 threads",
         {},
         WAIT,
       ),
@@ -746,9 +761,9 @@ describe("the task dialog route", () => {
     expect(
       within(proposal).getByRole("link", { name: "r9" }).getAttribute("href"),
     ).toBe("/p/demo/repository?revision=r9");
-    const messages = region(dialog, "Messages");
+    const messages = await openMessages(dialog);
     expect(
-      await within(messages).findByText("1 linked to T-2", {}, WAIT),
+      await within(messages).findByText("1 thread", {}, WAIT),
     ).toBeTruthy();
     expect(within(messages).getByText("Ready for review")).toBeTruthy();
     expect(
@@ -1738,7 +1753,7 @@ describe("the human edits", () => {
 
   it("sends feedback to the claim holder with a pending state", async () => {
     const { dialog } = await openTask();
-    const messages = region(dialog, "Messages");
+    const messages = await openMessages(dialog);
     const box = within(messages).getByRole("combobox", { name: "Feedback" });
     // The readers arrive after the box, and the claim holder is the default.
     await waitFor(() => {
@@ -1764,7 +1779,7 @@ describe("the human edits", () => {
     });
     // The write ends once the message list has been read again, so the sent message is in it.
     await waitFor(() => {
-      expect(within(messages).getByText("1 linked to T-2")).toBeTruthy();
+      expect(within(messages).getByText("1 thread")).toBeTruthy();
     }, WAIT);
     expect(
       within(messages).getByText("Use the shorter copy", { selector: "p" }),
@@ -1774,7 +1789,7 @@ describe("the human edits", () => {
   it("suggests items and files in the feedback box and links them once sent", async () => {
     mentionRoutes();
     const { dialog } = await openTask();
-    const messages = region(dialog, "Messages");
+    const messages = await openMessages(dialog);
     const box = within(messages).getByRole("combobox", { name: "Feedback" });
     await expectMentionPopover(box);
     await userEvent.type(box, "report.tsx");
@@ -1796,7 +1811,7 @@ describe("the human edits", () => {
 
   it("offers the claim holder, the area lead and the main agent, the holder first", async () => {
     const { dialog } = await openTask();
-    const messages = region(dialog, "Messages");
+    const messages = await openMessages(dialog);
     const choice = within(messages).getByRole("combobox", { name: "Send to" });
     await waitFor(() => {
       expect(
@@ -1824,6 +1839,94 @@ describe("the human edits", () => {
         to: ["web-lead"],
       });
     }, WAIT);
+    // The write ends once the message list has been read again.
+    expect(
+      await within(messages).findByText(
+        "Who builds this?",
+        { selector: "p" },
+        WAIT,
+      ),
+    ).toBeTruthy();
+  }, 15_000);
+});
+
+describe("the task's messages", () => {
+  const message = (
+    n: number,
+    thread: number,
+    over: Partial<MessageView>,
+  ): MessageView => ({
+    id: messageId(n),
+    thread: messageId(thread),
+    sender: "frontend/ui",
+    choices: [],
+    header: null,
+    asks_human: false,
+    recipients: [],
+    body: `message ${String(n)}`,
+    proposal: null,
+    request: null,
+    reply_to: n === thread ? null : messageId(thread),
+    task: "T-2",
+    sent_at: 1_000 + n,
+    ...over,
+  });
+
+  it("stays collapsed with the human's thread count and opens on a click to every message of each thread", async () => {
+    linked = [
+      message(40, 40, { sender: "human:tanim", body: "Use the short copy" }),
+      message(41, 40, {
+        sender: "frontend/ui",
+        body: "Asked the lead first",
+        task: null,
+      }),
+      message(42, 40, {
+        sender: "web-lead",
+        body: "Short copy it is",
+        task: null,
+      }),
+      message(50, 50, { body: "Which font?", asks_human: true }),
+    ];
+    const { dialog } = await openTask();
+    const messages = region(dialog, "Messages");
+    expect(
+      await within(messages).findByText("2 threads", {}, WAIT),
+    ).toBeTruthy();
+    expect(within(messages).getByText("1 waits for you")).toBeTruthy();
+    const head = within(messages).getByRole("button", { name: "Messages" });
+    expect(head.getAttribute("aria-expanded")).toBe("false");
+    expect(within(messages).queryByText("Use the short copy")).toBeNull();
+    expect(
+      within(messages).queryByRole("combobox", { name: "Feedback" }),
+    ).toBeNull();
+    await userEvent.click(head);
+    expect(head.getAttribute("aria-expanded")).toBe("true");
+    const threads = within(messages)
+      .getAllByRole("listitem")
+      .filter((item) => item.parentElement?.tagName === "UL");
+    expect(threads).toHaveLength(2);
+    const [asked, feedback] = threads as [HTMLElement, HTMLElement];
+    expect(within(asked).getByText("Waits for you")).toBeTruthy();
+    expect(within(asked).getByText("Which font?")).toBeTruthy();
+    expect(
+      ["Use the short copy", "Asked the lead first", "Short copy it is"].map(
+        (body) => within(feedback).getByText(body).textContent,
+      ),
+    ).toHaveLength(3);
+    expect(within(feedback).queryByText("Waits for you")).toBeNull();
+    expect(
+      within(messages).getByRole("combobox", { name: "Feedback" }),
+    ).toBeTruthy();
+    expect(
+      daemon.calls.some(
+        (call) =>
+          call.path.startsWith(`${P}/demo/messages?`) &&
+          call.path.includes("task=T-2") &&
+          call.path.includes("mine=true"),
+      ),
+    ).toBe(true);
+    await userEvent.click(head);
+    expect(within(messages).queryByText("Which font?")).toBeNull();
   }, 15_000);
 });
 

@@ -8,12 +8,12 @@ import {
   historyText as historyTextSegments,
   humanReviewLines,
   integrationText as integrationTextSegments,
-  messageCountText,
   parseRecipient,
   proposalStateText,
   recipientValue,
   reviewText,
   statusLook,
+  threadCountText,
 } from "./text";
 import { segmentsText } from "@/people/segments";
 
@@ -192,7 +192,25 @@ describe("proposal texts", () => {
         commit: null,
       }),
     ).toBe("by @review · 13:40");
-    expect(messageCountText(2, "T-12")).toBe("2 linked to T-12");
+  });
+});
+
+describe("threadCountText", () => {
+  const thread = (awaiting_human: boolean) => ({ awaiting_human });
+
+  it("counts the human's threads and those that wait for the human", () => {
+    expect(threadCountText([])).toEqual({ count: "0 threads", waiting: null });
+    expect(threadCountText([thread(false)])).toEqual({
+      count: "1 thread",
+      waiting: null,
+    });
+    expect(threadCountText([thread(true), thread(false)])).toEqual({
+      count: "2 threads",
+      waiting: "1 waits for you",
+    });
+    expect(threadCountText([thread(true), thread(true)]).waiting).toBe(
+      "2 wait for you",
+    );
   });
 });
 

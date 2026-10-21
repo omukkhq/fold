@@ -182,9 +182,22 @@ export function integrationText(integration: TaskIntegration): Segment[] {
   return seg`by ${actorSegment(integration.by)} · ${clockTime(integration.at)}`;
 }
 
-/** `2 linked to T-12`. */
-export function messageCountText(count: number, task: string): string {
-  return `${String(count)} linked to ${task}`;
+/** The Messages head over the threads the signed-in human takes part in: `2 threads`, and `1 waits for you` while some hold an ask for the human, else null. */
+export function threadCountText(
+  threads: readonly { awaiting_human: boolean }[],
+): {
+  count: string;
+  waiting: string | null;
+} {
+  const count = threads.length;
+  const waiting = threads.filter((thread) => thread.awaiting_human).length;
+  return {
+    count: `${String(count)} ${count === 1 ? "thread" : "threads"}`,
+    waiting:
+      waiting === 0
+        ? null
+        : `${String(waiting)} ${waiting === 1 ? "waits" : "wait"} for you`,
+  };
 }
 
 /** The `<select>` value of a recipient; an agent can be named `holder`, so the kind is part of it. */

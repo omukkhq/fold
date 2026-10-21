@@ -1,8 +1,14 @@
 import { PersonList, PersonName } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Send } from "lucide-react";
-import { useEffect, useId, useMemo } from "react";
+import {
+  ArrowRight,
+  ChevronDown,
+  ChevronRight,
+  MessageCircle,
+  Send,
+} from "lucide-react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { keys } from "@/api/keys";
 import { olderNotListed } from "@/api/pages";
@@ -13,8 +19,10 @@ import {
   type FeedbackRecipient,
   type TaskDetail,
   type TaskMessage,
+  type TaskThread,
 } from "@/api/tasks";
 import { HrefLink } from "@/app/HrefLink";
+import { Badge } from "@/components/badge/Badge";
 import { Button } from "@/components/button/Button";
 import { controlClasses } from "@/components/form/Field";
 import { MarkAnswered } from "@/features/messages/MarkAnswered";
@@ -25,13 +33,13 @@ import { focusRing } from "@/lib/focus";
 import { MentionTextarea } from "@/mentions/MentionTextarea";
 import { threadPath } from "./links";
 import { keptChoice, recipientOptions } from "./recipients";
-import { SectionHead, submit, WriteError } from "./parts";
+import { submit, WriteError } from "./parts";
 import { feedbackSchema, type FeedbackForm } from "./schemas";
 import {
   clockTime,
   feedbackPlaceholder,
-  messageCountText,
   parseRecipient,
+  threadCountText,
 } from "./text";
 import { useTaskWrite } from "./useTaskWrite";
 
@@ -187,7 +195,24 @@ function FeedbackBox({
   );
 }
 
-/** Messages linked to the task, and the feedback box that adds one from the signed-in human. The count shows once the messages are read. */
+function Thread({ slug, thread }: { slug: string; thread: TaskThread }) {
+  return (
+    <li className="flex flex-col gap-6">
+      {thread.awaiting_human ? (
+        <Badge tone="needs-you" icon={MessageCircle} className="self-start">
+          Waits for you
+        </Badge>
+      ) : null}
+      <ol className="flex flex-col gap-6">
+        {thread.messages.map((message) => (
+          <Message key={message.id} slug={slug} message={message} />
+        ))}
+      </ol>
+    </li>
+  );
+}
+
+/** The task's threads that the signed-in human takes part in, each with every message, and the feedback box that adds one from the human. The section opens on a click; its head counts the threads once they are read and says how many wait for the human. */
 export function MessagesSection({
   slug,
   task,
@@ -195,17 +220,41 @@ export function MessagesSection({
   slug: string;
   task: TaskDetail;
 }) {
+  const bodyId = useId();
+  const [open, setOpen] = useState(false);
   // Every claim of a task read is its implementation claim.
   const holder = task.claims[0]?.holder ?? null;
   const query = useQuery(taskMessagesQuery(slug, task.task));
-  const messages = query.data?.items ?? [];
+  const threads = query.data?.items ?? [];
+  const count = threadCountText(threads);
+  const Chevron = open ? ChevronDown : ChevronRight;
   return (
     <section aria-label="Messages" className="flex flex-col gap-10">
-      <SectionHead title="Messages">
+      <div className="flex flex-wrap items-center gap-10">
+        <h3 className="text-section leading-snug font-semibold text-text">
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls={bodyId}
+            className={cn(
+              "inline-flex items-center gap-4 rounded-s",
+              focusRing,
+            )}
+            onClick={() => {
+              setOpen(!open);
+            }}
+          >
+            <Chevron aria-hidden="true" size={16} className="text-text-muted" />
+            Messages
+          </button>
+        </h3>
         {query.isSuccess ? (
-          <span className="text-bar text-text-muted">
-            {messageCountText(messages.length, task.task)}
-          </span>
+          <span className="text-bar text-text-muted">{count.count}</span>
+        ) : null}
+        {query.isSuccess && count.waiting !== null ? (
+          <Badge tone="needs-you" icon={MessageCircle}>
+            {count.waiting}
+          </Badge>
         ) : null}
         {taskCanMarkAnswered(task.attention) ? (
           <MarkAnswered
@@ -214,21 +263,25 @@ export function MessagesSection({
             className="ml-auto"
           />
         ) : null}
-      </SectionHead>
+      </div>
       <WriteError error={query.error} />
-      {messages.length > 0 ? (
-        <ul className="flex flex-col gap-10">
-          {messages.map((message) => (
-            <Message key={message.id} slug={slug} message={message} />
-          ))}
-        </ul>
+      {open ? (
+        <div id={bodyId} className="flex flex-col gap-10">
+          {threads.length > 0 ? (
+            <ul className="flex flex-col gap-14">
+              {threads.map((thread) => (
+                <Thread key={thread.id} slug={slug} thread={thread} />
+              ))}
+            </ul>
+          ) : null}
+          {query.data?.more ? (
+            <p className="text-bar text-text-muted">
+              {olderNotListed(threads.length, "threads")}
+            </p>
+          ) : null}
+          <FeedbackBox slug={slug} task={task.task} holder={holder} />
+        </div>
       ) : null}
-      {query.data?.more ? (
-        <p className="text-bar text-text-muted">
-          {olderNotListed(messages.length, "messages")}
-        </p>
-      ) : null}
-      <FeedbackBox slug={slug} task={task.task} holder={holder} />
     </section>
   );
 }

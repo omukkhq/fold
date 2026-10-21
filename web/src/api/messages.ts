@@ -19,7 +19,7 @@ export type NewMessage = { body: string } & (
 const PAGE_SIZE = 200;
 const MAX_PAGES = 5;
 
-/** The threads that concern the signed-in human, newest first, in at most `MAX_PAGES` pages of `PAGE_SIZE`; `more` says that older threads were left out. The daemon filters them; agent-to-agent threads stay on the task screen and in Activity. */
+/** The threads that concern the signed-in human, newest first, in at most `MAX_PAGES` pages of `PAGE_SIZE`; `more` says that older threads were left out. The daemon filters them; threads only between agents stay in Activity. */
 export async function listThreads(slug: string): Promise<Pages<ThreadView>> {
   return readPages(async (before) => {
     const page = await unwrap(

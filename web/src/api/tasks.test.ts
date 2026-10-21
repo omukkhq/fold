@@ -426,18 +426,14 @@ describe("the task's messages", () => {
     task: "T-2",
   });
 
-  it("reads the threads of the task and keeps its messages, oldest first", async () => {
+  it("reads the human's threads of the task, each with every message", async () => {
+    const agentReply = message(2, { task: null, sender: "backend" });
     daemon.on(
       `GET ${P}/messages`,
       ok({
         items: [
-          thread([message(10, { sent_at: 3_000, thread: "m-10" })]),
-          thread([
-            message(1),
-            message(2, { task: "T-5" }),
-            message(9, { sent_at: 2_000 }),
-            message(3, { sent_at: 2_000 }),
-          ]),
+          thread([message(10, { thread: "m-10" })]),
+          thread([message(1), agentReply]),
         ],
         next: null,
       }),
@@ -446,9 +442,12 @@ describe("the task's messages", () => {
     expect(query.queryKey).toEqual(["demo", "messages", "task", "T-2"]);
     expect(query.staleTime).toBe(Infinity);
     const read = await getTaskMessages("demo", "T-2");
-    expect(read.items.map((m) => m.id)).toEqual(["m-1", "m-3", "m-9", "m-10"]);
+    expect(read.items.map((t) => t.id)).toEqual(["m-10", "m-1"]);
+    expect(read.items[1]?.messages).toEqual([message(1), agentReply]);
     expect(read.more).toBe(false);
-    expect(daemon.calls[0]?.path).toBe(`${P}/messages?task=T-2&limit=200`);
+    expect(daemon.calls[0]?.path).toBe(
+      `${P}/messages?task=T-2&mine=true&limit=200`,
+    );
   });
 
   it("throws the refusal code", async () => {
