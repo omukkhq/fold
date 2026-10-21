@@ -187,14 +187,7 @@ export function messageCountText(count: number, task: string): string {
   return `${String(count)} linked to ${task}`;
 }
 
-/** The feedback box's default reader: the claim holder, or nobody when the task has no holder. */
-export function defaultRecipient(
-  holder: string | null,
-): FeedbackRecipient | null {
-  return holder === null ? null : { kind: "holder" };
-}
-
-/** The `<select>` value of a recipient; agent and tag names can be equal, so the kind is part of it. */
+/** The `<select>` value of a recipient; an agent can be named `holder`, so the kind is part of it. */
 export function recipientValue(to: FeedbackRecipient): string {
   return to.kind === "holder" ? "holder" : `${to.kind}:${to.name}`;
 }
@@ -209,10 +202,7 @@ export function parseRecipient(value: string): FeedbackRecipient | null {
   if (colon <= 0 || name === "") {
     return null;
   }
-  if (kind === "agent" || kind === "tag") {
-    return { kind, name };
-  }
-  return null;
+  return kind === "agent" ? { kind, name } : null;
 }
 
 /** The placeholder names the reader, `Write feedback to frontend/ui…`. */
@@ -226,7 +216,5 @@ export function feedbackPlaceholder(
   if (to.kind === "holder") {
     return `Write feedback to ${holder === null ? "the claim holder" : atName(holder)}…`;
   }
-  return to.kind === "tag"
-    ? `Write feedback to every agent tagged ${to.name}…`
-    : `Write feedback to ${to.name}…`;
+  return `Write feedback to ${to.name}…`;
 }

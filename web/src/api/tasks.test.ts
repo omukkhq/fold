@@ -20,12 +20,11 @@ import {
   createLabelOn,
   createTask,
   feedbackTo,
-  getMessageTargets,
   getTask,
+  getTaskReaders,
   getTaskMessages,
   labelsQuery,
   listLabels,
-  messageTargetsQuery,
   moveChecklistItem,
   removeChecklistItem,
   removeDependency,
@@ -37,6 +36,7 @@ import {
   setTitle,
   taskMessagesQuery,
   taskQuery,
+  taskReadersQuery,
   tickChecklistItem,
 } from "./tasks";
 
@@ -76,35 +76,25 @@ describe("reads", () => {
     expect(await listLabels("demo")).toEqual([data, ui]);
   });
 
-  it("derives the message targets from the agents: main agents, child workers and every tag once", async () => {
-    daemon.on(
-      `GET ${P}/agents`,
-      ok({
-        agents: [
-          {
-            name: "frontend",
-            tags: ["ui", "review"],
-            workers: [
-              { name: "frontend", parent: null },
-              { name: "frontend/ui", parent: "frontend" },
-            ],
-          },
-          { name: "backend", tags: ["ui"], workers: [] },
-        ],
-      }),
+  it("reads the readers of the task's feedback", async () => {
+    const readers = {
+      readers: [{ name: "web-lead", role: "area_lead", stopped: false }],
+    };
+    daemon.on(`GET ${P}/tasks/T-2/readers`, ok(readers));
+    expect(await getTaskReaders("demo", "T-2")).toEqual(readers);
+    daemon.on(`GET ${P}/tasks/T-9/readers`, refuse(404, "task_not_found"));
+    await expect(getTaskReaders("demo", "T-9")).rejects.toSatisfy(
+      (e: unknown) => apiErrorCode(e) === "task_not_found",
     );
-    expect(await getMessageTargets("demo")).toEqual({
-      agents: ["frontend", "frontend/ui", "backend"],
-      tags: ["review", "ui"],
-    });
   });
 
   it("keeps the queries under their keys", async () => {
     expect(taskQuery("demo", "T-2").queryKey).toEqual(keys.task("demo", "T-2"));
     expect(taskQuery("demo", "T-2").staleTime).toBe(Infinity);
-    expect(messageTargetsQuery("demo").queryKey).toEqual(
-      keys.messageTargets("demo"),
+    expect(taskReadersQuery("demo", "T-2").queryKey).toEqual(
+      keys.taskReaders("demo", "T-2"),
     );
+    expect(taskReadersQuery("demo", "T-2").staleTime).toBe(Infinity);
     daemon.on(`GET ${P}/labels`, ok({ labels: [ui] }));
     const client = new QueryClient();
     expect(await client.query(labelsQuery("demo"))).toEqual([ui]);
@@ -358,18 +348,17 @@ describe("feedback", () => {
     expect(feedbackTo({ kind: "agent", name: "frontend/ui" })).toEqual([
       "frontend/ui",
     ]);
-    expect(feedbackTo({ kind: "tag", name: "ui" })).toEqual(["tag:ui"]);
   });
 
   it("posts the task, the body and the recipients", async () => {
     daemon.on(`POST ${P}/feedback`, ok({}, 201));
     await sendFeedback("demo", "T-2", {
       body: "Hi",
-      to: { kind: "tag", name: "ui" },
+      to: { kind: "agent", name: "web-lead" },
     });
     await sendFeedback("demo", "T-2", { body: "Hi", to: { kind: "holder" } });
     expect(daemon.made(`POST ${P}/feedback`).map((c) => c.body)).toEqual([
-      { task: "T-2", body: "Hi", to: ["tag:ui"] },
+      { task: "T-2", body: "Hi", to: ["web-lead"] },
       { task: "T-2", body: "Hi" },
     ]);
   });

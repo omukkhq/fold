@@ -36,16 +36,12 @@ export type Blocker = Schemas["BlockerMark"];
 
 export type TaskDetail = Schemas["TaskView"];
 
-/** Whom the feedback box can address besides the claim holder. */
-export interface MessageTargets {
-  agents: string[];
-  tags: string[];
-}
+export type TaskReader = Schemas["TaskReader"];
+export type TaskReaders = Schemas["TaskReaders"];
 
 export type FeedbackRecipient =
   | { kind: "holder" }
-  | { kind: "agent"; name: string }
-  | { kind: "tag"; name: string };
+  | { kind: "agent"; name: string };
 
 export type NewChecklistItem =
   | { kind: "step"; text: string }
@@ -58,8 +54,6 @@ export function feedbackTo(to: FeedbackRecipient): string[] | undefined {
       return undefined;
     case "agent":
       return [to.name];
-    case "tag":
-      return [`tag:${to.name}`];
   }
 }
 
@@ -71,21 +65,16 @@ export function getTask(slug: string, task: string): Promise<TaskDetail> {
   );
 }
 
-/** The agents and workers a human can write to, and every tag in use. */
-export async function getMessageTargets(slug: string): Promise<MessageTargets> {
-  const { agents } = await unwrap(
-    api.GET("/api/v1/projects/{slug}/agents", {
-      params: { path: { slug } },
+/** Who the task's feedback box offers as readers, the default first. */
+export function getTaskReaders(
+  slug: string,
+  task: string,
+): Promise<TaskReaders> {
+  return unwrap(
+    api.GET("/api/v1/projects/{slug}/tasks/{id}/readers", {
+      params: { path: { slug, id: task } },
     }),
   );
-  const names = agents.flatMap((agent) => [
-    agent.name,
-    ...agent.workers
-      .filter((worker) => worker.parent !== null)
-      .map((worker) => worker.name),
-  ]);
-  const tags = [...new Set(agents.flatMap((agent) => agent.tags))].sort();
-  return { agents: names, tags };
 }
 
 /** Answers the new task's public id. The kind is sent only when it is not `proposal`, the daemon's default. */
@@ -423,8 +412,10 @@ export const labelsQuery = (slug: string) =>
     staleTime: Infinity,
   });
 
-export const messageTargetsQuery = (slug: string) =>
+/** Under the agents prefix, so a worker or agent event refreshes the stopped marks and the main agent; a task or claim event of the task refreshes it too. */
+export const taskReadersQuery = (slug: string, task: string) =>
   queryOptions({
-    queryKey: keys.messageTargets(slug),
-    queryFn: () => getMessageTargets(slug),
+    queryKey: keys.taskReaders(slug, task),
+    queryFn: () => getTaskReaders(slug, task),
+    staleTime: Infinity,
   });

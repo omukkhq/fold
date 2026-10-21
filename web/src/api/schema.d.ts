@@ -1106,6 +1106,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/tasks/{id}/readers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Who a human's feedback on the task can go to: the worker that holds the implementation claim, the lead of the task's area (none for a task of Main or in no area) and the main agent. Only they answer for the task. */
+        get: operations["task_readers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/tasks/{id}/send-back": {
         parameters: {
             query?: never;
@@ -3120,6 +3137,11 @@ export interface components {
             /** @description The human's note to the worker. */
             message: string | null;
         };
+        /**
+         * @description Why a reader is offered for a human's feedback on a task.
+         * @enum {string}
+         */
+        ReaderRole: "claim_holder" | "area_lead" | "main_agent";
         /** @description One recipient row. Names starting `human:` are humans. */
         RecipientView: {
             /**
@@ -3878,6 +3900,20 @@ export interface components {
              * @description The current version.
              */
             version: number;
+        };
+        TaskReader: {
+            /**
+             * @description The worker, `agent` or `agent/worker`; feedback addressed to it by name reaches it.
+             * @example web-t12
+             */
+            name: string;
+            role: components["schemas"]["ReaderRole"];
+            /** @description fold supervises the reader's agent and its process is stopped or failed, so the message waits until the process runs again. */
+            stopped: boolean;
+        };
+        TaskReaders: {
+            /** @description The default reader first: the claim holder, else the area lead, else the main agent. Each worker once, under its first role. */
+            readers: components["schemas"]["TaskReader"][];
         };
         /** @description A task worker's report that the work of a `no_proposal` task is finished, with the lead check that answered it. */
         TaskReport: {
@@ -10922,6 +10958,85 @@ export interface operations {
             };
             /** @description `task_closed`: the task is archived */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    task_readers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task id, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The readers, the default first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskReaders"];
+                };
+            };
+            /** @description `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found` or `project_not_found` */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

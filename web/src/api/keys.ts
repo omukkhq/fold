@@ -59,8 +59,9 @@ export const keys = {
   agents: (slug: string) => [slug, "agents"] as const,
   /** Under the agents prefix, so every event that invalidates the agents also refreshes the agent chips of the top bar. */
   agentBar: (slug: string) => [slug, "agents", "bar"] as const,
-  /** Under the agents prefix, so the feedback box learns a new agent or tag with the agent list. */
-  messageTargets: (slug: string) => [slug, "agents", "targets"] as const,
+  /** Under the agents prefix, so the feedback box's readers refresh with the agents and workers. */
+  taskReaders: (slug: string, task: string) =>
+    [slug, "agents", "readers", task] as const,
   labels: (slug: string) => [slug, "labels"] as const,
   messages: (slug: string) => [slug, "messages"] as const,
   taskMessages: (slug: string, task: string) =>

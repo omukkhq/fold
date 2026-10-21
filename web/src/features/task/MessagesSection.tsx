@@ -2,14 +2,14 @@ import { PersonList, PersonName } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Send } from "lucide-react";
-import { useId } from "react";
+import { useEffect, useId, useMemo } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { keys } from "@/api/keys";
 import { olderNotListed } from "@/api/pages";
 import {
-  messageTargetsQuery,
   sendFeedback,
   taskMessagesQuery,
+  taskReadersQuery,
   type FeedbackRecipient,
   type TaskDetail,
   type TaskMessage,
@@ -24,16 +24,14 @@ import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { MentionTextarea } from "@/mentions/MentionTextarea";
 import { threadPath } from "./links";
-import { recipientOptions } from "./recipients";
+import { keptChoice, recipientOptions } from "./recipients";
 import { SectionHead, submit, WriteError } from "./parts";
 import { feedbackSchema, type FeedbackForm } from "./schemas";
 import {
   clockTime,
-  defaultRecipient,
   feedbackPlaceholder,
   messageCountText,
   parseRecipient,
-  recipientValue,
 } from "./text";
 import { useTaskWrite } from "./useTaskWrite";
 
@@ -75,7 +73,11 @@ function FeedbackBox({
 }) {
   const id = useId();
   const queryClient = useQueryClient();
-  const targets = useQuery(messageTargetsQuery(slug));
+  const readers = useQuery(taskReadersQuery(slug, task));
+  const options = useMemo(
+    () => recipientOptions(readers.data?.readers),
+    [readers.data],
+  );
   // The sent message joins the list before the box clears, so the write stays pending until the list is read again.
   const write = useTaskWrite(
     slug,
@@ -87,11 +89,18 @@ function FeedbackBox({
       });
     },
   );
-  const fallback = defaultRecipient(holder);
   const form = useForm<FeedbackForm>({
     resolver: zodResolver(feedbackSchema),
-    defaultValues: { to: fallback ? recipientValue(fallback) : "", body: "" },
+    defaultValues: { to: keptChoice("", options), body: "" },
   });
+  // The readers arrive after the box and change with the claim and the task's area; a choice the daemon stops offering falls back to the default.
+  useEffect(() => {
+    const current = form.getValues("to");
+    const kept = keptChoice(current, options);
+    if (kept !== current) {
+      form.setValue("to", kept);
+    }
+  }, [form, options]);
   const to = parseRecipient(useWatch({ control: form.control, name: "to" }));
   const errors = form.formState.errors;
   return (
@@ -127,8 +136,10 @@ function FeedbackBox({
           className={cn(controlClasses, focusRing, "w-auto shrink-0")}
           {...form.register("to")}
         >
-          {holder === null ? <option value="">Choose a reader</option> : null}
-          {recipientOptions(holder, targets.data).map((option) => (
+          {options.length === 0 ? (
+            <option value="">Choose a reader</option>
+          ) : null}
+          {options.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
             </option>
@@ -171,7 +182,7 @@ function FeedbackBox({
           {errors.to?.message ?? errors.body?.message}
         </p>
       ) : null}
-      <WriteError error={write.error} />
+      <WriteError error={readers.error ?? write.error} />
     </form>
   );
 }

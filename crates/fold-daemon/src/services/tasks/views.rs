@@ -5,10 +5,11 @@ use fold_core::claims::is_stale;
 use fold_core::events::types;
 use fold_core::reviews::ProposalStanding;
 use fold_core::status::status_reason;
-use fold_core::tasks::areas::areas_conflict;
+use fold_core::tasks::areas::{ReaderRole, areas_conflict, feedback_readers};
 use fold_core::{
-    AreaName, ChangesetId, ChecklistName, DependencyOrigin, Event, HoldMark, LabelName, ProposalId,
-    RevisionId, TaskId, TaskKind, TaskStatus, TaskTitle, Timestamp, WorkerName, WorkspaceId,
+    AgentName, AreaName, ChangesetId, ChecklistName, DependencyOrigin, Event, HoldMark, LabelName,
+    ProposalId, RevisionId, TaskId, TaskKind, TaskStatus, TaskTitle, Timestamp, WorkerName,
+    WorkspaceId,
 };
 use fold_store::reviews::{self, ProposalSummary, ReviewEntry};
 use fold_store::tasks::checklists::{self, ItemContent};
@@ -16,7 +17,7 @@ use fold_store::tasks::claims;
 use fold_store::tasks::reports;
 use fold_store::tasks::{self, BoardSnapshot};
 use fold_store::workspaces::{self, Checkpoint};
-use fold_store::{StoreError, events};
+use fold_store::{StoreError, agents, events};
 
 pub use fold_store::tasks::{ChecklistCounts, TaskRef};
 
@@ -25,6 +26,15 @@ use super::{
     ChecklistItemView, ClaimView, HumanReviewMark, LabelView, REPORT_LIMIT, ReportView, TaskError,
     TaskService, TaskView, area_labels, label_view, task_not_found, view,
 };
+
+/// A reader of a human's feedback on a task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskReader {
+    pub name: WorkerName,
+    pub role: ReaderRole,
+    /// fold supervises the reader's agent and its process is stopped or failed, so the message waits until the process runs again.
+    pub stopped: bool,
+}
 
 /// How many Done cards the board returns: the most recently completed ones. The Done column's `total` counts them all.
 pub const BOARD_DONE_LIMIT: usize = 20;
@@ -471,6 +481,52 @@ impl TaskService {
             return None;
         }
         live.view.edits_after_version
+    }
+
+    /// The readers a human's feedback on the task goes to, the default first, as [`feedback_readers`] chooses them, read in one read transaction.
+    pub async fn readers(&self, id: TaskId) -> Result<Vec<TaskReader>, TaskError> {
+        let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
+        tasks::fetch(&mut tx, id)
+            .await?
+            .ok_or_else(|| task_not_found(id))?;
+        let labels: Vec<LabelName> = tasks::labels_for_conn(&mut tx, id)
+            .await?
+            .into_iter()
+            .map(|label| label.name)
+            .collect();
+        let areas: Vec<_> = agents::list_areas(&mut *tx)
+            .await?
+            .into_iter()
+            .map(|area| (area.name, area.label, area.lead))
+            .collect();
+        let holder = claims::unreleased_for_task(&mut *tx, id)
+            .await?
+            .map(|claim| claim.worker);
+        let main: BTreeSet<i64> = agents::all_tags(&mut *tx)
+            .await?
+            .into_iter()
+            .filter(|(_, tag)| tag.is_main())
+            .map(|(agent, _)| agent)
+            .collect();
+        let main_agents: Vec<AgentName> = agents::list_agents(&mut *tx)
+            .await?
+            .into_iter()
+            .filter(|agent| main.contains(&agent.id))
+            .map(|agent| agent.name)
+            .collect();
+        let mut readers = Vec::new();
+        for reader in feedback_readers(holder.as_ref(), &labels, &areas, &main_agents) {
+            let stopped = agents::find_worker_process(&mut tx, &reader.name.agent())
+                .await?
+                .is_some_and(|process| !process.state.is_running());
+            readers.push(TaskReader {
+                name: reader.name,
+                role: reader.role,
+                stopped,
+            });
+        }
+        tx.commit().await.map_err(StoreError::from)?;
+        Ok(readers)
     }
 
     /// The tasks that are not archived, in number order, with their direct prerequisites and claim holders. Done tasks only when `include_done`.

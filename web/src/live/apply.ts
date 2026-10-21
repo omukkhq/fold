@@ -357,12 +357,20 @@ function invalidationKeys(
       return [keys.workers(slug)];
     case "label":
       return [board, keys.labels(slug), ...taskKey];
-    case "task":
-      // Needs you lists human tasks in Todo and tasks with a blocker, which any task event can add or remove; the human review mark also decides which proposals wait for the human.
+    case "task": {
+      // Needs you lists human tasks in Todo and tasks with a blocker, which any task event can add or remove; the human review mark also decides which proposals wait for the human. A change of the labels can move the task to another area, whose lead reads its feedback.
+      const readers = task === null ? [] : [keys.taskReaders(slug, task)];
       return type === "task.human_review_set" ||
         type === "task.human_review_cleared"
-        ? [board, ...taskKey, keys.needsYou(slug), keys.proposals(slug)]
-        : [board, ...taskKey, keys.needsYou(slug)];
+        ? [
+            board,
+            ...taskKey,
+            ...readers,
+            keys.needsYou(slug),
+            keys.proposals(slug),
+          ]
+        : [board, ...taskKey, ...readers, keys.needsYou(slug)];
+    }
     case "dependency":
     case "checklist":
       return [board, ...taskKey];
@@ -496,7 +504,7 @@ export function patchPresence(
   );
 }
 
-/** The agent lists under the agents prefix take the new presence in place; a list that cannot take it, such as one that does not hold the agent yet, is refetched. Caches without presence records, such as the message targets, are left alone. */
+/** The agent lists under the agents prefix take the new presence in place; a list that cannot take it, such as one that does not hold the agent yet, is refetched. Caches without presence records, such as a task's feedback readers, are left alone. */
 function applyPresence(
   queryClient: QueryClient,
   slug: string,

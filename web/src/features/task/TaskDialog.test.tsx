@@ -433,6 +433,22 @@ function registerDaemon(): void {
       ],
     }),
   );
+  daemon.on(`GET ${P}/:slug/tasks/:id/readers`, (call) => {
+    const task = view(call.params.id ?? "");
+    const holder = task.claims[0]?.holder;
+    const lead = AREAS.find((area) =>
+      task.labels.some((label) => label.name === area.label),
+    )?.lead;
+    return ok({
+      readers: [
+        ...(holder
+          ? [{ name: holder, role: "claim_holder", stopped: true }]
+          : []),
+        ...(lead ? [{ name: lead, role: "area_lead", stopped: false }] : []),
+        { name: "main", role: "main_agent", stopped: false },
+      ],
+    });
+  });
   daemon.on(`GET ${P}/:slug/messages`, (call) =>
     ok({
       items: call.path.includes("task=T-2")
@@ -1724,9 +1740,12 @@ describe("the human edits", () => {
     const { dialog } = await openTask();
     const messages = region(dialog, "Messages");
     const box = within(messages).getByRole("combobox", { name: "Feedback" });
-    expect(box.getAttribute("placeholder")).toBe(
-      "Write feedback to @frontend/ui…",
-    );
+    // The readers arrive after the box, and the claim holder is the default.
+    await waitFor(() => {
+      expect(box.getAttribute("placeholder")).toBe(
+        "Write feedback to @frontend/ui…",
+      );
+    }, WAIT);
     await userEvent.type(box, "Use the shorter copy");
     await userEvent.click(
       within(messages).getByRole("button", { name: "Send" }),
@@ -1775,22 +1794,36 @@ describe("the human edits", () => {
     ).toBe("/p/demo/repository?path=web%2Freport.tsx");
   }, 15_000);
 
-  it("lists the claim holder once and the other agents after it", async () => {
+  it("offers the claim holder, the area lead and the main agent, the holder first", async () => {
     const { dialog } = await openTask();
     const messages = region(dialog, "Messages");
+    const choice = within(messages).getByRole("combobox", { name: "Send to" });
     await waitFor(() => {
       expect(
-        within(messages).getByRole("option", { name: "frontend" }),
-      ).toBeTruthy();
+        within(choice)
+          .getAllByRole("option")
+          .map((option) => option.textContent),
+      ).toEqual([
+        "frontend/ui (claim holder, stopped)",
+        "web-lead (area lead)",
+        "main (main agent)",
+      ]);
     }, WAIT);
-    expect(
-      within(messages).getAllByRole("option", { name: /frontend\/ui/ }),
-    ).toHaveLength(1);
-    expect(
-      within(messages).getByRole("option", {
-        name: "frontend/ui (claim holder)",
-      }),
-    ).toBeTruthy();
+    expect((choice as HTMLSelectElement).value).toBe("holder");
+    await userEvent.selectOptions(choice, "agent:web-lead");
+    const box = within(messages).getByRole("combobox", { name: "Feedback" });
+    expect(box.getAttribute("placeholder")).toBe("Write feedback to web-lead…");
+    await userEvent.type(box, "Who builds this?");
+    await userEvent.click(
+      within(messages).getByRole("button", { name: "Send" }),
+    );
+    await waitFor(() => {
+      expect(daemon.made(`POST ${P}/demo/feedback`)[0]?.body).toEqual({
+        task: "T-2",
+        body: "Who builds this?",
+        to: ["web-lead"],
+      });
+    }, WAIT);
   }, 15_000);
 });
 

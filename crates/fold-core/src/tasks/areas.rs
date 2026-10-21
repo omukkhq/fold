@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::json;
 
-use crate::agents::AreaName;
+use crate::agents::{AgentName, AreaName, WorkerName};
 use crate::error::{FoldError, codes};
 use crate::ids::TaskId;
 use crate::tasks::LabelName;
@@ -139,6 +139,51 @@ pub fn check_new_area(
     ))
 }
 
+/// Why a reader is offered for a human's feedback on a task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReaderRole {
+    ClaimHolder,
+    AreaLead,
+    MainAgent,
+}
+
+/// A reader of a human's feedback on a task, as a worker name: an agent reads it through its main worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeedbackReader {
+    pub name: WorkerName,
+    pub role: ReaderRole,
+}
+
+/// The readers a human's feedback on a task goes to, the default first: the worker that holds the implementation claim, the lead of the task's area and the main agents. Only they answer for the task, so no other agent is offered. A task of Main has no lead but the main agent, and a task in no area has none. Each worker is listed once, under its first role. `areas` gives each area's name, label and lead.
+pub fn feedback_readers(
+    holder: Option<&WorkerName>,
+    labels: &[LabelName],
+    areas: &[(AreaName, LabelName, Option<AgentName>)],
+    main_agents: &[AgentName],
+) -> Vec<FeedbackReader> {
+    let main = in_main_area(labels);
+    let leads = areas
+        .iter()
+        .filter(|(area, label, _)| !main && !area.is_main() && labels.contains(label))
+        .filter_map(|(_, _, lead)| lead.as_ref());
+    let mut readers: Vec<FeedbackReader> = Vec::new();
+    let candidates = holder
+        .map(|holder| (holder.clone(), ReaderRole::ClaimHolder))
+        .into_iter()
+        .chain(leads.map(|lead| (WorkerName::main(lead), ReaderRole::AreaLead)))
+        .chain(
+            main_agents
+                .iter()
+                .map(|agent| (WorkerName::main(agent), ReaderRole::MainAgent)),
+        );
+    for (name, role) in candidates {
+        if readers.iter().all(|reader| reader.name != name) {
+            readers.push(FeedbackReader { name, role });
+        }
+    }
+    readers
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +279,106 @@ mod tests {
         assert!(check_new_area(&docs, &label("guide"), &tasks[1..2], &areas).is_ok());
         assert!(check_new_area(&docs, &label("chore"), &tasks, &areas).is_ok());
         assert!(check_new_area(&docs, &label("guide"), &tasks, &[]).is_ok());
+    }
+
+    fn worker(name: &str) -> WorkerName {
+        WorkerName::parse(name).unwrap()
+    }
+
+    fn agents(names: &[&str]) -> Vec<AgentName> {
+        names
+            .iter()
+            .map(|name| AgentName::parse(name).unwrap())
+            .collect()
+    }
+
+    fn led() -> Vec<(AreaName, LabelName, Option<AgentName>)> {
+        vec![
+            (
+                AreaName::parse("web").unwrap(),
+                label("ui"),
+                AgentName::parse("web-lead").ok(),
+            ),
+            (AreaName::parse("api").unwrap(), label("server"), None),
+            (AreaName::main(), LabelName::main(), None),
+        ]
+    }
+
+    fn readers(
+        holder: Option<&str>,
+        set: &[&str],
+        main_agents: &[&str],
+    ) -> Vec<(String, ReaderRole)> {
+        let holder = holder.map(worker);
+        feedback_readers(holder.as_ref(), &labels(set), &led(), &agents(main_agents))
+            .into_iter()
+            .map(|reader| (reader.name.to_string(), reader.role))
+            .collect()
+    }
+
+    #[test]
+    fn feedback_goes_to_the_claim_holder_first_then_the_area_lead_and_the_main_agent() {
+        assert_eq!(
+            readers(Some("web-t12"), &["ui", "bug"], &["main"]),
+            [
+                ("web-t12".to_owned(), ReaderRole::ClaimHolder),
+                ("web-lead".to_owned(), ReaderRole::AreaLead),
+                ("main".to_owned(), ReaderRole::MainAgent),
+            ]
+        );
+    }
+
+    #[test]
+    fn without_a_claim_the_area_lead_is_the_default() {
+        assert_eq!(
+            readers(None, &["ui"], &["main"]),
+            [
+                ("web-lead".to_owned(), ReaderRole::AreaLead),
+                ("main".to_owned(), ReaderRole::MainAgent),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_task_in_no_area_or_in_an_area_without_a_lead_goes_to_the_main_agent() {
+        for set in [&["bug"][..], &[], &["server"]] {
+            assert_eq!(
+                readers(None, set, &["main"]),
+                [("main".to_owned(), ReaderRole::MainAgent)],
+                "{set:?}"
+            );
+        }
+        assert!(readers(None, &["bug"], &[]).is_empty());
+    }
+
+    #[test]
+    fn a_task_of_main_has_the_main_agent_alone_beside_its_holder() {
+        assert_eq!(
+            readers(None, &["main", "ui"], &["main"]),
+            [("main".to_owned(), ReaderRole::MainAgent)]
+        );
+        assert_eq!(
+            readers(Some("main"), &["main"], &["main"]),
+            [("main".to_owned(), ReaderRole::ClaimHolder)],
+            "the main agent that holds the claim is listed once"
+        );
+    }
+
+    #[test]
+    fn a_lead_that_holds_the_claim_is_listed_once_and_its_child_worker_apart() {
+        assert_eq!(
+            readers(Some("web-lead"), &["ui"], &["main"]),
+            [
+                ("web-lead".to_owned(), ReaderRole::ClaimHolder),
+                ("main".to_owned(), ReaderRole::MainAgent),
+            ]
+        );
+        assert_eq!(
+            readers(Some("web-lead/ui"), &["ui"], &["web-lead"]),
+            [
+                ("web-lead/ui".to_owned(), ReaderRole::ClaimHolder),
+                ("web-lead".to_owned(), ReaderRole::AreaLead),
+            ]
+        );
     }
 }
