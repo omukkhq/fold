@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 use fold_core::{
     AddressedAs, AgentName, Choice, Directory, DirectoryAgent, HumanName, MessageId, ProposalId,
@@ -582,53 +582,63 @@ pub async fn threads(
     Ok(rows)
 }
 
-/// The threads that hold an open ask, as [`awaiting_human`] decides; with `human`, an open ask addressed to that human by name or to `humans`.
+/// The threads that hold an open ask, as [`awaiting_human`] decides; with `human`, an open ask addressed to that human by name or to `humans`. Each thread maps to whether one of those asks is closable: a human can mark it answered, because it is no worker's `AskUserQuestion`, which only a reply ends.
 pub async fn threads_awaiting_human(
     executor: impl SqliteExecutor<'_>,
     human: Option<&HumanName>,
-) -> Result<BTreeSet<MessageId>, StoreError> {
+) -> Result<BTreeMap<MessageId, bool>, StoreError> {
     let human = human.map(HumanName::as_str);
-    let rows = sqlx::query_scalar!(
-        r#"SELECT DISTINCT q.thread_id AS "thread!: i64"
+    let rows = sqlx::query!(
+        r#"SELECT q.thread_id AS "thread!: i64",
+                  MAX(NOT EXISTS (SELECT 1 FROM worker_question_messages w WHERE w.message_id = q.id))
+                      AS "closable!: bool"
            FROM open_human_questions q
            WHERE ?1 IS NULL OR EXISTS (
                      SELECT 1 FROM message_recipients r
-                     WHERE r.message_id = q.id AND (r.human = ?1 OR r.addressed_as = 'humans'))"#,
+                     WHERE r.message_id = q.id AND (r.human = ?1 OR r.addressed_as = 'humans'))
+           GROUP BY q.thread_id"#,
         human
     )
     .fetch_all(executor)
     .await?;
     rows.into_iter()
-        .map(|thread| message_id(thread, "messages.thread_id"))
+        .map(|row| Ok((message_id(row.thread, "messages.thread_id")?, row.closable)))
         .collect()
 }
 
-/// Whether thread `thread` holds an open ask, as [`threads_awaiting_human`] decides for every thread.
+/// Whether thread `thread` holds an open ask, as [`threads_awaiting_human`] decides for every thread: `None` when none waits, else whether one of them is closable.
 pub async fn thread_awaits_human(
     executor: impl SqliteExecutor<'_>,
     thread: MessageId,
-) -> Result<bool, StoreError> {
+) -> Result<Option<bool>, StoreError> {
     let thread = thread.to_db();
     Ok(sqlx::query_scalar!(
-        r#"SELECT EXISTS (SELECT 1 FROM open_human_questions WHERE thread_id = ?) AS "awaiting!: bool""#,
+        r#"SELECT MAX(NOT EXISTS (SELECT 1 FROM worker_question_messages w WHERE w.message_id = q.id))
+                      AS "closable: bool"
+           FROM open_human_questions q WHERE q.thread_id = ?"#,
         thread
     )
     .fetch_one(executor)
     .await?)
 }
 
-/// The tasks linked to an open ask: the source of the `question` attention kind.
+/// The tasks linked to an open ask, the source of the `question` attention kind, each with whether one of its asks is closable, as [`threads_awaiting_human`] decides it.
 pub async fn tasks_awaiting_human(
     executor: impl SqliteExecutor<'_>,
-) -> Result<BTreeSet<TaskId>, StoreError> {
-    let rows = sqlx::query_scalar!(
-        r#"SELECT DISTINCT t.number AS "task!: i64"
+) -> Result<BTreeMap<TaskId, bool>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT t.number AS "task!: i64",
+                  MAX(NOT EXISTS (SELECT 1 FROM worker_question_messages w WHERE w.message_id = q.id))
+                      AS "closable!: bool"
            FROM open_human_questions q
-           JOIN tasks t ON t.id = q.task_id"#
+           JOIN tasks t ON t.id = q.task_id
+           GROUP BY t.number"#
     )
     .fetch_all(executor)
     .await?;
-    rows.into_iter().map(task_id).collect()
+    rows.into_iter()
+        .map(|row| Ok((task_id(row.task)?, row.closable)))
+        .collect()
 }
 
 /// Why an ask stopped waiting without a human's reply in its thread.

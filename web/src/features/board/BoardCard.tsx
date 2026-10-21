@@ -26,6 +26,7 @@ import { PersonName } from "@/people/PersonName";
 import type { LiveWorkspace } from "@/live/envelope";
 import { activityLine, liveFilesText, type ActivityLine } from "./activityLine";
 import { MarkAnswered } from "@/features/messages/MarkAnswered";
+import { taskCanMarkAnswered } from "@/features/messages/answered";
 import { attentionMark, hasKind } from "./attention";
 import {
   blockedText,
@@ -174,7 +175,7 @@ export function BoardCard({
   const kind = kindText(card);
   const blocker = blockerMark(card);
   const leadCheck = leadCheckMark(card);
-  const question = hasKind(card.attention, "question");
+  const answerable = taskCanMarkAnswered(card.attention);
   const stalled = hasKind(card.attention, "stalled");
   const stale = hasKind(card.attention, "stale_claim");
   const hasFooter =
@@ -198,7 +199,7 @@ export function BoardCard({
               </Badge>
             </span>
           </Tooltip>
-          {question ? (
+          {answerable ? (
             <MarkAnswered
               slug={slug}
               scope={{ task: card.task }}

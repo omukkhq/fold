@@ -26,6 +26,7 @@ import {
 import { deliveryLines, recipientActors } from "./delivery";
 import { replyPlaceholder } from "./filters";
 import { MarkAnswered } from "./MarkAnswered";
+import { threadCanMarkAnswered } from "./answered";
 import { MessageBody } from "./MessageBody";
 import { chosenAnswers, isQuestion } from "./question";
 import {
@@ -112,7 +113,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
             <PersonList names={thread.participants} />
           </p>
         </div>
-        {thread.awaiting_human ? (
+        {threadCanMarkAnswered(thread) ? (
           <MarkAnswered slug={slug} scope={{ thread: thread.id }} />
         ) : null}
         {thread.task ? (

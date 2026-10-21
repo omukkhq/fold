@@ -119,7 +119,10 @@ async fn the_workspace_routes_list_one_entry_with_its_attention() {
     assert_eq!(entry["kind"], "task");
     assert_eq!(entry["base"], "r1");
     assert_eq!(entry["state"], "active");
-    assert_eq!(entry["attention"], json!([{"kind": "question"}]));
+    assert_eq!(
+        entry["attention"],
+        json!([{"kind": "question", "closable": true}])
+    );
     assert_eq!(entry["live"]["workspace"], id.to_string());
     assert_eq!(entry["live"]["summary"], "no changes");
     assert_eq!(entry["watch"], "watching");

@@ -1,5 +1,6 @@
 import type { QueryKey } from "@tanstack/react-query";
-import type { AnsweredScope } from "@/api/messages";
+import type { AttentionItem } from "@/api/board";
+import type { AnsweredScope, ThreadView } from "@/api/messages";
 import { keys } from "@/api/keys";
 
 /** The reads that show an ask waiting: the threads and the Messages count, the board's question mark, Needs you and, for a task, its task read. */
@@ -12,12 +13,26 @@ export function answeredKeys(slug: string, scope: AnsweredScope): QueryKey[] {
   ];
 }
 
-/** The note under the control once the daemon answered: none when it closed an ask, otherwise why nothing changed. */
+/** A task offers Mark answered while its question mark holds an ask a human can close; a worker's `AskUserQuestion` ends only with a reply, so it offers none. */
+export function taskCanMarkAnswered(
+  attention: readonly AttentionItem[],
+): boolean {
+  return attention.some((item) => item.kind === "question" && item.closable);
+}
+
+/** A thread offers Mark answered while it waits on an ask a human can close; a thread with only a worker's `AskUserQuestion` offers the reply box alone. */
+export function threadCanMarkAnswered(
+  thread: Pick<ThreadView, "awaiting_human" | "closable">,
+): boolean {
+  return thread.awaiting_human && thread.closable;
+}
+
+/** The note under the control once the daemon answered: none when it closed an ask; otherwise the ask was answered before the click, such as by another human. */
 export function answeredNote(
   closed: readonly string[] | undefined,
 ): string | null {
   if (closed === undefined || closed.length > 0) {
     return null;
   }
-  return "Nothing was marked: a worker's question ends only with your reply.";
+  return "It was already answered.";
 }

@@ -1473,6 +1473,8 @@ export interface components {
             name: string;
         };
         AttentionItem: {
+            /** @description For a `question`: one of the task's open asks is closable, so a human can mark it answered with the asks route, because it is no worker's `AskUserQuestion`, which only a reply in its thread ends. False for every other kind. */
+            closable: boolean;
             kind: components["schemas"]["AttentionKind"];
         };
         /**
@@ -3975,6 +3977,8 @@ export interface components {
         ThreadView: {
             /** @description True while the thread holds an open ask: a message an agent marked as asking a human, a question with choices or a worker's `AskUserQuestion`, with no human reply after it and not marked answered. In a `mine` listing, only an ask that waits for the signed-in human: addressed to them by name or to `humans`. */
             awaiting_human: boolean;
+            /** @description One of those asks is closable: a human can mark it answered with the asks route, because it is no worker's `AskUserQuestion`, which only a reply in the thread ends. False while `awaiting_human` is false. */
+            closable: boolean;
             /**
              * @description The id of the thread's first message.
              * @example m-31

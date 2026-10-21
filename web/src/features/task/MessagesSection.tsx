@@ -17,8 +17,8 @@ import {
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
 import { controlClasses } from "@/components/form/Field";
-import { hasKind } from "@/features/board/attention";
 import { MarkAnswered } from "@/features/messages/MarkAnswered";
+import { taskCanMarkAnswered } from "@/features/messages/answered";
 import { MessageBody } from "@/features/messages/MessageBody";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
@@ -196,7 +196,7 @@ export function MessagesSection({
             {messageCountText(messages.length, task.task)}
           </span>
         ) : null}
-        {hasKind(task.attention, "question") ? (
+        {taskCanMarkAnswered(task.attention) ? (
           <MarkAnswered
             slug={slug}
             scope={{ task: task.task }}

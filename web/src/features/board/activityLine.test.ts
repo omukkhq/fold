@@ -75,7 +75,9 @@ describe("activityLine", () => {
 
   it("says no edits for n min when the attention list has stalled", () => {
     const line = activityLine(
-      card({ path: "a.ts", at: NOW - 6 * MINUTE }, [{ kind: "stalled" }]),
+      card({ path: "a.ts", at: NOW - 6 * MINUTE }, [
+        { kind: "stalled", closable: false },
+      ]),
       undefined,
       NOW,
     );
@@ -91,7 +93,7 @@ describe("activityLine", () => {
       activityLine(
         card(
           { path: "a.ts", at: NOW - 6 * MINUTE },
-          [{ kind: "stalled" }],
+          [{ kind: "stalled", closable: false }],
           true,
         ),
         undefined,
@@ -146,8 +148,8 @@ describe("activityLine", () => {
   it("says the holder sent the version and what it waits for while the files are that version", () => {
     const sent = {
       ...card({ path: "a.ts", at: NOW - 6 * MINUTE }, [
-        { kind: "stalled" },
-        { kind: "human_review" },
+        { kind: "stalled", closable: false },
+        { kind: "human_review", closable: false },
       ]),
       proposal: {
         id: "P-1",
@@ -183,7 +185,9 @@ describe("activityLine", () => {
 
   it("says the stall while a sent version is back with its author", () => {
     const back = {
-      ...card({ path: "a.ts", at: NOW - 6 * MINUTE }, [{ kind: "stalled" }]),
+      ...card({ path: "a.ts", at: NOW - 6 * MINUTE }, [
+        { kind: "stalled", closable: false },
+      ]),
       proposal: {
         id: "P-1",
         state: "changes_requested" as const,

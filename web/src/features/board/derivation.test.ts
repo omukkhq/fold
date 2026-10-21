@@ -28,15 +28,19 @@ describe("attention", () => {
 
 describe("the derivation scan", () => {
   it("flags a list written out and a pushed item", () => {
-    expect(ATTENTION_BUILT.test('card.attention = [{ kind: "stalled" }]')).toBe(
-      true,
-    );
-    expect(ATTENTION_BUILT.test('attention: [{ kind: "question" }]')).toBe(
-      true,
-    );
-    expect(ATTENTION_BUILT.test('attention.push({ kind: "stalled" })')).toBe(
-      true,
-    );
+    expect(
+      ATTENTION_BUILT.test(
+        'card.attention = [{ kind: "stalled", closable: false }]',
+      ),
+    ).toBe(true);
+    expect(
+      ATTENTION_BUILT.test('attention: [{ kind: "question", closable: true }]'),
+    ).toBe(true);
+    expect(
+      ATTENTION_BUILT.test(
+        'attention.push({ kind: "stalled", closable: false })',
+      ),
+    ).toBe(true);
     expect(ATTENTION_BUILT.test('kind: "stalled" | "stale_claim";')).toBe(
       false,
     );

@@ -149,6 +149,8 @@ pub struct ThreadView {
     pub participants: Vec<String>,
     /// True while the thread holds an open ask: a message an agent marked as asking a human, a question with choices or a worker's `AskUserQuestion`, with no human reply after it and not marked answered. In a `mine` listing, only an ask that waits for the signed-in human: addressed to them by name or to `humans`.
     pub awaiting_human: bool,
+    /// One of those asks is closable: a human can mark it answered with the asks route, because it is no worker's `AskUserQuestion`, which only a reply in the thread ends. False while `awaiting_human` is false.
+    pub closable: bool,
     /// UTC milliseconds of the newest message.
     pub last_at: i64,
     pub messages: Vec<MessageView>,
@@ -163,6 +165,7 @@ impl From<service::ThreadView> for ThreadView {
             request: thread.request.map(|id| id.to_string()),
             participants: thread.participants,
             awaiting_human: thread.awaiting_human,
+            closable: thread.closable,
             last_at: thread.last_at.as_millis(),
             messages: thread.messages.into_iter().map(Into::into).collect(),
         }

@@ -128,7 +128,7 @@ describe("liveStrip", () => {
   it("says how long the worker has been quiet while the daemon reports it stalled", () => {
     const strip = liveStrip(
       task({
-        attention: [{ kind: "stalled" }],
+        attention: [{ kind: "stalled", closable: false }],
         activity: { path: "a.ts", at: NOW - 7 * MINUTE },
       }),
       live({ last_activity_at: NOW - 8 * MINUTE }),
@@ -143,7 +143,10 @@ describe("liveStrip", () => {
 
   it("keeps the verb when a stalled worker has no recorded edit", () => {
     const strip = liveStrip(
-      task({ attention: [{ kind: "stalled" }], activity: null }),
+      task({
+        attention: [{ kind: "stalled", closable: false }],
+        activity: null,
+      }),
       null,
       NOW,
     );
@@ -162,7 +165,7 @@ describe("liveStrip", () => {
       reviews: [],
     };
     const sent = task({
-      attention: [{ kind: "stalled" }],
+      attention: [{ kind: "stalled", closable: false }],
       proposal,
       edits_after_version: false,
     });
@@ -189,7 +192,7 @@ describe("liveStrip", () => {
 
   it("says the stall and the wait while a sent version is back with its author", () => {
     const back = task({
-      attention: [{ kind: "stalled" }],
+      attention: [{ kind: "stalled", closable: false }],
       proposal: {
         id: "P-1",
         title: "Add the form",

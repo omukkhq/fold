@@ -96,6 +96,49 @@ async fn agree(h: &Harness, asks: &[(&str, &str)]) {
     assert_eq!(seen, expected);
 }
 
+/// Whether the human can mark an ask of each thread answered, as the thread read and the board card's question mark say: `(awaiting_human, closable)` of thread `message`, and the `closable` of `task`'s question item, `None` without one.
+async fn closable(h: &Harness, message: &str, task: Option<&str>) -> ((bool, bool), Option<bool>) {
+    let thread = get(h, &format!("/threads/{message}")).await;
+    let seen = (
+        thread["awaiting_human"].as_bool().unwrap(),
+        thread["closable"].as_bool().unwrap(),
+    );
+    let listed = get(h, "/messages?mine=true").await["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|listed| listed["id"] == thread["id"])
+        .map(|listed| {
+            (
+                listed["awaiting_human"].as_bool().unwrap(),
+                listed["closable"].as_bool().unwrap(),
+            )
+        });
+    assert_eq!(
+        listed.unwrap_or((false, false)),
+        seen,
+        "the listing agrees with the thread read"
+    );
+    let card = match task {
+        Some(task) => get(h, "/board").await["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|column| column["cards"].as_array().unwrap().iter())
+            .find(|card| card["task"] == task)
+            .and_then(|card| {
+                card["attention"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| item["kind"] == "question")
+                    .map(|item| item["closable"].as_bool().unwrap())
+            }),
+        None => None,
+    };
+    (seen, card)
+}
+
 async fn ask(h: &Harness, from: &str, task: &str, text: &str) -> String {
     h.send_with(
         from,
@@ -173,6 +216,11 @@ async fn acceptance_19_asks_wait_for_the_human_until_answered_and_every_view_agr
     // The human marks a task's ask answered on the board card.
     let colour = ask(&h, "review", &third, "Red or blue?").await;
     agree(&h, &[(&colour, &third)]).await;
+    assert_eq!(
+        closable(&h, &colour, Some(&third)).await,
+        ((true, true), Some(true)),
+        "a human can mark an asks_human ask answered"
+    );
     let (status, marked) = h
         .http(
             Method::POST,
@@ -184,6 +232,11 @@ async fn acceptance_19_asks_wait_for_the_human_until_answered_and_every_view_agr
     assert_eq!(status, StatusCode::OK, "{marked}");
     assert_eq!(marked, json!({"answered": [colour]}));
     agree(&h, &[]).await;
+    assert_eq!(
+        closable(&h, &colour, Some(&third)).await,
+        ((false, false), None),
+        "nothing is left to close"
+    );
     let closed: Vec<Value> = h
         .events()
         .await
@@ -221,6 +274,11 @@ async fn acceptance_19_asks_wait_for_the_human_until_answered_and_every_view_agr
     .await;
     let seen = waiting(&h).await;
     assert!(seen.board.is_empty(), "the question is linked to no task");
+    assert_eq!(
+        closable(&h, &question, None).await,
+        ((true, false), None),
+        "only a reply ends a worker's AskUserQuestion"
+    );
     assert_eq!((seen.marked.len(), seen.count), (1, 1));
     assert_eq!(
         refused_code(&h, MAIN, "mark_answered", json!({"message": question})).await,

@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use fold_core::messages::reply_addresses;
 use fold_core::{
@@ -52,6 +52,8 @@ pub struct ThreadView {
     pub participants: Vec<String>,
     /// The thread holds an open ask; in a listing for one human, an open ask that waits for that human.
     pub awaiting_human: bool,
+    /// One of those asks is closable: a human can mark it answered, because it is no worker's `AskUserQuestion`, which only a reply in the thread ends.
+    pub closable: bool,
     pub last_at: Timestamp,
     pub messages: Vec<MessageView>,
 }
@@ -299,21 +301,22 @@ fn last_number(thread: &ThreadView) -> Option<MessageId> {
 }
 
 /// `rows` are the messages of thread `id` in number order.
-/// The one thread a single-thread read shows, as the set [`thread_view`] takes: holding `thread` when it waits for a human.
+/// The one thread a single-thread read shows, as the map [`thread_view`] takes: holding `thread`, with whether one of its asks is closable, when it waits for a human.
 async fn awaiting_set(
     conn: &mut SqliteConnection,
     thread: MessageId,
-) -> Result<BTreeSet<MessageId>, StoreError> {
-    Ok(
-        if messages::thread_awaits_human(&mut *conn, thread).await? {
-            BTreeSet::from([thread])
-        } else {
-            BTreeSet::new()
-        },
-    )
+) -> Result<BTreeMap<MessageId, bool>, StoreError> {
+    Ok(messages::thread_awaits_human(&mut *conn, thread)
+        .await?
+        .map(|closable| BTreeMap::from([(thread, closable)]))
+        .unwrap_or_default())
 }
 
-fn thread_view(id: MessageId, rows: Vec<MessageRow>, awaiting: &BTreeSet<MessageId>) -> ThreadView {
+fn thread_view(
+    id: MessageId,
+    rows: Vec<MessageRow>,
+    awaiting: &BTreeMap<MessageId, bool>,
+) -> ThreadView {
     let mut seen = HashSet::new();
     let mut participants = Vec::new();
     for row in &rows {
@@ -335,7 +338,8 @@ fn thread_view(id: MessageId, rows: Vec<MessageRow>, awaiting: &BTreeSet<Message
         proposal: messages.iter().find_map(|message| message.proposal),
         request: messages.iter().find_map(|message| message.request),
         participants,
-        awaiting_human: awaiting.contains(&id),
+        awaiting_human: awaiting.contains_key(&id),
+        closable: awaiting.get(&id).copied().unwrap_or(false),
         last_at: messages
             .last()
             .map_or(Timestamp::EPOCH, |message| message.sent_at),

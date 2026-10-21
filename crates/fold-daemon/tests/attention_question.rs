@@ -256,6 +256,11 @@ impl Fixture {
     }
 
     async fn questions(&self) -> BTreeSet<TaskId> {
+        self.closable().await.into_keys().collect()
+    }
+
+    /// The tasks with an open ask, each with whether a human can mark one of them answered.
+    async fn closable(&self) -> BTreeMap<TaskId, bool> {
         fold_store::messages::tasks_awaiting_human(self.handle.store.read())
             .await
             .unwrap()
@@ -601,4 +606,22 @@ async fn an_ask_to_two_named_humans_waits_in_their_needs_you_and_counts_only_for
             "{human}"
         );
     }
+}
+
+#[tokio::test]
+async fn an_open_ask_is_closable_until_someone_marks_it_answered() {
+    let fixture = Fixture::new().await;
+    fixture.ask("frontend", &["human:tanim"], 1, None).await;
+    let thread = async || {
+        let (status, thread) = fixture
+            .call(Method::GET, "/api/v1/projects/demo/threads/m-1", None)
+            .await;
+        assert_eq!(status, StatusCode::OK, "{thread}");
+        (thread["awaiting_human"].clone(), thread["closable"].clone())
+    };
+    assert_eq!(fixture.closable().await, BTreeMap::from([(t(1), true)]));
+    assert_eq!(thread().await, (json!(true), json!(true)));
+    fixture.mark_answered("frontend", 1).await.unwrap();
+    assert!(fixture.closable().await.is_empty());
+    assert_eq!(thread().await, (json!(false), json!(false)));
 }

@@ -34,6 +34,7 @@ function message(
 function thread(messages: MessageView[]): ThreadView {
   return {
     id: "m-1",
+    closable: false,
     messages,
     participants: [],
     awaiting_human: false,

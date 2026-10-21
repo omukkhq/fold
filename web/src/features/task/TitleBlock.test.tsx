@@ -53,7 +53,7 @@ describe("the proposal strip of the task dialog", () => {
       taskView("T-1", {
         status: "review",
         proposal,
-        attention: [{ kind: "human_review" }],
+        attention: [{ kind: "human_review", closable: false }],
       }),
     );
     const link = screen.getByRole("link", { name: "Go to proposal" });

@@ -84,7 +84,7 @@ function demoBoard(): Board {
         title: "Review the gate",
         status: "review",
         worker: "backend",
-        attention: [{ kind: "question" }],
+        attention: [{ kind: "question", closable: true }],
       }),
       boardCard("T-4", {
         title: "Needs two others",
@@ -107,13 +107,16 @@ function demoBoard(): Board {
           reason: "Auth work",
           set_by: "planner",
         },
-        attention: [{ kind: "human_review" }],
+        attention: [{ kind: "human_review", closable: false }],
       }),
       boardCard("T-7", {
         title: "Quiet worker",
         status: "in_progress",
         worker: "backend/db",
-        attention: [{ kind: "stalled" }, { kind: "stale_claim" }],
+        attention: [
+          { kind: "stalled", closable: false },
+          { kind: "stale_claim", closable: false },
+        ],
       }),
       boardCard("T-8", { status: "done", title: "Older", completed_at: 10 }),
       boardCard("T-9", { status: "done", title: "Newest", completed_at: 30 }),
