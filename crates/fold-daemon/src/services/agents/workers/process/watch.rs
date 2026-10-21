@@ -77,6 +77,7 @@ impl Supervisor {
             .is_some_and(|run| run.generation != process.generation);
         if !newer {
             lock(&self.inner.replays).remove(&process.agent);
+            self.forget_answering(&process.agent);
         }
         self.forget(&process);
         self.forget_waiters(process.generation);
@@ -327,6 +328,7 @@ impl Supervisor {
         self.notify_running_authors().await;
         self.clone().resume_owed_send_backs().await;
         self.clone().resume_owed_gate_runs().await;
+        self.clone().resume_owed_messages().await;
         self.resume_pending().await;
     }
 }
@@ -391,6 +393,16 @@ pub(super) async fn watch_done(
             && let Some(task) = event.task
         {
             tokio::spawn(supervisor.clone().resume_sent_back(task));
+        }
+        if let Some(agent) = super::message::answering_agent(&event) {
+            supervisor.stop_if_answered(&agent).await;
+        }
+        // A message to a stopped worker starts it; one sent while it was stopping waits for its stop.
+        if event.event_type == types::MESSAGE_SENT
+            || event.event_type == types::WORKER_STOPPED
+            || event.event_type == types::WORKER_FAILED
+        {
+            tokio::spawn(supervisor.clone().resume_owed_messages());
         }
         // A freed worker slot or a raised limit can serve a resume that the limits refused earlier.
         if event.event_type == types::WORKER_STOPPED

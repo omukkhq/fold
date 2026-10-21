@@ -763,6 +763,18 @@ pub async fn restart_worker_process(
     Ok(())
 }
 
+/// Records on the failed row `id` that its Claude Code session is gone, as the failure reason `reason`, so a message to it goes on to a lead without another `--resume`. The next start of the row clears it.
+pub async fn mark_session_lost(tx: &mut WriteTx, id: i64, reason: &str) -> Result<(), StoreError> {
+    sqlx::query!(
+        "UPDATE worker_processes SET failed_reason = ?2 WHERE id = ?1 AND state = 'failed'",
+        id,
+        reason
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
 /// A running worker process bound to a task or proposal: its row id and its agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundWorker {
