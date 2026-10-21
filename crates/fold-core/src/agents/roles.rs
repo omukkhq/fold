@@ -11,8 +11,10 @@ mod profile;
 
 pub use answers::{PermissionBehavior, ask_answer_turn, permission_answer_turn};
 pub use handoff::{
-    HANDOFF_REQUEST, HANDOFF_TURNS, MAX_HANDOFF_CHARS, RefreshFacts, SUMMARY_ITEMS,
-    SummaryProposal, SummaryTask, check_handoff, handoff_due, handoff_overdue, refresh_turn,
+    DEFAULT_HANDOFF_LARGE_PERCENT, DEFAULT_HANDOFF_LARGE_WINDOW, DEFAULT_HANDOFF_SMALL_PERCENT,
+    HANDOFF_REQUEST, HANDOFF_TURNS, HandoffAt, MAX_HANDOFF_CHARS, RefreshFacts, SUMMARY_ITEMS,
+    SummaryProposal, SummaryTask, check_handoff, default_handoff_percent, handoff_due,
+    handoff_overdue, refresh_turn,
 };
 pub use profile::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, FieldChange, MAX_AREA_INSTRUCTIONS_CHARS,

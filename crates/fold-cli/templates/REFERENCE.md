@@ -95,7 +95,7 @@ idle_minutes = 15                    # task_worker and reviewer only: an idle wo
 mcp = ["fold", "pencil"]             # the servers the role may load: fold and servers of the project's .mcp.json
 
 [roles.review_lead]
-handoff_at = 15                      # area_lead and review_lead only: the percent of the context window past which fold refreshes the lead through a hand-off note
+handoff_at = 50                      # area_lead and review_lead only: the percent of the context window past which fold refreshes the lead through a hand-off note; without it, 85% of the window below 220k tokens and 60% from 220k
 ```
 
 - The top-level numbers must be whole numbers above 0. A worker limit has no upper bound, and 0 lets no worker of its role start; the leads are outside the limits, and a lower limit never stops a running worker.

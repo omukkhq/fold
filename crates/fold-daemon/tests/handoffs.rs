@@ -17,9 +17,9 @@ use crate::workers_support::{FakeClaude, Run, fixture};
 const MAIN: &str = "frontend";
 const LEAD: &str = "web-lead";
 
-/// The recorded turn reports a context of 25310 tokens in a window of 1000000; the grown one reports 160192, just past the default `handoff_at` of 15 percent.
+/// The recorded turn reports a context of 25310 tokens in a window of 1000000; the grown one reports 700192, past the default of 60 percent for that window.
 const SMALL: &str = "\"cache_read_input_tokens\":25118";
-const GROWN: &str = "\"cache_read_input_tokens\":160000";
+const GROWN: &str = "\"cache_read_input_tokens\":700000";
 
 /// The turn the stand-in replays: a file the test rewrites between turns, so the context it reports grows.
 struct Turn {
@@ -140,7 +140,7 @@ async fn grow_until_asked(harness: &Harness, turn: &Turn, fake: &FakeClaude) -> 
     turn.grow();
     harness.send(MAIN, &[LEAD], "Look at the page.").await;
     let asked = idle_after(harness, 3).await;
-    assert_eq!(asked.context_tokens, 160_192);
+    assert_eq!(asked.context_tokens, 700_192);
     let run = runs(fake, 1, 4).await.remove(0);
     assert_eq!(asks(&run), 1);
     asked
@@ -235,7 +235,7 @@ async fn a_lead_past_its_threshold_hands_off_to_a_fresh_session() {
     assert_eq!(refreshed[0]["agent"], LEAD);
     assert_eq!(refreshed[0]["old_session"], started.session_id.as_str());
     assert_eq!(refreshed[0]["new_session"], fresh_session.as_str());
-    assert_eq!(refreshed[0]["context_tokens"], 160_192);
+    assert_eq!(refreshed[0]["context_tokens"], 700_192);
     assert_eq!(refreshed[0]["handoff"], true);
     assert!(
         events
@@ -271,17 +271,17 @@ async fn a_project_handoff_at_wins_over_the_default() {
     harness.make_main(MAIN).await;
     std::fs::write(
         std::path::Path::new(harness.root()).join(".fold/config.toml"),
-        "[roles.area_lead]\nhandoff_at = 20\n",
+        "[roles.area_lead]\nhandoff_at = 80\n",
     )
     .unwrap();
     lead(&mut harness).await;
     turn.grow();
     harness.send(MAIN, &[LEAD], "Look at the page.").await;
-    assert_eq!(idle_after(&harness, 2).await.context_tokens, 160_192);
+    assert_eq!(idle_after(&harness, 2).await.context_tokens, 700_192);
     harness.send(MAIN, &[LEAD], "One more look.").await;
     idle_after(&harness, 3).await;
     let run = runs(&fake, 1, 4).await.remove(0);
-    assert_eq!(asks(&run), 0, "16 percent is below the project's 20");
+    assert_eq!(asks(&run), 0, "70 percent is below the project's 80");
 }
 
 #[tokio::test]
