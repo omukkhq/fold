@@ -1,4 +1,3 @@
-import { reviewerText } from "./proposalStrip";
 import type {
   HumanReviewMark,
   CardProposalState,
@@ -161,6 +160,11 @@ const PROPOSAL_STATES: Record<CardProposalState, string> = {
   conflict: "conflict",
   integrated: "integrated",
 };
+
+/** The reviewer that holds the review claim, as the proposal strip and the state text name it. */
+export function reviewerText(claim: string): string {
+  return `@${claim}`;
+}
 
 /** `waiting for review · v2`, with ` · with @review-lead` while a reviewer holds the review claim. */
 export function proposalStateText(

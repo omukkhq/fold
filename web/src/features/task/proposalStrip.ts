@@ -1,5 +1,6 @@
 import type { TaskDetail } from "@/api/tasks";
 import { hasKind } from "@/features/board/attention";
+import { reviewerText } from "./text";
 
 export interface ProposalStrip {
   proposal: string;
@@ -13,11 +14,6 @@ export interface ProposalStrip {
 
 function files(count: number): string {
   return `${String(count)} ${count === 1 ? "file" : "files"}`;
-}
-
-/** The reviewer as the lead and the state text name them. */
-export function reviewerText(claim: string): string {
-  return `@${claim}`;
 }
 
 /**

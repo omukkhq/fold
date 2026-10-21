@@ -55,11 +55,19 @@ describe("the proposal strip of the task dialog", () => {
     const link = screen.getByRole("link", { name: "Go to proposal" });
     expect(link.getAttribute("href")).toBe("/p/demo/proposals/P-7");
     expect(screen.getByText("P-7 v2 waits for your review")).toBeTruthy();
+    expect(screen.getByLabelText("Proposal").className).toContain(
+      "bg-secondary-soft",
+    );
   });
 
   it("is neutral while a reviewer holds the version", async () => {
-    await mount(taskView("T-1", { proposal }));
-    expect(screen.getByText("P-7 v2 waits for a reviewer")).toBeTruthy();
+    await mount(
+      taskView("T-1", {
+        proposal: { ...proposal, review_claim: "review-lead" },
+      }),
+    );
+    expect(screen.getByText("P-7 v2 is with @review-lead")).toBeTruthy();
+    expect(screen.getByLabelText("Proposal").className).toContain("bg-sunken");
   });
 
   it("is absent without an open proposal", async () => {

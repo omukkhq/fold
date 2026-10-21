@@ -75,7 +75,7 @@ describe("proposalStrip", () => {
     ).toBe("");
   });
 
-  it("is neutral while a reviewer agent has the version", () => {
+  it("waits for any reviewer while no reviewer holds the review claim", () => {
     expect(proposalStrip(taskView("T-1", { proposal }))).toEqual({
       proposal: "P-7",
       lead: "P-7 v2 waits for a reviewer",
