@@ -21,10 +21,12 @@ use crate::services::events::{EventBuffer, EventBus};
 use crate::services::fired;
 
 mod asks;
+mod forward;
 mod inbox;
 mod threads;
 
 pub use asks::DismissScope;
+pub(crate) use forward::forward_in_tx;
 pub(crate) use inbox::record_pushed;
 pub use inbox::{InboxItem, unread_count};
 pub use threads::{
@@ -79,6 +81,8 @@ pub struct RecipientView {
     pub pushed_at: Option<Timestamp>,
     /// Whether a notice to the recipient's agent would reach one of its sessions now; `None` for a human, for an agent without a connected session, and for every recipient of a service without the project's push targets.
     pub reachable: Option<bool>,
+    /// The lead fold sent the message on to because the recipient, a stopped task worker, could not start to answer it; the sender itself when the sender is that lead.
+    pub forwarded_to: Option<WorkerName>,
 }
 
 /// A message with public ids only.
@@ -112,6 +116,7 @@ fn recipient_view(row: RecipientRow) -> RecipientView {
         acknowledged_at: row.acked_at,
         pushed_at: row.pushed_at,
         reachable: None,
+        forwarded_to: row.forwarded_to,
     }
 }
 
@@ -523,6 +528,7 @@ async fn write_message(
                 acknowledged_at: None,
                 pushed_at: None,
                 reachable: None,
+                forwarded_to: None,
             })
             .collect(),
         choices,

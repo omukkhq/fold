@@ -1,5 +1,6 @@
 import { PersonList, PersonName } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { ArrowRight, Send, SquareKanban } from "lucide-react";
@@ -24,11 +25,13 @@ import {
   toBottom,
 } from "./follow";
 import { deliveryLines, recipientActors } from "./delivery";
+import { workersQuery } from "@/api/queries";
 import { replyPlaceholder } from "./filters";
 import { MarkAnswered } from "./MarkAnswered";
 import { threadCanMarkAnswered } from "./answered";
 import { MessageBody } from "./MessageBody";
 import { chosenAnswers, isQuestion } from "./question";
+import { replyAgents, stoppedReplyNote, stoppedTaskWorkers } from "./stopped";
 import {
   QuestionBadge,
   QuestionChoices,
@@ -48,6 +51,11 @@ interface ThreadPanelProps {
 export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
   const last = thread.messages.at(-1);
   const chosen = chosenAnswers(thread);
+  const workers = useQuery(workersQuery(slug));
+  const stoppedNote = stoppedReplyNote(
+    replyAgents(thread),
+    stoppedTaskWorkers(workers.data?.workers),
+  );
   const {
     control,
     handleSubmit,
@@ -238,6 +246,9 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
             Send
           </Button>
         </div>
+        {stoppedNote === null ? null : (
+          <p className="text-meta text-text-faint">{stoppedNote}</p>
+        )}
         {errors.body ? (
           <p className="text-meta font-medium text-danger">
             {errors.body.message}

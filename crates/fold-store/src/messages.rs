@@ -47,6 +47,8 @@ pub struct RecipientRow {
     pub acked_at: Option<Timestamp>,
     /// The first time a notice about the message reached the recipient's agent.
     pub pushed_at: Option<Timestamp>,
+    /// The worker fold sent the message on to because this recipient, a stopped task worker, could not start to answer it.
+    pub forwarded_to: Option<WorkerName>,
 }
 
 /// A stored message with its recipients in the order they were written.
@@ -391,6 +393,143 @@ pub async fn mark_pushed(
     .execute(tx.conn())
     .await?;
     Ok(done.rows_affected())
+}
+
+/// A message to a stopped or failed task worker that it has not read, that no notice reached and that fold has not sent on: the worker must start again to answer it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwedMessage {
+    /// The recipient task worker's agent.
+    pub agent: AgentName,
+    pub message: MessageId,
+    pub thread: MessageId,
+    pub task: Option<TaskId>,
+    pub sender: Sender,
+}
+
+/// Every [`OwedMessage`] in message number order. Only rows addressed to the agent or to one of its workers by name count, so a message to a tag or to every agent starts no stopped worker, and fold's own messages never do.
+pub async fn owed_to_stopped(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<OwedMessage>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT DISTINCT g.name AS "agent!: String", m.number AS "number!: i64",
+                  m.thread_id AS "thread!: i64", t.number AS "task?: i64", m.sender_kind,
+                  sw.name AS "worker?: String", m.sender_human
+           FROM message_recipients r
+           JOIN messages m ON m.id = r.message_id
+           JOIN workers k ON k.id = r.worker_id
+           JOIN agents g ON g.id = k.agent_id
+           JOIN worker_processes p ON p.agent_id = k.agent_id
+           LEFT JOIN workers sw ON sw.id = m.sender_worker_id
+           LEFT JOIN tasks t ON t.id = m.task_id
+           WHERE p.role = 'task_worker' AND p.state IN ('stopped', 'failed')
+             AND r.addressed_as IN ('agent', 'worker') AND m.sender_kind <> 'fold'
+             AND r.delivered_at IS NULL AND r.acked_at IS NULL AND r.pushed_at IS NULL
+             AND r.forwarded_to IS NULL
+           ORDER BY m.number, g.name"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let sender = match (row.sender_kind.as_str(), row.worker, row.sender_human) {
+                ("worker", Some(worker), None) => Sender::Worker(
+                    WorkerName::parse(&worker).map_err(|_| StoreError::Corrupt("workers.name"))?,
+                ),
+                ("human", None, Some(name)) => Sender::Human(
+                    HumanName::parse(&name)
+                        .map_err(|_| StoreError::Corrupt("messages.sender_human"))?,
+                ),
+                _ => return Err(StoreError::Corrupt("messages.sender_kind")),
+            };
+            Ok(OwedMessage {
+                agent: AgentName::parse(&row.agent)
+                    .map_err(|_| StoreError::Corrupt("agents.name"))?,
+                message: message_id(row.number, "messages.number")?,
+                thread: message_id(row.thread, "messages.thread_id")?,
+                task: row.task.map(task_id).transpose()?,
+                sender,
+            })
+        })
+        .collect()
+}
+
+/// Records on `agent`'s rows of `message` that fold sent the message on to `to`, where no forward is recorded yet, and returns how many rows it set.
+pub async fn mark_forwarded(
+    tx: &mut WriteTx,
+    message: MessageId,
+    agent: &AgentName,
+    to: &WorkerName,
+    now: Timestamp,
+) -> Result<u64, StoreError> {
+    let message = message.to_db();
+    let agent = agent.as_str();
+    let to_agent = to.agent();
+    let to_agent = to_agent.as_str();
+    let to = to.as_str();
+    let now = now.as_millis();
+    let done = sqlx::query!(
+        "UPDATE message_recipients
+         SET forwarded_to = (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id
+                             WHERE a.name = ?4 AND w.name = ?3),
+             forwarded_at = ?1
+         WHERE forwarded_to IS NULL
+           AND message_id = (SELECT id FROM messages WHERE number = ?2)
+           AND worker_id IN (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id
+                             WHERE a.name = ?5)",
+        now,
+        message,
+        to,
+        to_agent,
+        agent
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(done.rows_affected())
+}
+
+/// Whether `worker` has a row of `message`.
+pub async fn is_recipient(
+    conn: &mut SqliteConnection,
+    message: MessageId,
+    worker: &WorkerName,
+) -> Result<bool, StoreError> {
+    let message = message.to_db();
+    let agent = worker.agent();
+    let agent = agent.as_str();
+    let worker = worker.as_str();
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM message_recipients r
+               JOIN workers w ON w.id = r.worker_id
+               JOIN agents a ON a.id = w.agent_id
+               WHERE r.message_id = (SELECT id FROM messages WHERE number = ?1)
+                 AND a.name = ?2 AND w.name = ?3
+           ) AS "found!: bool""#,
+        message,
+        agent,
+        worker
+    )
+    .fetch_one(conn)
+    .await?)
+}
+
+/// How many rows of `agent`'s workers no inbox has returned yet.
+pub async fn undelivered_count(
+    executor: impl SqliteExecutor<'_>,
+    agent: &AgentName,
+) -> Result<u64, StoreError> {
+    let agent = agent.as_str();
+    let count = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!: i64"
+           FROM message_recipients r
+           JOIN workers w ON w.id = r.worker_id
+           JOIN agents a ON a.id = w.agent_id
+           WHERE a.name = ? AND r.delivered_at IS NULL AND r.acked_at IS NULL"#,
+        agent
+    )
+    .fetch_one(executor)
+    .await?;
+    u64::try_from(count).map_err(|_| StoreError::Corrupt("message_recipients"))
 }
 
 /// Acknowledges the worker's row of `message`, or with `up_to` every unacknowledged row of the worker up to that number, and returns the numbers it changed in order. `None` when the worker has no row for `message`; a row acknowledged before keeps its time.
@@ -844,10 +983,11 @@ async fn with_recipients(
         .map_err(|_| StoreError::Invalid("message numbers"))?;
     let recipients = sqlx::query!(
         r#"SELECT m.number, w.name AS "worker?: String", r.human, r.addressed_as,
-                  r.delivered_at, r.acked_at, r.pushed_at
+                  r.delivered_at, r.acked_at, r.pushed_at, fw.name AS "forwarded_to?: String"
            FROM message_recipients r
            JOIN messages m ON m.id = r.message_id
            LEFT JOIN workers w ON w.id = r.worker_id
+           LEFT JOIN workers fw ON fw.id = r.forwarded_to
            WHERE m.number IN (SELECT value FROM json_each(?))
            ORDER BY m.number, r.id"#,
         numbers
@@ -884,6 +1024,12 @@ async fn with_recipients(
             pushed_at: row
                 .pushed_at
                 .map(|millis| time(millis, "message_recipients.pushed_at"))
+                .transpose()?,
+            forwarded_to: row
+                .forwarded_to
+                .map(|name| {
+                    WorkerName::parse(&name).map_err(|_| StoreError::Corrupt("workers.name"))
+                })
                 .transpose()?,
         });
     }

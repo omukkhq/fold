@@ -20,11 +20,16 @@ import { controlClasses } from "@/components/form/Field";
 import { MarkAnswered } from "@/features/messages/MarkAnswered";
 import { taskCanMarkAnswered } from "@/features/messages/answered";
 import { MessageBody } from "@/features/messages/MessageBody";
+import {
+  stoppedReplyNote,
+  stoppedTaskWorkers,
+} from "@/features/messages/stopped";
+import { workersQuery } from "@/api/queries";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { MentionTextarea } from "@/mentions/MentionTextarea";
 import { threadPath } from "./links";
-import { recipientOptions } from "./recipients";
+import { feedbackReaders, recipientOptions } from "./recipients";
 import { SectionHead, submit, WriteError } from "./parts";
 import { feedbackSchema, type FeedbackForm } from "./schemas";
 import {
@@ -76,6 +81,8 @@ function FeedbackBox({
   const id = useId();
   const queryClient = useQueryClient();
   const targets = useQuery(messageTargetsQuery(slug));
+  const workers = useQuery(workersQuery(slug));
+  const stopped = stoppedTaskWorkers(workers.data?.workers);
   // The sent message joins the list before the box clears, so the write stays pending until the list is read again.
   const write = useTaskWrite(
     slug,
@@ -93,6 +100,7 @@ function FeedbackBox({
     defaultValues: { to: fallback ? recipientValue(fallback) : "", body: "" },
   });
   const to = parseRecipient(useWatch({ control: form.control, name: "to" }));
+  const stoppedNote = stoppedReplyNote(feedbackReaders(to, holder), stopped);
   const errors = form.formState.errors;
   return (
     <form
@@ -124,11 +132,11 @@ function FeedbackBox({
           id={`${id}-to`}
           disabled={write.isPending}
           aria-invalid={errors.to ? true : undefined}
-          className={cn(controlClasses, focusRing, "w-auto shrink-0")}
+          className={cn(controlClasses, focusRing, "w-auto max-w-1/2 shrink-0")}
           {...form.register("to")}
         >
           {holder === null ? <option value="">Choose a reader</option> : null}
-          {recipientOptions(holder, targets.data).map((option) => (
+          {recipientOptions(holder, targets.data, stopped).map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
             </option>
@@ -166,6 +174,9 @@ function FeedbackBox({
           Send
         </Button>
       </div>
+      {stoppedNote === null ? null : (
+        <p className="text-meta text-text-faint">{stoppedNote}</p>
+      )}
       {(errors.to?.message ?? errors.body?.message) ? (
         <p className="text-meta font-medium text-danger">
           {errors.to?.message ?? errors.body?.message}
