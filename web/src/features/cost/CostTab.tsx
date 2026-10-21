@@ -1,7 +1,7 @@
 import * as RadixTooltip from "@radix-ui/react-tooltip";
 import { useQuery } from "@tanstack/react-query";
 import { CircleDollarSign, Info, RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { projectCostQuery, type ProjectCost } from "@/api/cost";
 import { apiErrorCode } from "@/api/errors";
 import { HrefLink } from "@/app/HrefLink";
@@ -37,6 +37,7 @@ import {
   showsTick,
   taskRows,
   type TokenPart,
+  type TokensCard,
   tokensCard,
   tokensText,
   workerRows,
@@ -134,7 +135,12 @@ function CostContent({
             </span>
             <span className="text-meta text-text-muted">{tile.detail}</span>
             <span className="text-meta text-text-muted tabular-nums">
-              {tile.tokens}
+              {tile.tokens.map((part, at) => (
+                <Fragment key={part}>
+                  {at > 0 ? " · " : null}
+                  <span className="whitespace-nowrap">{part}</span>
+                </Fragment>
+              ))}
             </span>
           </li>
         ))}
@@ -254,7 +260,7 @@ const TOKEN_FILL: Record<TokenPart["key"], string> = {
   cache_read: "bg-primary",
   cache_write: "bg-primary-muted",
   output: "bg-secondary",
-  input: "bg-border",
+  input: "bg-text-faint",
 };
 
 function TokensPanel({ view }: { view: ProjectCost }) {
@@ -267,6 +273,20 @@ function TokensPanel({ view }: { view: ProjectCost }) {
           {card.total}
         </span>
       </div>
+      {card.cacheLine === null ? (
+        <p className="text-bar text-text-muted">
+          No turn in this range reported its tokens.
+        </p>
+      ) : (
+        <TokenParts card={card} />
+      )}
+    </section>
+  );
+}
+
+function TokenParts({ card }: { card: TokensCard }) {
+  return (
+    <>
       <div
         aria-hidden="true"
         className="flex h-6 gap-2 overflow-hidden rounded-full bg-sunken"
@@ -298,7 +318,7 @@ function TokensPanel({ view }: { view: ProjectCost }) {
         ))}
       </dl>
       <p className="text-meta text-text-muted">{card.cacheLine}</p>
-    </section>
+    </>
   );
 }
 

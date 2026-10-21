@@ -47,25 +47,25 @@ describe("costTiles", () => {
         label: "Total",
         amount: "$10.00",
         detail: "since Oct 19 · 40 turns",
-        tokens: "2.0M tokens · 160.0k output",
+        tokens: ["2.0M tokens", "160.0k output"],
       },
       {
         label: "Task workers",
         amount: "$6.00",
         detail: "60% · 2 workers",
-        tokens: "1.2M tokens · 96.0k output",
+        tokens: ["1.2M tokens", "96.0k output"],
       },
       {
         label: "Reviews",
         amount: "$2.00",
         detail: "20% · 2 workers",
-        tokens: "400.0k tokens · 32.0k output",
+        tokens: ["400.0k tokens", "32.0k output"],
       },
       {
         label: "Leads",
         amount: "$2.00",
         detail: "20% · 1 worker",
-        tokens: "400.0k tokens · 32.0k output",
+        tokens: ["400.0k tokens", "32.0k output"],
       },
     ]);
   });
@@ -365,7 +365,7 @@ describe("tokens", () => {
       }),
     );
     expect(none.parts.every((part) => part.fill === 0)).toBe(true);
-    expect(none.cacheLine).toBe("0% of the input came from the prompt cache");
+    expect(none.cacheLine).toBeNull();
   });
 });
 

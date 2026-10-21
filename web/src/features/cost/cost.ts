@@ -56,9 +56,12 @@ export function tokensText(count: number): string {
   return `${(Math.round(count / 100_000) / 10).toFixed(1)}M`;
 }
 
-/** `1.2M tokens · 98.0k output`. */
-function tokensLine(tokens: TokenCounts): string {
-  return `${tokensText(tokens.total)} tokens · ${tokensText(tokens.output)} output`;
+/** `1.2M tokens` and `98.0k output`. */
+function tokensLine(tokens: TokenCounts): string[] {
+  return [
+    `${tokensText(tokens.total)} tokens`,
+    `${tokensText(tokens.output)} output`,
+  ];
 }
 
 const NO_TOKENS: TokenCounts = {
@@ -88,8 +91,8 @@ export interface CostTile {
   label: string;
   amount: string;
   detail: string;
-  /** Its tokens and their output, such as `1.2M tokens · 98.0k output`. */
-  tokens: string;
+  /** Its tokens and their output, such as `1.2M tokens` and `98.0k output`, which a narrow tile wraps between, never inside. */
+  tokens: string[];
 }
 
 /** The four totals: everything, then the task workers, the reviews (the review lead and the reviewers) and the area leads, each with its share and its workers. */
@@ -435,8 +438,8 @@ export interface TokensCard {
   total: string;
   /** Cache reads, cache writes, output and input, in the order the bar draws them. */
   parts: TokenPart[];
-  /** How much of the input the prompt cache held, such as `92% of the input came from the prompt cache`. */
-  cacheLine: string;
+  /** How much of the input the prompt cache held, such as `92% of the input came from the prompt cache`; `null` while no token is counted, when the card shows its empty state. */
+  cacheLine: string | null;
 }
 
 /** The tokens of the range: the total, its four parts and how much of the input came from the prompt cache. The input is everything the model read: the cache reads and writes and the input the cache did not hold. */
@@ -461,7 +464,10 @@ export function tokensCard(view: ProjectCost): TokensCard {
       part("output", "Output", tokens.output),
       part("input", "Input", tokens.input),
     ],
-    cacheLine: `${shareText(tokens.cache_read, read)} of the input came from the prompt cache`,
+    cacheLine:
+      tokens.total === 0
+        ? null
+        : `${shareText(tokens.cache_read, read)} of the input came from the prompt cache`,
   };
 }
 

@@ -532,9 +532,8 @@ describe("AgentsScreen", () => {
     expect(within(totals).getByText("60% · 2 workers")).toBeTruthy();
     const since = calls.find((call) => call.path === `${BASE}/cost`)?.search;
     expect(Number(since?.get("since"))).toBeLessThan(Date.now());
-    expect(
-      within(totals).getByText("2.0M tokens · 160.0k output"),
-    ).toBeTruthy();
+    expect(within(totals).getByText("2.0M tokens")).toBeTruthy();
+    expect(within(totals).getByText("160.0k output")).toBeTruthy();
     expect(screen.getByRole("region", { name: "Cost by day" })).toBeTruthy();
     const tokens = screen.getByRole("region", { name: "Tokens" });
     expect(within(tokens).getByText("Cache read")).toBeTruthy();
@@ -574,6 +573,23 @@ describe("AgentsScreen", () => {
       { tab: "cost" },
     ]);
     expect(searches.at(-1)).toEqual({});
+  });
+
+  it("shows the Tokens panel's empty state while no turn reported its tokens", async () => {
+    const view = projectCost(localDayStart(Date.now()));
+    stubFetch(
+      routes({
+        [`GET ${BASE}/cost`]: {
+          body: { ...view, total: { ...view.total, tokens: tokens(0) } },
+        },
+      }),
+    );
+    await setup([], team, { tab: "cost" });
+    const panel = await screen.findByRole("region", { name: "Tokens" });
+    expect(
+      within(panel).getByText("No turn in this range reported its tokens."),
+    ).toBeTruthy();
+    expect(within(panel).queryByText(/prompt cache/)).toBeNull();
   });
 
   it("says when the range has no cost and shows a failed read with its code", async () => {
