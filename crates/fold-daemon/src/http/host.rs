@@ -34,7 +34,7 @@ pub async fn require_listen_host(
         )
         .into_response();
     }
-    match refusal(state.listen, request.method(), request.headers()) {
+    match refusal(state.listen.ip(), request.method(), request.headers()) {
         None => next.run(request).await,
         Some(header) => ApiError(
             FoldError::new(

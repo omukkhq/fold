@@ -1853,10 +1853,18 @@ pub async fn deleted_project_slug(
 
 /// The registered root of the project that holds `cwd`, read from the host registry without a running daemon.
 pub async fn root_for_dir_on_host(host: &HostPaths, cwd: &Path) -> Result<PathBuf, ProjectError> {
+    Ok(PathBuf::from(row_for_dir_on_host(host, cwd).await?.root))
+}
+
+/// The registry row of the project that holds `cwd`, read from the host registry without a running daemon.
+pub async fn row_for_dir_on_host(
+    host: &HostPaths,
+    cwd: &Path,
+) -> Result<projects::ProjectRow, ProjectError> {
     let registry = Store::open_registry(&host.registry_db()).await?;
     let row = row_for_dir(&registry, cwd).await;
     registry.close().await?;
-    Ok(PathBuf::from(row?.root))
+    row
 }
 
 /// The registry row of the human `name`, inserted on first use with `created_at` from `clock`. A known human costs one read and no write. Humans belong to the host, so this appends no project event.

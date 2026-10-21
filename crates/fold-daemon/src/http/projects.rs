@@ -19,6 +19,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list, open))
         .routes(routes!(list_humans))
+        .routes(routes!(show_daemon))
         .routes(routes!(show))
         .routes(routes!(show_git, enable_git))
         .routes(routes!(collect_garbage))
@@ -191,6 +192,33 @@ pub async fn list_humans(State(state): State<AppState>) -> Result<Json<HumanList
     Ok(Json(HumanList {
         humans: humans.iter().map(ToString::to_string).collect(),
     }))
+}
+
+/// What the running daemon is, for `fld` to report its status.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DaemonView {
+    /// The fold version the daemon runs, such as `0.3.0`.
+    pub version: String,
+    /// The address and port the HTTP listener is bound to, such as `127.0.0.1:7420`.
+    pub listen: String,
+}
+
+/// The daemon's version and the address its web interface listens on. Socket only, so a command learns the port the daemon got instead of the one its configuration asked for.
+#[utoipa::path(
+    get,
+    path = "/api/v1/daemon",
+    operation_id = "show_daemon",
+    responses(
+        (status = 200, description = "The running daemon", body = DaemonView),
+        (status = 404, description = "Not on the socket", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn show_daemon(_socket: SocketOnly, State(state): State<AppState>) -> Json<DaemonView> {
+    Json(DaemonView {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        listen: state.listen.to_string(),
+    })
 }
 
 /// One open project.

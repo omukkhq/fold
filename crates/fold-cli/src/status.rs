@@ -1,0 +1,567 @@
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use fold_cli::daemon_client::{self, Response};
+use fold_daemon::services::projects::row_for_dir_on_host;
+
+use crate::doctor::run_briefly;
+use crate::platform::{Host, LAUNCH_AGENT_LABEL};
+use crate::serve::{self, Dirs};
+use crate::{init, output};
+
+/// How long the probe of the daemon and each query of the service manager may take, so a bare `fld` answers at once even when the daemon or the manager hangs.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The socket-only route that names the daemon's version and listen address.
+const DAEMON_ROUTE: &str = "/api/v1/daemon";
+
+/// What the probe of the socket found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Daemon {
+    /// fld knows no socket to probe; the text says why.
+    NoSocket(String),
+    NotRunning,
+    /// Something accepts connections on the socket but gave no answer fld can read; the text says what went wrong.
+    Silent(String),
+    /// `version` and `listen` are `None` for a daemon older than the route that reports them.
+    Running {
+        version: Option<String>,
+        listen: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Manager {
+    Systemd,
+    Launchd,
+}
+
+/// The service that `fld setup` installed, and whether its manager runs it now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Service {
+    pub(crate) manager: Manager,
+    pub(crate) active: bool,
+}
+
+/// The fold project that holds the current folder, with the name and slug the host registry gives it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Project {
+    pub(crate) root: PathBuf,
+    pub(crate) registered: Option<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Status {
+    pub(crate) socket: Option<PathBuf>,
+    pub(crate) daemon: Daemon,
+    /// `None` when no service is installed.
+    pub(crate) service: Option<Service>,
+    pub(crate) project: Option<Project>,
+}
+
+/// Prints fold's status: the version line first, so a failed write ends the command before anything is probed, then the daemon, its service and the current project. A missing daemon is a status, never an error, and this never starts one.
+pub fn run(out: &mut impl Write) -> io::Result<()> {
+    output::line(out, &output::version_line())?;
+    let host = Host::from_env();
+    let status = gather(&host, std::env::current_dir().ok().as_deref());
+    for line in lines(&status, env!("CARGO_PKG_VERSION")) {
+        output::line(out, &line)?;
+    }
+    Ok(())
+}
+
+fn gather(host: &Host, cwd: Option<&Path>) -> Status {
+    let (socket, daemon) = match serve::socket_path(None, &host.dirs) {
+        Ok(Some(path)) => {
+            let path = std::path::absolute(&path).unwrap_or(path);
+            let daemon = probe(&path);
+            (Some(path), daemon)
+        }
+        Ok(None) => (
+            None,
+            Daemon::NoSocket("XDG_RUNTIME_DIR is not set and daemon.toml names no socket".into()),
+        ),
+        Err(error) => (None, Daemon::NoSocket(first_line(&error.to_string()))),
+    };
+    Status {
+        socket,
+        daemon,
+        service: service(host),
+        project: cwd.and_then(|cwd| project(&host.dirs, cwd)),
+    }
+}
+
+fn first_line(text: &str) -> String {
+    text.lines().next().unwrap_or_default().to_owned()
+}
+
+/// Asks the daemon on `socket` what it is, without a human and without starting one.
+fn probe(socket: &Path) -> Daemon {
+    let runtime = match serve::current_thread_runtime() {
+        Ok(runtime) => runtime,
+        Err(error) => return Daemon::Silent(format!("cannot start the async runtime: {error}")),
+    };
+    let answer = runtime.block_on(async {
+        tokio::time::timeout(PROBE_TIMEOUT, daemon_client::probe(socket, DAEMON_ROUTE)).await
+    });
+    match answer {
+        Ok(Ok(None)) => Daemon::NotRunning,
+        Ok(Ok(Some(response))) => running(&response),
+        Ok(Err(error)) => Daemon::Silent(error.to_string()),
+        Err(_) => Daemon::Silent(format!(
+            "no answer within {} seconds",
+            PROBE_TIMEOUT.as_secs()
+        )),
+    }
+}
+
+/// A daemon that refuses the route, or answers without the fields, is older than the route.
+fn running(response: &Response) -> Daemon {
+    let text = |key: &str| {
+        response
+            .is_success()
+            .then(|| response.body[key].as_str().map(str::to_owned))
+            .flatten()
+    };
+    Daemon::Running {
+        version: text("version"),
+        listen: text("listen"),
+    }
+}
+
+/// The installed service and whether it runs now, through the same files and managers as `fld setup` and `fld restart`, each query cut off after [`PROBE_TIMEOUT`].
+fn service(host: &Host) -> Option<Service> {
+    if host.platform.linux {
+        host.unit_path().filter(|unit| unit.is_file())?;
+        let active = host
+            .systemctl()
+            .and_then(|systemctl| {
+                run_briefly(
+                    &systemctl,
+                    &["--user", "is-active", "fold.service"],
+                    PROBE_TIMEOUT,
+                )
+            })
+            .is_some_and(|answer| answer.trim() == "active");
+        return Some(Service {
+            manager: Manager::Systemd,
+            active,
+        });
+    }
+    if host.platform.macos {
+        host.agent_path().filter(|agent| agent.is_file())?;
+        let target = format!("gui/{}/{LAUNCH_AGENT_LABEL}", host.uid);
+        let active = host
+            .launchctl()
+            .and_then(|launchctl| run_briefly(&launchctl, &["print", &target], PROBE_TIMEOUT))
+            .is_some_and(|answer| launchd_running(&answer));
+        return Some(Service {
+            manager: Manager::Launchd,
+            active,
+        });
+    }
+    None
+}
+
+/// `launchctl print` names a running agent's state as `state = running`.
+fn launchd_running(answer: &str) -> bool {
+    answer.lines().any(|line| line.trim() == "state = running")
+}
+
+/// The project at or above `cwd`, named as the host registry names it when the registry exists; a missing registry is not created.
+fn project(dirs: &Dirs, cwd: &Path) -> Option<Project> {
+    let cwd = std::fs::canonicalize(cwd).ok()?;
+    let root = init::project_root_at_or_above(&cwd)?;
+    let registered = init::host_paths(dirs)
+        .ok()
+        .filter(|host| host.registry_db().is_file())
+        .and_then(|host| {
+            let runtime = serve::current_thread_runtime().ok()?;
+            runtime.block_on(row_for_dir_on_host(&host, &root)).ok()
+        })
+        .map(|row| (row.name, row.slug));
+    Some(Project { root, registered })
+}
+
+fn service_name(manager: Manager) -> String {
+    match manager {
+        Manager::Systemd => "the systemd user service fold.service".to_owned(),
+        Manager::Launchd => format!("the launchd agent {LAUNCH_AGENT_LABEL}"),
+    }
+}
+
+/// The lines after the version line; `fld` is the version of this fld.
+pub(crate) fn lines(status: &Status, fld: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let running = matches!(status.daemon, Daemon::Running { .. });
+    match &status.daemon {
+        Daemon::NoSocket(reason) => {
+            lines.push(format!(
+                "daemon: fld cannot tell where its socket is: {reason}"
+            ));
+        }
+        Daemon::NotRunning => {
+            lines.push("daemon: not running; fld claude, fld serve or fld setup starts it".into());
+        }
+        Daemon::Silent(reason) => {
+            lines.push(format!(
+                "daemon: the socket accepts connections, but fld cannot read the answer: {reason}"
+            ));
+            lines.push("hint: run fld doctor".into());
+        }
+        Daemon::Running {
+            version: Some(version),
+            listen: Some(listen),
+        } => {
+            lines.push(format!(
+                "daemon: running fold {version}, web interface http://{listen}"
+            ));
+            if version != fld {
+                lines.push(format!(
+                    "hint: the daemon runs fold {version} and this fld is {fld}: run fld restart"
+                ));
+            }
+        }
+        Daemon::Running { .. } => {
+            lines.push(
+                "daemon: running a fold older than this fld, which does not report its version or address"
+                    .into(),
+            );
+            lines.push(format!(
+                "hint: run fld restart, so the daemon runs this fld {fld}"
+            ));
+        }
+    }
+    if let Some(socket) = &status.socket {
+        let note = if running || matches!(status.daemon, Daemon::Silent(_)) {
+            ""
+        } else {
+            ", where fld looks for the daemon"
+        };
+        lines.push(format!("socket: {}{note}", socket.display()));
+    }
+    lines.push(match status.service {
+        Some(Service {
+            manager,
+            active: true,
+        }) if running => format!("service: the daemon runs through {}", service_name(manager)),
+        Some(Service {
+            manager,
+            active: true,
+        }) => format!(
+            "service: {} is active, but no daemon answers on the socket",
+            service_name(manager)
+        ),
+        Some(Service {
+            manager,
+            active: false,
+        }) if running => format!(
+            "service: started by hand; {} is installed but not active",
+            service_name(manager)
+        ),
+        Some(Service {
+            manager,
+            active: false,
+        }) => format!(
+            "service: {} is installed but not active",
+            service_name(manager)
+        ),
+        None if running => {
+            "service: started by hand; fld setup installs a service that starts the daemon at login"
+                .into()
+        }
+        None => {
+            "service: none; fld setup installs a service that starts the daemon at login".into()
+        }
+    });
+    lines.push(match &status.project {
+        Some(Project {
+            root,
+            registered: Some((name, slug)),
+        }) => format!(
+            "project: {} ({slug}) in {}",
+            output::escape_control(name),
+            output::escape_control(&root.to_string_lossy())
+        ),
+        Some(Project {
+            root,
+            registered: None,
+        }) => format!(
+            "project: {}, which this host's registry does not list",
+            output::escape_control(&root.to_string_lossy())
+        ),
+        None => "project: none; this folder is in no fold project, and fld init makes one".into(),
+    });
+    lines.push("Run fld --help for commands".into());
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::platform::{Platform, Probe};
+
+    const SOCKET: &str = "/run/user/1000/fold/fold.sock";
+
+    fn status(daemon: Daemon, service: Option<Service>, project: Option<Project>) -> Status {
+        Status {
+            socket: Some(PathBuf::from(SOCKET)),
+            daemon,
+            service,
+            project,
+        }
+    }
+
+    fn running(version: &str) -> Daemon {
+        Daemon::Running {
+            version: Some(version.to_owned()),
+            listen: Some("127.0.0.1:7420".to_owned()),
+        }
+    }
+
+    fn app() -> Option<Project> {
+        Some(Project {
+            root: PathBuf::from("/home/ana/app"),
+            registered: Some(("App".to_owned(), "app".to_owned())),
+        })
+    }
+
+    #[test]
+    fn a_running_daemon_names_its_address_socket_service_and_the_project() {
+        let systemd = Service {
+            manager: Manager::Systemd,
+            active: true,
+        };
+        assert_eq!(
+            lines(&status(running("0.3.0"), Some(systemd), app()), "0.3.0"),
+            [
+                "daemon: running fold 0.3.0, web interface http://127.0.0.1:7420",
+                "socket: /run/user/1000/fold/fold.sock",
+                "service: the daemon runs through the systemd user service fold.service",
+                "project: App (app) in /home/ana/app",
+                "Run fld --help for commands",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_daemon_of_another_version_gets_the_restart_hint() {
+        let shown = lines(&status(running("0.2.0"), None, None), "0.3.0");
+        assert_eq!(
+            shown[..4],
+            [
+                "daemon: running fold 0.2.0, web interface http://127.0.0.1:7420",
+                "hint: the daemon runs fold 0.2.0 and this fld is 0.3.0: run fld restart",
+                "socket: /run/user/1000/fold/fold.sock",
+                "service: started by hand; fld setup installs a service that starts the daemon at login",
+            ]
+        );
+        let old = Daemon::Running {
+            version: None,
+            listen: None,
+        };
+        let shown = lines(&status(old, None, None), "0.3.0");
+        assert!(shown[0].contains("older than this fld"), "{shown:?}");
+        assert_eq!(
+            shown[1],
+            "hint: run fld restart, so the daemon runs this fld 0.3.0"
+        );
+    }
+
+    #[test]
+    fn a_missing_daemon_is_a_status_with_the_socket_fld_looks_at() {
+        let launchd = Service {
+            manager: Manager::Launchd,
+            active: false,
+        };
+        assert_eq!(
+            lines(&status(Daemon::NotRunning, Some(launchd), None), "0.3.0"),
+            [
+                "daemon: not running; fld claude, fld serve or fld setup starts it",
+                "socket: /run/user/1000/fold/fold.sock, where fld looks for the daemon",
+                "service: the launchd agent dev.omukk.fold is installed but not active",
+                "project: none; this folder is in no fold project, and fld init makes one",
+                "Run fld --help for commands",
+            ]
+        );
+        let active = Service {
+            manager: Manager::Systemd,
+            active: true,
+        };
+        assert_eq!(
+            lines(&status(Daemon::NotRunning, Some(active), None), "0.3.0")[2],
+            "service: the systemd user service fold.service is active, but no daemon answers on the socket"
+        );
+        let inactive = Service {
+            manager: Manager::Systemd,
+            active: false,
+        };
+        assert_eq!(
+            lines(&status(running("0.3.0"), Some(inactive), None), "0.3.0")[2],
+            "service: started by hand; the systemd user service fold.service is installed but not active"
+        );
+        let none = Status {
+            socket: None,
+            ..status(
+                Daemon::NoSocket("XDG_RUNTIME_DIR is not set".into()),
+                None,
+                None,
+            )
+        };
+        assert_eq!(
+            lines(&none, "0.3.0")[..2],
+            [
+                "daemon: fld cannot tell where its socket is: XDG_RUNTIME_DIR is not set",
+                "service: none; fld setup installs a service that starts the daemon at login",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_silent_daemon_names_the_reason_and_doctor() {
+        let shown = lines(
+            &status(
+                Daemon::Silent("no answer within 2 seconds".into()),
+                None,
+                None,
+            ),
+            "0.3.0",
+        );
+        assert_eq!(
+            shown[..3],
+            [
+                "daemon: the socket accepts connections, but fld cannot read the answer: no answer within 2 seconds",
+                "hint: run fld doctor",
+                "socket: /run/user/1000/fold/fold.sock",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unregistered_project_and_control_characters_in_its_name_are_shown_safely() {
+        let odd = Some(Project {
+            root: PathBuf::from("/home/ana/app"),
+            registered: Some(("A\u{1b}[2Jpp".to_owned(), "app".to_owned())),
+        });
+        assert_eq!(
+            lines(&status(Daemon::NotRunning, None, odd), "0.3.0")[3],
+            "project: A\\u{1b}[2Jpp (app) in /home/ana/app"
+        );
+        let unlisted = Some(Project {
+            root: PathBuf::from("/home/ana/app"),
+            registered: None,
+        });
+        assert_eq!(
+            lines(&status(Daemon::NotRunning, None, unlisted), "0.3.0")[3],
+            "project: /home/ana/app, which this host's registry does not list"
+        );
+    }
+
+    #[test]
+    fn the_answer_of_the_daemon_route_or_its_refusal_reads_as_a_running_daemon() {
+        let answer = Response {
+            status: 200,
+            body: json!({"version": "0.3.0", "listen": "127.0.0.1:7420"}),
+        };
+        assert_eq!(super::running(&answer), running("0.3.0"));
+        let refused = Response {
+            status: 404,
+            body: json!({"error": {"code": "not_found", "message": "no route"}}),
+        };
+        assert_eq!(
+            super::running(&refused),
+            Daemon::Running {
+                version: None,
+                listen: None
+            }
+        );
+    }
+
+    #[test]
+    fn launchd_counts_an_agent_whose_state_is_running() {
+        assert!(launchd_running(
+            "gui/501/dev.omukk.fold = {\n\tactive count = 1\n\tstate = running\n\tpid = 4242\n}\n"
+        ));
+        assert!(!launchd_running(
+            "gui/501/dev.omukk.fold = {\n\tstate = not running\n}\n"
+        ));
+    }
+
+    fn host(dir: &Path, linux: bool) -> Host {
+        Host {
+            dirs: Dirs {
+                home: Some(dir.to_owned()),
+                config_home: Some(dir.join("config")),
+                ..Dirs::default()
+            },
+            user: None,
+            uid: 501,
+            path: Some(dir.join("bin").into_os_string()),
+            platform: Platform {
+                linux,
+                macos: !linux,
+                file_modes: true,
+            },
+            probe: Probe::new(dir.join("root")),
+            names: crate::fold_name::Environment::default(),
+            claude: None,
+        }
+    }
+
+    fn tool(dir: &Path, name: &str, script: &str) {
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join(name), script).unwrap();
+        std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn the_service_is_installed_when_its_file_is_there_and_active_when_its_manager_says_so() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let linux = host(dir.path(), true);
+        assert_eq!(service(&linux), None);
+        let unit = dir.path().join("config/systemd/user/fold.service");
+        std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
+        std::fs::write(&unit, "[Service]\n").unwrap();
+        let inactive = Service {
+            manager: Manager::Systemd,
+            active: false,
+        };
+        assert_eq!(service(&linux), Some(inactive));
+        tool(
+            dir.path(),
+            "systemctl",
+            "#!/bin/sh\n[ \"$*\" = \"--user is-active fold.service\" ] && echo active\n",
+        );
+        assert_eq!(
+            service(&linux),
+            Some(Service {
+                active: true,
+                ..inactive
+            })
+        );
+
+        let macos = host(dir.path(), false);
+        assert_eq!(service(&macos), None);
+        let agent = dir.path().join("Library/LaunchAgents/dev.omukk.fold.plist");
+        std::fs::create_dir_all(agent.parent().unwrap()).unwrap();
+        std::fs::write(&agent, "<plist/>\n").unwrap();
+        tool(
+            dir.path(),
+            "launchctl",
+            "#!/bin/sh\n[ \"$*\" = \"print gui/501/dev.omukk.fold\" ] && printf '\\tstate = running\\n'\n",
+        );
+        assert_eq!(
+            service(&macos),
+            Some(Service {
+                manager: Manager::Launchd,
+                active: true,
+            })
+        );
+    }
+}

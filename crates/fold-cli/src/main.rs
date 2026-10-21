@@ -16,6 +16,7 @@ mod seed;
 mod serve;
 mod service;
 mod shell_env;
+mod status;
 mod token;
 
 use std::ffi::OsString;
@@ -176,7 +177,7 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::Dev(args)) => {
             seed::run(&args, &serve::Dirs::from_env(), out).map_err(Failure::Seed)
         }
-        None => output::line(out, &output::version_line()).map_err(Failure::Write),
+        None => status::run(out).map_err(Failure::Write),
     }
 }
 
@@ -293,10 +294,9 @@ mod tests {
     }
 
     #[test]
-    fn no_subcommand_prints_the_version_line() {
-        let (result, out) = run_with(&["fld"]);
-        assert!(result.is_ok());
-        assert_eq!(out, "fld 0.3.0\n");
+    fn no_subcommand_is_the_status() {
+        let cli = Cli::try_parse_from(["fld"]).unwrap();
+        assert!(cli.command.is_none());
     }
 
     #[test]

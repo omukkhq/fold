@@ -6,14 +6,6 @@ fn fold(args: &[&str]) -> io::Result<Output> {
 }
 
 #[test]
-fn bare_invocation_prints_the_version_line() -> io::Result<()> {
-    let output = fold(&[])?;
-    assert!(output.status.success());
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "fld 0.3.0\n");
-    Ok(())
-}
-
-#[test]
 fn version_flag_prints_the_version_line() -> io::Result<()> {
     let output = fold(&["--version"])?;
     assert!(output.status.success());

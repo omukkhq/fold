@@ -43,6 +43,7 @@ mod restart;
 mod seed_dev;
 mod service_install;
 mod shell_env;
+mod status;
 mod templates;
 mod token;
 mod transcript;

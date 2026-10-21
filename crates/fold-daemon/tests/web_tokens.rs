@@ -508,7 +508,7 @@ async fn no_log_line_or_error_carries_a_token_or_a_session_id() {
         projects: Projects::default(),
         clock: Arc::new(project.clock().clone()),
         assets: AssetSource::Embedded,
-        listen: "0.0.0.0".parse().unwrap(),
+        listen: "0.0.0.0:0".parse().unwrap(),
         session_lifetime: Duration::from_secs(3600),
     });
     let token = create_web_token(

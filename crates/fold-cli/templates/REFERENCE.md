@@ -137,6 +137,7 @@ The user runs these in a terminal; agents never do. Commands that act on a proje
 
 Start and set up:
 
+- `fld` with no command: print fold's status: the fld version, whether the daemon runs, its web address and socket, whether a service runs it, and the project of the current folder. It never starts the daemon, and it names `fld restart` when the daemon runs another version.
 - `fld init [DIR] [--name NAME] [--with-git] [--git-name NAME --git-email EMAIL]`: make the folder a fold project and register it. Without `DIR` the current folder; a new `DIR` is created. `--with-git` turns Git sync on: in a Git repository its `HEAD` commit becomes the genesis, else fold creates `.git`, and every revision becomes a commit on the `[git]` branch. `fld init --refresh [DIR]` rewrites fold's Claude Code files (`AGENTS.md` or `CLAUDE.md` section, the skill and this file) in an existing project.
 - `fld setup [--no-start] [--claude] [--remove]`: install the service that starts the daemon at login (a systemd user unit on Linux, a launchd agent on macOS) and start it, then offer to add fold to the user's Claude Code config. `--claude` only adds fold to Claude Code; `--remove` takes fold's entries out of it.
 - `fld claude [--name NAME] [-- ARGS]`: start the daemon when needed and continue the main agent's last session, or start one. `fld new` (also `fld new claude`) starts a new main session.

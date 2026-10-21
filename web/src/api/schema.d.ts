@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/v1/daemon": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The daemon's version and the address its web interface listens on. Socket only, so a command learns the port the daemon got instead of the one its configuration asked for. */
+        get: operations["show_daemon"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/hooks/edit": {
         parameters: {
             query?: never;
@@ -1947,6 +1964,13 @@ export interface components {
             parent?: string | null;
             /** @description One line, not empty. */
             title: string;
+        };
+        /** @description What the running daemon is, for `fld` to report its status. */
+        DaemonView: {
+            /** @description The address and port the HTTP listener is bound to, such as `127.0.0.1:7420`. */
+            listen: string;
+            /** @description The fold version the daemon runs, such as `0.3.0`. */
+            version: string;
         };
         DefineAreaBody: {
             /** @description What every worker of the area must know about its kind of work, at most 8000 characters. */
@@ -4315,6 +4339,62 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    show_daemon: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The running daemon */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DaemonView"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     hook_edit: {
         parameters: {
             query?: never;
