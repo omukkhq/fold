@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::messages::resolve;
+use fold_core::tasks::areas::feedback_to;
 use fold_core::{
     Actor, Address, AddressedAs, AgentActor, AgentName, Choice, Clock, EventError, FoldError,
     HumanName, IdKind, MessageBody, MessageChoices, MessageId, NewEvent, ProposalId, Recipient,
     RequestId, Sender, Target, TaskId, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::messages::{self, MessageHead, MessageLines, MessageRow, NewMessage, RecipientRow};
-use fold_store::tasks::claims;
 use fold_store::{Store, StoreError, WriteTx, agents, counters, projects, reviews, tasks};
 use serde_json::json;
 use thiserror::Error;
@@ -21,10 +21,12 @@ use crate::services::events::{EventBuffer, EventBus};
 use crate::services::fired;
 
 mod asks;
+mod forward;
 mod inbox;
 mod threads;
 
 pub use asks::DismissScope;
+pub(crate) use forward::forward_in_tx;
 pub(crate) use inbox::record_pushed;
 pub use inbox::{InboxItem, unread_count};
 pub use threads::{
@@ -79,6 +81,8 @@ pub struct RecipientView {
     pub pushed_at: Option<Timestamp>,
     /// Whether a notice to the recipient's agent would reach one of its sessions now; `None` for a human, for an agent without a connected session, and for every recipient of a service without the project's push targets.
     pub reachable: Option<bool>,
+    /// The lead fold sent the message on to because the recipient, a stopped worker, could not start to answer it; the sender itself when the sender is that lead.
+    pub forwarded_to: Option<WorkerName>,
 }
 
 /// A message with public ids only.
@@ -114,6 +118,7 @@ fn recipient_view(row: RecipientRow) -> RecipientView {
         acknowledged_at: row.acked_at,
         pushed_at: row.pushed_at,
         reachable: None,
+        forwarded_to: row.forwarded_to,
     }
 }
 
@@ -341,7 +346,7 @@ impl MessageService {
         Ok(view)
     }
 
-    /// A human's feedback on `task`, linked to it. It goes to `to` when given, otherwise to the worker holding the task's implementation claim.
+    /// A human's feedback on `task`, linked to it. It goes to the task's readers only: to `to` when every entry names one, otherwise to the first reader, the claim holder when there is one.
     pub async fn send_feedback(
         &self,
         actor: &Actor,
@@ -358,15 +363,8 @@ impl MessageService {
             .store
             .write(async |tx| {
                 require_task(tx, task).await?;
-                let to = match to {
-                    Some(to) => to,
-                    None => {
-                        let holder = claims::unreleased_for_task(tx.conn(), task)
-                            .await?
-                            .ok_or_else(|| no_claim_holder(task))?;
-                        vec![Address::of_worker(&holder.worker)]
-                    }
-                };
+                let readers = crate::services::tasks::readers_in(tx.conn(), task).await?;
+                let to = feedback_to(task, to, &readers)?;
                 let directory = messages::directory(tx.conn(), humans).await?;
                 let recipients = resolve(&to, &directory, &sender).map_err(FoldError::from)?;
                 let draft = Draft {
@@ -533,6 +531,7 @@ async fn write_message(
                 acknowledged_at: None,
                 pushed_at: None,
                 reachable: None,
+                forwarded_to: None,
             })
             .collect(),
         choices,
@@ -700,13 +699,4 @@ fn message_not_found(message: MessageId) -> FoldError {
         format!("{message} does not exist"),
     )
     .with_hint("call get_inbox to see your messages")
-}
-
-fn no_claim_holder(task: TaskId) -> FoldError {
-    FoldError::new(
-        codes::RECIPIENT_NOT_FOUND,
-        format!("{task} has no claim holder to receive the feedback"),
-    )
-    .with_details([("task", json!(task.to_string()))])
-    .with_hint("choose a recipient for the feedback")
 }

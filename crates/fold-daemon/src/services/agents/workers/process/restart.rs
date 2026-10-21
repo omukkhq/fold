@@ -58,6 +58,7 @@ impl Supervisor {
         tokio::spawn(self.clone().resume_pending());
         tokio::spawn(self.clone().resume_owed_send_backs());
         tokio::spawn(self.clone().resume_owed_gate_runs());
+        tokio::spawn(self.clone().resume_owed_messages());
         Ok(())
     }
 
@@ -182,6 +183,7 @@ impl Supervisor {
         tokio::spawn(self.clone().resume_pending());
         tokio::spawn(self.clone().resume_owed_send_backs());
         tokio::spawn(self.clone().resume_owed_gate_runs());
+        tokio::spawn(self.clone().resume_owed_messages());
         Ok(())
     }
 

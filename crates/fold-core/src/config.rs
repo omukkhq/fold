@@ -629,7 +629,7 @@ mod tests {
             }
         );
         let reviewer = defaults.role(Role::Reviewer);
-        assert_eq!(reviewer.cache_ttl, CacheTtl::OneHour);
+        assert_eq!(reviewer.cache_ttl, CacheTtl::FiveMinutes);
         assert_eq!(reviewer.idle_minutes, Some(DEFAULT_IDLE_MINUTES));
         assert_eq!(reviewer.mcp, None);
         let lead = defaults.role(Role::ReviewLead);

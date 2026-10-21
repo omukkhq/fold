@@ -5,6 +5,8 @@
  */
 export const keys = {
   projects: () => ["@projects"] as const,
+  /** The list read on the viewer's day that starts at `day`, under the projects prefix: its cost of today and of the last seven days moves at midnight. */
+  projectList: (day: number) => ["@projects", day] as const,
   session: () => ["@session"] as const,
   humans: () => ["@humans"] as const,
   project: (slug: string) => [slug, "project"] as const,
@@ -59,8 +61,9 @@ export const keys = {
   agents: (slug: string) => [slug, "agents"] as const,
   /** Under the agents prefix, so every event that invalidates the agents also refreshes the agent chips of the top bar. */
   agentBar: (slug: string) => [slug, "agents", "bar"] as const,
-  /** Under the agents prefix, so the feedback box learns a new agent or tag with the agent list. */
-  messageTargets: (slug: string) => [slug, "agents", "targets"] as const,
+  /** Under the agents prefix, so the feedback box's readers refresh with the agents and workers. */
+  taskReaders: (slug: string, task: string) =>
+    [slug, "agents", "readers", task] as const,
   labels: (slug: string) => [slug, "labels"] as const,
   messages: (slug: string) => [slug, "messages"] as const,
   taskMessages: (slug: string, task: string) =>
@@ -100,6 +103,13 @@ export const keys = {
   /** Each worker's latest step, written only by the event stream. */
   workerSteps: (slug: string) => [slug, "worker-steps"] as const,
   needsYou: (slug: string) => [slug, "needs-you"] as const,
+  /** Every cost read of the project, under one prefix, which the end of a worker's turn refreshes. */
+  cost: (slug: string) => [slug, "cost"] as const,
+  /** `since` is the range's start, so a range that starts at the viewer's midnight is read again once the day changes. */
+  projectCost: (slug: string, range: string, since: number | null) =>
+    [slug, "cost", "project", range, since] as const,
+  taskCost: (slug: string, task: string) =>
+    [slug, "cost", "task", task] as const,
   reviewBatches: (slug: string) => [slug, "review-batches"] as const,
   /** Under the batches prefix, so every event that refreshes the batches also refreshes the open batch. */
   reviewBatch: (slug: string, batch: string) =>

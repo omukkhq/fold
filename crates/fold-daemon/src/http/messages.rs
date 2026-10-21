@@ -41,6 +41,9 @@ pub struct RecipientView {
     /// For an agent recipient, whether fold can post a notice into one of the agent's sessions now; false means the agent learns of the message only when it reads its inbox. Null for a human and for an agent without a connected session.
     #[schema(required = true)]
     pub reachable: Option<bool>,
+    /// The lead that fold sent the message on to because this recipient, a stopped worker, could not start to answer it; the sender itself when the sender is that lead. Null while fold has not sent it on.
+    #[schema(required = true, example = "web-lead")]
+    pub forwarded_to: Option<String>,
 }
 
 /// A stored message with public ids only.
@@ -154,6 +157,7 @@ impl From<service::MessageView> for MessageView {
                     acknowledged_at: recipient.acknowledged_at.map(|time| time.as_millis()),
                     pushed_at: recipient.pushed_at.map(|time| time.as_millis()),
                     reachable: recipient.reachable,
+                    forwarded_to: recipient.forwarded_to.map(|worker| worker.to_string()),
                 })
                 .collect(),
             choices: message
@@ -254,7 +258,7 @@ pub struct FeedbackRequest {
     /// The message to answer, such as `m-31`. The reply joins its thread and takes its task and request.
     #[serde(default)]
     pub reply_to: Option<String>,
-    /// The recipients, as an agent, `agent/worker`, `tag:<tag>`, `all`, `human:<name>` or `humans`. Left out, feedback goes to the task's claim holder, a request message to the request's drafter and a reply to the parent's sender.
+    /// The recipients, as an agent, `agent/worker`, `tag:<tag>`, `all`, `human:<name>` or `humans`. Feedback on a task takes only the task's readers, and left out it goes to the first of them; left out, a request message to the request's drafter and a reply to the parent's sender.
     #[serde(default)]
     pub to: Option<Vec<String>>,
 }
@@ -342,7 +346,7 @@ pub async fn show_thread(
     Ok(Json(thread.into()))
 }
 
-/// A named human's feedback on a task, message in a request's clarification thread, or reply to a message. Feedback goes to the task's claim holder and a request message to the request's drafter unless `to` names recipients; a reply answers a question to humans, which clears the task's `question` attention. The message changes no task or request state.
+/// A named human's feedback on a task, message in a request's clarification thread, or reply to a message. Feedback goes only to the task's readers, as `GET /tasks/{id}/readers` lists them: to `to` when given, otherwise to the first reader. A request message goes to the request's drafter unless `to` names recipients; a reply answers a question to humans, which clears the task's `question` attention. The message changes no task or request state.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/feedback",
@@ -355,7 +359,8 @@ pub async fn show_thread(
         (status = 201, description = "The stored message", body = MessageView),
         (status = 400, description = "`invalid_request`: no `task`, `request` or `reply_to`, a `request` other than the parent's (`details.reason` `request_thread`), an empty body or a malformed request; `invalid_id` or `invalid_name`: an id or recipient is malformed", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
-        (status = 404, description = "`task_not_found`, `request_not_found`, `message_not_found`, `proposal_not_found`, `unknown_human`, `recipient_not_found` (also when the task has no claim holder, or the request no drafter, and `to` is left out) or `project_not_found`", body = ErrorEnvelope),
+        (status = 404, description = "`task_not_found`, `request_not_found`, `message_not_found`, `proposal_not_found`, `unknown_human`, `recipient_not_found` (also when the task has no reader, or the request no drafter, and `to` is left out) or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`recipient_not_reader`: feedback on a task names a recipient that is not one of the task's readers", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )

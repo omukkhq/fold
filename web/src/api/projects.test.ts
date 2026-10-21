@@ -5,6 +5,8 @@ import {
   getProject,
   listProjects,
   pauseProject,
+  removeProject,
+  restoreProject,
   resumeProject,
 } from "./projects";
 
@@ -13,8 +15,8 @@ afterEach(() => {
 });
 
 describe("projects", () => {
-  it("lists the registered projects", async () => {
-    stubFetch({
+  it("lists the registered projects with the cost of the viewer's own days", async () => {
+    const calls = stubFetch({
       "GET /api/v1/projects": {
         body: {
           projects: [
@@ -24,10 +26,16 @@ describe("projects", () => {
         },
       },
     });
-    expect((await listProjects()).map((p) => p.available)).toEqual([
+    const today = new Date(2026, 9, 21).getTime();
+    expect((await listProjects(today)).map((p) => p.available)).toEqual([
       true,
       false,
     ]);
+    expect(Number(calls[0]?.search.get("today"))).toBe(today);
+    expect(Number(calls[0]?.search.get("week"))).toBe(
+      new Date(2026, 9, 15).getTime(),
+    );
+    expect(calls[0]?.search.get("include_removed")).toBe("true");
   });
 
   it("pauses and resumes the agents of a project", async () => {
@@ -43,13 +51,23 @@ describe("projects", () => {
     expect(calls.map((call) => call.method)).toEqual(["POST", "POST"]);
   });
 
-  it("reads one project by slug", async () => {
-    stubFetch({
-      "GET /api/v1/projects/demo": {
-        body: { slug: "demo", name: "demo", available: true },
-      },
+  it("reads, removes and restores one project with the cost of the viewer's own days", async () => {
+    const project = { slug: "demo", name: "demo", available: true };
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo": { body: project },
+      "DELETE /api/v1/projects/demo": { body: project },
+      "POST /api/v1/projects/demo/restore": { body: project },
     });
     expect((await getProject("demo")).slug).toBe("demo");
+    expect((await removeProject("demo")).slug).toBe("demo");
+    expect((await restoreProject("demo")).slug).toBe("demo");
+    expect(calls.map((call) => call.method)).toEqual(["GET", "DELETE", "POST"]);
+    for (const call of calls) {
+      expect(new Date(Number(call.search.get("today"))).getHours()).toBe(0);
+      expect(Number(call.search.get("week"))).toBeLessThan(
+        Number(call.search.get("today")),
+      );
+    }
   });
 
   it.each([

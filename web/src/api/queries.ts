@@ -9,6 +9,7 @@ import {
   listThreads,
 } from "./messages";
 import { getProject, listProjects } from "./projects";
+import { localDayStart } from "../format/days";
 import {
   getProposal,
   getProposalChanges,
@@ -26,8 +27,14 @@ import { getSession } from "./session";
 import { listNeedsYou, listWorkerQuestions, listWorkers } from "./workers";
 import { getWorkspace } from "./workspaces";
 
-export const projectsQuery = () =>
-  queryOptions({ queryKey: keys.projects(), queryFn: listProjects });
+/** The list of the viewer's day at `now`: the next day reads it again, with the costs of that day. */
+export const projectsQuery = (now: number = Date.now()) => {
+  const today = localDayStart(now);
+  return queryOptions({
+    queryKey: keys.projectList(today),
+    queryFn: () => listProjects(today),
+  });
+};
 
 export const projectQuery = (slug: string) =>
   queryOptions({

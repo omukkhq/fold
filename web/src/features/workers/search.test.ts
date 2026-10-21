@@ -10,6 +10,17 @@ describe("parseAgentsSearch", () => {
     expect(parseAgentsSearch({ question: 3 })).toEqual({});
     expect(parseAgentsSearch({})).toEqual({});
   });
+
+  it("keeps the Cost tab and a range other than all time", () => {
+    expect(parseAgentsSearch({ tab: "cost", range: "today" })).toEqual({
+      tab: "cost",
+      range: "today",
+    });
+    expect(parseAgentsSearch({ tab: "team", range: "all" })).toEqual({});
+    expect(parseAgentsSearch({ tab: "cost", range: "year" })).toEqual({
+      tab: "cost",
+    });
+  });
 });
 
 describe("isBatchId", () => {

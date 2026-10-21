@@ -66,7 +66,7 @@ pub(super) enum RowChange {
         tokens: u64,
         model: Option<String>,
     },
-    /// The end of a turn. `total_cost_usd` is the running total of the process: the probe's turns of one process report 0.00297, 0.00355, … up to 0.00613 for an interrupted turn that cost nothing more. The usage is the turn's own.
+    /// The end of a turn. `total_cost_usd` is the running total of the session: the probe's turns report 0.00297, 0.00355, … up to 0.00613 for an interrupted turn that cost nothing more, and the `--resume` of that session goes on with 0.00651. The usage is the turn's own.
     TurnEnded {
         total_cost_usd: f64,
         usage: Usage,

@@ -175,7 +175,6 @@ impl Supervisor {
         let process = Process {
             id: row.id,
             agent: row.agent.clone(),
-            base_cost: row.cost_micro_usd,
             generation,
             pid,
             resumed: resume,
