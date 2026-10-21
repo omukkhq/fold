@@ -196,7 +196,7 @@ function ProjectCard({
   );
   const side =
     actions.remove || actions.addBack ? (
-      <div className="flex shrink-0 items-start">
+      <div className="flex shrink-0 items-start md:items-center">
         {actions.remove ? <RemoveProject project={project} /> : null}
         {actions.addBack ? <AddBackProject project={project} /> : null}
       </div>
@@ -215,7 +215,11 @@ function ProjectCard({
           >
             {content}
           </HrefLink>
-          {side ? <div className="flex pt-14 pr-12">{side}</div> : null}
+          {side ? (
+            <div className="flex items-start pt-14 pr-12 md:items-center md:pt-16 md:pb-12">
+              {side}
+            </div>
+          ) : null}
         </div>
         <GitStatus
           slug={project.slug}
