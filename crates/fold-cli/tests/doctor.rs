@@ -129,6 +129,36 @@ fn a_project_whose_fold_was_deleted_leaves_the_registry_and_the_report() {
 }
 
 #[test]
+fn a_project_a_person_removed_is_not_checked() {
+    let sandbox = Sandbox::new().unwrap();
+    let alpha = sandbox.init("alpha").unwrap();
+    sandbox.init("beta").unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let registry = fold_store::Store::open_registry(&sandbox.path("data/fold/registry.db"))
+            .await
+            .unwrap();
+        let now = fold_core::Timestamp::from_millis(5).unwrap();
+        assert!(
+            registry
+                .write(async |tx| fold_store::projects::set_removed(tx, "alpha", now).await)
+                .await
+                .unwrap()
+        );
+        registry.close().await.unwrap();
+    });
+    std::fs::remove_dir_all(&alpha).unwrap();
+    let socket = sandbox.path("absent.sock");
+    let output = sandbox
+        .fold(&["doctor", "--socket", socket.to_str().unwrap()])
+        .unwrap();
+    let text = stdout(&output);
+    assert!(!text.contains("project alpha"), "{text}");
+    assert!(!text.contains("fix: mount the disk that holds"), "{text}");
+    assert!(text.contains("project beta\n"), "{text}");
+}
+
+#[test]
 fn a_socket_with_mode_0644_fails_with_exit_1() {
     let sandbox = Sandbox::new().unwrap();
     let socket = sandbox.path("loose.sock");
