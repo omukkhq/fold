@@ -285,12 +285,35 @@ async fn the_proposal_of_the_task_read_names_its_title_files_and_review_claim() 
     let review = fx.agents.actor(&fx.review.ctx, None).await.unwrap();
 
     let open = fx.tasks.get_view(t(1)).await.unwrap().proposal.unwrap();
-    assert!(!open.title.is_empty());
-    assert!(open.files >= 1);
+    assert_eq!(
+        (open.title.as_str(), open.files, open.version),
+        ("Add the report", 3, 1)
+    );
     assert_eq!(open.review_claim, None);
 
     fx.reviews.claim_review(&review, p(1)).await.unwrap();
     let claimed = fx.tasks.get_view(t(1)).await.unwrap().proposal.unwrap();
     assert_eq!(claimed.review_claim.as_deref(), Some("review"));
     assert_eq!((claimed.title, claimed.files), (open.title, open.files));
+
+    fx.reviews
+        .release_review(&review, p(1), None)
+        .await
+        .unwrap();
+    let released = fx.tasks.get_view(t(1)).await.unwrap().proposal.unwrap();
+    assert_eq!(released.review_claim, None);
+}
+
+#[tokio::test]
+async fn the_files_of_the_task_read_count_the_newest_version() {
+    let fx = Fixture::new().await;
+    fx.proposal().await;
+    fx.write("src/more.rs", "pub fn w() {}\n");
+    fx.reviews
+        .update_proposal(&by(&fx.frontend.worker), p(1), None)
+        .await
+        .unwrap();
+
+    let proposal = fx.tasks.get_view(t(1)).await.unwrap().proposal.unwrap();
+    assert_eq!((proposal.version, proposal.files), (2, 4));
 }
