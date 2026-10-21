@@ -65,7 +65,8 @@ export function RemoveProject({ project }: { project: ProjectSummary }) {
           <div className="flex flex-col gap-12 px-24 pt-18 pb-20">
             <RadixDialog.Description className="text-bar text-text-muted">
               fold closes the project and stops showing it. Nothing in the
-              folder is deleted: its data stays in .fold.
+              folder is deleted: its data stays in .fold. fold deletes the
+              project's notification targets and their secrets.
             </RadixDialog.Description>
             <Mono className="text-meta break-all text-text">
               {project.root}

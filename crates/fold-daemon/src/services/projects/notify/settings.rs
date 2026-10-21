@@ -406,6 +406,24 @@ impl NotifySettings {
         .await
     }
 
+    /// Deletes the settings file of the project `slug` with its targets and their secrets, as the project leaves fold: a project that comes back, or a new one that takes the slug, starts with none. A failure is logged with the slug and the error kind and does not stop the removal.
+    pub async fn forget_project(&self, slug: &str) {
+        let Ok(name) = project_file(slug) else {
+            return;
+        };
+        let _writing = self.writing.lock().await;
+        let path = self.project_dir().join(name);
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => {
+                tracing::info!(project = %slug, "the project's notification targets were deleted")
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                tracing::warn!(project = %slug, kind = %error.kind(), "the project's notification settings could not be deleted")
+            }
+        }
+    }
+
     /// The target `id` among those of `scope`.
     pub async fn find(&self, scope: &Scope, id: NotifyTargetId) -> Result<Target, FoldError> {
         self.targets(scope)

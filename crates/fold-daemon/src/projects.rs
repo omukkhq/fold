@@ -690,6 +690,9 @@ impl Projects {
             }
         }
         unpoisoned(self.removed.write()).insert(slug.to_owned(), root.to_owned());
+        if let Some(notify) = &self.notify {
+            notify.forget_project(slug).await;
+        }
         self.mark_away(slug, false);
         let slot = {
             let mut slots = unpoisoned(self.slots.write());
@@ -750,6 +753,9 @@ impl Projects {
         let slot = unpoisoned(self.slots.write()).remove(slug);
         if let Some(Slot::Open(handle)) = slot {
             handle.close().await;
+        }
+        if let Some(notify) = &self.notify {
+            notify.forget_project(slug).await;
         }
         tracing::info!(project = %slug, "a person removed the project from fold");
         Ok(true)

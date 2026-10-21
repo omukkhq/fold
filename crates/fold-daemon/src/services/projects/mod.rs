@@ -382,8 +382,10 @@ async fn init_with(
             .unwrap_or_default(),
     };
     let registry = Store::open_registry(&host.registry_db()).await?;
+    let notify = notify::NotifySettings::new(host.notify_dir());
     let init = Init {
         registry: &registry,
+        notify: &notify,
         root_text: &root_text,
         human,
         git: &git,
@@ -398,6 +400,8 @@ async fn init_with(
 /// The inputs every step of one init shares.
 struct Init<'a> {
     registry: &'a Store,
+    /// A project that takes over the slug of a registration whose `.fold/` was deleted starts with no notification targets.
+    notify: &'a notify::NotifySettings,
     root_text: &'a str,
     human: &'a HumanName,
     git: &'a Git,
@@ -494,6 +498,9 @@ impl Init<'_> {
         )
         .into()));
         let (row, replaced) = register(self.registry, self.root_text, name, replaces, now).await?;
+        if replaced {
+            self.notify.forget_project(&row.slug).await;
+        }
         Ok(InitializedProject {
             slug: row.slug,
             name: row.name,
@@ -1770,7 +1777,7 @@ pub async fn show(
     })
 }
 
-/// A named human takes the project `slug` off fold: the registry marks it removed and the daemon closes it, as [`Projects::remove_for_person`] describes, and answers with the project as the list shows it. The data in the folder's `.fold/` stays, and `fld claude`, `fld new` or `fld init` there, or [`restore`], brings the project back under its slug. A project removed already stays as it is. While a worker of the project runs, the removal is refused with `project_workers_running`.
+/// A named human takes the project `slug` off fold: the registry marks it removed and the daemon closes it, as [`Projects::remove_for_person`] describes, and answers with the project as the list shows it. The data in the folder's `.fold/` stays, its notification targets and their secrets are deleted, and `fld claude`, `fld new` or `fld init` there, or [`restore`], brings the project back under its slug. A project removed already stays as it is. While a worker of the project runs, the removal is refused with `project_workers_running`.
 pub async fn remove(
     state: &DaemonState,
     actor: &Actor,
@@ -1966,12 +1973,16 @@ pub async fn remove_deleted_on_host(host: &HostPaths) -> Result<Vec<String>, Pro
         return Ok(Vec::new());
     }
     let registry = Store::open_registry(&host.registry_db()).await?;
-    let removed = remove_deleted_rows(&registry).await;
+    let removed =
+        remove_deleted_rows(&registry, &notify::NotifySettings::new(host.notify_dir())).await;
     registry.close().await?;
     removed
 }
 
-async fn remove_deleted_rows(registry: &Store) -> Result<Vec<String>, ProjectError> {
+async fn remove_deleted_rows(
+    registry: &Store,
+    notify: &notify::NotifySettings,
+) -> Result<Vec<String>, ProjectError> {
     let mut removed = Vec::new();
     for row in projects::list_projects(registry.read()).await? {
         let gone =
@@ -1985,6 +1996,7 @@ async fn remove_deleted_rows(registry: &Store) -> Result<Vec<String>, ProjectErr
                 .await?
         {
             tracing::warn!(project = %row.slug, root = %row.root, "the project folder has no .fold; fold removed the project");
+            notify.forget_project(&row.slug).await;
             removed.push(row.slug);
         }
     }

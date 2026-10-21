@@ -341,7 +341,7 @@ pub async fn show(
     Ok(Json(projects::show(&state, &handle).await?.into()))
 }
 
-/// A named human removes the project from fold: the daemon closes it and leaves it out of the project list, and its data stays in the folder's `.fold/`. `fld claude`, `fld new` or `fld init` in the folder, or the restore route, brings it back under its slug. Removing a removed project changes nothing. While a worker of the project runs, the removal is refused.
+/// A named human removes the project from fold: the daemon closes it and leaves it out of the project list, its data stays in the folder's `.fold/`, and its notification targets are deleted. `fld claude`, `fld new` or `fld init` in the folder, or the restore route, brings it back under its slug. Removing a removed project changes nothing. While a worker of the project runs, the removal is refused.
 #[utoipa::path(
     delete,
     path = "/api/v1/projects/{slug}",

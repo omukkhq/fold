@@ -18,7 +18,9 @@ use fold_daemon::jobs::spawn_notify;
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::AgentService;
 use fold_daemon::services::messages::{MessageService, SendMessage};
-use fold_daemon::services::projects::notify::{NotifySettings, notify_pass};
+use fold_daemon::services::projects::notify::{
+    NewChannel, NewTarget, NotifySettings, Scope, notify_pass,
+};
 use fold_daemon::services::tasks::{CreateTask, TaskService};
 use fold_store::projects::ProjectRow;
 use fold_store::testing::TestProject;
@@ -889,4 +891,121 @@ async fn a_restart_repeats_no_notice_and_keeps_what_waits() {
         .collect();
     assert_eq!(ids, [second.as_str()], "the sent item is not sent again");
     assert!(receiver.none_waiting());
+}
+
+/// Adds a webhook target to the project `slug` straight in the settings files.
+async fn project_target(settings: &NotifySettings, slug: &str) {
+    settings
+        .add(&Scope::Project(slug.to_owned()), |id| {
+            NewTarget {
+                interval_minutes: None,
+                channel: NewChannel::Webhook {
+                    url: "https://hooks.example.com/x".to_owned(),
+                    secret: SECRET.to_owned(),
+                },
+            }
+            .checked(id, &crate::common::ana(), fold_core::Timestamp::EPOCH)
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_project_that_leaves_fold_takes_its_targets_and_their_secrets_with_it() {
+    use fold_core::{HostPaths, ManualClock};
+    use fold_daemon::services::projects::{self as project_service, init_project};
+
+    let dir = TempDir::new().unwrap();
+    let host = HostPaths::new(dir.path().join("data").to_str(), None).unwrap();
+    let clock = ManualClock::new();
+    let settings = NotifySettings::new(host.notify_dir());
+    let file = host.notify_dir().join("projects/app.json");
+    let targets = async || {
+        settings
+            .targets(&Scope::Project("app".to_owned()))
+            .await
+            .unwrap()
+    };
+    let init = async |root: &std::path::Path| {
+        std::fs::create_dir_all(root).unwrap();
+        init_project(&host, root, None, &crate::common::ana(), &clock)
+            .await
+            .unwrap()
+    };
+
+    // A registration whose `.fold/` was deleted goes, and a new project under its slug has no targets.
+    let first = dir.path().join("app");
+    assert_eq!(init(&first).await.slug, "app");
+    project_target(&settings, "app").await;
+    project_target(&settings, "kept").await;
+    assert!(file.exists());
+    std::fs::remove_dir_all(first.join(".fold")).unwrap();
+    assert_eq!(
+        project_service::remove_deleted_on_host(&host)
+            .await
+            .unwrap(),
+        ["app"]
+    );
+    assert!(
+        !file.exists(),
+        "the secrets file went with the registration"
+    );
+    let second = dir.path().join("again/app");
+    assert_eq!(init(&second).await.slug, "app");
+    assert!(targets().await.is_empty());
+    assert_eq!(
+        settings
+            .targets(&Scope::Project("kept".to_owned()))
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "another project keeps its targets"
+    );
+
+    // An init in a folder whose `.fold/` was deleted replaces the registration and starts with no targets.
+    project_target(&settings, "app").await;
+    std::fs::remove_dir_all(second.join(".fold")).unwrap();
+    let replaced = init(&second).await;
+    assert_eq!(replaced.slug, "app");
+    assert!(targets().await.is_empty());
+
+    // A person's removal deletes the targets, and the restored project starts with none.
+    let registry = fold_store::Store::open_registry(&host.registry_db())
+        .await
+        .unwrap();
+    let state: AppState = Arc::new(DaemonState {
+        projects: Projects::default()
+            .with_registry(registry.clone())
+            .with_notify_dir(host.notify_dir()),
+        registry,
+        clock: Arc::new(clock.clone()),
+        assets: AssetSource::Embedded,
+        listen: "127.0.0.1:0".parse().unwrap(),
+        session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
+    });
+    project_service::open(&state, "app").await.unwrap();
+    project_target(&settings, "app").await;
+    let ana = Actor::human(crate::common::ana());
+    project_service::remove(&state, &ana, "app").await.unwrap();
+    assert!(!file.exists());
+    project_service::restore(&state, &ana, "app").await.unwrap();
+    assert!(targets().await.is_empty());
+
+    // The daemon's removal of a project whose `.fold/` was deleted deletes them too.
+    project_target(&settings, "app").await;
+    let row = fold_store::projects::find_project(state.registry.read(), "app")
+        .await
+        .unwrap()
+        .unwrap();
+    std::fs::remove_dir_all(second.join(".fold")).unwrap();
+    assert!(state.projects.remove_if_deleted(&row).await);
+    assert!(!file.exists());
+
+    for handle in state.projects.handles() {
+        handle.bus.close();
+        handle.stop_tasks(Duration::from_secs(5)).await;
+        handle.store.close().await.unwrap();
+    }
+    state.registry.close().await.unwrap();
 }
