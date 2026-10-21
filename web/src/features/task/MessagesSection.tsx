@@ -133,7 +133,7 @@ function FeedbackBox({
         }),
       )}
     >
-      <div className="flex items-start gap-8">
+      <div className="flex flex-col gap-8 md:flex-row md:items-start">
         <label className="sr-only" htmlFor={`${id}-to`}>
           Send to
         </label>
@@ -141,7 +141,11 @@ function FeedbackBox({
           id={`${id}-to`}
           disabled={write.isPending}
           aria-invalid={errors.to ? true : undefined}
-          className={cn(controlClasses, focusRing, "w-auto shrink-0")}
+          className={cn(
+            controlClasses,
+            focusRing,
+            "w-full md:w-auto md:shrink-0",
+          )}
           {...form.register("to")}
         >
           {options.length === 0 ? (
@@ -167,7 +171,7 @@ function FeedbackBox({
               disabled={write.isPending}
               placeholder={feedbackPlaceholder(to, holder)}
               aria-invalid={errors.body ? true : undefined}
-              className="min-w-0 flex-1 resize-none py-9"
+              className="min-w-0 resize-none py-9 md:flex-1"
               ref={field.ref}
               value={field.value}
               onValueChange={field.onChange}
@@ -180,6 +184,7 @@ function FeedbackBox({
           variant="primary"
           pending={write.isPending}
           pendingLabel="Sending…"
+          className="self-end md:self-auto"
           icon={<Send aria-hidden="true" size={15} />}
         >
           Send
