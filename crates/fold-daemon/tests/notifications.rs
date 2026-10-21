@@ -119,7 +119,7 @@ impl Notified {
         give_role(self.fx.project.store(), agent, Role::ReviewLead, None).await;
     }
 
-    /// Gives `agent` the review claim of `P-1`, as a start of a reviewer gives it; the review lead holds none of its own.
+    /// Gives `agent` the review claim of `P-1` as a stored row, whatever its role, so a test can make the review lead hold one.
     async fn give_claim(&self, agent: &str) {
         give_review_claim(self.fx.project.store(), agent, p(1), self.fx.project.now()).await;
     }
@@ -347,7 +347,8 @@ async fn push_goes_to_the_review_lead_on_proposal_opened() {
         .unwrap()
         .detail()
         .unwrap();
-    let version = "fold: P-1 has version 2. Call create_review_checkout.";
+    // The review lead holds the claim but never checks a version out, so it gives the claim up.
+    let version = "fold: P-1 has version 2; release your review claim with release_review, then give it to a reviewer. Call start_worker.";
     assert_eq!(review.next().await, version);
     // `backend` leads no review, so the first notice it gets is the sentinel.
     n.send(&agent("frontend"), &["backend"]).await;
