@@ -259,3 +259,48 @@ async fn acceptance_21_a_question_goes_to_the_worker_holding_the_task() {
     assert!(h.inbox("backend").await.iter().any(|id| id == question));
     assert!(!h.inbox("frontend").await.iter().any(|id| id == question));
 }
+
+#[tokio::test]
+async fn acceptance_21_a_question_to_a_stopped_author_starts_it_again_to_answer() {
+    use crate::worker_resume::{TASK_WORKER, proposed_by_a_task_worker, until_runs, worker};
+    use crate::workers_support::FakeClaude;
+
+    let fake = FakeClaude::new("result");
+    let (mut harness, _work) =
+        proposed_by_a_task_worker(&fake, &[("page.html", "<p>page</p>\n")]).await;
+    harness.disconnect(TASK_WORKER).await;
+    let stopped = worker(&harness, TASK_WORKER).await;
+
+    let ask = json!({"version": 1, "path": "page.html", "side": "new", "start_line": 1, "end_line": 1, "body": "Why a page?"});
+    let (status, sent) = harness
+        .http(
+            Method::POST,
+            "/api/v1/projects/demo/proposals/P-1/questions",
+            Some(&ask),
+            HUMAN,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    assert_eq!(sent["recipients"][0]["name"], TASK_WORKER);
+    let question = sent["id"].as_str().unwrap().to_owned();
+
+    // The author's own session starts again with a turn that names the question.
+    let runs = until_runs(&fake, TASK_WORKER, 2).await;
+    assert_eq!(runs[1].flag("--resume"), Some(stopped.session_id.as_str()));
+    let turn = &runs[1].stdin[1];
+    assert!(
+        turn.contains(&format!("- {question} from human:{HUMAN} about T-1")),
+        "{turn}"
+    );
+
+    harness.connect(TASK_WORKER).await;
+    let inbox = harness.call(TASK_WORKER, "get_inbox", json!({})).await;
+    let item = inbox["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["id"] == question.as_str())
+        .cloned()
+        .unwrap();
+    assert_eq!(item["lines"]["excerpt"], "<p>page</p>");
+}
