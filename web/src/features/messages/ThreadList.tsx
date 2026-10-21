@@ -1,4 +1,6 @@
+import { MessageCircle } from "lucide-react";
 import { ActorText } from "@/people/ActorText";
+import { Badge } from "@/components/badge/Badge";
 import { HrefLink } from "@/app/HrefLink";
 import type { ThreadView } from "@/api/messages";
 import { formatAsOf } from "@/format/time";
@@ -44,17 +46,6 @@ export function ThreadList({
               )}
             >
               <span className="flex items-center gap-8">
-                {thread.awaiting_human ? (
-                  <>
-                    <span
-                      aria-hidden="true"
-                      className="size-7 shrink-0 rounded-full bg-ink"
-                    />
-                    <span className="sr-only">
-                      Question waiting for a human answer.
-                    </span>
-                  </>
-                ) : null}
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate text-body leading-snug text-text",
@@ -67,6 +58,15 @@ export function ThreadList({
                   {formatAsOf(now, thread.last_at)}
                 </span>
               </span>
+              {thread.awaiting_human ? (
+                <Badge
+                  tone="needs-you"
+                  icon={MessageCircle}
+                  className="self-start"
+                >
+                  Waits for you
+                </Badge>
+              ) : null}
               <span className="flex items-center gap-8 font-mono text-label text-text-muted">
                 <span className="min-w-0 flex-1 truncate">
                   {first ? (

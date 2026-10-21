@@ -109,9 +109,40 @@ describe("MessagesScreen", () => {
     await setup({}, [question]);
     const list = screen.getByRole("list", { name: "Threads" });
     expect(within(list).getByText("Which chart library?")).toBeTruthy();
+    expect(within(list).getByText("Waits for you")).toBeTruthy();
+  });
+
+  it("marks each thread the badge counts and shows only them with the waiting filter", async () => {
+    const report = thread(SECOND, {
+      participants: ["frontend/ui", "human:tanim"],
+      last_at: 2000,
+      messages: [message(SECOND, { body: "The build passes.", sent_at: 2000 })],
+    });
+    const other = thread(`m-${String(40)}`, {
+      awaiting_human: true,
+      last_at: 500,
+      messages: [message(`m-${String(40)}`, { body: "Which port?" })],
+    });
+    const threads = [report, question, other];
+    await setup({}, threads);
+    const list = screen.getByRole("list", { name: "Threads" });
+    const total = threads.filter((t) => t.awaiting_human).length;
+    expect(within(list).getAllByText("Waits for you")).toHaveLength(total);
     expect(
-      within(list).getByText("Question waiting for a human answer."),
-    ).toBeTruthy();
+      screen
+        .getByRole("button", { name: `Waits for you (${String(total)})` })
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
+    cleanup();
+    await setup({ waiting: true }, threads);
+    const filtered = screen.getByRole("list", { name: "Threads" });
+    expect(within(filtered).queryByText("The build passes.")).toBeNull();
+    expect(within(filtered).getAllByText("Waits for you")).toHaveLength(total);
+    expect(
+      screen
+        .getByRole("button", { name: `Waits for you (${String(total)})` })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
   });
 
   it("reads a requested thread the list did not reach, and says when it does not exist", async () => {
@@ -198,7 +229,9 @@ describe("MessagesScreen", () => {
       within(panel).getByLabelText<HTMLTextAreaElement>("Reply").value,
     ).toBe("");
     expect(
-      screen.queryByText("Question waiting for a human answer."),
+      within(screen.getByRole("list", { name: "Threads" })).queryByText(
+        "Waits for you",
+      ),
     ).toBeNull();
   });
 });
