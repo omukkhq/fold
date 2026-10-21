@@ -25,6 +25,7 @@ mod acceptance_15_genesis_and_git;
 mod acceptance_16_reviewer_fix;
 mod acceptance_17_stash;
 mod acceptance_18_project_checks;
+mod acceptance_19_human_asks;
 mod acceptance_1_three_sessions;
 mod acceptance_2_messaging;
 mod acceptance_3_parallel_workspaces;
