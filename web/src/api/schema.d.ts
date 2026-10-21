@@ -11,7 +11,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The daemon's version and the address its web interface listens on. Socket only, so a command learns the port the daemon got instead of the one its configuration asked for. */
+        /** The daemon's version, process and start, and the address its web interface listens on. Socket only, so a command learns the port the daemon got instead of the one its configuration asked for. */
         get: operations["show_daemon"];
         put?: never;
         post?: never;
@@ -1965,10 +1965,36 @@ export interface components {
             /** @description One line, not empty. */
             title: string;
         };
-        /** @description What the running daemon is, for `fld` to report its status. */
+        /**
+         * @description What started the daemon process.
+         * @enum {string}
+         */
+        DaemonStartedBy: "hand" | "systemd" | "launchd";
+        /** @description What the running daemon is, for `fld` and `fld doctor` to report it. */
         DaemonView: {
             /** @description The address and port the HTTP listener is bound to, such as `127.0.0.1:7420`. */
             listen: string;
+            /**
+             * Format: int32
+             * @description The process id of the daemon.
+             */
+            pid: number;
+            /**
+             * @description The file name of the login shell the daemon ran at its start to read the workers' environment, such as `bash`; null when it knows none.
+             * @example bash
+             */
+            shell: string | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the moment the daemon started to run that shell; a shell startup file changed after it holds changes the workers lack until `fld restart`. Null when it ran none.
+             */
+            shell_read_at: number | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the daemon's start.
+             */
+            started_at: number;
+            started_by: components["schemas"]["DaemonStartedBy"];
             /** @description The fold version the daemon runs, such as `0.3.0`. */
             version: string;
         };
