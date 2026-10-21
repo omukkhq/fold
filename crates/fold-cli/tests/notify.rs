@@ -124,9 +124,10 @@ async fn fld_notify_adds_lists_tests_and_removes_targets_and_keeps_secrets_priva
     let dir = host.data_home().join("fold/notify");
     let mode =
         |path: std::path::PathBuf| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode(dir.join("host.json")), 0o600);
+    assert_eq!(mode(dir.join("host/host.json")), 0o600);
+    assert_eq!(mode(dir.join("host")), 0o700);
     assert_eq!(mode(dir.clone()), 0o700);
-    let kept = std::fs::read_to_string(dir.join("host.json")).unwrap();
+    let kept = std::fs::read_to_string(dir.join("host/host.json")).unwrap();
     assert!(kept.contains("given-secret-0123456789"));
     guard.stop().await;
 }

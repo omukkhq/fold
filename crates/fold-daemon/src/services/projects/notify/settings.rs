@@ -236,6 +236,8 @@ struct ProjectFile {
     targets: Vec<Target>,
 }
 
+/// The host file has a folder of its own below the notify folder, as each project file has, because a private write narrows the folder it writes in and that folder's parent to 0700: the parent is then the notify folder, never the daemon's data folder.
+const HOST_DIR: &str = "host";
 const HOST_FILE: &str = "host.json";
 const PROJECTS_DIR: &str = "projects";
 
@@ -281,6 +283,10 @@ impl NotifySettings {
         self.dir.join(PROJECTS_DIR)
     }
 
+    fn host_dir(&self) -> PathBuf {
+        self.dir.join(HOST_DIR)
+    }
+
     async fn blocking<T: Send + 'static>(
         &self,
         work: impl FnOnce(&Path) -> Result<T, FoldError> + Send + 'static,
@@ -292,7 +298,9 @@ impl NotifySettings {
     }
 
     async fn host(&self) -> Result<HostFile, FoldError> {
-        self.blocking(|dir| read_file(&dir.join(HOST_FILE))).await
+        let host = self.host_dir();
+        self.blocking(move |_| read_file(&host.join(HOST_FILE)))
+            .await
     }
 
     async fn project(&self, slug: &str) -> Result<ProjectFile, FoldError> {
@@ -325,10 +333,11 @@ impl NotifySettings {
 
     pub async fn set_web_url(&self, url: Option<String>) -> Result<(), FoldError> {
         let _writing = self.writing.lock().await;
-        self.blocking(move |dir| {
-            let mut host: HostFile = read_file(&dir.join(HOST_FILE))?;
+        let host_dir = self.host_dir();
+        self.blocking(move |_| {
+            let mut host: HostFile = read_file(&host_dir.join(HOST_FILE))?;
             host.web_url = url;
-            write_file(dir, HOST_FILE, &host)
+            write_file(&host_dir, HOST_FILE, &host)
         })
         .await
     }
@@ -345,8 +354,9 @@ impl NotifySettings {
             Scope::Project(slug) => Some(project_file(slug)?),
         };
         let projects = self.project_dir();
-        self.blocking(move |dir| {
-            let mut host: HostFile = read_file(&dir.join(HOST_FILE))?;
+        let host_dir = self.host_dir();
+        self.blocking(move |_| {
+            let mut host: HostFile = read_file(&host_dir.join(HOST_FILE))?;
             let number = host.next_number.max(1);
             let id = NotifyTargetId::from_number(number)
                 .ok_or_else(|| FoldError::new(codes::INTERNAL_ERROR, "no target number is left"))?;
@@ -355,10 +365,10 @@ impl NotifySettings {
             match project {
                 None => {
                     host.targets.push(target.clone());
-                    write_file(dir, HOST_FILE, &host)?;
+                    write_file(&host_dir, HOST_FILE, &host)?;
                 }
                 Some(name) => {
-                    write_file(dir, HOST_FILE, &host)?;
+                    write_file(&host_dir, HOST_FILE, &host)?;
                     let mut file: ProjectFile = read_file(&projects.join(&name))?;
                     file.targets.push(target.clone());
                     write_file(&projects, &name, &file)?;
@@ -377,11 +387,12 @@ impl NotifySettings {
             Scope::Project(slug) => Some(project_file(slug)?),
         };
         let projects = self.project_dir();
-        self.blocking(move |dir| match project {
+        let host_dir = self.host_dir();
+        self.blocking(move |_| match project {
             None => {
-                let mut host: HostFile = read_file(&dir.join(HOST_FILE))?;
+                let mut host: HostFile = read_file(&host_dir.join(HOST_FILE))?;
                 take(&mut host.targets, id)?;
-                write_file(dir, HOST_FILE, &host)
+                write_file(&host_dir, HOST_FILE, &host)
             }
             Some(name) => {
                 let mut file: ProjectFile = read_file(&projects.join(&name))?;
@@ -530,6 +541,7 @@ mod tests {
     #[tokio::test]
     async fn targets_live_in_private_files_and_numbers_are_never_reused() {
         let temp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
         let settings = NotifySettings::new(temp.path().join("notify"));
         let project = Scope::Project("demo".to_owned());
         let make = |url: &'static str| {
@@ -572,7 +584,14 @@ mod tests {
             Some("https://fold.example.com")
         );
         let mode = |path: PathBuf| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(temp.path().join("notify/host.json")), 0o600);
+        assert_eq!(mode(temp.path().join("notify/host/host.json")), 0o600);
+        assert_eq!(mode(temp.path().join("notify/host")), 0o700);
+        assert_eq!(mode(temp.path().join("notify")), 0o700);
+        assert_eq!(
+            mode(temp.path().to_path_buf()),
+            0o755,
+            "the daemon's data folder keeps its mode"
+        );
         assert_eq!(mode(temp.path().join("notify/projects/demo.json")), 0o600);
         assert_eq!(mode(temp.path().join("notify/projects")), 0o700);
         let refused = settings
@@ -592,8 +611,8 @@ mod tests {
     async fn a_broken_file_is_an_error_that_shows_none_of_it() {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path().join("notify");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("host.json"), "{\"targets\": \"secret-text\"").unwrap();
+        std::fs::create_dir_all(dir.join("host")).unwrap();
+        std::fs::write(dir.join("host/host.json"), "{\"targets\": \"secret-text\"").unwrap();
         let error = NotifySettings::new(dir)
             .targets(&Scope::Host)
             .await
