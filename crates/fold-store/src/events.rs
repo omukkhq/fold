@@ -401,29 +401,29 @@ pub async fn newest_by_agent(
     rows.into_iter().map(EventRecord::into_event).collect()
 }
 
-/// The `seq` the agent has read up to, or 0 when it never moved its cursor.
-pub async fn cursor(executor: impl SqliteExecutor<'_>, agent_id: i64) -> Result<u64, StoreError> {
+/// The `seq` the worker has read up to, or 0 when it never moved its cursor.
+pub async fn cursor(executor: impl SqliteExecutor<'_>, worker_id: i64) -> Result<u64, StoreError> {
     let last = sqlx::query_scalar!(
-        r#"SELECT last_seq AS "last_seq!: i64" FROM agent_cursors WHERE agent_id = ?"#,
-        agent_id
+        r#"SELECT last_seq AS "last_seq!: i64" FROM worker_cursors WHERE worker_id = ?"#,
+        worker_id
     )
     .fetch_optional(executor)
     .await?;
     match last {
         None => Ok(0),
         Some(last) => {
-            u64::try_from(last).map_err(|_| StoreError::Corrupt("agent_cursors.last_seq"))
+            u64::try_from(last).map_err(|_| StoreError::Corrupt("worker_cursors.last_seq"))
         }
     }
 }
 
-/// Moves the agent's cursor to `seq`. A cursor already past `seq` stays where it is, so the cursor only moves forward.
-pub async fn advance_cursor(tx: &mut WriteTx, agent_id: i64, seq: u64) -> Result<(), StoreError> {
+/// Moves the worker's cursor to `seq`. A cursor already past `seq` stays where it is, so the cursor only moves forward.
+pub async fn advance_cursor(tx: &mut WriteTx, worker_id: i64, seq: u64) -> Result<(), StoreError> {
     let seq = seq_param(seq)?;
     sqlx::query!(
-        "INSERT INTO agent_cursors (agent_id, last_seq) VALUES (?1, ?2)
-         ON CONFLICT (agent_id) DO UPDATE SET last_seq = MAX(last_seq, excluded.last_seq)",
-        agent_id,
+        "INSERT INTO worker_cursors (worker_id, last_seq) VALUES (?1, ?2)
+         ON CONFLICT (worker_id) DO UPDATE SET last_seq = MAX(last_seq, excluded.last_seq)",
+        worker_id,
         seq
     )
     .execute(tx.conn())
@@ -431,28 +431,28 @@ pub async fn advance_cursor(tx: &mut WriteTx, agent_id: i64, seq: u64) -> Result
     Ok(())
 }
 
-/// Moves the agent's cursor from `from` to `to` only while it still stands at `from` (0 also when the agent has no cursor yet). False when another read moved it first, and then nothing changes.
+/// Moves the worker's cursor from `from` to `to` only while it still stands at `from` (0 also when the worker has no cursor yet). False when another read moved it first, and then nothing changes.
 pub async fn move_cursor(
     tx: &mut WriteTx,
-    agent_id: i64,
+    worker_id: i64,
     from: u64,
     to: u64,
 ) -> Result<bool, StoreError> {
     let (from, to) = (seq_param(from)?, seq_param(to)?);
     let moved = if from == 0 {
         sqlx::query!(
-            "INSERT INTO agent_cursors (agent_id, last_seq) VALUES (?1, ?2)
-             ON CONFLICT (agent_id) DO UPDATE SET last_seq = excluded.last_seq
-             WHERE agent_cursors.last_seq = 0",
-            agent_id,
+            "INSERT INTO worker_cursors (worker_id, last_seq) VALUES (?1, ?2)
+             ON CONFLICT (worker_id) DO UPDATE SET last_seq = excluded.last_seq
+             WHERE worker_cursors.last_seq = 0",
+            worker_id,
             to
         )
         .execute(tx.conn())
         .await?
     } else {
         sqlx::query!(
-            "UPDATE agent_cursors SET last_seq = ?3 WHERE agent_id = ?1 AND last_seq = ?2",
-            agent_id,
+            "UPDATE worker_cursors SET last_seq = ?3 WHERE worker_id = ?1 AND last_seq = ?2",
+            worker_id,
             from,
             to
         )

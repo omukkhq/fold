@@ -59,7 +59,15 @@ struct Session {
     client: Arc<Client>,
     progress: mpsc::UnboundedReceiver<ProgressNotificationParam>,
     context: SessionContext,
-    agent_id: i64,
+    /// The agent's main worker, known once the session registered.
+    main: Option<WorkerRow>,
+}
+
+#[cfg(test)]
+impl Session {
+    fn main(&self) -> &WorkerRow {
+        self.main.as_ref().unwrap()
+    }
 }
 
 #[cfg(test)]
@@ -128,7 +136,7 @@ impl Fixture {
             client: Arc::new(client),
             progress,
             context,
-            agent_id: 0,
+            main: None,
         };
         call(&session, "register_agent", json!({"name": name})).await;
         let agent =
@@ -137,7 +145,12 @@ impl Fixture {
                 .unwrap()
                 .unwrap();
         session.context.agent = Some(agent.name);
-        session.agent_id = agent.id;
+        session.main = Some(
+            self.agents
+                .resolve_worker(&session.context, None)
+                .await
+                .unwrap(),
+        );
         while !call(&session, "get_events", json!({"limit": 500})).await["events"]
             .as_array()
             .unwrap()
@@ -166,8 +179,9 @@ impl Fixture {
         commit(self.store(), &self.bus, self.project.now(), batch).await
     }
 
+    /// The main worker's cursor.
     async fn cursor(&self, session: &Session) -> u64 {
-        events::cursor(self.store().read(), session.agent_id)
+        events::cursor(self.store().read(), session.main().id)
             .await
             .unwrap()
     }
@@ -596,19 +610,21 @@ async fn a_filtered_wait_ends_for_a_new_message_to_the_waiter_only() {
     );
 }
 
+#[cfg(test)]
+fn filtered(types: &[&str], worker: Option<&str>) -> Value {
+    let mut arguments = json!({"types": types, "timeout_s": 2});
+    if let Some(worker) = worker {
+        arguments["as"] = json!(worker);
+    }
+    arguments
+}
+
 #[tokio::test]
 async fn a_main_worker_wakes_for_its_workers_and_a_child_only_for_itself() {
     let fx = Fixture::new().await;
     let backend = fx.connect("backend").await;
     call(&backend, "register_worker", json!({"name": "sub"})).await;
-    let filter = |worker: Option<&str>| {
-        let mut arguments = json!({"types": ["proposal.opened"], "timeout_s": 2});
-        if let Some(worker) = worker {
-            arguments["as"] = json!(worker);
-        }
-        arguments
-    };
-    let main = wait_in_background(&backend, filter(None));
+    let main = wait_in_background(&backend, filtered(&["proposal.opened"], None));
     subscribed(&fx.bus, 1).await;
     let to_sub = send_as_human(&fx, "backend/sub").await;
     let main = body(&tokio::time::timeout(WAIT, main).await.unwrap().unwrap());
@@ -617,7 +633,21 @@ async fn a_main_worker_wakes_for_its_workers_and_a_child_only_for_itself() {
         main["hint"],
         json!("a message waits for a worker of your agent; call get_inbox with include_workers")
     );
-    let child = wait_in_background(&backend, filter(Some("backend/sub")));
+    let child = call(
+        &backend,
+        "wait_for_events",
+        filtered(&["proposal.opened"], Some("backend/sub")),
+    )
+    .await;
+    assert_eq!(
+        child["messages"],
+        json!([to_sub.to_string()]),
+        "the main worker's wait leaves the child's cursor alone"
+    );
+    let child = wait_in_background(
+        &backend,
+        filtered(&["proposal.opened"], Some("backend/sub")),
+    );
     subscribed(&fx.bus, 1).await;
     send_as_human(&fx, "backend").await;
     let child = body(&tokio::time::timeout(WAIT, child).await.unwrap().unwrap());
@@ -626,6 +656,95 @@ async fn a_main_worker_wakes_for_its_workers_and_a_child_only_for_itself() {
         json!({"timed_out": true}),
         "a message to the main worker"
     );
+}
+
+#[tokio::test]
+async fn a_main_worker_and_its_child_waiting_together_both_wake_for_the_childs_message() {
+    let fx = Fixture::new().await;
+    let backend = fx.connect("backend").await;
+    call(&backend, "register_worker", json!({"name": "sub"})).await;
+    let main = wait_in_background(&backend, filtered(&["proposal.opened"], None));
+    let child = wait_in_background(
+        &backend,
+        filtered(&["proposal.opened"], Some("backend/sub")),
+    );
+    subscribed(&fx.bus, 2).await;
+    let to_sub = send_as_human(&fx, "backend/sub").await;
+    let main = body(&tokio::time::timeout(WAIT, main).await.unwrap().unwrap());
+    let child = body(&tokio::time::timeout(WAIT, child).await.unwrap().unwrap());
+    assert_eq!(main["messages"], json!([to_sub.to_string()]), "{main}");
+    assert_eq!(child["messages"], json!([to_sub.to_string()]), "{child}");
+    assert_eq!(
+        child["hint"],
+        json!("a message waits for you; call get_inbox")
+    );
+}
+
+#[tokio::test]
+async fn concurrent_waits_of_a_main_worker_and_its_child_each_wake_for_their_own_message() {
+    let fx = Fixture::new().await;
+    let backend = fx.connect("backend").await;
+    call(&backend, "register_worker", json!({"name": "sub"})).await;
+    let main = wait_in_background(&backend, filtered(&["worker.stopped"], None));
+    let child = wait_in_background(
+        &backend,
+        filtered(&["proposal.opened"], Some("backend/sub")),
+    );
+    subscribed(&fx.bus, 2).await;
+    let to_main = send_as_human(&fx, "backend").await;
+    fx.commit(vec![new_event(types::MAIN_ADVANCED, "fold")])
+        .await;
+    let to_sub = send_as_human(&fx, "backend/sub").await;
+    let main = body(&tokio::time::timeout(WAIT, main).await.unwrap().unwrap());
+    let child = body(&tokio::time::timeout(WAIT, child).await.unwrap().unwrap());
+    let woke: Vec<&Value> = main["messages"].as_array().unwrap().iter().collect();
+    assert_eq!(woke.first(), Some(&&json!(to_main.to_string())), "{main}");
+    assert_eq!(child["messages"], json!([to_sub.to_string()]), "{child}");
+    if !woke.contains(&&json!(to_sub.to_string())) {
+        let again = call(
+            &backend,
+            "wait_for_events",
+            filtered(&["worker.stopped"], None),
+        )
+        .await;
+        assert_eq!(
+            again["messages"],
+            json!([to_sub.to_string()]),
+            "the child's wait left the message to it for the main worker"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_footer_counts_new_events_after_the_calling_workers_cursor() {
+    let fx = Fixture::new().await;
+    let backend = fx.connect("backend").await;
+    call(&backend, "register_worker", json!({"name": "sub"})).await;
+    let head = fx
+        .commit(vec![new_event(types::MAIN_ADVANCED, "fold")])
+        .await[0];
+    let footer = |result: &CallToolResult| {
+        result
+            .content
+            .get(1)
+            .map(|line| line.as_text().unwrap().text.clone())
+    };
+    let main = call_raw(&backend, "get_events", json!({})).await;
+    assert_eq!(footer(&main), None);
+    let peek = call_raw(
+        &backend,
+        "get_events",
+        json!({"after": head, "as": "backend/sub"}),
+    )
+    .await;
+    assert_eq!(
+        footer(&peek).as_deref(),
+        Some("fold: 1 new events"),
+        "the main worker's read leaves the child's count"
+    );
+    let read = call_raw(&backend, "get_events", json!({"as": "backend/sub"})).await;
+    assert_eq!(returned_seqs(&body(&read)).last(), Some(&head));
+    assert_eq!(footer(&read), None, "the child's read clears its count");
 }
 
 #[tokio::test]
@@ -850,7 +969,7 @@ async fn a_ready_match_wins_over_a_deadline_that_has_passed() {
         ..WaitQuery::default()
     };
     let mut waiter = time
-        .within(events.wait(session.agent_id, &query))
+        .within(events.wait(session.main(), &query))
         .await
         .unwrap();
     tokio::time::advance(Duration::from_secs(2)).await;
@@ -937,7 +1056,7 @@ async fn a_wait_behind_a_large_backlog_reads_one_page() {
         ..WaitQuery::default()
     };
     for page in 0..2 {
-        let mut waiter = events.wait(session.agent_id, &query).await.unwrap();
+        let mut waiter = events.wait(session.main(), &query).await.unwrap();
         assert_eq!(waiter.held(), 100, "the waiter holds one page, not 1500");
         let step = tokio::time::timeout(WAIT, waiter.next())
             .await
@@ -961,12 +1080,12 @@ async fn a_wait_ends_once_the_bus_closes() {
         timeout_s: Some(1500),
         ..WaitQuery::default()
     };
-    let mut waiter = events.wait(session.agent_id, &query).await.unwrap();
+    let mut waiter = events.wait(session.main(), &query).await.unwrap();
     let waiting = tokio::spawn(async move { waiter.next().await.unwrap() });
     fx.bus.close();
     let step = tokio::time::timeout(WAIT, waiting).await.unwrap().unwrap();
     assert_eq!(step, WaitStep::TimedOut);
-    let mut late = events.wait(session.agent_id, &query).await.unwrap();
+    let mut late = events.wait(session.main(), &query).await.unwrap();
     let step = tokio::time::timeout(WAIT, late.next())
         .await
         .unwrap()

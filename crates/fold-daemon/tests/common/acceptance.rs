@@ -435,7 +435,7 @@ impl Harness {
         ids(&self.call(agent, "get_inbox", json!({})).await)
     }
 
-    /// Reads every event after the agent's cursor, so its next wait starts from now.
+    /// Reads every event after the main worker's cursor, so its next wait starts from now.
     pub async fn drain_events(&self, agent: &str) {
         tokio::time::timeout(WAIT, async {
             while !self.call(agent, "get_events", json!({"limit": 500})).await["events"]

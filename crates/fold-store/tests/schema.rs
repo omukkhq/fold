@@ -85,7 +85,6 @@ async fn baseline_creates_every_table_of_the_data_model() {
     .await
     .unwrap();
     let expected: BTreeSet<&str> = [
-        "agent_cursors",
         "agent_tags",
         "agents",
         "area_mcp_servers",
@@ -141,6 +140,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "task_labels",
         "task_reports",
         "tasks",
+        "worker_cursors",
         "worker_permission_answers",
         "worker_permission_closures",
         "worker_permission_questions",

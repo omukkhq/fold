@@ -51,7 +51,6 @@ fn new_event(event_type: EventType, by: &str) -> NewEvent {
 
 #[cfg(test)]
 struct Agent {
-    id: i64,
     name: AgentName,
     main: WorkerRow,
     _ctx: SessionContext,
@@ -97,7 +96,6 @@ impl Fixture {
             .unwrap();
         let main = self.agents.resolve_worker(&ctx, None).await.unwrap();
         Agent {
-            id: main.agent_id,
             name,
             main,
             _ctx: ctx,
@@ -143,16 +141,18 @@ impl Fixture {
     }
 
     async fn cursor(&self, agent: &Agent) -> u64 {
-        events::cursor(self.store().read(), agent.id).await.unwrap()
+        events::cursor(self.store().read(), agent.main.id)
+            .await
+            .unwrap()
     }
 
-    /// Moves the agent's cursor to the head, so a test counts only what it appends next.
+    /// Moves the main worker's cursor to the head, so a test counts only what it appends next.
     async fn catch_up(&self, agent: &Agent) {
         loop {
             let page = self
                 .events
                 .get_events(
-                    agent.id,
+                    &agent.main,
                     &EventQuery {
                         limit: Some(MAX_LIMIT),
                         ..EventQuery::default()
@@ -326,7 +326,7 @@ async fn a_bad_filter_is_refused_with_invalid_event_filter() {
         assert_eq!(error.code(), codes::INVALID_EVENT_FILTER, "{request:?}");
         assert_eq!(error.hint(), Some("call get_events"));
         let error = refusal(
-            read_since_cursor(fx.store(), agent.id, &request)
+            read_since_cursor(fx.store(), &agent.main, &request)
                 .await
                 .unwrap_err(),
         );
@@ -353,7 +353,7 @@ async fn the_cursor_resumes_and_advances_to_the_last_event_returned() {
     let first = fx
         .events
         .get_events(
-            agent.id,
+            &agent.main,
             &EventQuery {
                 limit: Some(2),
                 ..EventQuery::default()
@@ -365,7 +365,7 @@ async fn the_cursor_resumes_and_advances_to_the_last_event_returned() {
     assert_eq!(fx.cursor(&agent).await, 2);
     let rest = fx
         .events
-        .get_events(agent.id, &EventQuery::default())
+        .get_events(&agent.main, &EventQuery::default())
         .await
         .unwrap();
     assert_eq!(rest.events.first().map(|event| event.seq), Some(3));
@@ -373,7 +373,7 @@ async fn the_cursor_resumes_and_advances_to_the_last_event_returned() {
     assert_eq!(fx.cursor(&agent).await, head);
     let empty = fx
         .events
-        .get_events(agent.id, &EventQuery::default())
+        .get_events(&agent.main, &EventQuery::default())
         .await
         .unwrap();
     assert!(empty.events.is_empty());
@@ -383,7 +383,7 @@ async fn the_cursor_resumes_and_advances_to_the_last_event_returned() {
         .await;
     let news = fx
         .events
-        .get_events(agent.id, &EventQuery::default())
+        .get_events(&agent.main, &EventQuery::default())
         .await
         .unwrap();
     assert_eq!(seqs(&news), added);
@@ -405,7 +405,7 @@ async fn a_filtered_cursor_read_moves_the_cursor_to_the_last_match() {
     let page = fx
         .events
         .get_events(
-            agent.id,
+            &agent.main,
             &EventQuery {
                 task: Some("T-1".into()),
                 ..EventQuery::default()
@@ -429,7 +429,7 @@ async fn an_explicit_after_leaves_the_cursor_alone() {
         let page = fx
             .events
             .get_events(
-                agent.id,
+                &agent.main,
                 &EventQuery {
                     after: Some(after),
                     ..EventQuery::default()
@@ -449,7 +449,7 @@ async fn the_cursor_never_moves_back() {
     fx.catch_up(&agent).await;
     let head = fx.head().await;
     fx.store()
-        .write(async |tx| events::advance_cursor(tx, agent.id, 1).await)
+        .write(async |tx| events::advance_cursor(tx, agent.main.id, 1).await)
         .await
         .unwrap();
     assert_eq!(fx.cursor(&agent).await, head);
@@ -467,14 +467,14 @@ async fn two_agents_keep_independent_cursors() {
         .await;
     let page = fx
         .events
-        .get_events(backend.id, &EventQuery::default())
+        .get_events(&backend.main, &EventQuery::default())
         .await
         .unwrap();
     assert_eq!(page.events.first().map(|event| event.seq), Some(1));
     assert_eq!(fx.cursor(&backend).await, added[0]);
     let page = fx
         .events
-        .get_events(frontend.id, &EventQuery::default())
+        .get_events(&frontend.main, &EventQuery::default())
         .await
         .unwrap();
     assert_eq!(seqs(&page), added);
@@ -490,7 +490,7 @@ async fn the_cursor_survives_a_reopened_project() {
     let events = EventService::new(fx.project.store().clone(), EventBus::new());
     assert_eq!(fx.cursor(&agent).await, cursor);
     let empty = events
-        .get_events(agent.id, &EventQuery::default())
+        .get_events(&agent.main, &EventQuery::default())
         .await
         .unwrap();
     assert!(empty.events.is_empty());
@@ -520,7 +520,7 @@ async fn new_events_count_only_what_concerns_the_agent() {
     ))
     .await;
     fx.catch_up(&frontend).await;
-    let count = || fx.events.new_event_count(frontend.id, &frontend.name);
+    let count = || fx.events.new_event_count(&frontend.main, &frontend.name);
     assert_eq!(count().await.unwrap(), 0);
     let cursor = fx.cursor(&frontend).await;
     fx.commit(vec![
@@ -536,7 +536,7 @@ async fn new_events_count_only_what_concerns_the_agent() {
     .await;
     assert_eq!(count().await.unwrap(), 5);
     assert_eq!(fx.cursor(&frontend).await, cursor, "counting moves nothing");
-    let facts_of_review = fx.events.new_event_count(review.id, &review.name).await;
+    let facts_of_review = fx.events.new_event_count(&review.main, &review.name).await;
     assert!(
         facts_of_review.unwrap() >= 2,
         "main.advanced reaches every agent"
