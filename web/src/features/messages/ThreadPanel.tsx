@@ -1,6 +1,6 @@
 import { PersonList, PersonName } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { ArrowRight, Send, SquareKanban } from "lucide-react";
 import { HrefLink } from "@/app/HrefLink";
@@ -16,7 +16,12 @@ import { formatAsOf } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { replySchema, type ReplyValues } from "./compose";
-import { isFollowing } from "./follow";
+import {
+  browserSizeObserver,
+  followResizes,
+  isFollowing,
+  toBottom,
+} from "./follow";
 import { deliveryLines, recipientActors } from "./delivery";
 import { replyPlaceholder } from "./filters";
 import { MessageBody } from "./MessageBody";
@@ -52,14 +57,23 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
   });
 
   const scroller = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLOListElement>(null);
   const following = useRef(true);
   // A thread opens at its newest message; a new message scrolls into view only for a reader at the bottom.
-  useEffect(() => {
-    const el = scroller.current;
-    if (el && following.current) {
-      el.scrollTop = el.scrollHeight;
+  useLayoutEffect(() => {
+    const box = scroller.current;
+    if (box && following.current) {
+      toBottom(box);
     }
   }, [thread.messages.length]);
+  useEffect(() => {
+    const box = scroller.current;
+    const list = content.current;
+    if (!box || !list) {
+      return undefined;
+    }
+    return followResizes(box, [box, list], following, browserSizeObserver);
+  }, []);
 
   const submit = handleSubmit(async ({ body }) => {
     if (!last) {
@@ -113,7 +127,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
         tabIndex={0}
         className="min-h-0 flex-1 overflow-y-auto"
       >
-        <ol className="flex flex-col gap-12 p-18">
+        <ol ref={content} className="flex flex-col gap-12 p-18">
           {thread.messages.map((message) => (
             <li key={message.id} className="flex flex-col gap-4">
               {isQuestion(message) ? (
