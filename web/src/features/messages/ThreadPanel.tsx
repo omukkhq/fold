@@ -1,5 +1,6 @@
 import { PersonList, PersonName } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useEffect, useRef } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { ArrowRight, Send, SquareKanban } from "lucide-react";
 import { HrefLink } from "@/app/HrefLink";
@@ -49,6 +50,15 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
     defaultValues: { body: "" },
   });
 
+  const scroller = useRef<HTMLDivElement>(null);
+  // A thread opens at its newest message, and a new message scrolls into view.
+  useEffect(() => {
+    const el = scroller.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [thread.messages.length]);
+
   const submit = handleSubmit(async ({ body }) => {
     if (!last) {
       return;
@@ -64,9 +74,9 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
   return (
     <section
       aria-label={threadTitle(thread)}
-      className="flex min-w-0 flex-1 flex-col rounded-l bg-surface inset-ring inset-ring-border-subtle"
+      className="flex min-h-0 min-w-0 flex-1 flex-col rounded-l bg-surface inset-ring inset-ring-border-subtle"
     >
-      <header className="flex items-center gap-10 border-b border-border-subtle px-18 py-14">
+      <header className="flex shrink-0 items-center gap-10 border-b border-border-subtle px-18 py-14">
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <h2 className="text-section leading-snug font-semibold text-text">
             {threadTitle(thread)}
@@ -91,73 +101,81 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
         ) : null}
       </header>
 
-      <ol className="flex flex-1 flex-col gap-12 p-18">
-        {thread.messages.map((message) => (
-          <li key={message.id} className="flex flex-col gap-4">
-            {isQuestion(message) ? (
-              <QuestionBadge thread={thread} question={message} />
-            ) : null}
-            {isQuestion(message) && message.header !== null ? (
-              <QuestionHeader header={message.header} />
-            ) : null}
-            <article className="flex flex-col gap-4 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
-              <p className="flex items-center gap-8 font-mono text-caption text-text-muted">
-                <PersonName name={message.sender} slot="messageHead" />
-                <ArrowRight
-                  aria-label="to"
-                  role="img"
-                  size={12}
-                  className="shrink-0 text-text-faint"
-                />
-                <PersonList
-                  names={recipientActors(message)}
-                  nameClassName="text-bar"
-                />
-                <span className="ml-auto font-ui text-meta text-text-faint">
-                  {formatAsOf(now, message.sent_at)}
-                </span>
-              </p>
-              {chosen.has(message.id) ? (
-                <div className="flex flex-col gap-4">
-                  <p className="text-body font-semibold text-text">
-                    {message.body.trim()}
-                  </p>
-                  <p className="text-code text-text-muted">
-                    Chosen option of the question above.
-                  </p>
-                </div>
-              ) : (
-                <MessageBody body={message.body} slug={slug} />
-              )}
+      <div
+        ref={scroller}
+        role="region"
+        aria-label="Messages"
+        tabIndex={0}
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
+        <ol className="flex flex-col gap-12 p-18">
+          {thread.messages.map((message) => (
+            <li key={message.id} className="flex flex-col gap-4">
               {isQuestion(message) ? (
-                <QuestionChoices
-                  thread={thread}
-                  question={message}
-                  onReply={onReply}
-                />
+                <QuestionBadge thread={thread} question={message} />
               ) : null}
-            </article>
-            <ul className="flex flex-col gap-2">
-              {deliveryLines(message, now).map((line) => (
-                <li
-                  key={line.actor}
-                  className="flex items-center gap-6 text-meta text-text-faint"
-                >
-                  {line.lead}
-                  <PersonName name={line.actor} className="text-bar" />
-                  {line.at === null ? null : ` · ${line.at}`}
-                  {line.note === null ? null : ` · ${line.note}`}
-                </li>
-              ))}
-            </ul>
-          </li>
-        ))}
-      </ol>
+              {isQuestion(message) && message.header !== null ? (
+                <QuestionHeader header={message.header} />
+              ) : null}
+              <article className="flex flex-col gap-4 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
+                <p className="flex items-center gap-8 font-mono text-caption text-text-muted">
+                  <PersonName name={message.sender} slot="messageHead" />
+                  <ArrowRight
+                    aria-label="to"
+                    role="img"
+                    size={12}
+                    className="shrink-0 text-text-faint"
+                  />
+                  <PersonList
+                    names={recipientActors(message)}
+                    nameClassName="text-bar"
+                  />
+                  <span className="ml-auto font-ui text-meta text-text-faint">
+                    {formatAsOf(now, message.sent_at)}
+                  </span>
+                </p>
+                {chosen.has(message.id) ? (
+                  <div className="flex flex-col gap-4">
+                    <p className="text-body font-semibold text-text">
+                      {message.body.trim()}
+                    </p>
+                    <p className="text-code text-text-muted">
+                      Chosen option of the question above.
+                    </p>
+                  </div>
+                ) : (
+                  <MessageBody body={message.body} slug={slug} />
+                )}
+                {isQuestion(message) ? (
+                  <QuestionChoices
+                    thread={thread}
+                    question={message}
+                    onReply={onReply}
+                  />
+                ) : null}
+              </article>
+              <ul className="flex flex-col gap-2">
+                {deliveryLines(message, now).map((line) => (
+                  <li
+                    key={line.actor}
+                    className="flex items-center gap-6 text-meta text-text-faint"
+                  >
+                    {line.lead}
+                    <PersonName name={line.actor} className="text-bar" />
+                    {line.at === null ? null : ` · ${line.at}`}
+                    {line.note === null ? null : ` · ${line.note}`}
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ol>
+      </div>
 
       <form
         onSubmit={(event) => void submit(event)}
         noValidate
-        className="flex flex-col gap-6 border-t border-border-subtle px-18 py-12"
+        className="flex shrink-0 flex-col gap-6 border-t border-border-subtle px-18 py-12"
       >
         <div className="flex items-center gap-8">
           <Controller
