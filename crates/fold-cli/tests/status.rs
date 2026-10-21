@@ -51,6 +51,28 @@ async fn a_bare_fld_without_a_daemon_says_so_and_starts_none() {
 }
 
 #[tokio::test]
+async fn a_bare_fld_in_a_removed_project_says_it_is_removed_and_what_brings_it_back() {
+    let host = Host::new().await;
+    let registry = fold_store::Store::open_registry(&host.data_home().join("fold/registry.db"))
+        .await
+        .unwrap();
+    let now = fold_core::Timestamp::from_millis(5).unwrap();
+    registry
+        .write(async |tx| fold_store::projects::set_removed(tx, "app", now).await)
+        .await
+        .unwrap();
+    registry.close().await.unwrap();
+    let text = stdout(&bare(&host, &host.root).await);
+    assert!(
+        text.contains(&format!(
+            "project: App (app) in {}, removed from fold; fld claude or fld init there brings it back\n",
+            host.root.display()
+        )),
+        "{text}"
+    );
+}
+
+#[tokio::test]
 async fn a_bare_fld_without_a_registry_names_no_project_and_creates_no_registry() {
     let host = Host::new().await;
     let fold_data = host.data_home().join("fold");

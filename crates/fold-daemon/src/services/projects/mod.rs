@@ -2096,16 +2096,16 @@ pub async fn root_for_dir_on_host(host: &HostPaths, cwd: &Path) -> Result<PathBu
     Ok(PathBuf::from(found?.row.root))
 }
 
-/// The registry row of the project that holds `cwd`, read from the host registry without a running daemon and without writing it: a missing registry is not created, a registry of another schema version is refused, and a lock is waited for at most `busy_timeout`.
+/// The registration of the project that holds `cwd`, a project a person removed too, read from the host registry without a running daemon and without writing it: a missing registry is not created, a registry of another schema version is refused, and a lock is waited for at most `busy_timeout`.
 pub async fn row_for_dir_on_host(
     host: &HostPaths,
     cwd: &Path,
     busy_timeout: std::time::Duration,
-) -> Result<projects::ProjectRow, ProjectError> {
+) -> Result<projects::Registration, ProjectError> {
     let registry = Store::read_registry(&host.registry_db(), busy_timeout).await?;
     let found = row_for_dir(&registry, cwd).await;
     registry.close().await;
-    found.map(|found| found.row)
+    found
 }
 
 /// The registration of the project that holds `cwd`, a project a person removed too, read from the host registry without a running daemon.
