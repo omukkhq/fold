@@ -15,7 +15,7 @@ export function ProjectSwitcher({ slug }: { slug: string }) {
   const router = useRouter();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const projects = useQuery(projectsQuery());
-  const recent = projects.data ? recentProjects(projects.data) : [];
+  const recent = projects.data ? recentProjects(projects.data, slug) : [];
 
   return (
     <Menu.Root>

@@ -29,29 +29,51 @@ describe("recentProjects", () => {
       project("e", 5),
       project("f", 2),
     ];
-    expect(recentProjects(projects).map((entry) => entry.slug)).toEqual([
+    expect(recentProjects(projects, "d").map((entry) => entry.slug)).toEqual([
       "d",
       "b",
       "e",
       "c",
       "f",
     ]);
-    expect(recentProjects(projects)).toHaveLength(RECENT_PROJECTS);
+    expect(recentProjects(projects, "d")).toHaveLength(RECENT_PROJECTS);
+  });
+
+  it("lists the open project in the last place when it is not among the most recent", () => {
+    const projects = [
+      project("a", 1),
+      project("b", 7),
+      project("c", 3),
+      project("d", 9),
+      project("e", 5),
+      project("f", 2),
+    ];
+    expect(recentProjects(projects, "a").map((entry) => entry.slug)).toEqual([
+      "d",
+      "b",
+      "e",
+      "c",
+      "a",
+    ]);
+    expect(
+      recentProjects(projects, "unknown").map((entry) => entry.slug),
+    ).toEqual(["d", "b", "e", "c", "f"]);
   });
 
   it("orders projects used at the same time by slug", () => {
     expect(
-      recentProjects([project("b", 4), project("a", 4)]).map((e) => e.slug),
+      recentProjects([project("b", 4), project("a", 4)], "a").map(
+        (e) => e.slug,
+      ),
     ).toEqual(["a", "b"]);
   });
 
   it("names the slug only beside a name that another listed project shares", () => {
     expect(
-      recentProjects([
-        project("nobs", 4),
-        project("nobs-2", 3, "nobs"),
-        project("web", 2),
-      ]),
+      recentProjects(
+        [project("nobs", 4), project("nobs-2", 3, "nobs"), project("web", 2)],
+        "web",
+      ),
     ).toEqual([
       { slug: "nobs", name: "nobs", detail: "nobs" },
       { slug: "nobs-2", name: "nobs", detail: "nobs-2" },
@@ -62,11 +84,11 @@ describe("recentProjects", () => {
   it("leaves out a project a person removed", () => {
     const removed = { ...project("old", 9), removed_at: 9, available: false };
     expect(
-      recentProjects([removed, project("web", 1)]).map((e) => e.slug),
+      recentProjects([removed, project("web", 1)], "web").map((e) => e.slug),
     ).toEqual(["web"]);
   });
 
   it("lists nothing for no projects", () => {
-    expect(recentProjects([])).toEqual([]);
+    expect(recentProjects([], "web")).toEqual([]);
   });
 });

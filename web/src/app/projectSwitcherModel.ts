@@ -10,16 +10,21 @@ export interface SwitcherEntry {
   detail: string | null;
 }
 
-/** The most recently used projects in fold, newest first by the daemon's `last_used_at` and then by slug, at most `RECENT_PROJECTS`; a removed project is left out. */
+/** The most recently used projects in fold, newest first by the daemon's `last_used_at` and then by slug, at most `RECENT_PROJECTS`; a removed project is left out. The project `current` is always listed: when it is not among the most recent, it takes the last place, so the switcher shows which project is open. */
 export function recentProjects(
   projects: readonly ProjectSummary[],
+  current: string,
 ): SwitcherEntry[] {
-  const recent = projects
+  const inFold = projects
     .filter((project) => project.removed_at === null)
     .sort(
       (a, b) => b.last_used_at - a.last_used_at || a.slug.localeCompare(b.slug),
-    )
-    .slice(0, RECENT_PROJECTS);
+    );
+  const recent = inFold.slice(0, RECENT_PROJECTS);
+  const open = inFold.find((project) => project.slug === current);
+  if (open !== undefined && !recent.includes(open)) {
+    recent[RECENT_PROJECTS - 1] = open;
+  }
   const counts = new Map<string, number>();
   for (const project of recent) {
     counts.set(project.name, (counts.get(project.name) ?? 0) + 1);
