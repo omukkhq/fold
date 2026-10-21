@@ -62,6 +62,11 @@ impl Host {
         Self { dir, daemon }
     }
 
+    /// Closes the stub workers and waits for them to exit, so none is killed while it writes its coverage profile.
+    async fn stop(self) {
+        self.daemon.shutdown().await;
+    }
+
     fn project(&self) -> std::path::PathBuf {
         self.dir.path().join("demo")
     }
@@ -274,6 +279,7 @@ async fn the_seed_fills_every_column_and_every_state_of_the_review_screens() {
         .find(|card| card["title"] == "Add the user routes")
         .unwrap();
     assert_eq!(routes["status"], "in_progress");
+    host.stop().await;
 }
 
 #[tokio::test]
@@ -292,4 +298,5 @@ async fn a_second_run_fails_with_seed_exists_and_changes_nothing() {
     assert_eq!(stored_board(host.get("/board").await), board);
     assert_eq!(host.get("/proposals").await, proposals);
     assert!(Path::new(&host.project()).exists());
+    host.stop().await;
 }

@@ -93,6 +93,11 @@ impl Host {
         }
     }
 
+    /// Closes the stub workers and waits for them to exit, so none is killed while it writes its coverage profile.
+    async fn stop(self) {
+        self.daemon.shutdown().await;
+    }
+
     fn script(&self, agent: &str, script: &Value) {
         let path = self
             .root
@@ -250,6 +255,7 @@ async fn a_stub_lead_and_its_task_worker_run_their_scripts_through_the_fold_tool
             "{agent} ran no stub"
         );
     }
+    host.stop().await;
 }
 
 #[tokio::test]
@@ -273,4 +279,5 @@ async fn a_failed_step_fails_the_stub_worker() {
         .await;
     let log = std::fs::read_to_string(host.worker_file("web-lead", "stub.log")).unwrap();
     assert!(log.contains("get_task failed: task_not_found"), "{log}");
+    host.stop().await;
 }
