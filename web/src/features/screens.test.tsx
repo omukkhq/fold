@@ -11,7 +11,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Suspense, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { keys } from "../api/keys";
+import { projectsQuery } from "../api/queries";
 import { createAppRouter } from "../app/router";
 import { createQueryClient } from "../app/queryClient";
 import { ThemeProvider } from "../theme/ThemeProvider";
@@ -274,7 +274,7 @@ describe("Projects screen", () => {
 
   it("shows the empty state with the next step when there are no projects", async () => {
     const queryClient = createQueryClient();
-    queryClient.setQueryData(keys.projects(), []);
+    queryClient.setQueryData(projectsQuery().queryKey, []);
     render(
       <ThemeProvider>
         <QueryClientProvider client={queryClient}>

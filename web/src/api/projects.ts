@@ -1,6 +1,6 @@
 import { api } from "./client";
 import { unwrap } from "./result";
-import { costDays } from "../format/days";
+import { addDays, costDays } from "../format/days";
 import type { components } from "./schema";
 
 export type ProjectSummary = components["schemas"]["ProjectSummary"];
@@ -8,9 +8,9 @@ export type ProjectOverview = components["schemas"]["ProjectOverview"];
 export type PauseEntry = components["schemas"]["PauseEntry"];
 export type ProjectFolderState = components["schemas"]["ProjectFolderState"];
 
-/** Every project, the ones a person removed too: the projects page searches them, and every other screen leaves them out. Each project's cost of today and of the last seven days starts at the viewer's own midnight. */
-export async function listProjects(): Promise<ProjectSummary[]> {
-  const { today, week } = costDays(Date.now());
+/** Every project, the ones a person removed too: the projects page searches them, and every other screen leaves them out. Each project's cost of today counts from `today`, the viewer's own midnight, and the cost of the last seven days from six days before it. */
+export async function listProjects(today: number): Promise<ProjectSummary[]> {
+  const week = addDays(today, -6);
   const { projects } = await unwrap(
     api.GET("/api/v1/projects", {
       params: { query: { include_removed: true, today, week } },

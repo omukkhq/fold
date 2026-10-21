@@ -5,6 +5,8 @@
  */
 export const keys = {
   projects: () => ["@projects"] as const,
+  /** The list read on the viewer's day that starts at `day`, under the projects prefix: its cost of today and of the last seven days moves at midnight. */
+  projectList: (day: number) => ["@projects", day] as const,
   session: () => ["@session"] as const,
   humans: () => ["@humans"] as const,
   project: (slug: string) => [slug, "project"] as const,
@@ -99,8 +101,9 @@ export const keys = {
   needsYou: (slug: string) => [slug, "needs-you"] as const,
   /** Every cost read of the project, under one prefix, which the end of a worker's turn refreshes. */
   cost: (slug: string) => [slug, "cost"] as const,
-  projectCost: (slug: string, range: string) =>
-    [slug, "cost", "project", range] as const,
+  /** `since` is the range's start, so a range that starts at the viewer's midnight is read again once the day changes. */
+  projectCost: (slug: string, range: string, since: number | null) =>
+    [slug, "cost", "project", range, since] as const,
   taskCost: (slug: string, task: string) =>
     [slug, "cost", "task", task] as const,
   reviewBatches: (slug: string) => [slug, "review-batches"] as const,

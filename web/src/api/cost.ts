@@ -43,7 +43,7 @@ export const projectCostQuery = (
   since: number | null,
 ) =>
   queryOptions({
-    queryKey: keys.projectCost(slug, range),
+    queryKey: keys.projectCost(slug, range, since),
     queryFn: () => getProjectCost(slug, since),
     staleTime: Infinity,
   });

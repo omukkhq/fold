@@ -26,18 +26,14 @@ describe("projects", () => {
         },
       },
     });
-    expect((await listProjects()).map((p) => p.available)).toEqual([
+    const today = new Date(2026, 9, 21).getTime();
+    expect((await listProjects(today)).map((p) => p.available)).toEqual([
       true,
       false,
     ]);
-    const today = Number(calls[0]?.search.get("today"));
-    const week = Number(calls[0]?.search.get("week"));
-    expect(new Date(today).getHours()).toBe(0);
-    expect(today).toBeLessThanOrEqual(Date.now());
-    expect(new Date(week).getDate()).toBe(
-      new Date(
-        new Date(today).setDate(new Date(today).getDate() - 6),
-      ).getDate(),
+    expect(Number(calls[0]?.search.get("today"))).toBe(today);
+    expect(Number(calls[0]?.search.get("week"))).toBe(
+      new Date(2026, 9, 15).getTime(),
     );
     expect(calls[0]?.search.get("include_removed")).toBe("true");
   });

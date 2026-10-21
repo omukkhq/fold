@@ -39,7 +39,10 @@ describe("cost", () => {
 
   it("keeps every cost read under the cost prefix", () => {
     expect(projectCostQuery("demo", "week", 5).queryKey).toEqual(
-      keys.projectCost("demo", "week"),
+      keys.projectCost("demo", "week", 5),
+    );
+    expect(projectCostQuery("demo", "today", 9).queryKey).not.toEqual(
+      projectCostQuery("demo", "today", 5).queryKey,
     );
     expect(taskCostQuery("demo", "T-1").queryKey).toEqual(
       keys.taskCost("demo", "T-1"),
