@@ -28,25 +28,26 @@ export function recipientState(r: RecipientView, now: number): Delivery {
       note: null,
     };
   }
+  const unreachable = r.reachable === false ? UNREACHABLE_NOTE : null;
   // A notice that got through stays in the session even when a later post to the agent fails.
   if (r.pushed_at !== null) {
     return {
       lead: "waiting for",
       actor: r.name,
       at: formatAsOf(now, r.pushed_at),
-      note: "it is busy until its current step ends",
+      note: unreachable ?? "it is busy until its current step ends",
     };
   }
   return {
     lead: "not delivered to",
     actor: r.name,
     at: null,
-    note:
-      r.reachable === false
-        ? "not reachable now · it gets the message when it reads its inbox"
-        : null,
+    note: unreachable,
   };
 }
+
+const UNREACHABLE_NOTE =
+  "not reachable now · it gets the message when it reads its inbox";
 
 /** One line per recipient, in the order the daemon lists them. */
 export function deliveryLines(message: MessageView, now: number): Delivery[] {

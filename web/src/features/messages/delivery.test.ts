@@ -81,8 +81,17 @@ describe("delivery", () => {
       recipientState(
         recipient("backend-lead", { pushed_at: NOW, reachable: false }),
         NOW,
-      ).lead,
-    ).toBe("waiting for");
+      ),
+    ).toMatchObject({
+      lead: "waiting for",
+      note: "not reachable now · it gets the message when it reads its inbox",
+    });
+    expect(
+      recipientState(
+        recipient("backend-lead", { pushed_at: NOW, reachable: true }),
+        NOW,
+      ).note,
+    ).toBe("it is busy until its current step ends");
     expect(
       recipientState(
         recipient("backend-lead", { pushed_at: NOW, delivered_at: NOW }),
