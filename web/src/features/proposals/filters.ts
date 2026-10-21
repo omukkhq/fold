@@ -15,6 +15,8 @@ export interface ListSearch {
   state?: ProposalState;
   claim?: ClaimFilter;
   conflicted?: true;
+  /** Only the proposals whose current version waits for your review. */
+  waiting?: true;
 }
 
 function isState(value: unknown): value is ProposalState {
@@ -23,12 +25,15 @@ function isState(value: unknown): value is ProposalState {
 
 /** Unknown values are dropped, so an old or edited address still opens the list. */
 export function parseListSearch(search: Record<string, unknown>): ListSearch {
-  const { state, claim, conflicted } = search;
+  const { state, claim, conflicted, waiting } = search;
   return {
     ...(isState(state) && state !== "open" ? { state } : {}),
     ...(claim === "claimed" || claim === "unclaimed" ? { claim } : {}),
     ...(conflicted === true || conflicted === "true"
       ? { conflicted: true as const }
+      : {}),
+    ...(waiting === true || waiting === "true"
+      ? { waiting: true as const }
       : {}),
   };
 }
@@ -37,13 +42,16 @@ export function shownState(search: ListSearch): ProposalState {
   return search.state ?? "open";
 }
 
+/** `waitingForYou` holds the ids the daemon names as waiting for your review; the waiting filter keeps only those. */
 export function filterProposals(
   proposals: readonly ProposalSummary[],
   search: ListSearch,
+  waitingForYou: readonly string[] = [],
 ): ProposalSummary[] {
   const state = shownState(search);
   return proposals
     .filter((p) => p.state === state)
+    .filter((p) => !search.waiting || waitingForYou.includes(p.id))
     .filter((p) => {
       if (search.claim === "claimed") return p.review_claim !== null;
       if (search.claim === "unclaimed") return p.review_claim === null;
@@ -67,7 +75,16 @@ export function countByState(
 
 /** True when a filter other than the state segment narrows the list. */
 export function isNarrowed(search: ListSearch): boolean {
-  return search.claim !== undefined || search.conflicted === true;
+  return (
+    search.claim !== undefined ||
+    search.conflicted === true ||
+    search.waiting === true
+  );
+}
+
+/** The waiting filter's text, with the number of proposals that wait for your review. */
+export function waitingLabel(count: number): string {
+  return count === 0 ? "Waits for you" : `Waits for you (${String(count)})`;
 }
 
 export function listHref(slug: string, search: ListSearch): string {
@@ -76,6 +93,7 @@ export function listHref(slug: string, search: ListSearch): string {
     params.set("state", search.state);
   if (search.claim) params.set("claim", search.claim);
   if (search.conflicted) params.set("conflicted", "true");
+  if (search.waiting) params.set("waiting", "true");
   return withQuery(projectPath(slug, "proposals"), params);
 }
 

@@ -358,8 +358,11 @@ function invalidationKeys(
     case "label":
       return [board, keys.labels(slug), ...taskKey];
     case "task":
-      // Needs you lists human tasks in Todo and tasks with a blocker, which any task event can add or remove.
-      return [board, ...taskKey, keys.needsYou(slug)];
+      // Needs you lists human tasks in Todo and tasks with a blocker, which any task event can add or remove; the human review mark also decides which proposals wait for the human.
+      return type === "task.human_review_set" ||
+        type === "task.human_review_cleared"
+        ? [board, ...taskKey, keys.needsYou(slug), keys.proposals(slug)]
+        : [board, ...taskKey, keys.needsYou(slug)];
     case "dependency":
     case "checklist":
       return [board, ...taskKey];

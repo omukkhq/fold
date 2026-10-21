@@ -712,6 +712,22 @@ describe("invalidation rules", () => {
     expect(hit(keys.needsYou(slug))).toBe(false);
   });
 
+  it("refreshes the proposals that wait for the human when the human review mark or a review changes", () => {
+    for (const [type, extra] of [
+      ["task.human_review_set", { task: "T-3" }],
+      ["task.human_review_cleared", { task: "T-3" }],
+      ["review.submitted", { proposal: "P-3" }],
+      ["proposal.version_added", { proposal: "P-3" }],
+    ] as const) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type, extra));
+      expect(hit(keys.proposals(slug)), type).toBe(true);
+    }
+    invalidated = [];
+    applyEvent(client, slug, ev("task.updated", { task: "T-3" }));
+    expect(hit(keys.proposals(slug))).toBe(false);
+  });
+
   it("refreshes the batches for batch, proposal and review events", () => {
     applyEvent(client, slug, ev("review.batch_created", { proposal: "P-3" }));
     expect(hit(keys.reviewBatches(slug))).toBe(true);

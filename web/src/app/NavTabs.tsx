@@ -11,7 +11,7 @@ import {
   Plus,
   type LucideIcon,
 } from "lucide-react";
-import { awaitingHumanQuery } from "../api/queries";
+import { awaitingHumanQuery, proposalsWaitingQuery } from "../api/queries";
 import { HrefLink } from "./HrefLink";
 import { cn } from "../lib/cn";
 import { focusRing } from "../lib/focus";
@@ -34,10 +34,15 @@ const ICONS: Record<NavId, LucideIcon> = {
 const MESSAGES_BADGE =
   "Threads with a question that waits for your answer, marked Waits for you";
 
+const PROPOSALS_BADGE =
+  "Open proposals whose current version waits for your review, marked Waits for you";
+
 export function NavTabs({ slug }: { slug: string }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const active = activeNav(pathname);
   const { data: awaiting = 0 } = useQuery(awaitingHumanQuery(slug));
+  const { data: waitingReviews = [] } = useQuery(proposalsWaitingQuery(slug));
+  const reviews = waitingReviews.length;
   return (
     <nav aria-label="Project" className={cn(TAB_LIST, "shrink-0 bg-surface")}>
       {/* The row scrolls sideways on a phone. A scroll box clips in both directions, so the row reaches 4px past the bar on each side to keep the tabs' focus rings whole, and the divider stays on the bar so it spans the width while the row scrolls. */}
@@ -54,6 +59,17 @@ export function NavTabs({ slug }: { slug: string }) {
             >
               <Icon size={15} aria-hidden />
               {entry.label}
+              {entry.id === "proposals" && reviews > 0 ? (
+                <Tooltip content={PROPOSALS_BADGE}>
+                  <span
+                    role="status"
+                    aria-label={`${String(reviews)} ${reviews === 1 ? "proposal waits" : "proposals wait"} for your review`}
+                    className="rounded-s bg-ink px-6 py-2 text-caption leading-snug font-semibold text-on-ink"
+                  >
+                    {reviews}
+                  </span>
+                </Tooltip>
+              ) : null}
               {entry.id === "messages" && awaiting > 0 ? (
                 <Tooltip content={MESSAGES_BADGE}>
                   <span

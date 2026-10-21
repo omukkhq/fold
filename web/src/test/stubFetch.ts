@@ -90,7 +90,7 @@ export function errorReply(status: number, code: string): StubReply {
 }
 
 /**
- * The routes every screen inside the project shell reads besides its own: the session, the project list, each project, its agents, its messages and what needs a human.
+ * The routes every screen inside the project shell reads besides its own: the session, the project list, each project, its agents, its messages, its proposals and what needs a human.
  */
 export function shellRoutes(slugs: readonly string[]): Record<string, Route> {
   const projects = slugs.map((slug) => ({ slug, name: slug, available: true }));
@@ -106,6 +106,9 @@ export function shellRoutes(slugs: readonly string[]): Record<string, Route> {
       body: { items: [], next: null, total_awaiting_human: 0 },
     };
     routes[`GET ${base}/needs-you`] = { body: { items: [] } };
+    routes[`GET ${base}/proposals`] = {
+      body: { proposals: [], waiting_for_you: [] },
+    };
   }
   return routes;
 }

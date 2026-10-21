@@ -406,7 +406,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lists the proposals in number order. */
+        /** Lists the proposals in number order, with the ones that wait for the signed-in human's review. */
         get: operations["list_proposals"];
         put?: never;
         post?: never;
@@ -2782,6 +2782,13 @@ export interface components {
         ProposalList: {
             /** @description In number order. */
             proposals: components["schemas"]["ProposalSummary"][];
+            /**
+             * @description The open proposals of the whole project, whatever the filter, whose current version waits for the signed-in human's review, in number order: the `human_review` items of Needs you that are theirs, which the Proposals tab counts. Empty when the request names no human.
+             * @example [
+             *       "P-3"
+             *     ]
+             */
+            waiting_for_you: string[];
         };
         ProposalReview: {
             body: string;
