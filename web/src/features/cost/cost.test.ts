@@ -94,6 +94,31 @@ describe("costChart", () => {
     expect(chart.bars[6]?.title).toBe("Wed Oct 21");
   });
 
+  it("adds the hour slots of a long range into their days", () => {
+    const chart = costChart(
+      projectCost(TODAY, {
+        slot_minutes: 60,
+        slots: [
+          {
+            start: TODAY + 23 * 60 * 60 * 1000,
+            role: "task_worker",
+            cost_micro_usd: 700_000,
+          },
+          {
+            start: TODAY - 60 * 60 * 1000,
+            role: "reviewer",
+            cost_micro_usd: 300_000,
+          },
+        ],
+      }),
+      "all",
+      NOW,
+    );
+    expect(chart.bars.slice(-2).map((bar) => bar.total)).toEqual([
+      300_000, 700_000,
+    ]);
+  });
+
   it("draws all time from the first turn's day, by week when it is long", () => {
     const chart = costChart(projectCost(TODAY), "all", NOW);
     expect(chart.bars.map((bar) => bar.tick)).toEqual([

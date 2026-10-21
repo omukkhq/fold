@@ -17,18 +17,21 @@ pub struct ProjectCost {
     pub since: Option<Timestamp>,
     pub report: CostReport,
     pub slots: Vec<CostSlot>,
+    pub slot_millis: i64,
 }
 
 impl AgentService {
     /// The cost of the turns that ended at or after `since`, of every turn without it. Costs are Claude Code's reported values only.
     pub async fn project_cost(&self, since: Option<Timestamp>) -> Result<ProjectCost, AgentError> {
         let pool = self.store.read();
+        let slot_millis = cost::slot_millis(since, self.clock.now());
         let groups = agents::cost_groups(pool, since, None).await?;
-        let slots = agents::cost_slots(pool, since).await?;
+        let slots = agents::cost_slots(pool, since, slot_millis).await?;
         Ok(ProjectCost {
             since,
             report: cost::report(&groups),
             slots,
+            slot_millis,
         })
     }
 

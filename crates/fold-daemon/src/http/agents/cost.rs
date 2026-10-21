@@ -143,7 +143,7 @@ pub struct ProjectCostView {
     pub workers: Vec<WorkerCost>,
     /// Every task a turn in the range counts for, the most expensive first.
     pub tasks: Vec<TaskCost>,
-    /// Oldest first; a slot without a turn is left out. Every time zone's offset is a whole number of slots, so a viewer adds them up into its own hours and days.
+    /// Oldest first; a slot without a turn is left out. A range of up to seven days has 15-minute slots, which add up to any viewer's own hours and days, because every time zone's offset is a whole number of them; a longer range has hour slots, which a viewer adds up into days.
     pub slots: Vec<CostSlot>,
     #[schema(example = 15)]
     pub slot_minutes: u32,
@@ -155,6 +155,7 @@ impl From<ProjectCost> for ProjectCostView {
             since,
             report,
             slots,
+            slot_millis,
         } = cost;
         let name = |area: Option<fold_core::AreaName>| area.map(|area| area.to_string());
         Self {
@@ -225,7 +226,7 @@ impl From<ProjectCost> for ProjectCostView {
                     cost_micro_usd: slot.cost_micro_usd,
                 })
                 .collect(),
-            slot_minutes: u32::try_from(fold_store::agents::SLOT_MILLIS / 60_000).unwrap_or(15),
+            slot_minutes: u32::try_from(slot_millis / 60_000).unwrap_or(15),
         }
     }
 }

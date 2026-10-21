@@ -1,6 +1,7 @@
+use fold_core::cost::{LONG_SLOT_MILLIS, SHORT_SLOT_MILLIS as SLOT_MILLIS};
 use fold_core::{AgentName, ProposalId, Role, TaskId, Timestamp, WorkerState};
 use fold_store::Store;
-use fold_store::agents::{self, CostSlot, CostTotals, NewWorkerProcess, SLOT_MILLIS, TurnTotals};
+use fold_store::agents::{self, CostSlot, CostTotals, NewWorkerProcess, TurnTotals};
 use fold_store::tasks;
 
 use crate::common::{count, exec, open};
@@ -321,7 +322,9 @@ async fn the_cost_groups_slots_and_totals_count_every_worker_in_its_range() {
     );
 
     assert_eq!(
-        agents::cost_slots(store.read(), None).await.unwrap(),
+        agents::cost_slots(store.read(), None, SLOT_MILLIS)
+            .await
+            .unwrap(),
         [
             CostSlot {
                 start: at(0),
@@ -339,6 +342,22 @@ async fn the_cost_groups_slots_and_totals_count_every_worker_in_its_range() {
                 cost_micro_usd: 40
             },
         ]
+    );
+    let slot = |role: Role, cost_micro_usd: u64| CostSlot {
+        start: at(0),
+        role,
+        cost_micro_usd,
+    };
+    assert_eq!(
+        agents::cost_slots(store.read(), None, LONG_SLOT_MILLIS)
+            .await
+            .unwrap(),
+        [
+            slot(Role::AreaLead, 100),
+            slot(Role::Reviewer, 40),
+            slot(Role::TaskWorker, 260),
+        ],
+        "an hour slot holds the first three quarter hours"
     );
     assert_eq!(
         agents::cost_totals(store.read(), at(SLOT_MILLIS), at(3 * SLOT_MILLIS))

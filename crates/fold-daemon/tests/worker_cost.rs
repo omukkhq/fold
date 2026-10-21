@@ -143,7 +143,7 @@ async fn a_stopped_and_resumed_task_worker_keeps_every_turn_in_the_project_and_t
     assert_eq!(task["area"], "web");
     assert_eq!(task["build_micro_usd"], second.cost_micro_usd);
     assert_eq!(task["review_micro_usd"], 0);
-    assert_eq!(all["slot_minutes"], 15);
+    assert_eq!(all["slot_minutes"], 60, "all time has hour slots");
     let slots: u64 = all["slots"]
         .as_array()
         .unwrap()
@@ -175,6 +175,10 @@ async fn a_stopped_and_resumed_task_worker_keeps_every_turn_in_the_project_and_t
         "only the turn after the resume ended since then"
     );
     assert_eq!(recent["since"], resumed_at.as_millis());
+    assert_eq!(
+        recent["slot_minutes"], 15,
+        "a range of minutes has quarter hours"
+    );
 
     let of_task = get(&harness, &format!("/api/v1/projects/{SLUG}/cost/tasks/T-1")).await;
     assert_eq!(of_task["build_micro_usd"], second.cost_micro_usd);

@@ -13,6 +13,25 @@ pub fn session_turn(reported: u64, session_total: u64) -> (u64, u64) {
     }
 }
 
+/// The slot of the cost by time for a range of at most [`SHORT_RANGE_MILLIS`]: every time zone's offset is a whole number of quarter hours, so the slots add up to the local hours and days of any viewer.
+pub const SHORT_SLOT_MILLIS: i64 = 15 * 60 * 1000;
+
+/// The slot of a longer range, which a viewer adds up into days only. A time zone with a half-hour offset sees each hour slot in the day it starts in.
+pub const LONG_SLOT_MILLIS: i64 = 60 * 60 * 1000;
+
+/// The longest range that gets [`SHORT_SLOT_MILLIS`]: seven days and the hour a clock change adds.
+pub const SHORT_RANGE_MILLIS: i64 = (7 * 24 + 1) * 60 * 60 * 1000;
+
+/// The slot length for the turns since `since`, every turn without it, at `now`.
+pub fn slot_millis(since: Option<Timestamp>, now: Timestamp) -> i64 {
+    match since {
+        Some(since) if now.as_millis().saturating_sub(since.as_millis()) <= SHORT_RANGE_MILLIS => {
+            SHORT_SLOT_MILLIS
+        }
+        _ => LONG_SLOT_MILLIS,
+    }
+}
+
 /// The turns of one worker with one model for one subject: a task its task worker built, or a proposal its reviewer reviewed with that proposal's task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnGroup {
@@ -359,6 +378,22 @@ mod tests {
         assert_eq!(session_turn(6136, 6136), (0, 6136));
         assert_eq!(session_turn(0, 6136), (0, 6136));
         assert_eq!(session_turn(300, 6136), (300, 300));
+    }
+
+    #[test]
+    fn a_range_of_a_week_has_quarter_hour_slots_and_a_longer_one_hours() {
+        let now = at(30 * 24 * 60 * 60 * 1000);
+        let before = |millis: i64| Some(at(now.as_millis() - millis));
+        assert_eq!(slot_millis(before(60_000), now), SHORT_SLOT_MILLIS);
+        assert_eq!(
+            slot_millis(before(SHORT_RANGE_MILLIS), now),
+            SHORT_SLOT_MILLIS
+        );
+        assert_eq!(
+            slot_millis(before(SHORT_RANGE_MILLIS + 1), now),
+            LONG_SLOT_MILLIS
+        );
+        assert_eq!(slot_millis(None, now), LONG_SLOT_MILLIS);
     }
 
     #[test]

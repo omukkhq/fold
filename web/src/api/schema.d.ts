@@ -2918,7 +2918,7 @@ export interface components {
              * @example 15
              */
             slot_minutes: number;
-            /** @description Oldest first; a slot without a turn is left out. Every time zone's offset is a whole number of slots, so a viewer adds them up into its own hours and days. */
+            /** @description Oldest first; a slot without a turn is left out. A range of up to seven days has 15-minute slots, which add up to any viewer's own hours and days, because every time zone's offset is a whole number of them; a longer range has hour slots, which a viewer adds up into days. */
             slots: components["schemas"]["CostSlot"][];
             /** @description Every task a turn in the range counts for, the most expensive first. */
             tasks: components["schemas"]["TaskCost"][];

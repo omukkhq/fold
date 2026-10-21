@@ -7,9 +7,6 @@ use crate::columns::{count, time};
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
-/// The length of a [`CostSlot`]: every time zone's offset is a whole number of quarter hours, so the slots add up to the local hours and days of any viewer.
-pub const SLOT_MILLIS: i64 = 15 * 60 * 1000;
-
 /// Appends the turn that just ended for worker row `id`, which added `cost_micro_usd` to the row's total. It copies the row's role, area and model, and counts the turn for one subject. A failed turn of a row that is stopping or has ended is the interrupt of a stop, which the row's state shows before its result comes. A task worker's turn counts for the task of its agent's newest unreleased implementation claim; without one, for its one bound task; with several bound tasks, for the bound task its agent claimed last. A reviewer's turn counts the same way for a proposal, through review claims and bound proposals. A lead's turn, and a turn none of these name, counts for no subject.
 pub(super) async fn insert_turn(
     tx: &mut WriteTx,
@@ -142,7 +139,7 @@ pub async fn cost_groups(
         .collect()
 }
 
-/// The cost of the turns of one role in one [`SLOT_MILLIS`] slot.
+/// The cost of the turns of one role in one slot, whose length [`fold_core::cost::slot_millis`] picks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CostSlot {
     pub start: Timestamp,
@@ -150,10 +147,11 @@ pub struct CostSlot {
     pub cost_micro_usd: u64,
 }
 
-/// The cost of the turns that ended at or after `since` by slot and role, oldest first; a slot without a turn is left out.
+/// The cost of the turns that ended at or after `since` by slot of `slot_millis` and role, oldest first; a slot without a turn is left out.
 pub async fn cost_slots(
     executor: impl SqliteExecutor<'_>,
     since: Option<Timestamp>,
+    slot_millis: i64,
 ) -> Result<Vec<CostSlot>, StoreError> {
     let since = since.map_or(i64::MIN, Timestamp::as_millis);
     let rows = sqlx::query!(
@@ -163,7 +161,7 @@ pub async fn cost_slots(
            GROUP BY created_at / ?2, role
            ORDER BY created_at / ?2, role"#,
         since,
-        SLOT_MILLIS
+        slot_millis
     )
     .fetch_all(executor)
     .await?;
