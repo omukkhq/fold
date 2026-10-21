@@ -13,8 +13,11 @@ CREATE TABLE worker_turns (
     cache_read_tokens INTEGER NOT NULL CONSTRAINT worker_turns_cache_read_count CHECK (cache_read_tokens >= 0),
     cache_write_tokens INTEGER NOT NULL CONSTRAINT worker_turns_cache_write_count CHECK (cache_write_tokens >= 0),
     failed INTEGER NOT NULL CONSTRAINT worker_turns_failed_flag CHECK (failed IN (0, 1)),
+    -- The interrupt of a stop ended the turn in an error: it keeps the cost the turn added, but it is not a turn of the worker's own.
+    interrupted INTEGER NOT NULL CONSTRAINT worker_turns_interrupted_flag CHECK (interrupted IN (0, 1)),
     created_at INTEGER NOT NULL,
-    CONSTRAINT worker_turns_one_subject CHECK (task_id IS NULL OR proposal_id IS NULL)
+    CONSTRAINT worker_turns_one_subject CHECK (task_id IS NULL OR proposal_id IS NULL),
+    CONSTRAINT worker_turns_interrupt_failed CHECK (interrupted = 0 OR failed = 1)
 );
 
 CREATE INDEX worker_turns_created ON worker_turns (created_at);

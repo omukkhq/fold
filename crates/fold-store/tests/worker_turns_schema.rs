@@ -359,7 +359,7 @@ async fn a_turn_is_append_only_and_carries_its_workers_role_and_area() {
     turn(&store, lead, 5, 1_000).await;
     let insert = |role: &str, area: &str| {
         format!(
-            "INSERT INTO worker_turns (worker_process_id, role, area_id, cost_micro_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, failed, created_at) VALUES ({lead}, '{role}', {area}, 0, 0, 0, 0, 0, 0, 0)"
+            "INSERT INTO worker_turns (worker_process_id, role, area_id, cost_micro_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, failed, interrupted, created_at) VALUES ({lead}, '{role}', {area}, 0, 0, 0, 0, 0, 0, 0, 0)"
         )
     };
     for (role, area) in [("reviewer", "21"), ("area_lead", "NULL")] {
@@ -373,7 +373,7 @@ async fn a_turn_is_append_only_and_carries_its_workers_role_and_area() {
     let both = exec(
         &store,
         &format!(
-            "INSERT INTO worker_turns (worker_process_id, role, area_id, task_id, proposal_id, cost_micro_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, failed, created_at) VALUES ({lead}, 'area_lead', 21, 1, 1, 0, 0, 0, 0, 0, 0, 0)"
+            "INSERT INTO worker_turns (worker_process_id, role, area_id, task_id, proposal_id, cost_micro_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, failed, interrupted, created_at) VALUES ({lead}, 'area_lead', 21, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0)"
         ),
     )
     .await
@@ -390,4 +390,50 @@ async fn a_turn_is_append_only_and_carries_its_workers_role_and_area() {
         );
     }
     assert_eq!(count(&store, "SELECT COUNT(*) FROM worker_turns").await, 2);
+}
+
+#[tokio::test]
+async fn a_stops_interrupt_keeps_its_cost_but_is_not_a_turn() {
+    let (_dir, store) = seeded().await;
+    let lead = process(&store, 1, Role::AreaLead, Some(21)).await;
+    let failed = |reported: u64| TurnTotals {
+        reported_micro_usd: reported,
+        failed: true,
+        ..TurnTotals::default()
+    };
+    turn(&store, lead, 100, 1_000).await;
+    // A failed turn of a running worker is one of its turns.
+    store
+        .write(async |tx| agents::record_turn(tx, lead, failed(130), at(2_000)).await)
+        .await
+        .unwrap();
+    store
+        .write(async |tx| {
+            agents::set_worker_state(tx, lead, WorkerState::Stopping, at(2_500)).await?;
+            agents::record_turn(tx, lead, failed(150), at(3_000)).await
+        })
+        .await
+        .unwrap();
+    let flags = sqlx::query_as::<_, (i64, i64, i64)>(
+        "SELECT cost_micro_usd, failed, interrupted FROM worker_turns WHERE worker_process_id = ? ORDER BY id",
+    )
+    .bind(lead)
+    .fetch_all(store.read())
+    .await
+    .unwrap();
+    assert_eq!(flags, [(100, 0, 0), (30, 1, 0), (20, 1, 1)]);
+    let groups = agents::cost_groups(store.read(), None, None).await.unwrap();
+    assert_eq!(
+        (groups[0].turns, groups[0].cost_micro_usd),
+        (2, 150),
+        "the interrupt's cost counts, its turn does not"
+    );
+    let refused = exec(
+        &store,
+        &format!(
+            "INSERT INTO worker_turns (worker_process_id, role, area_id, cost_micro_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, failed, interrupted, created_at) VALUES ({lead}, 'area_lead', 21, 0, 0, 0, 0, 0, 0, 1, 0)"
+        ),
+    )
+    .await;
+    assert!(refused.is_err(), "only a failed turn is an interrupt");
 }

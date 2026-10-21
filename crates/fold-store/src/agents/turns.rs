@@ -10,7 +10,7 @@ use crate::store::WriteTx;
 /// The length of a [`CostSlot`]: every time zone's offset is a whole number of quarter hours, so the slots add up to the local hours and days of any viewer.
 pub const SLOT_MILLIS: i64 = 15 * 60 * 1000;
 
-/// Appends the turn that just ended for worker row `id`, which added `cost_micro_usd` to the row's total. It copies the row's role, area and model, and counts the turn for one subject. A task worker's turn counts for the task of its agent's newest unreleased implementation claim; without one, for its one bound task; with several bound tasks, for the bound task its agent claimed last. A reviewer's turn counts the same way for a proposal, through review claims and bound proposals. A lead's turn, and a turn none of these name, counts for no subject.
+/// Appends the turn that just ended for worker row `id`, which added `cost_micro_usd` to the row's total. It copies the row's role, area and model, and counts the turn for one subject. A failed turn of a row that is stopping or has ended is the interrupt of a stop, which the row's state shows before its result comes. A task worker's turn counts for the task of its agent's newest unreleased implementation claim; without one, for its one bound task; with several bound tasks, for the bound task its agent claimed last. A reviewer's turn counts the same way for a proposal, through review claims and bound proposals. A lead's turn, and a turn none of these name, counts for no subject.
 pub(super) async fn insert_turn(
     tx: &mut WriteTx,
     id: i64,
@@ -28,7 +28,8 @@ pub(super) async fn insert_turn(
     sqlx::query!(
         r#"INSERT INTO worker_turns (
                worker_process_id, role, area_id, task_id, proposal_id, model, cost_micro_usd,
-               input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, failed, created_at
+               input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, failed, interrupted,
+               created_at
            )
            SELECT w.id, w.role, w.area_id,
                   CASE WHEN w.role = 'task_worker' THEN COALESCE(
@@ -53,7 +54,9 @@ pub(super) async fn insert_turn(
                        WHERE k.agent_id = w.agent_id AND c.kind = 'review'
                        ORDER BY c.renewed_at DESC, c.id DESC LIMIT 1)
                   ) END,
-                  w.model, ?2, ?3, ?4, ?5, ?6, ?7, ?8
+                  w.model, ?2, ?3, ?4, ?5, ?6, ?7,
+                  ?7 AND w.state NOT IN ('starting', 'working', 'idle'),
+                  ?8
            FROM worker_processes w WHERE w.id = ?1"#,
         id,
         cost,
@@ -69,7 +72,7 @@ pub(super) async fn insert_turn(
     Ok(())
 }
 
-/// The turns that ended at or after `since`, every turn without it, in groups of one worker, model and subject, in worker start order. With `task`, only the turns that built the task or reviewed one of its proposals.
+/// The turns that ended at or after `since`, every turn without it, in groups of one worker, model and subject, in worker start order. A stop's interrupt adds its cost but is not counted as a turn. With `task`, only the turns that built the task or reviewed one of its proposals.
 pub async fn cost_groups(
     executor: impl SqliteExecutor<'_>,
     since: Option<Timestamp>,
@@ -83,7 +86,7 @@ pub async fn cost_groups(
                   t.number AS "task?: i64", p.number AS "proposal?: i64",
                   COALESCE(t.number, pt.number) AS "subject?: i64",
                   COALESCE(t.title, pt.title) AS "title?: String",
-                  COUNT(*) AS "turns!: i64", SUM(x.cost_micro_usd) AS "cost!: i64",
+                  SUM(1 - x.interrupted) AS "turns!: i64", SUM(x.cost_micro_usd) AS "cost!: i64",
                   MIN(x.created_at) AS "first_at!: i64", MAX(x.created_at) AS "last_at!: i64"
            FROM worker_turns x
            JOIN worker_processes w ON w.id = x.worker_process_id
