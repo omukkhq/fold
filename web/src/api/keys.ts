@@ -65,6 +65,9 @@ export const keys = {
   messages: (slug: string) => [slug, "messages"] as const,
   taskMessages: (slug: string, task: string) =>
     [slug, "messages", "task", task] as const,
+  /** Under the messages prefix, so every message event refreshes the questions a proposal's diff marks. */
+  proposalThreads: (slug: string, proposal: string) =>
+    [slug, "messages", "proposal", proposal] as const,
   /** Under the messages prefix, so a thread read on its own refreshes with the list. */
   messagesThread: (slug: string, thread: string) =>
     [slug, "messages", "thread", thread] as const,

@@ -22,3 +22,12 @@ export const requestChangesSchema = z.object({
 
 export type CommentValues = z.infer<typeof commentSchema>;
 export type RequestChangesValues = z.infer<typeof requestChangesSchema>;
+
+/** A question to the author: any visible text, which the daemon keeps as typed. */
+export const questionSchema = z.object({
+  body: z
+    .string()
+    .refine((value) => value.trim().length > 0, "Write a question first."),
+});
+
+export type QuestionValues = z.infer<typeof questionSchema>;

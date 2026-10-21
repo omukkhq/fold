@@ -28,6 +28,7 @@ import { replyPlaceholder } from "./filters";
 import { MarkAnswered } from "./MarkAnswered";
 import { threadCanMarkAnswered } from "./answered";
 import { MessageBody } from "./MessageBody";
+import { QuotedLines } from "./QuotedLines";
 import { chosenAnswers, isQuestion } from "./question";
 import {
   QuestionBadge,
@@ -165,6 +166,13 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
                     {formatAsOf(now, message.sent_at)}
                   </span>
                 </p>
+                {message.lines === null ? null : (
+                  <QuotedLines
+                    slug={slug}
+                    proposal={message.proposal}
+                    lines={message.lines}
+                  />
+                )}
                 {chosen.has(message.id) ? (
                   <div className="flex flex-col gap-4">
                     <p className="text-body font-semibold text-text">
