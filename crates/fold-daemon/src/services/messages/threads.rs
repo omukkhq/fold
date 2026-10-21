@@ -2,8 +2,8 @@ use std::collections::{BTreeSet, HashSet};
 
 use fold_core::messages::reply_addresses;
 use fold_core::{
-    Actor, Address, AgentName, FoldError, MessageBody, MessageId, ProposalId, RequestId, Sender,
-    TaskId, Timestamp, WorkerName, codes, policy,
+    Actor, Address, AgentName, FoldError, HumanName, MessageBody, MessageId, ProposalId, RequestId,
+    Sender, TaskId, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::SqliteConnection;
 use fold_store::StoreError;
@@ -29,6 +29,8 @@ pub struct ThreadQuery {
     pub agent: Option<String>,
     pub task: Option<String>,
     pub proposal: Option<String>,
+    /// Only the threads that concern this human: a message of the thread is from them, addressed to them by name or addressed to `humans`. It also makes `awaiting_human` and the count mean the asks that wait for this human.
+    pub human: Option<HumanName>,
     pub awaiting_human: bool,
     /// The `next` of the previous page.
     pub before: Option<String>,
@@ -48,7 +50,7 @@ pub struct ThreadView {
     pub request: Option<RequestId>,
     /// Every sender and recipient, in the order they first appear.
     pub participants: Vec<String>,
-    /// The thread holds an open ask.
+    /// The thread holds an open ask; in a listing for one human, an open ask that waits for that human.
     pub awaiting_human: bool,
     pub last_at: Timestamp,
     pub messages: Vec<MessageView>,
@@ -59,7 +61,7 @@ pub struct ThreadView {
 pub struct ThreadPage {
     pub items: Vec<ThreadView>,
     pub next: Option<MessageId>,
-    /// Threads with an open ask in the whole project whatever the filter.
+    /// Threads with an open ask in the whole project whatever the other filters; in a listing for one human, the threads with an open ask that waits for that human.
     pub total_awaiting_human: u64,
 }
 
@@ -85,7 +87,7 @@ impl MessageService {
         heads.truncate(limit as usize);
         let ids: Vec<MessageId> = heads.iter().map(|head| head.thread).collect();
         let rows = messages::threads(&mut tx, &ids).await?;
-        let awaiting = messages::threads_awaiting_human(&mut *tx).await?;
+        let awaiting = messages::threads_awaiting_human(&mut *tx, filter.human.as_ref()).await?;
         let connected = self.connected(&mut tx).await?;
         tx.commit().await.map_err(StoreError::from)?;
         let mut items: Vec<ThreadView> = group(rows)
@@ -268,6 +270,7 @@ fn parse_query(query: &ThreadQuery) -> Result<(ThreadFilter, u32), FoldError> {
                 .as_deref()
                 .map(str::parse::<ProposalId>)
                 .transpose()?,
+            human: query.human.clone(),
             awaiting_human: query.awaiting_human,
             before: query
                 .before

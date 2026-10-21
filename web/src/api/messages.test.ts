@@ -26,6 +26,7 @@ describe("listThreads", () => {
     expect(items.map((t) => t.id)).toEqual(["m-50", "m-30"]);
     expect(more).toBe(false);
     expect(calls[0]?.search.get("limit")).toBe("200");
+    expect(calls[0]?.search.get("mine")).toBe("true");
   });
 });
 
@@ -67,7 +68,7 @@ describe("sendMessage", () => {
 });
 
 describe("countAwaitingHuman", () => {
-  it("reads the project-wide count from a page of one thread", async () => {
+  it("reads the signed-in human's count from a page of one thread", async () => {
     const calls = stubFetch({
       "GET /api/v1/projects/demo/messages": {
         body: { items: [thread("m-9")], next: "m-9", total_awaiting_human: 3 },
@@ -75,6 +76,7 @@ describe("countAwaitingHuman", () => {
     });
     await expect(countAwaitingHuman("demo")).resolves.toBe(3);
     expect(calls[0]?.search.get("limit")).toBe("1");
+    expect(calls[0]?.search.get("mine")).toBe("true");
   });
 });
 

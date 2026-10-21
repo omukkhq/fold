@@ -3896,13 +3896,13 @@ export interface components {
             next: string | null;
             /**
              * Format: int64
-             * @description How many threads in the whole project hold an open ask, whatever the filter; the navigation badge reads it with `limit=1`.
+             * @description How many threads hold an open ask, whatever the other filters: in the whole project, or with `mine` the threads with an open ask that waits for the signed-in human, which are the threads the listing marks `awaiting_human`. The navigation badge reads it with `mine=true&limit=1`.
              */
             total_awaiting_human: number;
         };
         /** @description A thread with every message in number order. */
         ThreadView: {
-            /** @description True while the thread holds an open ask: a message an agent marked as asking a human, a question with choices or a worker's `AskUserQuestion`, with no human reply after it and not marked answered. */
+            /** @description True while the thread holds an open ask: a message an agent marked as asking a human, a question with choices or a worker's `AskUserQuestion`, with no human reply after it and not marked answered. In a `mine` listing, only an ask that waits for the signed-in human: addressed to them by name or to `humans`. */
             awaiting_human: boolean;
             /**
              * @description The id of the thread's first message.
@@ -6244,8 +6244,10 @@ export interface operations {
                 task?: string;
                 /** @description Threads with a message linked to this proposal, such as `P-3`. */
                 proposal?: string;
-                /** @description Only threads with an open ask. */
+                /** @description Only threads with an open ask; with `mine`, an open ask that waits for the signed-in human. */
                 awaiting_human?: boolean;
+                /** @description Only the threads that concern the signed-in human: a message of the thread is from them, addressed to them by name or addressed to `humans`. Agent-to-agent threads stay readable through `task`, `proposal` and the thread route. Needs a signed-in human. */
+                mine?: boolean;
                 /** @description The `next` of the previous page. */
                 before?: string;
                 /** @description The page size: 50 when left out, at most 200. */
@@ -6278,7 +6280,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: `mine` is set and the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6287,7 +6289,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;

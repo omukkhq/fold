@@ -143,7 +143,7 @@ pub struct ThreadView {
     pub request: Option<String>,
     /// Every sender and recipient in the order they first appear.
     pub participants: Vec<String>,
-    /// True while the thread holds an open ask: a message an agent marked as asking a human, a question with choices or a worker's `AskUserQuestion`, with no human reply after it and not marked answered.
+    /// True while the thread holds an open ask: a message an agent marked as asking a human, a question with choices or a worker's `AskUserQuestion`, with no human reply after it and not marked answered. In a `mine` listing, only an ask that waits for the signed-in human: addressed to them by name or to `humans`.
     pub awaiting_human: bool,
     /// UTC milliseconds of the newest message.
     pub last_at: i64,
@@ -172,7 +172,7 @@ pub struct ThreadList {
     /// Pass as `before` for the next page; null on the last page.
     #[schema(required = true, example = "m-40")]
     pub next: Option<String>,
-    /// How many threads in the whole project hold an open ask, whatever the filter; the navigation badge reads it with `limit=1`.
+    /// How many threads hold an open ask, whatever the other filters: in the whole project, or with `mine` the threads with an open ask that waits for the signed-in human, which are the threads the listing marks `awaiting_human`. The navigation badge reads it with `mine=true&limit=1`.
     pub total_awaiting_human: u64,
 }
 
@@ -185,8 +185,10 @@ pub struct ListMessagesParams {
     pub task: Option<String>,
     /// Threads with a message linked to this proposal, such as `P-3`.
     pub proposal: Option<String>,
-    /// Only threads with an open ask.
+    /// Only threads with an open ask; with `mine`, an open ask that waits for the signed-in human.
     pub awaiting_human: Option<bool>,
+    /// Only the threads that concern the signed-in human: a message of the thread is from them, addressed to them by name or addressed to `humans`. Agent-to-agent threads stay readable through `task`, `proposal` and the thread route. Needs a signed-in human.
+    pub mine: Option<bool>,
     /// The `next` of the previous page.
     pub before: Option<String>,
     /// The page size: 50 when left out, at most 200.
@@ -224,16 +226,30 @@ pub struct FeedbackRequest {
     responses(
         (status = 200, description = "One page of threads", body = ThreadList),
         (status = 400, description = "`invalid_request`, `invalid_id` or `invalid_name`: a filter is malformed", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: `mine` is set and the request names no human", body = ErrorEnvelope),
         (status = 404, description = "`project_not_found`", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
 pub async fn list_messages(
+    human: Option<Human>,
     State(state): State<AppState>,
     project: Project,
     ApiQuery(params): ApiQuery<ListMessagesParams>,
 ) -> Result<Json<ThreadList>, ApiError> {
+    let human = match (params.mine.unwrap_or(false), human) {
+        (false, _) => None,
+        (true, Some(Human(name))) => Some(name),
+        (true, None) => {
+            return Err(FoldError::new(
+                codes::HUMAN_NAME_REQUIRED,
+                "`mine` needs a signed-in human",
+            )
+            .with_hint("sign in to the web interface, or set FOLD_HUMAN for the CLI")
+            .into());
+        }
+    };
     let page = project
         .0
         .messages(&state.registry)
@@ -241,6 +257,7 @@ pub async fn list_messages(
             agent: params.agent,
             task: params.task,
             proposal: params.proposal,
+            human,
             awaiting_human: params.awaiting_human.unwrap_or(false),
             before: params.before,
             limit: params.limit,

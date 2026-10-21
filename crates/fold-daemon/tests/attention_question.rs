@@ -190,7 +190,7 @@ impl Fixture {
         (status, serde_json::from_slice(&bytes).unwrap())
     }
 
-    /// The Messages listing: the threads marked `awaiting_human`, and the count the tab badge shows.
+    /// `tanim`'s Messages listing: the threads marked `awaiting_human`, and the count the tab badge shows.
     async fn messages_count(&self) -> (Vec<String>, u64) {
         let (status, list) = self
             .call(
@@ -515,4 +515,20 @@ async fn a_human_marks_the_asks_of_a_thread_or_a_task_answered() {
             .await;
         assert_eq!(body["error"]["code"], code, "{request}");
     }
+}
+
+#[tokio::test]
+async fn the_messages_count_means_the_asks_that_wait_for_the_signed_in_human() {
+    let fixture = Fixture::new().await;
+    fixture.ask("frontend", &["human:ana"], 1, None).await;
+    fixture.ask("backend", &["humans"], 2, None).await;
+    assert_eq!(fixture.agreed().await, BTreeSet::from([t(1), t(2)]));
+    assert_eq!(fixture.messages_count().await, (vec!["m-2".to_owned()], 1));
+    let ana_ask = needs_you(&fixture.handle.store)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|item| item.message.map(|(id, _)| id) == Some(m(1)))
+        .unwrap();
+    assert_eq!(ana_ask.human, Some(HumanName::parse("ana").unwrap()));
 }

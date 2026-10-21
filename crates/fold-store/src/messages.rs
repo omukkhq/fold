@@ -441,7 +441,9 @@ pub struct ThreadFilter {
     pub worker: Option<WorkerName>,
     pub task: Option<TaskId>,
     pub proposal: Option<ProposalId>,
-    /// Only threads that hold an open ask.
+    /// Only threads that concern this human: a message of the thread is from them, addressed to them by name or addressed to `humans`.
+    pub human: Option<HumanName>,
+    /// Only threads that hold an open ask; with `human`, an open ask that waits for that human.
     pub awaiting_human: bool,
     /// Only threads whose newest message is older than this number.
     pub before: Option<MessageId>,
@@ -467,6 +469,7 @@ pub async fn thread_page(
     let awaiting = filter.awaiting_human;
     let before = filter.before.map(MessageId::to_db);
     let limit = i64::from(limit);
+    let human = filter.human.as_ref().map(HumanName::as_str);
     let rows = sqlx::query!(
         r#"SELECT m.thread_id AS "thread!: i64", MAX(m.number) AS "last!: i64"
            FROM messages m
@@ -497,7 +500,18 @@ pub async fn thread_page(
                      JOIN workers w ON w.id = r.worker_id
                      WHERE x.thread_id = m.thread_id AND w.name = ?4))
              AND (NOT ?5 OR EXISTS (
-                     SELECT 1 FROM open_human_questions q WHERE q.thread_id = m.thread_id))
+                     SELECT 1 FROM open_human_questions q
+                     JOIN message_recipients r ON r.message_id = q.id
+                     WHERE q.thread_id = m.thread_id
+                       AND (?8 IS NULL OR r.human = ?8 OR r.addressed_as = 'humans')))
+             AND (?8 IS NULL OR EXISTS (
+                     SELECT 1 FROM messages x
+                     WHERE x.thread_id = m.thread_id AND x.sender_human = ?8
+                     UNION ALL
+                     SELECT 1 FROM messages x
+                     JOIN message_recipients r ON r.message_id = x.id
+                     WHERE x.thread_id = m.thread_id
+                       AND (r.human = ?8 OR r.addressed_as = 'humans')))
            GROUP BY m.thread_id
            HAVING ?6 IS NULL OR MAX(m.number) < ?6
            ORDER BY MAX(m.number) DESC
@@ -508,7 +522,8 @@ pub async fn thread_page(
         worker,
         awaiting,
         before,
-        limit
+        limit,
+        human
     )
     .fetch_all(conn)
     .await?;
@@ -540,12 +555,19 @@ pub async fn threads(
     Ok(rows)
 }
 
-/// The threads that hold an open ask, as [`awaiting_human`] decides.
+/// The threads that hold an open ask, as [`awaiting_human`] decides; with `human`, an open ask addressed to that human by name or to `humans`.
 pub async fn threads_awaiting_human(
     executor: impl SqliteExecutor<'_>,
+    human: Option<&HumanName>,
 ) -> Result<BTreeSet<MessageId>, StoreError> {
+    let human = human.map(HumanName::as_str);
     let rows = sqlx::query_scalar!(
-        r#"SELECT DISTINCT thread_id AS "thread!: i64" FROM open_human_questions"#
+        r#"SELECT DISTINCT q.thread_id AS "thread!: i64"
+           FROM open_human_questions q
+           WHERE ?1 IS NULL OR EXISTS (
+                     SELECT 1 FROM message_recipients r
+                     WHERE r.message_id = q.id AND (r.human = ?1 OR r.addressed_as = 'humans'))"#,
+        human
     )
     .fetch_all(executor)
     .await?;
