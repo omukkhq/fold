@@ -444,6 +444,16 @@ async fn count_concerning_counts_what_concerns_holds_and_stops_at_its_cap() {
     );
 }
 
+#[cfg(test)]
+fn reach(agent_id: i64) -> events::Reach<'static> {
+    events::Reach {
+        agent_id,
+        message_types: &[types::MESSAGE_SENT],
+        own_types: &[types::MESSAGE_ACKNOWLEDGED],
+        wake: None,
+    }
+}
+
 #[tokio::test]
 async fn read_reaching_keeps_a_message_event_only_for_an_agent_whose_worker_receives_it() {
     let project = TestProject::new().await;
@@ -468,15 +478,11 @@ async fn read_reaching_keeps_a_message_event_only_for_an_agent_whose_worker_rece
     batch.push(by(types::MESSAGE_ACKNOWLEDGED, "be").message(to_be));
     batch.push(by(types::MESSAGE_SENT, "human:ana").message(to_fe));
     let seqs = append_all(&project, batch).await;
-    let messages = [types::MESSAGE_SENT];
-    let own = [types::MESSAGE_ACKNOWLEDGED];
     let page = events::read_reaching(
         project.store().read(),
         0,
         &EventFilter::default(),
-        1,
-        &messages,
-        &own,
+        reach(1),
         100,
     )
     .await
@@ -491,9 +497,7 @@ async fn read_reaching_keeps_a_message_event_only_for_an_agent_whose_worker_rece
         project.store().read(),
         seqs[1199],
         &EventFilter::default(),
-        2,
-        &messages,
-        &own,
+        reach(2),
         2,
     )
     .await
@@ -517,9 +521,7 @@ async fn read_reaching_keeps_a_message_event_only_for_an_agent_whose_worker_rece
             project.store().read(),
             seqs[1202],
             &EventFilter::default(),
-            agent,
-            &messages,
-            &own,
+            reach(agent),
             10,
         )
         .await
@@ -536,6 +538,127 @@ async fn read_reaching_keeps_a_message_event_only_for_an_agent_whose_worker_rece
     assert!(
         reach(1).await.is_empty(),
         "another recipient of the acknowledged message is not woken"
+    );
+}
+
+#[tokio::test]
+async fn read_reaching_selects_a_message_to_the_waking_worker_past_the_filter() {
+    let project = TestProject::new().await;
+    exec(
+        &project,
+        "INSERT INTO agents (id, name, created_at) VALUES (1, 'be', 0), (2, 'fe', 0);
+         INSERT INTO workers (id, agent_id, name, parent_worker_id, created_at)
+         VALUES (1, 1, 'be', NULL, 0), (2, 1, 'be/sub', 1, 0), (3, 2, 'fe', NULL, 0);
+         INSERT INTO messages (number, thread_id, sender_kind, sender_human, body, created_at)
+         VALUES (1, 1, 'human', 'ana', 'one', 0), (2, 2, 'human', 'ana', 'two', 0),
+                (3, 3, 'human', 'ana', 'three', 0);
+         INSERT INTO message_recipients (message_id, worker_id, addressed_as)
+         SELECT m.id, CASE m.number WHEN 1 THEN 1 WHEN 2 THEN 2 ELSE 3 END, 'worker' FROM messages m;",
+    )
+    .await;
+    let seqs = append_all(
+        &project,
+        vec![
+            by(types::MESSAGE_SENT, "human:ana").message(MessageId::from_number(1).unwrap()),
+            by(types::MESSAGE_SENT, "human:ana").message(MessageId::from_number(2).unwrap()),
+            by(types::MESSAGE_SENT, "human:ana").message(MessageId::from_number(3).unwrap()),
+            by(types::MAIN_ADVANCED, "fold"),
+        ],
+    )
+    .await;
+    let filter = EventFilter {
+        types: vec![types::PROPOSAL_OPENED],
+        ..EventFilter::default()
+    };
+    let read = async |worker_id: i64, every_worker: bool| -> Vec<u64> {
+        let reach = events::Reach {
+            wake: Some(events::MessageWake {
+                event_type: types::MESSAGE_SENT,
+                worker_id,
+                every_worker,
+            }),
+            ..reach(1)
+        };
+        events::read_reaching(project.store().read(), 0, &filter, reach, 10)
+            .await
+            .unwrap()
+            .iter()
+            .map(|event| event.seq)
+            .collect()
+    };
+    assert_eq!(read(1, false).await, [seqs[0]], "only the worker's own row");
+    assert_eq!(
+        read(1, true).await,
+        [seqs[0], seqs[1]],
+        "every worker of the agent, never another agent's"
+    );
+    assert_eq!(read(2, false).await, [seqs[1]]);
+    let unwoken = events::read_reaching(project.store().read(), 0, &filter, reach(1), 10)
+        .await
+        .unwrap();
+    assert!(unwoken.is_empty(), "without a wake the filter decides");
+}
+
+#[tokio::test]
+async fn read_reaching_wakes_only_for_an_unread_message_the_worker_did_not_send() {
+    let project = TestProject::new().await;
+    exec(
+        &project,
+        "INSERT INTO agents (id, name, created_at) VALUES (1, 'be', 0);
+         INSERT INTO workers (id, agent_id, name, parent_worker_id, created_at)
+         VALUES (1, 1, 'be', NULL, 0), (2, 1, 'be/sub', 1, 0);
+         INSERT INTO messages (number, thread_id, sender_kind, sender_human, body, created_at)
+         VALUES (1, 1, 'human', 'ana', 'read', 0), (2, 2, 'human', 'ana', 'acknowledged', 0),
+                (3, 3, 'human', 'ana', 'to itself', 0), (4, 4, 'human', 'ana', 'to its child', 0),
+                (5, 5, 'human', 'ana', 'from its child', 0), (6, 6, 'human', 'ana', 'new', 0);
+         INSERT INTO message_recipients (message_id, worker_id, addressed_as, delivered_at, acked_at)
+         SELECT m.id, CASE m.number WHEN 4 THEN 2 ELSE 1 END, 'worker',
+                CASE m.number WHEN 1 THEN 5 END, CASE m.number WHEN 2 THEN 5 END
+         FROM messages m;",
+    )
+    .await;
+    let message = |n: u32| MessageId::from_number(n).unwrap();
+    let seqs = append_all(
+        &project,
+        vec![
+            by(types::MESSAGE_SENT, "human:ana").message(message(1)),
+            by(types::MESSAGE_SENT, "human:ana").message(message(2)),
+            by(types::MESSAGE_SENT, "be").message(message(3)),
+            by(types::MESSAGE_SENT, "be").message(message(4)),
+            by(types::MESSAGE_SENT, "be/sub").message(message(5)),
+            by(types::MESSAGE_SENT, "human:ana").message(message(6)),
+        ],
+    )
+    .await;
+    let filter = EventFilter {
+        types: vec![types::PROPOSAL_OPENED],
+        ..EventFilter::default()
+    };
+    let read = async |worker_id: i64, every_worker: bool| -> Vec<u64> {
+        let reach = events::Reach {
+            wake: Some(events::MessageWake {
+                event_type: types::MESSAGE_SENT,
+                worker_id,
+                every_worker,
+            }),
+            ..reach(1)
+        };
+        events::read_reaching(project.store().read(), 0, &filter, reach, 10)
+            .await
+            .unwrap()
+            .iter()
+            .map(|event| event.seq)
+            .collect()
+    };
+    assert_eq!(
+        read(1, true).await,
+        [seqs[4], seqs[5]],
+        "a read, an acknowledged and an own message never wake the main worker; its child's does"
+    );
+    assert_eq!(
+        read(2, false).await,
+        [seqs[3]],
+        "the main worker's message wakes its child"
     );
 }
 

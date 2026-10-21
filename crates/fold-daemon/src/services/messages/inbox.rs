@@ -1,7 +1,7 @@
 use fold_core::events::types;
 use fold_core::{
-    Actor, AddressedAs, AgentActor, Choice, FoldError, MessageId, NewEvent, ProposalId, RequestId,
-    Sender, TaskId, Timestamp, WorkerName, policy,
+    Actor, AddressedAs, AgentActor, AgentName, Choice, FoldError, MessageId, NewEvent, ProposalId,
+    RequestId, Sender, TaskId, Timestamp, WorkerName, policy,
 };
 use fold_store::agents::WorkerRow;
 use fold_store::messages::{self, InboxRow};
@@ -132,6 +132,18 @@ impl MessageService {
 /// The unacknowledged rows of every worker of the agent `agent_id`, read from the read pool: the unread part of the footer.
 pub async fn unread_count(store: &Store, agent_id: i64) -> Result<u64, MessageError> {
     Ok(messages::unread_count(store.read(), agent_id).await?)
+}
+
+/// Sets `pushed_at` on `agent`'s rows of `message` that have none, because a notice about it reached a session or the worker process of the agent at `now`, and returns how many rows it set. It appends no stored event, as reading an inbox appends none; the caller sends the live `message.pushed` after the commit.
+pub(crate) async fn record_pushed(
+    store: &Store,
+    agent: &AgentName,
+    message: MessageId,
+    now: Timestamp,
+) -> Result<u64, MessageError> {
+    Ok(store
+        .write(async |tx| messages::mark_pushed(tx, message, agent, now).await)
+        .await?)
 }
 
 async fn acting_worker(tx: &mut WriteTx, agent: &AgentActor) -> Result<WorkerRow, MessageError> {

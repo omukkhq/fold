@@ -22,16 +22,26 @@ run   = "test -f src/login.txt && test -f README.md"
 stage = "integration"
 "#;
 
-/// `agent` waits for the end of a check run of `task` and returns that `checks.finished` event.
+/// `agent` waits for the end of a check run of `task` and returns that `checks.finished` event. fold's message with the result also ends a wait, so the agent waits again until the event arrives.
 async fn finished(harness: &Harness, agent: &str, task: &str) -> Value {
-    let woke = harness
-        .call(
-            agent,
-            "wait_for_events",
-            json!({"types": ["checks.finished"], "task": task, "timeout_s": 60}),
-        )
-        .await;
-    woke["events"].as_array().unwrap().last().unwrap().clone()
+    loop {
+        let woke = harness
+            .call(
+                agent,
+                "wait_for_events",
+                json!({"types": ["checks.finished"], "task": task, "timeout_s": 60}),
+            )
+            .await;
+        if let Some(event) = woke["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|event| event["type"] == "checks.finished")
+        {
+            return event.clone();
+        }
+    }
 }
 
 /// The newest message from fold to `agent`.

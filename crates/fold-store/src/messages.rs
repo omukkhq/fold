@@ -43,6 +43,8 @@ pub struct RecipientRow {
     pub addressed_as: AddressedAs,
     pub delivered_at: Option<Timestamp>,
     pub acked_at: Option<Timestamp>,
+    /// The first time a notice about the message reached the recipient's agent.
+    pub pushed_at: Option<Timestamp>,
 }
 
 /// A stored message with its recipients in the order they were written.
@@ -360,6 +362,31 @@ pub async fn mark_delivered(
     Ok(())
 }
 
+/// Sets `pushed_at` on the rows of `agent`'s workers for `message`, where they have none, and returns how many rows it set. A row keeps the time of the first notice that got through.
+pub async fn mark_pushed(
+    tx: &mut WriteTx,
+    message: MessageId,
+    agent: &AgentName,
+    now: Timestamp,
+) -> Result<u64, StoreError> {
+    let message = message.to_db();
+    let agent = agent.as_str();
+    let now = now.as_millis();
+    let done = sqlx::query!(
+        "UPDATE message_recipients SET pushed_at = ?1
+         WHERE pushed_at IS NULL
+           AND message_id = (SELECT id FROM messages WHERE number = ?2)
+           AND worker_id IN (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id
+                             WHERE a.name = ?3)",
+        now,
+        message,
+        agent
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(done.rows_affected())
+}
+
 /// Acknowledges the worker's row of `message`, or with `up_to` every unacknowledged row of the worker up to that number, and returns the numbers it changed in order. `None` when the worker has no row for `message`; a row acknowledged before keeps its time.
 pub async fn acknowledge(
     tx: &mut WriteTx,
@@ -672,7 +699,7 @@ async fn with_recipients(
         .map_err(|_| StoreError::Invalid("message numbers"))?;
     let recipients = sqlx::query!(
         r#"SELECT m.number, w.name AS "worker?: String", r.human, r.addressed_as,
-                  r.delivered_at, r.acked_at
+                  r.delivered_at, r.acked_at, r.pushed_at
            FROM message_recipients r
            JOIN messages m ON m.id = r.message_id
            LEFT JOIN workers w ON w.id = r.worker_id
@@ -708,6 +735,10 @@ async fn with_recipients(
             acked_at: row
                 .acked_at
                 .map(|millis| time(millis, "message_recipients.acked_at"))
+                .transpose()?,
+            pushed_at: row
+                .pushed_at
+                .map(|millis| time(millis, "message_recipients.pushed_at"))
                 .transpose()?,
         });
     }
