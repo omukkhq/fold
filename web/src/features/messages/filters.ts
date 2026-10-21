@@ -73,9 +73,9 @@ export function findThread(
   );
 }
 
-/** The recipients a reply in the thread reaches, for the composer's hint. */
+/** The recipients a reply in the thread reaches, for the composer's hint. fold takes part in a thread only with its own notes and never reads a reply. */
 export function replyTargets(thread: ThreadView): string[] {
-  return thread.participants.filter((p) => !isHumanName(p));
+  return thread.participants.filter((p) => !isHumanName(p) && p !== "fold");
 }
 
 /** The reply box's placeholder: `Reply to @frontend/ui, @backend…`, or `Reply…` when the thread has no agent. */
