@@ -1,3 +1,4 @@
+use fold_core::cost::TurnGroup;
 use fold_core::{AgentName, AreaName, ProposalId, Role, TaskId, Timestamp, WorkerState};
 use sqlx::SqliteExecutor;
 
@@ -68,34 +69,12 @@ pub(super) async fn insert_turn(
     Ok(())
 }
 
-/// The turns of one worker with one model for one subject: a task its task worker built, or a proposal its reviewer reviewed with that proposal's task.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CostGroup {
-    pub agent: AgentName,
-    pub role: Role,
-    pub area: Option<AreaName>,
-    /// The worker's state now, so a stopped worker reads as one.
-    pub state: WorkerState,
-    /// The model of the turns; `None` for turns that ended before Claude Code named one.
-    pub model: Option<String>,
-    /// The task a task worker's turns built.
-    pub task: Option<TaskId>,
-    /// The proposal a reviewer's turns reviewed.
-    pub proposal: Option<ProposalId>,
-    /// The task of `task` or of `proposal`, with its title.
-    pub subject: Option<(TaskId, String)>,
-    pub turns: u64,
-    pub cost_micro_usd: u64,
-    pub first_at: Timestamp,
-    pub last_at: Timestamp,
-}
-
 /// The turns that ended at or after `since`, every turn without it, in groups of one worker, model and subject, in worker start order. With `task`, only the turns that built the task or reviewed one of its proposals.
 pub async fn cost_groups(
     executor: impl SqliteExecutor<'_>,
     since: Option<Timestamp>,
     task: Option<TaskId>,
-) -> Result<Vec<CostGroup>, StoreError> {
+) -> Result<Vec<TurnGroup>, StoreError> {
     let since = since.map_or(i64::MIN, Timestamp::as_millis);
     let task = task.map(TaskId::to_db);
     let rows = sqlx::query!(
@@ -126,7 +105,7 @@ pub async fn cost_groups(
             let task_of = |number: i64| {
                 TaskId::try_from_db(number).ok_or(StoreError::Corrupt("tasks.number"))
             };
-            Ok(CostGroup {
+            Ok(TurnGroup {
                 agent: AgentName::parse(&row.agent)
                     .map_err(|_| StoreError::Corrupt("agents.name"))?,
                 role: Role::parse(&row.role).ok_or(StoreError::Corrupt("worker_processes.role"))?,

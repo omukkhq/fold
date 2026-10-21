@@ -1,0 +1,586 @@
+use std::collections::BTreeMap;
+
+use crate::{AgentName, AreaName, ProposalId, Role, TaskId, Timestamp, WorkerState};
+
+/// The turns of one worker with one model for one subject: a task its task worker built, or a proposal its reviewer reviewed with that proposal's task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnGroup {
+    pub agent: AgentName,
+    pub role: Role,
+    pub area: Option<AreaName>,
+    /// The worker's state now, so a stopped worker reads as one.
+    pub state: WorkerState,
+    /// The model of the turns; `None` for turns that ended before Claude Code named one.
+    pub model: Option<String>,
+    /// The task a task worker's turns built.
+    pub task: Option<TaskId>,
+    /// The proposal a reviewer's turns reviewed.
+    pub proposal: Option<ProposalId>,
+    /// The task of `task` or of `proposal`, with its title.
+    pub subject: Option<(TaskId, String)>,
+    pub turns: u64,
+    pub cost_micro_usd: u64,
+    pub first_at: Timestamp,
+    pub last_at: Timestamp,
+}
+
+/// A sum of turns: their cost, how many there were and how many workers ran them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Amount {
+    pub cost_micro_usd: u64,
+    pub turns: u64,
+    pub workers: u64,
+}
+
+/// One worker's turns in the range.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerCost {
+    pub agent: AgentName,
+    pub role: Role,
+    pub area: Option<AreaName>,
+    pub state: WorkerState,
+    /// The model of the worker's newest turn.
+    pub model: Option<String>,
+    pub turns: u64,
+    pub cost_micro_usd: u64,
+}
+
+/// What one task cost: `build` is the turns of its task workers, `review` the turns of the reviewers of its proposals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskCost {
+    pub task: TaskId,
+    pub title: String,
+    /// The area of the task workers that built it; `None` while only reviewers worked on it.
+    pub area: Option<AreaName>,
+    pub build_micro_usd: u64,
+    pub review_micro_usd: u64,
+    pub turns: u64,
+}
+
+impl TaskCost {
+    pub fn total_micro_usd(&self) -> u64 {
+        self.build_micro_usd.saturating_add(self.review_micro_usd)
+    }
+}
+
+/// What a project's workers cost in a range, split as the cost view shows it. Every split adds up to `total`, except `tasks`, which leaves out the turns of no task.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CostReport {
+    pub total: Amount,
+    /// The end of the oldest turn in the range; `None` without a turn.
+    pub first_turn_at: Option<Timestamp>,
+    /// Every role in [`Role::ALL`] order, a role without a turn with nothing.
+    pub by_role: Vec<(Role, Amount)>,
+    /// The areas of the leads and the task workers, and `None` for the review lead and the reviewers, who work for every area; the most expensive first.
+    pub by_area: Vec<(Option<AreaName>, Amount)>,
+    /// The most expensive first.
+    pub by_model: Vec<(Option<String>, Amount)>,
+    /// The most expensive first, then by name.
+    pub workers: Vec<WorkerCost>,
+    /// The most expensive first, then by task number.
+    pub tasks: Vec<TaskCost>,
+}
+
+/// The area a turn counts for in the split by area: reviewers and the review lead review every area's work, so they have none.
+fn area_of(group: &TurnGroup) -> Option<AreaName> {
+    match group.role {
+        Role::ReviewLead | Role::Reviewer => None,
+        Role::AreaLead | Role::TaskWorker => group.area.clone(),
+    }
+}
+
+/// Adds the group to the amount of `key`, counting each worker once per key.
+fn add<K: Ord>(sums: &mut BTreeMap<K, (Amount, Vec<AgentName>)>, key: K, group: &TurnGroup) {
+    let (amount, agents) = sums.entry(key).or_default();
+    amount.cost_micro_usd = amount.cost_micro_usd.saturating_add(group.cost_micro_usd);
+    amount.turns = amount.turns.saturating_add(group.turns);
+    if !agents.contains(&group.agent) {
+        agents.push(group.agent.clone());
+        amount.workers += 1;
+    }
+}
+
+fn amounts<K: Ord>(sums: BTreeMap<K, (Amount, Vec<AgentName>)>) -> Vec<(K, Amount)> {
+    let mut list: Vec<(K, Amount)> = sums
+        .into_iter()
+        .map(|(key, (amount, _))| (key, amount))
+        .collect();
+    list.sort_by_key(|(_, amount)| std::cmp::Reverse(amount.cost_micro_usd));
+    list
+}
+
+/// Sums `groups`, the turns of one range, into the totals and splits of the cost view.
+pub fn report(groups: &[TurnGroup]) -> CostReport {
+    let mut total = BTreeMap::new();
+    let mut roles = BTreeMap::new();
+    let mut areas = BTreeMap::new();
+    let mut models = BTreeMap::new();
+    let mut workers: BTreeMap<AgentName, (WorkerCost, Timestamp)> = BTreeMap::new();
+    let mut tasks: BTreeMap<TaskId, TaskCost> = BTreeMap::new();
+    for group in groups {
+        add(&mut total, (), group);
+        add(&mut roles, group.role, group);
+        add(&mut areas, area_of(group), group);
+        add(&mut models, group.model.clone(), group);
+        let (worker, newest) = workers.entry(group.agent.clone()).or_insert_with(|| {
+            (
+                WorkerCost {
+                    agent: group.agent.clone(),
+                    role: group.role,
+                    area: group.area.clone(),
+                    state: group.state,
+                    model: group.model.clone(),
+                    turns: 0,
+                    cost_micro_usd: 0,
+                },
+                group.last_at,
+            )
+        });
+        worker.turns = worker.turns.saturating_add(group.turns);
+        worker.cost_micro_usd = worker.cost_micro_usd.saturating_add(group.cost_micro_usd);
+        if group.last_at > *newest {
+            *newest = group.last_at;
+            worker.model = group.model.clone();
+        }
+        if let Some((task, title)) = &group.subject {
+            let entry = tasks.entry(*task).or_insert_with(|| TaskCost {
+                task: *task,
+                title: title.clone(),
+                area: None,
+                build_micro_usd: 0,
+                review_micro_usd: 0,
+                turns: 0,
+            });
+            entry.turns = entry.turns.saturating_add(group.turns);
+            if group.proposal.is_some() {
+                entry.review_micro_usd =
+                    entry.review_micro_usd.saturating_add(group.cost_micro_usd);
+            } else {
+                entry.build_micro_usd = entry.build_micro_usd.saturating_add(group.cost_micro_usd);
+                if entry.area.is_none() {
+                    entry.area = group.area.clone();
+                }
+            }
+        }
+    }
+    let mut workers: Vec<WorkerCost> = workers.into_values().map(|(worker, _)| worker).collect();
+    workers.sort_by(|a, b| {
+        b.cost_micro_usd
+            .cmp(&a.cost_micro_usd)
+            .then_with(|| a.agent.cmp(&b.agent))
+    });
+    let mut tasks: Vec<TaskCost> = tasks.into_values().collect();
+    tasks.sort_by(|a, b| {
+        b.total_micro_usd()
+            .cmp(&a.total_micro_usd())
+            .then_with(|| a.task.cmp(&b.task))
+    });
+    let roles = amounts(roles);
+    CostReport {
+        total: total
+            .remove(&())
+            .map(|(amount, _)| amount)
+            .unwrap_or_default(),
+        first_turn_at: groups.iter().map(|group| group.first_at).min(),
+        by_role: Role::ALL
+            .into_iter()
+            .map(|role| {
+                let amount = roles
+                    .iter()
+                    .find(|(known, _)| *known == role)
+                    .map(|(_, amount)| *amount)
+                    .unwrap_or_default();
+                (role, amount)
+            })
+            .collect(),
+        by_area: amounts(areas),
+        by_model: amounts(models),
+        workers,
+        tasks,
+    }
+}
+
+/// Which part of a task's cost a worker's turns are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CostPart {
+    /// A task worker built the task.
+    Build,
+    /// A reviewer reviewed a proposal of the task.
+    Review,
+}
+
+/// One worker's turns for one task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskWorkerCost {
+    pub agent: AgentName,
+    pub role: Role,
+    pub part: CostPart,
+    /// The model of the worker's newest turn for the task.
+    pub model: Option<String>,
+    /// The proposals of the task a reviewer reviewed, in number order; empty for a build.
+    pub proposals: Vec<ProposalId>,
+    pub turns: u64,
+    pub cost_micro_usd: u64,
+}
+
+/// What one task cost, with one row per worker: the builds first, then the reviews, each in the order the workers first worked on it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TaskCostReport {
+    pub build_micro_usd: u64,
+    pub review_micro_usd: u64,
+    pub turns: u64,
+    pub workers: Vec<TaskWorkerCost>,
+}
+
+/// Sums `groups`, every turn that built one task or reviewed one of its proposals.
+pub fn task_report(groups: &[TurnGroup]) -> TaskCostReport {
+    let mut report = TaskCostReport::default();
+    let mut rows: Vec<(TaskWorkerCost, Timestamp, Timestamp)> = Vec::new();
+    for group in groups {
+        let part = if group.proposal.is_some() {
+            CostPart::Review
+        } else {
+            CostPart::Build
+        };
+        match part {
+            CostPart::Build => {
+                report.build_micro_usd =
+                    report.build_micro_usd.saturating_add(group.cost_micro_usd);
+            }
+            CostPart::Review => {
+                report.review_micro_usd =
+                    report.review_micro_usd.saturating_add(group.cost_micro_usd);
+            }
+        }
+        report.turns = report.turns.saturating_add(group.turns);
+        let index = match rows
+            .iter()
+            .position(|(row, _, _)| row.agent == group.agent && row.part == part)
+        {
+            Some(index) => index,
+            None => {
+                rows.push((
+                    TaskWorkerCost {
+                        agent: group.agent.clone(),
+                        role: group.role,
+                        part,
+                        model: group.model.clone(),
+                        proposals: Vec::new(),
+                        turns: 0,
+                        cost_micro_usd: 0,
+                    },
+                    group.first_at,
+                    group.last_at,
+                ));
+                rows.len() - 1
+            }
+        };
+        let (row, first, last) = &mut rows[index];
+        row.turns = row.turns.saturating_add(group.turns);
+        row.cost_micro_usd = row.cost_micro_usd.saturating_add(group.cost_micro_usd);
+        if let Some(proposal) = group.proposal
+            && !row.proposals.contains(&proposal)
+        {
+            row.proposals.push(proposal);
+            row.proposals.sort();
+        }
+        *first = (*first).min(group.first_at);
+        if group.last_at > *last {
+            *last = group.last_at;
+            row.model = group.model.clone();
+        }
+    }
+    rows.sort_by(|a, b| {
+        (a.0.part == CostPart::Review)
+            .cmp(&(b.0.part == CostPart::Review))
+            .then_with(|| a.1.cmp(&b.1))
+    });
+    report.workers = rows.into_iter().map(|(row, _, _)| row).collect();
+    report
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(millis: i64) -> Timestamp {
+        Timestamp::from_millis(millis).unwrap()
+    }
+
+    fn group(agent: &str, role: Role, area: Option<&str>, cost: u64) -> TurnGroup {
+        TurnGroup {
+            agent: AgentName::parse(agent).unwrap(),
+            role,
+            area: area.map(|area| AreaName::parse(area).unwrap()),
+            state: WorkerState::Idle,
+            model: Some("sonnet".to_owned()),
+            task: None,
+            proposal: None,
+            subject: None,
+            turns: 1,
+            cost_micro_usd: cost,
+            first_at: at(10),
+            last_at: at(20),
+        }
+    }
+
+    fn built(mut group: TurnGroup, task: u32, title: &str) -> TurnGroup {
+        let task = TaskId::from_number(task).unwrap();
+        group.task = Some(task);
+        group.subject = Some((task, title.to_owned()));
+        group
+    }
+
+    fn reviewed(mut group: TurnGroup, proposal: u32, task: u32, title: &str) -> TurnGroup {
+        group.proposal = ProposalId::from_number(proposal);
+        group.subject = Some((TaskId::from_number(task).unwrap(), title.to_owned()));
+        group
+    }
+
+    fn area(name: &str) -> Option<AreaName> {
+        Some(AreaName::parse(name).unwrap())
+    }
+
+    #[test]
+    fn no_turns_cost_nothing_and_every_role_is_listed() {
+        let report = report(&[]);
+        assert_eq!(report.total, Amount::default());
+        assert_eq!(report.first_turn_at, None);
+        assert_eq!(
+            report.by_role,
+            Role::ALL
+                .into_iter()
+                .map(|role| (role, Amount::default()))
+                .collect::<Vec<_>>()
+        );
+        assert!(report.by_area.is_empty() && report.workers.is_empty() && report.tasks.is_empty());
+    }
+
+    #[test]
+    fn the_splits_add_up_and_reviews_have_no_area() {
+        let mut later = built(
+            group("web-worker", Role::TaskWorker, Some("web"), 300),
+            2,
+            "two",
+        );
+        later.model = Some("opus".to_owned());
+        later.first_at = at(5);
+        later.last_at = at(40);
+        let groups = [
+            group("web-lead", Role::AreaLead, Some("web"), 100),
+            built(
+                group("web-worker", Role::TaskWorker, Some("web"), 200),
+                1,
+                "one",
+            ),
+            later,
+            built(
+                group("api-worker", Role::TaskWorker, Some("api"), 50),
+                3,
+                "three",
+            ),
+            reviewed(group("reviewer-1", Role::Reviewer, None, 80), 7, 1, "one"),
+            group("review-lead", Role::ReviewLead, None, 20),
+        ];
+        let report = report(&groups);
+        assert_eq!(
+            report.total,
+            Amount {
+                cost_micro_usd: 750,
+                turns: 6,
+                workers: 5
+            }
+        );
+        assert_eq!(report.first_turn_at, Some(at(5)));
+        let role = |role: Role| {
+            report
+                .by_role
+                .iter()
+                .find(|(known, _)| *known == role)
+                .unwrap()
+                .1
+        };
+        assert_eq!(
+            role(Role::TaskWorker),
+            Amount {
+                cost_micro_usd: 550,
+                turns: 3,
+                workers: 2
+            }
+        );
+        assert_eq!(role(Role::ReviewLead).cost_micro_usd, 20);
+        assert_eq!(
+            report.by_area,
+            [
+                (
+                    area("web"),
+                    Amount {
+                        cost_micro_usd: 600,
+                        turns: 3,
+                        workers: 2
+                    }
+                ),
+                (
+                    None,
+                    Amount {
+                        cost_micro_usd: 100,
+                        turns: 2,
+                        workers: 2
+                    }
+                ),
+                (
+                    area("api"),
+                    Amount {
+                        cost_micro_usd: 50,
+                        turns: 1,
+                        workers: 1
+                    }
+                ),
+            ]
+        );
+        assert_eq!(
+            report.by_model,
+            [
+                (
+                    Some("sonnet".to_owned()),
+                    Amount {
+                        cost_micro_usd: 450,
+                        turns: 5,
+                        workers: 5
+                    }
+                ),
+                (
+                    Some("opus".to_owned()),
+                    Amount {
+                        cost_micro_usd: 300,
+                        turns: 1,
+                        workers: 1
+                    }
+                ),
+            ]
+        );
+        let worker = &report.workers[0];
+        assert_eq!(
+            (worker.agent.as_str(), worker.turns, worker.cost_micro_usd),
+            ("web-worker", 2, 500)
+        );
+        assert_eq!(
+            worker.model.as_deref(),
+            Some("opus"),
+            "the newest turn's model"
+        );
+        let tasks: Vec<(String, u64, u64, Option<AreaName>)> = report
+            .tasks
+            .iter()
+            .map(|task| {
+                (
+                    task.task.to_string(),
+                    task.build_micro_usd,
+                    task.review_micro_usd,
+                    task.area.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            tasks,
+            [
+                ("T-2".to_owned(), 300, 0, area("web")),
+                ("T-1".to_owned(), 200, 80, area("web")),
+                ("T-3".to_owned(), 50, 0, area("api")),
+            ]
+        );
+        assert_eq!(report.tasks[1].total_micro_usd(), 280);
+        assert_eq!(report.tasks[1].turns, 2);
+    }
+
+    #[test]
+    fn equal_costs_keep_a_stable_order() {
+        let groups = [
+            built(group("b", Role::TaskWorker, Some("web"), 10), 2, "two"),
+            built(group("a", Role::TaskWorker, Some("web"), 10), 1, "one"),
+        ];
+        let report = report(&groups);
+        let names: Vec<&str> = report.workers.iter().map(|w| w.agent.as_str()).collect();
+        assert_eq!(names, ["a", "b"]);
+        let tasks: Vec<String> = report.tasks.iter().map(|t| t.task.to_string()).collect();
+        assert_eq!(tasks, ["T-1", "T-2"]);
+    }
+
+    #[test]
+    fn a_task_reviewed_before_it_was_built_has_no_area_until_a_build() {
+        let only_review = report(&[reviewed(group("r", Role::Reviewer, None, 5), 4, 1, "one")]);
+        assert_eq!(only_review.tasks[0].area, None);
+        assert_eq!(only_review.tasks[0].build_micro_usd, 0);
+    }
+
+    #[test]
+    fn a_tasks_cost_lists_its_builders_then_its_reviewers() {
+        let mut second = built(
+            group("web-worker", Role::TaskWorker, Some("web"), 30),
+            1,
+            "one",
+        );
+        second.model = Some("opus".to_owned());
+        second.last_at = at(90);
+        let mut early_review = reviewed(group("reviewer-2", Role::Reviewer, None, 7), 5, 1, "one");
+        early_review.first_at = at(1);
+        let groups = [
+            reviewed(group("reviewer-1", Role::Reviewer, None, 9), 6, 1, "one"),
+            built(
+                group("web-worker", Role::TaskWorker, Some("web"), 70),
+                1,
+                "one",
+            ),
+            second,
+            reviewed(group("reviewer-1", Role::Reviewer, None, 1), 4, 1, "one"),
+            early_review,
+        ];
+        let report = task_report(&groups);
+        assert_eq!(
+            (
+                report.build_micro_usd,
+                report.review_micro_usd,
+                report.turns
+            ),
+            (100, 17, 5)
+        );
+        type Row<'a> = (&'a str, CostPart, u64, u64, Vec<String>, Option<&'a str>);
+        let rows: Vec<Row> = report
+            .workers
+            .iter()
+            .map(|row| {
+                (
+                    row.agent.as_str(),
+                    row.part,
+                    row.turns,
+                    row.cost_micro_usd,
+                    row.proposals.iter().map(ToString::to_string).collect(),
+                    row.model.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("web-worker", CostPart::Build, 2, 100, vec![], Some("opus")),
+                (
+                    "reviewer-2",
+                    CostPart::Review,
+                    1,
+                    7,
+                    vec!["P-5".to_owned()],
+                    Some("sonnet")
+                ),
+                (
+                    "reviewer-1",
+                    CostPart::Review,
+                    2,
+                    10,
+                    vec!["P-4".to_owned(), "P-6".to_owned()],
+                    Some("sonnet")
+                ),
+            ]
+        );
+        assert_eq!(task_report(&[]), TaskCostReport::default());
+    }
+}

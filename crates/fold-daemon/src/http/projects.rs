@@ -6,6 +6,7 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::actor::Human;
+use super::agents::cost::time_param;
 use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use super::{Project, SocketOnly};
 use crate::daemon::{AppState, StartedBy};
@@ -95,6 +96,17 @@ pub struct ProjectOverview {
     /// Who paused the agents, such as `human:ana` or the main agent's name, while they are paused; null otherwise.
     #[schema(required = true)]
     pub paused_by: Option<String>,
+    pub cost: ProjectCostTotals,
+}
+
+/// What the project's supervised workers cost, in millionths of a US dollar, from the values Claude Code reported. The main agent is the user's own Claude Code session, which fold does not supervise, so its cost is in none of them.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectCostTotals {
+    pub all_time_micro_usd: u64,
+    /// The turns that ended since the start of the day the list was asked for with `today`, else since midnight UTC.
+    pub today_micro_usd: u64,
+    /// The turns that ended since the start of the week the list was asked for with `week`, else since midnight UTC six days ago.
+    pub week_micro_usd: u64,
 }
 
 /// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind. `uncommitted_changes`: the project folder has changes that no revision records, which the human records with `fld record` or puts aside with `fld stash`; such a change on a path main changed, or the conflict markers of `fld unstash`, keep the whole folder where it is until then. `head_moved`: the Git branch or HEAD shows a change fold did not make, such as another branch checked out, a reset or a stash, so the project folder stops following main until the human brings the branch back.
@@ -158,6 +170,11 @@ impl From<projects::ProjectOverview> for ProjectOverview {
             attention: overview.attention.into_iter().map(Into::into).collect(),
             paused_since: overview.paused_since,
             paused_by: overview.paused_by,
+            cost: ProjectCostTotals {
+                all_time_micro_usd: overview.cost.all_time,
+                today_micro_usd: overview.cost.today,
+                week_micro_usd: overview.cost.week,
+            },
         }
     }
 }
@@ -200,6 +217,10 @@ pub struct ListProjectsQuery {
     /// List the projects a person removed from fold too; they are left out without it.
     #[serde(default)]
     pub include_removed: bool,
+    /// UTC milliseconds of the start of the viewer's day, from which each project's cost of today counts; midnight UTC without it.
+    pub today: Option<i64>,
+    /// UTC milliseconds of the start of the viewer's last seven days, from which each project's cost of the week counts; midnight UTC six days ago without it.
+    pub week: Option<i64>,
 }
 
 /// Every project in fold and whether the daemon has it open, ordered by slug; with `include_removed`, the projects a person removed too. A project whose `.fold/` was deleted is removed from fold before the list is read, so it is not in the list.
@@ -210,7 +231,7 @@ pub struct ListProjectsQuery {
     params(ListProjectsQuery),
     responses(
         (status = 200, description = "The registered projects", body = ProjectList),
-        (status = 400, description = "`invalid_request`: `include_removed` is not `true` or `false`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request`: `include_removed` is not `true` or `false`, or `today` or `week` is not a time", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
@@ -218,7 +239,11 @@ pub async fn list(
     State(state): State<AppState>,
     ApiQuery(query): ApiQuery<ListProjectsQuery>,
 ) -> Result<Json<ProjectList>, ApiError> {
-    let projects = projects::list(&state, query.include_removed)
+    let days = projects::CostDays {
+        today: query.today.map(time_param).transpose()?,
+        week: query.week.map(time_param).transpose()?,
+    };
+    let projects = projects::list_for(&state, query.include_removed, days)
         .await?
         .into_iter()
         .map(ProjectSummary::from)
