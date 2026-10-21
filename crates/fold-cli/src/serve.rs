@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use clap::Args;
 use fold_cli::daemon_client::{ClientConfig, ClientError};
+use fold_core::Clock;
 use fold_daemon::config::{LOCK_FILE, SOCKET_FILE};
 use fold_daemon::services::agents::Launcher;
 use fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME;
@@ -242,7 +243,8 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
     let dirs = Dirs::from_env();
     let file = read_file_config(&dirs.config_file()?)?;
     let config = build_config(args, &dirs, &file)?;
-    let chosen = crate::shell_env::from_host();
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let (chosen, started_by) = crate::shell_env::from_host(clock.as_ref());
     crate::shell_env::log(&chosen.environment);
     if let Some(path) = &chosen.path {
         // SAFETY: no other thread runs yet: the tokio runtime is built below, and neither the log subscriber nor the failpoints start one, so nothing reads the environment while it changes.
@@ -265,8 +267,7 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
     runtime.block_on(async {
         let signals = shutdown_signal().map_err(ServeError::Signals)?;
         let daemon =
-            Daemon::start_on_host(config, Arc::new(SystemClock), launcher, chosen.environment)
-                .await?;
+            Daemon::start_on_host(config, clock, launcher, chosen.environment, started_by).await?;
         signals.await;
         tracing::info!("shutting down");
         daemon.shutdown().await;

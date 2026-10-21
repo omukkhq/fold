@@ -10,6 +10,8 @@ use fold_daemon::services::agents::environment::{
     EnvSource, ShellProblem, WorkerEnvironment, sign_in_names, worker_variables,
 };
 
+use fold_core::Clock;
+use fold_daemon::daemon::StartedBy;
 use fold_daemon::services::agents::Launcher;
 
 use crate::platform::on_path;
@@ -190,6 +192,7 @@ pub(crate) fn choose(
                             claude: Some(claude),
                             git: program(path, "git"),
                             sign_in: sign_in_names(names),
+                            ..WorkerEnvironment::default()
                         },
                         path: path.map(OsStr::to_owned),
                         workers,
@@ -212,6 +215,7 @@ pub(crate) fn choose(
             claude: program(path, "claude"),
             git: program(path, "git"),
             sign_in: sign_in_names(own.iter().filter_map(|(name, _)| name.to_str())),
+            ..WorkerEnvironment::default()
         },
         workers: Vec::new(),
         path: None,
@@ -236,26 +240,47 @@ pub(crate) fn shell_dir(home: Option<OsString>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
-/// Reads the login shell of this process's user once, with the running fld as the program that prints its environment, and chooses the workers' environment as [`choose`] does.
-pub(crate) fn from_host() -> Chosen {
+/// Reads the login shell of this process's user once, with the running fld as the program that prints its environment, and chooses the workers' environment as [`choose`] does. The environment names the shell and the moment, from `clock`, just before the shell started, so a startup file changed during the read counts as changed after it.
+pub(crate) fn from_host(clock: &dyn Clock) -> (Chosen, StartedBy) {
     let own: Vec<(OsString, OsString)> = std::env::vars_os().collect();
-    let service = value(&own, SERVICE_ENV).is_some();
+    let started_by = started_by(value(&own, SERVICE_ENV));
     let passwd = std::fs::read_to_string("/etc/passwd").ok();
     let uid = rustix::process::getuid().as_raw();
-    let shell = match (
-        login_shell(std::env::var_os("SHELL"), passwd.as_deref(), uid),
-        Launcher::default().with_own_binary().fold,
-    ) {
-        (Some(shell), Some(fld)) => read_shell(
-            &shell,
-            &fld,
-            &shell_dir(std::env::var_os("HOME")),
-            SHELL_TIMEOUT,
-        ),
+    let login = login_shell(std::env::var_os("SHELL"), passwd.as_deref(), uid);
+    let mut read_at = None;
+    let shell = match (&login, Launcher::default().with_own_binary().fold) {
+        (Some(shell), Some(fld)) => {
+            read_at = Some(clock.now());
+            read_shell(
+                shell,
+                &fld,
+                &shell_dir(std::env::var_os("HOME")),
+                SHELL_TIMEOUT,
+            )
+        }
         (None, _) => Err(ShellProblem::NoShell),
         (Some(_), None) => Err(ShellProblem::Failed),
     };
-    choose(shell, &own, service)
+    let mut chosen = choose(shell, &own, started_by != StartedBy::Hand);
+    chosen.environment.shell = login.as_deref().and_then(shell_name);
+    chosen.environment.shell_read_at = read_at;
+    (chosen, started_by)
+}
+
+/// The file name of `shell`, such as `bash` for `/usr/bin/bash`.
+pub(crate) fn shell_name(shell: &Path) -> Option<String> {
+    shell.file_name().and_then(OsStr::to_str).map(str::to_owned)
+}
+
+/// What the [`SERVICE_ENV`] marker says started the daemon. The service files name their manager; a marker of another value still means a service started it, under the manager of this platform.
+pub(crate) fn started_by(marker: Option<&OsStr>) -> StartedBy {
+    match marker.and_then(OsStr::to_str) {
+        None => StartedBy::Hand,
+        Some("launchd") => StartedBy::Launchd,
+        Some("systemd") => StartedBy::Systemd,
+        Some(_) if cfg!(target_os = "macos") => StartedBy::Launchd,
+        Some(_) => StartedBy::Systemd,
+    }
 }
 
 /// Logs which environment the workers get and why, with source and problem names only, never a path or a value.
@@ -489,6 +514,19 @@ mod tests {
             ),
             Err(ShellProblem::Failed)
         );
+    }
+
+    #[test]
+    fn the_service_marker_names_the_manager_and_the_shell_its_file_name() {
+        assert_eq!(started_by(None), StartedBy::Hand);
+        assert_eq!(started_by(Some(OsStr::new("systemd"))), StartedBy::Systemd);
+        assert_eq!(started_by(Some(OsStr::new("launchd"))), StartedBy::Launchd);
+        assert_ne!(started_by(Some(OsStr::new("other"))), StartedBy::Hand);
+        assert_eq!(
+            shell_name(Path::new("/usr/bin/bash")).as_deref(),
+            Some("bash")
+        );
+        assert_eq!(shell_name(Path::new("/")), None);
     }
 
     #[test]

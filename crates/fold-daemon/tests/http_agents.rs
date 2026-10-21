@@ -625,6 +625,7 @@ async fn the_worker_environment_answers_only_on_the_socket_and_names_no_value() 
         claude: Some(claude.clone()),
         git: None,
         sign_in: vec!["ANTHROPIC_API_KEY".to_owned(), "HOME".to_owned()],
+        ..WorkerEnvironment::default()
     };
     let state: AppState = Arc::new(DaemonState {
         registry: project.registry().clone(),

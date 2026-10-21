@@ -26,6 +26,7 @@ use crate::init::host_paths;
 use crate::output;
 use crate::platform::{Host, Platform, on_path};
 use crate::serve::{self, DEFAULT_LISTEN, Dirs, FileConfig, read_file_config};
+use crate::status;
 use fold_cli::claude_files::{self, shadowing_files};
 use fold_cli::claude_user::{self, UserSetup};
 use fold_daemon::config::{LOCK_FILE, SOCKET_FILE};
@@ -61,8 +62,9 @@ pub enum DoctorError {
     HostPaths(FoldError),
     #[error("cannot start the async runtime: {0}")]
     Runtime(io::Error),
-    #[error("checks failed: {failed}")]
-    ChecksFailed { failed: usize },
+    /// `names` lists the failed checks, as the summary names them.
+    #[error("checks failed: {failed} ({names})")]
+    ChecksFailed { failed: usize, names: String },
     #[error("cannot write the output: {0}")]
     Write(#[from] io::Error),
 }
@@ -138,6 +140,13 @@ pub(crate) struct Section {
     pub(crate) checks: Vec<Check>,
 }
 
+/// What doctor reports: the lines about this fld and the daemon, then the checks.
+#[derive(Debug)]
+pub(crate) struct Report {
+    pub(crate) header: Vec<String>,
+    pub(crate) sections: Vec<Section>,
+}
+
 pub(crate) fn failed(sections: &[Section]) -> usize {
     sections
         .iter()
@@ -146,18 +155,26 @@ pub(crate) fn failed(sections: &[Section]) -> usize {
         .count()
 }
 
+fn label(status: Status) -> &'static str {
+    match status {
+        Status::Ok => "ok",
+        Status::Warn => "warn",
+        Status::Fail => "fail",
+    }
+}
+
 fn write_report(sections: &[Section], out: &mut impl Write) -> io::Result<()> {
     for section in sections {
         output::line(out, &section.title)?;
         for check in &section.checks {
-            let label = match check.status {
-                Status::Ok => "ok",
-                Status::Warn => "warn",
-                Status::Fail => "fail",
-            };
             output::line(
                 out,
-                &format!("  {label:<4} {}: {}", check.name, check.message),
+                &format!(
+                    "  {:<4} {}: {}",
+                    label(check.status),
+                    check.name,
+                    check.message
+                ),
             )?;
             if let Some(fix) = &check.fix {
                 output::line(out, &format!("       fix: {fix}"))?;
@@ -167,16 +184,85 @@ fn write_report(sections: &[Section], out: &mut impl Write) -> io::Result<()> {
     Ok(())
 }
 
+/// The name of `check` in the summary: a project's checks carry the project, since every project has checks of the same names.
+fn summary_name(section: &Section, check: &Check) -> String {
+    match section.title.as_str() {
+        "host" => check.name.to_owned(),
+        title => format!("{} ({title})", check.name),
+    }
+}
+
+/// The failed and warned checks, in report order, each with its summary name.
+fn problems(sections: &[Section]) -> Vec<(String, &Check)> {
+    sections
+        .iter()
+        .flat_map(|section| {
+            section
+                .checks
+                .iter()
+                .filter(|check| check.status != Status::Ok)
+                .map(move |check| (summary_name(section, check), check))
+        })
+        .collect()
+}
+
+/// The summary names of the failed checks, comma separated.
+pub(crate) fn failed_names(sections: &[Section]) -> String {
+    problems(sections)
+        .into_iter()
+        .filter(|(_, check)| check.status == Status::Fail)
+        .map(|(name, _)| name)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The end of the report, which names every failed and warned check again with its fix, so a paste of only the end still shows them.
+fn write_summary(sections: &[Section], out: &mut impl Write) -> io::Result<()> {
+    let problems = problems(sections);
+    if problems.is_empty() {
+        return output::line(out, "summary: every check passed");
+    }
+    let warned = problems
+        .iter()
+        .filter(|(_, check)| check.status == Status::Warn)
+        .count();
+    output::line(
+        out,
+        &format!(
+            "summary: {} failed, {warned} warned",
+            problems.len() - warned
+        ),
+    )?;
+    for (name, check) in problems {
+        output::line(
+            out,
+            &format!(
+                "  {:<4} {name}: fix: {}",
+                label(check.status),
+                check.fix.as_deref().unwrap_or_default()
+            ),
+        )?;
+    }
+    Ok(())
+}
+
 /// Exit code 1 comes from the `ChecksFailed` error; warnings alone end with success.
 pub fn run(args: &DoctorArgs, out: &mut impl Write) -> Result<(), DoctorError> {
     let host = Host::from_env();
     let now = SystemClock.now();
     let runtime = serve::current_thread_runtime().map_err(DoctorError::Runtime)?;
-    let sections = collect(args, &host, now, &runtime)?;
-    write_report(&sections, out)?;
-    match failed(&sections) {
+    let report = collect(args, &host, now, &runtime)?;
+    for line in &report.header {
+        output::line(out, line)?;
+    }
+    write_report(&report.sections, out)?;
+    write_summary(&report.sections, out)?;
+    match failed(&report.sections) {
         0 => Ok(()),
-        failed => Err(DoctorError::ChecksFailed { failed }),
+        failed => Err(DoctorError::ChecksFailed {
+            failed,
+            names: failed_names(&report.sections),
+        }),
     }
 }
 
@@ -185,32 +271,71 @@ pub(crate) fn collect(
     host: &Host,
     now: Timestamp,
     runtime: &tokio::runtime::Runtime,
-) -> Result<Vec<Section>, DoctorError> {
+) -> Result<Report, DoctorError> {
     let mut sections = vec![Section {
         title: "host".to_owned(),
         checks: Vec::new(),
     }];
+    let socket = daemon_socket(args.socket.as_deref(), &host.dirs);
+    let daemon = socket.as_deref().map_or_else(
+        || status::Daemon::NoSocket("XDG_RUNTIME_DIR is not set".to_owned()),
+        status::probe,
+    );
+    let fld = env!("CARGO_PKG_VERSION");
+    let header = daemon::header_lines(
+        fld,
+        std::env::current_exe().ok().as_deref(),
+        socket.as_deref(),
+        &daemon,
+        host.platform,
+    );
     let (file, config_check) = daemon_file(&host.dirs);
     sections[0].checks.extend(config_check);
     sections[0]
         .checks
         .extend(host_checks(args.socket.as_deref(), &file, host));
-    let report = daemon_socket(args.socket.as_deref(), &host.dirs)
-        .map_or(environment::DaemonReport::NotRunning, |socket| {
-            environment::ask_daemon(&socket, host.user.clone(), runtime)
-        });
     sections[0]
         .checks
-        .push(environment::daemon_claude_verdict(&report));
+        .extend(daemon::version_verdict(&daemon, fld));
+    let report = socket
+        .as_deref()
+        .map_or(environment::DaemonReport::NotRunning, |socket| {
+            environment::ask_daemon(socket, host.user.clone(), runtime)
+        });
     let names: Vec<String> = std::env::vars_os()
         .filter_map(|(name, _)| name.into_string().ok())
         .collect();
-    let shell = environment::sign_in_names(names.iter().map(String::as_str));
+    let terminal = environment::sign_in_names(names.iter().map(String::as_str));
+    sections[0]
+        .checks
+        .push(environment::daemon_claude_verdict(&report, &terminal));
     sections[0].checks.extend(environment::daemon_env_verdict(
         &report,
-        &shell,
+        &terminal,
         host.platform.linux,
     ));
+    let start = match &daemon {
+        status::Daemon::Running { start, .. } => start.as_ref(),
+        _ => None,
+    };
+    let zdotdir = std::env::var_os("ZDOTDIR")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute());
+    let files = match (
+        start.and_then(|start| start.shell.as_deref()),
+        host.dirs.home.as_deref(),
+    ) {
+        (Some(shell), Some(home)) => daemon::startup_files(
+            shell,
+            home,
+            zdotdir.as_deref(),
+            host.dirs.config_home.as_deref(),
+        ),
+        _ => Vec::new(),
+    };
+    sections[0]
+        .checks
+        .extend(daemon::shell_verdict(start, &files, now));
     let projects = match &args.project {
         Some(dir) => {
             let root = absolute_dir(dir);
@@ -230,17 +355,24 @@ pub(crate) fn collect(
     } else {
         projects.clone()
     };
-    let socket = daemon_socket(args.socket.as_deref(), &host.dirs);
+    let answering = socket
+        .as_deref()
+        .filter(|_| matches!(daemon, status::Daemon::Running { .. }));
     for (label, root) in projects {
         let mut checks = project_checks(&root, host, now, runtime);
         let slug = push::slug_of(&registered, &root);
         checks.push(push::push_check(socket.as_deref(), slug.as_deref()));
+        checks.push(workers::workers_check(
+            answering,
+            slug.as_deref(),
+            start.map(|start| start.started_at),
+        ));
         sections.push(Section {
             title: format!("project {label}"),
             checks,
         });
     }
-    Ok(sections)
+    Ok(Report { header, sections })
 }
 
 /// The shadowing walk climbs the parents of the root, so a relative `--project` is resolved first.
@@ -1290,8 +1422,10 @@ fn shadowing_checks(root: &Path, home: Option<&Path>) -> Vec<Check> {
         .collect()
 }
 
+mod daemon;
 mod environment;
 mod push;
+mod workers;
 
 #[cfg(test)]
 mod tests;

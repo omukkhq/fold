@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
+use fold_core::Timestamp;
 use fold_core::layout::{AGENT_ENV, AGENT_TAGS_ENV};
 use tokio::process::Command;
 
@@ -68,6 +69,10 @@ pub struct WorkerEnvironment {
     pub git: Option<PathBuf>,
     /// The names, sorted, of the variables of the workers' environment that decide how Claude Code signs in, as [`is_sign_in_variable`] picks them.
     pub sign_in: Vec<String>,
+    /// The file name of the login shell the daemon ran, such as `bash`; `None` when it knows none.
+    pub shell: Option<String>,
+    /// When the daemon started to run the login shell, so a startup file changed after it shows that the workers lack the change; `None` when it ran none.
+    pub shell_read_at: Option<Timestamp>,
 }
 
 /// The variables that fold sets or removes itself on every worker process, so the shell's value never replaces fold's.
