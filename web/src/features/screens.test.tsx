@@ -105,6 +105,49 @@ describe("Projects screen", () => {
     expect(screen.queryByRole("link", { name: /Archive/ })).toBeNull();
   });
 
+  it("shows +N for the agent chips that do not fit and gives a screen reader their names", async () => {
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(100);
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(250);
+    stubFetch({
+      "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+      "GET /api/v1/projects": {
+        body: {
+          projects: [
+            {
+              ...summary("demo", "Demo"),
+              overview: {
+                counts: {
+                  backlog: 0,
+                  todo: 0,
+                  in_progress: 0,
+                  review: 0,
+                  done: 0,
+                },
+                agents: ["alpha", "beta", "gamma", "delta"].map((name) => ({
+                  name,
+                  presence: "active",
+                })),
+                head: "r1",
+                last_change_at: Date.now(),
+                attention: [],
+              },
+            },
+          ],
+        },
+      },
+      "GET /api/v1/projects/demo/git": errorReply(404, "git_not_found"),
+    });
+    renderAt("/projects");
+    const demo = await screen.findByRole("link", {
+      name: /3 more agents: @beta, @gamma, @delta/,
+    });
+    const more = within(demo).getByText("+3");
+    expect(more.getAttribute("aria-hidden")).toBe("true");
+    expect(more.parentElement?.getAttribute("title")).toBe(
+      "3 more agents: @beta, @gamma, @delta",
+    );
+  });
+
   it("searches every project by name, slug or folder, the removed ones too, and adds a removed one back", async () => {
     let removed: number | null = 5;
     const calls = stubFetch({

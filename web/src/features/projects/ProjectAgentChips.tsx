@@ -74,12 +74,10 @@ export function ProjectAgentChips({
         <Chip key={agent.name} agent={agent} />
       ))}
       {hidden.length > 0 ? (
-        <span
-          className={cn(CHIP, "text-text-muted")}
-          title={moreTitle(hidden)}
-          aria-label={moreTitle(hidden)}
-        >
-          {moreLabel(hidden.length)}
+        // The card is one link, so the chip cannot take focus; a screen reader reads the hidden names in the link's text.
+        <span className={cn(CHIP, "text-text-muted")} title={moreTitle(hidden)}>
+          <span aria-hidden>{moreLabel(hidden.length)}</span>
+          <span className="sr-only">{moreTitle(hidden)}</span>
         </span>
       ) : null}
       <div
