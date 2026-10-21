@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import {
+  ArrowLeft,
   Bot,
   Check,
   GitPullRequest,
@@ -19,6 +20,10 @@ import { keys } from "@/api/keys";
 import { sendMessage, type NewMessage } from "@/api/messages";
 import { olderNotListed } from "@/api/pages";
 import { messagesQuery, threadQuery } from "@/api/queries";
+import { HrefLink } from "@/app/HrefLink";
+import { buttonClasses } from "@/components/button/buttonStyles";
+import { cn } from "@/lib/cn";
+import { focusRing } from "@/lib/focus";
 import { Button } from "@/components/button/Button";
 import { Menu } from "@/components/overlay/Menu";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
@@ -101,9 +106,14 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
   }
 
   return (
-    <div className="flex flex-1 flex-col items-stretch gap-20 px-24 pt-20 pb-24 lg:flex-row">
-      <div className="flex shrink-0 flex-col gap-12 lg:w-thread-list">
-        <div className="flex flex-col gap-4">
+    <div className="flex min-h-0 flex-1 flex-col items-stretch gap-20 overflow-hidden px-24 pt-20 pb-24 lg:flex-row">
+      <div
+        className={cn(
+          "min-h-0 flex-1 flex-col gap-12 lg:flex lg:w-thread-list lg:flex-none",
+          search.thread === undefined ? "flex" : "hidden",
+        )}
+      >
+        <div className="flex shrink-0 flex-col gap-4">
           <h1 className="text-screen leading-snug font-semibold text-text">
             Messages
           </h1>
@@ -113,7 +123,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
             terminals.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-6">
+        <div className="flex shrink-0 flex-wrap items-center gap-6">
           {FILTERS.map(({ key, label, all, icon: Icon, options: group }) => {
             const value = search[key];
             const pick = (next: string | undefined) => {
@@ -155,49 +165,71 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
             Send feedback
           </Button>
         </div>
-        {visible.length === 0 ? (
-          <EmptyPanel
-            icon={MessagesSquare}
-            title={data.length === 0 ? "No messages yet" : "No thread matches"}
-          >
-            {data.length === 0
-              ? "Feedback you send and messages from agents appear here."
-              : "Change or clear the filters to see more threads."}
-          </EmptyPanel>
-        ) : (
-          <ThreadList
-            threads={visible}
-            selected={open?.id ?? null}
-            now={dataUpdatedAt}
-            hrefOf={(thread) =>
-              messagesHref(slug, { ...search, thread: thread.id })
-            }
-          />
+        <div className="flex min-h-0 flex-1 flex-col gap-12 overflow-y-auto">
+          {visible.length === 0 ? (
+            <EmptyPanel
+              icon={MessagesSquare}
+              title={
+                data.length === 0 ? "No messages yet" : "No thread matches"
+              }
+            >
+              {data.length === 0
+                ? "Feedback you send and messages from agents appear here."
+                : "Change or clear the filters to see more threads."}
+            </EmptyPanel>
+          ) : (
+            <ThreadList
+              threads={visible}
+              selected={open?.id ?? null}
+              now={dataUpdatedAt}
+              hrefOf={(thread) =>
+                messagesHref(slug, { ...search, thread: thread.id })
+              }
+            />
+          )}
+          {listing.more ? (
+            <p className="text-bar text-text-muted">
+              {olderNotListed(data.length, "threads")}
+            </p>
+          ) : null}
+        </div>
+      </div>
+      <div
+        className={cn(
+          "min-h-0 min-w-0 flex-1 flex-col gap-8 lg:flex",
+          search.thread === undefined ? "hidden" : "flex",
         )}
-        {listing.more ? (
-          <p className="text-bar text-text-muted">
-            {olderNotListed(data.length, "threads")}
-          </p>
+      >
+        <HrefLink
+          href={messagesHref(slug, { ...search, thread: undefined })}
+          className={cn(
+            buttonClasses("secondary", "md"),
+            focusRing,
+            "self-start lg:hidden",
+          )}
+        >
+          <ArrowLeft aria-hidden="true" size={15} />
+          Threads
+        </HrefLink>
+        {target.kind === "unlisted" && !unlisted.data ? (
+          <UnlistedThread
+            id={target.id}
+            error={unlisted.error}
+            onRetry={() => void unlisted.refetch()}
+          />
+        ) : null}
+        {open ? (
+          <ThreadPanel
+            key={open.id}
+            slug={slug}
+            thread={open}
+            now={dataUpdatedAt}
+            onReply={async (replyTo, body) => {
+              await send.mutateAsync({ reply_to: replyTo, body });
+            }}
+          />
         ) : null}
       </div>
-      {target.kind === "unlisted" && !unlisted.data ? (
-        <UnlistedThread
-          id={target.id}
-          error={unlisted.error}
-          onRetry={() => void unlisted.refetch()}
-        />
-      ) : null}
-      {open ? (
-        <ThreadPanel
-          key={open.id}
-          slug={slug}
-          thread={open}
-          now={dataUpdatedAt}
-          onReply={async (replyTo, body) => {
-            await send.mutateAsync({ reply_to: replyTo, body });
-          }}
-        />
-      ) : null}
       <FeedbackDialog
         slug={slug}
         open={feedback}
