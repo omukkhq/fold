@@ -97,7 +97,7 @@ pub struct RoleSettings {
 pub const DEFAULT_IDLE_MINUTES: u64 = 15;
 
 /// The share of its model's context window, in percent, past which a long-lived worker gets a fresh context, when its role sets no `handoff_at`.
-pub const DEFAULT_HANDOFF_AT: u64 = 60;
+pub const DEFAULT_HANDOFF_AT: u64 = 15;
 
 /// The `[git]` section: the branch of the project folder's repository `.git` that every integration is committed to and the folder has checked out.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -639,6 +639,13 @@ mod tests {
             defaults.role(Role::TaskWorker).cache_ttl,
             CacheTtl::FiveMinutes
         );
+    }
+
+    #[test]
+    fn both_leads_hand_off_at_15_percent_by_default() {
+        let config = ProjectConfig::from_toml("").unwrap();
+        assert_eq!(config.role(Role::AreaLead).handoff_at, Some(15));
+        assert_eq!(config.role(Role::ReviewLead).handoff_at, Some(15));
     }
 
     #[test]
