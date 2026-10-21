@@ -247,7 +247,6 @@ async fn the_git_route_reports_the_repository_the_remotes_and_the_last_push_of_e
 }
 
 #[tokio::test]
-#[cfg(test)]
 async fn the_socket_names_the_daemons_version_and_the_port_it_listens_on() {
     let project = TestProject::new().await;
     let state: AppState = Arc::new(DaemonState {
