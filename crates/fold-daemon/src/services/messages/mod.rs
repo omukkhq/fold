@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::messages::resolve;
+use fold_core::tasks::areas::feedback_to;
 use fold_core::{
     Actor, Address, AddressedAs, AgentActor, AgentName, Choice, Clock, EventError, FoldError,
     HumanName, IdKind, MessageBody, MessageChoices, MessageId, NewEvent, ProposalId, Recipient,
     RequestId, Sender, Target, TaskId, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::messages::{self, MessageHead, MessageRow, NewMessage, RecipientRow};
-use fold_store::tasks::claims;
 use fold_store::{Store, StoreError, WriteTx, agents, counters, projects, reviews, tasks};
 use serde_json::json;
 use thiserror::Error;
@@ -337,7 +337,7 @@ impl MessageService {
         Ok(view)
     }
 
-    /// A human's feedback on `task`, linked to it. It goes to `to` when given, otherwise to the worker holding the task's implementation claim.
+    /// A human's feedback on `task`, linked to it. It goes to the task's readers only: to `to` when every entry names one, otherwise to the first reader, the claim holder when there is one.
     pub async fn send_feedback(
         &self,
         actor: &Actor,
@@ -354,15 +354,8 @@ impl MessageService {
             .store
             .write(async |tx| {
                 require_task(tx, task).await?;
-                let to = match to {
-                    Some(to) => to,
-                    None => {
-                        let holder = claims::unreleased_for_task(tx.conn(), task)
-                            .await?
-                            .ok_or_else(|| no_claim_holder(task))?;
-                        vec![Address::of_worker(&holder.worker)]
-                    }
-                };
+                let readers = crate::services::tasks::readers_in(tx.conn(), task).await?;
+                let to = feedback_to(task, to, &readers)?;
                 let directory = messages::directory(tx.conn(), humans).await?;
                 let recipients = resolve(&to, &directory, &sender).map_err(FoldError::from)?;
                 let draft = Draft {
@@ -649,13 +642,4 @@ fn message_not_found(message: MessageId) -> FoldError {
         format!("{message} does not exist"),
     )
     .with_hint("call get_inbox to see your messages")
-}
-
-fn no_claim_holder(task: TaskId) -> FoldError {
-    FoldError::new(
-        codes::RECIPIENT_NOT_FOUND,
-        format!("{task} has no claim holder to receive the feedback"),
-    )
-    .with_details([("task", json!(task.to_string()))])
-    .with_hint("choose a recipient for the feedback")
 }

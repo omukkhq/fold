@@ -338,6 +338,7 @@ async fn mine_lists_only_the_threads_that_concern_the_signed_in_human() {
     fixture.send("review", &["humans"], None, None).await;
     fixture.send("frontend", &["human:ana"], None, None).await;
     fixture.send("backend", &["frontend"], Some(2), None).await;
+    crate::common::roles::give_main_tag(&fixture.handle.store, "backend").await;
     let (status, sent) = fixture
         .feedback(
             &[COOKIE],
@@ -455,16 +456,20 @@ async fn a_thread_is_read_by_any_of_its_messages() {
 }
 
 #[tokio::test]
-async fn feedback_goes_to_the_claim_holder() {
+async fn feedback_goes_to_the_first_reader_and_only_to_the_readers() {
     let fixture = Fixture::new().await;
-    let (status, body) = fixture
+    let (status, lead) = fixture
         .feedback(
             &[COOKIE],
             json!({"body": "use the short copy", "task": "T-1"}),
         )
         .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
-    assert_eq!(code(&body), "recipient_not_found");
+    assert_eq!(status, StatusCode::CREATED, "{lead}");
+    assert_eq!(
+        recipients(&lead),
+        ["frontend"],
+        "without a claim the area lead reads it"
+    );
     fixture
         .tasks
         .claim_task(&agent("frontend/ui"), "T-1".parse().unwrap())
@@ -477,7 +482,7 @@ async fn feedback_goes_to_the_claim_holder() {
         )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{sent}");
-    assert_eq!(sent["id"], "m-1");
+    assert_eq!(sent["id"], "m-2");
     assert_eq!(sent["sender"], "human:tanim");
     assert_eq!(sent["task"], "T-1");
     assert_eq!(recipients(&sent), ["frontend/ui"]);
@@ -486,15 +491,47 @@ async fn feedback_goes_to_the_claim_holder() {
         .inbox(&agent("frontend/ui"), false)
         .await
         .unwrap();
-    assert_eq!(inbox[0].id.to_string(), "m-1");
+    assert_eq!(inbox[0].id.to_string(), "m-2");
     let (status, named) = fixture
         .feedback(
             &[COOKIE],
-            json!({"body": "fyi", "task": "T-1", "to": ["backend", "human:tanim"]}),
+            json!({"body": "fyi", "task": "T-1", "to": ["frontend", "frontend/ui"]}),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{named}");
-    assert_eq!(recipients(&named), ["backend", "human:tanim"]);
+    assert_eq!(recipients(&named), ["frontend", "frontend/ui"]);
+    for to in [
+        json!(["backend"]),
+        json!(["frontend", "tag:ui"]),
+        json!(["human:tanim"]),
+    ] {
+        let (status, body) = fixture
+            .feedback(&[COOKIE], json!({"body": "fyi", "task": "T-1", "to": to}))
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{to}: {body}");
+        assert_eq!(code(&body), "recipient_not_reader", "{to}");
+    }
+    fixture
+        .tasks
+        .create_task(
+            &agent("review"),
+            CreateTask {
+                title: TaskTitle::parse("no area").unwrap(),
+                description: TaskDescription::new(""),
+                labels: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let (status, body) = fixture
+        .feedback(&[COOKIE], json!({"body": "x", "task": "T-3"}))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(
+        code(&body),
+        "recipient_not_found",
+        "a task in no area of a project without a main agent has no reader"
+    );
     let (status, body) = fixture
         .feedback(&[COOKIE], json!({"body": "x", "task": "T-9"}))
         .await;
@@ -578,6 +615,7 @@ async fn feedback_needs_a_named_human_and_a_task_or_reply() {
 async fn a_task_s_mine_listing_holds_the_human_s_threads_with_the_agents_replies() {
     let fixture = Fixture::new().await;
     fixture.send("frontend", &["backend"], Some(1), None).await;
+    crate::common::roles::give_main_tag(&fixture.handle.store, "backend").await;
     let (status, sent) = fixture
         .feedback(
             &[COOKIE],
@@ -677,6 +715,19 @@ async fn a_task_offers_its_claim_holder_its_area_lead_and_the_main_agent_as_read
             reader("review", "main_agent"),
         ],
         "the claim holder comes first"
+    );
+    fixture
+        .tasks
+        .release_task(&agent("frontend/ui"), "T-1".parse().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        readers(&fixture, "T-1").await,
+        [
+            reader("frontend", "area_lead"),
+            reader("review", "main_agent"),
+        ],
+        "a released claim has no holder"
     );
     for (labels, title) in [(vec![], "no area"), (vec![LabelName::main()], "main")] {
         fixture

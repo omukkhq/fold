@@ -17,7 +17,7 @@ use fold_store::tasks::claims;
 use fold_store::tasks::reports;
 use fold_store::tasks::{self, BoardSnapshot};
 use fold_store::workspaces::{self, Checkpoint};
-use fold_store::{StoreError, agents, events};
+use fold_store::{SqliteConnection, StoreError, agents, events};
 
 pub use fold_store::tasks::{ChecklistCounts, TaskRef};
 
@@ -480,32 +480,7 @@ impl TaskService {
         tasks::fetch(&mut tx, id)
             .await?
             .ok_or_else(|| task_not_found(id))?;
-        let labels: Vec<LabelName> = tasks::labels_for_conn(&mut tx, id)
-            .await?
-            .into_iter()
-            .map(|label| label.name)
-            .collect();
-        let areas: Vec<_> = agents::list_areas(&mut *tx)
-            .await?
-            .into_iter()
-            .map(|area| (area.name, area.label, area.lead))
-            .collect();
-        let holder = claims::unreleased_for_task(&mut *tx, id)
-            .await?
-            .map(|claim| claim.worker);
-        let main: BTreeSet<i64> = agents::all_tags(&mut *tx)
-            .await?
-            .into_iter()
-            .filter(|(_, tag)| tag.is_main())
-            .map(|(agent, _)| agent)
-            .collect();
-        let main_agents: Vec<AgentName> = agents::list_agents(&mut *tx)
-            .await?
-            .into_iter()
-            .filter(|agent| main.contains(&agent.id))
-            .map(|agent| agent.name)
-            .collect();
-        let readers = feedback_readers(holder.as_ref(), &labels, &areas, &main_agents);
+        let readers = readers_in(&mut tx, id).await?;
         tx.commit().await.map_err(StoreError::from)?;
         Ok(readers)
     }
@@ -659,4 +634,42 @@ fn labels_of(snapshot: &mut BoardSnapshot, task: TaskId) -> Vec<LabelView> {
         .into_iter()
         .map(label_view)
         .collect()
+}
+
+/// The readers of a human's feedback on `task`, read on `conn`: the task listing and the feedback send choose them from the same rows.
+pub(crate) async fn readers_in(
+    conn: &mut SqliteConnection,
+    task: TaskId,
+) -> Result<Vec<FeedbackReader>, StoreError> {
+    let labels: Vec<LabelName> = tasks::labels_for_conn(conn, task)
+        .await?
+        .into_iter()
+        .map(|label| label.name)
+        .collect();
+    let areas: Vec<_> = agents::list_areas(&mut *conn)
+        .await?
+        .into_iter()
+        .map(|area| (area.name, area.label, area.lead))
+        .collect();
+    let holder = claims::unreleased_for_task(&mut *conn, task)
+        .await?
+        .map(|claim| claim.worker);
+    let main: BTreeSet<i64> = agents::all_tags(&mut *conn)
+        .await?
+        .into_iter()
+        .filter(|(_, tag)| tag.is_main())
+        .map(|(agent, _)| agent)
+        .collect();
+    let main_agents: Vec<AgentName> = agents::list_agents(&mut *conn)
+        .await?
+        .into_iter()
+        .filter(|agent| main.contains(&agent.id))
+        .map(|agent| agent.name)
+        .collect();
+    Ok(feedback_readers(
+        holder.as_ref(),
+        &labels,
+        &areas,
+        &main_agents,
+    ))
 }

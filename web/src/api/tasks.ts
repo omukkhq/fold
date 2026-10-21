@@ -48,7 +48,7 @@ export type NewChecklistItem =
   | { kind: "step"; text: string }
   | { kind: "linked"; task: string };
 
-/** The `to` list of a feedback request. Leaving it out sends the feedback to the task's claim holder. */
+/** The `to` list of a feedback request. Leaving it out sends the feedback to the task's first reader, its claim holder while it has one. */
 export function feedbackTo(to: FeedbackRecipient): string[] | undefined {
   switch (to.kind) {
     case "holder":

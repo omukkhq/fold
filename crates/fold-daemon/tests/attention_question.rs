@@ -387,7 +387,7 @@ async fn a_report_a_thank_you_and_an_answer_to_the_humans_own_message_wait_for_n
         .call(
             Method::POST,
             "/api/v1/projects/demo/feedback",
-            Some(json!({"body": "All good now?", "task": "T-1", "to": ["frontend"]})),
+            Some(json!({"body": "All good now?", "task": "T-1", "to": ["main"]})),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED);

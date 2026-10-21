@@ -12,7 +12,7 @@ const ROLES: Record<TaskReader["role"], string> = {
   main_agent: "main agent",
 };
 
-/** The claim holder is addressed as the holder, so the feedback reaches whoever holds the claim when it is sent; the lead and the main agent by name. */
+/** The claim holder is addressed as the holder, so the daemon sends the feedback to the first reader, whoever holds the claim when it is sent; the lead and the main agent by name. */
 export function readerRecipient(reader: TaskReader): FeedbackRecipient {
   return reader.role === "claim_holder"
     ? { kind: "holder" }
