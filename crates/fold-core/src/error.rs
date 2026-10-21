@@ -182,6 +182,7 @@ define_codes! {
     ASK_NOT_OPEN = "ask_not_open",
     ASK_CLOSE_DENIED = "ask_close_denied",
     PROJECT_WORKERS_RUNNING = "project_workers_running",
+    RECIPIENT_NOT_READER = "recipient_not_reader",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

@@ -1,5 +1,4 @@
-import { MAIN_TAG } from "@/api/agents";
-import type { FeedbackRecipient } from "@/api/tasks";
+import type { FeedbackRecipient, TaskReader } from "@/api/tasks";
 import { recipientValue } from "./text";
 
 export type RecipientOption = {
@@ -7,28 +6,41 @@ export type RecipientOption = {
   label: string;
 };
 
-/** The reader options of the feedback box, each reader once: the claim holder first, then the other agents, then every tag but the main tag, which reaches only the main agent and that agent is already listed by name. */
+const ROLES: Record<TaskReader["role"], string> = {
+  claim_holder: "claim holder",
+  area_lead: "area lead",
+  main_agent: "main agent",
+};
+
+/** The claim holder is addressed as the holder, so the daemon sends the feedback to the first reader, whoever holds the claim when it is sent; the lead and the main agent by name. */
+export function readerRecipient(reader: TaskReader): FeedbackRecipient {
+  return reader.role === "claim_holder"
+    ? { kind: "holder" }
+    : { kind: "agent", name: reader.name };
+}
+
+/** `web-t12 (claim holder)`. */
+export function readerLabel(reader: TaskReader): string {
+  return `${reader.name} (${ROLES[reader.role]})`;
+}
+
+/** The feedback box's reader options in the daemon's order, the default first; none before the readers are read. */
 export function recipientOptions(
-  holder: string | null,
-  targets: { agents: string[]; tags: string[] } | undefined,
+  readers: readonly TaskReader[] | undefined,
 ): RecipientOption[] {
-  const option = (to: FeedbackRecipient, label: string): RecipientOption => ({
-    value: recipientValue(to),
-    label,
-  });
-  const options: RecipientOption[] = [];
-  if (holder !== null) {
-    options.push(option({ kind: "holder" }, `${holder} (claim holder)`));
+  return (readers ?? []).map((reader) => ({
+    value: recipientValue(readerRecipient(reader)),
+    label: readerLabel(reader),
+  }));
+}
+
+/** The reader the box keeps: the current choice while the daemon still offers it, else the default, else no reader (`""`). */
+export function keptChoice(
+  current: string,
+  options: readonly RecipientOption[],
+): string {
+  if (options.some((option) => option.value === current)) {
+    return current;
   }
-  for (const agent of targets?.agents ?? []) {
-    if (agent !== holder) {
-      options.push(option({ kind: "agent", name: agent }, agent));
-    }
-  }
-  for (const tag of targets?.tags ?? []) {
-    if (tag !== MAIN_TAG) {
-      options.push(option({ kind: "tag", name: tag }, `tag ${tag}`));
-    }
-  }
-  return options;
+  return options[0]?.value ?? "";
 }
