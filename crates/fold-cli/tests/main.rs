@@ -36,6 +36,7 @@ mod hook_session_start;
 mod hook_stop;
 mod init;
 mod init_folder;
+mod log;
 mod news;
 mod remote;
 mod restart;
