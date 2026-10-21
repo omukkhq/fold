@@ -1,0 +1,177 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT p.number AS \"number!: i64\", t.number AS \"task!: i64\", p.state, p.title,\n                  (SELECT k.name FROM claims c JOIN workers k ON k.id = c.worker_id\n                   WHERE c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL) AS \"review_claim?: String\",\n                  (SELECT cs.stats FROM proposal_versions v JOIN changesets cs ON cs.id = v.head_changeset_id\n                   WHERE v.proposal_id = p.id ORDER BY v.version DESC LIMIT 1) AS \"stats?: String\",\n                  p.conflicted AS \"conflicted: bool\",\n                  p.checks_failed AS \"checks_failed: bool\",\n                  (SELECT MAX(v.version) FROM proposal_versions v WHERE v.proposal_id = p.id) AS \"version?: i64\",\n                  (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) AS \"verdict?: String\",\n                  rev.number AS \"revision?: i64\",\n                  i.actor AS \"integrated_by?: String\",\n                  i.created_at AS \"integrated_at?: i64\",\n                  rc.\"commit\" AS \"git_commit?: String\"\n           FROM proposals p\n           JOIN tasks t ON t.id = p.task_id\n           LEFT JOIN integrations i ON i.proposal_id = p.id AND i.result = 'succeeded'\n           LEFT JOIN revisions rev ON rev.id = i.revision_id\n           LEFT JOIN revision_commits rc ON rc.revision_id = rev.id\n           WHERE p.state IN ('open', 'integrated')\n             AND (?1 IS NULL OR t.number = ?1)\n             AND p.number = (\n                     SELECT MAX(q.number) FROM proposals q\n                     WHERE q.task_id = p.task_id AND q.state IN ('open', 'integrated')\n                 )\n           ORDER BY t.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "task!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "review_claim?: String",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "stats?: String",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "changesets",
+            "name": "stats"
+          }
+        }
+      },
+      {
+        "name": "conflicted: bool",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "conflicted"
+          }
+        }
+      },
+      {
+        "name": "checks_failed: bool",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "checks_failed"
+          }
+        }
+      },
+      {
+        "name": "version?: i64",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "verdict?: String",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "reviews",
+            "name": "verdict"
+          }
+        }
+      },
+      {
+        "name": "revision?: i64",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "integrated_by?: String",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integrations",
+            "name": "actor"
+          }
+        }
+      },
+      {
+        "name": "integrated_at?: i64",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "integrations",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "git_commit?: String",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "revision_commits",
+            "name": "commit"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "332a4c418efddda37e09ac0bbdeed18581f5380de3f189cd63e8325e38d47d81"
+}

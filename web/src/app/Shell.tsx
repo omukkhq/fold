@@ -4,10 +4,10 @@ import { TopBar } from "./TopBar";
 
 export function Shell({ slug }: { slug: string }) {
   return (
-    <div className="flex min-h-screen flex-col bg-bg">
+    <div className="relative flex h-dvh flex-col overflow-clip bg-bg">
       <TopBar slug={slug} />
       <NavTabs slug={slug} />
-      <main className="flex flex-1 flex-col">
+      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <Outlet />
       </main>
     </div>

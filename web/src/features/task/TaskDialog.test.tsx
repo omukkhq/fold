@@ -668,6 +668,9 @@ describe("the task dialog route", () => {
       changesets: [{ id: "C-18", message: "Add the form", created_at: at }],
       proposal: {
         id: "P-3",
+        title: "Add the form",
+        review_claim: null,
+        files: 3,
         state: "open",
         version: 2,
         checks_failed: false,
