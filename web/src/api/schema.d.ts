@@ -5177,7 +5177,12 @@ export interface operations {
     };
     show_project: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description UTC milliseconds of the start of the viewer's day, from which the project's cost of today counts; midnight UTC without it. */
+                today?: number;
+                /** @description UTC milliseconds of the start of the viewer's last seven days, from which the project's cost of the week counts; midnight UTC six days ago without it. */
+                week?: number;
+            };
             header?: never;
             path: {
                 /** @description The project slug */
@@ -5194,6 +5199,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectSummary"];
+                };
+            };
+            /** @description `invalid_request`: `today` or `week` is not a time */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
@@ -5245,7 +5259,12 @@ export interface operations {
     };
     remove_project: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description UTC milliseconds of the start of the viewer's day, from which the project's cost of today counts; midnight UTC without it. */
+                today?: number;
+                /** @description UTC milliseconds of the start of the viewer's last seven days, from which the project's cost of the week counts; midnight UTC six days ago without it. */
+                week?: number;
+            };
             header?: never;
             path: {
                 /** @description The project slug */
@@ -5262,6 +5281,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectSummary"];
+                };
+            };
+            /** @description `invalid_request`: `today` or `week` is not a time */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
@@ -9081,7 +9109,12 @@ export interface operations {
     };
     restore_project: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description UTC milliseconds of the start of the viewer's day, from which the project's cost of today counts; midnight UTC without it. */
+                today?: number;
+                /** @description UTC milliseconds of the start of the viewer's last seven days, from which the project's cost of the week counts; midnight UTC six days ago without it. */
+                week?: number;
+            };
             header?: never;
             path: {
                 /** @description The project slug */
@@ -9098,6 +9131,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectSummary"];
+                };
+            };
+            /** @description `invalid_request`: `today` or `week` is not a time */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */

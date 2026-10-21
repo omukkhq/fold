@@ -5,6 +5,8 @@ import {
   getProject,
   listProjects,
   pauseProject,
+  removeProject,
+  restoreProject,
   resumeProject,
 } from "./projects";
 
@@ -53,13 +55,23 @@ describe("projects", () => {
     expect(calls.map((call) => call.method)).toEqual(["POST", "POST"]);
   });
 
-  it("reads one project by slug", async () => {
-    stubFetch({
-      "GET /api/v1/projects/demo": {
-        body: { slug: "demo", name: "demo", available: true },
-      },
+  it("reads, removes and restores one project with the cost of the viewer's own days", async () => {
+    const project = { slug: "demo", name: "demo", available: true };
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo": { body: project },
+      "DELETE /api/v1/projects/demo": { body: project },
+      "POST /api/v1/projects/demo/restore": { body: project },
     });
     expect((await getProject("demo")).slug).toBe("demo");
+    expect((await removeProject("demo")).slug).toBe("demo");
+    expect((await restoreProject("demo")).slug).toBe("demo");
+    expect(calls.map((call) => call.method)).toEqual(["GET", "DELETE", "POST"]);
+    for (const call of calls) {
+      expect(new Date(Number(call.search.get("today"))).getHours()).toBe(0);
+      expect(Number(call.search.get("week"))).toBeLessThan(
+        Number(call.search.get("today")),
+      );
+    }
   });
 
   it.each([

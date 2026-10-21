@@ -1775,8 +1775,9 @@ const USE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 pub async fn show(
     state: &DaemonState,
     handle: &ProjectHandle,
+    days: CostDays,
 ) -> Result<ProjectEntry, ProjectError> {
-    let overview = overview(handle, CostDays::default()).await?;
+    let overview = overview(handle, days).await?;
     let used = match note_use(state, &handle.slug).await {
         Ok(used) => used,
         Err(error) => {
@@ -1801,6 +1802,7 @@ pub async fn remove(
     state: &DaemonState,
     actor: &Actor,
     slug: &str,
+    days: CostDays,
 ) -> Result<ProjectEntry, ProjectError> {
     policy::can_remove_project(actor).map_err(FoldError::from)?;
     let found = registration(state, slug).await?;
@@ -1810,7 +1812,7 @@ pub async fn remove(
             .remove_for_person(&state.registry, slug, state.clock.now())
             .await?;
     }
-    Ok(entry_of(state, registration(state, slug).await?, CostDays::default()).await)
+    Ok(entry_of(state, registration(state, slug).await?, days).await)
 }
 
 /// A named human brings back the project `slug` that a person removed, while its folder holds the project's `.fold/`: the removed mark goes and the daemon opens the project, and the answer is the project as the list shows it. A project in fold stays as it is. A removed project whose folder is missing or whose `.fold/` holds no database keeps its mark and is refused with `project_unavailable`, and so is one whose `.fold/` is gone, where `fld init` makes a new project.
@@ -1818,6 +1820,7 @@ pub async fn restore(
     state: &DaemonState,
     actor: &Actor,
     slug: &str,
+    days: CostDays,
 ) -> Result<ProjectEntry, ProjectError> {
     policy::can_remove_project(actor).map_err(FoldError::from)?;
     let found = registration(state, slug).await?;
@@ -1831,7 +1834,7 @@ pub async fn restore(
             tracing::warn!(project = %slug, code = error.log_code(), "the use of the project could not be noted");
         }
     }
-    Ok(entry_of(state, registration(state, slug).await?, CostDays::default()).await)
+    Ok(entry_of(state, registration(state, slug).await?, days).await)
 }
 
 /// Refuses to bring back the removed project `slug` unless its folder at `root` holds the project's `.fold/` with its database, so the mark stays on a project that cannot open: a missing folder or database is `project_unavailable` with its reason, and a missing `.fold/` is `project_unavailable` with `fold_missing`, where `fld init` makes a new project.

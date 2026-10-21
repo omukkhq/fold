@@ -232,6 +232,33 @@ async fn a_stopped_and_resumed_task_worker_keeps_every_turn_in_the_project_and_t
         today >= second.cost_micro_usd - first.cost_micro_usd && today < all_time,
         "{cost}"
     );
+
+    let shown = get(
+        &harness,
+        &format!(
+            "/api/v1/projects/{SLUG}?today={}&week=0",
+            resumed_at.as_millis()
+        ),
+    )
+    .await;
+    let cost = &shown["overview"]["cost"];
+    assert_eq!(
+        cost["week_micro_usd"], cost["all_time_micro_usd"],
+        "the project shows the viewer's days as the list does"
+    );
+    assert!(
+        cost["today_micro_usd"].as_u64().unwrap() < cost["all_time_micro_usd"].as_u64().unwrap()
+    );
+    let (status, refused) = harness
+        .http(
+            Method::GET,
+            &format!("/api/v1/projects/{SLUG}?today=soon"),
+            None,
+            "ana",
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(refused["error"]["code"], "invalid_request");
 }
 
 /// Claude Code's `--resume` goes on from the session's running total: the recorded session ends its interrupted turn at $0.00613623 and its resumed turn at $0.00651414, so the resumed turn cost only what the total grew by.

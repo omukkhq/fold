@@ -223,6 +223,23 @@ pub struct ListProjectsQuery {
     pub week: Option<i64>,
 }
 
+/// Where the viewer's day and week start, for the cost totals of the project an answer shows.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct CostDaysQuery {
+    /// UTC milliseconds of the start of the viewer's day, from which the project's cost of today counts; midnight UTC without it.
+    pub today: Option<i64>,
+    /// UTC milliseconds of the start of the viewer's last seven days, from which the project's cost of the week counts; midnight UTC six days ago without it.
+    pub week: Option<i64>,
+}
+
+fn cost_days(today: Option<i64>, week: Option<i64>) -> Result<projects::CostDays, ApiError> {
+    Ok(projects::CostDays {
+        today: today.map(time_param).transpose()?,
+        week: week.map(time_param).transpose()?,
+    })
+}
+
 /// Every project in fold and whether the daemon has it open, ordered by slug; with `include_removed`, the projects a person removed too. A project whose `.fold/` was deleted is removed from fold before the list is read, so it is not in the list.
 #[utoipa::path(
     get,
@@ -239,10 +256,7 @@ pub async fn list(
     State(state): State<AppState>,
     ApiQuery(query): ApiQuery<ListProjectsQuery>,
 ) -> Result<Json<ProjectList>, ApiError> {
-    let days = projects::CostDays {
-        today: query.today.map(time_param).transpose()?,
-        week: query.week.map(time_param).transpose()?,
-    };
+    let days = cost_days(query.today, query.week)?;
     let projects = projects::list_for(&state, query.include_removed, days)
         .await?
         .into_iter()
@@ -348,9 +362,10 @@ pub async fn show_daemon(_socket: SocketOnly, State(state): State<AppState>) -> 
     get,
     path = "/api/v1/projects/{slug}",
     operation_id = "show_project",
-    params(("slug" = String, Path, description = "The project slug")),
+    params(("slug" = String, Path, description = "The project slug"), CostDaysQuery),
     responses(
         (status = 200, description = "The project", body = ProjectSummary),
+        (status = 400, description = "`invalid_request`: `today` or `week` is not a time", body = ErrorEnvelope),
         (status = 404, description = "The slug is not registered", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -359,8 +374,10 @@ pub async fn show_daemon(_socket: SocketOnly, State(state): State<AppState>) -> 
 pub async fn show(
     State(state): State<AppState>,
     Project(handle): Project,
+    ApiQuery(query): ApiQuery<CostDaysQuery>,
 ) -> Result<Json<ProjectSummary>, ApiError> {
-    Ok(Json(projects::show(&state, &handle).await?.into()))
+    let days = cost_days(query.today, query.week)?;
+    Ok(Json(projects::show(&state, &handle, days).await?.into()))
 }
 
 /// A named human removes the project from fold: the daemon closes it and leaves it out of the project list, and its data stays in the folder's `.fold/`. `fld claude`, `fld new` or `fld init` in the folder, or the restore route, brings it back under its slug. Removing a removed project changes nothing. While a worker of the project runs, the removal is refused.
@@ -368,9 +385,10 @@ pub async fn show(
     delete,
     path = "/api/v1/projects/{slug}",
     operation_id = "remove_project",
-    params(("slug" = String, Path, description = "The project slug")),
+    params(("slug" = String, Path, description = "The project slug"), CostDaysQuery),
     responses(
         (status = 200, description = "The project as the list shows it after the removal", body = ProjectSummary),
+        (status = 400, description = "`invalid_request`: `today` or `week` is not a time", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`project_not_found`: the slug is not registered", body = ErrorEnvelope),
         (status = 409, description = "`project_workers_running` with the running agents in `details.workers`: pause the project or stop them first", body = ErrorEnvelope),
@@ -381,9 +399,11 @@ pub async fn remove(
     human: Human,
     State(state): State<AppState>,
     Path(slug): Path<String>,
+    ApiQuery(query): ApiQuery<CostDaysQuery>,
 ) -> Result<Json<ProjectSummary>, ApiError> {
+    let days = cost_days(query.today, query.week)?;
     Ok(Json(
-        projects::remove(&state, &human.actor(), &slug)
+        projects::remove(&state, &human.actor(), &slug, days)
             .await?
             .into(),
     ))
@@ -394,9 +414,10 @@ pub async fn remove(
     post,
     path = "/api/v1/projects/{slug}/restore",
     operation_id = "restore_project",
-    params(("slug" = String, Path, description = "The project slug")),
+    params(("slug" = String, Path, description = "The project slug"), CostDaysQuery),
     responses(
         (status = 200, description = "The project as the list shows it after it came back", body = ProjectSummary),
+        (status = 400, description = "`invalid_request`: `today` or `week` is not a time", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`project_not_found`: the slug is not registered", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable` with `details.reason` `folder_missing`, `fold_missing` or `database_missing`: the folder does not hold the project, which stays removed", body = ErrorEnvelope),
@@ -407,9 +428,11 @@ pub async fn restore(
     human: Human,
     State(state): State<AppState>,
     Path(slug): Path<String>,
+    ApiQuery(query): ApiQuery<CostDaysQuery>,
 ) -> Result<Json<ProjectSummary>, ApiError> {
+    let days = cost_days(query.today, query.week)?;
     Ok(Json(
-        projects::restore(&state, &human.actor(), &slug)
+        projects::restore(&state, &human.actor(), &slug, days)
             .await?
             .into(),
     ))
