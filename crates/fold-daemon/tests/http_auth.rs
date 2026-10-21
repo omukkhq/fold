@@ -62,9 +62,9 @@ impl Fixture {
             clock: clock.clone(),
             assets: AssetSource::Dir(web.path().to_owned()),
             listen: if auth_required {
-                "0.0.0.0".parse().unwrap()
+                "0.0.0.0:0".parse().unwrap()
             } else {
-                "127.0.0.1".parse().unwrap()
+                "127.0.0.1:0".parse().unwrap()
             },
             session_lifetime: DEFAULT_SESSION_LIFETIME,
         });
@@ -492,7 +492,7 @@ async fn the_cookie_lasts_as_long_as_the_configured_lifetime() {
         projects: Projects::default(),
         clock: Arc::new(project.clock().clone()),
         assets: AssetSource::Embedded,
-        listen: "0.0.0.0".parse().unwrap(),
+        listen: "0.0.0.0:0".parse().unwrap(),
         session_lifetime: Duration::from_secs(7 * 24 * 60 * 60),
     });
     let token = create_web_token(

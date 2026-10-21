@@ -347,35 +347,58 @@ impl DaemonClient {
         let human = self.human.as_deref().ok_or(ClientError::HumanUnknown)?;
         let human =
             HeaderValue::from_bytes(human.as_bytes()).map_err(|_| ClientError::HumanInvalid)?;
-        let (mut sender, connection) =
-            hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
-        let driver = tokio::spawn(connection);
-        let mut request = Request::builder()
-            .method(method)
-            .uri(path)
-            .header(HOST, "fold")
-            .header(HUMAN_HEADER, human);
-        let bytes = match body {
-            Some(body) => {
-                request = request.header(CONTENT_TYPE, "application/json");
-                Bytes::from(body.to_string())
-            }
-            None => Bytes::new(),
-        };
-        let request = request
-            .body(Full::new(bytes))
-            .map_err(|error| io_error("build the request")(io::Error::other(error)))?;
-        let response = sender.send_request(request).await?;
-        let status = response.status().as_u16();
-        let bytes = response.into_body().collect().await?.to_bytes();
-        driver.abort();
-        let body = if bytes.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_slice(&bytes).map_err(|_| ClientError::Body)?
-        };
-        Ok(Response { status, body })
+        send(stream, method, path, Some(human), body).await
     }
+}
+
+/// Sends `GET path` without a human to a daemon that already runs, and never starts one: `None` when no daemon listens on `socket`.
+pub async fn probe(socket: &Path, path: &str) -> Result<Option<Response>, ClientError> {
+    let stream = match UnixStream::connect(socket).await {
+        Ok(stream) => stream,
+        Err(error) if absent(&error) => return Ok(None),
+        Err(error) => return Err(io_error("connect to the daemon socket")(error)),
+    };
+    send(stream, Method::GET, path, None, None).await.map(Some)
+}
+
+/// One HTTP/1.1 exchange over `stream`, as `human` when one is given.
+async fn send(
+    stream: UnixStream,
+    method: Method,
+    path: &str,
+    human: Option<HeaderValue>,
+    body: Option<&Value>,
+) -> Result<Response, ClientError> {
+    let (mut sender, connection) =
+        hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
+    let driver = tokio::spawn(connection);
+    let mut request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(HOST, "fold");
+    if let Some(human) = human {
+        request = request.header(HUMAN_HEADER, human);
+    }
+    let bytes = match body {
+        Some(body) => {
+            request = request.header(CONTENT_TYPE, "application/json");
+            Bytes::from(body.to_string())
+        }
+        None => Bytes::new(),
+    };
+    let request = request
+        .body(Full::new(bytes))
+        .map_err(|error| io_error("build the request")(io::Error::other(error)))?;
+    let response = sender.send_request(request).await?;
+    let status = response.status().as_u16();
+    let bytes = response.into_body().collect().await?.to_bytes();
+    driver.abort();
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).map_err(|_| ClientError::Body)?
+    };
+    Ok(Response { status, body })
 }
 
 #[cfg(test)]

@@ -1802,11 +1802,14 @@ pub async fn open_for_dir(
 
 /// The slug of the registered project whose root holds `cwd`, the nearest one when roots nest.
 pub async fn slug_for_dir(registry: &Store, cwd: &Path) -> Result<String, ProjectError> {
-    Ok(row_for_dir(registry, cwd).await?.slug)
+    Ok(row_for_dir(registry.read(), cwd).await?.slug)
 }
 
-async fn row_for_dir(registry: &Store, cwd: &Path) -> Result<projects::ProjectRow, ProjectError> {
-    let rows = projects::list_projects(registry.read()).await?;
+async fn row_for_dir(
+    registry: &fold_store::SqlitePool,
+    cwd: &Path,
+) -> Result<projects::ProjectRow, ProjectError> {
+    let rows = projects::list_projects(registry).await?;
     let root = find_root(cwd, rows.iter().map(|row| Path::new(&row.root)));
     root.and_then(|root| rows.iter().find(|row| Path::new(&row.root) == root))
         .cloned()
@@ -1854,9 +1857,21 @@ pub async fn deleted_project_slug(
 /// The registered root of the project that holds `cwd`, read from the host registry without a running daemon.
 pub async fn root_for_dir_on_host(host: &HostPaths, cwd: &Path) -> Result<PathBuf, ProjectError> {
     let registry = Store::open_registry(&host.registry_db()).await?;
-    let row = row_for_dir(&registry, cwd).await;
+    let row = row_for_dir(registry.read(), cwd).await;
     registry.close().await?;
     Ok(PathBuf::from(row?.root))
+}
+
+/// The registry row of the project that holds `cwd`, read from the host registry without a running daemon and without writing it: a missing registry is not created, a registry of another schema version is refused, and a lock is waited for at most `busy_timeout`.
+pub async fn row_for_dir_on_host(
+    host: &HostPaths,
+    cwd: &Path,
+    busy_timeout: std::time::Duration,
+) -> Result<projects::ProjectRow, ProjectError> {
+    let registry = Store::read_registry(&host.registry_db(), busy_timeout).await?;
+    let row = row_for_dir(&registry, cwd).await;
+    registry.close().await;
+    row
 }
 
 /// The registry row of the human `name`, inserted on first use with `created_at` from `clock`. A known human costs one read and no write. Humans belong to the host, so this appends no project event.

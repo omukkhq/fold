@@ -137,6 +137,7 @@ The user runs these in a terminal; agents never do. Commands that act on a proje
 
 Start and set up:
 
+- `fld` with no command: print fold's status: the fld version, whether the daemon runs, its web address and socket, whether a service runs it, and the project of the current folder. It never starts the daemon, and it names `fld restart` when the daemon runs another version.
 - `fld init [DIR] [--name NAME] [--with-git] [--git-name NAME --git-email EMAIL]`: make the folder a fold project and register it. Without `DIR` the current folder; a new `DIR` is created. `--with-git` turns Git sync on: in a Git repository its `HEAD` commit becomes the genesis, else fold creates `.git`, and every revision becomes a commit on the `[git]` branch. `fld init --refresh [DIR]` rewrites fold's Claude Code files (`AGENTS.md` or `CLAUDE.md` section, the skill and this file) in an existing project.
 - `fld setup [--no-start] [--claude] [--remove]`: install the service that starts the daemon at login (a systemd user unit on Linux, a launchd agent on macOS) and start it, then offer to add fold to the user's Claude Code config. `--claude` only adds fold to Claude Code; `--remove` takes fold's entries out of it.
 - `fld claude [--name NAME] [-- ARGS]`: start the daemon when needed and continue the main agent's last session, or start one. `fld new` (also `fld new claude`) starts a new main session.
@@ -152,6 +153,7 @@ Work in the project folder:
 - `fld unstash`: merge the newest stash entry back into the folder; a conflict writes conflict markers and keeps the entry until `fld record`.
 - `fld pause` and `fld resume`: stop every worker of the project, keeping its session and claims, and run them again.
 - `fld worker restart NAME [--instructions TEXT]`: start the worker `NAME` of any role again in a new Claude Code session, for example when its session is broken; it keeps its name, claims and workers, and its old session id stays in its previous sessions.
+- `fld log [-n N] [--oneline]`: list main's revisions, newest first, as the web app's repository screen shows them: the revision id with main's head marked, the title by origin (the proposal and its title, a pull, a direct change, a record or the genesis), the task, the author, the time in UTC and the Git commit. `-n` sets how many (20 by default, at most 1000); `--oneline` prints only the id and the title.
 - `fld transcript AGENT [--tail N]`: print the path of the agent's Claude Code transcript, the file of its current session: the main agent's recorded session, or the session fold runs for a worker. `--tail N` prints the file's last N lines instead; fld reads them itself, and the daemon never opens a transcript.
 
 Maintenance and access:
