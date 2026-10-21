@@ -257,6 +257,42 @@ async fn fld_init_and_the_open_route_bring_a_removed_project_back_under_its_slug
 }
 
 #[tokio::test]
+async fn the_open_route_keeps_the_mark_of_a_removed_project_whose_folder_does_not_hold_it() {
+    let running = Running::start().await;
+    assert_eq!(running.remove().await.0, StatusCode::OK);
+    let db = fold_core::ProjectPaths::new(&running.root).db();
+    let kept = db.with_extension("kept");
+    std::fs::rename(&db, &kept).unwrap();
+    let refused = project_service::open(&running.state, "app")
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Some(codes::PROJECT_UNAVAILABLE));
+    let project_service::ProjectError::Fold(error) = refused else {
+        panic!("a refusal with a code");
+    };
+    assert_eq!(error.details().unwrap()["reason"], "database_missing");
+    assert!(running.removed_at().await.is_some(), "the mark stays");
+    assert!(running.listed("/api/v1/projects").await.is_empty());
+    std::fs::rename(&kept, &db).unwrap();
+
+    std::fs::remove_dir_all(running.fold_dir()).unwrap();
+    let refused = project_service::open(&running.state, "app")
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Some(codes::PROJECT_UNAVAILABLE));
+    assert!(
+        running.removed_at().await.is_some(),
+        "the registration stays"
+    );
+    let all = running
+        .listed("/api/v1/projects?include_removed=true")
+        .await;
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0]["folder"], "fold_missing");
+    running.close().await;
+}
+
+#[tokio::test]
 async fn a_project_with_a_running_worker_is_not_removed_until_its_agents_are_paused() {
     let fake = FakeClaude::new("init");
     let harness = lead_running(&fake, WorkerState::Working).await;

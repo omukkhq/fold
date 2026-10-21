@@ -1795,28 +1795,7 @@ pub async fn restore(
     policy::can_remove_project(actor).map_err(FoldError::from)?;
     let found = registration(state, slug).await?;
     if found.removed_at.is_some() {
-        let root = PathBuf::from(&found.row.root);
-        match project_folder(&root).await {
-            ProjectFolder::Present => {}
-            ProjectFolder::FoldMissing => {
-                return Err(FoldError::new(
-                    codes::PROJECT_UNAVAILABLE,
-                    format!(
-                        "project {slug} cannot come back: {} is missing",
-                        ProjectPaths::new(&root).fold_dir().display()
-                    ),
-                )
-                .with_hint(format!(
-                    "run `fld init` in {} to make a new project there",
-                    root.display()
-                ))
-                .with_details([("reason", serde_json::json!("fold_missing"))])
-                .into());
-            }
-            ProjectFolder::RootMissing | ProjectFolder::DatabaseMissing => {
-                return Err(unopened(slug, &root).await.into());
-            }
-        }
+        refuse_return(slug, Path::new(&found.row.root)).await?;
         bring_back(state, slug).await?;
         if let Err(error) = open_registered(state, slug).await {
             tracing::warn!(project = %slug, code = error.log_code(), "the project is back in fold but did not open");
@@ -1826,6 +1805,29 @@ pub async fn restore(
         }
     }
     Ok(entry_of(state, registration(state, slug).await?).await)
+}
+
+/// Refuses to bring back the removed project `slug` unless its folder at `root` holds the project's `.fold/` with its database, so the mark stays on a project that cannot open: a missing folder or database is `project_unavailable` with its reason, and a missing `.fold/` is `project_unavailable` with `fold_missing`, where `fld init` makes a new project.
+async fn refuse_return(slug: &str, root: &Path) -> Result<(), ProjectError> {
+    match project_folder(root).await {
+        ProjectFolder::Present => Ok(()),
+        ProjectFolder::FoldMissing => Err(FoldError::new(
+            codes::PROJECT_UNAVAILABLE,
+            format!(
+                "project {slug} cannot come back: {} is missing",
+                ProjectPaths::new(root).fold_dir().display()
+            ),
+        )
+        .with_hint(format!(
+            "run `fld init` in {} to make a new project there",
+            root.display()
+        ))
+        .with_details([("reason", serde_json::json!("fold_missing"))])
+        .into()),
+        ProjectFolder::RootMissing | ProjectFolder::DatabaseMissing => {
+            Err(unopened(slug, root).await.into())
+        }
+    }
 }
 
 /// The registry row of `slug`, removed or not; a slug the registry does not hold is `project_not_found`.
@@ -1988,9 +1990,14 @@ async fn remove_deleted_rows(registry: &Store) -> Result<Vec<String>, ProjectErr
     Ok(removed)
 }
 
-/// Opens a project that `fld init` registered after the daemon started, for a `fld` command in its folder: a project a person removed comes back into fold first, under its slug. An open project returns its handle again; a slug the registry does not hold is `project_not_found`.
+/// Opens a project that `fld init` registered after the daemon started, for a `fld` command in its folder: a project a person removed comes back into fold first, under its slug, while its folder holds its `.fold/` with the database, and keeps its mark otherwise, as [`restore`] does. An open project returns its handle again; a slug the registry does not hold is `project_not_found`.
 pub async fn open(state: &DaemonState, slug: &str) -> Result<Arc<ProjectHandle>, ProjectError> {
-    bring_back(state, slug).await?;
+    if let Some(found) = projects::find_registration(state.registry.read(), slug).await?
+        && found.removed_at.is_some()
+    {
+        refuse_return(slug, Path::new(&found.row.root)).await?;
+        bring_back(state, slug).await?;
+    }
     let handle = open_registered(state, slug).await?;
     if let Err(error) = note_use(state, slug).await {
         tracing::warn!(project = %slug, code = error.log_code(), "the use of the project could not be noted");
