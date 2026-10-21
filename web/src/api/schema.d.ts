@@ -2611,10 +2611,18 @@ export interface components {
              */
             header: string | null;
             /**
-             * @description The human a `human_review`, a `request_draft` or a `question` waits for, or whose change a `human_change` is; null when any human may answer.
+             * @description The human a `human_review` or a `request_draft` waits for, or whose change a `human_change` is; null when any human may answer.
              * @example tanim
              */
             human: string | null;
+            /**
+             * @description The humans a `question` names, in name order, when none of its recipients is `humans`: it waits for each of them, as their Messages count does. Empty when any human may answer, and for every other kind.
+             * @example [
+             *       "ana",
+             *       "bob"
+             *     ]
+             */
+            humans: string[];
             kind: components["schemas"]["NeedsYouItemKind"];
             /**
              * @description The question message of a `question`.
@@ -2825,7 +2833,7 @@ export interface components {
             /** @description In number order. */
             proposals: components["schemas"]["ProposalSummary"][];
             /**
-             * @description The open proposals of the whole project, whatever the filter, whose current version waits for the signed-in human's review, in number order: the `human_review` items of Needs you that are theirs, which the Proposals tab counts. Empty when the request names no human.
+             * @description The open proposals of the whole project, whatever the filter, whose current version waits for the signed-in human's review, in number order: the `human_review` items of Needs you that are theirs, which the Proposals screen marks. Empty when the request names no human.
              * @example [
              *       "P-3"
              *     ]

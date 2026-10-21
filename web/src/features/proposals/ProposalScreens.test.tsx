@@ -39,6 +39,7 @@ import {
   revision,
 } from "@/test/proposals";
 import { ThemeProvider } from "@/theme/ThemeProvider";
+import { needsItem } from "@/test/workers";
 
 vi.mock("@/api/client", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/api/client")>();
@@ -263,6 +264,27 @@ function routes(): void {
     ok({
       proposals: summaries(call.params.slug ?? ""),
       waiting_for_you: call.params.slug === "demo" ? ["P-4"] : [],
+    }),
+  );
+  daemon.on("GET /api/v1/projects/:slug/needs-you", (call) =>
+    ok({
+      items:
+        call.params.slug === "demo"
+          ? [
+              needsItem({
+                kind: "human_review",
+                screen: "proposal",
+                proposal: "P-4",
+                human: "tanim",
+              }),
+              needsItem({
+                kind: "human_review",
+                screen: "proposal",
+                proposal: "P-5",
+                human: "ana",
+              }),
+            ]
+          : [],
     }),
   );
   daemon.on("GET /api/v1/projects/:slug/proposals/:id", (call) => {
@@ -507,9 +529,11 @@ describe("Proposals list", () => {
     expect(marked).toEqual(["P-4"]);
     const nav = screen.getByRole("navigation", { name: "Project" });
     expect(
-      within(nav).getByRole("status", {
-        name: "1 proposal waits for your review",
-      }).textContent,
+      (
+        await within(nav).findByRole("status", {
+          name: "1 proposal waits for your review",
+        })
+      ).textContent,
     ).toBe("1");
     await user.click(screen.getByRole("button", { name: "Waits for you (1)" }));
     await waitFor(async () => {

@@ -115,19 +115,6 @@ impl ReviewService {
         Ok(awaiting_human_review(&self.store).await?)
     }
 
-    /// The open proposals whose current version waits for `human`'s review, in proposal number order: those of [`awaiting_human_review`] whose mark names `human` or no one, as Needs you shows them to that human.
-    pub async fn awaiting_review_of(
-        &self,
-        human: &HumanName,
-    ) -> Result<Vec<ProposalId>, ReviewError> {
-        Ok(awaiting_human_review(&self.store)
-            .await?
-            .into_iter()
-            .filter(|waiting| waiting.reviewer.as_ref().is_none_or(|named| named == human))
-            .map(|waiting| waiting.proposal)
-            .collect())
-    }
-
     async fn require_known(&self, name: &HumanName) -> Result<(), ReviewError> {
         let known = match &self.registry {
             Some(registry) => projects::find_human(registry.read(), name).await?.is_some(),
@@ -153,6 +140,15 @@ pub async fn awaiting_human_review(read: &Store) -> Result<Vec<AwaitingHumanRevi
     let waiting = awaiting_human_review_in(&mut tx).await?;
     tx.commit().await?;
     Ok(waiting)
+}
+
+/// The open proposals whose current version waits for `human`'s review, in proposal number order: those of `waiting` whose mark names `human` or no one, as Needs you shows them to that human.
+pub fn waiting_for(waiting: &[AwaitingHumanReview], human: &HumanName) -> Vec<ProposalId> {
+    waiting
+        .iter()
+        .filter(|waiting| waiting.reviewer.as_ref().is_none_or(|named| named == human))
+        .map(|waiting| waiting.proposal)
+        .collect()
 }
 
 /// [`awaiting_human_review`] on `tx`, so a caller reads it inside a read transaction of its own.

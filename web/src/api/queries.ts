@@ -94,7 +94,7 @@ export const awaitingHumanQuery = (slug: string) =>
     staleTime: Infinity,
   });
 
-/** The proposal list and the proposals waiting for the signed-in human share one read: the Proposals screen and the tab badge never fetch it twice. */
+/** The proposal list and the proposals waiting for the signed-in human share one read, so the Proposals screen never fetches it twice. */
 export const proposalsQuery = (slug: string) =>
   queryOptions({
     queryKey: keys.proposals(slug),

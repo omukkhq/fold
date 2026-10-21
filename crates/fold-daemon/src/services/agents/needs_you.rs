@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use fold_core::requests::{RequestState, Requester};
 use fold_core::reviews::checks::CHECKS_FILE;
 use fold_core::roles::{CLAUDE_NOT_FOUND, restart_hint};
@@ -93,8 +95,10 @@ pub struct NeedsYouItem {
     pub task: Option<TaskId>,
     pub proposal: Option<ProposalId>,
     pub request: Option<RequestId>,
-    /// The human a human review, a request draft or an ask waits for; `None` when any human may answer.
+    /// The human a human review or a request draft waits for, or whose change a `HumanChange` is; `None` when any human may answer.
     pub human: Option<HumanName>,
+    /// The humans a `Question` names, in name order, when none of its recipients came from `humans`; empty when any human may answer. The Messages count of each of them, and of no one else, counts the ask.
+    pub humans: Vec<HumanName>,
     pub choices: Vec<Choice>,
     /// The short header of a `Question`.
     pub header: Option<String>,
@@ -136,6 +140,7 @@ impl NeedsYouItem {
             proposal: None,
             request: None,
             human: None,
+            humans: Vec::new(),
             choices: Vec::new(),
             header: None,
             title: None,
@@ -146,22 +151,23 @@ impl NeedsYouItem {
     }
 }
 
-/// The one human an ask waits for: its only human recipient when no recipient came from `humans`.
-fn asked_human(recipients: &[messages::RecipientRow]) -> Option<HumanName> {
+/// The humans an ask waits for: its human recipients by name, in name order, or none when a recipient came from `humans`, which any human answers.
+fn asked_humans(recipients: &[messages::RecipientRow]) -> Vec<HumanName> {
     if recipients
         .iter()
         .any(|recipient| recipient.addressed_as == AddressedAs::Humans)
     {
-        return None;
+        return Vec::new();
     }
-    let mut humans = recipients
+    recipients
         .iter()
         .filter_map(|recipient| match &recipient.target {
             Target::Human(name) => Some(name.clone()),
             Target::Worker(_) => None,
-        });
-    let first = humans.next()?;
-    humans.next().is_none().then_some(first)
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// The second line of a `ChecksFileInvalidOnMain` item: the file, then the problem as the parse states it, such as `fold-checks.toml line 12: unknown field`.
@@ -211,7 +217,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         item.task = row.task;
         item.proposal = row.proposal;
         item.request = row.request;
-        item.human = asked_human(&row.recipients);
+        item.humans = asked_humans(&row.recipients);
         item.choices = row.choices;
         item.header = row.header;
         items.push(item);

@@ -47,8 +47,8 @@ pub use integrate::{
 };
 pub(crate) use proposals::proposal_missing;
 pub use proposals::{
-    DEFAULT_PROPOSAL_LIST, MAX_PROPOSAL_LIST, ProposalDetail, ProposalFilter, ProposalSummary,
-    Proposed, Retirement, Turn, VersionView, retire_proposal,
+    DEFAULT_PROPOSAL_LIST, MAX_PROPOSAL_LIST, ProposalDetail, ProposalFilter, ProposalListing,
+    ProposalSummary, Proposed, Retirement, Turn, VersionView, retire_proposal,
 };
 pub use review_fixes::{FixOutcome, FixedVersion, MAX_CHECKS_CHARS, MAX_FIXES, ReviewFix};
 pub use scopes::{SuggestedScope, scope_suggestion};

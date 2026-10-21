@@ -191,9 +191,12 @@ pub struct NeedsYouEntry {
     pub proposal: Option<String>,
     #[schema(required = true, example = "RQ-4")]
     pub request: Option<String>,
-    /// The human a `human_review`, a `request_draft` or a `question` waits for, or whose change a `human_change` is; null when any human may answer.
+    /// The human a `human_review` or a `request_draft` waits for, or whose change a `human_change` is; null when any human may answer.
     #[schema(required = true, example = "tanim")]
     pub human: Option<String>,
+    /// The humans a `question` names, in name order, when none of its recipients is `humans`: it waits for each of them, as their Messages count does. Empty when any human may answer, and for every other kind.
+    #[schema(example = json!(["ana", "bob"]))]
+    pub humans: Vec<String>,
     /// The options of a `question` with choices; empty otherwise.
     pub choices: Vec<MessageChoice>,
     /// The short header of a `question`, such as `Chart library`.
@@ -251,6 +254,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             proposal: item.proposal.map(|id| id.to_string()),
             request: item.request.map(|id| id.to_string()),
             human: item.human.map(|human| human.to_string()),
+            humans: item.humans.iter().map(ToString::to_string).collect(),
             choices: item.choices.into_iter().map(MessageChoice::from).collect(),
             header: item.header,
             title: item.title,

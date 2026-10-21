@@ -87,7 +87,7 @@ export class FakeDaemon {
     ];
   }
 
-  /** Registers the routes the project shell reads besides each screen's own: the session, the project list, each project, its agents, its messages and its proposals. A test that registers any of them afterwards replaces them. */
+  /** Registers the routes the project shell reads besides each screen's own: the session, the project list, each project, its agents and its messages. A test that registers agents or messages afterwards replaces them. */
   shell(slugs: readonly string[]): void {
     const projects = slugs.map((slug) => ({
       slug,
@@ -105,10 +105,6 @@ export class FakeDaemon {
     this.on(
       "GET /api/v1/projects/:slug/messages",
       ok({ items: [], next: null, total_awaiting_human: 0 }),
-    );
-    this.on(
-      "GET /api/v1/projects/:slug/proposals",
-      ok({ proposals: [], waiting_for_you: [] }),
     );
   }
 

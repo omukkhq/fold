@@ -43,7 +43,7 @@ fn m(number: u32) -> MessageId {
 
 #[cfg(test)]
 struct Fixture {
-    _project: TestProject,
+    project: TestProject,
     state: AppState,
     handle: Arc<ProjectHandle>,
     messages: MessageService,
@@ -120,7 +120,7 @@ impl Fixture {
             handle.clock.clone(),
         );
         Self {
-            _project: project,
+            project,
             state,
             handle,
             messages,
@@ -176,11 +176,22 @@ impl Fixture {
 
     /// Sends `request` to the router as human `tanim`.
     async fn call(&self, method: Method, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+        self.call_as("tanim", method, uri, body).await
+    }
+
+    /// Sends `request` to the router as human `human`.
+    async fn call_as(
+        &self,
+        human: &str,
+        method: Method,
+        uri: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
         let request = Request::builder()
             .header(CLIENT_HEADER, "test")
             .method(method)
             .uri(uri)
-            .header("cookie", "fold_human=tanim")
+            .header("cookie", format!("fold_human={human}"))
             .header("content-type", "application/json")
             .body(body.map_or_else(Body::empty, |body| Body::from(body.to_string())))
             .unwrap();
@@ -192,8 +203,14 @@ impl Fixture {
 
     /// `tanim`'s Messages listing: the threads marked `awaiting_human`, and the count the tab badge shows.
     async fn messages_count(&self) -> (Vec<String>, u64) {
+        self.messages_count_of("tanim").await
+    }
+
+    /// `human`'s Messages listing: the threads marked `awaiting_human`, and the count the tab badge shows.
+    async fn messages_count_of(&self, human: &str) -> (Vec<String>, u64) {
         let (status, list) = self
-            .call(
+            .call_as(
+                human,
                 Method::GET,
                 "/api/v1/projects/demo/messages?mine=true",
                 None,
@@ -530,5 +547,58 @@ async fn the_messages_count_means_the_asks_that_wait_for_the_signed_in_human() {
         .into_iter()
         .find(|item| item.message.map(|(id, _)| id) == Some(m(1)))
         .unwrap();
-    assert_eq!(ana_ask.human, Some(HumanName::parse("ana").unwrap()));
+    assert_eq!(ana_ask.humans, vec![HumanName::parse("ana").unwrap()]);
+    assert_eq!(ana_ask.human, None);
+}
+
+#[tokio::test]
+async fn an_ask_to_two_named_humans_waits_in_their_needs_you_and_counts_only_for_them() {
+    let fixture = Fixture::new().await;
+    for name in ["bob", "carol"] {
+        let name = HumanName::parse(name).unwrap();
+        let now = fixture.project.now();
+        fixture
+            .state
+            .registry
+            .write(async |tx| fold_store::projects::insert_human(tx, &name, now).await)
+            .await
+            .unwrap();
+    }
+    fixture
+        .ask("frontend", &["human:bob", "human:ana"], 1, None)
+        .await;
+    fixture.ask("backend", &["humans"], 2, None).await;
+    let (status, list) = fixture
+        .call_as(
+            "carol",
+            Method::GET,
+            "/api/v1/projects/demo/needs-you",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let named: Vec<(&str, &Value)> = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| (item["message"].as_str().unwrap(), &item["humans"]))
+        .collect();
+    assert_eq!(
+        named,
+        vec![("m-1", &json!(["ana", "bob"])), ("m-2", &json!([]))],
+        "Needs you names the humans of m-1, and m-2 waits for any human"
+    );
+    for (human, marked) in [
+        ("ana", vec!["m-2", "m-1"]),
+        ("bob", vec!["m-2", "m-1"]),
+        ("carol", vec!["m-2"]),
+    ] {
+        let marked: Vec<String> = marked.into_iter().map(str::to_owned).collect();
+        let count = marked.len() as u64;
+        assert_eq!(
+            fixture.messages_count_of(human).await,
+            (marked, count),
+            "{human}"
+        );
+    }
 }

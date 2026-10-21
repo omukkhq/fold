@@ -314,7 +314,7 @@ impl From<service::ProposalSummary> for ProposalSummary {
 pub struct ProposalList {
     /// In number order.
     pub proposals: Vec<ProposalSummary>,
-    /// The open proposals of the whole project, whatever the filter, whose current version waits for the signed-in human's review, in number order: the `human_review` items of Needs you that are theirs, which the Proposals tab counts. Empty when the request names no human.
+    /// The open proposals of the whole project, whatever the filter, whose current version waits for the signed-in human's review, in number order: the `human_review` items of Needs you that are theirs, which the Proposals screen marks. Empty when the request names no human.
     #[schema(example = json!(["P-3"]))]
     pub waiting_for_you: Vec<String>,
 }
@@ -1091,15 +1091,20 @@ pub async fn list_proposals(
         unclaimed: query.unclaimed.unwrap_or(false),
         limit: None,
     };
-    let reviews = service(&state, &project);
-    let rows = reviews.list_proposals(filter).await?;
-    let waiting = match human {
-        Some(Human(name)) => reviews.awaiting_review_of(&name).await?,
-        None => Vec::new(),
-    };
+    let listing = service(&state, &project)
+        .list_proposals_for(filter, human.as_ref().map(|Human(name)| name))
+        .await?;
     Ok(Json(ProposalList {
-        proposals: rows.into_iter().map(ProposalSummary::from).collect(),
-        waiting_for_you: waiting.iter().map(ToString::to_string).collect(),
+        proposals: listing
+            .proposals
+            .into_iter()
+            .map(ProposalSummary::from)
+            .collect(),
+        waiting_for_you: listing
+            .waiting_for_human
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
     }))
 }
 

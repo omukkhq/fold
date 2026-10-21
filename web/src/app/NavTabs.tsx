@@ -11,7 +11,12 @@ import {
   Plus,
   type LucideIcon,
 } from "lucide-react";
-import { awaitingHumanQuery, proposalsWaitingQuery } from "../api/queries";
+import {
+  awaitingHumanQuery,
+  needsYouQuery,
+  sessionQuery,
+} from "../api/queries";
+import { reviewsWaitingFor } from "./needsYouModel";
 import { HrefLink } from "./HrefLink";
 import { cn } from "../lib/cn";
 import { focusRing } from "../lib/focus";
@@ -41,8 +46,12 @@ export function NavTabs({ slug }: { slug: string }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const active = activeNav(pathname);
   const { data: awaiting = 0 } = useQuery(awaitingHumanQuery(slug));
-  const { data: waitingReviews = [] } = useQuery(proposalsWaitingQuery(slug));
-  const reviews = waitingReviews.length;
+  const needs = useQuery(needsYouQuery(slug));
+  const session = useQuery(sessionQuery());
+  const reviews = reviewsWaitingFor(
+    needs.data ?? [],
+    session.data?.human ?? null,
+  );
   return (
     <nav aria-label="Project" className={cn(TAB_LIST, "shrink-0 bg-surface")}>
       {/* The row scrolls sideways on a phone. A scroll box clips in both directions, so the row reaches 4px past the bar on each side to keep the tabs' focus rings whole, and the divider stays on the bar so it spans the width while the row scrolls. */}
