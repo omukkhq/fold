@@ -692,27 +692,22 @@ async fn concurrent_waits_of_a_main_worker_and_its_child_each_wake_for_their_own
     );
     subscribed(&fx.bus, 2).await;
     let to_main = send_as_human(&fx, "backend").await;
-    fx.commit(vec![new_event(types::MAIN_ADVANCED, "fold")])
-        .await;
-    let to_sub = send_as_human(&fx, "backend/sub").await;
     let main = body(&tokio::time::timeout(WAIT, main).await.unwrap().unwrap());
+    assert_eq!(main["messages"], json!([to_main.to_string()]), "{main}");
+    let to_sub = send_as_human(&fx, "backend/sub").await;
     let child = body(&tokio::time::timeout(WAIT, child).await.unwrap().unwrap());
-    let woke: Vec<&Value> = main["messages"].as_array().unwrap().iter().collect();
-    assert_eq!(woke.first(), Some(&&json!(to_main.to_string())), "{main}");
     assert_eq!(child["messages"], json!([to_sub.to_string()]), "{child}");
-    if !woke.contains(&&json!(to_sub.to_string())) {
-        let again = call(
-            &backend,
-            "wait_for_events",
-            filtered(&["worker.stopped"], None),
-        )
-        .await;
-        assert_eq!(
-            again["messages"],
-            json!([to_sub.to_string()]),
-            "the child's wait left the message to it for the main worker"
-        );
-    }
+    let again = call(
+        &backend,
+        "wait_for_events",
+        filtered(&["worker.stopped"], None),
+    )
+    .await;
+    assert_eq!(
+        again["messages"],
+        json!([to_sub.to_string()]),
+        "the child's wait left the message to it for the main worker"
+    );
 }
 
 #[tokio::test]
