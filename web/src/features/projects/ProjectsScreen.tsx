@@ -26,7 +26,7 @@ import {
 import { RemoveProject } from "./RemoveProject";
 import { projectPath } from "@/routes/paths";
 
-/** At phone width the agents and the change time go below the name; from `md` they are columns beside it. */
+/** At phone width the agents and the change time go below the name, each on its own line; from `md` they are columns beside it. */
 const LINE = "flex flex-col gap-10 md:flex-row md:items-center md:gap-20";
 const ROW =
   "rounded-l bg-surface py-16 pr-12 pl-20 inset-ring inset-ring-border-subtle";
@@ -72,7 +72,7 @@ export function ProjectsScreen() {
               <input
                 type="search"
                 aria-label="Search projects"
-                placeholder="Search by name, slug or folder, removed projects too"
+                placeholder="Search by name, slug or folder"
                 value={query}
                 onChange={(event) => {
                   setQuery(event.target.value);
@@ -159,12 +159,12 @@ function ProjectCard({
       </div>
       {overview ? (
         <>
-          <div className="flex min-w-0 items-center gap-16 md:contents">
+          <div className="flex min-w-0 flex-col gap-6 md:contents">
             <ProjectAgentChips
               agents={overview.agents}
-              className="flex-1 md:w-project-agents md:flex-none md:shrink-0"
+              className="w-full md:w-project-agents md:shrink-0"
             />
-            <span className="flex shrink-0 items-center justify-end gap-6 text-code whitespace-nowrap md:w-project-state">
+            <span className="flex shrink-0 items-center gap-6 text-code whitespace-nowrap md:w-project-state md:justify-end">
               <span
                 aria-hidden
                 className={cn(
