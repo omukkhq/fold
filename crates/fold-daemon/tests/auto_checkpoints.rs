@@ -415,14 +415,14 @@ async fn a_failed_checkpoint_refuses_the_command() {
     let mut quiet = QuietCheckpoints::default();
     fx.advance(QUIET_SECONDS);
     assert_eq!(quiet.run(&fx.handle).await, 0, "the live state is detached");
-    let WorkspaceError::Fold(refused) = fx
-        .workspaces
-        .take_quiet_checkpoint(fx.workspace)
-        .await
-        .unwrap_err()
-    else {
-        panic!("a closed workspace is refused");
-    };
+    // The removal holds the workspace's lock until it has recorded the removal, and a quiet checkpoint skips a busy workspace.
+    let refused = fold_store::testing::eventually(WAIT, async || {
+        match fx.workspaces.take_quiet_checkpoint(fx.workspace).await {
+            Err(WorkspaceError::Fold(refused)) => Ok(refused),
+            other => Err(format!("{other:?}")),
+        }
+    })
+    .await;
     assert_eq!(refused.code(), codes::WORKSPACE_NOT_ACTIVE);
     assert_eq!(fx.checkpoints(true).await.len(), 1);
 }
