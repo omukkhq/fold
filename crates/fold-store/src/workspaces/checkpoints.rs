@@ -49,10 +49,12 @@ pub enum CheckpointReason {
     HumanEdit,
     /// The tree of a reviewer's fix of a proposal version, made in its review checkout, which the task worker's next sync or restore writes into the workspace.
     ReviewFix,
+    /// The files a closed workspace held that fold had not recorded, taken just before fold removes its directory.
+    BeforeRemoval,
 }
 
 impl CheckpointReason {
-    pub const ALL: [CheckpointReason; 9] = [
+    pub const ALL: [CheckpointReason; 10] = [
         CheckpointReason::Explicit,
         CheckpointReason::BeforeSync,
         CheckpointReason::BeforeRecord,
@@ -62,6 +64,7 @@ impl CheckpointReason {
         CheckpointReason::Quiet,
         CheckpointReason::HumanEdit,
         CheckpointReason::ReviewFix,
+        CheckpointReason::BeforeRemoval,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -75,6 +78,7 @@ impl CheckpointReason {
             CheckpointReason::Quiet => "quiet",
             CheckpointReason::HumanEdit => "human_edit",
             CheckpointReason::ReviewFix => "review_fix",
+            CheckpointReason::BeforeRemoval => "before_removal",
         }
     }
 

@@ -261,7 +261,7 @@ impl WorkspaceService {
         })
     }
 
-    /// Abandons a live workspace of the actor's worker, which `policy::can_abandon_workspace` requires to be the owner: it becomes `abandoned` and `closed_at` is set, and the task goes back to Todo or Backlog. The directory and the claim stay. Refused while the task has an open proposal; the author closes it first, and nothing closes it on the worker's behalf. The main workspace has no task, so abandoning it only closes it and discards its unsubmitted change. `reason` is the worker's short explanation, which `workspace.abandoned` carries.
+    /// Abandons a live workspace of the actor's worker, which `policy::can_abandon_workspace` requires to be the owner: it becomes `abandoned` and `closed_at` is set, and the task goes back to Todo or Backlog. The claim stays; fold removes the directory after the commit, once the worker process of the owning agent has ended. Refused while the task has an open proposal; the author closes it first, and nothing closes it on the worker's behalf. The main workspace has no task, so abandoning it only closes it and discards its unsubmitted change. `reason` is the worker's short explanation, which `workspace.abandoned` carries.
     pub async fn abandon_workspace(
         &self,
         actor: &Actor,
@@ -462,7 +462,7 @@ impl WorkspaceService {
     }
 }
 
-/// Moves a live workspace to `archived` and stamps `closed_at`, inside the caller's transaction, and appends `workspace.archived`. Used when the task's proposal integrates, when the task is archived and for the review checkouts of a proposal that ends. Only the row changes; the directory stays until garbage collection. False, with nothing changed, when the workspace is not live. The caller runs `recompute` for the task.
+/// Moves a live workspace to `archived` and stamps `closed_at`, inside the caller's transaction, and appends `workspace.archived`. Used when the task's proposal integrates, when the task is archived and for the review checkouts of a proposal that ends. Only the row changes; fold removes the directory after the commit (see `WorkspaceService::remove_closed_directory`). False, with nothing changed, when the workspace is not live. The caller runs `recompute` for the task.
 pub async fn archive_in_tx<E: From<StoreError> + From<EventError>>(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,

@@ -402,6 +402,16 @@ async fn a_failed_checkpoint_refuses_the_command() {
         .abandon_workspace(&fx.actor, fx.workspace, "a different approach")
         .await
         .unwrap();
+    // The closed workspace's directory goes after its final checkpoint, the only one it gets.
+    fold_store::testing::eventually(WAIT, async || {
+        let finals = fx.with_reason(CheckpointReason::BeforeRemoval).await.len();
+        if !fx.dir.exists() && finals == 1 {
+            Ok(())
+        } else {
+            Err(finals)
+        }
+    })
+    .await;
     let mut quiet = QuietCheckpoints::default();
     fx.advance(QUIET_SECONDS);
     assert_eq!(quiet.run(&fx.handle).await, 0, "the live state is detached");
@@ -414,7 +424,7 @@ async fn a_failed_checkpoint_refuses_the_command() {
         panic!("a closed workspace is refused");
     };
     assert_eq!(refused.code(), codes::WORKSPACE_NOT_ACTIVE);
-    assert!(fx.checkpoints(true).await.is_empty());
+    assert_eq!(fx.checkpoints(true).await.len(), 1);
 }
 
 #[tokio::test]

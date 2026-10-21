@@ -322,7 +322,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Collects the project's garbage: prunes checkpoints, removes closed workspace directories past their retention and deletes unreferenced objects. Socket only; used by `fld gc`. */
+        /** Collects the project's garbage: prunes checkpoints, removes the closed workspace directories that are still there and deletes unreferenced objects. Socket only; used by `fld gc`. */
         post: operations["run_gc"];
         delete?: never;
         options?: never;
@@ -2332,7 +2332,7 @@ export interface components {
             bytes_freed: number;
             /**
              * Format: int64
-             * @description Automatic checkpoints beyond the kept number, and every checkpoint of a removed workspace.
+             * @description Automatic checkpoints beyond the kept number, and every checkpoint of a workspace closed for longer than `closed_workspace_days`.
              */
             checkpoints_pruned: number;
             /**
@@ -2359,7 +2359,7 @@ export interface components {
             tmp_removed: number;
             /**
              * Format: int64
-             * @description Directories of archived or abandoned workspaces past their retention.
+             * @description Directories of archived or abandoned workspaces that the run removed.
              */
             workspaces_removed: number;
         };

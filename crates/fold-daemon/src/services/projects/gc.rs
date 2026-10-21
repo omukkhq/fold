@@ -5,8 +5,8 @@ use std::time::{Duration, SystemTime};
 use fold_core::object::ObjectHash;
 use fold_core::{CheckpointId, FoldError, Timestamp, WorkspaceId, codes};
 use fold_store::workspaces::{
-    ClosedWorkspace, closed_workspaces_due, gc_roots, mark_directory_removed, prune_auto,
-    prune_workspace, workspaces_over_auto_limit,
+    ClosedWorkspace, closed_checkpoints_due, closed_directories_due, gc_roots,
+    mark_directory_removed, prune_auto, prune_workspace, workspaces_over_auto_limit,
 };
 use fold_store::{StoreError, WriteTx};
 pub use fold_vcs::gc::GcReport;
@@ -16,9 +16,9 @@ use fold_vcs::objects::ObjectStore;
 use super::{ProjectError, load_config};
 use crate::projects::ProjectHandle;
 use crate::services::events::EventBuffer;
-use crate::services::workspaces::pruned_event;
+use crate::services::workspaces::{DirectoryRemoval, WorkspaceService, pruned_event};
 
-/// Collects the garbage of one project. It reads `now` once, prunes the automatic checkpoints of each workspace beyond the configured number, removes the directories of closed workspaces past their retention and prunes all their checkpoints, then marks every object the remaining rows reach and sweeps the rest that is older than the grace period while it holds the project's object lock exclusive. A dry run makes the same database changes in a write that always rolls back and plans the sweep, so its counts are those of a real run and nothing changes. One run per project at a time; a second call is `gc_in_progress`.
+/// Collects the garbage of one project. It reads `now` once, prunes the automatic checkpoints of each workspace beyond the configured number, removes every closed workspace directory that is still there once its worker process has ended (see [`WorkspaceService::remove_closed_directory`]), which retries a removal that failed when the workspace closed, prunes all the checkpoints of the closed workspaces past `closed_workspace_days`, then marks every object the remaining rows reach and sweeps the rest that is older than the grace period while it holds the project's object lock exclusive. A dry run makes the same database changes in a write that always rolls back and plans the sweep, so its counts are those of a real run and nothing changes; it takes no final checkpoint and reads no workspace file. One run per project at a time; a second call is `gc_in_progress`.
 pub async fn gc(project: &ProjectHandle, dry_run: bool) -> Result<GcReport, ProjectError> {
     let Ok(_running) = project.gc.try_lock() else {
         return Err(FoldError::new(
@@ -42,12 +42,12 @@ pub async fn gc(project: &ProjectHandle, dry_run: bool) -> Result<GcReport, Proj
     let now = project.clock.now();
     let config = load_config(&project.paths).await?;
     let keep = u32::try_from(config.auto_checkpoints_kept).unwrap_or(u32::MAX);
-    let due =
-        closed_workspaces_due(project.store.read(), now, config.closed_workspace_days).await?;
+    let days = config.closed_workspace_days;
+    let due = closed_directories_due(project.store.read(), None).await?;
     let pruning = if dry_run {
-        plan_pruning(project, keep, due, now).await?
+        plan_pruning(project, keep, days, due, now).await?
     } else {
-        prune(project, keep, due, now).await?
+        prune(project, keep, days, due, now).await?
     };
     let objects_dir = project.paths.fold_dir();
     let fs_now = file_time(now);
@@ -91,6 +91,7 @@ struct Pruning {
 async fn prune(
     project: &ProjectHandle,
     keep: u32,
+    days: u64,
     due: Vec<ClosedWorkspace>,
     now: Timestamp,
 ) -> Result<Pruning, ProjectError> {
@@ -113,33 +114,31 @@ async fn prune(
     for workspace in over {
         project.live.reload_checkpoints(workspace).await;
     }
+    let service = WorkspaceService::for_project(project);
     let mut workspaces_removed = 0;
     for workspace in due {
-        let root = project.paths.root().to_owned();
-        let path = PathBuf::from(&workspace.path);
-        let existed = match blocking(move || vcs_gc::remove_workspace_dir(&root, &path)).await? {
-            Ok(existed) => existed,
+        match service.remove_closed_directory(workspace.id).await {
+            Ok(DirectoryRemoval::Removed { .. }) => workspaces_removed += 1,
+            Ok(DirectoryRemoval::NotDue) => {}
             Err(error) => {
-                tracing::warn!(project = %project.slug, workspace = %workspace.id, code = error.code(), "closed workspace directory was not removed");
-                continue;
+                tracing::warn!(project = %project.slug, workspace = %workspace.id, code = error.log_code(), "closed workspace directory was not removed");
             }
-        };
-        let (buffer, pruned) = project
-            .store
-            .write(async |tx| -> Result<(EventBuffer, u64), ProjectError> {
-                let mut buffer = EventBuffer::new();
-                let ids = prune_workspace(tx, workspace.id, now).await?;
-                let pruned = append_pruned(tx, &mut buffer, workspace.id, &ids, now).await?;
-                mark_directory_removed(tx, workspace.id, now).await?;
-                Ok((buffer, pruned))
-            })
-            .await?;
-        project.bus.publish(buffer);
-        checkpoints_pruned += pruned;
-        if existed || pruned > 0 {
-            workspaces_removed += 1;
         }
     }
+    let (buffer, pruned) = project
+        .store
+        .write(async |tx| -> Result<(EventBuffer, u64), ProjectError> {
+            let mut buffer = EventBuffer::new();
+            let mut pruned = 0;
+            for workspace in closed_checkpoints_due(tx.conn(), now, days).await? {
+                let ids = prune_workspace(tx, workspace, now).await?;
+                pruned += append_pruned(tx, &mut buffer, workspace, &ids, now).await?;
+            }
+            Ok((buffer, pruned))
+        })
+        .await?;
+    project.bus.publish(buffer);
+    checkpoints_pruned += pruned;
     let roots = gc_roots(project.store.read()).await?;
     Ok(Pruning {
         checkpoints_pruned,
@@ -163,6 +162,7 @@ impl From<StoreError> for DryRun {
 async fn plan_pruning(
     project: &ProjectHandle,
     keep: u32,
+    days: u64,
     due: Vec<ClosedWorkspace>,
     now: Timestamp,
 ) -> Result<Pruning, ProjectError> {
@@ -171,7 +171,7 @@ async fn plan_pruning(
         let root = project.paths.root().to_owned();
         let path = PathBuf::from(&workspace.path);
         match blocking(move || vcs_gc::locate_workspace_dir(&root, &path)).await? {
-            Ok(found) => located.push((workspace.id, found.is_some())),
+            Ok(_) => located.push(workspace.id),
             Err(error) => {
                 tracing::warn!(project = %project.slug, workspace = %workspace.id, code = error.code(), "closed workspace directory would not be removed");
             }
@@ -185,12 +185,13 @@ async fn plan_pruning(
                 checkpoints_pruned += count(prune_auto(tx, workspace, keep, now).await?.len());
             }
             let mut workspaces_removed = 0;
-            for (workspace, exists) in &located {
-                let pruned = count(prune_workspace(tx, *workspace, now).await?.len());
-                checkpoints_pruned += pruned;
-                if *exists || pruned > 0 {
+            for workspace in &located {
+                if mark_directory_removed(tx, *workspace, now).await? {
                     workspaces_removed += 1;
                 }
+            }
+            for workspace in closed_checkpoints_due(tx.conn(), now, days).await? {
+                checkpoints_pruned += count(prune_workspace(tx, workspace, now).await?.len());
             }
             let roots = gc_roots(tx.conn()).await?;
             Err(DryRun::Planned(Pruning {

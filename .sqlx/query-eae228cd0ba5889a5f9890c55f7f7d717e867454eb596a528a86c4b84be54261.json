@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n             SELECT 1 FROM workspaces w JOIN revisions r ON r.id = w.base_revision_id\n             WHERE w.number = ?1 AND r.tree_hash = ?2\n             UNION ALL\n             SELECT 1 FROM workspaces w JOIN checkpoints c ON c.workspace_id = w.id\n             WHERE w.number = ?1 AND c.pruned_at IS NULL AND c.tree_hash = ?2\n             UNION ALL\n             SELECT 1 FROM workspaces w JOIN changesets c ON c.workspace_id = w.id\n             WHERE w.number = ?1 AND c.tree_hash = ?2\n             UNION ALL\n             SELECT 1 FROM workspaces w JOIN proposals p ON p.task_id = w.task_id\n               JOIN proposal_versions v ON v.proposal_id = p.id\n             WHERE w.number = ?1 AND v.tree_hash = ?2\n           ) AS \"recorded!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "recorded!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "eae228cd0ba5889a5f9890c55f7f7d717e867454eb596a528a86c4b84be54261"
+}

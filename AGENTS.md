@@ -82,7 +82,7 @@ To run the tests of one file in `crates/<crate>/tests/`, select its module: `car
 2. **The main head moves only through the integration procedure,** under the project's integration mutex, by compare-and-swap. A published revision is never partial.
 3. **Done means a completion record,** written in the same transaction as the integration (or by the container rule in `recompute`, or by the complete command of a task without a proposal or of a human task, which only a human or the main agent marks Done). A failed integration never completes a task.
 4. **Proposal versions never change.** Approvals belong to the version they reviewed; a new version starts unapproved, except a version a human makes with the review edit, which keeps the reviewer agents' approvals of its source version until the human sends it for review again.
-5. **fold writes into a workspace only on create, sync and restore,** and never copies unrecorded changes between workspaces. Nothing deletes a workspace directory except `fld gc` after the retention period.
+5. **fold writes into a workspace only on create, sync and restore,** never copies unrecorded changes between workspaces, and deletes a workspace's directory when the workspace closes (after a final checkpoint of unrecorded tracked changes) or through `fld gc`.
 6. **Messages never change task state,** never stand in for a dependency and never stand in for a claim.
 7. **Every path from an agent or a tree is checked** to be relative, normalised and inside its workspace before it is read or written. Symlinks are recorded, never followed.
 8. **Log ids, never content.** No file content, diff text, message body, review body or token in a log line or an error detail.

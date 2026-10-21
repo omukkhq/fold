@@ -70,7 +70,7 @@ auto_checkpoint_quiet_seconds = 120  # quiet time before an automatic checkpoint
 auto_checkpoints_kept = 20           # automatic checkpoints each workspace keeps
 max_file_bytes = 52428800            # a larger file keeps its recorded version and gives a warning
 stall_minutes = 5                    # a claimed task without a file change for this long counts as stalled
-closed_workspace_days = 14           # how long `fld gc` keeps a closed workspace directory
+closed_workspace_days = 14           # how long `fld gc` keeps the checkpoints of a closed workspace
 
 [git]
 branch = "main"                      # the branch of the project folder's .git that every integration commits to
@@ -158,7 +158,7 @@ Work in the project folder:
 
 Maintenance and access:
 
-- `fld gc [--dry-run]`: delete unreferenced objects, prune automatic checkpoints beyond `auto_checkpoints_kept`, and remove closed workspace directories older than `closed_workspace_days`. `--dry-run` only counts.
+- `fld gc [--dry-run]`: delete unreferenced objects, prune automatic checkpoints beyond `auto_checkpoints_kept`, remove the closed workspace directories that are still there, and prune the checkpoints of workspaces closed longer than `closed_workspace_days`. fold removes a workspace's directory as soon as the workspace closes and its worker has ended, after a final checkpoint of the tracked files it had not recorded; `fld gc` retries a removal that failed. `--dry-run` only counts.
 - `fld token create NAME [--label TEXT]`: create a sign-in token for the web app off localhost for the human `NAME` and print it once. `fld token list` shows the tokens without their secrets, and `fld token revoke ID` (such as `wt-3`) ends every session made from one.
 - `fld subscribe [EMAIL]`: subscribe an address to fold release news.
 
