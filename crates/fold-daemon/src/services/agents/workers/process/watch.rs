@@ -317,13 +317,14 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Does from the stored state what the events the watcher missed would have done: answers each `ask` question whose messages all have their replies, stops each short-lived worker whose work is done, tells each running task worker about changes requested of it, and serves the resumes, send-backs and failed proposal checks the limits held back.
+    /// Does from the stored state what the events the watcher missed would have done: answers each `ask` question whose messages all have their replies, stops each short-lived worker whose work is done, tells each running task worker about changes requested of it, and serves the resumes, send-backs, failed proposal checks and reviews of new versions the limits held back.
     async fn recover(self) {
         self.answer_open_asks().await;
         self.stop_done_workers().await;
         self.notify_running_authors().await;
         self.clone().resume_owed_send_backs().await;
         self.clone().resume_owed_gate_runs().await;
+        self.clone().resume_owed_reviewers(None).await;
         self.resume_pending().await;
     }
 }
@@ -389,6 +390,13 @@ pub(super) async fn watch_done(
         {
             tokio::spawn(supervisor.clone().resume_sent_back(task));
         }
+        // A version that waits for a reviewer that has ended resumes that reviewer, which still holds the review claim.
+        if (event.event_type == types::PROPOSAL_VERSION_ADDED
+            || event.event_type == types::PROPOSAL_REVIEW_AGAIN_REQUESTED)
+            && let Some(proposal) = event.proposal
+        {
+            tokio::spawn(supervisor.clone().resume_owed_reviewers(Some(proposal)));
+        }
         // A freed worker slot or a raised limit can serve a resume that the limits refused earlier.
         if event.event_type == types::WORKER_STOPPED
             || event.event_type == types::WORKER_FAILED
@@ -396,6 +404,7 @@ pub(super) async fn watch_done(
         {
             tokio::spawn(supervisor.clone().resume_owed_send_backs());
             tokio::spawn(supervisor.clone().resume_owed_gate_runs());
+            tokio::spawn(supervisor.clone().resume_owed_reviewers(None));
             tokio::spawn(supervisor.resume_pending());
         }
     }

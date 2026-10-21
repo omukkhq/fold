@@ -14,8 +14,8 @@ use crate::auto_integrate::{Running, approve, head, reviewer, state_of};
 use crate::common::acceptance::{HUMAN, Harness, WAIT};
 use crate::proposal_tools_support::{Fixture, human, t};
 use crate::worker_resume::{
-    MAIN, TASK_WORKER, proposed_by_a_task_worker, request_changes, task_worker_for, until_runs,
-    until_state, worker,
+    MAIN, REVIEWER, TASK_WORKER, post_next_version, proposed_by_a_task_worker, request_changes,
+    reviewed_by_a_started_reviewer, task_worker_for, until_runs, until_state, worker,
 };
 use crate::workers_support::FakeClaude;
 
@@ -334,4 +334,37 @@ async fn only_a_human_or_the_main_agent_pauses_or_resumes() {
             ("project.resumed".to_owned(), "human:ana".to_owned()),
         ]
     );
+}
+
+/// A new version that arrives while the project is paused waits for the resume of the pause, and only then goes back to the reviewer that holds its claim.
+#[tokio::test]
+async fn a_new_version_waits_for_the_resume_of_a_pause_before_its_reviewer_resumes() {
+    let fake = FakeClaude::new("result");
+    let (harness, work) = reviewed_by_a_started_reviewer(&fake).await;
+    let stopped = worker(&harness, REVIEWER).await;
+    harness.call(MAIN, "pause_project", json!({})).await;
+    until_not_running(&harness, TASK_WORKER).await;
+    harness
+        .project
+        .clock()
+        .advance(Duration::from_secs(1))
+        .unwrap();
+
+    work.write(&[("page.html", "<h1>page</h1>\n")]);
+    post_next_version(&harness, &work).await;
+    // A later message's handling shows that the version's event was served.
+    harness
+        .send(MAIN, &["review-lead"], "after the version")
+        .await;
+    assert_eq!(worker(&harness, REVIEWER).await.state, WorkerState::Stopped);
+    assert_eq!(
+        fake.runs_of(REVIEWER).len(),
+        1,
+        "the pause holds the resume"
+    );
+
+    harness.call(MAIN, "resume_project", json!({})).await;
+    let runs = until_runs(&fake, REVIEWER, 2).await;
+    assert_eq!(runs[1].flag("--resume"), Some(stopped.session_id.as_str()));
+    assert!(runs[1].stdin[1].contains("P-1 v2"), "{}", runs[1].stdin[1]);
 }

@@ -324,6 +324,125 @@ impl Supervisor {
         }
     }
 
+    /// Resumes each reviewer that has ended while it holds the review claim of a proposal whose newest version waits for it (see [`agents::reviews_owed_to_ended_reviewers`]), in its own session with a turn that names the versions: a new version never waits for the claim's lease to run out, and the review lead never takes it over. `proposal` is the proposal whose new version an event announced; without it every owed review is served. A resume that a pause or the worker limits refuse leaves the review owed, and the resume of the pause or the next stopped worker serves it. A reviewer whose session is gone starts in a new one with the same turn.
+    pub(super) async fn resume_owed_reviewers(self, proposal: Option<ProposalId>) {
+        let owed = match agents::reviews_owed_to_ended_reviewers(self.inner.store.read(), proposal)
+            .await
+        {
+            Ok(owed) => owed,
+            Err(error) => {
+                tracing::warn!(
+                    code = error.log_code(),
+                    "could not read the reviews owed to ended reviewers"
+                );
+                return;
+            }
+        };
+        let mut by_reviewer: BTreeMap<AgentName, Vec<(ProposalId, u32)>> = BTreeMap::new();
+        for review in owed {
+            by_reviewer
+                .entry(review.agent)
+                .or_default()
+                .push((review.proposal, review.version));
+        }
+        for (agent, versions) in by_reviewer {
+            if let Err(error) = self.resume_reviewer(&agent, &versions).await {
+                tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not resume a reviewer for a new version");
+            }
+        }
+    }
+
+    async fn resume_reviewer(
+        &self,
+        agent: &AgentName,
+        versions: &[(ProposalId, u32)],
+    ) -> Result<(), AgentError> {
+        // The row is read under the lock, so a second event finds the reviewer running.
+        let resuming = self.inner.resuming.lock().await;
+        let mut conn = self
+            .inner
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        let worker = agents::find_worker_process(&mut conn, agent).await?;
+        drop(conn);
+        let Some(worker) = worker else {
+            return Ok(());
+        };
+        if worker.role != Role::Reviewer || worker.state.is_running() {
+            return Ok(());
+        }
+        let turn = reviewer_turn(versions);
+        let watch = match self.resume(agent, turn.clone(), &[]).await {
+            Ok(watch) => watch,
+            // The row is left as it was, so the review stays owed and a later resume serves it.
+            Err(error) if is_paused_refusal(&error) => return Ok(()),
+            Err(AgentError::Fold(error)) if error.code() == codes::WORKER_LIMIT_REACHED => {
+                return Ok(());
+            }
+            Err(AgentError::Fold(error)) if error.code() == codes::WORKER_EXISTS => {
+                if let Some(run) = lock(&self.inner.running).get(agent) {
+                    let _ = run.input.send(Input::Turn(turn));
+                }
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        drop(resuming);
+        let outcome = match watch {
+            Some(watch) => watch.outcome().await,
+            None => SessionStart::Ended,
+        };
+        match outcome {
+            SessionStart::Went => self.record_reviewer_resumed(agent, versions).await,
+            SessionStart::Lost => {
+                self.clone().start_lost(agent.clone(), Some(turn)).await;
+                Ok(())
+            }
+            SessionStart::Ended => Ok(()),
+        }
+    }
+
+    /// `worker.resumed` of reason `new_version` for each version, once the resumed reviewer's session runs.
+    async fn record_reviewer_resumed(
+        &self,
+        agent: &AgentName,
+        versions: &[(ProposalId, u32)],
+    ) -> Result<(), AgentError> {
+        let mut tasks = Vec::with_capacity(versions.len());
+        for (proposal, _) in versions {
+            let row = reviews::get_proposal(self.inner.store.read(), *proposal)
+                .await?
+                .ok_or(StoreError::Corrupt("proposals.number"))?;
+            tasks.push(row.task);
+        }
+        let now = self.inner.clock.now();
+        let mut buffer = EventBuffer::new();
+        self.inner
+            .store
+            .write(async |tx| {
+                for ((proposal, version), task) in versions.iter().zip(&tasks) {
+                    let event = NewEvent::new(types::WORKER_RESUMED, EventActor::fold())?
+                        .task(*task)
+                        .proposal(*proposal)
+                        .data(json!({
+                            "agent": agent.as_str(),
+                            "proposal": proposal.to_string(),
+                            "version": version,
+                            "reason": "new_version",
+                            "resumed": true,
+                        }))?;
+                    buffer.append(tx, &event, now).await?;
+                }
+                Ok::<_, AgentError>(())
+            })
+            .await?;
+        self.inner.bus.publish(buffer);
+        Ok(())
+    }
+
     /// Tells each running task worker about the requested changes and conflicts recorded since its process started, from the stored reviews and integrations. The watcher calls it after it fell behind the bus, when the events that would have reached the task worker as notices may be lost.
     pub(super) async fn notify_running_authors(&self) {
         for (agent, found) in self.owed_to_running().await {
@@ -749,6 +868,18 @@ fn resume_turn(found: &[Found]) -> String {
     format!(
         "fold resumed you because work you proposed needs you again.\n\n{}\n\n{STOP_LINE}",
         found_turn_parts(found)
+    )
+}
+
+/// The turn a reviewer that fold resumed gets: each version to review, and that it still holds the claims.
+fn reviewer_turn(versions: &[(ProposalId, u32)]) -> String {
+    let listed = versions
+        .iter()
+        .map(|(proposal, version)| format!("{proposal} v{version}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "fold resumed you because a proposal you review has a new version: {listed}. You still hold the review claim. Read get_proposal first, and tell the review lead with send_message if a claim is gone. Check out the version with create_review_checkout and review it with submit_review; fold stops you again once each of your proposals has a verdict."
     )
 }
 

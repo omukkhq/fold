@@ -329,6 +329,8 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
         }
     })
     .await;
+    // fold stopped the reviewer once each of its proposals had a verdict; it keeps the review claims.
+    until_state(&h, "reviewer", WorkerState::Stopped).await;
     item_work.write(&[("src/item.rs", "pub fn handler() -> u16 { 404 }\n")]);
     h.call(
         &item_task_worker,
@@ -341,21 +343,19 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
         .await;
     assert_eq!(updated["version"], "v2", "{updated}");
     until_state(&h, &item_task_worker, WorkerState::Stopped).await;
-    until_state(&h, "reviewer", WorkerState::Stopped).await;
-    let second = h
-        .call(
-            REVIEW_LEAD,
-            "start_worker",
-            json!({"role": "reviewer", "proposals": ["P-2"]}),
-        )
-        .await;
-    assert_eq!(second["worker"]["name"], "reviewer-2", "{second}");
-    until_state(&h, "reviewer-2", WorkerState::Idle).await;
-    h.connect("reviewer-2").await;
-    h.call("reviewer-2", "create_review_checkout", json!({"id": "P-2"}))
+    // The new version goes back to the reviewer that holds its claim, in its own session.
+    let reviewer_runs = until_runs(&fake, "reviewer", 2).await;
+    assert!(reviewer_runs[1].has("--resume"));
+    assert!(
+        reviewer_runs[1].stdin[1].contains("P-2 v2"),
+        "{}",
+        reviewer_runs[1].stdin[1]
+    );
+    until_state(&h, "reviewer", WorkerState::Idle).await;
+    h.call("reviewer", "create_review_checkout", json!({"id": "P-2"}))
         .await;
     h.call(
-        "reviewer-2",
+        "reviewer",
         "submit_review",
         json!({"id": "P-2", "version": 2, "verdict": "approve", "body": "The 404 is right."}),
     )
@@ -392,28 +392,28 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
             json!({"role": "reviewer", "proposals": ["P-3"]}),
         )
         .await;
-    assert_eq!(reviewer["worker"]["name"], "reviewer-3", "{reviewer}");
+    assert_eq!(reviewer["worker"]["name"], "reviewer-2", "{reviewer}");
     let proposal = h
         .call(REVIEW_LEAD, "get_proposal", json!({"id": "P-3"}))
         .await;
-    assert_eq!(proposal["claim"]["holder"], "reviewer-3", "{proposal}");
-    until_state(&h, "reviewer-3", WorkerState::Idle).await;
-    h.connect("reviewer-3").await;
+    assert_eq!(proposal["claim"]["holder"], "reviewer-2", "{proposal}");
+    until_state(&h, "reviewer-2", WorkerState::Idle).await;
+    h.connect("reviewer-2").await;
     let refused = h
-        .refused("reviewer-3", "claim_review", json!({"id": "P-3"}))
+        .refused("reviewer-2", "claim_review", json!({"id": "P-3"}))
         .await;
     assert_eq!(refused["code"], codes::WORKER_CLAIM_DENIED);
     let checkout = h
-        .call("reviewer-3", "create_review_checkout", json!({"id": "P-3"}))
+        .call("reviewer-2", "create_review_checkout", json!({"id": "P-3"}))
         .await;
     assert_eq!(checkout["version"], "v1", "{checkout}");
     h.call(
-        "reviewer-3",
+        "reviewer-2",
         "submit_review",
         json!({"id": "P-3", "version": 1, "verdict": "approve", "body": "Searches both."}),
     )
     .await;
-    until_state(&h, "reviewer-3", WorkerState::Stopped).await;
+    until_state(&h, "reviewer-2", WorkerState::Stopped).await;
 
     eventually(WAIT, async || match committed(&h).await {
         3 => Ok(()),
@@ -486,9 +486,8 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
             (LEAD.to_owned(), json!("backend-worker")),
             (LEAD.to_owned(), json!("backend-worker-2")),
             (REVIEW_LEAD.to_owned(), json!("reviewer")),
-            (REVIEW_LEAD.to_owned(), json!("reviewer-2")),
             (LEAD.to_owned(), json!("backend-worker-3")),
-            (REVIEW_LEAD.to_owned(), json!("reviewer-3")),
+            (REVIEW_LEAD.to_owned(), json!("reviewer-2")),
         ]
     );
     integrate.stop().await;

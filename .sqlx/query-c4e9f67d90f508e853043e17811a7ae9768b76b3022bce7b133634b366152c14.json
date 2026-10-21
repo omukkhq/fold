@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT g.name AS \"agent!: String\", p.number AS \"proposal!: i64\", v.version AS \"version!: i64\"\n           FROM worker_processes w\n           JOIN agents g ON g.id = w.agent_id\n           JOIN worker_proposals b ON b.worker_process_id = w.id\n           JOIN proposals p ON p.id = b.proposal_id AND p.state = 'open'\n           JOIN proposal_versions v ON v.proposal_id = p.id\n           JOIN claims c ON c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL\n           JOIN workers k ON k.id = c.worker_id AND k.agent_id = w.agent_id\n           WHERE w.role = 'reviewer' AND w.state IN ('stopped', 'failed')\n             AND v.version = (SELECT MAX(x.version) FROM proposal_versions x WHERE x.proposal_id = p.id)\n             AND (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) IS NULL\n             AND CASE WHEN ?1 IS NULL\n                      THEN v.created_at > w.started_at\n                           OR EXISTS (SELECT 1 FROM review_again_requests q\n                                      WHERE q.version_id = v.id AND q.created_at > w.started_at)\n                      ELSE p.number = ?1 END\n           ORDER BY w.id, p.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "proposal!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "version!: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "version"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c4e9f67d90f508e853043e17811a7ae9768b76b3022bce7b133634b366152c14"
+}

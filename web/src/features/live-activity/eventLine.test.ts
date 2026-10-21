@@ -280,6 +280,17 @@ describe("eventLine", () => {
       }),
     ).toBe("resumed web-worker for the send-back of T-12");
     expect(
+      line("worker.resumed", {
+        agent: "reviewer",
+        reason: "new_version",
+        version: 2,
+        resumed: true,
+      }),
+    ).toBe("resumed reviewer to review v2 of P-4");
+    expect(
+      line("worker.resumed", { agent: "reviewer", reason: "new_version" }),
+    ).toBe("resumed reviewer to review a new version of P-4");
+    expect(
       line("worker.started", { agent: "web-worker", role: "task_worker" }),
     ).toBe("started web-worker as task worker");
     // A stored event keeps the role value it was written with.
