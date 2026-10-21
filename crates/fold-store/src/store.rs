@@ -76,6 +76,25 @@ impl Store {
         Self::open(path, &REGISTRY_MIGRATIONS, "registry", wait, busy_timeout).await
     }
 
+    /// One read-only connection to the host registry, for a command that only reports what it holds. It never creates the file, never migrates and gives up on a lock after `busy_timeout`, so it never writes and never waits long. A registry whose applied migrations are not exactly this build's is refused, because its tables may not match the queries.
+    pub async fn read_registry(
+        path: &Path,
+        busy_timeout: Duration,
+    ) -> Result<SqlitePool, StoreError> {
+        let options = connect_options_read_only(path, busy_timeout);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await?;
+        match applied_match(&pool, &REGISTRY_MIGRATIONS).await {
+            Ok(()) => Ok(pool),
+            Err(error) => {
+                pool.close().await;
+                Err(error)
+            }
+        }
+    }
+
     /// Another opener's WAL switch or migration transaction refuses this one with `SQLITE_BUSY`, and a loaded host can hold the migration transaction past the busy timeout, so the whole open is tried again from a fresh connection until `wait` has passed. The last attempt can run up to the busy timeout past `wait`.
     async fn open(
         path: &Path,
@@ -198,6 +217,36 @@ async fn migrate(writer: &SqlitePool, migrations: &Migrator) -> Result<(), Store
     migrations.run_direct(None, &mut *tx, false).await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// `SchemaTooNew` when the database holds a migration this build lacks, `SchemaOutdated` when it lacks one of this build's.
+async fn applied_match(pool: &SqlitePool, migrations: &Migrator) -> Result<(), StoreError> {
+    let applied: Vec<i64> =
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success ORDER BY version")
+            .fetch_all(pool)
+            .await?;
+    let mut known: Vec<i64> = migrations
+        .iter()
+        .filter(|migration| !migration.migration_type.is_down_migration())
+        .map(|migration| migration.version)
+        .collect();
+    known.sort_unstable();
+    if let Some(&version) = applied.iter().find(|version| !known.contains(version)) {
+        return Err(StoreError::SchemaTooNew { version });
+    }
+    if applied != known {
+        return Err(StoreError::SchemaOutdated);
+    }
+    Ok(())
+}
+
+/// Read-only and without a journal mode: switching to WAL is a write, and the registry is already in WAL once a writer opened it.
+fn connect_options_read_only(path: &Path, busy_timeout: Duration) -> SqliteConnectOptions {
+    SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(true)
+        .create_if_missing(false)
+        .busy_timeout(busy_timeout)
 }
 
 fn connect_options(path: &Path, busy_timeout: Duration) -> SqliteConnectOptions {

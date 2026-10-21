@@ -394,6 +394,115 @@ async fn registry_opens_with_its_own_migrations() {
     registry.close().await.unwrap();
 }
 
+const SHORT_BUSY: std::time::Duration = std::time::Duration::from_millis(100);
+
+#[tokio::test]
+async fn reading_a_missing_registry_fails_and_creates_no_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registry.db");
+    let error = Store::read_registry(&path, SHORT_BUSY).await.unwrap_err();
+    assert!(matches!(error, StoreError::Database(_)), "{error:?}");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn a_registry_read_lists_its_projects_and_refuses_a_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registry.db");
+    Store::open_registry(&path)
+        .await
+        .unwrap()
+        .close()
+        .await
+        .unwrap();
+    let reader = Store::read_registry(&path, SHORT_BUSY).await.unwrap();
+    assert!(
+        fold_store::projects::list_projects(&reader)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let write = sqlx::query("DELETE FROM humans").execute(&reader).await;
+    assert!(write.is_err(), "{write:?}");
+    reader.close().await;
+}
+
+/// A registry made by this build, with `change` run on its migration table afterwards.
+async fn registry_with(change: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registry.db");
+    let registry = Store::open_registry(&path).await.unwrap();
+    exec(&registry, change).await.unwrap();
+    registry.close().await.unwrap();
+    (dir, path)
+}
+
+#[tokio::test]
+async fn a_registry_of_a_newer_fold_is_not_read() {
+    let (_dir, path) = registry_with(
+        "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) VALUES (99990101000000, 'later', 1, x'00', 0)",
+    )
+    .await;
+    let error = Store::read_registry(&path, SHORT_BUSY).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            StoreError::SchemaTooNew {
+                version: 99_990_101_000_000
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_registry_that_lacks_a_migration_is_not_read_and_not_migrated() {
+    let (_dir, path) = registry_with(
+        "DELETE FROM _sqlx_migrations WHERE version = (SELECT MAX(version) FROM _sqlx_migrations)",
+    )
+    .await;
+    let error = Store::read_registry(&path, SHORT_BUSY).await.unwrap_err();
+    assert!(matches!(error, StoreError::SchemaOutdated), "{error:?}");
+    let options = sqlx::sqlite::SqliteConnectOptions::new().filename(&path);
+    let mut conn = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .unwrap();
+    let applied: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(applied, registry_migration_count() - 1);
+    conn.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_locked_registry_is_given_up_on_after_the_busy_timeout() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registry.db");
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(&path)
+        .create_if_missing(true);
+    let mut holder = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .unwrap();
+    sqlx::query("BEGIN EXCLUSIVE")
+        .execute(&mut holder)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE held (a)")
+        .execute(&mut holder)
+        .await
+        .unwrap();
+    let read = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        Store::read_registry(&path, SHORT_BUSY),
+    )
+    .await
+    .unwrap();
+    assert!(read.is_err(), "{read:?}");
+    holder.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn a_web_token_made_before_sessions_keeps_its_row_id_as_its_number() {
     let dir = tempfile::tempdir().unwrap();

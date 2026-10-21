@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use fold_cli::daemon_client::{self, Response};
+use fold_core::codes;
 use fold_daemon::services::projects::row_for_dir_on_host;
 
 use crate::doctor::run_briefly;
@@ -12,6 +13,9 @@ use crate::{init, output};
 
 /// How long the probe of the daemon and each query of the service manager may take, so a bare `fld` answers at once even when the daemon or the manager hangs.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long the read of the host registry waits for a lock, so a registry that another process holds costs a bare `fld` its project line and not its answer.
+const REGISTRY_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// The socket-only route that names the daemon's version and listen address.
 const DAEMON_ROUTE: &str = "/api/v1/daemon";
@@ -48,7 +52,17 @@ pub(crate) struct Service {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Project {
     pub(crate) root: PathBuf,
-    pub(crate) registered: Option<(String, String)>,
+    pub(crate) registered: Registered,
+}
+
+/// What the host registry says of a project folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Registered {
+    /// The name and the slug of the registered project.
+    Listed(String, String),
+    Unlisted,
+    /// The registry is missing, locked, of another schema version or unreadable, so the status names no project.
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,7 +183,7 @@ fn launchd_running(answer: &str) -> bool {
     answer.lines().any(|line| line.trim() == "state = running")
 }
 
-/// The project at or above `cwd`, named as the host registry names it when the registry exists; a missing registry is not created.
+/// The project at or above `cwd`, named as the host registry names it. The registry is only read: a missing one is not created, one of another schema version is not migrated, and a lock is waited for briefly.
 fn project(dirs: &Dirs, cwd: &Path) -> Option<Project> {
     let cwd = std::fs::canonicalize(cwd).ok()?;
     let root = init::project_root_at_or_above(&cwd)?;
@@ -178,9 +192,20 @@ fn project(dirs: &Dirs, cwd: &Path) -> Option<Project> {
         .filter(|host| host.registry_db().is_file())
         .and_then(|host| {
             let runtime = serve::current_thread_runtime().ok()?;
-            runtime.block_on(row_for_dir_on_host(&host, &root)).ok()
+            runtime.block_on(async {
+                tokio::time::timeout(
+                    PROBE_TIMEOUT,
+                    row_for_dir_on_host(&host, &root, REGISTRY_BUSY_TIMEOUT),
+                )
+                .await
+                .ok()
+            })
         })
-        .map(|row| (row.name, row.slug));
+        .map_or(Registered::Unknown, |row| match row {
+            Ok(row) => Registered::Listed(row.name, row.slug),
+            Err(error) if error.code() == Some(codes::PROJECT_NOT_FOUND) => Registered::Unlisted,
+            Err(_) => Registered::Unknown,
+        });
     Some(Project { root, registered })
 }
 
@@ -275,24 +300,30 @@ pub(crate) fn lines(status: &Status, fld: &str) -> Vec<String> {
             "service: none; fld setup installs a service that starts the daemon at login".into()
         }
     });
-    lines.push(match &status.project {
+    match &status.project {
         Some(Project {
             root,
-            registered: Some((name, slug)),
-        }) => format!(
+            registered: Registered::Listed(name, slug),
+        }) => lines.push(format!(
             "project: {} ({slug}) in {}",
             output::escape_control(name),
             output::escape_control(&root.to_string_lossy())
-        ),
+        )),
         Some(Project {
             root,
-            registered: None,
-        }) => format!(
+            registered: Registered::Unlisted,
+        }) => lines.push(format!(
             "project: {}, which this host's registry does not list",
             output::escape_control(&root.to_string_lossy())
+        )),
+        Some(Project {
+            registered: Registered::Unknown,
+            ..
+        }) => {}
+        None => lines.push(
+            "project: none; this folder is in no fold project, and fld init makes one".into(),
         ),
-        None => "project: none; this folder is in no fold project, and fld init makes one".into(),
-    });
+    }
     lines.push("Run fld --help for commands".into());
     lines
 }
@@ -327,7 +358,7 @@ mod tests {
     fn app() -> Option<Project> {
         Some(Project {
             root: PathBuf::from("/home/ana/app"),
-            registered: Some(("App".to_owned(), "app".to_owned())),
+            registered: Registered::Listed("App".to_owned(), "app".to_owned()),
         })
     }
 
@@ -446,7 +477,7 @@ mod tests {
     fn an_unregistered_project_and_control_characters_in_its_name_are_shown_safely() {
         let odd = Some(Project {
             root: PathBuf::from("/home/ana/app"),
-            registered: Some(("A\u{1b}[2Jpp".to_owned(), "app".to_owned())),
+            registered: Registered::Listed("A\u{1b}[2Jpp".to_owned(), "app".to_owned()),
         });
         assert_eq!(
             lines(&status(Daemon::NotRunning, None, odd), "0.3.0")[3],
@@ -454,11 +485,19 @@ mod tests {
         );
         let unlisted = Some(Project {
             root: PathBuf::from("/home/ana/app"),
-            registered: None,
+            registered: Registered::Unlisted,
         });
         assert_eq!(
             lines(&status(Daemon::NotRunning, None, unlisted), "0.3.0")[3],
             "project: /home/ana/app, which this host's registry does not list"
+        );
+        let unknown = Some(Project {
+            root: PathBuf::from("/home/ana/app"),
+            registered: Registered::Unknown,
+        });
+        assert_eq!(
+            lines(&status(Daemon::NotRunning, None, unknown), "0.3.0")[3],
+            "Run fld --help for commands"
         );
     }
 

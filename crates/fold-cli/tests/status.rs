@@ -29,7 +29,14 @@ fn stdout(output: &Output) -> String {
 async fn a_bare_fld_without_a_daemon_says_so_and_starts_none() {
     let host = Host::new().await;
     let socket = host.default_socket();
+    let registry = host.data_home().join("fold").join("registry.db");
+    let before = std::fs::read(&registry).unwrap();
     let output = bare(&host, &host.root).await;
+    assert_eq!(
+        std::fs::read(&registry).unwrap(),
+        before,
+        "a bare fld never writes the registry"
+    );
     assert_eq!(
         stdout(&output),
         format!(
@@ -41,6 +48,17 @@ async fn a_bare_fld_without_a_daemon_says_so_and_starts_none() {
     );
     assert!(daemons(&socket).is_empty(), "a bare fld starts no daemon");
     assert!(!socket.exists());
+}
+
+#[tokio::test]
+async fn a_bare_fld_without_a_registry_names_no_project_and_creates_no_registry() {
+    let host = Host::new().await;
+    let fold_data = host.data_home().join("fold");
+    std::fs::remove_dir_all(&fold_data).unwrap();
+    let text = stdout(&bare(&host, &host.root).await);
+    assert!(!text.contains("project:"), "{text}");
+    assert!(text.ends_with("Run fld --help for commands\n"), "{text}");
+    assert!(!fold_data.exists(), "a bare fld creates no registry");
 }
 
 #[tokio::test]
