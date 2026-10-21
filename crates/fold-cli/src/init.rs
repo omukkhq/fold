@@ -242,10 +242,20 @@ pub(crate) fn initialise(
         .await
     })?;
     let root = project.root.display();
-    output::line(
-        out,
-        &format!("initialised project {} at {root}", project.slug),
-    )?;
+    if project.restored {
+        output::line(
+            out,
+            &format!(
+                "project {} at {root} is back in fold, with the data its .fold kept",
+                project.slug
+            ),
+        )?;
+    } else {
+        output::line(
+            out,
+            &format!("initialised project {} at {root}", project.slug),
+        )?;
+    }
     if project.replaced {
         output::line(
             out,

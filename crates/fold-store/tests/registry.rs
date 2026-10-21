@@ -79,7 +79,7 @@ async fn a_project_is_used_when_registered_and_each_touch_after_the_period_moves
             .unwrap();
     }
     let uses = async || -> Vec<(String, i64)> {
-        projects::list_project_uses(store.read())
+        projects::list_registrations(store.read())
             .await
             .unwrap()
             .into_iter()
@@ -106,14 +106,88 @@ async fn a_project_is_used_when_registered_and_each_touch_after_the_period_moves
         uses().await,
         [("alpha".to_owned(), 20), ("beta".to_owned(), 7)]
     );
-    let found = projects::find_project_use(store.read(), "alpha")
+    let found = projects::find_registration(store.read(), "alpha")
         .await
         .unwrap();
     assert_eq!(found.map(|entry| entry.last_used_at), Some(at(20)));
     assert_eq!(
-        projects::find_project_use(store.read(), "none")
+        projects::find_registration(store.read(), "none")
             .await
             .unwrap(),
         None
+    );
+}
+
+#[tokio::test]
+async fn a_removed_project_keeps_its_row_and_slug_but_leaves_the_lists_of_projects_in_fold() {
+    let (_dir, store) = registry_store().await;
+    let at = |millis| Timestamp::from_millis(millis).unwrap();
+    for project in [row("alpha", "/a"), row("beta", "/b")] {
+        store
+            .write(async |tx| projects::insert_project(tx, &project, at(5)).await)
+            .await
+            .unwrap();
+    }
+    let remove = async |slug: &'static str| {
+        store
+            .write(async |tx| projects::set_removed(tx, slug, at(9)).await)
+            .await
+            .unwrap()
+    };
+    let clear = async |slug: &'static str| {
+        store
+            .write(async |tx| projects::clear_removed(tx, slug).await)
+            .await
+            .unwrap()
+    };
+    assert!(remove("alpha").await);
+    assert!(!remove("alpha").await, "a removed project stays as it is");
+    assert!(!remove("none").await);
+
+    assert_eq!(
+        projects::list_projects(store.read()).await.unwrap(),
+        [row("beta", "/b")]
+    );
+    assert_eq!(
+        projects::find_project(store.read(), "alpha").await.unwrap(),
+        None
+    );
+    assert_eq!(
+        projects::find_by_root(store.read(), "/a").await.unwrap(),
+        None
+    );
+    let all = projects::list_registrations(store.read()).await.unwrap();
+    assert_eq!(
+        all.iter()
+            .map(|entry| (entry.row.slug.as_str(), entry.removed_at))
+            .collect::<Vec<_>>(),
+        [("alpha", Some(at(9))), ("beta", None)]
+    );
+    let found = projects::find_registration_by_root(store.read(), "/a")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (found.row, found.removed_at),
+        (row("alpha", "/a"), Some(at(9)))
+    );
+    // The slug stays taken while the project is removed.
+    assert!(
+        store
+            .write(async |tx| projects::insert_project(tx, &row("alpha", "/c"), at(10)).await)
+            .await
+            .unwrap_err()
+            .unique_violation()
+    );
+
+    assert!(clear("alpha").await);
+    assert!(!clear("alpha").await);
+    assert!(
+        !clear("beta").await,
+        "a project in fold has no mark to clear"
+    );
+    assert_eq!(
+        projects::find_project(store.read(), "alpha").await.unwrap(),
+        Some(row("alpha", "/a"))
     );
 }

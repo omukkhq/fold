@@ -51,6 +51,20 @@ function renderAt(path: string) {
   return router;
 }
 
+/** A project in fold as the list gives it, open, with no overview. */
+function summary(slug: string, name: string) {
+  return {
+    slug,
+    name,
+    root: `/home/ana/${slug}`,
+    available: true,
+    last_used_at: 0,
+    removed_at: null as number | null,
+    folder: "present",
+    overview: null,
+  };
+}
+
 describe("Projects screen", () => {
   it("lists the projects with counts, agents and head, links an available one to its board and marks one that did not open", async () => {
     stubFetch({
@@ -59,9 +73,7 @@ describe("Projects screen", () => {
         body: {
           projects: [
             {
-              slug: "demo",
-              name: "Demo",
-              available: true,
+              ...summary("demo", "Demo"),
               overview: {
                 counts: {
                   backlog: 2,
@@ -76,7 +88,7 @@ describe("Projects screen", () => {
                 attention: [],
               },
             },
-            { slug: "archive", name: "Archive", available: false },
+            { ...summary("archive", "Archive"), available: false },
           ],
         },
       },
@@ -91,6 +103,117 @@ describe("Projects screen", () => {
     expect(within(demo).getByText(/changed \d+ s ago/)).toBeTruthy();
     expect(screen.getByText("Could not open this project.")).toBeTruthy();
     expect(screen.queryByRole("link", { name: /Archive/ })).toBeNull();
+  });
+
+  it("searches every project by name, slug or folder, the removed ones too, and adds a removed one back", async () => {
+    let removed: number | null = 5;
+    const calls = stubFetch({
+      "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+      "GET /api/v1/projects": () => ({
+        body: {
+          projects: [
+            { ...summary("web", "Web shop"), available: false },
+            {
+              ...summary("old", "Old site"),
+              available: removed === null,
+              removed_at: removed,
+            },
+            {
+              ...summary("away", "Away"),
+              available: false,
+              folder: "folder_missing",
+            },
+          ],
+        },
+      }),
+      "POST /api/v1/projects/old/restore": () => {
+        removed = null;
+        return { body: { ...summary("old", "Old site") } };
+      },
+      "GET /api/v1/projects/old/git": errorReply(404, "git_not_found"),
+    });
+    renderAt("/projects");
+    const list = await screen.findByRole("list", { name: "Projects" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+    expect(within(list).queryByText("Old site")).toBeNull();
+    expect(within(list).getByText("folder missing")).toBeTruthy();
+    expect(within(list).getByText("/home/ana/away")).toBeTruthy();
+
+    await userEvent.type(
+      screen.getByRole("searchbox", { name: "Search projects" }),
+      "OLD",
+    );
+    const results = screen.getByRole("list", { name: "Search results" });
+    expect(within(results).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(results).getByText("removed")).toBeTruthy();
+    expect(within(results).getByText("/home/ana/old")).toBeTruthy();
+    await userEvent.click(
+      within(results).getByRole("button", {
+        name: "Add Old site back to fold",
+      }),
+    );
+    expect(
+      await within(results).findByRole("button", {
+        name: "Remove Old site from fold",
+      }),
+    ).toBeTruthy();
+    expect(calls.map((call) => call.method)).toContain("POST");
+
+    await userEvent.clear(screen.getByRole("searchbox"));
+    await userEvent.type(screen.getByRole("searchbox"), "nothing");
+    expect(
+      screen.getByRole("region", { name: "No project matches" }),
+    ).toBeTruthy();
+  });
+
+  it("removes a project only after the dialog that says its data stays, and shows a refusal there", async () => {
+    let refuse = true;
+    let removed: number | null = null;
+    stubFetch({
+      "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+      "GET /api/v1/projects": () => ({
+        body: {
+          projects: [
+            {
+              ...summary("web", "Web shop"),
+              available: false,
+              removed_at: removed,
+            },
+          ],
+        },
+      }),
+      "DELETE /api/v1/projects/web": () => {
+        if (refuse) {
+          return errorReply(409, "project_workers_running");
+        }
+        removed = 9;
+        return { body: { ...summary("web", "Web shop"), removed_at: 9 } };
+      },
+    });
+    renderAt("/projects");
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Remove Web shop from fold" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Remove Web shop from fold?",
+    });
+    expect(within(dialog).getByText("/home/ana/web")).toBeTruthy();
+    expect(within(dialog).getByText("fld claude")).toBeTruthy();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Remove from fold" }),
+    );
+    expect((await within(dialog).findByRole("alert")).textContent).toContain(
+      "Pause the project's agents",
+    );
+
+    refuse = false;
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Remove from fold" }),
+    );
+    expect(
+      await screen.findByRole("region", { name: "No projects yet" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("shows the empty state with the next step when there are no projects", async () => {
@@ -282,7 +405,9 @@ describe("A project fold removed", () => {
     stubFetch({
       "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
       "GET /api/v1/projects": {
-        body: { projects: [{ slug: "demo", name: "Demo", available: false }] },
+        body: {
+          projects: [{ ...summary("demo", "Demo"), available: false }],
+        },
       },
       "GET /api/v1/projects/nobs": errorReply(404, "project_not_found"),
     });
@@ -334,11 +459,8 @@ describe("The top bar", () => {
     const slugs = ["a", "b", "c", "d", "e", "f"];
     const shell = shellRoutes(slugs);
     const projects = slugs.map((slug, index) => ({
-      slug,
-      name: slug === "c" ? "f" : slug,
-      available: true,
+      ...summary(slug, slug === "c" ? "f" : slug),
       last_used_at: index,
-      overview: null,
     }));
     stubFetch({
       ...shell,

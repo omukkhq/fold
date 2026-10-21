@@ -1110,7 +1110,7 @@ async fn the_daemon_closes_a_project_whose_fold_data_was_deleted_and_opens_the_n
     let new = project_service::open(&state, "app").await.unwrap();
     assert!(!Arc::ptr_eq(&old, &new));
     assert!(!new.database_replaced().await);
-    let listed = project_service::list(&state).await.unwrap();
+    let listed = project_service::list(&state, false).await.unwrap();
     assert_eq!(listed.len(), 1);
     assert!(listed[0].available && listed[0].overview.is_some());
 

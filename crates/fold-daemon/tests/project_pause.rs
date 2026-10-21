@@ -19,12 +19,12 @@ use crate::worker_resume::{
 };
 use crate::workers_support::FakeClaude;
 
-const LEAD: &str = "web-lead";
+pub(crate) const LEAD: &str = "web-lead";
 const PAUSE: &str = "/api/v1/projects/demo/pause";
 const RESUME: &str = "/api/v1/projects/demo/resume";
 
 /// A harness whose worker processes run `fake`, with the human [`HUMAN`] known and `frontend` as the main agent, the area `web` over label `ui`, and its lead started and in `state`.
-async fn lead_running(fake: &FakeClaude, state: WorkerState) -> Harness {
+pub(crate) async fn lead_running(fake: &FakeClaude, state: WorkerState) -> Harness {
     let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     fold_daemon::services::projects::ensure_human(
         harness.project.registry(),
@@ -59,7 +59,7 @@ async fn http_post(harness: &Harness, path: &str) -> Value {
 }
 
 /// Waits until the supervisor runs no process for `agent`.
-async fn until_not_running(harness: &Harness, agent: &str) {
+pub(crate) async fn until_not_running(harness: &Harness, agent: &str) {
     let name = AgentName::parse(agent).unwrap();
     eventually(WAIT, async || {
         if harness.handle.workers.is_running(&name) {

@@ -10,8 +10,11 @@ function project(
   return {
     slug,
     name,
+    root: `/home/ana/${slug}`,
     available: true,
     last_used_at: lastUsedAt,
+    removed_at: null,
+    folder: "present",
     overview: null,
   };
 }
@@ -54,6 +57,13 @@ describe("recentProjects", () => {
       { slug: "nobs-2", name: "nobs", detail: "nobs-2" },
       { slug: "web", name: "web", detail: null },
     ]);
+  });
+
+  it("leaves out a project a person removed", () => {
+    const removed = { ...project("old", 9), removed_at: 9, available: false };
+    expect(
+      recentProjects([removed, project("web", 1)]).map((e) => e.slug),
+    ).toEqual(["web"]);
   });
 
   it("lists nothing for no projects", () => {

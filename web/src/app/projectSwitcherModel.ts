@@ -10,11 +10,12 @@ export interface SwitcherEntry {
   detail: string | null;
 }
 
-/** The most recently used projects, newest first by the daemon's `last_used_at` and then by slug, at most `RECENT_PROJECTS`. */
+/** The most recently used projects in fold, newest first by the daemon's `last_used_at` and then by slug, at most `RECENT_PROJECTS`; a removed project is left out. */
 export function recentProjects(
   projects: readonly ProjectSummary[],
 ): SwitcherEntry[] {
-  const recent = [...projects]
+  const recent = projects
+    .filter((project) => project.removed_at === null)
     .sort(
       (a, b) => b.last_used_at - a.last_used_at || a.slug.localeCompare(b.slug),
     )

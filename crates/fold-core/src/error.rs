@@ -179,6 +179,7 @@ define_codes! {
     MAIN_AREA = "main_area",
     AGENT_SESSION_NOT_FOUND = "agent_session_not_found",
     TRANSCRIPT_NOT_FOUND = "transcript_not_found",
+    PROJECT_WORKERS_RUNNING = "project_workers_running",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

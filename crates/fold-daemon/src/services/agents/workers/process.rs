@@ -288,6 +288,13 @@ impl Supervisor {
         lock(&self.inner.running).contains_key(agent)
     }
 
+    /// The agents whose worker process runs now, ordered by name.
+    pub fn running_agents(&self) -> Vec<AgentName> {
+        let mut agents: Vec<AgentName> = lock(&self.inner.running).keys().cloned().collect();
+        agents.sort();
+        agents
+    }
+
     pub(super) fn paths(&self) -> &ProjectPaths {
         &self.inner.paths
     }

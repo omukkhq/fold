@@ -137,6 +137,7 @@ mod recompute_guard;
 mod reconcile;
 #[cfg(feature = "failpoints")]
 mod reconcile_failpoints;
+mod removed_projects;
 mod request_routing;
 mod requests;
 mod restart_sessions;

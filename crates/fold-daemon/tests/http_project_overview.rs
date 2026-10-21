@@ -159,8 +159,11 @@ async fn an_unavailable_project_lists_only_its_slug_name_and_availability() {
             {
                 "slug": "late",
                 "name": "Project late",
+                "root": project.paths().root().to_str().unwrap(),
                 "available": false,
                 "last_used_at": project.now().as_millis(),
+                "removed_at": null,
+                "folder": "present",
                 "overview": null
             }
         ]})

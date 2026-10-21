@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT slug, name, root FROM projects WHERE slug = ?",
+  "query": "SELECT slug, name, root FROM projects WHERE removed_at IS NULL ORDER BY slug",
   "describe": {
     "columns": [
       {
@@ -38,7 +38,7 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 0
     },
     "nullable": [
       false,
@@ -46,5 +46,5 @@
       false
     ]
   },
-  "hash": "edf93f55c80e14a95c35168f92ef3c772b04700d4c48b1182acf1609dcc36630"
+  "hash": "045906208b0b0b809d33ca8a06cb2e2b24a7c651c9c61095291a58694c469ed7"
 }
