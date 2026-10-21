@@ -14,7 +14,7 @@ import { MentionTextarea } from "@/mentions/MentionTextarea";
 import { failureText } from "@/format/failure";
 import { formatAsOf } from "@/format/time";
 import { cn } from "@/lib/cn";
-import { focusRing } from "@/lib/focus";
+import { focusRing, insetFocusRing } from "@/lib/focus";
 import { replySchema, type ReplyValues } from "./compose";
 import {
   browserSizeObserver,
@@ -125,7 +125,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
         role="region"
         aria-label="Messages"
         tabIndex={0}
-        className="min-h-0 flex-1 overflow-y-auto"
+        className={cn("min-h-0 flex-1 overflow-y-auto", insetFocusRing)}
       >
         <ol ref={content} className="flex flex-col gap-12 p-18">
           {thread.messages.map((message) => (
