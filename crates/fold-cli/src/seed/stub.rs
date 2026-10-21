@@ -571,7 +571,7 @@ impl<W: AsyncWrite + Unpin> Stub<W> {
             "is_error": is_error,
             "num_turns": turns,
             "session_id": session,
-            "total_cost_usd": 0,
+            "total_cost_usd": running_cost(turns, self.calls),
             "duration_ms": 0,
             "usage": usage(),
             "result": reply,
@@ -598,6 +598,11 @@ impl<W: AsyncWrite + Unpin> Stub<W> {
         file.flush().await?;
         Ok(())
     }
+}
+
+/// A made-up running cost of the process, as Claude Code reports a running total in each result, so a seeded project's cost view has numbers: 1.25 cents a turn and 0.4 cents a tool call.
+fn running_cost(turns: u32, calls: u32) -> f64 {
+    f64::from(turns) * 0.0125 + f64::from(calls) * 0.004
 }
 
 fn usage() -> Value {
@@ -1008,5 +1013,12 @@ mod tests {
             std::fs::read_to_string(elsewhere.join("kept.txt")).unwrap(),
             "kept\n"
         );
+    }
+
+    #[test]
+    fn the_running_cost_grows_with_each_turn_and_tool_call() {
+        assert!(running_cost(0, 0).abs() < f64::EPSILON);
+        assert!((running_cost(2, 5) - 0.045).abs() < 1e-9);
+        assert!(running_cost(3, 5) > running_cost(2, 5));
     }
 }
