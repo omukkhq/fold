@@ -1,6 +1,6 @@
 use std::fs::{File, TryLockError};
 use std::io;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,8 +31,8 @@ pub struct DaemonState {
     pub projects: Projects,
     pub clock: Arc<dyn Clock>,
     pub assets: AssetSource,
-    /// The IP address the HTTP listener is bound to. It fixes the auth mode at start and names the hosts the `/api` routes answer.
-    pub listen: IpAddr,
+    /// The address the HTTP listener is bound to, with the port it got. Its IP address fixes the auth mode at start and names the hosts the `/api` routes answer.
+    pub listen: SocketAddr,
     /// How long a session that `POST /api/v1/session` opens lasts.
     pub session_lifetime: Duration,
 }
@@ -40,7 +40,7 @@ pub struct DaemonState {
 impl DaemonState {
     /// True off loopback, where every guarded `/api` route needs the `fold_session` cookie of a live session. `0.0.0.0` and `::` are off loopback, so they need it even for a request from `127.0.0.1`.
     pub fn auth_required(&self) -> bool {
-        !self.listen.is_loopback()
+        !self.listen.ip().is_loopback()
     }
 }
 
@@ -159,7 +159,7 @@ impl Daemon {
                 .web_dir
                 .clone()
                 .map_or(AssetSource::Embedded, AssetSource::Dir),
-            listen: config.listen.ip(),
+            listen: http_addr,
             session_lifetime: config.session_lifetime,
         });
         let rows = match fold_store::projects::list_projects(state.registry.read()).await {

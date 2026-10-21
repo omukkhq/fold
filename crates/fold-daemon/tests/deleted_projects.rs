@@ -64,7 +64,7 @@ impl Running {
             registry,
             clock: Arc::new(clock.clone()),
             assets: AssetSource::Embedded,
-            listen: "127.0.0.1".parse().unwrap(),
+            listen: "127.0.0.1:0".parse().unwrap(),
             session_lifetime: DEFAULT_SESSION_LIFETIME,
         });
         let handle = project_service::open(&state, "app").await.unwrap();
@@ -498,7 +498,7 @@ async fn a_folder_missing_at_the_start_opens_once_it_is_back() {
         registry: registry.clone(),
         clock: Arc::new(running.clock.clone()),
         assets: AssetSource::Embedded,
-        listen: "127.0.0.1".parse().unwrap(),
+        listen: "127.0.0.1:0".parse().unwrap(),
         session_lifetime: DEFAULT_SESSION_LIFETIME,
     });
     let row = fold_store::projects::find_project(registry.read(), "app")

@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use fold_cli::daemon_client::{
-    ClientConfig, ClientError, DaemonClient, HUMAN_HEADER, connect, human_from,
+    ClientConfig, ClientError, DaemonClient, HUMAN_HEADER, connect, human_from, probe,
 };
 use fold_core::ManualClock;
 use fold_daemon::{Daemon, DaemonConfig};
@@ -99,6 +99,26 @@ async fn a_request_carries_the_human_from_fold_human_or_the_user_name() {
         serve_once(&listener, TEXT)
     );
     assert!(matches!(response, Err(ClientError::Body)));
+}
+
+#[tokio::test]
+async fn a_probe_sends_no_human_and_never_starts_a_daemon() {
+    let dir = TempDir::new().unwrap();
+    let socket = dir.path().join("fake.sock");
+    assert_eq!(probe(&socket, "/api/v1/daemon").await.unwrap(), None);
+    assert!(!socket.exists());
+
+    let listener = UnixListener::bind(&socket).unwrap();
+    const OK: &str = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\n\r\n{\"ok\":true}";
+    let (response, request) =
+        tokio::join!(probe(&socket, "/api/v1/daemon"), serve_once(&listener, OK));
+    let response = response.unwrap().unwrap();
+    assert_eq!((response.status, response.body), (200, json!({"ok": true})));
+    assert!(
+        request.starts_with("GET /api/v1/daemon HTTP/1.1\r\n"),
+        "{request}"
+    );
+    assert!(!request.contains(HUMAN_HEADER), "{request}");
 }
 
 #[tokio::test]

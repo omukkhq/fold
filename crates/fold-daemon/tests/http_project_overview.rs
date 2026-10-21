@@ -55,7 +55,7 @@ fn state_of(project: &TestProject) -> AppState {
         projects: Projects::default(),
         clock: Arc::new(project.clock().clone()),
         assets: AssetSource::Embedded,
-        listen: "127.0.0.1".parse().unwrap(),
+        listen: "127.0.0.1:0".parse().unwrap(),
         session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
     })
 }
@@ -244,4 +244,38 @@ async fn the_git_route_reports_the_repository_the_remotes_and_the_last_push_of_e
     let (_, body) = call(&state, Method::GET, "/api/v1/projects/demo/git", None).await;
     assert_eq!(body["remotes"][1]["failed"], Value::Null);
     assert_eq!(body["remotes"][1]["pushed"]["revision"], "r1");
+}
+
+#[tokio::test]
+async fn the_socket_names_the_daemons_version_and_the_port_it_listens_on() {
+    let project = TestProject::new().await;
+    let state: AppState = Arc::new(DaemonState {
+        registry: project.registry().clone(),
+        projects: Projects::default(),
+        clock: Arc::new(project.clock().clone()),
+        assets: AssetSource::Embedded,
+        listen: "127.0.0.1:47123".parse().unwrap(),
+        session_lifetime: fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME,
+    });
+    let request = || {
+        Request::builder()
+            .method(Method::GET)
+            .uri("/api/v1/daemon")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let response = fold_daemon::http::socket_router(state.clone())
+        .oneshot(request())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body,
+        json!({"version": env!("CARGO_PKG_VERSION"), "listen": "127.0.0.1:47123"})
+    );
+
+    let (status, body) = call(&state, Method::GET, "/api/v1/daemon", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }
