@@ -47,7 +47,7 @@ export interface DiffRowsProps {
 
 // A row spans the panel, so its focus ring sits inside the row instead of outside it.
 const ROW_FOCUS =
-  "cursor-pointer outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring";
+  "cursor-pointer focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring";
 
 /** A block under a line, indented past the number and sign columns. */
 function UnderLine({ children }: { children: ReactNode }) {
