@@ -18,7 +18,7 @@ use super::settings::NotifySettings;
 use super::{link_base, notice_project};
 use crate::jobs::JobProgress;
 use crate::projects::ProjectHandle;
-use crate::services::agents::with_folder_attention;
+use crate::services::agents::{NeedsYouKind, with_folder_attention};
 use crate::services::error::from_store;
 use crate::services::events::BusMessage;
 
@@ -55,21 +55,28 @@ pub async fn notify_pass(
         open.entry(item_key(&item)).or_insert(item);
     }
     let keys: BTreeSet<String> = open.keys().cloned().collect();
+    // Until the folder's first look since the project opened, a missing branch or folder item may only be unseen yet, so its row stays and a restart sends it again to no one.
+    let unsure = if handle.git_attention.observed() {
+        Vec::new()
+    } else {
+        vec![
+            NeedsYouKind::HeadMoved.as_str(),
+            NeedsYouKind::FolderHeld.as_str(),
+        ]
+    };
     let now = handle.clock.now();
     handle
         .store
         .write(async |tx| {
-            let recorded = sync_notify_items(tx, &keys, now).await?;
+            let recorded = sync_notify_items(tx, &keys, &unsure, now).await?;
             let applying = targets
                 .iter()
                 .map(|target| {
-                    let seen = open
+                    let before = open
                         .iter()
-                        .filter(|(key, item)| {
-                            recorded.contains(*key) || item.since < target.created_at
-                        })
-                        .map(|(key, _)| key.clone())
-                        .collect();
+                        .filter(|(_, item)| item.since < target.created_at)
+                        .map(|(key, _)| key);
+                    let seen = recorded.iter().chain(before).cloned().collect();
                     (target.id, seen)
                 })
                 .collect();
@@ -90,7 +97,9 @@ pub async fn notify_pass(
         let mut pending: Vec<(&String, Timestamp)> = state
             .items
             .iter()
-            .filter(|(key, _)| !state.sent.contains(&(target.id, (*key).clone())))
+            .filter(|(key, _)| {
+                open.contains_key(*key) && !state.sent.contains(&(target.id, (*key).clone()))
+            })
             .map(|(key, seen)| (key, *seen))
             .collect();
         let Some(oldest) = pending.iter().map(|(_, seen)| *seen).min() else {

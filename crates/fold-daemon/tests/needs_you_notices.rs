@@ -1009,3 +1009,52 @@ async fn a_project_that_leaves_fold_takes_its_targets_and_their_secrets_with_it(
     }
     state.registry.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_restart_never_sends_a_project_folder_item_again() {
+    const HINT: &str = "run `git switch main` in the project folder";
+    let mut fixture = Fixture::new().await;
+    let mut receiver = Receiver::start(200).await;
+    fixture.webhook(&receiver.url, false, 1).await;
+    let moved = |fixture: &Fixture, hint: Option<&str>| {
+        let attention = &fixture.handle.git_attention;
+        attention.note_moved(hint.map(str::to_owned), fixture.project.now());
+        attention.mark_observed();
+    };
+    moved(&fixture, Some(HINT));
+    assert_eq!(fixture.pass().await, 0);
+    fixture.advance(SETTLE);
+    assert_eq!(fixture.pass().await, 1);
+    assert_eq!(
+        receiver.next().await.json()["items"][0]["kind"],
+        "head_moved"
+    );
+
+    // The folder's first look after the restart finds the same move again, later than before.
+    fixture.restart().await;
+    fixture.advance(Duration::from_secs(3600));
+    moved(&fixture, Some(HINT));
+    assert_eq!(fixture.pass().await, 0);
+    fixture.advance(Duration::from_secs(3600));
+    assert_eq!(
+        fixture.pass().await,
+        0,
+        "the same move is not news after a restart"
+    );
+    assert!(receiver.none_waiting());
+
+    moved(&fixture, None);
+    assert_eq!(fixture.pass().await, 0);
+    moved(&fixture, Some(HINT));
+    assert_eq!(fixture.pass().await, 0);
+    fixture.advance(SETTLE);
+    assert_eq!(
+        fixture.pass().await,
+        1,
+        "a move that ended and came back is news again"
+    );
+    assert_eq!(
+        receiver.next().await.json()["items"][0]["kind"],
+        "head_moved"
+    );
+}

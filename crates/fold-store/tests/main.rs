@@ -25,6 +25,7 @@ mod humans;
 mod integrations_schema;
 mod main_workspaces_schema;
 mod messages_schema;
+mod notify;
 mod proposals_schema;
 mod registry;
 mod removal;

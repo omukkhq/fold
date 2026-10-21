@@ -50,10 +50,11 @@ pub async fn notify_state(conn: &mut SqliteConnection) -> Result<NotifyState, St
     Ok(state)
 }
 
-/// Records `open`, the keys of the items in Needs you now: a new key gets `now` as its time, and a key that is gone loses its row with every send of it. Returns the keys recorded before, of the items that stay open and the ones that went.
+/// Records `open`, the keys of the items in Needs you now: a new key gets `now` as its time, and a key that is gone loses its row with every send of it, except a key of a kind in `unsure`, whose absence says nothing yet. Returns the keys recorded before, of the items that stay open and the ones that went.
 pub async fn sync_notify_items(
     tx: &mut WriteTx,
     open: &BTreeSet<String>,
+    unsure: &[&str],
     now: Timestamp,
 ) -> Result<BTreeSet<String>, StoreError> {
     let known: BTreeSet<String> = sqlx::query_scalar!(r#"SELECT key AS "key!" FROM notify_items"#)
@@ -71,7 +72,11 @@ pub async fn sync_notify_items(
         .execute(tx.conn())
         .await?;
     }
-    for key in known.difference(open) {
+    let kept = |key: &str| {
+        let kind = key.split_once(':').map_or(key, |(kind, _)| kind);
+        unsure.contains(&kind)
+    };
+    for key in known.difference(open).filter(|key| !kept(key)) {
         sqlx::query!("DELETE FROM notify_items WHERE key = ?1", key)
             .execute(tx.conn())
             .await?;

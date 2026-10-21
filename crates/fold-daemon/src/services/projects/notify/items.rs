@@ -2,7 +2,7 @@ use fold_core::projects::notify::{NoticeItem, short_title, web_link};
 
 use crate::services::agents::{NeedsYouItem, NeedsYouKind};
 
-/// The key that names `item` across reads of Needs you: its kind and the id or agent it is about. The project folder's items, of which at most one of each kind waits, have their kind alone, so an item that stays open keeps its key and one that comes back gets the same key as a new item.
+/// The key that names `item` across reads of Needs you and across a daemon restart: its kind and the id, agent or [`NeedsYouItem::about`] it is about. The project folder's waiting item has its kind alone, as at most one waits, so it keeps its key while its paths change.
 pub fn item_key(item: &NeedsYouItem) -> String {
     let kind = item.kind.as_str();
     let about = match item.kind {
@@ -16,9 +16,9 @@ pub fn item_key(item: &NeedsYouItem) -> String {
         | NeedsYouKind::ClaudeNotFound => item.agent.as_ref().map(ToString::to_string),
         NeedsYouKind::HumanChange
         | NeedsYouKind::HeadMoved
-        | NeedsYouKind::FolderHeld
         | NeedsYouKind::UnstashConflicted
-        | NeedsYouKind::ChecksFileInvalidOnMain => None,
+        | NeedsYouKind::ChecksFileInvalidOnMain => item.about.clone(),
+        NeedsYouKind::FolderHeld => None,
     };
     match about {
         Some(about) => format!("{kind}:{about}"),
@@ -202,10 +202,36 @@ mod tests {
         let mut change = of(NeedsYouKind::HumanChange);
         change.paths = vec!["secret/path.rs".to_owned()];
         change.commit = Some("9f2c4e1".to_owned());
-        assert_eq!(item_key(&change), "human_change");
+        change.about = Some("tree-1".to_owned());
+        assert_eq!(item_key(&change), "human_change:tree-1");
         let shown = notice_item(BASE, "demo", &change);
         assert_eq!(shown.id, None);
         assert_eq!(shown.link, "https://fold.example.com/p/demo/repository");
+
+        let moved = |since: i64, hint: &str| {
+            item_key(&NeedsYouItem::head_moved(
+                Timestamp::from_millis(since).unwrap(),
+                hint.to_owned(),
+            ))
+        };
+        assert_eq!(
+            moved(5, "run `git switch main`"),
+            moved(90, "run `git switch main`"),
+            "the same move keeps its key whenever it is seen again"
+        );
+        assert_ne!(
+            moved(5, "run `git switch main`"),
+            moved(5, "run `git reset --soft 1a2b`")
+        );
+        assert!(moved(5, "x").starts_with("head_moved:"));
+        let held = |paths: &[&str]| {
+            item_key(&NeedsYouItem::folder_held(
+                Timestamp::from_millis(3).unwrap(),
+                paths.iter().map(|path| (*path).to_owned()).collect(),
+            ))
+        };
+        assert_eq!(held(&["a.txt"]), held(&["a.txt", "b.txt"]));
+        assert_eq!(held(&["a.txt"]), "folder_held");
 
         for kind in [
             NeedsYouKind::Question,

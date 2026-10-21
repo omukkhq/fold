@@ -1580,6 +1580,8 @@ pub struct GitAttention {
     moved: std::sync::Mutex<Option<(Timestamp, String)>>,
     /// Since when the project folder waits on changes of the human's that no revision records, with the paths main changed that hold them.
     held: std::sync::Mutex<Option<(Timestamp, Vec<String>)>>,
+    /// True once a run that raises attention noted the branch and the held folder since the project opened. Until then a missing item says nothing, so the notifier keeps what it knew of these items across a restart.
+    observed: AtomicBool,
 }
 
 /// How a run changed the project's attention.
@@ -1603,12 +1605,22 @@ impl GitAttention {
     }
 
     /// Notes the hint of a branch change fold did not make, keeping the time it was first seen, or clears it with `None`.
-    pub(crate) fn note_moved(&self, hint: Option<String>, now: Timestamp) {
+    pub fn note_moved(&self, hint: Option<String>, now: Timestamp) {
         let mut moved = crate::support::lock(&self.moved);
         *moved = hint.map(|hint| {
             let since = moved.as_ref().map_or(now, |(since, _)| *since);
             (since, hint)
         });
+    }
+
+    /// Whether a run noted the branch and the held folder since the project opened.
+    pub fn observed(&self) -> bool {
+        self.observed.load(Ordering::Relaxed)
+    }
+
+    /// Marks that a run noted the branch and the held folder, so their absence now means they ended.
+    pub fn mark_observed(&self) {
+        self.observed.store(true, Ordering::Relaxed);
     }
 
     /// Since when the project folder waits on changes of the human's that no revision records, with the paths main changed that hold them.

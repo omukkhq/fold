@@ -130,12 +130,15 @@ pub struct NeedsYouItem {
     pub commit: Option<String>,
     /// The paths of a `HumanChange` that conflict with main, those of a `FolderHeld` that keep the folder where it is, or those of an `UnstashConflicted` that hold the conflict, in path order.
     pub paths: Vec<String>,
+    /// What a project folder item is about, the same for as long as it is the same item and across a daemon restart: the tree of a `HumanChange` or of an `UnstashConflicted` stash entry, the time main's checks file started to hold integrations for a `ChecksFileInvalidOnMain`, or a digest of the hint of a `HeadMoved`, which names the commit fold left or the branch to go back to. `None` for every other kind: the project folder waits as one `FolderHeld` item whatever paths hold it.
+    pub about: Option<String>,
 }
 
 impl NeedsYouItem {
     /// The `HeadMoved` item of a branch that moved at `since`, with the command that brings it back.
     pub fn head_moved(since: Timestamp, hint: String) -> Self {
         let mut item = Self::new(NeedsYouKind::HeadMoved, since);
+        item.about = Some(blake3::hash(hint.as_bytes()).to_hex()[..16].to_owned());
         item.reason = Some(hint);
         item
     }
@@ -167,6 +170,7 @@ impl NeedsYouItem {
             reason: None,
             commit: None,
             paths: Vec::new(),
+            about: None,
         }
     }
 }
@@ -291,6 +295,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
     .await?;
     if let Some(change) = fold_store::workspaces::conflicted_human_change(&mut conn).await? {
         let mut item = NeedsYouItem::new(NeedsYouKind::HumanChange, change.created_at);
+        item.about = Some(change.tree.to_string());
         item.human = HumanName::parse(&change.human).ok();
         item.commit = change.commit;
         item.paths = change
@@ -305,6 +310,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         && let Some(since) = entry.conflicted_at
     {
         let mut item = NeedsYouItem::new(NeedsYouKind::UnstashConflicted, since);
+        item.about = Some(entry.tree.to_string());
         item.reason =
             Some("fix the conflict markers in these files, then run `fld record`".to_owned());
         item.paths = entry
@@ -316,6 +322,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
     }
     if let Some((since, problem)) = reviews::checks::held_by_main(&mut *conn).await? {
         let mut item = NeedsYouItem::new(NeedsYouKind::ChecksFileInvalidOnMain, since);
+        item.about = Some(since.as_millis().to_string());
         item.title = Some(held_title(&problem));
         item.paths = vec![CHECKS_FILE.to_owned()];
         items.push(item);
