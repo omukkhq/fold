@@ -357,7 +357,7 @@ impl Supervisor {
         agent: &AgentName,
         versions: &[(ProposalId, u32)],
     ) -> Result<(), AgentError> {
-        // The row is read under the lock, so a second event finds the reviewer running.
+        // The row and the claims are read under the lock, so a second event finds the reviewer running, and a version whose claim a new reviewer took over since the owed reviews were read is left to that reviewer.
         let resuming = self.inner.resuming.lock().await;
         let mut conn = self
             .inner
@@ -366,14 +366,31 @@ impl Supervisor {
             .acquire()
             .await
             .map_err(StoreError::from)?;
-        let worker = agents::find_worker_process(&mut conn, agent).await?;
-        drop(conn);
-        let Some(worker) = worker else {
+        let Some(worker) = agents::find_worker_process(&mut conn, agent).await? else {
             return Ok(());
         };
         if worker.role != Role::Reviewer || worker.state.is_running() {
             return Ok(());
         }
+        let mut held = Vec::with_capacity(versions.len());
+        for (proposal, version) in versions {
+            let holds = reviews::unreleased_review_claim(&mut *conn, *proposal)
+                .await?
+                .is_some_and(|claim| claim.worker.agent() == *agent);
+            let current = reviews::get_proposal(&mut *conn, *proposal)
+                .await?
+                .is_some_and(|row| {
+                    row.state == ProposalState::Open && row.current_version == *version
+                });
+            if holds && current {
+                held.push((*proposal, *version));
+            }
+        }
+        drop(conn);
+        if held.is_empty() {
+            return Ok(());
+        }
+        let versions = held.as_slice();
         let turn = reviewer_turn(versions);
         let watch = match self.resume(agent, turn.clone(), &[]).await {
             Ok(watch) => watch,
