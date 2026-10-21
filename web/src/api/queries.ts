@@ -4,6 +4,7 @@ import { RECENT_EVENTS, listAgents } from "./agents";
 import { getProjectGit } from "./git";
 import { keys } from "./keys";
 import { countAwaitingHuman, listThreads } from "./messages";
+import { getHostNotify, getProjectNotify } from "./notify";
 import { getProject, listProjects } from "./projects";
 import {
   getProposal,
@@ -231,3 +232,12 @@ export const reviewBatchQuery = (slug: string, id: string) =>
     queryFn: () => getReviewBatch(slug, id),
     staleTime: Infinity,
   });
+
+export const projectNotifyQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.notify(slug),
+    queryFn: () => getProjectNotify(slug),
+  });
+
+export const hostNotifyQuery = () =>
+  queryOptions({ queryKey: keys.hostNotify(), queryFn: getHostNotify });

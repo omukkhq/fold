@@ -103,4 +103,7 @@ export const keys = {
     [slug, "review-batches", batch] as const,
   /** The workspaces a stored event ended since the last snapshot, written only by the event stream. */
   endedWorkspaces: (slug: string) => [slug, "ended-workspaces"] as const,
+  /** No event covers the notification settings: only a person's own write changes them, and it refreshes them. */
+  notify: (slug: string) => [slug, "notify"] as const,
+  hostNotify: () => ["@notify"] as const,
 };

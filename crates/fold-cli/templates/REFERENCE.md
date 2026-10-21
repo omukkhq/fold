@@ -183,8 +183,9 @@ The daemon serves the web app at `http://127.0.0.1:7420` by default. On loopback
 - Agents: the main agent, the leads and their workers with state, model, turns, cost and context. Start an area lead or the review lead, stop a worker, start a worker in a new session, and allow or deny a worker's tool permission.
 - Messages: the threads that concern you, filtered by agent, task or proposal, or to those marked Waits for you, which the tab's count counts; reply, answer a question with its choices or free text, mark a thread's questions answered, and send feedback. Agents' messages to each other are on each task and in Activity.
 - Repository: revisions, the tree, files and a compare of two revisions.
+- Settings: where Needs you notices go. List, add, test and remove the project's webhook and email targets and the host's, which every project without targets of its own uses, and set the web address that links in notices start with.
 
-The top bar switches project, pauses and resumes the agents, and opens Needs you, which lists what waits for a human, each with a link to the screen that handles it: Questions, Permissions, Reviews, Request drafts, Human tasks, Blockers, Your changes (a conflicting change from the project folder), Git branch, Project folder (unrecorded changes in files main changed), Unstash conflict, Checks file and Worker connection (a worker that needs `fld restart`). The web app has no settings screen: config, areas, worker limits and tokens change through `.fold/config.toml`, the fold tools and `fld`.
+The top bar switches project, pauses and resumes the agents, and opens Needs you, which lists what waits for a human, each with a link to the screen that handles it: Questions, Permissions, Reviews, Request drafts, Human tasks, Blockers, Your changes (a conflicting change from the project folder), Git branch, Project folder (unrecorded changes in files main changed), Unstash conflict, Checks file and Worker connection (a worker that needs `fld restart`). Config, areas, worker limits and tokens change through `.fold/config.toml`, the fold tools and `fld`; the Settings tab holds only the notification targets.
 
 ## Tools
 
