@@ -1148,6 +1148,11 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
             .any(|label| label.name.is_main());
         ctx.review_claim = row.review_claim.map(|worker| worker.agent());
         ctx.retired = row.state != reviews::ProposalState::Open;
+        if kind == fold_core::events::types::PROPOSAL_OPENED {
+            ctx.planned = reviews::plans::live_plan_of_proposal(store.read(), proposal)
+                .await?
+                .is_some();
+        }
         if kind == fold_core::events::types::INTEGRATION_SUCCEEDED {
             ctx.reviewer = integrated_reviewer(store, event, proposal).await?;
         }

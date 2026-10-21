@@ -391,6 +391,15 @@ function invalidationKeys(
         ...(type === "proposal.integrated" ? [repository] : []),
       ];
     case "review":
+      // A review plan changes the waiting state of each of its proposals and of their board cards; its events name only one of them, or none.
+      if (type.startsWith("review.plan_")) {
+        return [
+          keys.proposals(slug),
+          keys.proposalPages(slug),
+          board,
+          ...taskKey,
+        ];
+      }
       return type.startsWith("review.batch_")
         ? [keys.reviewBatches(slug), keys.workers(slug), ...proposalKey]
         : [

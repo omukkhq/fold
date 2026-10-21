@@ -240,6 +240,7 @@ describe("BoardScreen", () => {
         version: 1,
         checks_failed: false,
         revision: null,
+        review_plan: null,
       };
       first.activity = { path: "src/routes/login.tsx", at: Date.now() };
     }

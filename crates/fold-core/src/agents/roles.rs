@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentName, AreaName};
 use crate::error::{FoldError, codes};
-use crate::ids::{ProposalId, ReviewBatchId, TaskId};
+use crate::ids::{ProposalId, ReviewBatchId, ReviewPlanId, TaskId};
 use crate::tasks::{LabelName, define_names};
 
 mod answers;
@@ -460,6 +460,8 @@ pub struct CatchUpFacts<'a> {
     pub area: Option<&'a AreaName>,
     pub tasks: &'a [TaskId],
     pub proposals: &'a [ProposalId],
+    /// The open review plans of the review lead; their proposals are not in `proposals`.
+    pub plans: &'a [ReviewPlanId],
 }
 
 /// The part of a restarted lead's turn that names the work waiting for it, at most [`SUMMARY_ITEMS`] ids. fold stores no push notice, so the lead may never have heard of this work. `None` for the other roles and when nothing waits, so a lead with nothing to do stays idle.
@@ -488,10 +490,22 @@ pub fn catch_up_turn(facts: &CatchUpFacts<'_>) -> Option<String> {
                 listed(facts.tasks.iter().map(ToString::to_string).collect())
             ))
         }
-        Role::ReviewLead if !facts.proposals.is_empty() => Some(format!(
-            "These open proposals wait for a review and nobody holds a live review claim of them: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, and give them to reviewers with start_worker, which also moves a stale claim. Leave a proposal whose reviewer holds a live claim to that reviewer: fold resumes it for a new version.",
-            listed(facts.proposals.iter().map(ToString::to_string).collect())
-        )),
+        Role::ReviewLead if !facts.proposals.is_empty() || !facts.plans.is_empty() => {
+            let mut parts = Vec::new();
+            if !facts.proposals.is_empty() {
+                parts.push(format!(
+                    "These open proposals wait for a review and nobody holds a live review claim of them: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, and give them to reviewers with start_worker, which also moves a stale claim. Leave a proposal whose reviewer holds a live claim to that reviewer: fold resumes it for a new version.",
+                    listed(facts.proposals.iter().map(ToString::to_string).collect())
+                ));
+            }
+            if !facts.plans.is_empty() {
+                parts.push(format!(
+                    "These review plans of yours are open: {}. Read each with get_review_plan; when it waits for no task, or its wait ended, start one reviewer for it with start_worker and plan.",
+                    listed(facts.plans.iter().map(ToString::to_string).collect())
+                ));
+            }
+            Some(parts.join(" "))
+        }
         Role::AreaLead | Role::ReviewLead | Role::TaskWorker | Role::Reviewer => None,
     }
 }
@@ -1049,6 +1063,7 @@ mod tests {
             area: Some(&web),
             tasks,
             proposals,
+            plans: &[],
         };
         let lead = catch_up_turn(&facts(Role::AreaLead, &tasks, &[])).unwrap();
         assert!(
@@ -1074,6 +1089,19 @@ mod tests {
         assert!(
             review.contains("list_proposals") && review.contains("start_worker"),
             "{review}"
+        );
+        let plans = [ReviewPlanId::from_number(2).unwrap()];
+        let planned = catch_up_turn(&CatchUpFacts {
+            area: None,
+            plans: &plans,
+            ..facts(Role::ReviewLead, &[], &[])
+        })
+        .unwrap();
+        assert!(
+            planned.starts_with("These review plans of yours are open: rp-2.")
+                && planned.contains("get_review_plan")
+                && planned.contains("start_worker"),
+            "{planned}"
         );
         assert_eq!(catch_up_turn(&facts(Role::AreaLead, &[], &proposals)), None);
         assert_eq!(catch_up_turn(&facts(Role::ReviewLead, &tasks, &[])), None);

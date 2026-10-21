@@ -21,6 +21,8 @@ pub struct Recomputed {
 
 /// Recalculates `tasks.status` and `tasks.blocked` for `seeds` and every task that needs one of them, directly or not, inside the caller's transaction. Every command that changes a fact the status depends on calls this before it commits, with the tasks whose facts it changed as seeds; `now` comes from the command's `Clock`.
 ///
+/// At its end, also for no seeds, it runs `settle_plans`, so a change such as a task moved back to Backlog, an archived task or a proposal that opened reaches the review plans that wait for the task in the same transaction.
+///
 /// Only the edges among the seeds and their dependents are read. Tasks are visited in dependency order and each task's facts are read on the writer's connection just before it is calculated, so each prerequisite's status is final before a dependent reads it, and one call cascades a completion down the whole chain. Before a task is calculated, its linked checklist items whose child is Done are ticked (`checklist.item_done`), and when `completes_by_children` holds it gets a `children` completion (`task.completed`) and calculates as Done; because a parent needs its linked children, a grandparent completes in the same call. Archived tasks keep the cache they had and are neither ticked nor completed. A row is written, and its events appended, only when the status or the blocked flag differs from the stored value. `task.blocked_changed` follows the stored flag, so its `blocked_by` is the unfinished set at the moment the flag changes; a list that shrinks or grows while the task stays blocked shows in the prerequisite's `task.status_changed` or in the `dependency.added` and `dependency.removed` events. The events carry the `fold` actor: the status is calculated, no agent sets it.
 pub async fn recompute(
     tx: &mut WriteTx,
@@ -29,6 +31,7 @@ pub async fn recompute(
 ) -> Result<Recomputed, TaskError> {
     let mut recomputed = Recomputed::default();
     if seeds.is_empty() {
+        crate::services::reviews::settle_plans(tx, &mut recomputed.events, now).await?;
         return Ok(recomputed);
     }
     let graph = Dag::from_edges(tasks::dependent_edges(tx.conn(), seeds).await?);
@@ -84,5 +87,6 @@ pub async fn recompute(
             recomputed.events.append(tx, &event, now).await?;
         }
     }
+    crate::services::reviews::settle_plans(tx, &mut recomputed.events, now).await?;
     Ok(recomputed)
 }

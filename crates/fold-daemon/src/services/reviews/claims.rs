@@ -142,7 +142,7 @@ pub(crate) struct Assignment<'a> {
     pub by: &'a EventActor,
 }
 
-/// Gives the new reviewer `worker` its review of the assigned proposals inside the caller's write, for the review lead that starts it with `start_worker`: one proposal takes its review claim as by `claim_review`, and two or more become a batch of the reviewer's, as by `create_review_batch`. Each chosen scope is stored with `review.scope_chosen` by the review lead. The new reviewer is an agent of its own, so it is never the author's agent. Returns the batch.
+/// Gives the new reviewer `worker` its review of the assigned proposals inside the caller's write, for the review lead that starts it with `start_worker`: one proposal takes its review claim as by `claim_review`, and two or more become a batch of the reviewer's, as by `create_review_batch`. Each chosen scope is stored with `review.scope_chosen` by the review lead. A proposal that waits in a review plan is refused with `already_in_plan`: the plan's start gives it with the others. The new reviewer is an agent of its own, so it is never the author's agent. Returns the batch.
 pub(crate) async fn assign_reviews_in_tx(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
@@ -156,6 +156,7 @@ pub(crate) async fn assign_reviews_in_tx(
     let mut rows = Vec::with_capacity(proposals.len());
     for &proposal in proposals {
         let row = require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
+        super::refuse_planned(tx, proposal).await?;
         let main_task = task_in_main_area(tx.conn(), row.task).await?;
         policy::can_assign_review(main_task).map_err(|denied| {
             FoldError::from(denied).with_details([("proposal", json!(proposal.to_string()))])

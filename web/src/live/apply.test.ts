@@ -767,6 +767,15 @@ describe("invalidation rules", () => {
     }
   });
 
+  it("refreshes every proposal page and the board for a review plan event", () => {
+    invalidated = [];
+    applyEvent(client, slug, ev("review.plan_wait_ended", {}));
+    expect(hit(keys.proposalPages(slug))).toBe(true);
+    expect(hit(keys.proposals(slug))).toBe(true);
+    expect(hit(keys.board(slug))).toBe(true);
+    expect(hit(keys.reviewBatches(slug))).toBe(false);
+  });
+
   it("covers the remaining domains", () => {
     const cases: [string, readonly unknown[]][] = [
       ["agent.registered", keys.agents(slug)],

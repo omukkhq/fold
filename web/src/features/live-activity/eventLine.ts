@@ -18,6 +18,7 @@ import {
   Milestone,
   Pause,
   Pencil,
+  Hourglass,
   Play,
   RotateCcw,
   Tag,
@@ -111,6 +112,35 @@ function requestOf(event: DurableEvent): string {
 
 function batchOf(event: DurableEvent): string {
   return text(event.data.batch) ?? "a review batch";
+}
+
+function planOf(event: DurableEvent): string {
+  return text(event.data.plan) ?? "a review plan";
+}
+
+function idsOf(value: unknown): string[] {
+  const list: unknown[] = Array.isArray(value) ? value : [];
+  return list.flatMap((item) => text(item) ?? []);
+}
+
+function planCreatedText(event: DurableEvent): string {
+  const awaited = idsOf(event.data.awaited);
+  return awaited.length === 0
+    ? `made ${planOf(event)}`
+    : `made ${planOf(event)}, waiting for ${awaited.join(", ")}`;
+}
+
+function planLeftText(event: DurableEvent): string {
+  const reason = text(event.data.reason);
+  const left = `${taskOf(event)} left ${planOf(event)}`;
+  return reason === null ? left : `${left}: ${reason.replaceAll("_", " ")}`;
+}
+
+function planStartedText(event: DurableEvent): string {
+  const batch = text(event.data.batch);
+  return batch === null
+    ? `started ${planOf(event)} for one reviewer`
+    : `started ${planOf(event)} as ${batch}`;
 }
 
 function batchCreatedText(event: DurableEvent): string {
@@ -848,6 +878,22 @@ const SPECS: Record<EventType, Spec> = {
     icon: TriangleAlert,
     text: (e) => `${workerOf(e)} cannot reach the model`,
   },
+  "review.plan_created": { icon: Hourglass, text: planCreatedText },
+  "review.plan_changed": {
+    icon: Hourglass,
+    text: (e) => `changed ${planOf(e)}`,
+  },
+  "review.plan_joined": {
+    icon: ListChecks,
+    text: (e) => `${proposalOf(e)} joined ${planOf(e)}`,
+  },
+  "review.plan_left": { icon: X, text: planLeftText },
+  "review.plan_wait_ended": {
+    icon: Hourglass,
+    text: (e) => `the wait of ${planOf(e)} ended`,
+  },
+  "review.plan_started": { icon: Play, text: planStartedText },
+  "review.plan_ended": { icon: X, text: (e) => `ended ${planOf(e)}` },
 };
 
 /** Every stored event type this build writes a line for. */

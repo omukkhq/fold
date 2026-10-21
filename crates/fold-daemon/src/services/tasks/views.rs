@@ -25,6 +25,7 @@ use super::{
     ChecklistItemView, ClaimView, HumanReviewMark, LabelView, REPORT_LIMIT, ReportView, TaskError,
     TaskService, TaskView, area_labels, label_view, task_not_found, view,
 };
+use crate::services::reviews::{ProposalPlan, proposal_plans};
 
 /// How many Done cards the board returns: the most recently completed ones. The Done column's `total` counts them all.
 pub const BOARD_DONE_LIMIT: usize = 20;
@@ -98,6 +99,8 @@ pub struct CardProposal {
     pub checks_failed: bool,
     /// The revision an integrated proposal became.
     pub revision: Option<RevisionId>,
+    /// The review plan the open proposal waits in.
+    pub review_plan: Option<ProposalPlan>,
 }
 
 /// A checklist item with the title and status of the task it links.
@@ -504,6 +507,7 @@ impl TaskService {
             .await
             .map_err(StoreError::from)?;
         let areas = area_labels(&mut conn).await?;
+        let mut plans = proposal_plans(&mut conn).await?;
         drop(conn);
         let ids: Vec<TaskId> = snapshot.tasks.iter().map(|row| row.id).collect();
         let stalled = stalled_tasks(self.live.as_ref());
@@ -538,6 +542,7 @@ impl TaskService {
                 version: summary.version,
                 checks_failed: summary.checks_failed,
                 revision: summary.integration.as_ref().map(|record| record.revision),
+                review_plan: plans.remove(&summary.id),
             });
             let edits_after_version = self.edits_after_version(
                 snapshot.workspaces.get(&row.id).copied(),

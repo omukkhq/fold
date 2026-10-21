@@ -255,6 +255,28 @@ describe("eventLine", () => {
       "reviewed rb-3",
     );
     expect(line("review.batch_closed", { batch: "rb-3" })).toBe("closed rb-3");
+    expect(
+      line("review.plan_created", { plan: "rp-2", awaited: ["T-7", "T-8"] }),
+    ).toBe("made rp-2, waiting for T-7, T-8");
+    expect(line("review.plan_created", { plan: "rp-2" })).toBe("made rp-2");
+    expect(line("review.plan_changed")).toBe("changed a review plan");
+    expect(line("review.plan_joined", { plan: "rp-2" })).toBe(
+      "P-4 joined rp-2",
+    );
+    expect(
+      line("review.plan_left", { plan: "rp-2", reason: "depends_on_member" }),
+    ).toBe("T-12 left rp-2: depends on member");
+    expect(line("review.plan_left", { plan: "rp-2" })).toBe("T-12 left rp-2");
+    expect(line("review.plan_wait_ended", { plan: "rp-2" })).toBe(
+      "the wait of rp-2 ended",
+    );
+    expect(line("review.plan_started", { plan: "rp-2", batch: "rb-4" })).toBe(
+      "started rp-2 as rb-4",
+    );
+    expect(line("review.plan_started", { plan: "rp-2", batch: null })).toBe(
+      "started rp-2 for one reviewer",
+    );
+    expect(line("review.plan_ended", { plan: "rp-2" })).toBe("ended rp-2");
     expect(line("area.defined", { area: "web", label: "ui" })).toBe(
       "defined web over label ui",
     );

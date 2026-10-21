@@ -146,6 +146,7 @@ mod review_batches;
 mod review_checkouts;
 mod review_claims;
 mod review_fixes;
+mod review_plans;
 mod review_rights;
 mod review_scopes;
 mod reviews;

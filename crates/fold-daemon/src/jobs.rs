@@ -51,6 +51,9 @@ pub const AUTO_INTEGRATE_TICK: Duration = Duration::from_secs(5);
 /// How often the idle job looks for short-lived workers idle past their role's `idle_minutes`.
 pub const WORKER_IDLE_TICK: Duration = Duration::from_secs(30);
 
+/// How often the review plan job looks for plans whose hour of waiting ran out. It is short against the hour, so the review lead hears of the end of a wait at most this much late.
+pub const PLAN_DEADLINE_TICK: Duration = Duration::from_secs(30);
+
 /// How many workspaces [`reconcile_workspaces`] scans at once.
 pub const RECONCILE_PARALLEL: usize = 4;
 
@@ -315,6 +318,49 @@ pub fn spawn_worker_idle(state: AppState, tick: Duration, stop: watch::Receiver<
     Job {
         task,
         progress: watcher,
+    }
+}
+
+/// Starts the review plan job: every `tick` it ends the wait of each open review plan whose deadline passed by its project's clock, through [`ReviewService::end_due_plan_waits`], so the review lead hears that it now gives the plan's open proposals to one reviewer. A cycle is a tick that ended at least one wait. It stops when `stop` changes.
+///
+/// [`ReviewService::end_due_plan_waits`]: crate::services::reviews::ReviewService::end_due_plan_waits
+pub fn spawn_plan_deadlines(state: AppState, tick: Duration, stop: watch::Receiver<bool>) -> Job {
+    let (progress, watcher) = watch::channel(JobProgress::default());
+    let task = tokio::spawn(plan_deadlines(state, tick, stop, progress));
+    Job {
+        task,
+        progress: watcher,
+    }
+}
+
+async fn plan_deadlines(
+    state: AppState,
+    tick: Duration,
+    mut stop: watch::Receiver<bool>,
+    progress: watch::Sender<JobProgress>,
+) {
+    let mut ticks = tokio::time::interval(tick);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = stop.changed() => break,
+            _ = ticks.tick() => {}
+        }
+        let mut ended = 0;
+        for handle in state.projects.handles() {
+            match handle.reviews(&state.registry).end_due_plan_waits().await {
+                Ok(plans) => ended += plans,
+                Err(error) => tracing::warn!(
+                    project = %handle.slug,
+                    code = error.log_code(),
+                    "the review plan deadlines were not checked; the next tick tries again"
+                ),
+            }
+        }
+        progress.send_modify(|seen| {
+            seen.checks += 1;
+            seen.cycles += u64::from(ended > 0);
+        });
     }
 }
 

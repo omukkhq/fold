@@ -42,6 +42,8 @@ pub struct PushContext {
     pub starter: Option<AgentName>,
     /// The event's proposal belongs to a task of the area Main, which no review agent reviews.
     pub main_task: bool,
+    /// The event's proposal waits in a review plan, whose own notices tell the review lead when to start its reviewer.
+    pub planned: bool,
 }
 
 /// One line for one agent's Claude Code session. `text` holds public ids and the next tool only.
@@ -82,6 +84,10 @@ pub fn is_pushed(event: &Event) -> bool {
         types::INTEGRATION_HELD,
         types::WORKER_FAILED,
         types::WORKER_MODEL_UNREACHABLE,
+        types::REVIEW_PLAN_JOINED,
+        types::REVIEW_PLAN_LEFT,
+        types::REVIEW_PLAN_WAIT_ENDED,
+        types::REVIEW_PLAN_ENDED,
     ]
     .contains(&event.event_type)
 }
@@ -98,7 +104,10 @@ pub fn request_of(event: &Event) -> Option<RequestId> {
 
 /// The notices one committed event sends. An agent never hears about what its own workers did, and an event that misses an id its rule names sends nothing.
 pub fn notice_for(event: &Event, ctx: &PushContext) -> Vec<Notice> {
-    let rules = match human_change_rules(event, ctx).or_else(|| review_rules(event, ctx)) {
+    let rules = match human_change_rules(event, ctx)
+        .or_else(|| plan_rules(event, ctx))
+        .or_else(|| review_rules(event, ctx))
+    {
         Some(rules) => rules,
         None => rule(event, ctx).into_iter().collect(),
     };
@@ -645,7 +654,7 @@ fn review_rules(
             Some(task) => format!("{proposal} opened for {task}"),
             None => format!("{proposal} opened"),
         };
-        (text, true)
+        (text, !ctx.planned)
     } else if kind == types::PROPOSAL_VERSION_ADDED {
         let text = match event
             .data
@@ -675,6 +684,88 @@ fn review_rules(
         (leads, text.clone(), "start_worker"),
         (holder, text, "create_review_checkout"),
     ])
+}
+
+/// A review plan reaches the review lead when it changes without the lead: an awaited task opened its proposal and joined, or stopped being eligible and left; the wait ended at the deadline; or fold ended the plan because no member is left. Once no task is awaited, the notice names the proposals to give one reviewer with the plan. The daemon writes the plan's open proposals and awaited tasks after the change into the event.
+fn plan_rules(
+    event: &Event,
+    ctx: &PushContext,
+) -> Option<Vec<(Vec<AgentName>, String, &'static str)>> {
+    let kind = event.event_type;
+    if ![
+        types::REVIEW_PLAN_JOINED,
+        types::REVIEW_PLAN_LEFT,
+        types::REVIEW_PLAN_WAIT_ENDED,
+        types::REVIEW_PLAN_ENDED,
+    ]
+    .contains(&kind)
+    {
+        return None;
+    }
+    let leads: Vec<AgentName> = ctx.review_leads.iter().cloned().collect();
+    let text = |key: &str| event.data.get(key).and_then(serde_json::Value::as_str);
+    let strings = |key: &str| -> Vec<String> {
+        event
+            .data
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let plan = text("plan")?;
+    let proposals = strings("proposals");
+    let awaited = strings("awaited");
+    let start = |proposals: &[String]| match proposals {
+        [one] => format!("start a reviewer for {one} with plan {plan}"),
+        many => format!(
+            "start one reviewer for {} with plan {plan}",
+            many.join(", ")
+        ),
+    };
+    let (body, tool) = if kind == types::REVIEW_PLAN_WAIT_ENDED {
+        let left = strings("left");
+        let left = if left.is_empty() {
+            String::new()
+        } else {
+            format!("; {} left it", left.join(", "))
+        };
+        (
+            format!("the wait of {plan} ended{left}; {}", start(&proposals)),
+            "start_worker",
+        )
+    } else if kind == types::REVIEW_PLAN_ENDED {
+        (
+            format!("{plan} ended: no member is left to review"),
+            "list_proposals",
+        )
+    } else {
+        let task = text("task")?;
+        let change = if kind == types::REVIEW_PLAN_JOINED {
+            format!("{} of {task} joined {plan}", text("proposal")?)
+        } else {
+            format!("{task} left {plan} ({})", text("reason")?)
+        };
+        if !awaited.is_empty() {
+            (
+                format!("{change}; it still waits for {}", awaited.join(", ")),
+                "get_review_plan",
+            )
+        } else if !proposals.is_empty() {
+            (
+                format!("{change}; no task is awaited now, so {}", start(&proposals)),
+                "start_worker",
+            )
+        } else {
+            // The plan has no member left and ends in the same write; its own notice follows.
+            return Some(Vec::new());
+        }
+    };
+    Some(vec![(leads, body, tool)])
 }
 
 /// `review.submitted` names its verdict in `data.verdict`, with the values of `reviews.verdict`.
@@ -735,6 +826,7 @@ mod tests {
             held_from_agents: false,
             starter: None,
             main_task: false,
+            planned: false,
         }
     }
 
@@ -772,6 +864,101 @@ mod tests {
                     "start_worker"
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn a_proposal_that_joins_a_plan_reaches_the_review_lead_only_through_the_plan() {
+        let planned = PushContext {
+            planned: true,
+            ..ctx()
+        };
+        let notices = notice_for(&event(types::PROPOSAL_OPENED, "frontend/ui"), &planned);
+        assert!(
+            sent(&notices)
+                .iter()
+                .all(|(_, _, tool)| *tool != "start_worker")
+        );
+        let joined = with_data(
+            event(types::REVIEW_PLAN_JOINED, "fold"),
+            json!({"plan": "rp-1", "task": "T-12", "proposal": "P-3", "proposals": ["P-2", "P-3"], "awaited": ["T-14"]}),
+        );
+        assert_eq!(
+            sent(&notice_for(&joined, &ctx()))[2],
+            row(
+                "review",
+                "fold: P-3 of T-12 joined rp-1; it still waits for T-14. Call get_review_plan.",
+                "get_review_plan"
+            )
+        );
+        let last = with_data(
+            event(types::REVIEW_PLAN_JOINED, "fold"),
+            json!({"plan": "rp-1", "task": "T-12", "proposal": "P-3", "proposals": ["P-2", "P-3"], "awaited": []}),
+        );
+        assert_eq!(
+            sent(&notice_for(&last, &ctx()))[2],
+            row(
+                "review",
+                "fold: P-3 of T-12 joined rp-1; no task is awaited now, so start one reviewer for P-2, P-3 with plan rp-1. Call start_worker.",
+                "start_worker"
+            )
+        );
+    }
+
+    #[test]
+    fn a_plan_tells_its_review_lead_of_a_leave_the_deadline_and_its_end() {
+        let left = with_data(
+            event(types::REVIEW_PLAN_LEFT, "fold"),
+            json!({"plan": "rp-1", "task": "T-14", "reason": "blocker", "proposals": ["P-3"], "awaited": []}),
+        );
+        assert_eq!(
+            sent(&notice_for(&left, &ctx()))[2],
+            row(
+                "review",
+                "fold: T-14 left rp-1 (blocker); no task is awaited now, so start a reviewer for P-3 with plan rp-1. Call start_worker.",
+                "start_worker"
+            )
+        );
+        let emptied = with_data(
+            event(types::REVIEW_PLAN_LEFT, "fold"),
+            json!({"plan": "rp-1", "task": "T-14", "reason": "archived", "proposals": [], "awaited": []}),
+        );
+        assert!(notice_for(&emptied, &ctx()).is_empty());
+        let still = with_data(
+            event(types::REVIEW_PLAN_LEFT, "fold"),
+            json!({"plan": "rp-1", "task": "T-14", "reason": "backlog", "proposals": ["P-3"], "awaited": ["T-15"]}),
+        );
+        assert_eq!(sent(&notice_for(&still, &ctx()))[1].2, "get_review_plan");
+        let mut ended = event(types::REVIEW_PLAN_WAIT_ENDED, "fold");
+        ended.task = None;
+        ended.proposal = None;
+        let ended = with_data(
+            ended,
+            json!({"plan": "rp-1", "proposals": ["P-3", "P-4", "P-5", "P-6", "P-7"], "left": ["T-15"]}),
+        );
+        let notices = notice_for(&ended, &ctx());
+        assert_eq!(notices.len(), 3, "every review lead");
+        assert_eq!(
+            notices[0].text,
+            "fold: the wait of rp-1 ended; T-15 left it; start one reviewer for P-3, P-4, P-5, P-6, P-7 with plan rp-1. Call start_worker."
+        );
+        assert!(notices[0].text.len() <= MAX_NOTICE_LEN);
+        let gone = with_data(
+            event(types::REVIEW_PLAN_ENDED, "fold"),
+            json!({"plan": "rp-1", "reason": "no_member"}),
+        );
+        assert_eq!(
+            sent(&notice_for(&gone, &ctx()))[0].1,
+            "fold: rp-1 ended: no member is left to review. Call list_proposals."
+        );
+        let by_lead = with_data(
+            event(types::REVIEW_PLAN_ENDED, "review"),
+            json!({"plan": "rp-1", "reason": "removed"}),
+        );
+        assert!(
+            sent(&notice_for(&by_lead, &ctx()))
+                .iter()
+                .all(|(agent, _, _)| agent != "review")
         );
     }
 
