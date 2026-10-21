@@ -415,7 +415,10 @@ impl Supervisor {
         match outcome {
             SessionStart::Went => self.record_reviewer_resumed(agent, versions).await,
             SessionStart::Lost => {
-                self.clone().start_lost(agent.clone(), Some(turn)).await;
+                let resumed = self.reviewer_resumed_events(agent, versions, false).await?;
+                self.clone()
+                    .start_lost_with(agent.clone(), Some(turn), resumed)
+                    .await;
                 Ok(())
             }
             SessionStart::Ended => Ok(()),
@@ -428,36 +431,48 @@ impl Supervisor {
         agent: &AgentName,
         versions: &[(ProposalId, u32)],
     ) -> Result<(), AgentError> {
-        let mut tasks = Vec::with_capacity(versions.len());
-        for (proposal, _) in versions {
-            let row = reviews::get_proposal(self.inner.store.read(), *proposal)
-                .await?
-                .ok_or(StoreError::Corrupt("proposals.number"))?;
-            tasks.push(row.task);
-        }
+        let resumed = self.reviewer_resumed_events(agent, versions, true).await?;
         let now = self.inner.clock.now();
         let mut buffer = EventBuffer::new();
         self.inner
             .store
             .write(async |tx| {
-                for ((proposal, version), task) in versions.iter().zip(&tasks) {
-                    let event = NewEvent::new(types::WORKER_RESUMED, EventActor::fold())?
-                        .task(*task)
-                        .proposal(*proposal)
-                        .data(json!({
-                            "agent": agent.as_str(),
-                            "proposal": proposal.to_string(),
-                            "version": version,
-                            "reason": "new_version",
-                            "resumed": true,
-                        }))?;
-                    buffer.append(tx, &event, now).await?;
+                for event in &resumed {
+                    buffer.append(tx, event, now).await?;
                 }
                 Ok::<_, AgentError>(())
             })
             .await?;
         self.inner.bus.publish(buffer);
         Ok(())
+    }
+
+    /// One `worker.resumed` of reason `new_version` for each version; `resumed` is false for a reviewer whose session was gone, so it started in a new one.
+    async fn reviewer_resumed_events(
+        &self,
+        agent: &AgentName,
+        versions: &[(ProposalId, u32)],
+        resumed: bool,
+    ) -> Result<Vec<NewEvent>, AgentError> {
+        let mut events = Vec::with_capacity(versions.len());
+        for (proposal, version) in versions {
+            let row = reviews::get_proposal(self.inner.store.read(), *proposal)
+                .await?
+                .ok_or(StoreError::Corrupt("proposals.number"))?;
+            events.push(
+                NewEvent::new(types::WORKER_RESUMED, EventActor::fold())?
+                    .task(row.task)
+                    .proposal(*proposal)
+                    .data(json!({
+                        "agent": agent.as_str(),
+                        "proposal": proposal.to_string(),
+                        "version": version,
+                        "reason": "new_version",
+                        "resumed": resumed,
+                    }))?,
+            );
+        }
+        Ok(events)
     }
 
     /// Tells each running task worker about the requested changes and conflicts recorded since its process started, from the stored reviews and integrations. The watcher calls it after it fell behind the bus, when the events that would have reached the task worker as notices may be lost.
@@ -613,7 +628,11 @@ impl Supervisor {
             SessionStart::Went => self.record_resumed(agent, &found).await,
             SessionStart::Lost => {
                 let instructions = fresh_instructions(&found_turn_parts(&found));
-                self.start_fresh(agent, &found, &instructions).await
+                let resumed = found
+                    .iter()
+                    .map(|found| resumed_event(agent, found, false))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.start_fresh(agent, &resumed, &instructions).await
             }
             SessionStart::Ended => Ok(()),
         }
@@ -638,11 +657,21 @@ impl Supervisor {
         agent: AgentName,
         instructions: Option<String>,
     ) {
+        self.start_lost_with(agent, instructions, Vec::new()).await;
+    }
+
+    /// [`Supervisor::start_lost`] that records `resumed`, the `worker.resumed` events of the work the new session takes, instead of one of reason `session_lost`. A start that a pause refuses records `session_lost` when the resume of the pause serves it.
+    async fn start_lost_with(
+        self,
+        agent: AgentName,
+        instructions: Option<String>,
+        resumed: Vec<NewEvent>,
+    ) {
         let fresh = match self
             .lost_instructions(&agent, instructions.as_deref())
             .await
         {
-            Ok(text) => self.start_fresh(&agent, &[], &text).await,
+            Ok(text) => self.start_fresh(&agent, &resumed, &text).await,
             Err(error) => Err(error),
         };
         match fresh {
@@ -771,11 +800,11 @@ impl Supervisor {
         Ok(())
     }
 
-    /// The worker's session is gone: the same row, so the same author or lead, starts again with a new session, its binding and `instructions`, which name what `found` asks of it. With nothing found it records one `worker.resumed` of reason `session_lost`. A row that did not end `failed` was stopped on purpose and stays stopped.
+    /// The worker's session is gone: the same row, so the same author, reviewer or lead, starts again with a new session, its binding and `instructions`, which name the work that `resumed`, its `worker.resumed` events, records. Without them it records one `worker.resumed` of reason `session_lost`. A row that did not end `failed` was stopped on purpose and stays stopped.
     async fn start_fresh(
         &self,
         agent: &AgentName,
-        found: &[Found],
+        resumed: &[NewEvent],
         instructions: &str,
     ) -> Result<(), AgentError> {
         let config = load_config(&self.inner.paths).await?;
@@ -812,12 +841,10 @@ impl Supervisor {
                         "resumed": false,
                     }))?;
                 buffer.append(tx, &event, now).await?;
-                for found in found {
-                    buffer
-                        .append(tx, &resumed_event(agent, found, false)?, now)
-                        .await?;
+                for event in resumed {
+                    buffer.append(tx, event, now).await?;
                 }
-                if found.is_empty() {
+                if resumed.is_empty() {
                     let event = NewEvent::new(types::WORKER_RESUMED, EventActor::fold())?.data(
                         json!({"agent": agent.as_str(), "reason": "session_lost", "resumed": false}),
                     )?;

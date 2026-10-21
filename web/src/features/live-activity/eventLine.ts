@@ -198,7 +198,9 @@ function resumedText(event: DurableEvent): string {
       version === null
         ? `a new version of ${proposalOf(event)}`
         : `v${String(version)} of ${proposalOf(event)}`;
-    return `resumed ${worker} to review ${which}`;
+    return event.data.resumed === false
+      ? `restarted ${worker} in a new session to review ${which}`
+      : `resumed ${worker} to review ${which}`;
   }
   if (event.data.reason === "sent_back") {
     return `resumed ${worker} for the send-back of ${taskOf(event)}`;
