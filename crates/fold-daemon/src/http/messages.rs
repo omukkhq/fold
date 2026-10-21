@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use fold_core::{Address, Choice, FoldError, MessageBody, MessageId, RequestId, TaskId};
+use fold_core::{Address, Choice, FoldError, MessageBody, MessageId, RequestId, TaskId, codes};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
@@ -11,13 +11,14 @@ use super::Project;
 use super::actor::Human;
 use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
 use crate::daemon::AppState;
-use crate::services::messages::{self as service, Feedback, ThreadQuery};
+use crate::services::messages::{self as service, DismissScope, Feedback, ThreadQuery};
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_messages))
         .routes(routes!(show_thread))
         .routes(routes!(send_feedback))
+        .routes(routes!(mark_asks_answered))
 }
 
 /// One recipient row. Names starting `human:` are humans.
@@ -68,6 +69,8 @@ pub struct MessageView {
     /// The short header of a multiple-choice question, such as `Chart library`.
     #[schema(required = true, example = "Chart library")]
     pub header: Option<String>,
+    /// The sending agent marked the message as asking a human for an answer. A question with choices and a worker's `AskUserQuestion` message ask without the mark.
+    pub asks_human: bool,
 }
 
 /// One option of a multiple-choice question.
@@ -118,6 +121,7 @@ impl From<service::MessageView> for MessageView {
                 .map(MessageChoice::from)
                 .collect(),
             header: message.header,
+            asks_human: message.asks_human,
         }
     }
 }
@@ -139,7 +143,7 @@ pub struct ThreadView {
     pub request: Option<String>,
     /// Every sender and recipient in the order they first appear.
     pub participants: Vec<String>,
-    /// True while the thread holds a question to a human that no human has answered; a human reply clears it.
+    /// True while the thread holds an open ask: a message an agent marked as asking a human, a question with choices or a worker's `AskUserQuestion`, with no human reply after it and not marked answered.
     pub awaiting_human: bool,
     /// UTC milliseconds of the newest message.
     pub last_at: i64,
@@ -168,7 +172,7 @@ pub struct ThreadList {
     /// Pass as `before` for the next page; null on the last page.
     #[schema(required = true, example = "m-40")]
     pub next: Option<String>,
-    /// How many threads in the whole project hold a question to a human that no human has answered, whatever the filter; the navigation badge reads it with `limit=1`.
+    /// How many threads in the whole project hold an open ask, whatever the filter; the navigation badge reads it with `limit=1`.
     pub total_awaiting_human: u64,
 }
 
@@ -181,7 +185,7 @@ pub struct ListMessagesParams {
     pub task: Option<String>,
     /// Threads with a message linked to this proposal, such as `P-3`.
     pub proposal: Option<String>,
-    /// Only threads with a question to a human that no human has answered.
+    /// Only threads with an open ask.
     pub awaiting_human: Option<bool>,
     /// The `next` of the previous page.
     pub before: Option<String>,
@@ -333,4 +337,70 @@ pub async fn send_feedback(
         .feedback(&human.actor(), feedback)
         .await?;
     Ok((StatusCode::CREATED, Json(message.into())))
+}
+
+/// The asks a human marks answered: those of one thread, or every ask linked to one task.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct MarkAnsweredRequest {
+    /// Any message of the thread whose asks are answered, such as `m-31`. Give `thread` or `task`, not both.
+    #[serde(default)]
+    pub thread: Option<String>,
+    /// The task whose asks are answered, such as `T-12`.
+    #[serde(default)]
+    pub task: Option<String>,
+}
+
+/// The asks the call marked answered.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MarkedAnswered {
+    /// In number order; empty when nothing waited. A worker's `AskUserQuestion` stays open, because its worker waits for a reply in the thread.
+    #[schema(example = json!(["m-31"]))]
+    pub answered: Vec<String>,
+}
+
+/// A named human marks the open asks of a thread, or of a task, answered without a reply, such as when they answered the agent elsewhere. Each closed ask appends `message.ask_closed`, and the thread, the board's question mark, Needs you and the Messages count stop waiting for it. The messages stay unchanged.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/asks/answered",
+    operation_id = "mark_asks_answered",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+    ),
+    request_body = MarkAnsweredRequest,
+    responses(
+        (status = 200, description = "The asks marked answered", body = MarkedAnswered),
+        (status = 400, description = "`invalid_request`: neither or both of `thread` and `task`; `invalid_id`: an id is malformed", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "`message_not_found`, `task_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn mark_asks_answered(
+    human: Human,
+    State(state): State<AppState>,
+    project: Project,
+    ApiJson(request): ApiJson<MarkAnsweredRequest>,
+) -> Result<Json<MarkedAnswered>, ApiError> {
+    let scope = match (request.thread.as_deref(), request.task.as_deref()) {
+        (Some(thread), None) => {
+            DismissScope::Thread(thread.parse::<MessageId>().map_err(FoldError::from)?)
+        }
+        (None, Some(task)) => DismissScope::Task(task.parse::<TaskId>().map_err(FoldError::from)?),
+        _ => {
+            return Err(
+                FoldError::new(codes::INVALID_REQUEST, "give thread or task, not both")
+                    .with_hint("name the thread such as m-31, or the task such as T-12")
+                    .into(),
+            );
+        }
+    };
+    let answered = project
+        .0
+        .messages(&state.registry)
+        .dismiss_asks(&human.actor(), scope)
+        .await?;
+    Ok(Json(MarkedAnswered {
+        answered: answered.iter().map(ToString::to_string).collect(),
+    }))
 }

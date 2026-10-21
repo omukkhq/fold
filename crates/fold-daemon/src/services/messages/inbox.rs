@@ -35,6 +35,8 @@ pub struct InboxItem {
     pub choices: Vec<Choice>,
     /// The short header of a multiple-choice question.
     pub header: Option<String>,
+    /// The sender marked the message as asking a human for an answer.
+    pub asks_human: bool,
 }
 
 fn item(row: InboxRow, now: Timestamp) -> InboxItem {
@@ -54,6 +56,7 @@ fn item(row: InboxRow, now: Timestamp) -> InboxItem {
         delivered_at: row.delivered_at.unwrap_or(now),
         choices: message.choices,
         header: message.header,
+        asks_human: message.asks_human,
     }
 }
 

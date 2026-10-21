@@ -76,6 +76,25 @@ async function setup(
 }
 
 describe("ThreadPanel", () => {
+  it("marks the thread's asks answered and says when only a worker's question waits", async () => {
+    daemon.on("POST /api/v1/projects/demo/asks/answered", {
+      status: 200,
+      body: { answered: [] },
+    });
+    await setup(() => Promise.resolve());
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark answered" }),
+    );
+    expect(
+      await screen.findByText(
+        "Nothing was marked: a worker's question ends only with your reply.",
+      ),
+    ).toBeTruthy();
+    expect(
+      daemon.made("POST /api/v1/projects/demo/asks/answered")[0]?.body,
+    ).toEqual({ thread: MESSAGE });
+  });
+
   it("suggests the files of a workspace after @ws-9:", async () => {
     mentionRoutes();
     await setup(vi.fn(() => Promise.resolve()));

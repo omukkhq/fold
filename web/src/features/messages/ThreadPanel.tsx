@@ -17,6 +17,7 @@ import { focusRing } from "@/lib/focus";
 import { replySchema, type ReplyValues } from "./compose";
 import { deliveryLines, recipientActors } from "./delivery";
 import { replyPlaceholder } from "./filters";
+import { MarkAnswered } from "./MarkAnswered";
 import { MessageBody } from "./MessageBody";
 import { chosenAnswers, isQuestion } from "./question";
 import {
@@ -78,6 +79,9 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
             <PersonList names={thread.participants} />
           </p>
         </div>
+        {thread.awaiting_human ? (
+          <MarkAnswered slug={slug} scope={{ thread: thread.id }} />
+        ) : null}
         {thread.task ? (
           <HrefLink
             href={projectPath(slug, "t", thread.task)}

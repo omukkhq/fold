@@ -461,6 +461,7 @@ function registerDaemon(): void {
         sender: "human:tanim",
         choices: [],
         header: null,
+        asks_human: false,
         recipients: [],
         body: body.body,
         proposal: null,
@@ -629,6 +630,7 @@ describe("the task dialog route", () => {
         sender: "frontend/ui",
         choices: [],
         header: null,
+        asks_human: false,
         recipients: [
           {
             name: "review",

@@ -3,8 +3,8 @@ use fold_core::reviews::checks::CHECKS_FILE;
 use fold_core::roles::{CLAUDE_NOT_FOUND, restart_hint};
 use fold_core::turn_errors::{MODEL_UNREACHABLE_HINT, model_unreachable};
 use fold_core::{
-    AgentName, Choice, HumanName, MessageId, PermissionQuestionId, ProposalId, RequestId, Sender,
-    TaskId, Timestamp, WorkerState,
+    AddressedAs, AgentName, Choice, HumanName, MessageId, PermissionQuestionId, ProposalId,
+    RequestId, Sender, Target, TaskId, Timestamp, WorkerState,
 };
 use fold_store::agents::{self, QuestionKind};
 use fold_store::reviews;
@@ -17,7 +17,7 @@ use crate::services::reviews::awaiting_human_review;
 /// What waits for a human.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NeedsYouKind {
-    /// A question with choices from an agent to the humans, or a worker's `AskUserQuestion` call, that no human has answered in its thread. A plain message to the humans is not an item.
+    /// An open ask from an agent to a human: a message the agent marked as asking, a question with choices, or a worker's `AskUserQuestion` call, with no human reply in its thread and no closure. A report to the humans is not an item. The board's `question` mark and the Messages count read the same asks.
     Question,
     /// A worker's tool call that auto mode would not decide.
     Permission,
@@ -93,7 +93,7 @@ pub struct NeedsYouItem {
     pub task: Option<TaskId>,
     pub proposal: Option<ProposalId>,
     pub request: Option<RequestId>,
-    /// The human a human review or a request draft waits for; `None` when any human may answer.
+    /// The human a human review, a request draft or an ask waits for; `None` when any human may answer.
     pub human: Option<HumanName>,
     pub choices: Vec<Choice>,
     /// The short header of a `Question`.
@@ -146,6 +146,24 @@ impl NeedsYouItem {
     }
 }
 
+/// The one human an ask waits for: its only human recipient when no recipient came from `humans`.
+fn asked_human(recipients: &[messages::RecipientRow]) -> Option<HumanName> {
+    if recipients
+        .iter()
+        .any(|recipient| recipient.addressed_as == AddressedAs::Humans)
+    {
+        return None;
+    }
+    let mut humans = recipients
+        .iter()
+        .filter_map(|recipient| match &recipient.target {
+            Target::Human(name) => Some(name.clone()),
+            Target::Worker(_) => None,
+        });
+    let first = humans.next()?;
+    humans.next().is_none().then_some(first)
+}
+
 /// The second line of a `ChecksFileInvalidOnMain` item: the file, then the problem as the parse states it, such as `fold-checks.toml line 12: unknown field`.
 fn held_title(problem: &str) -> String {
     match problem
@@ -183,13 +201,7 @@ pub fn with_folder_attention(
 pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
     let mut items = Vec::new();
     let mut conn = store.read().acquire().await?;
-    let awaiting = messages::awaiting_human(&mut conn).await?;
-    let ids: Vec<MessageId> = awaiting.iter().map(|row| row.id).collect();
-    let asked = agents::asked_among(&mut *conn, &ids).await?;
-    for row in awaiting {
-        if row.choices.is_empty() && !asked.contains(&row.id) {
-            continue;
-        }
+    for row in messages::awaiting_human(&mut conn).await? {
         let mut item = NeedsYouItem::new(NeedsYouKind::Question, row.created_at);
         item.message = Some((row.id, row.thread));
         item.agent = match &row.sender {
@@ -199,6 +211,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         item.task = row.task;
         item.proposal = row.proposal;
         item.request = row.request;
+        item.human = asked_human(&row.recipients);
         item.choices = row.choices;
         item.header = row.header;
         items.push(item);

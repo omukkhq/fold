@@ -157,6 +157,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         codes::CHECK_RUN_NOT_FOUND => Some(StatusCode::NOT_FOUND),
         codes::CHECKS_FILE_INVALID => Some(StatusCode::UNPROCESSABLE_ENTITY),
         codes::CHECKS_RUNNING => Some(StatusCode::CONFLICT),
+        codes::ASK_NOT_OPEN => Some(StatusCode::CONFLICT),
+        codes::ASK_CLOSE_DENIED => Some(StatusCode::FORBIDDEN),
         _ => None,
     }
 }

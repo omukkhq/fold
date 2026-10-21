@@ -158,6 +158,23 @@ export interface paths {
         patch: operations["update_area"];
         trace?: never;
     };
+    "/api/v1/projects/{slug}/asks/answered": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human marks the open asks of a thread, or of a task, answered without a reply, such as when they answered the agent elsewhere. Each closed ask appends `message.ask_closed`, and the thread, the board's question mark, Needs you and the Messages count stop waiting for it. The messages stay unchanged. */
+        post: operations["mark_asks_answered"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/board": {
         parameters: {
             query?: never;
@@ -355,7 +372,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every item that waits for a human, oldest first: questions with choices from agents to the humans, workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, and a worker whose turns fail before they reach the model. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, and with the live `worker.output` steps `result` and `result_error`, which end a turn. */
+        /** Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, and a worker whose turns fail before they reach the model. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, and with the live `worker.output` steps `result` and `result_error`, which end a turn. */
         get: operations["list_needs_you"];
         put?: never;
         post?: never;
@@ -2062,7 +2079,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable" | "message.ask_closed";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -2458,6 +2475,23 @@ export interface components {
             /** @example ws-9 */
             workspace: string;
         };
+        /** @description The asks a human marks answered: those of one thread, or every ask linked to one task. */
+        MarkAnsweredRequest: {
+            /** @description The task whose asks are answered, such as `T-12`. */
+            task?: string | null;
+            /** @description Any message of the thread whose asks are answered, such as `m-31`. Give `thread` or `task`, not both. */
+            thread?: string | null;
+        };
+        /** @description The asks the call marked answered. */
+        MarkedAnswered: {
+            /**
+             * @description In number order; empty when nothing waited. A worker's `AskUserQuestion` stays open, because its worker waits for a reply in the thread.
+             * @example [
+             *       "m-31"
+             *     ]
+             */
+            answered: string[];
+        };
         /** @description One option of a multiple-choice question. */
         MessageChoice: {
             /**
@@ -2470,6 +2504,8 @@ export interface components {
         };
         /** @description A stored message with public ids only. */
         MessageView: {
+            /** @description The sending agent marked the message as asking a human for an answer. A question with choices and a worker's `AskUserQuestion` message ask without the mark. */
+            asks_human: boolean;
             /** @description Plain text. */
             body: string;
             /** @description The options of a multiple-choice question, in order; empty for any other message. A human answers with a reply whose body names one option's label, or with free text. */
@@ -2533,7 +2569,7 @@ export interface components {
              */
             header: string | null;
             /**
-             * @description The human a `human_review` or `request_draft` waits for, or whose change a `human_change` is; null when any human may answer.
+             * @description The human a `human_review`, a `request_draft` or a `question` waits for, or whose change a `human_change` is; null when any human may answer.
              * @example tanim
              */
             human: string | null;
@@ -3860,13 +3896,13 @@ export interface components {
             next: string | null;
             /**
              * Format: int64
-             * @description How many threads in the whole project hold a question to a human that no human has answered, whatever the filter; the navigation badge reads it with `limit=1`.
+             * @description How many threads in the whole project hold an open ask, whatever the filter; the navigation badge reads it with `limit=1`.
              */
             total_awaiting_human: number;
         };
         /** @description A thread with every message in number order. */
         ThreadView: {
-            /** @description True while the thread holds a question to a human that no human has answered; a human reply clears it. */
+            /** @description True while the thread holds an open ask: a message an agent marked as asking a human, a question with choices or a worker's `AskUserQuestion`, with no human reply after it and not marked answered. */
             awaiting_human: boolean;
             /**
              * @description The id of the thread's first message.
@@ -5051,6 +5087,87 @@ export interface operations {
             };
         };
     };
+    mark_asks_answered: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarkAnsweredRequest"];
+            };
+        };
+        responses: {
+            /** @description The asks marked answered */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkedAnswered"];
+                };
+            };
+            /** @description `invalid_request`: neither or both of `thread` and `task`; `invalid_id`: an id is malformed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `message_not_found`, `task_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     get_board: {
         parameters: {
             query?: never;
@@ -6127,7 +6244,7 @@ export interface operations {
                 task?: string;
                 /** @description Threads with a message linked to this proposal, such as `P-3`. */
                 proposal?: string;
-                /** @description Only threads with a question to a human that no human has answered. */
+                /** @description Only threads with an open ask. */
                 awaiting_human?: boolean;
                 /** @description The `next` of the previous page. */
                 before?: string;

@@ -154,6 +154,7 @@ define_event_types! {
     INTEGRATION_HELD = "integration.held",
     REVIEW_SCOPE_CHOSEN = "review.scope_chosen",
     WORKER_MODEL_UNREACHABLE = "worker.model_unreachable",
+    MESSAGE_ASK_CLOSED = "message.ask_closed",
 }
 
 impl EventType {

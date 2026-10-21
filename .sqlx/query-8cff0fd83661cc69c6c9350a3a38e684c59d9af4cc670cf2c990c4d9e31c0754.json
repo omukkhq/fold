@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO message_ask_closures (message_id, reason, closed_by, created_at)\n         VALUES ((SELECT id FROM messages WHERE number = ?1), ?2, ?3, ?4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "8cff0fd83661cc69c6c9350a3a38e684c59d9af4cc670cf2c990c4d9e31c0754"
+}

@@ -22,6 +22,7 @@ pub const SEND_MESSAGE: &str = "send_message";
 pub const GET_INBOX: &str = "get_inbox";
 pub const GET_THREAD: &str = "get_thread";
 pub const ACKNOWLEDGE_MESSAGE: &str = "acknowledge_message";
+pub const MARK_ANSWERED: &str = "mark_answered";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -45,6 +46,19 @@ pub struct SendMessageInput {
     /// Make the message a multiple-choice question: 2 to 6 options, each a short single-line label or {label, description}. The recipient answers with a reply that names one option, or with free text. Ask a human with to: ["humans"] or ["human:<name>"].
     #[serde(default)]
     pub choices: Option<Vec<ChoiceInput>>,
+    /// Mark the message as asking a human for an answer, so it waits for the human on the board, in Needs you and in the Messages count until a human replies in its thread or someone calls mark_answered. Set it only when you need the human's answer; a report or a thank-you waits for no one. Needs a human recipient; a question with choices asks without it.
+    #[serde(default)]
+    pub asks_human: bool,
+    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
+    #[serde(rename = "as", default)]
+    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct MarkAnsweredInput {
+    /// The ask that the user answered outside its thread, such as m-31: a message your agent sent to a human with asks_human or choices, or, for the main agent, any agent's ask.
+    pub message: String,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -149,6 +163,11 @@ pub fn tools() -> Vec<Tool> {
             "Mark a message as handled, so it leaves your inbox and the unread count. With up_to, also every earlier message of the same worker.",
             schema_for_type::<AcknowledgeMessageInput>(),
         ),
+        Tool::new(
+            MARK_ANSWERED,
+            "Record that the user answered an ask to a human outside its thread, such as in the main agent's session, so it stops waiting for a human. Only the asking agent or the main agent calls it. A worker's AskUserQuestion ends only with a human's reply in its thread.",
+            schema_for_type::<MarkAnsweredInput>(),
+        ),
     ]
 }
 
@@ -202,6 +221,9 @@ fn inbox_json(item: &InboxItem) -> Value {
     if let Some(header) = &item.header {
         object.insert("header".into(), json!(header));
     }
+    if item.asks_human {
+        object.insert("asks_human".into(), json!(true));
+    }
     object.insert("sent_at".into(), json!(millis(item.sent_at)));
     Value::Object(object)
 }
@@ -233,6 +255,9 @@ fn thread_json(message: &MessageView) -> Value {
     }
     if let Some(header) = &message.header {
         object.insert("header".into(), json!(header));
+    }
+    if message.asks_human {
+        object.insert("asks_human".into(), json!(true));
     }
     object.insert("sent_at".into(), json!(millis(message.sent_at)));
     Value::Object(object)
@@ -270,7 +295,7 @@ pub async fn send_message(
     let actor = server.actor(Some(&worker.name)).await?;
     let sent = server
         .messages
-        .send_with_choices(&actor, message, request, choices)
+        .send_marked(&actor, message, request, choices, input.asks_human)
         .await
         .map_err(from_message)?;
     Ok(json!({
@@ -340,6 +365,22 @@ pub async fn acknowledge_message(
         .await
         .map_err(from_message)?;
     Ok(json!({ "acknowledged": ids(&acknowledged) }))
+}
+
+pub async fn mark_answered(
+    server: &FoldServer,
+    worker: &WorkerRow,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: MarkAnsweredInput = parse(arguments)?;
+    let id = message_id(&input.message)?;
+    let actor = server.actor(Some(&worker.name)).await?;
+    let closed = server
+        .messages
+        .mark_answered(&actor, id)
+        .await
+        .map_err(from_message)?;
+    Ok(json!({ "answered": closed.to_string() }))
 }
 
 /// The `unread` part of the footer: the unacknowledged messages of every worker of the calling agent.

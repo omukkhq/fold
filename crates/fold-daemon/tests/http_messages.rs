@@ -141,17 +141,35 @@ impl Fixture {
         router(self.state.clone())
     }
 
+    /// A message to a human is marked as asking for an answer.
     async fn send(&self, from: &str, to: &[&str], task: Option<u32>, proposal: Option<u32>) {
+        self.send_reply(from, to, task, proposal, None).await;
+    }
+
+    async fn send_reply(
+        &self,
+        from: &str,
+        to: &[&str],
+        task: Option<u32>,
+        proposal: Option<u32>,
+        reply_to: Option<&str>,
+    ) {
+        let asks = to
+            .iter()
+            .any(|entry| *entry == "humans" || entry.starts_with("human:"));
         self.messages
-            .send(
+            .send_marked(
                 &agent(from),
                 SendMessage {
                     to: Address::parse_all(to).unwrap(),
                     body: MessageBody::parse("text").unwrap(),
                     task: task.map(|n| TaskId::from_number(n).unwrap()),
                     proposal: proposal.map(|n| ProposalId::from_number(n).unwrap()),
-                    reply_to: None,
+                    reply_to: reply_to.map(|id| id.parse().unwrap()),
                 },
+                None,
+                None,
+                asks,
             )
             .await
             .unwrap();
@@ -261,6 +279,7 @@ async fn the_list_filters_by_agent_task_proposal_and_awaiting_human() {
     assert_eq!(
         keys,
         [
+            "asks_human",
             "body",
             "choices",
             "header",

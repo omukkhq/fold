@@ -1,0 +1,69 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT q.number AS \"number!: i64\", q.thread_id AS \"thread!: i64\",\n                  t.number AS \"task?: i64\", w.name AS \"worker!: String\",\n                  EXISTS (SELECT 1 FROM worker_question_messages x WHERE x.message_id = q.id)\n                      AS \"worker_question!: bool\"\n           FROM open_human_questions q\n           JOIN messages m ON m.id = q.id\n           JOIN workers w ON w.id = m.sender_worker_id\n           LEFT JOIN tasks t ON t.id = q.task_id\n           WHERE (?1 IS NULL OR q.number = ?1)\n             AND (?2 IS NULL OR q.thread_id = ?2)\n             AND (?3 IS NULL OR t.number = ?3)\n           ORDER BY q.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "thread!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "task?: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "tasks",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "worker!: String",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "worker_question!: bool",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "0e8a4c49beca22aead1a752e820f148d8431407e6b8cc96acf52dcf9a34fbe0d"
+}

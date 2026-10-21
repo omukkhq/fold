@@ -48,7 +48,7 @@ pub struct ThreadView {
     pub request: Option<RequestId>,
     /// Every sender and recipient, in the order they first appear.
     pub participants: Vec<String>,
-    /// The thread holds a question to a human that no human has answered.
+    /// The thread holds an open ask.
     pub awaiting_human: bool,
     pub last_at: Timestamp,
     pub messages: Vec<MessageView>,
@@ -59,7 +59,7 @@ pub struct ThreadView {
 pub struct ThreadPage {
     pub items: Vec<ThreadView>,
     pub next: Option<MessageId>,
-    /// Threads with a question to a human that no human has answered, in the whole project whatever the filter.
+    /// Threads with an open ask in the whole project whatever the filter.
     pub total_awaiting_human: u64,
 }
 
@@ -191,7 +191,10 @@ impl MessageService {
         body: MessageBody,
         to: Option<Vec<Address>>,
     ) -> Result<MessageView, MessageError> {
-        let to_drafter = to.is_none();
+        let send = super::SendOptions {
+            to_drafter: to.is_none(),
+            asks_human: false,
+        };
         self.send_inner(
             actor,
             SendMessage {
@@ -203,7 +206,7 @@ impl MessageService {
             },
             Some(request),
             None,
-            to_drafter,
+            send,
         )
         .await
     }

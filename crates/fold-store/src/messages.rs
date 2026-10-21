@@ -24,6 +24,8 @@ pub struct NewMessage<'a> {
     /// The request the message clarifies; every message of a request shares one thread.
     pub request: Option<RequestId>,
     pub body: &'a str,
+    /// The sender marked the message as asking a human for an answer.
+    pub asks_human: bool,
     pub now: Timestamp,
 }
 
@@ -62,6 +64,8 @@ pub struct MessageRow {
     pub choices: Vec<Choice>,
     /// The short header of a multiple-choice question.
     pub header: Option<String>,
+    /// The sender marked the message as asking a human for an answer.
+    pub asks_human: bool,
 }
 
 /// Inserts the message. A sender worker, task or proposal that does not exist leaves its column empty, which the sender check or the caller's earlier lookup refuses.
@@ -81,16 +85,17 @@ pub async fn insert(tx: &mut WriteTx, message: &NewMessage<'_>) -> Result<(), St
     let request = message.request.map(RequestId::to_db);
     let body = message.body;
     let now = message.now.as_millis();
+    let asks = message.asks_human;
     sqlx::query!(
         "INSERT INTO messages
              (number, thread_id, reply_to, sender_kind, sender_worker_id, sender_human,
-              task_id, proposal_id, request_id, body, created_at)
+              task_id, proposal_id, request_id, body, created_at, asks_human)
          VALUES (?1, ?2, ?3, ?4,
                  (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id
                   WHERE a.name = ?11 AND w.name = ?5), ?6,
                  (SELECT id FROM tasks WHERE number = ?7),
                  (SELECT id FROM proposals WHERE number = ?8),
-                 (SELECT id FROM requests WHERE number = ?12), ?9, ?10)",
+                 (SELECT id FROM requests WHERE number = ?12), ?9, ?10, ?13)",
         number,
         thread,
         reply_to,
@@ -102,7 +107,8 @@ pub async fn insert(tx: &mut WriteTx, message: &NewMessage<'_>) -> Result<(), St
         body,
         now,
         agent,
-        request
+        request,
+        asks
     )
     .execute(tx.conn())
     .await?;
@@ -261,7 +267,7 @@ pub async fn thread(
     by_numbers(conn, &numbers).await
 }
 
-/// Messages from a worker to a human with no later message from a human in their thread, in number order.
+/// The open asks: messages from a worker to a human that ask for an answer, with no later message from a human in their thread and no closure, in number order. The `open_human_questions` view holds the rule, so the board's question mark, Needs you and the Messages count agree.
 pub async fn awaiting_human(conn: &mut SqliteConnection) -> Result<Vec<MessageRow>, StoreError> {
     let numbers = sqlx::query_scalar!(
         r#"SELECT number AS "number!: i64" FROM open_human_questions ORDER BY number"#
@@ -435,7 +441,7 @@ pub struct ThreadFilter {
     pub worker: Option<WorkerName>,
     pub task: Option<TaskId>,
     pub proposal: Option<ProposalId>,
-    /// Only threads that hold a question no human has answered.
+    /// Only threads that hold an open ask.
     pub awaiting_human: bool,
     /// Only threads whose newest message is older than this number.
     pub before: Option<MessageId>,
@@ -534,7 +540,7 @@ pub async fn threads(
     Ok(rows)
 }
 
-/// The threads that hold a question from a worker to a human with no later human message, as `awaiting_human` decides.
+/// The threads that hold an open ask, as [`awaiting_human`] decides.
 pub async fn threads_awaiting_human(
     executor: impl SqliteExecutor<'_>,
 ) -> Result<BTreeSet<MessageId>, StoreError> {
@@ -548,7 +554,7 @@ pub async fn threads_awaiting_human(
         .collect()
 }
 
-/// Whether thread `thread` holds a question from a worker to a human with no later human message, as [`threads_awaiting_human`] decides for every thread.
+/// Whether thread `thread` holds an open ask, as [`threads_awaiting_human`] decides for every thread.
 pub async fn thread_awaits_human(
     executor: impl SqliteExecutor<'_>,
     thread: MessageId,
@@ -562,7 +568,7 @@ pub async fn thread_awaits_human(
     .await?)
 }
 
-/// The tasks linked to a question from a worker to a human with no later human message in its thread: the source of the `question` attention kind.
+/// The tasks linked to an open ask: the source of the `question` attention kind.
 pub async fn tasks_awaiting_human(
     executor: impl SqliteExecutor<'_>,
 ) -> Result<BTreeSet<TaskId>, StoreError> {
@@ -574,6 +580,110 @@ pub async fn tasks_awaiting_human(
     .fetch_all(executor)
     .await?;
     rows.into_iter().map(task_id).collect()
+}
+
+/// Why an ask stopped waiting without a human's reply in its thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AskClosure {
+    /// The asking agent or the main agent recorded that the user answered elsewhere.
+    AnsweredElsewhere,
+    /// A human marked the ask answered.
+    Dismissed,
+}
+
+impl AskClosure {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AskClosure::AnsweredElsewhere => "answered_elsewhere",
+            AskClosure::Dismissed => "dismissed",
+        }
+    }
+}
+
+/// An open ask as a closing command reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAsk {
+    pub id: MessageId,
+    pub thread: MessageId,
+    pub task: Option<TaskId>,
+    pub sender: WorkerName,
+    /// The message stands for a worker's `AskUserQuestion` call, whose worker waits for the human's reply, so no closure ends it.
+    pub worker_question: bool,
+}
+
+/// Which open asks a read returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AskScope {
+    Message(MessageId),
+    Thread(MessageId),
+    Task(TaskId),
+}
+
+/// The open asks of `scope`, in number order.
+pub async fn open_asks(
+    conn: &mut SqliteConnection,
+    scope: AskScope,
+) -> Result<Vec<OpenAsk>, StoreError> {
+    let (message, thread, task) = match scope {
+        AskScope::Message(id) => (Some(id.to_db()), None, None),
+        AskScope::Thread(id) => (None, Some(id.to_db()), None),
+        AskScope::Task(id) => (None, None, Some(id.to_db())),
+    };
+    let rows = sqlx::query!(
+        r#"SELECT q.number AS "number!: i64", q.thread_id AS "thread!: i64",
+                  t.number AS "task?: i64", w.name AS "worker!: String",
+                  EXISTS (SELECT 1 FROM worker_question_messages x WHERE x.message_id = q.id)
+                      AS "worker_question!: bool"
+           FROM open_human_questions q
+           JOIN messages m ON m.id = q.id
+           JOIN workers w ON w.id = m.sender_worker_id
+           LEFT JOIN tasks t ON t.id = q.task_id
+           WHERE (?1 IS NULL OR q.number = ?1)
+             AND (?2 IS NULL OR q.thread_id = ?2)
+             AND (?3 IS NULL OR t.number = ?3)
+           ORDER BY q.number"#,
+        message,
+        thread,
+        task
+    )
+    .fetch_all(conn)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(OpenAsk {
+                id: message_id(row.number, "messages.number")?,
+                thread: message_id(row.thread, "messages.thread_id")?,
+                task: row.task.map(task_id).transpose()?,
+                sender: WorkerName::parse(&row.worker)
+                    .map_err(|_| StoreError::Corrupt("workers.name"))?,
+                worker_question: row.worker_question,
+            })
+        })
+        .collect()
+}
+
+/// Records that the open ask `message` stopped waiting. The database refuses a message that is no open ask, and an `AskUserQuestion` message.
+pub async fn close_ask(
+    tx: &mut WriteTx,
+    message: MessageId,
+    reason: AskClosure,
+    closed_by: &str,
+    now: Timestamp,
+) -> Result<(), StoreError> {
+    let number = message.to_db();
+    let reason = reason.as_str();
+    let now = now.as_millis();
+    sqlx::query!(
+        "INSERT INTO message_ask_closures (message_id, reason, closed_by, created_at)
+         VALUES ((SELECT id FROM messages WHERE number = ?1), ?2, ?3, ?4)",
+        number,
+        reason,
+        closed_by,
+        now
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(())
 }
 
 fn id_list(ids: &[i64]) -> Result<String, StoreError> {
@@ -593,6 +703,7 @@ struct RawMessage {
     request: Option<i64>,
     body: String,
     created_at: i64,
+    asks_human: bool,
 }
 
 impl RawMessage {
@@ -628,6 +739,7 @@ impl RawMessage {
             recipients,
             choices: asked.choices,
             header: asked.header,
+            asks_human: self.asks_human,
         })
     }
 }
@@ -650,7 +762,8 @@ async fn raw_by_numbers(
         RawMessage,
         r#"SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS "worker?: String",
                   m.sender_human, t.number AS "task?: i64", p.number AS "proposal?: i64",
-                  rq.number AS "request?: i64", m.body, m.created_at
+                  rq.number AS "request?: i64", m.body, m.created_at,
+                  m.asks_human AS "asks_human!: bool"
            FROM messages m
            LEFT JOIN workers w ON w.id = m.sender_worker_id
            LEFT JOIN tasks t ON t.id = m.task_id

@@ -31,6 +31,7 @@ export function message(
     request: null,
     choices: [],
     header: null,
+    asks_human: false,
     ...fields,
   };
 }

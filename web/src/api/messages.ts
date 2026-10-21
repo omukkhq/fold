@@ -47,6 +47,28 @@ export async function sendMessage(
   );
 }
 
+/** What a human marks answered: the open asks of the thread that holds a message, or every open ask linked to a task. */
+export type AnsweredScope =
+  | { thread: string; task?: undefined }
+  | { task: string; thread?: undefined };
+
+/**
+ * Marks the open asks of a thread or a task answered without a reply, and answers with the ids it closed, none when nothing waited.
+ * A worker's `AskUserQuestion` stays open, because its worker waits for a reply in the thread.
+ */
+export async function markAnswered(
+  slug: string,
+  scope: AnsweredScope,
+): Promise<string[]> {
+  const result = await unwrap(
+    api.POST("/api/v1/projects/{slug}/asks/answered", {
+      params: { path: { slug } },
+      body: scope,
+    }),
+  );
+  return result.answered;
+}
+
 /** How many threads in the whole project hold a question to a human that no human has answered. One request for a page of a single thread carries the project-wide count. */
 export async function countAwaitingHuman(slug: string): Promise<number> {
   const page = await unwrap(

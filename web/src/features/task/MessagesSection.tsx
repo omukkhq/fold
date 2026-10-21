@@ -17,6 +17,8 @@ import {
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
 import { controlClasses } from "@/components/form/Field";
+import { hasKind } from "@/features/board/attention";
+import { MarkAnswered } from "@/features/messages/MarkAnswered";
 import { MessageBody } from "@/features/messages/MessageBody";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
@@ -193,6 +195,13 @@ export function MessagesSection({
           <span className="text-bar text-text-muted">
             {messageCountText(messages.length, task.task)}
           </span>
+        ) : null}
+        {hasKind(task.attention, "question") ? (
+          <MarkAnswered
+            slug={slug}
+            scope={{ task: task.task }}
+            className="ml-auto"
+          />
         ) : null}
       </SectionHead>
       <WriteError error={query.error} />

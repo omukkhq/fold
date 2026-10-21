@@ -290,9 +290,36 @@ describe("BoardScreen", () => {
       expect(link.getAttribute("draggable")).toBe("false");
     }
     for (const name of ["Backlog", "Todo", "In Progress", "Review", "Done"]) {
-      expect(within(column(name)).queryAllByRole("button")).toHaveLength(0);
+      // Mark answered closes a question for you; it moves no card.
+      const buttons = within(column(name))
+        .queryAllByRole("button")
+        .map((button) => button.textContent);
+      expect(buttons.filter((text) => text !== "Mark answered")).toEqual([]);
       expect(within(column(name)).queryAllByRole("menu")).toHaveLength(0);
     }
+  });
+
+  it("marks the asks of a card's task answered, pending until the daemon answers", async () => {
+    setup();
+    daemon.latency = 30;
+    daemon.on(
+      "POST /api/v1/projects/demo/asks/answered",
+      ok({ answered: ["m-4"] }),
+    );
+    daemon.on("GET /api/v1/projects/demo/board", () => ok(demoBoard()));
+    const review = await screen.findByRole("region", { name: "Review" });
+    const buttons = within(review).getAllByRole("button", {
+      name: "Mark answered",
+    });
+    expect(buttons).toHaveLength(1);
+    await userEvent.click(buttons[0] as HTMLElement);
+    expect(within(review).getByText("Marking…")).toBeTruthy();
+    await waitFor(() => {
+      expect(within(review).queryByText("Marking…")).toBeNull();
+    });
+    expect(
+      daemon.made("POST /api/v1/projects/demo/asks/answered")[0]?.body,
+    ).toEqual({ task: "T-3" });
   });
 
   it("opens a card from the keyboard", async () => {

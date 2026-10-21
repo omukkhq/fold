@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorReply, stubFetch } from "../test/stubFetch";
 import { isApiError } from "./errors";
-import { countAwaitingHuman, listThreads, sendMessage } from "./messages";
+import {
+  countAwaitingHuman,
+  listThreads,
+  markAnswered,
+  sendMessage,
+} from "./messages";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -70,5 +75,36 @@ describe("countAwaitingHuman", () => {
     });
     await expect(countAwaitingHuman("demo")).resolves.toBe(3);
     expect(calls[0]?.search.get("limit")).toBe("1");
+  });
+});
+
+describe("markAnswered", () => {
+  it("posts the thread or the task and answers with the closed asks", async () => {
+    const calls = stubFetch({
+      "POST /api/v1/projects/demo/asks/answered": {
+        body: { answered: ["m-3", "m-4"] },
+      },
+    });
+    await expect(markAnswered("demo", { thread: "m-4" })).resolves.toEqual([
+      "m-3",
+      "m-4",
+    ]);
+    await markAnswered("demo", { task: "T-2" });
+    expect(calls.map((call) => call.body)).toEqual([
+      { thread: "m-4" },
+      { task: "T-2" },
+    ]);
+  });
+
+  it("rejects with the daemon's code for an unknown task", async () => {
+    stubFetch({
+      "POST /api/v1/projects/demo/asks/answered": errorReply(
+        404,
+        "task_not_found",
+      ),
+    });
+    await expect(markAnswered("demo", { task: "T-9" })).rejects.toSatisfy(
+      (e: unknown) => isApiError(e, "task_not_found"),
+    );
   });
 });
