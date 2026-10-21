@@ -632,8 +632,7 @@ fn approved_text(request: RequestId, tasks: &[TaskId]) -> String {
     }
 }
 
-/// Every review lead but the author's agent, then the holder of the review claim. No review lead hears of a proposal of a task of Main.
-/// A proposal that needs a review reaches the review lead, which gives the review to a reviewer with `start_worker`, and the holder of its review claim, which checks out the version to review. A new version, or one a human sent for review again, reaches the review lead only while nobody holds the claim: fold resumes a holder that has ended for that version. No review lead hears of a proposal of a task of Main or of its own proposal.
+/// A proposal that needs a review reaches the review lead, which gives the review to a reviewer with `start_worker`, and the holder of its review claim, which checks out the version to review. A new version, or one a human sent for review again, reaches the review lead only while nobody holds the claim: fold resumes a holder that has ended for that version. A review lead that holds the claim, taken before fold refused its reviews, is told to release it and give the review to a reviewer, since it can no longer check the version out. No review lead hears of a proposal of a task of Main or of its own proposal.
 fn review_rules(
     event: &Event,
     ctx: &PushContext,
@@ -671,10 +670,22 @@ fn review_rules(
         .cloned()
         .collect();
     let holder = ctx.review_claim.iter().cloned().collect();
-    Some(vec![
-        (leads, text.clone(), "start_worker"),
-        (holder, text, "create_review_checkout"),
-    ])
+    let held_by_lead = ctx
+        .review_claim
+        .as_ref()
+        .is_some_and(|agent| ctx.review_leads.contains(agent));
+    let held = if held_by_lead {
+        (
+            holder,
+            format!(
+                "{text}; release your review claim with release_review, then give it to a reviewer"
+            ),
+            "start_worker",
+        )
+    } else {
+        (holder, text.clone(), "create_review_checkout")
+    };
+    Some(vec![(leads, text, "start_worker"), held])
 }
 
 /// `review.submitted` names its verdict in `data.verdict`, with the values of `reviews.verdict`.
@@ -1436,10 +1447,23 @@ mod tests {
             event(types::PROPOSAL_VERSION_ADDED, "frontend/ui"),
             json!({"version": 2, "changeset": "C-4"}),
         );
+        let claimed = PushContext {
+            review_claim: Some(name("reviewer-1")),
+            ..ctx()
+        };
         let text = "fold: P-3 has version 2. Call create_review_checkout.";
         assert_eq!(
+            sent(&notice_for(&event, &claimed)),
+            vec![row("reviewer-1", text, "create_review_checkout")]
+        );
+        // A review lead that still holds a claim it took itself gives it up first.
+        assert_eq!(
             sent(&notice_for(&event, &ctx())),
-            vec![row("review", text, "create_review_checkout")]
+            vec![row(
+                "review",
+                "fold: P-3 has version 2; release your review claim with release_review, then give it to a reviewer. Call start_worker.",
+                "start_worker"
+            )]
         );
         let unclaimed = PushContext {
             review_claim: None,
@@ -1455,7 +1479,7 @@ mod tests {
         );
         let bare = with_data(event.clone(), json!({}));
         assert_eq!(
-            notice_for(&bare, &ctx())[0].text,
+            notice_for(&bare, &claimed)[0].text,
             "fold: P-3 has a new version. Call create_review_checkout."
         );
     }
@@ -1478,12 +1502,20 @@ mod tests {
             event(types::PROPOSAL_REVIEW_AGAIN_REQUESTED, "human:tanim"),
             json!({"version": 4}),
         );
+        let claimed = PushContext {
+            review_claim: Some(name("reviewer-1")),
+            ..ctx()
+        };
         let text =
             "fold: a human sent P-3 version 4 for review again. Call create_review_checkout.";
         assert_eq!(
-            sent(&notice_for(&again, &ctx())),
-            vec![row("review", text, "create_review_checkout")]
+            sent(&notice_for(&again, &claimed)),
+            vec![row("reviewer-1", text, "create_review_checkout")]
         );
+        let held = notice_for(&again, &ctx());
+        assert_eq!(held[0].next_tool, "start_worker");
+        assert!(held[0].text.contains("release_review"), "{}", held[0].text);
+        assert!(held[0].text.len() <= MAX_NOTICE_LEN);
         let unclaimed = PushContext {
             review_claim: None,
             ..ctx()
