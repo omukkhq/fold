@@ -109,7 +109,8 @@ pub struct Check {
     pub run: String,
     pub files: Option<Regex>,
     pub required: bool,
-    pub stage: Stage,
+    /// The stages the check runs in, in the order the file lists them; never empty.
+    pub stages: Vec<Stage>,
     pub timeout: Option<Duration>,
 }
 
@@ -142,6 +143,14 @@ struct RawSetup {
     run: String,
 }
 
+/// `stage` as the file writes it: one name or a list of names.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawStage {
+    One(String),
+    Many(Vec<String>),
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawCheck {
@@ -149,7 +158,7 @@ struct RawCheck {
     run: String,
     files: Option<String>,
     required: Option<bool>,
-    stage: Option<String>,
+    stage: Option<RawStage>,
     timeout: Option<toml::Spanned<String>>,
 }
 
@@ -189,12 +198,7 @@ impl ChecksFile {
                 .files
                 .map(|pattern| files_pattern(&pattern, &format!("{at} ({name}) files")))
                 .transpose()?;
-            let stage = match check.stage.as_deref() {
-                None => Stage::Proposal,
-                Some(text) => Stage::parse(text).ok_or_else(|| {
-                    invalid(format!("{at} ({name}): stage is proposal or integration"))
-                })?,
-            };
+            let stages = parse_stages(check.stage, &format!("{at} ({name})"))?;
             let timeout = check
                 .timeout
                 .map(|value| {
@@ -211,7 +215,7 @@ impl ChecksFile {
                 run,
                 files,
                 required: check.required.unwrap_or(true),
-                stage,
+                stages,
                 timeout,
             });
         }
@@ -222,7 +226,7 @@ impl ChecksFile {
     pub fn plan<'a>(&'a self, stage: Stage, changed: &[String]) -> Vec<Planned<'a>> {
         self.checks
             .iter()
-            .filter(|check| check.stage == stage)
+            .filter(|check| check.stages.contains(&stage))
             .map(|check| Planned {
                 check,
                 runs: check
@@ -235,7 +239,9 @@ impl ChecksFile {
 
     /// Whether the file names any check of `stage`, whatever the changed paths.
     pub fn has_stage(&self, stage: Stage) -> bool {
-        self.checks.iter().any(|check| check.stage == stage)
+        self.checks
+            .iter()
+            .any(|check| check.stages.contains(&stage))
     }
 }
 
@@ -247,6 +253,36 @@ pub fn runs_any(plan: &[Planned<'_>]) -> bool {
 /// Whether a change adds, changes or removes the checks file, from its entry in the base tree and in the changed tree.
 pub fn checks_file_changed(base: Option<&FlatEntry>, tree: Option<&FlatEntry>) -> bool {
     base != tree
+}
+
+/// The stages of a check from its `stage` value: `proposal` when absent, otherwise one name or a list of distinct names.
+fn parse_stages(raw: Option<RawStage>, at: &str) -> Result<Vec<Stage>, FoldError> {
+    let names = match raw {
+        None => return Ok(vec![Stage::Proposal]),
+        Some(RawStage::One(name)) => vec![name],
+        Some(RawStage::Many(names)) => names,
+    };
+    if names.is_empty() {
+        return Err(invalid(format!(
+            "{at}: stage is not empty; list proposal, integration or both"
+        )));
+    }
+    let mut stages = Vec::with_capacity(names.len());
+    for name in &names {
+        let stage = Stage::parse(name).ok_or_else(|| {
+            invalid(format!(
+                "{at}: stage is proposal, integration or a list of both, not \"{name}\""
+            ))
+        })?;
+        if stages.contains(&stage) {
+            return Err(invalid(format!(
+                "{at}: stage lists {} twice",
+                stage.as_str()
+            )));
+        }
+        stages.push(stage);
+    }
+    Ok(stages)
 }
 
 /// The longest `timeout` a check may have, in hours.
@@ -361,9 +397,9 @@ stage = "integration"
         let names: Vec<_> = file.checks.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["test", "format", "e2e"]);
         assert!(file.checks[0].required);
-        assert_eq!(file.checks[0].stage, Stage::Proposal);
+        assert_eq!(file.checks[0].stages, [Stage::Proposal]);
         assert!(!file.checks[1].required);
-        assert_eq!(file.checks[2].stage, Stage::Integration);
+        assert_eq!(file.checks[2].stages, [Stage::Integration]);
         assert!(file.has_stage(Stage::Integration));
     }
 
@@ -379,6 +415,56 @@ stage = "integration"
         let plan = file.plan(Stage::Integration, &[]);
         assert_eq!(plan.len(), 1);
         assert!(runs_any(&plan));
+    }
+
+    #[test]
+    fn a_stage_list_runs_the_check_in_each_listed_stage() {
+        let file = ChecksFile::parse(
+            "[[check]]\nname = \"both\"\nrun = \"x\"\nstage = [\"proposal\", \"integration\"]\n[[check]]\nname = \"one\"\nrun = \"y\"\nstage = [\"integration\"]\n[[check]]\nname = \"text\"\nrun = \"z\"\nstage = \"integration\"\n[[check]]\nname = \"plain\"\nrun = \"w\"\n",
+        )
+        .unwrap();
+        assert_eq!(file.checks[0].stages, [Stage::Proposal, Stage::Integration]);
+        assert_eq!(file.checks[1].stages, file.checks[2].stages);
+        let name = |stage| -> Vec<&str> {
+            file.plan(stage, &[])
+                .iter()
+                .map(|p| p.check.name.as_str())
+                .collect()
+        };
+        assert_eq!(name(Stage::Proposal), ["both", "plain"]);
+        assert_eq!(name(Stage::Integration), ["both", "one", "text"]);
+        let only = ChecksFile::parse(
+            "[[check]]\nname = \"a\"\nrun = \"x\"\nstage = [\"proposal\", \"integration\"]\n",
+        )
+        .unwrap();
+        assert!(only.has_stage(Stage::Proposal) && only.has_stage(Stage::Integration));
+    }
+
+    #[test]
+    fn an_empty_unknown_or_repeated_stage_names_its_check() {
+        for (stage, part) in [
+            ("[]", "not empty"),
+            ("[\"later\"]", "not \"later\""),
+            ("\"later\"", "not \"later\""),
+            ("[\"proposal\", \"proposal\"]", "proposal twice"),
+            (
+                "[\"integration\", \"proposal\", \"integration\"]",
+                "integration twice",
+            ),
+        ] {
+            let text = format!("[[check]]\nname = \"t\"\nrun = \"x\"\nstage = {stage}\n");
+            let error = ChecksFile::parse(&text).unwrap_err();
+            assert_eq!(error.code(), codes::CHECKS_FILE_INVALID, "{stage}");
+            assert!(
+                error.message().contains("check 1 (t): stage"),
+                "{}",
+                error.message()
+            );
+            assert!(error.message().contains(part), "{}", error.message());
+        }
+        let error =
+            ChecksFile::parse("[[check]]\nname = \"t\"\nrun = \"x\"\nstage = 3\n").unwrap_err();
+        assert_eq!(error.code(), codes::CHECKS_FILE_INVALID);
     }
 
     #[test]

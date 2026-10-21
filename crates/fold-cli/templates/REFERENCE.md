@@ -32,6 +32,11 @@ name = "acceptance"
 run = "make acceptance"
 stage = "integration"
 timeout = "2h"
+
+[[check]]
+name = "build"
+run = "cargo build --workspace"
+stage = ["proposal", "integration"]
 ```
 
 Keys. Every key is known, and a misspelt key refuses the whole file with `checks_file_invalid`, whose message names the line or the check:
@@ -42,7 +47,7 @@ Keys. Every key is known, and a misspelt key refuses the whole file with `checks
   - `run`: the shell command, at most 4000 characters. It runs as `sh -c` in the check directory, with stdin closed and without fold's agent and human variables. A fold call from inside a check acts only as the agent of the worker that asked for the run, never as a human.
   - `files`: optional. A regular expression, not a glob, searched anywhere in each changed path; `'^web/'` matches the folder `web` at the root and `'\.rs$'` every Rust file. A check whose pattern matches no changed path is `skipped`. Without it the check always runs.
   - `required`: optional, `true` by default. A check with `required = false` shows its result and never blocks.
-  - `stage`: optional, `proposal` (the default) or `integration`.
+  - `stage`: optional, `proposal` (the default), `integration`, or a list such as `["proposal", "integration"]` to run the check in both stages under one name. A string is a list of one. An empty list, an unknown name or a repeated name refuses the file.
   - `timeout`: optional, a whole number with `s`, `m` or `h`, such as `"90s"`, `"10m"` or `"2h"`, from 1s to 24h. The default is 30 minutes. fold stops a command's whole process group at its timeout (`timed_out`), and at its end, so a server that a test started ends with it.
 
 The file is at most 256 KiB. Prefer one check per tool or part of the repository with a `files` pattern, so a change of the docs runs no test suite.
