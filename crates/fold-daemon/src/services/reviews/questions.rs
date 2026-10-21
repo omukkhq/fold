@@ -103,7 +103,7 @@ fn unknown_path(location: &CommentLocation, version: u32) -> ReviewError {
         ("path", json!(location.path)),
         ("side", json!(location.side.as_str())),
     ])
-    .with_hint("pick lines of a changed text file of the version")
+    .with_hint("pick lines of a text file in the version")
     .into()
 }
 

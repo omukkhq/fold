@@ -278,7 +278,7 @@ fn lines_json(lines: &MessageLines) -> Value {
         "side": lines.side.as_str(),
         "start_line": lines.start_line,
         "end_line": lines.end_line,
-        "text": lines.excerpt,
+        "excerpt": lines.excerpt,
     });
     if lines.excerpt_cut {
         object["excerpt_cut"] = json!(true);

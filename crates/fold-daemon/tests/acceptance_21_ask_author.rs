@@ -86,7 +86,7 @@ async fn acceptance_21_a_human_asks_the_author_about_lines_of_the_diff() {
     assert_eq!(
         item["lines"],
         json!({"version": 1, "path": FILE, "side": "new", "start_line": 2, "end_line": 3,
-               "text": "export const b = 2;\nexport const c = 3;"})
+               "excerpt": "export const b = 2;\nexport const c = 3;"})
     );
     let thread = h
         .call("frontend", "get_thread", json!({"thread": question}))
