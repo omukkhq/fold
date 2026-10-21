@@ -759,12 +759,20 @@ mod tests {
         assert!(main.contains(
             "about changes to the approved plan's boundaries (section 8), repeated failures, worker limits, blockers, human tasks and requests"
         ));
-        assert!(main.contains("never relay them"));
+        assert!(main.contains("never relay their questions"));
+        assert!(main.contains(
+            "Ask the user yourself about your own responsibilities: the plan and its boundaries, project-wide settings, and project checks"
+        ));
+        assert!(main.contains(
+            "Bring pending tool permissions, human reviews, request drafts, ready human tasks and blockers to the user, with each item id"
+        ));
+        assert!(shared_prompt().contains(
+            "Ask the humans directly about your own work; the main agent asks the user about the plan"
+        ));
         assert!(main.contains(
             "When the user answers a lead's ask here, reply to the asker in its thread, then call `mark_answered`"
         ));
         assert!(main.contains("the leads' short lines name"));
-        assert!(main.contains("Tell the user only your own questions"));
         assert!(!main.contains("Bring human questions"));
     }
 
