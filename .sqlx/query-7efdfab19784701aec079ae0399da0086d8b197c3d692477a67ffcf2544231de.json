@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE message_recipients SET pushed_at = ?1\n         WHERE pushed_at IS NULL\n           AND message_id = (SELECT id FROM messages WHERE number = ?2)\n           AND worker_id IN (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id\n                             WHERE a.name = ?3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "7efdfab19784701aec079ae0399da0086d8b197c3d692477a67ffcf2544231de"
+}

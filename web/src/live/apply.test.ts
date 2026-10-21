@@ -351,6 +351,22 @@ describe("patch rules", () => {
     expect(invalidated).toEqual([]);
   });
 
+  it("refetches only the thread of a message_pushed frame", () => {
+    applyEvent(
+      client,
+      slug,
+      guarded({
+        kind: "message_pushed",
+        message: "m-210",
+        thread: "m-208",
+        agent: "backend",
+      }),
+    );
+    expect(invalidated).toEqual([
+      JSON.stringify(keys.messagesThread(slug, "m-208")),
+    ]);
+  });
+
   it("refetches the agents and the workers when a worker's turn starts or ends", () => {
     for (const step of ["init", "result", "result_error"]) {
       invalidated = [];

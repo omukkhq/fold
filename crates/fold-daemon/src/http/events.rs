@@ -192,6 +192,7 @@ enum Frame<'a> {
     WorkspaceChanged(&'a serde_json::Value),
     AgentPresenceChanged(&'a serde_json::Value),
     WorkerOutput(&'a serde_json::Value),
+    MessagePushed(&'a serde_json::Value),
     Snapshot {
         seq: u64,
         workspaces: Vec<&'a LiveWorkspace>,
@@ -213,6 +214,11 @@ fn live_frame(event: &LiveEvent) -> Option<Frame<'_>> {
             Frame::WorkerOutput(data),
             WorkerOutput::deserialize(data).is_ok(),
         )
+    } else if event.event_type == types::MESSAGE_PUSHED {
+        (
+            Frame::MessagePushed(data),
+            MessagePushed::deserialize(data).is_ok(),
+        )
     } else {
         return None;
     };
@@ -226,7 +232,7 @@ fn live_frame(event: &LiveEvent) -> Option<Frame<'_>> {
     Some(frame)
 }
 
-/// One frame of a project's event stream, told apart by `kind`: a stored event, a live workspace change, a live presence change, a live worker step, or the snapshot sent after a replay.
+/// One frame of a project's event stream, told apart by `kind`: a stored event, a live workspace change, a live presence change, a live worker step, a live message push, or the snapshot sent after a replay.
 // The `event` variant serialises as the stored `Event` plus `kind`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -236,6 +242,7 @@ pub enum EventEnvelope {
     WorkspaceChanged(LiveWorkspace),
     AgentPresenceChanged(PresenceChange),
     WorkerOutput(WorkerOutput),
+    MessagePushed(MessagePushed),
     Snapshot(Snapshot),
 }
 
@@ -265,7 +272,7 @@ pub struct DurableEvent {
     pub created_at: Timestamp,
 }
 
-/// Every stored event type. The live types arrive only as their own variants: `workspace.changed` as `workspace_changed`, `agent.presence_changed` as `agent_presence_changed` and `worker.output` as `worker_output`.
+/// Every stored event type. The live types arrive only as their own variants: `workspace.changed` as `workspace_changed`, `agent.presence_changed` as `agent_presence_changed`, `worker.output` as `worker_output` and `message.pushed` as `message_pushed`.
 pub struct DurableEventType;
 
 impl DurableEventType {
@@ -318,6 +325,19 @@ pub struct WorkerOutput {
     #[serde(default)]
     #[schema(required = true)]
     pub text_length: Option<u64>,
+}
+
+/// A notice about a message got through to a session or the worker process of a recipient agent for the first time, so the message's thread shows that the message waits there. It is the `data` of the live `message.pushed` event; the recipients' `pushed_at` is committed before it is sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct MessagePushed {
+    #[schema(example = "m-210")]
+    pub message: String,
+    /// The thread of the message: the id of its first message.
+    #[schema(example = "m-208")]
+    pub thread: String,
+    /// The recipient agent whose session or worker process took the notice.
+    #[schema(example = "backend")]
+    pub agent: String,
 }
 
 /// The newest durable sequence number and every live workspace, sent after a replay so a client starts from current state.
@@ -395,5 +415,27 @@ mod tests {
         .unwrap();
         let frame = live_frame(&good).unwrap();
         same(&frame, &EventEnvelope::WorkerOutput(output));
+        let pushed = MessagePushed {
+            message: "m-2".into(),
+            thread: "m-1".into(),
+            agent: "backend".into(),
+        };
+        let good = LiveEvent::new(
+            types::MESSAGE_PUSHED,
+            None,
+            serde_json::to_value(&pushed).unwrap(),
+        )
+        .unwrap();
+        same(
+            &live_frame(&good).unwrap(),
+            &EventEnvelope::MessagePushed(pushed),
+        );
+        let bad = LiveEvent::new(
+            types::MESSAGE_PUSHED,
+            None,
+            serde_json::json!({"message": "m-2"}),
+        )
+        .unwrap();
+        assert!(live_frame(&bad).is_none());
     }
 }

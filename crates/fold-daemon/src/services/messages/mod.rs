@@ -25,6 +25,7 @@ mod inbox;
 mod threads;
 
 pub use asks::DismissScope;
+pub(crate) use inbox::record_pushed;
 pub use inbox::{InboxItem, unread_count};
 pub use threads::{
     DEFAULT_THREAD_LIMIT, Feedback, MAX_THREAD_LIMIT, ThreadPage, ThreadQuery, ThreadView,
@@ -74,6 +75,8 @@ pub struct RecipientView {
     pub addressed_as: AddressedAs,
     pub delivered_at: Option<Timestamp>,
     pub acknowledged_at: Option<Timestamp>,
+    /// The first time a notice about the message reached a session or the worker process of the recipient's agent; `None` for a human and while no notice got through.
+    pub pushed_at: Option<Timestamp>,
     /// Whether a notice to the recipient's agent would reach one of its sessions now; `None` for a human, for an agent without a connected session, and for every recipient of a service without the project's push targets.
     pub reachable: Option<bool>,
 }
@@ -107,6 +110,7 @@ fn recipient_view(row: RecipientRow) -> RecipientView {
         addressed_as: row.addressed_as,
         delivered_at: row.delivered_at,
         acknowledged_at: row.acked_at,
+        pushed_at: row.pushed_at,
         reachable: None,
     }
 }
@@ -517,6 +521,7 @@ async fn write_message(
                 addressed_as: recipient.addressed_as,
                 delivered_at: None,
                 acknowledged_at: None,
+                pushed_at: None,
                 reachable: None,
             })
             .collect(),

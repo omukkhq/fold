@@ -3,6 +3,7 @@ use std::pin::Pin;
 
 use fold_core::{Event, FoldError};
 use fold_store::agents::WorkerRow;
+use fold_store::events::WaitingMessage;
 use rmcp::RoleServer;
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, ProgressNotificationParam, Tool};
@@ -46,7 +47,7 @@ pub struct GetEventsInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct WaitForEventsInput {
-    /// Wake only for these exact event types, such as proposal.integrated. Leave it out to wake for every type.
+    /// Wake only for these exact event types, such as proposal.integrated. Leave it out to wake for every type. A new message to you ends the wait whatever this says.
     #[serde(default)]
     pub types: Vec<String>,
     /// Wake only for events about this task, such as T-12.
@@ -72,7 +73,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             WAIT_FOR_EVENTS,
-            "Block until a matching event arrives after your cursor, then return it with every match committed with it and move your cursor to the last one, past the events a filter left out. Use it instead of polling get_events.",
+            "Block until a matching event arrives after your cursor, then return it with every match committed with it and move your cursor to the last one, past the events a filter left out. A new message to you also ends the wait, whatever the filter says; the result then names it, so call get_inbox. Use it instead of polling get_events.",
             schema_for_type::<WaitForEventsInput>(),
         ),
     ]
@@ -105,6 +106,25 @@ fn page_json(page: &EventPage) -> Value {
         "events": page.events.iter().map(event_json).collect::<Vec<_>>(),
         "next": page.next,
     })
+}
+
+/// The page of a wait, with the messages in it that wait for the worker and the call that reads them.
+fn wait_json(page: &EventPage, waiting: &[WaitingMessage]) -> Value {
+    let mut result = page_json(page);
+    if waiting.is_empty() {
+        return result;
+    }
+    let ids: Vec<String> = waiting
+        .iter()
+        .map(|message| message.id.to_string())
+        .collect();
+    result["messages"] = json!(ids);
+    result["hint"] = json!(if waiting.iter().all(|message| message.own) {
+        "a message waits for you; call get_inbox"
+    } else {
+        "a message waits for a worker of your agent; call get_inbox with include_workers"
+    });
+    result
 }
 
 pub async fn get_events(
@@ -144,7 +164,7 @@ pub async fn wait_for_events(
     };
     let mut waiter = server
         .events
-        .wait(worker.agent_id, &query)
+        .wait_as(worker, &query)
         .await
         .map_err(from_events)?;
     let progress = context.meta.get_progress_token();
@@ -154,7 +174,14 @@ pub async fn wait_for_events(
             () = context.ct.cancelled() => return Ok(json!({"cancelled": true})),
         };
         match step {
-            WaitStep::Events(page) => return Ok(page_json(&page)),
+            WaitStep::Events(page) => {
+                let waiting = server
+                    .events
+                    .waiting_messages(worker, &page)
+                    .await
+                    .map_err(from_events)?;
+                return Ok(wait_json(&page, &waiting));
+            }
             WaitStep::TimedOut => return Ok(json!({"timed_out": true})),
             WaitStep::Tick(count) => {
                 let session = server.session().await;

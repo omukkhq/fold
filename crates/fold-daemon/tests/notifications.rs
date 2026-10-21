@@ -98,7 +98,12 @@ impl Notified {
     async fn new() -> Self {
         let fx = Fixture::new().await;
         let targets = PushTargets::new();
-        let push = push::run(fx.project.store().clone(), &fx.bus, targets.clone());
+        let push = push::run(
+            fx.project.store().clone(),
+            Arc::new(fx.project.clock().clone()),
+            &fx.bus,
+            targets.clone(),
+        );
         let notified = Self {
             fx,
             targets,

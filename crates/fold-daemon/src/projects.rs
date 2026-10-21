@@ -164,7 +164,7 @@ impl ProjectHandle {
         .with_workspace_locks(workspace_locks.clone())
         .with_objects(&paths, objects.clone());
         let push = PushTargets::new();
-        let push_task = push::run(store.clone(), &bus, push.clone());
+        let push_task = push::run(store.clone(), clock.clone(), &bus, push.clone());
         let workers = Supervisor::new(
             store.clone(),
             bus.clone(),
