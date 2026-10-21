@@ -4,9 +4,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use fold_core::events::{EventType, types};
-use fold_core::{Actor, CheckpointId, FoldError, WorkspaceId};
+use fold_core::{Actor, CheckpointId, FoldError, WorkspaceId, codes};
 use fold_store::workspaces::{self, CheckpointReason, WorkspaceKind, WorkspaceRow};
 use fold_vcs::gc::{locate_workspace_dir, remove_workspace_dir};
+use fold_vcs::scan::SkipReason;
+use fold_vcs::snapshot::{Warning, WarningReason};
 use tokio::sync::Notify;
 use tokio::sync::broadcast::{self, error::RecvError, error::TryRecvError};
 
@@ -24,7 +26,7 @@ pub enum DirectoryRemoval {
 }
 
 impl WorkspaceService {
-    /// Removes the directory of a closed workspace once the worker process of its owning agent has ended. The tracked files are snapshotted first, the way a checkpoint reads them, so ignored files such as build output are left out; when fold holds no such tree for the workspace (see [`workspaces::tree_recorded`]), a `before_removal` checkpoint commits before anything is deleted, in the write that records that the removal started. A review checkout takes no checkpoint: its files are a proposal version, and a fix in it becomes a version only through `submit_review_fix`. The path must name a directory directly below `.fold/ws/` that is not a symlink (see [`locate_workspace_dir`]); anything else is refused before a file is read. The directory is deleted in blocking work, without following a symlink inside it, then one write records the removal. A failure after the start only deletes when it runs again, such as in the next `fld gc`, so a directory that was partly deleted never gets a checkpoint; a failure before it starts again from the snapshot.
+    /// Removes the directory of a closed workspace once the worker process of its owning agent has ended. The tracked files are snapshotted first, the way a checkpoint reads them, so ignored files such as build output are left out; when fold holds no such tree for the workspace (see [`workspaces::tree_recorded`]), a `before_removal` checkpoint commits before anything is deleted, in the write that records that the removal started. A snapshot that could not read a tracked file, or saw one change while it read it, is `unrecorded_changes` and nothing starts, because its tree would hold the recorded version of that path; a file over `max_file_bytes` does not stop the removal, as it is never recorded anywhere. A review checkout takes no checkpoint: its files are a proposal version, and a fix in it becomes a version only through `submit_review_fix`. The path must name a directory directly below `.fold/ws/` that is not a symlink (see [`locate_workspace_dir`]); anything else is refused before a file is read. The directory is deleted in blocking work, without following a symlink inside it, then one write records the removal. A failure after the start only deletes when it runs again, such as in the next `fld gc`, so a directory that was partly deleted never gets a checkpoint; a failure before it starts again from the snapshot.
     pub async fn remove_closed_directory(
         &self,
         workspace: WorkspaceId,
@@ -122,6 +124,16 @@ impl WorkspaceService {
                 move || files.snapshot(base_tree)
             })
             .await?;
+            let unread = snapshot.warnings.iter().filter(|w| not_read(w)).count();
+            if unread > 0 {
+                tracing::warn!(workspace = %row.id, files = unread, "a closed workspace has files the final checkpoint could not read; its directory stays");
+                return Err(FoldError::new(
+                    codes::UNRECORDED_CHANGES,
+                    format!("{} has {unread} files that fold could not record", row.id),
+                )
+                .with_hint("fold removes the directory once every tracked file can be read; `fld gc` tries again")
+                .into());
+            }
             let recorded =
                 workspaces::tree_recorded(self.store.read(), row.id, &snapshot.tree).await?;
             (!recorded).then_some(snapshot.tree)
@@ -190,6 +202,16 @@ pub async fn follow_closed_workspaces(
         let stop = || *closing.borrow();
         service.remove_closed_directories(&stop).await;
     }
+}
+
+/// Whether the snapshot left out a tracked file it should have recorded: one it could not read or that changed while it was read. A file over `max_file_bytes` and a socket, FIFO or device are never recorded, so they do not count.
+fn not_read(warning: &Warning) -> bool {
+    matches!(
+        warning.reason,
+        WarningReason::Skipped(SkipReason::Unreadable)
+            | WarningReason::Unstable
+            | WarningReason::ChangedDuringSnapshot
+    )
 }
 
 fn can_make_due(event_type: EventType) -> bool {

@@ -330,3 +330,40 @@ async fn a_removal_that_fails_leaves_the_row_for_the_next_gc() {
         "what is left of a started removal is only deleted"
     );
 }
+
+#[tokio::test]
+async fn a_tracked_file_the_final_checkpoint_cannot_read_keeps_the_directory() {
+    let fx = Fixture::new().await;
+    abandoned_with_changes(&fx).await;
+    let lib = fx.task_dir().join("src/lib.rs");
+    fs::set_permissions(&lib, Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&lib).is_ok() {
+        fs::set_permissions(&lib, Permissions::from_mode(0o644)).unwrap();
+        eprintln!("skipped: this user reads a file without read permission");
+        return;
+    }
+    let refused = fx.workspaces.remove_closed_directory(ws(1)).await;
+    fs::set_permissions(&lib, Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(refused.unwrap_err().code(), Some("unrecorded_changes"));
+    assert_eq!(fs::read_to_string(&lib).unwrap(), UNRECORDED);
+    assert_eq!(final_checkpoints(&fx).await, 0);
+    assert_eq!(
+        fx.count("SELECT COUNT(*) FROM workspaces WHERE number = 1 AND (removal_started_at IS NOT NULL OR directory_removed_at IS NOT NULL)")
+            .await,
+        0,
+        "nothing starts, so the next try takes the checkpoint"
+    );
+
+    let removal = fx.workspaces.remove_closed_directory(ws(1)).await.unwrap();
+    assert!(
+        matches!(
+            removal,
+            DirectoryRemoval::Removed {
+                checkpoint: Some(_)
+            }
+        ),
+        "{removal:?}"
+    );
+    assert!(!fx.task_dir().exists());
+    assert_eq!(final_checkpoints(&fx).await, 1);
+}
