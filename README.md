@@ -152,7 +152,7 @@ Run these commands inside your project:
 | `fld log` | List main's revisions, newest first: `fld log -n 50` shows more, and `fld log --oneline` shows one line each. |
 | `fld doctor` | Check the installation, daemon, and projects, with suggested fixes. It names the running daemon and its version, says why workers cannot sign in, and repeats every problem with its fix at the end. |
 | `fld transcript` | Find an agent's Claude Code transcript: `fld transcript <agent>` prints the path of the file of its current session, and `fld transcript <agent> --tail N` prints the file's last N lines. |
-| `fld gc` | Delete objects that nothing refers to, prune old automatic checkpoints, and remove the folders of workspaces closed for longer than `closed_workspace_days` (14 days by default). The daemon also runs it every day; `fld gc` needs a running daemon. `fld gc --dry-run` counts what a run would remove and changes nothing. |
+| `fld gc` | Delete objects that nothing refers to, prune old automatic checkpoints, remove the folder of a closed workspace that is still there, and prune the checkpoints of workspaces closed for longer than `closed_workspace_days` (14 days by default). fold removes a workspace's folder as soon as the workspace closes and its worker has ended, after a final checkpoint of the tracked files it had not recorded; `fld gc` retries a removal that failed. The daemon also runs it every day; `fld gc` needs a running daemon. `fld gc --dry-run` counts what a run would remove and changes nothing. |
 | `fld token` | Manage the tokens that sign a person in to the web interface off localhost: `fld token create`, `fld token list`, and `fld token revoke`. |
 | `fld --help` | See the command reference. |
 
