@@ -27,6 +27,7 @@ mod acceptance_17_stash;
 mod acceptance_18_project_checks;
 mod acceptance_19_human_asks;
 mod acceptance_1_three_sessions;
+mod acceptance_22_reviewer_resume;
 mod acceptance_2_messaging;
 mod acceptance_3_parallel_workspaces;
 mod acceptance_4_live_diff;
