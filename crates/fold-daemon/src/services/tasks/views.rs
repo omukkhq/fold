@@ -54,7 +54,12 @@ pub struct ChangesetSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskProposal {
     pub id: ProposalId,
+    pub title: String,
     pub standing: ProposalStanding,
+    /// The worker that holds the unreleased review claim.
+    pub review_claim: Option<String>,
+    /// The files the current version changes.
+    pub files: u32,
     pub version: u32,
     /// The integration checks of the current version failed.
     pub checks_failed: bool,
@@ -318,6 +323,9 @@ impl TaskService {
         let proposal = match summary {
             Some(summary) => Some(TaskProposal {
                 standing: standing(&summary),
+                title: summary.title.clone(),
+                review_claim: summary.review_claim.clone(),
+                files: summary.files,
                 version: summary.version,
                 checks_failed: summary.checks_failed,
                 reviews: reviews::review_entries(&mut tx, summary.id).await?,

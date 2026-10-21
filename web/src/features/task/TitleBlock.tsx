@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as RadixDialog from "@radix-ui/react-dialog";
-import { Pencil } from "lucide-react";
+import { ArrowRight, GitPullRequest, Pencil } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { setTitle, type TaskDetail } from "@/api/tasks";
 import { Button, IconButton } from "@/components/button/Button";
@@ -9,7 +9,9 @@ import { useState } from "react";
 import { cn } from "@/lib/cn";
 import { PersonName } from "@/people/PersonName";
 import type { LiveStrip } from "./liveStrip";
-import { submit, WriteError } from "./parts";
+import { LinkButton, submit, WriteError } from "./parts";
+import { proposalPath } from "./links";
+import { proposalStrip } from "./proposalStrip";
 import { titleSchema, type TitleForm } from "./schemas";
 import { statusLook } from "./text";
 import { useTaskWrite } from "./useTaskWrite";
@@ -109,6 +111,41 @@ function Strip({ strip }: { strip: LiveStrip }) {
   );
 }
 
+function ProposalStrip({ slug, task }: { slug: string; task: TaskDetail }) {
+  const strip = proposalStrip(task);
+  if (strip === null) {
+    return null;
+  }
+  return (
+    <div
+      aria-label="Proposal"
+      className={cn(
+        "flex min-w-0 items-center gap-10 rounded-m py-8 pr-8 pl-12",
+        strip.waitsForYou ? "bg-secondary-soft" : "bg-sunken",
+      )}
+    >
+      <GitPullRequest
+        aria-hidden="true"
+        size={15}
+        className="shrink-0 text-secondary-text"
+      />
+      <span className="shrink-0 text-bar font-semibold text-text">
+        {strip.lead}
+      </span>
+      {strip.rest ? (
+        <span className="min-w-0 flex-1 truncate text-bar text-text-muted">
+          {strip.rest}
+        </span>
+      ) : (
+        <span className="flex-1" />
+      )}
+      <LinkButton href={proposalPath(slug, strip.proposal)} icon={ArrowRight}>
+        Go to proposal
+      </LinkButton>
+    </div>
+  );
+}
+
 /** The title block: the title, the calculated status and the live strip. */
 export function TitleBlock({ slug, task, strip }: Props) {
   const [editing, setEditing] = useState(false);
@@ -167,6 +204,7 @@ export function TitleBlock({ slug, task, strip }: Props) {
         ) : null}
       </div>
       {strip ? <Strip strip={strip} /> : null}
+      <ProposalStrip slug={slug} task={task} />
     </div>
   );
 }

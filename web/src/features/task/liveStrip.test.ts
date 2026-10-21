@@ -153,6 +153,9 @@ describe("liveStrip", () => {
   it("says the holder sent the version and what it waits for, never the stall, while the files are that version", () => {
     const proposal = {
       id: "P-1",
+      title: "Add the form",
+      review_claim: null,
+      files: 3,
       state: "open" as const,
       version: 1,
       checks_failed: false,
@@ -189,6 +192,9 @@ describe("liveStrip", () => {
       attention: [{ kind: "stalled" }],
       proposal: {
         id: "P-1",
+        title: "Add the form",
+        review_claim: null,
+        files: 3,
         state: "conflict",
         version: 1,
         checks_failed: false,

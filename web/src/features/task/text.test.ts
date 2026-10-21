@@ -181,6 +181,9 @@ describe("proposal texts", () => {
     ).toEqual(["@r commented on v1", "@r approved on v1", "@r rejected on v1"]);
     expect(proposalStateText("open", 3)).toBe("waiting for review · v3");
     expect(proposalStateText("conflict", 1)).toBe("conflict · v1");
+    expect(proposalStateText("open", 2, "review-lead")).toBe(
+      "waiting for review · v2 · with @review-lead",
+    );
     expect(
       integrationText({
         revision: "r8",
