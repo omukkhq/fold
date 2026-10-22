@@ -31,7 +31,7 @@ mod acceptance_20_leads_ask_the_human;
 mod acceptance_21_ask_author;
 mod acceptance_22_reviewer_resume;
 mod acceptance_23_message_resume;
-mod acceptance_27_supervised_main;
+mod acceptance_25_supervised_main;
 mod acceptance_2_messaging;
 mod acceptance_3_parallel_workspaces;
 mod acceptance_4_live_diff;

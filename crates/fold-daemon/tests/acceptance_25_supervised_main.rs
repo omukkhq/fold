@@ -53,9 +53,9 @@ fn question_ids(needs: &Value) -> Vec<String> {
         .collect()
 }
 
-/// Acceptance 27, a request handled with no terminal: in a project whose setting has fold run the main agent, a human's request in the web app starts the supervised main, which claims it, asks the human in the request thread, and drafts the cards; the human's answer and approval reach the same idle process as its next turns, and no `fld claude` session ever runs.
+/// Acceptance 25, a request handled with no terminal: in a project whose setting has fold run the main agent, a human's request in the web app starts the supervised main, which claims it, asks the human in the request thread, and drafts the cards; the human's answer and approval reach the same idle process as its next turns, and no `fld claude` session ever runs.
 #[tokio::test]
-async fn acceptance_27_a_request_is_handled_end_to_end_by_the_supervised_main() {
+async fn acceptance_25_a_request_is_handled_end_to_end_by_the_supervised_main() {
     let fake = FakeClaude::new("result");
     let mut h = Harness::start_with_launcher(fake.launcher.clone()).await;
     std::fs::write(
