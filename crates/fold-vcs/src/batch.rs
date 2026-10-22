@@ -1,11 +1,11 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use fold_core::merge::{Conflict, OriginRun, line_origins, merge_trees};
 use fold_core::object::{ObjectHash, ObjectKind};
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{FoldError, codes};
 
-use crate::compare::load_flat;
+use crate::compare::{State, load_flat};
 use crate::diff::is_binary;
 use crate::objects::ObjectStore;
 use crate::revision_store::write_initial_tree;
@@ -39,12 +39,86 @@ pub enum BatchMerge {
     },
 }
 
+/// A member that does not merge onto main with the members before it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchConflict {
+    /// The member's index in merge order.
+    pub member: usize,
+    /// The earlier member it conflicts with, or `None` when the conflict is with main itself.
+    pub with: Option<usize>,
+    pub conflicts: Vec<Conflict>,
+}
+
+/// The merged tree of a batch as one side of a comparison, held in memory only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergedBatch {
+    /// main with the members before `conflict` merged in, or with every member when nothing conflicts. The line-merged files live in the state, never in the store.
+    pub state: State,
+    /// How many members, from the first, `state` holds.
+    pub merged: usize,
+    pub conflict: Option<BatchConflict>,
+}
+
 /// Merges `members` one after another onto main's tree `main`, each against its own base, with the three-way tree merge an integration uses, so the result is what integrating them in this order gives. The merges run in memory; only a clean result is written, its merged blobs first and then its trees bottom-up. Blocking: call it through `spawn_blocking`.
 pub fn merge_batch(
     objects: &ObjectStore,
     main: &ObjectHash,
     members: &[BatchMember],
 ) -> Result<BatchMerge, FoldError> {
+    let mut merging = merge_in_memory(objects, main, members)?;
+    if let Some(conflict) = merging.conflict {
+        return Ok(BatchMerge::Conflicted {
+            member: conflict.member,
+            with: conflict.with,
+            conflicts: conflict.conflicts,
+        });
+    }
+    let last = merging.steps.last().cloned().unwrap_or_default();
+    for (hash, bytes) in used_blobs(&merging.texts.merged, &last) {
+        let written = objects.write(ObjectKind::Blob, &bytes)?;
+        if written != hash {
+            return Err(FoldError::new(
+                codes::OBJECT_CORRUPT,
+                format!("the merged blob {hash} was stored as {written}"),
+            ));
+        }
+    }
+    let origins = origins(&mut merging.texts, &merging.steps, &merging.versions)?;
+    let tree_hash = write_initial_tree(objects, last)?;
+    Ok(BatchMerge::Merged { tree_hash, origins })
+}
+
+/// The tree [`merge_batch`] makes of the same members, as a comparison side that nothing stores: a view of the batch reads it without a checkout. A member that conflicts stops the merge, and the state holds the members before it. Blocking: call it through `spawn_blocking`.
+pub fn merged_batch_state(
+    objects: &ObjectStore,
+    main: &ObjectHash,
+    members: &[BatchMember],
+) -> Result<MergedBatch, FoldError> {
+    let merging = merge_in_memory(objects, main, members)?;
+    let last = merging.steps.last().cloned().unwrap_or_default();
+    let blobs = used_blobs(&merging.texts.merged, &last);
+    Ok(MergedBatch {
+        state: State::with_blobs(last, blobs),
+        merged: merging.versions.len(),
+        conflict: merging.conflict,
+    })
+}
+
+/// The members merged in memory up to the first that conflicts.
+struct Merging<'a> {
+    texts: Texts<'a>,
+    /// main's tree, then the tree after each merged member.
+    steps: Vec<FlatTree>,
+    /// Each merged member's base tree and own tree.
+    versions: Vec<(FlatTree, FlatTree)>,
+    conflict: Option<BatchConflict>,
+}
+
+fn merge_in_memory<'a>(
+    objects: &'a ObjectStore,
+    main: &ObjectHash,
+    members: &[BatchMember],
+) -> Result<Merging<'a>, FoldError> {
     let mut texts = Texts {
         objects,
         merged: HashMap::new(),
@@ -64,10 +138,15 @@ pub fn merge_batch(
             let merge = merge_trees(&base, &ours, &current, &blob)?;
             if !merge.conflicts.is_empty() {
                 let with = conflicting_member(&mut texts, &steps, &versions, &merge.conflicts)?;
-                return Ok(BatchMerge::Conflicted {
-                    member: index,
-                    with,
-                    conflicts: merge.conflicts,
+                return Ok(Merging {
+                    texts,
+                    steps,
+                    versions,
+                    conflict: Some(BatchConflict {
+                        member: index,
+                        with,
+                        conflicts: merge.conflicts,
+                    }),
                 });
             }
             texts.merged.extend(merge.new_blobs);
@@ -76,23 +155,25 @@ pub fn merge_batch(
         versions.push((base, ours));
         steps.push(next);
     }
-    let last = steps.last().cloned().unwrap_or_default();
-    let used: BTreeSet<ObjectHash> = last.values().map(|entry| entry.hash).collect();
-    for (hash, bytes) in &texts.merged {
-        if !used.contains(hash) {
-            continue;
-        }
-        let written = objects.write(ObjectKind::Blob, bytes)?;
-        if written != *hash {
-            return Err(FoldError::new(
-                codes::OBJECT_CORRUPT,
-                format!("the merged blob {hash} was stored as {written}"),
-            ));
-        }
-    }
-    let origins = origins(&mut texts, &steps, &versions)?;
-    let tree_hash = write_initial_tree(objects, last)?;
-    Ok(BatchMerge::Merged { tree_hash, origins })
+    Ok(Merging {
+        texts,
+        steps,
+        versions,
+        conflict: None,
+    })
+}
+
+/// The line-merged blobs that `tree` still names.
+fn used_blobs(
+    merged: &HashMap<ObjectHash, Vec<u8>>,
+    tree: &FlatTree,
+) -> BTreeMap<ObjectHash, Vec<u8>> {
+    let used: BTreeSet<ObjectHash> = tree.values().map(|entry| entry.hash).collect();
+    merged
+        .iter()
+        .filter(|(hash, _)| used.contains(*hash))
+        .map(|(hash, bytes)| (*hash, bytes.clone()))
+        .collect()
 }
 
 /// The text of blobs, from the line merges of this call or from the store, read once each. A binary file has none.
