@@ -34,6 +34,17 @@ pub enum StoreError {
     HeadMoved { expected: RevisionId },
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
+    /// The registry file keeps a mode that may let other users read it, so fold does not open it.
+    #[error(
+        "fold could not make {} readable by its user only: {source}; run `chmod 600 {}`, then try again",
+        path.display(),
+        path.display()
+    )]
+    RegistryMode {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 impl From<MigrateError> for StoreError {

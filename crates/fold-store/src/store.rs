@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::fs::Permissions;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -27,29 +27,48 @@ const SQLITE_BUSY: i32 = 5;
 
 /// The registry holds every human's name and the hashes of the web tokens, sessions and sign-in links, so only the host's user may open it or list its folder. SQLite gives the `-wal` and `-shm` files the mode of the database file when it creates them; ones left from before get it here.
 async fn restrict_registry(path: &Path) -> Result<(), StoreError> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || restrict_registry_with(&path, set_mode))
+        .await
+        .map_err(|error| StoreError::Io(std::io::Error::other(error)))?
+}
+
+fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
+    std::fs::set_permissions(path, Permissions::from_mode(mode))
+}
+
+/// A file whose mode cannot be set stops the open, because other users could then read the hashes in it. A folder whose mode cannot be set only lists the file names, so the open goes on with a warning that leaves the path out of the log.
+fn restrict_registry_with(
+    path: &Path,
+    set_mode: fn(&Path, u32) -> std::io::Result<()>,
+) -> Result<(), StoreError> {
     if let Some(parent) = path.parent() {
-        tokio::fs::DirBuilder::new()
+        std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
-            .create(parent)
-            .await?;
-        tokio::fs::set_permissions(parent, Permissions::from_mode(0o700)).await?;
+            .create(parent)?;
+        if let Err(error) = set_mode(parent, 0o700) {
+            tracing::warn!(
+                error = %error.kind(),
+                "the registry folder keeps its mode: fold could not set it to 0700"
+            );
+        }
     }
-    tokio::fs::OpenOptions::new()
+    std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(false)
         .mode(0o600)
-        .open(path)
-        .await?;
+        .open(path)?;
     for file in [
         path.to_owned(),
         suffixed(path, "-wal"),
         suffixed(path, "-shm"),
     ] {
-        match tokio::fs::set_permissions(&file, Permissions::from_mode(0o600)).await {
+        match set_mode(&file, 0o600) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            result => result?,
+            Err(source) => return Err(StoreError::RegistryMode { path: file, source }),
+            Ok(()) => {}
         }
     }
     Ok(())
@@ -297,4 +316,55 @@ fn connect_options(path: &Path, busy_timeout: Duration) -> SqliteConnectOptions 
         .synchronous(SqliteSynchronous::Full)
         .foreign_keys(true)
         .busy_timeout(busy_timeout)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mode(path: &Path) -> u32 {
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    fn refuse_folders(path: &Path, mode: u32) -> std::io::Result<()> {
+        if path.is_dir() {
+            return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        }
+        set_mode(path, mode)
+    }
+
+    fn refuse_files(path: &Path, mode: u32) -> std::io::Result<()> {
+        if path.is_file() {
+            return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        }
+        set_mode(path, mode)
+    }
+
+    #[test]
+    fn a_folder_whose_mode_cannot_be_set_still_opens_with_a_private_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let folder = dir.path().join("fold");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::set_permissions(&folder, Permissions::from_mode(0o755)).unwrap();
+        let path = folder.join("registry.db");
+        restrict_registry_with(&path, refuse_folders).unwrap();
+        assert_eq!(mode(&folder), 0o755);
+        assert_eq!(mode(&path), 0o600);
+    }
+
+    #[test]
+    fn a_file_whose_mode_cannot_be_set_refuses_the_open_and_names_the_file_and_its_mode() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("fold").join("registry.db");
+        let error = restrict_registry_with(&path, refuse_files).unwrap_err();
+        assert!(
+            matches!(&error, StoreError::RegistryMode { path: file, .. } if *file == path),
+            "{error:?}"
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains(&format!("chmod 600 {}", path.display())),
+            "{message}"
+        );
+    }
 }
