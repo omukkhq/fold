@@ -137,10 +137,18 @@ async fn acceptance_2_the_push_wakes_an_idle_session_and_skips_an_agent_without_
     assert_eq!(harness.inbox("review").await, [first, sentinel]);
 }
 
-/// Acceptance 2, session push: a proposal opened while `review` is idle wakes it through its inbox socket with a notice naming `claim_review`, because `review` is the review lead. The author's own agent hears nothing about its proposal; as the lead of the task's area it heard that the task was ready.
+/// Acceptance 2, session push: a proposal opened while `review` is idle wakes it through its inbox socket with a notice naming `start_worker`, because `review` is the review lead, which gives the review to a reviewer. The author's own agent hears nothing about its proposal; as the lead of the task's area it heard that the task was ready.
 #[tokio::test]
 async fn acceptance_2_a_proposal_opened_while_review_is_idle_wakes_it_through_the_push() {
-    let harness = Harness::start().await;
+    let mut harness = Harness::start_without_roles().await;
+    crate::common::roles::give_role(
+        &harness.handle.store,
+        "review",
+        fold_core::roles::Role::ReviewLead,
+        None,
+    )
+    .await;
+    harness.lead_the_work_area().await;
     let mut review = harness.register_inbox("review").await;
     let mut backend = harness.register_inbox("backend").await;
 

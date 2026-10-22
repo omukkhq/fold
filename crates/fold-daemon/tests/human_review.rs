@@ -148,7 +148,7 @@ impl Fixture {
                 .await
                 .unwrap();
         }
-        give_role(project.store(), "review", Role::ReviewLead, None).await;
+        give_role(project.store(), "review", Role::Reviewer, None).await;
         let author = agent("frontend", &[]);
         workspaces.create_workspace(&author, t(1)).await.unwrap();
         let file = project.paths().root().join(".fold/ws/t-1/src/lib.rs");

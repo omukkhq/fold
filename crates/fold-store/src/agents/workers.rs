@@ -971,6 +971,82 @@ pub async fn pending_resumes(
         .collect()
 }
 
+/// The newest version of an open proposal that waits on a reviewer that has ended: the reviewer is bound to the proposal and its agent still holds the unreleased review claim, the version has no verdict, and the version came, or a human sent it for review again, after the reviewer last started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwedReview {
+    pub agent: AgentName,
+    pub proposal: ProposalId,
+    pub version: u32,
+}
+
+/// The reviews owed to stopped or failed reviewers, by reviewer and proposal. Each start moves the row's `started_at`, so a version that a resumed reviewer did not review before it stopped again is not owed a second time; a resume that the worker limits or a pause refused leaves the row as it was, so the review stays owed until a start succeeds. With `proposal`, only that proposal, whose new version an event just announced, whatever the times: the event itself says the version came after the reviewer's verdict.
+pub async fn reviews_owed_to_ended_reviewers(
+    executor: impl SqliteExecutor<'_>,
+    proposal: Option<ProposalId>,
+) -> Result<Vec<OwedReview>, StoreError> {
+    let number = proposal.map(ProposalId::to_db);
+    let rows = sqlx::query!(
+        r#"SELECT g.name AS "agent!: String", p.number AS "proposal!: i64", v.version AS "version!: i64"
+           FROM worker_processes w
+           JOIN agents g ON g.id = w.agent_id
+           JOIN worker_proposals b ON b.worker_process_id = w.id
+           JOIN proposals p ON p.id = b.proposal_id AND p.state = 'open'
+           JOIN proposal_versions v ON v.proposal_id = p.id
+           JOIN claims c ON c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL
+           JOIN workers k ON k.id = c.worker_id AND k.agent_id = w.agent_id
+           WHERE w.role = 'reviewer' AND w.state IN ('stopped', 'failed')
+             AND v.version = (SELECT MAX(x.version) FROM proposal_versions x WHERE x.proposal_id = p.id)
+             AND (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) IS NULL
+             AND CASE WHEN ?1 IS NULL
+                      THEN v.created_at > w.started_at
+                           OR EXISTS (SELECT 1 FROM review_again_requests q
+                                      WHERE q.version_id = v.id AND q.created_at > w.started_at)
+                      ELSE p.number = ?1 END
+           ORDER BY w.id, p.number"#,
+        number
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(OwedReview {
+                agent: AgentName::parse(&row.agent)
+                    .map_err(|_| StoreError::Corrupt("agents.name"))?,
+                proposal: ProposalId::try_from_db(row.proposal)
+                    .ok_or(StoreError::Corrupt("proposals.number"))?,
+                version: count(row.version, "proposal_versions.version")?,
+            })
+        })
+        .collect()
+}
+
+/// The open proposals, in number order, whose unreleased review claim a worker of `agent` holds while its reviewer process has ended, and whose newest version has no verdict. A comment is not a verdict.
+pub async fn unreviewed_claims_of_ended_reviewer(
+    executor: impl SqliteExecutor<'_>,
+    agent: &AgentName,
+) -> Result<Vec<ProposalId>, StoreError> {
+    let name = agent.as_str();
+    let rows = sqlx::query_scalar!(
+        r#"SELECT p.number AS "proposal!: i64"
+           FROM worker_processes w
+           JOIN agents g ON g.id = w.agent_id
+           JOIN workers k ON k.agent_id = w.agent_id
+           JOIN claims c ON c.worker_id = k.id AND c.kind = 'review' AND c.released_at IS NULL
+           JOIN proposals p ON p.id = c.proposal_id AND p.state = 'open'
+           WHERE g.name = ?1 AND w.role = 'reviewer' AND w.state IN ('stopped', 'failed')
+             AND (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) IS NULL
+           ORDER BY p.number"#,
+        name
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|number| {
+            ProposalId::try_from_db(number).ok_or(StoreError::Corrupt("proposals.number"))
+        })
+        .collect()
+}
+
 /// How many bound proposals of each worker in `worker_process_ids` are open and have no verdict on their newest version; every id has an entry. A comment is not a verdict.
 pub async fn proposals_without_verdict(
     executor: impl SqliteExecutor<'_>,

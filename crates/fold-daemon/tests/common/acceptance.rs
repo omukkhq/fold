@@ -63,7 +63,7 @@ pub struct Session {
     server: JoinHandle<()>,
 }
 
-/// Project `demo` open in daemon state, with `r1` holding `README.md` and the project folder holding it as `fld init` leaves it, and one adapter session for each of [`AGENTS`], connected over in-memory streams through the same handshake `fld mcp` performs with `FOLD_AGENT` set. `review` is the review lead and `frontend` and `backend` lead the areas of [`WORK`], as if fold had started them, and [`HUMAN`] is a known human.
+/// Project `demo` open in daemon state, with `r1` holding `README.md` and the project folder holding it as `fld init` leaves it, and one adapter session for each of [`AGENTS`], connected over in-memory streams through the same handshake `fld mcp` performs with `FOLD_AGENT` set. `review` is a reviewer that fold started and `frontend` and `backend` lead the areas of [`WORK`], as if fold had started them, and [`HUMAN`] is a known human.
 pub struct Harness {
     pub project: TestProject,
     /// Holds the fake inbox sockets.
@@ -89,7 +89,7 @@ impl Harness {
     /// [`Harness::start`] without the area leads: `frontend` and `backend` have no fold role, so neither claims a task, and either may become the main agent.
     pub async fn start_without_leads() -> Self {
         let harness = Self::start_without_roles().await;
-        crate::common::roles::give_role(&harness.handle.store, "review", Role::ReviewLead, None)
+        crate::common::roles::give_role(&harness.handle.store, "review", Role::Reviewer, None)
             .await;
         fold_daemon::services::projects::ensure_human(
             harness.project.registry(),
@@ -114,7 +114,7 @@ impl Harness {
     /// [`Harness::start`] in a plain project: no Git repository, and Git sync off.
     pub async fn start_plain() -> Self {
         let mut harness = Self::start_on(TestProject::plain().await, no_claude()).await;
-        crate::common::roles::give_role(&harness.handle.store, "review", Role::ReviewLead, None)
+        crate::common::roles::give_role(&harness.handle.store, "review", Role::Reviewer, None)
             .await;
         harness.lead_the_work_area().await;
         fold_daemon::services::projects::ensure_human(
@@ -406,6 +406,33 @@ impl Harness {
             .await
             .expect("the main handshake's session ends within the wait")
             .unwrap();
+    }
+
+    /// Gives the reviewer `agent` the review claim on `proposal`, such as `P-1`, as the review lead's `start_worker` gives it to a reviewer that fold starts; a reviewer never claims itself.
+    pub async fn give_review(&self, agent: &str, proposal: &str) {
+        use fold_core::Clock as _;
+        crate::common::roles::give_review_claim(
+            &self.handle.store,
+            agent,
+            proposal.parse().unwrap(),
+            self.project.clock().now(),
+        )
+        .await;
+    }
+
+    /// Makes a review batch of `proposals` for the reviewer `agent`, as the review lead's `start_worker` makes it for a reviewer of two or more proposals; returns its id, such as `rb-1`.
+    pub async fn give_batch(&self, agent: &str, proposals: &[&str]) -> String {
+        use fold_core::Clock as _;
+        let proposals: Vec<fold_core::ProposalId> =
+            proposals.iter().map(|id| id.parse().unwrap()).collect();
+        crate::common::roles::give_batch(
+            &self.handle.store,
+            agent,
+            &proposals,
+            self.project.clock().now(),
+        )
+        .await
+        .to_string()
     }
 
     /// The result body of a call that must succeed.
@@ -898,7 +925,7 @@ pub fn wire(token: &str, text: &str) -> String {
 
 /// The notice text for a newly opened proposal.
 pub fn proposal_notice(proposal: &str, task: &str) -> String {
-    format!("fold: {proposal} opened for {task}. Call claim_review.")
+    format!("fold: {proposal} opened for {task}. Call start_worker.")
 }
 
 /// The notice text a lead gets when a task of its area is ready and nobody holds it.

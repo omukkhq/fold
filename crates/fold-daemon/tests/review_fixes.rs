@@ -72,7 +72,7 @@ fn details(error: &FoldError) -> Value {
     error.details().cloned().map_or(Value::Null, Value::Object)
 }
 
-/// `frontend` proposes `P-1` for `T-1`; `review`, the review lead, claims it and checks it out as `ws-2`.
+/// `frontend` proposes `P-1` for `T-1`; `review`, a reviewer, gets its claim and checks it out as `ws-2`.
 struct Scene {
     fx: Fixture,
     frontend: Actor,
@@ -85,10 +85,16 @@ impl Scene {
         let fx = Fixture::new().await;
         let frontend = fx.agent("frontend").await;
         let review = fx.agent("review").await;
-        give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+        give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
         fx.proposal(&frontend, 1, "pub fn y() {}\n").await;
         let reviews = fx.reviews();
-        reviews.claim_review(&review, p(1)).await.unwrap();
+        crate::common::roles::give_review_claim(
+            &fx.handle.store,
+            "review",
+            p(1),
+            fx.handle.clock.now(),
+        )
+        .await;
         let checkout = reviews.create_review_checkout(&review, p(1)).await.unwrap();
         assert_eq!(checkout.workspace.id, ws(2));
         let checkout = fx.project.paths().root().join(&checkout.workspace.path);
@@ -485,12 +491,15 @@ async fn a_batch_member_is_fixed_in_its_own_checkout_and_left_out_of_the_batch_r
         .release_review(&scene.review, p(1), None)
         .await
         .unwrap();
-    let batch = reviews
-        .create_review_batch(&scene.review, vec![p(1), p(2)])
-        .await
-        .unwrap();
+    let batch = crate::common::roles::give_batch(
+        &scene.fx.handle.store,
+        "review",
+        &[p(1), p(2)],
+        scene.fx.handle.clock.now(),
+    )
+    .await;
     let checkout = reviews
-        .create_batch_checkout(&scene.review, batch.id)
+        .create_batch_checkout(&scene.review, batch)
         .await
         .unwrap();
     let batch_dir = scene
@@ -520,7 +529,7 @@ async fn a_batch_member_is_fixed_in_its_own_checkout_and_left_out_of_the_batch_r
     let submitted = reviews
         .submit_batch_review(
             &scene.review,
-            batch.id,
+            batch,
             vec![
                 BatchVerdict {
                     proposal: p(1),
@@ -619,12 +628,15 @@ async fn the_edit_hook_admits_only_the_claim_holders_own_checkout_of_one_proposa
         .create_proposal(&backend, t(2), "Extend the readme", None)
         .await
         .unwrap();
-    let batch = reviews
-        .create_review_batch(&scene.review, vec![p(1), p(2)])
-        .await
-        .unwrap();
+    let batch = crate::common::roles::give_batch(
+        &fx.handle.store,
+        "review",
+        &[p(1), p(2)],
+        fx.handle.clock.now(),
+    )
+    .await;
     let checkout = reviews
-        .create_batch_checkout(&scene.review, batch.id)
+        .create_batch_checkout(&scene.review, batch)
         .await
         .unwrap();
     let batched = post(socket.clone(), &ask("review", &checkout.workspace.path)).await;
@@ -649,13 +661,13 @@ async fn the_edit_hook_admits_only_the_claim_holders_own_checkout_of_one_proposa
     assert_eq!(answer["error"]["code"], codes::INVALID_NAME);
 }
 
-/// `frontend` proposes `P-1` with a `fold-checks.toml` whose check needs `fn y` in `src/lib.rs`, through its green checks; `review`, the review lead, claims and checks it out.
+/// `frontend` proposes `P-1` with a `fold-checks.toml` whose check needs `fn y` in `src/lib.rs`, through its green checks; `review`, a reviewer, gets its claim and checks it out.
 #[cfg(test)]
 async fn scene_with_checks() -> Scene {
     let fx = Fixture::new().await;
     let frontend = fx.agent("frontend").await;
     let review = fx.agent("review").await;
-    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
     fx.workspaces()
         .create_workspace(&frontend, t(1))
         .await
@@ -683,7 +695,13 @@ async fn scene_with_checks() -> Scene {
             .map_err(|_| "no proposal")
     })
     .await;
-    reviews.claim_review(&review, p(1)).await.unwrap();
+    crate::common::roles::give_review_claim(
+        &fx.handle.store,
+        "review",
+        p(1),
+        fx.handle.clock.now(),
+    )
+    .await;
     let checkout = reviews.create_review_checkout(&review, p(1)).await.unwrap();
     let checkout = fx.project.paths().root().join(&checkout.workspace.path);
     Scene {

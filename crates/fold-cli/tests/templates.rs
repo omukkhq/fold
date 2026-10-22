@@ -103,7 +103,7 @@ const FOLD_TOOLS: [&str; 92] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 161] = [
+const FOLD_ERROR_CODES: [&str; 162] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -265,6 +265,7 @@ const FOLD_ERROR_CODES: [&str; 161] = [
     "ask_not_open",
     "ask_close_denied",
     "recipient_not_reader",
+    "review_lead_delegates",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.

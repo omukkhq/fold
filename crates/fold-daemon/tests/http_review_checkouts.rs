@@ -41,7 +41,7 @@ fn reviews(opened: &Opened) -> ReviewService {
 async fn proposed() -> Opened {
     let opened = Opened::new().await;
     register(&opened, "review").await;
-    give_role(&opened.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&opened.handle.store, "review", Role::Reviewer, None).await;
     let (_, dir) = opened.create(1).await;
     std::fs::write(dir.join("src/lib.rs"), "pub fn y() {}\n").unwrap();
     let reviews = reviews(&opened);
@@ -51,7 +51,13 @@ async fn proposed() -> Opened {
         .unwrap()
         .detail()
         .unwrap();
-    reviews.claim_review(&agent("review"), p(1)).await.unwrap();
+    crate::common::roles::give_review_claim(
+        &opened.handle.store,
+        "review",
+        p(1),
+        opened.handle.clock.now(),
+    )
+    .await;
     opened
 }
 
@@ -107,11 +113,13 @@ async fn a_batch_checkout_lists_its_batch_and_its_members_in_merge_order() {
         .unwrap()
         .detail()
         .unwrap();
-    let batch = reviews
-        .create_review_batch(&agent("review"), vec![p(1), p(2)])
-        .await
-        .unwrap()
-        .id;
+    let batch = crate::common::roles::give_batch(
+        &opened.handle.store,
+        "review",
+        &[p(1), p(2)],
+        opened.handle.clock.now(),
+    )
+    .await;
     let checkout = reviews
         .create_batch_checkout(&agent("review"), batch)
         .await

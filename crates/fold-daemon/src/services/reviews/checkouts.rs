@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
 use fold_core::events::types;
+use fold_core::policy::AgentStanding;
 use fold_core::{
     Actor, AgentActor, AgentName, EventActor, FoldError, IdKind, NewEvent, ProposalId, WorkspaceId,
     codes, policy,
 };
-use fold_store::agents::WorkerRow;
+use fold_store::agents::{self, WorkerRow};
 use fold_store::reviews::{self, ProposalRow, ReviewClaimRow};
 use fold_store::workspaces::{self, NewReviewCheckout};
 use fold_store::{Store, StoreError, counters};
@@ -54,7 +55,8 @@ impl ReviewService {
         let read = self.store.read();
         let row = require_open(reviews::get_proposal(read, proposal).await?, proposal)?;
         let holder = reviews::unreleased_review_claim(read, proposal).await?;
-        let reviewer = checkout_checks(actor, &row, holder.as_ref())?;
+        let standing = agents::standing_of(read, actor).await?;
+        let reviewer = checkout_checks(actor, standing, &row, holder.as_ref())?;
         let version = row.current_version;
         let worker = find_worker(&self.store, reviewer).await?;
         if let Some(existing) =
@@ -85,7 +87,8 @@ impl ReviewService {
                 let row = require_open(found, proposal)?;
                 require_version(proposal, version, row.current_version)?;
                 let holder = reviews::unreleased_review_claim(tx.conn(), proposal).await?;
-                let reviewer = checkout_checks(actor, &row, holder.as_ref())?;
+                let standing = agents::standing_of(tx.conn(), actor).await?;
+                let reviewer = checkout_checks(actor, standing, &row, holder.as_ref())?;
                 let worker = worker_row(tx, reviewer).await?;
                 if let Some(existing) =
                     workspaces::active_review_checkout(tx.conn(), proposal, version, worker.id)
@@ -219,11 +222,12 @@ impl ReviewService {
 /// The refusals of a create that need no files, run on the read pool and again in the transaction.
 fn checkout_checks<'a>(
     actor: &'a Actor,
+    standing: AgentStanding,
     row: &ProposalRow,
     holder: Option<&ReviewClaimRow>,
 ) -> Result<&'a AgentActor, ReviewError> {
     let holder = holder.map(|claim| &claim.worker);
-    policy::can_create_review_checkout(actor, holder).map_err(|denied| {
+    policy::can_create_review_checkout(actor, standing, holder).map_err(|denied| {
         FoldError::from(denied)
             .with_details([
                 ("proposal", json!(row.id.to_string())),

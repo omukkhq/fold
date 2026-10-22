@@ -47,7 +47,10 @@ pub use workers::{
     set_area_profile, set_worker_context, set_worker_pid, set_worker_state, task_workers_of_task,
     tasks_awaiting_proposal,
 };
-pub use workers::{PendingResume, pending_resumes};
+pub use workers::{
+    OwedReview, PendingResume, pending_resumes, reviews_owed_to_ended_reviewers,
+    unreviewed_claims_of_ended_reviewer,
+};
 pub use workers::{clear_turn_error, forget_made_up_model, record_turn_error, set_exit_error};
 
 /// Row ids of these tables stay inside the daemon; the public handles are the names.

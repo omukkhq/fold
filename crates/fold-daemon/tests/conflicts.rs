@@ -60,9 +60,9 @@ async fn move_main(fx: &Fixture, files: &[(&str, &[u8])]) {
     assert!(matches!(outcome, PullOutcome::Succeeded { .. }));
 }
 
-/// `review` is the review lead and acts with it.
-async fn review_lead(fx: &Fixture) -> Actor {
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+/// `review` is a reviewer and acts with it.
+async fn reviewer(fx: &Fixture) -> Actor {
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     fx.agents.actor(&fx.review.ctx, None).await.unwrap()
 }
 
@@ -82,10 +82,10 @@ async fn approve(fx: &Fixture, actor: &Actor) {
         .unwrap();
 }
 
-/// `P-1` approved by the review lead `review`, with main moved to `r2` so that its `src/lib.rs` conflicts. Returns the review lead.
+/// `P-1` approved by the reviewer `review`, with main moved to `r2` so that its `src/lib.rs` conflicts. Returns the reviewer.
 async fn conflicting(fx: &Fixture) -> Actor {
     fx.proposal().await;
-    let review = review_lead(fx).await;
+    let review = reviewer(fx).await;
     approve(fx, &review).await;
     move_main(
         fx,
@@ -384,7 +384,7 @@ async fn binary_and_delete_versus_edit_conflicts_are_reported_by_kind() {
         .unwrap()
         .detail()
         .unwrap();
-    let review = review_lead(&fx).await;
+    let review = reviewer(&fx).await;
     approve(&fx, &review).await;
     move_main(
         &fx,

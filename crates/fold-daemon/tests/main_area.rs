@@ -3,6 +3,7 @@
 use axum::http::{Method, StatusCode};
 use fold_core::codes;
 use fold_core::policy::MAIN_AREA_REASON;
+use fold_core::roles::Role;
 use serde_json::{Value, json};
 
 use crate::common::acceptance::{HUMAN, Harness, SLUG, TOKEN};
@@ -179,7 +180,7 @@ async fn no_review_agent_reviews_a_task_of_main_and_a_human_approves_it_alone() 
     let error = h
         .refused("review", "claim_review", json!({"id": proposal}))
         .await;
-    assert_eq!(error["code"], codes::MAIN_AREA, "{error}");
+    assert_eq!(error["code"], codes::WORKER_CLAIM_DENIED, "{error}");
     for (agent, code) in [
         ("review", codes::MAIN_AREA),
         (MAIN, codes::AUTHOR_CANNOT_REVIEW),
@@ -280,7 +281,9 @@ async fn the_main_agent_approves_its_own_proposal_only_once_a_human_cleared_the_
 
 #[tokio::test]
 async fn the_review_lead_starts_no_reviewer_and_makes_no_batch_for_a_task_of_main() {
-    let h = harness().await;
+    let mut h = harness().await;
+    h.connect("review-lead").await;
+    crate::common::roles::give_role(&h.handle.store, "review-lead", Role::ReviewLead, None).await;
     let task = create_main_task(&h, "Write the agent notes").await;
     let main_proposal = build(&h, &task).await;
     let mut others = Vec::new();
@@ -294,7 +297,7 @@ async fn the_review_lead_starts_no_reviewer_and_makes_no_batch_for_a_task_of_mai
 
     let error = h
         .refused(
-            "review",
+            "review-lead",
             "start_worker",
             json!({"role": "reviewer", "proposals": [main_proposal]}),
         )
@@ -302,21 +305,14 @@ async fn the_review_lead_starts_no_reviewer_and_makes_no_batch_for_a_task_of_mai
     assert_eq!(error["code"], codes::MAIN_AREA, "{error}");
     let error = h
         .refused(
-            "review",
-            "create_review_batch",
-            json!({"proposals": [main_proposal, others[0].1]}),
+            "review-lead",
+            "start_worker",
+            json!({"role": "reviewer", "proposals": [main_proposal, others[0].1]}),
         )
         .await;
     assert_eq!(error["code"], codes::MAIN_AREA, "{error}");
 
-    let batch = h
-        .call(
-            "review",
-            "create_review_batch",
-            json!({"proposals": [others[0].1, others[1].1]}),
-        )
-        .await;
-    let batch = batch["id"].as_str().unwrap().to_owned();
+    let batch = h.give_batch("review", &[&others[0].1, &others[1].1]).await;
     h.call(
         MAIN,
         "update_task",

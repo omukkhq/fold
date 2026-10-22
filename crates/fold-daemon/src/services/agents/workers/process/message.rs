@@ -47,7 +47,7 @@ impl Supervisor {
         }
     }
 
-    /// Resumes the worker of `agent` in its own session for one turn that names the messages it owes. A task worker whose own resume is owed, such as requested changes, waits for that resume, which moves its start, and answers once it stops again. When the worker cannot start, because a worker limit refuses it or the owed resume, because its session is gone or because its process ends before it runs, every message goes on to a lead; see [`forward_in_tx`].
+    /// Resumes the worker of `agent` in its own session for one turn that names the messages it owes. A worker whose own resume is owed, such as requested changes to a task worker or a new version to a reviewer, waits for that resume, which moves its start, and answers once it stops again: a start for a message first would move the start too and leave the owed work untold. When the worker cannot start, because a worker limit refuses it or the owed resume, because its session is gone or because its process ends before it runs, every message goes on to a lead; see [`forward_in_tx`].
     async fn answer_messages(&self, agent: &AgentName) -> Result<(), AgentError> {
         if !lock(&self.inner.message_starts).insert(agent.clone()) {
             return Ok(());
@@ -85,6 +85,7 @@ impl Supervisor {
             tokio::spawn(self.clone().resume_pending());
             tokio::spawn(self.clone().resume_owed_send_backs());
             tokio::spawn(self.clone().resume_owed_gate_runs());
+            tokio::spawn(self.clone().resume_owed_reviewers(None));
             return Ok(());
         }
         let turn = message_turn(&owed);
@@ -148,13 +149,19 @@ impl Supervisor {
         }
     }
 
-    /// Whether a resume of the task worker of `row` for its own work is owed: requested changes, a conflict, failed checks or a send-back that no start has served.
+    /// Whether a resume of the worker of `row` for its own work is owed: for a task worker requested changes, a conflict, failed checks or a send-back that no start has served, for a reviewer a new version of a proposal whose review claim it holds (see [`agents::reviews_owed_to_ended_reviewers`]).
     async fn owes_own_resume(&self, row: &WorkerProcessRow) -> Result<bool, AgentError> {
+        let read = self.inner.store.read();
+        let agent = &row.agent;
+        if row.role == Role::Reviewer {
+            return Ok(agents::reviews_owed_to_ended_reviewers(read, None)
+                .await?
+                .iter()
+                .any(|owed| owed.agent == *agent));
+        }
         if row.role != Role::TaskWorker {
             return Ok(false);
         }
-        let read = self.inner.store.read();
-        let agent = &row.agent;
         Ok(agents::pending_resumes(read, &ENDED)
             .await?
             .iter()

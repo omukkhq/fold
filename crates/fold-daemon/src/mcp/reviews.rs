@@ -256,7 +256,7 @@ pub struct SubmitReviewInput {
     pub id: String,
     /// The version you reviewed, such as 2 for v2: the version of your review checkout. When the current version is another one, nothing is written and the error is stale_version.
     pub version: u32,
-    /// comment, request_changes, approve or reject. Only the main agent, the review lead and the reviewers it starts can approve or reject; reject closes the proposal.
+    /// comment, request_changes, approve or reject. Only the main agent and the reviewers that the review lead starts can approve or reject; reject closes the proposal. The review lead gives no verdict (review_lead_delegates).
     pub verdict: String,
     /// The review text. It may be empty only when the review carries a comment; a reject needs it. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     pub body: String,
@@ -367,7 +367,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CLAIM_REVIEW,
-            "For a review of your own: the main agent and the review lead claim the review of an open proposal before they review it. A reviewer gets its claims from the review lead's start_worker and gets worker_claim_denied here; any other agent gets integrator_required and messages the review lead. The author's agent cannot claim it. Nobody claims the review of a task of the area main (main_area): a human approves it. A repeat call renews the claim.",
+            "For a review of its own, when the user tells it to: the main agent claims the review of an open proposal before it reviews it. The review lead never reviews and gets review_lead_delegates: it gives the review to a reviewer with start_worker. A reviewer gets its claims from the review lead's start_worker and gets worker_claim_denied here; any other agent gets integrator_required and messages the review lead. The author's agent cannot claim it. Nobody claims the review of a task of the area main (main_area): a human approves it. A repeat call renews the claim.",
             schema_for_type::<ClaimReviewInput>(),
         ),
         Tool::new(
@@ -377,12 +377,12 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CREATE_REVIEW_CHECKOUT,
-            "Get a copy of the current version of a proposal you hold the review claim of, to read, build and test it, and to fix what you find in the task's scope; submit_review_fix makes the fix the next version.",
+            "Get a copy of the current version of a proposal you hold the review claim of, to read, build and test it, and to fix what you find in the task's scope; submit_review_fix makes the fix the next version. The review lead never reviews and gets review_lead_delegates.",
             schema_for_type::<ProposalIdInput>(),
         ),
         Tool::new(
             SUBMIT_REVIEW,
-            "Review the version of a proposal you read, the version of your review checkout, with a verdict, a text and line comments. request_changes gives the turn to the author; reject closes the proposal. A version that is no longer current is refused with stale_version; an approve of a version whose integration checks failed is refused with invalid_request and the reason checks_failed until the author sends a new version. On a task of the area main only a human approves or rejects, or the main agent while the task has no human review mark, its own proposal included; any other agent gets main_area.",
+            "Review the version of a proposal you read, the version of your review checkout, with a verdict, a text and line comments. request_changes gives the turn to the author; reject closes the proposal. A version that is no longer current is refused with stale_version; an approve of a version whose integration checks failed is refused with invalid_request and the reason checks_failed until the author sends a new version. On a task of the area main only a human approves or rejects, or the main agent while the task has no human review mark, its own proposal included; any other agent gets main_area. The review lead gives no verdict and gets review_lead_delegates.",
             schema_for_type::<SubmitReviewInput>(),
         ),
         Tool::new(
@@ -409,7 +409,7 @@ pub fn tools() -> Vec<Tool> {
     ));
     tools.push(Tool::new(
         SUBMIT_REVIEW_FIX,
-        "Reviewer only: send the fixes you made in your review checkout as the next version of the proposal, under your name, with each changed file and its reason and the checks you ran. Fix only what the task's agreed scope settles; request changes for a product question or feature-size work. When fold-checks.toml has proposal checks for the fixed files, it returns at once with checks running and a run id: fold runs them in your checkout and makes the version only when they pass; the result comes as a message from fold. The version starts without approvals and your checkout then holds it: build it, run the required checks, then approve it with submit_review. The author's agent gets a push to sync its workspace. A batch checkout never becomes a version: fix a member in its own create_review_checkout. Refusals: review_claim_required, author_cannot_review, stale_version, version_unchanged, worker_busy, workspace_not_found (no checkout of that version) and invalid_request with reason fixes_mismatch (details list the unlisted and unchanged files).",
+        "Reviewer only: send the fixes you made in your review checkout as the next version of the proposal, under your name, with each changed file and its reason and the checks you ran. Fix only what the task's agreed scope settles; request changes for a product question or feature-size work. When fold-checks.toml has proposal checks for the fixed files, it returns at once with checks running and a run id: fold runs them in your checkout and makes the version only when they pass; the result comes as a message from fold. The version starts without approvals and your checkout then holds it: build it, run the required checks, then approve it with submit_review. The author's agent gets a push to sync its workspace. A batch checkout never becomes a version: fix a member in its own create_review_checkout. Refusals: review_claim_required, author_cannot_review, review_lead_delegates (the review lead never reviews), stale_version, version_unchanged, worker_busy, workspace_not_found (no checkout of that version) and invalid_request with reason fixes_mismatch (details list the unlisted and unchanged files).",
         schema_for_type::<SubmitReviewFixInput>(),
     ));
     tools.extend(checks::tools());

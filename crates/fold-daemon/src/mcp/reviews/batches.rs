@@ -71,7 +71,7 @@ pub struct RemoveFromBatchInput {
 pub struct BatchVerdictInput {
     /// The member, such as P-3.
     pub proposal: String,
-    /// comment, request_changes, approve or reject. Only the main agent, the review lead and the reviewers it starts can approve or reject; reject closes the proposal.
+    /// comment, request_changes, approve or reject. Only the main agent and the reviewers that the review lead starts can approve or reject; reject closes the proposal. The review lead gives no verdict (review_lead_delegates).
     pub verdict: String,
     /// The review text for this member. An approval may leave it out; request_changes and comment need it or a comment on the member; reject needs it. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
@@ -116,7 +116,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             CREATE_REVIEW_BATCH,
-            "For a review of your own by the main agent or the review lead: review related open proposals together. fold takes the review claim of each and orders them by their task dependencies. A proposal whose task has the human review mark is refused with invalid_request: review it on its own. Then call create_batch_checkout and submit_batch_review. A reviewer gets its batch from the review lead's start_worker and gets worker_claim_denied here.",
+            "For a review of its own by the main agent, when the user tells it to: review related open proposals together. fold takes the review claim of each and orders them by their task dependencies. A proposal whose task has the human review mark is refused with invalid_request: review it on its own. Then call create_batch_checkout and submit_batch_review. A reviewer gets its batch from the review lead's start_worker and gets worker_claim_denied here; the review lead never reviews and gets review_lead_delegates.",
             schema_for_type::<CreateReviewBatchInput>(),
         ),
         Tool::new(
@@ -136,7 +136,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CREATE_BATCH_CHECKOUT,
-            "Get a read-only checkout of main with every member of your batch merged in order, to build and test them once. A conflict is batch_conflict naming both proposals and the paths.",
+            "Get a read-only checkout of main with every member of your batch merged in order, to build and test them once. A conflict is batch_conflict naming both proposals and the paths. The review lead never reviews and gets review_lead_delegates.",
             schema_for_type::<ReviewBatchIdInput>(),
         ),
         Tool::new(

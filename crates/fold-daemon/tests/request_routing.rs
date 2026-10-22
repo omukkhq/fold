@@ -176,7 +176,7 @@ async fn an_area_lead_hears_of_a_new_request_and_claims_it_when_it_is_relevant()
     assert_eq!(
         refused["code"],
         codes::ORCHESTRATOR_REQUIRED,
-        "the review lead drafts no request"
+        "a reviewer drafts no request"
     );
     let claimed = h.call("backend", "claim_request", claim).await;
     assert_eq!(claimed["drafter"], "backend", "{claimed}");

@@ -91,7 +91,7 @@ async fn create_proposal_waits_for_green_checks_and_then_opens_the_proposal() {
 #[tokio::test]
 async fn a_check_of_both_stages_runs_under_one_name_on_the_proposal_and_at_integration() {
     let fx = Fixture::new().await;
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     workspace_with_checks(
         &fx,
         "[[check]]\nname = \"build\"\nrun = \"true\"\nstage = [\"proposal\", \"integration\"]\n",
@@ -355,10 +355,10 @@ async fn an_invalid_checks_file_refuses_the_proposal_at_once() {
     assert_eq!(proposals(&fx).await, 0);
 }
 
-/// `T-1` adds `fold-checks.toml` through a green proposal that a review lead approves and a human integrates, so main holds the file.
+/// `T-1` adds `fold-checks.toml` through a green proposal that a reviewer approves and a human integrates, so main holds the file.
 #[cfg(test)]
 async fn main_with_checks(fx: &Fixture) {
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     workspace_with_checks(fx, PASSING).await;
     let author = by(&fx.frontend.worker);
     let run = checking(

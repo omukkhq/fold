@@ -188,7 +188,7 @@ function GroupHead({
       <>
         <span className="font-semibold text-text">Review</span>
         <span className="text-text-muted">
-          review lead · groups open proposals into batches
+          review lead · gives open proposals to reviewers
         </span>
       </>
     );

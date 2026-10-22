@@ -281,7 +281,7 @@ async fn a_task_worker_stops_when_its_last_proposal_opens_after_an_earlier_one_i
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
-    give_role(&harness.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&harness.handle.store, "review", Role::Reviewer, None).await;
     areas(&harness).await;
     harness
         .call(
@@ -1615,7 +1615,7 @@ async fn a_review_lead_gives_an_ended_reviewers_review_again_and_a_marked_propos
             json!({"proposals": ["P-3", "P-2"]}),
         )
         .await;
-    assert_eq!(own["code"], codes::INVALID_REQUEST, "{own}");
+    assert_eq!(own["code"], codes::REVIEW_LEAD_DELEGATES, "{own}");
     let unclaimed = harness
         .call(MAIN, "get_proposal", json!({"id": "P-2"}))
         .await;
@@ -1709,7 +1709,7 @@ async fn a_task_worker_stops_when_its_task_is_done_unless_it_holds_another_claim
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
-    give_role(&harness.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&harness.handle.store, "review", Role::Reviewer, None).await;
     areas(&harness).await;
     for title in ["Style the page", "Print the page"] {
         harness
@@ -2765,7 +2765,7 @@ async fn a_review_lead_hears_at_a_daemon_start_of_the_proposals_that_wait_for_a_
     assert_eq!(caught_up.len(), 1, "{caught_up:?}");
     assert!(
         caught_up[0].contains(&format!(
-            "These open proposals wait for a review: {proposal}."
+            "These open proposals wait for a review and no reviewer works on them: {proposal}."
         )),
         "{}",
         caught_up[0]
@@ -2823,7 +2823,7 @@ async fn a_review_lead_catch_up_leaves_out_the_proposals_of_tasks_of_main() {
     assert_eq!(caught_up.len(), 1, "{caught_up:?}");
     assert!(
         caught_up[0].contains(&format!(
-            "These open proposals wait for a review: {proposal}."
+            "These open proposals wait for a review and no reviewer works on them: {proposal}."
         )),
         "{}",
         caught_up[0]
@@ -2939,6 +2939,7 @@ async fn a_claim_of_a_stopped_worker_hides_no_work_from_the_catch_up_and_a_live_
         assert_eq!(given["worker"]["name"], reviewer, "{given}");
         until_state(&harness, reviewer, WorkerState::Idle).await;
     }
+    // The first reviewer ends in the middle of its review and nobody resumes it, however live its claim's lease.
     harness
         .call(&review_lead, "stop_worker", json!({"name": "reviewer"}))
         .await;
@@ -2980,7 +2981,7 @@ async fn a_claim_of_a_stopped_worker_hides_no_work_from_the_catch_up_and_a_live_
     assert_eq!(caught_up.len(), 1, "{caught_up:?}");
     assert!(
         caught_up[0].contains(&format!(
-            "These open proposals wait for a review: {}.",
+            "These open proposals wait for a review and no reviewer works on them: {}.",
             proposals[0]
         )),
         "the stopped reviewer's proposal waits, the running reviewer-2 keeps the other: {}",

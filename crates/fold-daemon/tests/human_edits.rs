@@ -82,7 +82,7 @@ struct Fixture {
 
 #[cfg(test)]
 impl Fixture {
-    /// `frontend` holds task 1 and has opened `P-1` on it, which changes `src/lib.rs`; `review` is the review lead. The registry knows `tanim` and `ana`.
+    /// `frontend` holds task 1 and has opened `P-1` on it, which changes `src/lib.rs`; `review` is a reviewer. The registry knows `tanim` and `ana`.
     async fn new() -> Self {
         let project = TestProject::new().await;
         let bus = EventBus::new();
@@ -154,7 +154,7 @@ impl Fixture {
                 .await
                 .unwrap();
         }
-        give_role(project.store(), "review", Role::ReviewLead, None).await;
+        give_role(project.store(), "review", Role::Reviewer, None).await;
         let author = agent("frontend");
         workspaces.create_workspace(&author, t(1)).await.unwrap();
         std::fs::write(Self::file_in(&project), "pub fn y() {}\n").unwrap();
@@ -304,7 +304,7 @@ async fn a_human_edit_is_a_new_version_that_keeps_the_approvals() {
         .view_proposal(&human("tanim"), p(1), None)
         .await
         .unwrap();
-    assert!(view.agent_approved, "the review lead's approval is kept");
+    assert!(view.agent_approved, "the reviewer's approval is kept");
     let kept: Vec<_> = view
         .reviews
         .iter()
