@@ -1,12 +1,18 @@
 import { isHumanName } from "@/people/names";
 import { describe, expect, it } from "vitest";
 import type { ThreadView } from "@/api/messages";
-import { message, thread } from "@/test/messages";
+import { message, recipient, thread } from "@/test/messages";
 import {
   filterLabel,
   filterOptions,
   filterThreads,
   findThread,
+  hasAsk,
+  searchThreads,
+  showChips,
+  showFilter,
+  startedBy,
+  withShow,
   replyPlaceholder,
   replyTargets,
   waitingCount,
@@ -133,7 +139,122 @@ describe("the waiting filter", () => {
     ]);
     expect(filterThreads(threads, { waiting: false })).toHaveLength(3);
     expect(waitingCount(threads)).toBe(1);
-    expect(waitingLabel(1)).toBe("Waits for you (1)");
+    expect(waitingLabel(1)).toBe("Waits for you · 1");
     expect(waitingLabel(0)).toBe("Waits for you");
+  });
+});
+
+describe("the questions and mine filters", () => {
+  const asked = thread("m-7", {
+    last_at: 9,
+    messages: [
+      message("m-7", { sender: "human:tanim", body: "The build fails." }),
+      message("m-8", {
+        sender: "frontend",
+        recipients: [recipient("human:tanim")],
+        asks_human: true,
+      }),
+    ],
+  });
+  const choice = thread("m-9", {
+    last_at: 8,
+    messages: [
+      message("m-9", {
+        sender: "frontend",
+        choices: [{ label: "A", description: null }],
+      }),
+    ],
+  });
+  const plain = thread("m-10", {
+    last_at: 7,
+    messages: [message("m-10", { sender: "backend" })],
+  });
+  const all = [plain, choice, asked];
+
+  it("keeps the threads with an ask for the questions filter", () => {
+    expect([asked, choice, plain, thread("m-11")].map(hasAsk)).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+    expect(filterThreads(all, { questions: true }).map((t) => t.id)).toEqual([
+      "m-7",
+      "m-9",
+    ]);
+  });
+
+  it("keeps the threads the signed-in human started for the mine filter", () => {
+    expect(startedBy(asked, "tanim")).toBe(true);
+    expect(startedBy(asked, null)).toBe(false);
+    expect(startedBy(thread("m-12"), "tanim")).toBe(false);
+    expect(
+      filterThreads(all, { mine: true }, "tanim").map((t) => t.id),
+    ).toEqual(["m-7"]);
+    expect(filterThreads(all, { mine: true })).toEqual([]);
+  });
+});
+
+describe("searchThreads", () => {
+  const found = thread("m-20", {
+    task: "T-125",
+    proposal: "P-61",
+    participants: ["web-worker-39", "human:rafeed"],
+    messages: [
+      message("m-20", { body: "Role analytics\nTwo charts lack a spec." }),
+      message("m-21", { body: "Add decline reasons." }),
+    ],
+  });
+  const other = thread("m-30", {
+    participants: ["backend"],
+    messages: [message("m-30", { body: "The migration needs a default." })],
+  });
+
+  it("keeps every thread for an empty query", () => {
+    expect(searchThreads([found, other], "  ")).toHaveLength(2);
+  });
+
+  it("matches every word without case in the title, bodies, people, task, proposal and id", () => {
+    const ids = (query: string) =>
+      searchThreads([found, other], query).map((t) => t.id);
+    expect(ids("role ANALYTICS")).toEqual(["m-20"]);
+    expect(ids("decline")).toEqual(["m-20"]);
+    expect(ids("@rafeed t-125")).toEqual(["m-20"]);
+    expect(ids("p-61")).toEqual(["m-20"]);
+    expect(ids("m-30")).toEqual(["m-30"]);
+    expect(ids("migration charts")).toEqual([]);
+  });
+});
+
+describe("the chip row", () => {
+  it("reads which chip is on, all when none is", () => {
+    expect(showFilter({})).toBe("all");
+    expect(showFilter({ waiting: true, task: "T-1" })).toBe("waiting");
+    expect(showFilter({ questions: true })).toBe("questions");
+    expect(showFilter({ mine: true })).toBe("mine");
+  });
+  it("turns one chip on and the others off, keeping the other filters", () => {
+    expect(withShow({ waiting: true, task: "T-1" }, "mine")).toEqual({
+      task: "T-1",
+      waiting: undefined,
+      questions: undefined,
+      mine: true,
+    });
+    expect(showFilter(withShow({ mine: true }, "all"))).toBe("all");
+    expect(showFilter(withShow({}, "questions"))).toBe("questions");
+    expect(showFilter(withShow({}, "waiting"))).toBe("waiting");
+  });
+  it("counts the waiting threads and offers Mine only to a signed-in human", () => {
+    expect(showChips(threads, "tanim").map((c) => c.label)).toEqual([
+      "All",
+      "Waits for you · 1",
+      "Questions",
+      "Mine",
+    ]);
+    expect(showChips([], null).map((c) => c.label)).toEqual([
+      "All",
+      "Waits for you",
+      "Questions",
+    ]);
   });
 });

@@ -1,8 +1,8 @@
 use thiserror::Error;
 
 use crate::actor::{Actor, AgentActor};
-use crate::agents::WorkerName;
 use crate::agents::roles::Role;
+use crate::agents::{HumanName, WorkerName};
 use crate::error::{FoldError, codes};
 use crate::reviews::{Reviewer, Verdict};
 use crate::tasks::LabelName;
@@ -355,6 +355,18 @@ pub fn can_use_inbox(actor: &Actor) -> Result<&AgentActor, PolicyDenied> {
             code: codes::INVALID_REQUEST,
             message: "only an agent's worker has an inbox",
             hint: "read the threads on the Messages screen or with GET /messages",
+        }),
+    }
+}
+
+/// A human marks only their own recipient rows read, because a row's read time states what that one human has seen. An agent acknowledges through its worker's inbox, and the system reads nothing. It returns the human whose rows change.
+pub fn can_mark_read(actor: &Actor) -> Result<&HumanName, PolicyDenied> {
+    match actor {
+        Actor::Human { name } => Ok(name),
+        Actor::Agent(_) | Actor::System => Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only a human marks a thread read",
+            hint: "call acknowledge_message to acknowledge a message of the inbox",
         }),
     }
 }

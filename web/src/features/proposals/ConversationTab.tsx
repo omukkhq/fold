@@ -20,7 +20,7 @@ import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { MentionText } from "@/mentions/MentionText";
-import { MentionTextarea } from "@/mentions/MentionTextarea";
+import { MessageComposer } from "@/mentions/MessageComposer";
 import { PersonList, PersonName } from "@/people/PersonName";
 import { idHref } from "@/routes/paths";
 import { questionSchema, type QuestionValues } from "./compose";
@@ -152,14 +152,12 @@ function AskWholeProposal({
             control={control}
             name="body"
             render={({ field }) => (
-              <MentionTextarea
+              <MessageComposer
                 slug={slug}
-                rows={2}
                 aria-label="Question to the author"
                 placeholder="What do you want to know? This changes nothing in the review."
-                readOnly={isSubmitting}
+                pending={isSubmitting}
                 aria-invalid={errors.body ? true : undefined}
-                className="resize-y py-9"
                 ref={field.ref}
                 value={field.value}
                 onValueChange={field.onChange}
@@ -240,16 +238,14 @@ function ReplyForm({
           });
       }}
     >
-      <div className="flex flex-wrap items-start gap-8">
+      <div className="flex flex-wrap items-end gap-8">
         <div className="min-w-0 flex-1">
-          <MentionTextarea
+          <MessageComposer
             slug={slug}
-            rows={1}
             aria-label="Reply"
             placeholder="Reply"
             value={body}
-            readOnly={sending}
-            className="resize-none py-9"
+            pending={sending}
             onValueChange={setBody}
           />
         </div>

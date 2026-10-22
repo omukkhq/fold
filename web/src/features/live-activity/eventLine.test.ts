@@ -220,6 +220,12 @@ describe("eventLine", () => {
       "acknowledged 2 messages",
     );
     expect(line("message.acknowledged")).toBe("acknowledged a message");
+    const human = (data: DurableEvent["data"]) =>
+      eventLine(event("message.acknowledged", { actor: "human:tanim", data }))
+        .text;
+    expect(human({ ids: ["m-31"] })).toBe("read m-31");
+    expect(human({ ids: ["m-30", "m-31"] })).toBe("read 2 messages");
+    expect(human({})).toBe("read a message");
     expect(
       line("message.ask_closed", { message: "m-31", reason: "dismissed" }),
     ).toBe("marked m-31 answered");

@@ -435,3 +435,66 @@ async fn a_row_that_waits_unread_before_the_forward_columns_never_starts_a_worke
         ["m-3"]
     );
 }
+
+#[tokio::test]
+async fn a_human_acknowledges_only_their_own_rows_of_one_thread() {
+    use fold_core::{HumanName, MessageId, Timestamp};
+    use fold_store::{StoreError, messages};
+    let project = seeded().await;
+    for sql in [
+        "INSERT INTO messages (id, number, thread_id, reply_to, sender_kind, sender_worker_id, body, created_at)
+         VALUES (2, 2, 1, 1, 'worker', 1, 'more', 0), (3, 3, 3, NULL, 'worker', 1, 'other', 0)",
+        "INSERT INTO message_recipients (message_id, worker_id, human, addressed_as) VALUES
+         (1, NULL, 'tanim', 'human'), (1, NULL, 'ana', 'human'), (1, 1, NULL, 'worker'),
+         (2, NULL, 'tanim', 'human'), (3, NULL, 'tanim', 'human')",
+    ] {
+        exec(project.store(), sql).await.unwrap();
+    }
+    let tanim = HumanName::parse("tanim").unwrap();
+    let id = |number| MessageId::from_number(number).unwrap();
+    let read = async |before: Option<MessageId>, at: i64| {
+        project
+            .store()
+            .write(async |tx| {
+                messages::acknowledge_human(
+                    tx,
+                    &tanim,
+                    id(1),
+                    before,
+                    Timestamp::from_millis(at).unwrap(),
+                )
+                .await
+            })
+            .await
+    };
+    let first: Result<Vec<MessageId>, StoreError> = read(Some(id(2)), 10).await;
+    assert_eq!(first.unwrap(), vec![id(1)]);
+    assert_eq!(read(None, 20).await.unwrap(), vec![id(2)]);
+    assert_eq!(read(None, 30).await.unwrap(), Vec::<MessageId>::new());
+    assert_eq!(
+        count(
+            project.store(),
+            "SELECT acked_at FROM message_recipients WHERE message_id = 1 AND human = 'tanim'"
+        )
+        .await,
+        10
+    );
+    assert_eq!(
+        count(
+            project.store(),
+            "SELECT acked_at FROM message_recipients WHERE message_id = 2 AND human = 'tanim'"
+        )
+        .await,
+        20
+    );
+    assert_eq!(
+        count(
+            project.store(),
+            "SELECT COUNT(*) FROM message_recipients
+             WHERE acked_at IS NOT NULL AND (human IS NOT 'tanim' OR message_id = 3)"
+        )
+        .await,
+        0,
+        "another human's row, a worker's row and another thread stay unread"
+    );
+}

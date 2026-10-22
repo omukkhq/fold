@@ -20,6 +20,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(show_thread))
         .routes(routes!(send_feedback))
         .routes(routes!(mark_asks_answered))
+        .routes(routes!(mark_thread_read))
 }
 
 /// One recipient row. Names starting `human:` are humans.
@@ -29,10 +30,10 @@ pub struct RecipientView {
     pub name: String,
     /// How the sender reached this recipient: `agent`, `worker`, `tag`, `all`, `human` or `humans`.
     pub addressed_as: String,
-    /// UTC milliseconds; null until an inbox returned the row.
+    /// UTC milliseconds; null until an inbox returned the row. Always null for a human, whose Messages screen shows the message as soon as it is stored.
     #[schema(required = true)]
     pub delivered_at: Option<i64>,
-    /// UTC milliseconds; null until the recipient acknowledged it.
+    /// UTC milliseconds; null until the recipient acknowledged it. A human acknowledges by opening the thread, which marks it read, or by writing in it.
     #[schema(required = true)]
     pub acknowledged_at: Option<i64>,
     /// UTC milliseconds: the first time a notice about the message reached a session or the worker process of the recipient's agent, where it waits until the agent reads its inbox. Null for a human and while no notice got through.
@@ -469,5 +470,48 @@ pub async fn mark_asks_answered(
         .await?;
     Ok(Json(MarkedAnswered {
         answered: answered.iter().map(ToString::to_string).collect(),
+    }))
+}
+
+/// The messages a mark-read call acknowledged.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ThreadRead {
+    /// In number order; empty when the signed-in human had nothing unread in the thread.
+    #[schema(example = json!(["m-31", "m-33"]))]
+    pub read: Vec<String>,
+}
+
+/// The signed-in human marks a thread read: their recipient rows of its messages that have no acknowledgement take the current time, and `message.acknowledged` names those messages. Rows of other recipients never change, and a repeat changes nothing and appends no event.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/threads/{id}/read",
+    operation_id = "mark_thread_read",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The id of the thread's first message, or of any message of the thread"),
+    ),
+    responses(
+        (status = 200, description = "The messages this call marked read", body = ThreadRead),
+        (status = 400, description = "`invalid_id`: the id is not a message id", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "`message_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn mark_thread_read(
+    human: Human,
+    State(state): State<AppState>,
+    project: Project,
+    Path((_slug, id)): Path<(String, String)>,
+) -> Result<Json<ThreadRead>, ApiError> {
+    let id = id.parse::<MessageId>().map_err(FoldError::from)?;
+    let read = project
+        .0
+        .messages(&state.registry)
+        .mark_read(&human.actor(), id)
+        .await?;
+    Ok(Json(ThreadRead {
+        read: read.iter().map(ToString::to_string).collect(),
     }))
 }

@@ -337,6 +337,18 @@ impl MessageService {
                             .unwrap_or_default();
                     inbox::append_acknowledged(tx, &mut buffer, actor, &changed, now).await?;
                 }
+                // A human who writes in a thread has read what came before in it.
+                if let Actor::Human { name } = actor {
+                    let changed = fold_store::messages::acknowledge_human(
+                        tx,
+                        name,
+                        view.thread,
+                        Some(view.id),
+                        now,
+                    )
+                    .await?;
+                    inbox::append_acknowledged(tx, &mut buffer, actor, &changed, now).await?;
+                }
                 #[cfg(feature = "failpoints")]
                 fail::fail_point!("send_message_in_transaction", |_| Err(fired(
                     "send_message_in_transaction"

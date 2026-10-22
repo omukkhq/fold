@@ -3,6 +3,7 @@ import {
   formatAge,
   formatAsOf,
   formatAsOfMinute,
+  formatClock,
   formatQuiet,
   formatSince,
 } from "./time";
@@ -84,5 +85,12 @@ describe("formatAsOfMinute", () => {
     const now = new Date(2026, 9, 15, 0, 1, 0).getTime();
     const at = new Date(2026, 9, 14, 23, 59, 59).getTime();
     expect(formatAsOfMinute(now, at)).toBe("Oct 14, 23:59");
+  });
+});
+
+describe("formatClock", () => {
+  it("prints the local hour and minute without the day", () => {
+    expect(formatClock(new Date(2026, 0, 2, 7, 5, 59).getTime())).toBe("07:05");
+    expect(formatClock(new Date(2025, 11, 31, 23, 59).getTime())).toBe("23:59");
   });
 });
