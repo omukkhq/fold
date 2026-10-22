@@ -63,7 +63,7 @@ export function TokenCard({ pending, error, onSubmit }: CardProps) {
         <TextField
           label="Token"
           type="password"
-          placeholder="fold_tk_…"
+          placeholder="43 characters from fld token create"
           error={form.formState.errors.token?.message ?? error}
           className="font-mono text-meta"
           autoComplete="off"

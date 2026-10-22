@@ -3,8 +3,12 @@ import { TOKEN_REQUIRED, tokenFormSchema } from "./token";
 
 describe("tokenFormSchema", () => {
   it("trims a token", () => {
-    expect(tokenFormSchema.parse({ token: "  fold_tk_abc " })).toEqual({
-      token: "fold_tk_abc",
+    expect(
+      tokenFormSchema.parse({
+        token: "  Qm9sZF9leGFtcGxlX3Rva2VuX2Zvcl90ZXN0cw ",
+      }),
+    ).toEqual({
+      token: "Qm9sZF9leGFtcGxlX3Rva2VuX2Zvcl90ZXN0cw",
     });
   });
 

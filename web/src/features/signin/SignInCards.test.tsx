@@ -12,9 +12,14 @@ describe("TokenCard", () => {
     render(<TokenCard pending={false} onSubmit={onSubmit} />);
     const field = screen.getByLabelText("Token");
     expect(field.getAttribute("type")).toBe("password");
-    await userEvent.type(field, " fold_tk_abc ");
+    expect(field.getAttribute("placeholder")).toBe(
+      "43 characters from fld token create",
+    );
+    await userEvent.type(field, " Qm9sZF9leGFtcGxlX3Rva2VuX2Zvcl90ZXN0cw ");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(onSubmit).toHaveBeenCalledExactlyOnceWith("fold_tk_abc");
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
+      "Qm9sZF9leGFtcGxlX3Rva2VuX2Zvcl90ZXN0cw",
+    );
   });
 
   it("shows a pending state and an inline error", () => {

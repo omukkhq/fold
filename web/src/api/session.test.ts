@@ -41,8 +41,10 @@ describe("signInWithLink", () => {
 describe("signIn", () => {
   it("posts the token and nothing else", async () => {
     const calls = stubFetch({ "POST /api/v1/session": { status: 204 } });
-    await signIn("fold_tk_abc");
-    expect(calls[0]?.body).toEqual({ token: "fold_tk_abc" });
+    await signIn("Qm9sZF9leGFtcGxlX3Rva2VuX2Zvcl90ZXN0cw");
+    expect(calls[0]?.body).toEqual({
+      token: "Qm9sZF9leGFtcGxlX3Rva2VuX2Zvcl90ZXN0cw",
+    });
   });
 
   it("throws the daemon's code for a refused token", async () => {
