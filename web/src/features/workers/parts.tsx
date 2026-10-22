@@ -30,7 +30,7 @@ export function StatePill({ pill }: { pill: Pill }) {
 
 export function StepText({ step }: { step: Step }) {
   return (
-    <span className="flex min-w-0 items-center gap-6 text-code">
+    <span className="flex max-w-(--width-search) min-w-0 items-center gap-6 text-code">
       {step.tool ? (
         <span className="font-medium text-text">{step.tool}</span>
       ) : null}

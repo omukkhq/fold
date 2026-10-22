@@ -169,6 +169,7 @@
   --width-column: var(--width-column);
   --width-fact-label: var(--width-fact-label);
   --width-filter-column: var(--width-filter-column);
+  --width-group-head: var(--width-group-head);
 
   --height-*: initial;
   --height-bar: var(--height-bar);
