@@ -93,9 +93,11 @@ export function showFile(marks: OpenMarks, shown: string | null): OpenMarks {
   return markOpened(marks, shown);
 }
 
-/** A reader who selects a file opens it, even when it is already shown; null selects a file without a viewed mark. */
+/** A reader who selects the open file again opens it again. Another file is marked only once the screen shows it, so a render before the address moves never marks the file the reader left; null selects a file without a viewed mark. */
 export function selectFile(marks: OpenMarks, path: string | null): OpenMarks {
-  return path === null ? marks : markOpened(marks, path);
+  return path !== null && path === marks.opened
+    ? markOpened(marks, path)
+    : marks;
 }
 
 /** `2 of 33 viewed`, counting only the files the change lists. */

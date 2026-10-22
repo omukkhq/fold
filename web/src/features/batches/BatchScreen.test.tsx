@@ -435,6 +435,14 @@ describe("BatchScreen", () => {
     expect(screen.getByText("2 of 2 viewed")).toBeTruthy();
     await user.click(screen.getByRole("checkbox", { name: "Viewed" }));
     expect(screen.getByText("1 of 2 viewed")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /login\.ts(?!x)/ }));
+    expect(await screen.findByText("merged src/forms/login.ts")).toBeTruthy();
+    expect(screen.getByText("1 of 2 viewed")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: /login\.tsx/ })
+        .getAttribute("data-viewed"),
+    ).toBeNull();
     await user.click(screen.getByRole("tab", { name: "Members" }));
     expect(screen.getByRole("table", { name: "Members" })).toBeTruthy();
     expect(router.state.location.search).toEqual({});

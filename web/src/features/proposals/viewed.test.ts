@@ -108,15 +108,14 @@ describe("opening a file marks it viewed", () => {
     expect(open.opened).toBe("a.ts");
   });
 
-  it("marks a selected file again even when it is already open", () => {
+  it("marks the open file again when the reader selects it, and another file only once it is shown", () => {
     const open = showFile(none, "a.ts");
     expect(selectFile(open, "a.ts")).toBe(open);
     const unchecked = { ...open, viewed: new Set<string>() };
     expect(selectFile(unchecked, "a.ts")).toEqual(open);
-    expect(selectFile(unchecked, "b.ts")).toEqual({
-      opened: "b.ts",
-      viewed: new Set(["b.ts"]),
-    });
+    const leaving = selectFile(unchecked, "b.ts");
+    expect(leaving).toBe(unchecked);
+    expect(showFile(leaving, "a.ts")).toBe(unchecked);
     expect(selectFile(unchecked, null)).toBe(unchecked);
   });
 });
