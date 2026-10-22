@@ -1,5 +1,4 @@
-import type { ReviewBatchDiff } from "@/api/reviews";
-import { projectPath, withQuery } from "@/routes/paths";
+import type { ReviewBatch, ReviewBatchDiff } from "@/api/reviews";
 
 /** The two tabs of the batch screen; Members is the default. */
 export type BatchTab = "members" | "changes";
@@ -36,17 +35,6 @@ export function batchTabSearch(
   return search.path === undefined ? { tab } : { tab, path: search.path };
 }
 
-export function batchHref(
-  slug: string,
-  id: string,
-  search: BatchSearch,
-): string {
-  const params = new URLSearchParams();
-  if (search.tab !== undefined) params.set("tab", search.tab);
-  if (search.path !== undefined) params.set("path", search.path);
-  return withQuery(projectPath(slug, "batches", id), params);
-}
-
 function memberList(diff: ReviewBatchDiff): string {
   return diff.members
     .map((m) => `${m.proposal} v${String(m.version)}`)
@@ -65,6 +53,38 @@ export function mergedLine(diff: ReviewBatchDiff): string | null {
     return `main ${base} → ${diff.head ?? ""}: ${memberList(diff)}, integrated together`;
   }
   return null;
+}
+
+function verb(ids: readonly string[], one: string, many: string): string {
+  return `${ids.join(", ")} ${ids.length === 1 ? one : many}`;
+}
+
+/** Which members of a submitted batch's merged change integrate with the batch, such as `P-5 integrates · P-6 does not`: the change shows every member the review covered, which can be more than integrates. Null before the review is submitted, after the batch's turn and when no member the change shows is known yet. */
+export function integratesLine(
+  batch: ReviewBatch,
+  diff: ReviewBatchDiff,
+): string | null {
+  if (diff.basis !== "merged" || batch.state !== "submitted") return null;
+  const shown = diff.members.map((m) => m.proposal);
+  const integration = batch.integration;
+  if (integration.state === "waiting") {
+    const waiting = shown.filter((p) => integration.pending.includes(p));
+    return waiting.length === 0
+      ? null
+      : `${verb(waiting, "waits", "wait")} for a final verdict`;
+  }
+  if (integration.state !== "ready") return null;
+  const integrates = shown.filter((p) => integration.members.includes(p));
+  const left = shown.filter((p) => !integration.members.includes(p));
+  const parts: string[] = [];
+  if (integrates.length > 0) {
+    parts.push(verb(integrates, "integrates", "integrate"));
+  }
+  if (left.length > 0) {
+    const not = verb(left, "does not", "do not");
+    parts.push(integrates.length === 0 ? `${not} integrate` : not);
+  }
+  return parts.length === 0 ? null : parts.join(" · ");
 }
 
 /** The empty state of a merged change that has no file to show. */

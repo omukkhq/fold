@@ -341,7 +341,7 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
         <RadixTabs.Content value="changes" className={insetFocusRing}>
           <MergedChanges
             slug={slug}
-            id={batch.id}
+            batch={batch}
             path={search.path}
             onPath={(path) => {
               onSearch({ tab: "changes", path });

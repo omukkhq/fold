@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { comparedFile } from "@/test/diff";
-import { batchDiff } from "@/test/workers";
+import type { ReviewBatch } from "@/api/reviews";
+import { batch, batchDiff } from "@/test/workers";
 import {
-  batchHref,
   batchTab,
   batchTabSearch,
   conflictNote,
+  integratesLine,
   isBatchTab,
   mergedEmpty,
   mergedLine,
@@ -44,13 +45,6 @@ describe("the batch screen's address", () => {
     });
     expect(batchTabSearch({}, "changes")).toEqual({ tab: "changes" });
   });
-
-  it("writes the tab and the file into the link", () => {
-    expect(batchHref("demo", "rb-3", {})).toBe("/p/demo/batches/rb-3");
-    expect(batchHref("demo", "rb-3", { tab: "changes", path: "src/a b" })).toBe(
-      "/p/demo/batches/rb-3?tab=changes&path=src%2Fa+b",
-    );
-  });
 });
 
 describe("the merged change", () => {
@@ -67,6 +61,80 @@ describe("the merged change", () => {
     expect(
       mergedLine(batchDiff({ basis: "integrated", base: "r17", head: "r19" })),
     ).toBe("main r17 → r19: P-3 v2 + P-4 v1, integrated together");
+  });
+
+  it("marks which members of a submitted batch integrate with it", () => {
+    const submitted = (
+      integration: Partial<ReviewBatch["integration"]>,
+    ): ReviewBatch => {
+      const base = batch();
+      return batch({
+        state: "submitted",
+        integration: { ...base.integration, ...integration },
+      });
+    };
+    const diff = batchDiff();
+    expect(
+      integratesLine(submitted({ state: "ready", members: ["P-3"] }), diff),
+    ).toBe("P-3 integrates · P-4 does not");
+    expect(
+      integratesLine(
+        submitted({ state: "ready", members: ["P-3", "P-4"] }),
+        diff,
+      ),
+    ).toBe("P-3, P-4 integrate");
+    expect(
+      integratesLine(submitted({ state: "ready", members: [] }), diff),
+    ).toBe("P-3, P-4 do not integrate");
+    expect(
+      integratesLine(
+        submitted({ state: "ready", members: [] }),
+        batchDiff({ members: [{ proposal: "P-4", version: 1 }] }),
+      ),
+    ).toBe("P-4 does not integrate");
+    expect(
+      integratesLine(submitted({ state: "waiting", pending: ["P-4"] }), diff),
+    ).toBe("P-4 waits for a final verdict");
+    expect(
+      integratesLine(
+        submitted({ state: "waiting", pending: ["P-3", "P-4"] }),
+        diff,
+      ),
+    ).toBe("P-3, P-4 wait for a final verdict");
+  });
+
+  it("marks nothing before the review, after the turn or without members", () => {
+    const ready = {
+      ...batch().integration,
+      state: "ready" as const,
+      members: ["P-3"],
+    };
+    expect(integratesLine(batch({ integration: ready }), batchDiff())).toBe(
+      null,
+    );
+    const submitted = batch({ state: "submitted", integration: ready });
+    expect(
+      integratesLine(submitted, batchDiff({ basis: "integrated" })),
+    ).toBeNull();
+    expect(integratesLine(submitted, batchDiff({ members: [] }))).toBeNull();
+    expect(
+      integratesLine(
+        batch({
+          state: "submitted",
+          integration: { ...ready, state: "waiting", pending: ["P-9"] },
+        }),
+        batchDiff(),
+      ),
+    ).toBeNull();
+    expect(
+      integratesLine(
+        batch({
+          state: "submitted",
+          integration: { ...ready, state: "ended" },
+        }),
+        batchDiff(),
+      ),
+    ).toBeNull();
   });
 
   it("has no sides when it compares nothing", () => {

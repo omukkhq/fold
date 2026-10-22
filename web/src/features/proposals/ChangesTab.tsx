@@ -1,16 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, ChevronDown, CircleAlert, Pencil } from "lucide-react";
 import { useState } from "react";
-import type {
-  ChangeRange,
-  CheckRun,
-  ProposalDetail,
-  ReviewComment,
-} from "@/api/proposals";
+import type { CheckRun, ProposalDetail, ReviewComment } from "@/api/proposals";
 import { proposalChangesQuery, proposalFileDiffQuery } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
-import { Checkbox } from "@/components/form/controls";
 import { Menu } from "@/components/overlay/Menu";
 import {
   SEGMENT_LIST,
@@ -19,7 +13,7 @@ import {
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
-import { DiffViewer, type FileDiffView } from "@/features/diff/DiffViewer";
+import { useFileDiff } from "@/features/diff/fileDiff";
 import { currentFile, fileBody, listedFiles } from "@/features/diff/layout";
 import type { DiffSelection } from "@/features/diff/selection";
 import { cn } from "@/lib/cn";
@@ -29,8 +23,8 @@ import { AskAuthorBox } from "./AskAuthorBox";
 import { canEdit, editableFile } from "./edit";
 import { describeFailure } from "./errors";
 import { FileEditor } from "./FileEditor";
-import { changeTree, folderPaths, toggleFolder, treeFiles } from "./folderTree";
-import { FileTree } from "./FileTree";
+import { ChangedFiles } from "./ChangedFiles";
+import { useChangedFiles } from "./changedFilesState";
 import { HumanActions, type ActionHandlers } from "./HumanActions";
 import {
   lineMenu,
@@ -53,59 +47,10 @@ import {
   type DetailSearch,
   type DetailView,
 } from "./view";
-import {
-  readViewed,
-  toggleViewed,
-  viewedKey,
-  viewedText,
-  writeViewed,
-  type MarkStore,
-} from "./viewed";
+import { viewedKey } from "./viewed";
 
 function failureText(error: unknown): string {
   return describeFailure(error).text;
-}
-
-function useFileDiff(
-  slug: string,
-  id: string,
-  range: ChangeRange,
-  path: string | null,
-): FileDiffView {
-  const query = useQuery({
-    ...proposalFileDiffQuery(slug, id, range, path ?? ""),
-    enabled: path !== null,
-  });
-  if (query.isError) {
-    return {
-      status: "error",
-      retry: () => {
-        void query.refetch();
-      },
-    };
-  }
-  return query.data
-    ? { status: "ready", diff: query.data }
-    : { status: "pending" };
-}
-
-function browserStore(): MarkStore | null {
-  try {
-    return window.localStorage;
-  } catch {
-    return null;
-  }
-}
-
-/** The viewed marks of one change in this browser. */
-export function useViewed(key: string) {
-  const [viewed, setViewed] = useState(() => readViewed(browserStore(), key));
-  const toggle = (path: string) => {
-    const next = toggleViewed(viewed, path);
-    writeViewed(browserStore(), key, next);
-    setViewed(next);
-  };
-  return { viewed, toggle };
 }
 
 /** A line comment or a question from the diff selection, exactly as the selection gives its range. */
@@ -252,22 +197,17 @@ function ChangeBody({
   const comparison = useQuery(proposalChangesQuery(slug, id, view.range));
   const [selection, setSelection] = useState<DiffSelection | null>(null);
   const [mode, setMode] = useState<SelectionMode>("menu");
-  const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
-  const [filter, setFilter] = useState("");
-  const { viewed, toggle } = useViewed(viewedKey(slug, id, view.range));
+  const tree = useChangedFiles(viewedKey(slug, id, view.range));
   const select = (next: DiffSelection | null) => {
     setSelection(next);
     setMode("menu");
   };
   const [editing, setEditing] = useState<string | null>(null);
-  const tree = changeTree(comparison.data?.files ?? []);
   const files = comparison.data ? listedFiles(comparison.data.files) : [];
   const file = currentFile(files, search.path);
   const fileDiff = useFileDiff(
-    slug,
-    id,
-    view.range,
-    file !== null && fileBody(file) === "text" ? file.path : null,
+    proposalFileDiffQuery(slug, id, view.range, file?.path ?? ""),
+    file !== null && fileBody(file) === "text",
   );
   const version = shownVersion(view);
   const threads = buildThreads(comments, version);
@@ -318,7 +258,10 @@ function ChangeBody({
       </div>
     );
   }
-  const paths = treeFiles(tree).map((f) => f.path);
+  const showFile = (path: string) => {
+    select(null);
+    onSearch({ ...search, tab: "changes", path });
+  };
   return (
     <div className="flex min-w-0 flex-col gap-16 px-16 pt-16 pb-24 md:px-24">
       {editable ? (
@@ -338,46 +281,11 @@ function ChangeBody({
       {files.length === 0 ? (
         <EmptyPanel title="No changes">{emptyChangeText(view)}</EmptyPanel>
       ) : (
-        <DiffViewer
+        <ChangedFiles
+          state={tree}
           comparison={data}
           selectedPath={file?.path}
-          onSelectFile={(path) => {
-            select(null);
-            onSearch({ ...search, tab: "changes", path });
-          }}
-          fileNav={
-            <FileTree
-              nodes={tree}
-              selectedPath={file?.path ?? null}
-              viewed={viewed}
-              viewedText={viewedText(viewed, paths)}
-              closed={closed}
-              filter={filter}
-              onFilter={setFilter}
-              onToggle={(path) => {
-                setClosed((old) => toggleFolder(old, path));
-              }}
-              onExpandAll={() => {
-                setClosed(new Set());
-              }}
-              onCollapseAll={() => {
-                setClosed(new Set(folderPaths(tree)));
-              }}
-              onSelect={(path) => {
-                select(null);
-                onSearch({ ...search, tab: "changes", path });
-              }}
-            />
-          }
-          headExtra={(path) => (
-            <Checkbox
-              label="Viewed"
-              checked={viewed.has(path)}
-              onCheckedChange={() => {
-                toggle(path);
-              }}
-            />
-          )}
+          onSelectFile={showFile}
           fileDiff={fileDiff}
           selection={selection}
           onSelect={select}
