@@ -564,7 +564,7 @@ export function ConversationTab({
   const all = threads ?? [];
   const shown = filterConversation(all, filter);
   return (
-    <div className="flex w-page max-w-full flex-col gap-24 px-16 py-20 md:px-24 lg:flex-row lg:items-start">
+    <div className="flex min-w-0 flex-col gap-24 px-16 py-20 md:px-24 lg:flex-row lg:items-start">
       <aside
         aria-label="Filters"
         className="flex min-w-0 flex-col gap-18 lg:w-filter-column lg:shrink-0"

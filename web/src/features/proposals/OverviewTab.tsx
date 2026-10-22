@@ -725,7 +725,7 @@ export function OverviewTab({
     failed: failedVersions,
   });
   return (
-    <div className="flex w-page max-w-full flex-col gap-24 px-16 py-20 md:px-24 lg:flex-row lg:items-start">
+    <div className="flex min-w-0 flex-col gap-24 px-16 py-20 md:px-24 lg:flex-row lg:items-start">
       <div className="flex min-w-0 flex-1 flex-col gap-24">
         <IntegrationCard
           slug={slug}
