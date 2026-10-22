@@ -167,10 +167,13 @@
   --width-needs-you: var(--width-needs-you);
   --width-transcript: var(--width-transcript);
   --width-column: var(--width-column);
+  --width-fact-label: var(--width-fact-label);
+  --width-filter-column: var(--width-filter-column);
 
   --height-*: initial;
   --height-bar: var(--height-bar);
   --height-chart: var(--height-chart);
+  --height-review-dialog: var(--height-review-dialog);
 }
 
 @layer base {

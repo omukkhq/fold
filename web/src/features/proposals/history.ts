@@ -3,9 +3,11 @@ import type {
   ProposalDetail,
   ProposalVersion,
   Review,
+  ReviewComment,
   Verdict,
 } from "@/api/proposals";
 import { listedReviews, reviewScopeText, versionVerdict } from "./present";
+import { linesText } from "./threadsModel";
 import type { DetailSearch } from "./view";
 
 /** The lines of a review the history shows before "Read the full review". */
@@ -53,6 +55,8 @@ export interface HistoryReview {
   head: string;
   excerpt: Excerpt;
   scope: string | null;
+  /** The comments that came with the review, in the order they were made. */
+  comments: ReviewComment[];
 }
 
 /** How a version came to be: by the author, as a reviewer's fix, or as a human's edit in a human review. */
@@ -70,6 +74,8 @@ export interface HistoryEntry {
   diff: { label: string; search: DetailSearch };
   /** The version's check runs, newest first; null until they arrive. */
   runs: readonly CheckRun[] | null;
+  /** The read of the version's runs failed, so they never arrive. */
+  runsFailed: boolean;
   /** Its reviews, newest first. */
   reviews: HistoryReview[];
 }
@@ -80,7 +86,39 @@ function originOf(v: ProposalVersion): VersionOrigin {
   return "author";
 }
 
-function historyReview(review: Review): HistoryReview {
+/** A comment carries no review id; the review's reviewer, version and verdict name the review it came with. */
+export function commentsOfReview(
+  review: Review,
+  comments: readonly ReviewComment[],
+): ReviewComment[] {
+  return comments
+    .filter(
+      (c) =>
+        c.author === review.reviewer &&
+        c.version === review.version &&
+        c.verdict === review.verdict,
+    )
+    .sort((a, b) => a.created_at - b.created_at);
+}
+
+/** Where a review comment is: `a.sql · lines 2–4`, or `whole version`. */
+export function reviewCommentWhere(comment: ReviewComment): string {
+  const { path, side, start_line, end_line } = comment;
+  if (
+    path === null ||
+    side === null ||
+    start_line === null ||
+    end_line === null
+  ) {
+    return "whole version";
+  }
+  return `${path} · ${linesText({ path, side, start_line, end_line })}`;
+}
+
+function historyReview(
+  review: Review,
+  comments: readonly ReviewComment[],
+): HistoryReview {
   const head =
     review.kept_from === null
       ? HEADS[review.verdict]
@@ -90,13 +128,22 @@ function historyReview(review: Review): HistoryReview {
     head,
     excerpt: excerpt(review.body),
     scope: reviewScopeText(review),
+    comments: commentsOfReview(review, comments),
   };
+}
+
+export interface HistoryInputs {
+  /** Every comment of every version, for the comments each review came with. */
+  comments?: readonly ReviewComment[];
+  /** The versions whose read of their runs failed. */
+  failed?: ReadonlySet<number>;
 }
 
 /** One card per version, newest first, each with what made it, its check runs and its reviews. */
 export function historyEntries(
   p: ProposalDetail,
   runs: ReadonlyMap<number, readonly CheckRun[]>,
+  { comments = [], failed = new Set() }: HistoryInputs = {},
 ): HistoryEntry[] {
   const versions = [...p.versions].sort((a, b) => a.version - b.version);
   const reviews = listedReviews(p.reviews);
@@ -118,9 +165,10 @@ export function historyEntries(
             }
           : { label: "Full change", search: { tab: "changes", ...here } },
         runs: runs.get(v.version) ?? null,
+        runsFailed: !runs.has(v.version) && failed.has(v.version),
         reviews: reviews
           .filter((r) => r.version === v.version)
-          .map(historyReview),
+          .map((r) => historyReview(r, comments)),
       };
     })
     .reverse();

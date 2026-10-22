@@ -6,8 +6,15 @@ import {
   proposalSummary,
   proposalVersion,
   review,
+  reviewComment,
 } from "@/test/proposals";
-import { excerpt, historyEntries, runSummary } from "./history";
+import {
+  commentsOfReview,
+  excerpt,
+  historyEntries,
+  reviewCommentWhere,
+  runSummary,
+} from "./history";
 
 const p = proposalDetail(proposalSummary("P-39", { current_version: 3 }), {
   versions: [
@@ -31,6 +38,59 @@ const p = proposalDetail(proposalSummary("P-39", { current_version: 3 }), {
 });
 
 describe("historyEntries", () => {
+  it("gives each review the comments of its reviewer, version and verdict, and marks a failed read of runs", () => {
+    const comments = [
+      reviewComment(2, 1, {
+        author: "review/quality",
+        verdict: "request_changes",
+        created_at: 20,
+      }),
+      reviewComment(1, 1, {
+        author: "review/quality",
+        verdict: "request_changes",
+        path: null,
+        side: null,
+        start_line: null,
+        end_line: null,
+        created_at: 10,
+      }),
+      reviewComment(3, 1, { author: "review/quality", verdict: "comment" }),
+      reviewComment(4, 2, {
+        author: "review/quality",
+        verdict: "request_changes",
+      }),
+      reviewComment(5, 1, { author: "backend", verdict: "request_changes" }),
+    ];
+    const entries = historyEntries(p, new Map([[3, [checkRun(9)]]]), {
+      comments,
+      failed: new Set([1, 3]),
+    });
+    const changes = entries[2]?.reviews[0];
+    expect(changes?.comments.map((c) => c.id)).toEqual(["rc-1", "rc-2"]);
+    expect(entries.map((e) => e.runsFailed)).toEqual([false, false, true]);
+    expect(historyEntries(p, new Map())[2]?.runsFailed).toBe(false);
+    expect(
+      commentsOfReview(review(2, "review/quality", "approve"), comments),
+    ).toEqual([]);
+  });
+
+  it("names where a review comment is", () => {
+    expect(reviewCommentWhere(reviewComment(1, 1))).toBe("a.sql · lines 2–4");
+    expect(
+      reviewCommentWhere(reviewComment(1, 1, { start_line: 3, end_line: 3 })),
+    ).toBe("a.sql · line 3");
+    expect(
+      reviewCommentWhere(
+        reviewComment(1, 1, {
+          path: null,
+          side: null,
+          start_line: null,
+          end_line: null,
+        }),
+      ),
+    ).toBe("whole version");
+  });
+
   it("lists each version newest first with how it was made, its change and its reviews", () => {
     const entries = historyEntries(p, new Map([[3, [checkRun(9)]]]));
     expect(

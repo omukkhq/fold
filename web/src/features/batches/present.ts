@@ -130,13 +130,14 @@ export function memberChange(
   };
 }
 
-/** The proposal screen opens on the change the row shows. */
+/** The proposal screen opens its Changes tab on the change the row shows. */
 export function memberSearch(change: MemberChange | undefined): {
+  tab: "changes";
   since?: number;
 } {
   return change === undefined || change.since === null
-    ? {}
-    : { since: change.since };
+    ? { tab: "changes" }
+    : { tab: "changes", since: change.since };
 }
 
 /** Each member's change by proposal; `full` holds the full changes read so far, by proposal. */

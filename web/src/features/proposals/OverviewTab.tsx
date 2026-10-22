@@ -15,6 +15,7 @@ import type {
   CheckRun,
   GateStatus,
   ProposalDetail,
+  ReviewComment,
   Verdict,
 } from "@/api/proposals";
 import { HrefLink } from "@/app/HrefLink";
@@ -40,6 +41,7 @@ import { changedFolders, changeTree, filesWord } from "./folderTree";
 import { gateText, shownGates, waitingSummary } from "./gates";
 import {
   historyEntries,
+  reviewCommentWhere,
   runSummary,
   type HistoryEntry,
   type HistoryReview,
@@ -208,6 +210,27 @@ function IntegrationCard({
   );
 }
 
+function ReviewCommentItem({
+  slug,
+  comment,
+}: {
+  slug: string;
+  comment: ReviewComment;
+}) {
+  return (
+    <li className="flex flex-col gap-4 rounded-m bg-sunken px-12 py-9">
+      <span className="font-mono text-caption text-text-muted">
+        {comment.id} · {reviewCommentWhere(comment)}
+      </span>
+      <MentionText
+        text={comment.body}
+        slug={slug}
+        className="text-code leading-normal whitespace-pre-wrap"
+      />
+    </li>
+  );
+}
+
 function FullReview({
   slug,
   entry,
@@ -219,11 +242,6 @@ function FullReview({
   item: HistoryReview;
   now: number;
 }) {
-  const comments = item.review.comments;
-  const label =
-    comments > 0
-      ? `Read the full review and its ${String(comments)} ${comments === 1 ? "comment" : "comments"}`
-      : "Read the full review";
   return (
     <Dialog
       title={`${item.head} on v${String(entry.version.version)}`}
@@ -232,7 +250,7 @@ function FullReview({
           type="button"
           className={cn("self-start text-meta font-semibold", LINK)}
         >
-          {label}
+          Read the full review
         </button>
       }
     >
@@ -242,11 +260,30 @@ function FullReview({
           {formatAsOfMinute(now, item.review.created_at)}
           {item.scope === null ? "" : ` · ${item.scope}`}
         </p>
-        <MentionText
-          text={item.review.body.trim() || item.head}
-          slug={slug}
-          className="max-h-chart overflow-y-auto text-body leading-normal whitespace-pre-wrap"
-        />
+        <div className="flex max-h-review-dialog flex-col gap-14 overflow-y-auto">
+          <MentionText
+            text={item.review.body.trim() || item.head}
+            slug={slug}
+            className="text-body leading-normal whitespace-pre-wrap"
+          />
+          {item.comments.length === 0 ? null : (
+            <section
+              aria-label="Comments of the review"
+              className="flex flex-col gap-8"
+            >
+              <h3 className={OVERLINE}>Comments</h3>
+              <ul className="flex flex-col gap-8">
+                {item.comments.map((comment) => (
+                  <ReviewCommentItem
+                    key={comment.id}
+                    slug={slug}
+                    comment={comment}
+                  />
+                ))}
+              </ul>
+            </section>
+          )}
+        </div>
       </div>
     </Dialog>
   );
@@ -352,10 +389,14 @@ function VersionCard({
       </header>
       <div className="flex flex-col gap-12 px-18 py-12">
         <div className="flex gap-10">
-          <span className="w-skeleton-s shrink-0 text-code text-text-faint">
+          <span className="w-fact-label shrink-0 text-code text-text-faint">
             Checks
           </span>
-          {entry.runs === null ? (
+          {entry.runsFailed ? (
+            <p role="alert" className="text-code font-medium text-danger">
+              The checks could not be read.
+            </p>
+          ) : entry.runs === null ? (
             <p className="text-code text-text-muted">Reading the checks…</p>
           ) : entry.runs.length === 0 ? (
             <p className="text-code text-text-muted">
@@ -384,7 +425,7 @@ function VersionCard({
               data-verdict={item.review.verdict}
               className="flex gap-10"
             >
-              <span className="w-skeleton-s shrink-0 text-code text-text-faint">
+              <span className="w-fact-label shrink-0 text-code text-text-faint">
                 Review
               </span>
               <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -410,7 +451,9 @@ function VersionCard({
                     className="text-code leading-normal whitespace-pre-line text-text-muted"
                   />
                 )}
-                {item.excerpt.cut || item.review.comments > 0 ? (
+                {item.excerpt.cut ||
+                item.review.comments > 0 ||
+                item.comments.length > 0 ? (
                   <FullReview slug={slug} entry={entry} item={item} now={now} />
                 ) : null}
               </div>
@@ -447,7 +490,7 @@ function VersionCard({
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex gap-12">
-      <dt className="w-skeleton-s shrink-0 text-text-faint">{label}</dt>
+      <dt className="w-fact-label shrink-0 text-text-faint">{label}</dt>
       <dd className="min-w-0 flex-1 text-text">{children}</dd>
     </div>
   );
@@ -628,6 +671,10 @@ export interface OverviewTabProps {
   /** The current version, which the human actions act on. */
   actionView: DetailView;
   runs: ReadonlyMap<number, readonly CheckRun[]>;
+  /** The versions whose read of their runs failed. */
+  failedVersions: ReadonlySet<number>;
+  /** Every review comment of the proposal; empty until they arrive. */
+  comments: readonly ReviewComment[];
   threads: readonly ConversationThread[] | null;
   area: string | null;
   /** The address of another tab of this proposal. */
@@ -645,11 +692,16 @@ export function OverviewTab({
   actions,
   actionView,
   runs,
+  failedVersions,
+  comments,
   threads,
   area,
   tabHref,
 }: OverviewTabProps) {
-  const entries = historyEntries(proposal, runs);
+  const entries = historyEntries(proposal, runs, {
+    comments,
+    failed: failedVersions,
+  });
   return (
     <div className="flex w-page max-w-full flex-col gap-24 px-16 py-20 md:px-24 lg:flex-row lg:items-start">
       <div className="flex min-w-0 flex-1 flex-col gap-24">

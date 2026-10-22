@@ -28,6 +28,7 @@ import {
   proposalVersionQuery,
   workersQuery,
 } from "@/api/queries";
+import { olderNotListed } from "@/api/pages";
 import { revisionsQuery } from "@/api/repositoryQueries";
 import { HrefLink } from "@/app/HrefLink";
 import { buttonClasses } from "@/components/button/buttonStyles";
@@ -36,7 +37,7 @@ import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
 import { cn } from "@/lib/cn";
-import { focusRing } from "@/lib/focus";
+import { focusRing, insetFocusRing } from "@/lib/focus";
 import { useNow } from "@/live/useNow";
 import { projectPath } from "@/routes/paths";
 import {
@@ -79,7 +80,8 @@ interface ProposalDetailScreenProps {
   search: DetailSearch;
   /** The signed-in human; null before the name prompt is answered. */
   human: string | null;
-  onSearch: (next: DetailSearch) => void;
+  /** A tab change pushes a history entry, so Back returns to the earlier tab; a file, version or run on the same tab replaces the entry. */
+  onSearch: (next: DetailSearch, history?: "push" | "replace") => void;
 }
 
 function TabTrigger({
@@ -235,9 +237,11 @@ export function ProposalDetailScreen({
   const shown = failure === null ? null : describeFailure(failure);
 
   const runs = new Map<number, readonly CheckRun[]>([[current, data.checks]]);
+  const failedVersions = new Set<number>();
   earlier.forEach((version, index) => {
-    const read = earlierReads[index]?.data;
-    if (read) runs.set(version, read.checks);
+    const read = earlierReads[index];
+    if (read?.data) runs.set(version, read.data.checks);
+    else if (read?.isError) failedVersions.add(version);
   });
   // A version whose read failed leaves its runs out rather than holding the Checks tab in its loading state.
   const settled = earlierReads.every((read) => !read.isPending);
@@ -267,7 +271,8 @@ export function ProposalDetailScreen({
     },
   });
   const tabHref = (next: DetailSearch) => detailHref(slug, id, next);
-  const content = "focus-visible:outline-none";
+  // A panel spans the page, so its ring is drawn inside it where no edge clips it.
+  const content = insetFocusRing;
 
   return (
     <div className="flex min-w-0 flex-col">
@@ -288,7 +293,7 @@ export function ProposalDetailScreen({
       <RadixTabs.Root
         value={tab}
         onValueChange={(value) => {
-          if (isDetailTab(value)) onSearch(tabSearch(search, value));
+          if (isDetailTab(value)) onSearch(tabSearch(search, value), "push");
         }}
         className="flex min-w-0 flex-col"
       >
@@ -327,6 +332,8 @@ export function ProposalDetailScreen({
             actions={actionsFor(currentView)}
             actionView={currentView}
             runs={runs}
+            failedVersions={failedVersions}
+            comments={comments.data ?? []}
             threads={conversation}
             area={authorArea(workers.data, summary.author)}
             tabHref={tabHref}
@@ -386,6 +393,11 @@ export function ProposalDetailScreen({
             slug={slug}
             proposal={data}
             threads={conversation}
+            olderNote={
+              threads.data?.more
+                ? olderNotListed(threads.data.items.length, "message threads")
+                : null
+            }
             human={human}
             now={now}
             changesHref={tabHref({ tab: "changes" })}

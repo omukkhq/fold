@@ -14,7 +14,7 @@ const TABS: readonly DetailTab[] = [
 
 /** The detail screen's address: the tab, the version on screen, an earlier version whose change since it the screen shows instead of the full change, the file, and the check run and step the Checks tab shows. */
 export interface DetailSearch {
-  /** Absent, the tab is Changes for an address that names a file or an earlier version, and Overview otherwise. */
+  /** Absent, the tab is Changes for an address that names a file, a version or an earlier version, and Overview otherwise. */
   tab?: DetailTab;
   /** The current version when absent. */
   version?: number;
@@ -58,10 +58,12 @@ export function parseDetailSearch(
   };
 }
 
-/** The tab the address shows. Older links name only a file or an earlier version, and those open the change. */
+/** The tab the address shows. Older links name only a file, a version or an earlier version, and those open the change. */
 export function detailTab(search: DetailSearch): DetailTab {
   if (search.tab !== undefined) return search.tab;
-  return search.path !== undefined || search.since !== undefined
+  return search.path !== undefined ||
+    search.version !== undefined ||
+    search.since !== undefined
     ? "changes"
     : "overview";
 }

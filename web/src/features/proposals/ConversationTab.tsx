@@ -20,7 +20,6 @@ import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { MentionText } from "@/mentions/MentionText";
 import { MentionTextarea } from "@/mentions/MentionTextarea";
-import { atName } from "@/people/names";
 import { PersonList, PersonName } from "@/people/PersonName";
 import { idHref } from "@/routes/paths";
 import { questionSchema, type QuestionValues } from "./compose";
@@ -106,13 +105,11 @@ function FilterGroup<T>({
 /** A question to the author about the whole proposal; the author decides on its own whether it needs a human's answer. */
 function AskWholeProposal({
   slug,
-  proposal,
   human,
   changesHref,
   onAsk,
 }: {
   slug: string;
-  proposal: ProposalDetail;
   human: string | null;
   changesHref: string;
   onAsk: (body: string) => Promise<void>;
@@ -195,7 +192,7 @@ function AskWholeProposal({
               pendingLabel="Asking…"
               icon={<Send aria-hidden="true" size={13} />}
             >
-              Ask {atName(proposal.summary.author)}
+              Ask the author
             </Button>
           </div>
         </>
@@ -205,9 +202,11 @@ function AskWholeProposal({
 }
 
 function ReplyForm({
+  slug,
   label,
   onSend,
 }: {
+  slug: string;
   label: string;
   onSend: (body: string) => Promise<void>;
 }) {
@@ -240,20 +239,19 @@ function ReplyForm({
           });
       }}
     >
-      <div className="flex flex-wrap items-center gap-8">
-        <input
-          aria-label="Reply"
-          placeholder="Reply"
-          value={body}
-          readOnly={sending}
-          onChange={(event) => {
-            setBody(event.target.value);
-          }}
-          className={cn(
-            "min-w-0 flex-1 rounded-m bg-bg px-10 py-6 text-bar text-text inset-ring inset-ring-border placeholder:text-text-faint",
-            focusRing,
-          )}
-        />
+      <div className="flex flex-wrap items-start gap-8">
+        <div className="min-w-0 flex-1">
+          <MentionTextarea
+            slug={slug}
+            rows={1}
+            aria-label="Reply"
+            placeholder="Reply"
+            value={body}
+            readOnly={sending}
+            className="resize-none py-9"
+            onValueChange={setBody}
+          />
+        </div>
         <Button
           type="submit"
           size="sm"
@@ -477,6 +475,7 @@ function ThreadCard({
             ) : null}
             {human === null ? null : (
               <ReplyForm
+                slug={slug}
                 label={`Reply in ${source.thread.id}`}
                 onSend={async (body) => {
                   const last = source.thread.messages.at(-1);
@@ -512,6 +511,7 @@ function ThreadCard({
           {human !== null && proposal.summary.state === "open" ? (
             <div className="border-t border-border-subtle px-16 py-10">
               <ReplyForm
+                slug={slug}
                 label={`Reply to ${source.thread.id}`}
                 onSend={async (body) => {
                   const last = source.thread.comments.at(-1)?.comment;
@@ -531,6 +531,8 @@ export interface ConversationTabProps {
   proposal: ProposalDetail;
   /** Null while the threads or the comments are read. */
   threads: readonly ConversationThread[] | null;
+  /** The line that says older message threads were left out; null when every thread was read. */
+  olderNote: string | null;
   human: string | null;
   now: number;
   changesHref: string;
@@ -543,6 +545,7 @@ export function ConversationTab({
   slug,
   proposal,
   threads,
+  olderNote,
   human,
   now,
   changesHref,
@@ -558,7 +561,7 @@ export function ConversationTab({
     <div className="flex w-page max-w-full flex-col gap-24 px-16 py-20 md:px-24 lg:flex-row lg:items-start">
       <aside
         aria-label="Filters"
-        className="flex min-w-0 flex-col gap-18 lg:w-project-agents lg:shrink-0"
+        className="flex min-w-0 flex-col gap-18 lg:w-filter-column lg:shrink-0"
       >
         <FilterGroup
           title="Show"
@@ -585,7 +588,6 @@ export function ConversationTab({
       <div className="flex min-w-0 flex-1 flex-col gap-16">
         <AskWholeProposal
           slug={slug}
-          proposal={proposal}
           human={human}
           changesHref={changesHref}
           onAsk={onAsk}
@@ -611,6 +613,9 @@ export function ConversationTab({
               onComment={onComment}
             />
           ))
+        )}
+        {olderNote === null ? null : (
+          <p className="text-meta text-text-muted">{olderNote}</p>
         )}
       </div>
     </div>

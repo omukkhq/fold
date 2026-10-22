@@ -69,11 +69,11 @@ describe("parseDetailSearch", () => {
 });
 
 describe("detailTab", () => {
-  it("shows the named tab, else the change for a file or an earlier version, else the overview", () => {
+  it("shows the named tab, else the change for a file, a version or an earlier version, else the overview", () => {
     expect(detailTab({ tab: "checks", path: "a.sql" })).toBe("checks");
     expect(detailTab({ path: "a.sql" })).toBe("changes");
     expect(detailTab({ since: 1 })).toBe("changes");
-    expect(detailTab({ version: 1 })).toBe("overview");
+    expect(detailTab({ version: 1 })).toBe("changes");
     expect(detailTab({})).toBe("overview");
     expect(isDetailTab("checks")).toBe(true);
     expect(isDetailTab("files")).toBe(false);
@@ -96,7 +96,11 @@ describe("tabSearch", () => {
       tab: "overview",
     });
     expect(tabSearch({ tab: "checks", version: 2 }, "overview")).toEqual({
+      tab: "overview",
       version: 2,
+    });
+    expect(tabSearch({ tab: "checks", run: "cr-2" }, "overview")).toEqual({
+      run: "cr-2",
     });
     expect(changesSearch({ path: "a.sql" })).toEqual({
       tab: "changes",

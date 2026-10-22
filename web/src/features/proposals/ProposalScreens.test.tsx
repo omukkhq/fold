@@ -1395,6 +1395,85 @@ describe("Proposal tabs", () => {
     ).toBe("true");
   });
 
+  it("adds a history entry for each tab, so Back returns to the earlier tab, and replaces it for a version on the same tab", async () => {
+    const user = userEvent.setup();
+    const { router } = renderAt("/p/demo/proposals/P-4");
+    await screen.findByRole("tab", { name: "Overview" });
+    await user.click(screen.getByRole("tab", { name: /^Checks/ }));
+    await waitFor(() => {
+      expect(router.state.location.search).toEqual({ tab: "checks" });
+    });
+    await user.click(screen.getByRole("tab", { name: /^Changes/ }));
+    await waitFor(() => {
+      expect(router.state.location.search).toEqual({ tab: "changes" });
+    });
+    router.history.back();
+    await waitFor(() => {
+      expect(router.state.location.search).toEqual({ tab: "checks" });
+    });
+    expect(
+      screen
+        .getByRole("tab", { name: /^Checks/ })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    router.history.back();
+    await waitFor(() => {
+      expect(router.state.location.search).toEqual({});
+    });
+    await user.click(screen.getByRole("tab", { name: /^Changes/ }));
+    await user.click(
+      await screen.findByRole("button", { name: /^Version: v2/ }),
+    );
+    await user.click(await screen.findByRole("menuitem", { name: /^v1/ }));
+    await waitFor(() => {
+      expect(router.state.location.search).toEqual({
+        tab: "changes",
+        version: 1,
+      });
+    });
+    router.history.back();
+    await waitFor(() => {
+      expect(router.state.location.search).toEqual({});
+    });
+  });
+
+  it("shows a review with the comments it came with in its dialog", async () => {
+    const user = userEvent.setup();
+    renderAt("/p/demo/proposals/P-4");
+    const v1 = await screen.findByRole("article", { name: "Version v1" });
+    await user.click(
+      await within(v1).findByRole("button", { name: "Read the full review" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    const listed = within(dialog).getByRole("region", {
+      name: "Comments of the review",
+    });
+    expect(
+      within(listed).getByText("Add an index on (owner_id, report_date)."),
+    ).toBeTruthy();
+    expect(within(listed).getByText(`rc-1 · ${SCHEMA} · line 3`)).toBeTruthy();
+    expect(
+      within(listed).queryByText("Added reports_owner_date_idx in v2."),
+    ).toBeNull();
+  });
+
+  it("says when the checks of an earlier version could not be read", async () => {
+    daemon.on("GET /api/v1/projects/:slug/proposals/:id", (call) => {
+      const found = proposals.get(call.params.id ?? "");
+      if (!found) return refuse(404, "proposal_not_found");
+      return call.path.includes("version=1")
+        ? refuse(500, "disk_full")
+        : ok(found);
+    });
+    renderAt("/p/demo/proposals/P-4");
+    const v1 = await screen.findByRole("article", { name: "Version v1" });
+    expect(
+      await within(v1).findByText("The checks could not be read."),
+    ).toBeTruthy();
+    const v2 = screen.getByRole("article", { name: "Version v2" });
+    expect(within(v2).queryByText("The checks could not be read.")).toBeNull();
+  });
+
   it("lists the changed files as folders that close, open, filter and mark the viewed files", async () => {
     window.localStorage.clear();
     const user = userEvent.setup();
@@ -1443,6 +1522,18 @@ describe("Proposal tabs", () => {
     );
   });
 
+  it("says when the conversation left out older message threads", async () => {
+    daemon.on("GET /api/v1/projects/:slug/messages", () =>
+      ok({ items: [], next: "older", total_awaiting_human: 0 }),
+    );
+    renderAt("/p/demo/proposals/P-4?tab=conversation");
+    expect(
+      await screen.findByText(
+        "Showing the newest 0 message threads. Older message threads are not listed.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("asks the author about the whole proposal from the conversation, pending until the daemon answers", async () => {
     const user = userEvent.setup();
     renderAt("/p/demo/proposals/P-4?tab=conversation");
@@ -1454,7 +1545,7 @@ describe("Proposal tabs", () => {
     );
     const release = hold();
     await user.click(
-      within(form).getByRole("button", { name: "Ask @backend/db" }),
+      within(form).getByRole("button", { name: "Ask the author" }),
     );
     expect(
       within(form)
