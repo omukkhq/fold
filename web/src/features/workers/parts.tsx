@@ -40,6 +40,7 @@ export function StepText({ step }: { step: Step }) {
             "truncate",
             step.faint ? "text-text-faint" : "text-text-muted",
           )}
+          title={step.text}
         >
           {step.text}
         </span>
