@@ -1320,7 +1320,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** A named human stops a worker. Its turn is interrupted and its process ends; it keeps its session. */
+        /** A named human stops a worker. Its turn is interrupted and its process ends; it keeps its session. The supervised main stays stopped: fold starts it for no message, request, task or review until a human starts it again with a new session. */
         post: operations["stop_worker"];
         delete?: never;
         options?: never;
@@ -4571,6 +4571,8 @@ export interface components {
              * @example main
              */
             main_label: string;
+            /** @description Whether `supervised = true` under `[main]` has fold run the main agent as the worker of role `main`; false when fold cannot read `.fold/config.toml`. With it off, the main agent is the user's own `fld claude` session, and a row of role `main` is left from a time it was on. */
+            main_supervised: boolean;
             pause: components["schemas"]["PauseEntry"];
             /** @description Each role with the cache time a new worker of the role gets; empty when fold cannot read `.fold/config.toml`. */
             roles: components["schemas"]["RoleEntry"][];
@@ -4735,7 +4737,7 @@ export interface components {
          * @description The kinds of worker fold runs.
          * @enum {string}
          */
-        WorkerRole: "area_lead" | "review_lead" | "task_worker" | "reviewer";
+        WorkerRole: "area_lead" | "review_lead" | "task_worker" | "reviewer" | "main";
         WorkerWorkspace: {
             /**
              * @description The revision the workspace is based on.
@@ -12443,7 +12445,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `worker_exists`, `worker_busy` (a stop came first), `worker_limit_reached`, `project_paused` or `invalid_config` */
+            /** @description `worker_exists`, `worker_busy` (a stop came first), `worker_limit_reached`, `project_paused`, `invalid_config`, or for the supervised main `main_interactive` or `main_not_supervised` */
             409: {
                 headers: {
                     [name: string]: unknown;

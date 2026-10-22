@@ -201,7 +201,7 @@ pub struct GetActivityInput {
 pub struct WriteHandoffInput {
     /// The hand-off note for your next session, at most 8000 characters: what you are doing, your open decisions and what comes next. Tasks, proposals, reviews and messages stay in fold, so leave them out.
     pub text: String,
-    /// The worker that makes this call. Leave it out: only a lead's main worker writes its note.
+    /// The worker that makes this call. Leave it out: only the main worker of a lead or of the supervised main writes its note.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
 }
@@ -260,7 +260,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             WRITE_HANDOFF,
-            "As an area lead or the review lead, store your hand-off note when fold asks for it; fold then starts you again with a fresh context whose first turn holds the note and the current fold state.",
+            "As an area lead, the review lead or the supervised main, store your hand-off note when fold asks for it; fold then starts you again with a fresh context whose first turn holds the note and the current fold state.",
             schema_for_type::<WriteHandoffInput>(),
         ),
         Tool::new(

@@ -45,6 +45,8 @@ pub struct WorkerList {
     #[schema(required = true)]
     pub limits: Option<LimitsEntry>,
     pub pause: PauseEntry,
+    /// Whether `supervised = true` under `[main]` has fold run the main agent as the worker of role `main`; false when fold cannot read `.fold/config.toml`. With it off, the main agent is the user's own `fld claude` session, and a row of role `main` is left from a time it was on.
+    pub main_supervised: bool,
 }
 
 /// Whether the project's agents are paused. While paused, fold runs no worker process; a worker that was working, idle or starting keeps that state and runs again in its own session at the resume.
@@ -149,6 +151,8 @@ pub enum WorkerRole {
     ReviewLead,
     TaskWorker,
     Reviewer,
+    /// The supervised main agent, which fold runs when the project's `[main] supervised` setting is on; nobody starts it.
+    Main,
 }
 
 impl From<Role> for WorkerRole {
@@ -158,6 +162,7 @@ impl From<Role> for WorkerRole {
             Role::ReviewLead => Self::ReviewLead,
             Role::TaskWorker => Self::TaskWorker,
             Role::Reviewer => Self::Reviewer,
+            Role::Main => Self::Main,
         }
     }
 }
@@ -169,6 +174,7 @@ impl From<WorkerRole> for Role {
             WorkerRole::ReviewLead => Self::ReviewLead,
             WorkerRole::TaskWorker => Self::TaskWorker,
             WorkerRole::Reviewer => Self::Reviewer,
+            WorkerRole::Main => Self::Main,
         }
     }
 }
@@ -472,6 +478,7 @@ pub async fn list_workers(project: Project) -> Result<Json<WorkerList>, ApiError
         roles,
         limits: config.as_ref().map(|config| config.workers.limits().into()),
         pause: agents.pause_state().await?.into(),
+        main_supervised: config.as_ref().is_some_and(|config| config.main.supervised),
     }))
 }
 
@@ -521,7 +528,7 @@ pub async fn start_worker(
     Ok((StatusCode::CREATED, Json(entry(&agents, worker).await?)))
 }
 
-/// A named human stops a worker. Its turn is interrupted and its process ends; it keeps its session.
+/// A named human stops a worker. Its turn is interrupted and its process ends; it keeps its session. The supervised main stays stopped: fold starts it for no message, request, task or review until a human starts it again with a new session.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/workers/{name}/stop",
@@ -597,7 +604,7 @@ pub struct RestartWorkerBody {
         (status = 400, description = "`invalid_request` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`worker_process_not_found` or `project_not_found`", body = ErrorEnvelope),
-        (status = 409, description = "`worker_exists`, `worker_busy` (a stop came first), `worker_limit_reached`, `project_paused` or `invalid_config`", body = ErrorEnvelope),
+        (status = 409, description = "`worker_exists`, `worker_busy` (a stop came first), `worker_limit_reached`, `project_paused`, `invalid_config`, or for the supervised main `main_interactive` or `main_not_supervised`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )

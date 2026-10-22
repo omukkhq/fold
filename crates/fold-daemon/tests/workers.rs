@@ -961,6 +961,7 @@ async fn a_human_defines_areas_and_starts_and_stops_leads_over_http() {
             {"role": "review_lead", "cache_ttl": "1h", "model": null},
             {"role": "task_worker", "cache_ttl": "5m", "model": null},
             {"role": "reviewer", "cache_ttl": "5m", "model": null},
+            {"role": "main", "cache_ttl": "1h", "model": null},
         ])
     );
     let config = std::path::Path::new(harness.root()).join(".fold/config.toml");

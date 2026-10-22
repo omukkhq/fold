@@ -12,6 +12,7 @@ import {
   modelRows,
   projectCostLines,
   rangeSince,
+  roleRowName,
   roleRows,
   shareText,
   showsTick,
@@ -68,6 +69,28 @@ describe("costTiles", () => {
         tokens: ["400.0k tokens", "32.0k output"],
       },
     ]);
+  });
+
+  it("counts the supervised main agent among the leads", () => {
+    const view = projectCost(TODAY);
+    const withMain = projectCost(TODAY, {
+      by_role: [
+        ...view.by_role,
+        {
+          role: "main",
+          cost_micro_usd: 1_000_000,
+          tokens: tokens(200_000),
+          turns: 3,
+          workers: 1,
+        },
+      ],
+    });
+    expect(costTiles(withMain)[3]).toMatchObject({
+      label: "Leads",
+      amount: "$3.00",
+      detail: "30% · 2 workers",
+    });
+    expect(roleRowName("main")).toBe("Main agent");
   });
 
   it("says when there is no turn", () => {

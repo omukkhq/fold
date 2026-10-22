@@ -10,10 +10,10 @@ use fold_cli::claude_user::{self, UserFiles};
 use fold_cli::daemon_client::{self, ClientError, DaemonClient, Response};
 use fold_core::layout::{MCP_COMMAND, session_settings};
 use fold_core::transcript::{claude_config_dir, is_session_id};
-use fold_core::{AgentName, FoldError, MAIN_TAG, ProjectPaths, codes};
+use fold_core::{AgentName, FoldError, MAIN_TAG, ProjectConfig, ProjectPaths, codes};
 use fold_daemon::services::agents::claude::transcript_path;
 use fold_daemon::services::agents::new_session_id;
-use fold_daemon::services::projects::{ProjectError, registration_for_dir_on_host};
+use fold_daemon::services::projects::{ProjectError, load_config, registration_for_dir_on_host};
 use hyper::Method;
 use thiserror::Error;
 
@@ -153,6 +153,11 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
     let root = runtime.block_on(async {
         let found = registration_for_dir_on_host(&host, &cwd).await?;
         let slug = found.row.slug;
+        let root = PathBuf::from(found.row.root);
+        // Before the daemon starts, so a refused start runs nothing. A config that fold cannot read stops no session here; the daemon reports it where it reads it.
+        if let Ok(project) = load_config(&ProjectPaths::new(&root)).await {
+            not_supervised(&project)?;
+        }
         daemon_client::connect(&config).await?;
         // The daemon's open route notes that a person uses the project, which orders the recent projects of the web interface, and brings a project a person removed back into fold.
         let client = DaemonClient::new(config.clone(), human.clone());
@@ -168,7 +173,6 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
                 &format!("project {slug} is back in fold"),
             );
         }
-        let root = PathBuf::from(found.row.root);
         if let Some(human) = human {
             let client = DaemonClient::new(config, Some(human));
             let path = format!("/api/v1/projects/{slug}/agents");
@@ -411,6 +415,18 @@ fn accepted(response: &Response) -> Result<(), ClaudeError> {
             .message
             .unwrap_or_else(|| "the daemon refused the request".to_owned()),
         hint: refusal.hint,
+    })
+}
+
+/// Refuses before `claude` starts when the project has fold run its main agent as a supervised worker, so no second main agent runs beside it.
+fn not_supervised(config: &ProjectConfig) -> Result<(), ClaudeError> {
+    if !config.main.supervised {
+        return Ok(());
+    }
+    Err(ClaudeError::Refused {
+        code: codes::MAIN_SUPERVISED.to_owned(),
+        message: "fold runs the main agent of this project as a supervised worker, so `fld claude` starts no second one".to_owned(),
+        hint: Some("talk to the main agent in the fold web app; to run it here instead, set supervised = false under [main] in .fold/config.toml and stop the supervised main on the Agents screen".to_owned()),
     })
 }
 
@@ -921,6 +937,24 @@ mod tests {
         let error = main_is_free(&bare, &agent).unwrap_err();
         assert_eq!(error.code(), Some(codes::INTERNAL_ERROR));
         assert_eq!(error.hint(), None);
+    }
+
+    #[test]
+    fn a_supervised_main_refuses_the_interactive_one() {
+        assert!(not_supervised(&ProjectConfig::default()).is_ok());
+        let on = ProjectConfig::from_toml("[main]\nsupervised = true\n").unwrap();
+        let refused = not_supervised(&on).unwrap_err();
+        assert_eq!(refused.code(), Some(codes::MAIN_SUPERVISED));
+        assert!(
+            refused.to_string().contains("supervised worker"),
+            "{refused}"
+        );
+        assert!(
+            refused
+                .hint()
+                .is_some_and(|hint| hint.contains("supervised = false under [main]")),
+            "{refused:?}"
+        );
     }
 
     #[test]

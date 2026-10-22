@@ -558,6 +558,30 @@ pub async fn set_worker_pid(tx: &mut WriteTx, id: i64, pid: Option<u32>) -> Resu
     Ok(())
 }
 
+/// Records that a human stopped the supervised main of row `id`, which must be stopping or ended: fold then starts it for no work of its own until a start of the row clears the mark.
+pub async fn hold_worker(tx: &mut WriteTx, id: i64, now: Timestamp) -> Result<(), StoreError> {
+    let now = now.as_millis();
+    sqlx::query!(
+        "UPDATE worker_processes SET held_at = ?2 WHERE id = ?1",
+        id,
+        now
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
+/// Whether a human stopped row `id` and nothing started it since.
+pub async fn worker_held<'e>(db: impl SqliteExecutor<'e>, id: i64) -> Result<bool, StoreError> {
+    let held = sqlx::query_scalar!(
+        r#"SELECT held_at IS NOT NULL AS "held!: bool" FROM worker_processes WHERE id = ?"#,
+        id
+    )
+    .fetch_optional(db)
+    .await?;
+    Ok(held.unwrap_or(false))
+}
+
 /// Forgets the pid of the row's ended process `pid`. A row that records another pid keeps it: a new start of the row can run while the process it let go of is still ending.
 pub async fn clear_worker_pid(tx: &mut WriteTx, id: i64, pid: u32) -> Result<(), StoreError> {
     let pid = i64::from(pid);
@@ -753,7 +777,7 @@ pub async fn restart_worker_process(
     sqlx::query!(
         "UPDATE worker_processes
          SET state = 'starting', started_at = ?2, stopped_at = NULL, idle_since = NULL, pid = NULL, exit_code = NULL,
-             failed_reason = NULL
+             failed_reason = NULL, held_at = NULL
          WHERE id = ?1",
         id,
         now

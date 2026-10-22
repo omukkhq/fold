@@ -160,6 +160,9 @@ fn status_of(code: &str) -> Option<StatusCode> {
         codes::ASK_NOT_OPEN => Some(StatusCode::CONFLICT),
         codes::ASK_CLOSE_DENIED => Some(StatusCode::FORBIDDEN),
         codes::RECIPIENT_NOT_READER => Some(StatusCode::CONFLICT),
+        codes::MAIN_SUPERVISED | codes::MAIN_INTERACTIVE | codes::MAIN_NOT_SUPERVISED => {
+            Some(StatusCode::CONFLICT)
+        }
         _ => None,
     }
 }
@@ -405,6 +408,9 @@ mod tests {
             (codes::FILE_NOT_EDITABLE, StatusCode::UNPROCESSABLE_ENTITY),
             (codes::TASK_ON_HOLD, StatusCode::CONFLICT),
             (codes::TASK_NEEDS_HUMAN, StatusCode::CONFLICT),
+            (codes::MAIN_SUPERVISED, StatusCode::CONFLICT),
+            (codes::MAIN_INTERACTIVE, StatusCode::CONFLICT),
+            (codes::MAIN_NOT_SUPERVISED, StatusCode::CONFLICT),
         ] {
             assert_eq!(status_of(code), Some(status));
         }

@@ -8,11 +8,15 @@ use super::not_supervised;
 use crate::services::agents::{AgentError, AgentService};
 
 impl AgentService {
-    /// Stores the acting lead's hand-off note for its current session. fold then starts the lead again with a fresh session that reads the note: at once when the lead is idle, else when its turn ends. The note is content and goes into no log, event or error.
+    /// Stores the acting lead's or supervised main's hand-off note for its current session. fold then starts it again with a fresh session that reads the note: at once when it is idle, else when its turn ends. The note is content and goes into no log, event or error. The interactive main agent keeps its own session, so the rules refuse it.
     pub async fn write_handoff(&self, actor: &Actor, body: &str) -> Result<(), AgentError> {
         let supervisor = self.supervisor()?.clone();
+        let role = match actor {
+            Actor::Agent(agent) => self.get_worker(&agent.agent).await.ok().map(|row| row.role),
+            Actor::Human { .. } | Actor::System => None,
+        };
         let starter = self.starter(actor).await?;
-        policy::can_write_handoff(&starter).map_err(FoldError::from)?;
+        policy::can_write_handoff(&starter, role).map_err(FoldError::from)?;
         let body = check_handoff(body)?;
         let Actor::Agent(agent) = actor else {
             return Err(FoldError::new(

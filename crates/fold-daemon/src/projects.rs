@@ -199,6 +199,7 @@ impl ProjectHandle {
             Git::default(),
         );
         let cleanup_due = Arc::new(tokio::sync::Notify::new());
+        workers.set_cleanup_due(cleanup_due.clone());
         let cleanup = WorkspaceService::new(
             store.clone(),
             bus.clone(),
