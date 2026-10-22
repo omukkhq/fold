@@ -72,6 +72,8 @@ mod crash_messages;
 mod crash_record;
 #[cfg(feature = "failpoints")]
 mod crash_stash;
+#[cfg(feature = "failpoints")]
+mod crash_workspace_removal;
 mod daemon_shell;
 mod delete_archive;
 mod deleted_projects;
@@ -173,6 +175,7 @@ mod worker_transcript;
 mod workers;
 #[cfg(feature = "failpoints")]
 mod workers_failpoints;
+mod workspace_cleanup;
 mod workspaces_compare;
 #[cfg(feature = "failpoints")]
 mod workspaces_failpoints;

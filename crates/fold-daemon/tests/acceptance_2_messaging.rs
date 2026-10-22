@@ -26,9 +26,9 @@ async fn acceptance_2_a_reply_lands_in_the_senders_inbox_and_in_one_thread() {
         )
         .await;
     let acknowledged = harness
-        .call("backend", "acknowledge_message", json!({"id": question}))
+        .call("backend", "acknowledge_message", json!({"ids": [question]}))
         .await;
-    assert_eq!(acknowledged["acknowledged"], json!([question]));
+    assert_eq!(acknowledged["acknowledged"], json!([]));
     assert!(harness.inbox("backend").await.is_empty());
 
     let inbox = harness.call("frontend", "get_inbox", json!({})).await;
@@ -49,7 +49,7 @@ async fn acceptance_2_messages_wait_through_a_reconnect_and_a_daemon_restart() {
     let first = harness.send("frontend", &["backend"], "first").await;
     assert_eq!(harness.inbox("backend").await, [first.as_str()]);
     harness
-        .call("backend", "acknowledge_message", json!({"id": first}))
+        .call("backend", "acknowledge_message", json!({"ids": [first]}))
         .await;
 
     harness.disconnect("backend").await;
@@ -59,7 +59,7 @@ async fn acceptance_2_messages_wait_through_a_reconnect_and_a_daemon_restart() {
     harness.connect("backend").await;
     assert_eq!(harness.inbox("backend").await, [second.as_str()]);
     harness
-        .call("backend", "acknowledge_message", json!({"id": second}))
+        .call("backend", "acknowledge_message", json!({"ids": [second]}))
         .await;
 
     let third = harness

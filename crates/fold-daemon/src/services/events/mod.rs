@@ -18,6 +18,7 @@ pub use query::{
 };
 pub use wait::{
     DEFAULT_TIMEOUT_S, MAX_TIMEOUT_S, SHORT_CACHE_MAX_TIMEOUT_S, TICK, WaitQuery, WaitStep, Waiter,
+    cap_for_cache,
 };
 
 const BUS_CAPACITY: usize = 1024;

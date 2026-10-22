@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use fold_core::EventFilter;
 use fold_core::events::types;
+use fold_core::roles::CacheTtl;
 use fold_store::agents::WorkerRow;
 use fold_store::events::{self, MessageWake, WaitingMessage};
 use tokio::sync::broadcast::{self, error::RecvError};
@@ -21,6 +22,18 @@ pub const MAX_TIMEOUT_S: u64 = 1500;
 
 /// The longest wait of a worker whose prompt cache lives five minutes: a longer wait lets the cache expire, and the next turn pays to write it again.
 pub const SHORT_CACHE_MAX_TIMEOUT_S: u64 = 270;
+
+/// The wait of a caller whose prompt cache lives `ttl`: a five-minute cache cuts the requested wait, or the default one, to [`SHORT_CACHE_MAX_TIMEOUT_S`]. `None` is a caller that fold runs in no worker process, whose wait stays as requested.
+pub fn cap_for_cache(requested: Option<u64>, ttl: Option<CacheTtl>) -> Option<u64> {
+    match ttl {
+        Some(CacheTtl::FiveMinutes) => Some(
+            requested
+                .unwrap_or(DEFAULT_TIMEOUT_S)
+                .min(SHORT_CACHE_MAX_TIMEOUT_S),
+        ),
+        Some(CacheTtl::OneHour) | None => requested,
+    }
+}
 
 /// How often a waiter reports that it is still alive.
 pub const TICK: Duration = Duration::from_secs(60);
@@ -201,5 +214,29 @@ impl Waiter {
     /// How many events the waiter holds in memory: at most the one page its first read found.
     pub fn held(&self) -> usize {
         self.ready.as_ref().map_or(0, |page| page.events.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_five_minute_cache_cuts_a_long_or_default_wait_and_keeps_a_short_one() {
+        let short = Some(CacheTtl::FiveMinutes);
+        assert_eq!(cap_for_cache(Some(1500), short), Some(270));
+        assert_eq!(cap_for_cache(None, short), Some(270));
+        assert_eq!(cap_for_cache(Some(30), short), Some(30));
+    }
+
+    #[test]
+    fn an_hour_cache_or_no_worker_process_keeps_the_requested_wait() {
+        assert_eq!(
+            cap_for_cache(Some(1500), Some(CacheTtl::OneHour)),
+            Some(1500)
+        );
+        assert_eq!(cap_for_cache(None, Some(CacheTtl::OneHour)), None);
+        assert_eq!(cap_for_cache(Some(1500), None), Some(1500));
+        assert_eq!(cap_for_cache(None, None), None);
     }
 }
