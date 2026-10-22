@@ -32,7 +32,7 @@ export function PersonName({
     >
       @{bareName(name)}
       {isYou(name, you) ? (
-        <span className="font-normal text-text-muted"> (you)</span>
+        <span className="font-regular text-text-muted"> (you)</span>
       ) : null}
     </span>
   );
