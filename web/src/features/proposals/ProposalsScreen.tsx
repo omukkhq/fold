@@ -206,11 +206,11 @@ export function ProposalsScreen({
                   >
                     <td className={cn(CELL, MONO)}>{p.id}</td>
                     <td className={CELL}>
-                      <span className="flex flex-wrap items-center gap-8">
+                      <span className="flex min-w-(--width-search) flex-wrap items-center gap-8">
                         <HrefLink
                           href={projectPath(slug, "proposals", p.id)}
                           className={cn(
-                            "rounded-s text-body leading-snug font-medium text-text hover:underline",
+                            "min-w-0 rounded-s text-body leading-snug font-medium wrap-anywhere text-text hover:underline",
                             focusRing,
                           )}
                         >

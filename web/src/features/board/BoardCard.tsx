@@ -114,7 +114,7 @@ function LeadCheckPill({ mark }: { mark: LeadCheckMark }) {
         />
         {mark.text}
       </span>
-      <p className="line-clamp-2 text-meta leading-normal text-text-muted">
+      <p className="line-clamp-2 text-meta leading-normal wrap-anywhere text-text-muted">
         {mark.note}
       </p>
     </div>
@@ -129,7 +129,7 @@ function BlockerPill({ mark }: { mark: BlockerMark }) {
         <Hand aria-hidden="true" size={12} />
         {mark.text}
       </span>
-      <p className="line-clamp-2 text-meta leading-normal text-text-muted">
+      <p className="line-clamp-2 text-meta leading-normal wrap-anywhere text-text-muted">
         {mark.reason}
       </p>
     </div>
@@ -241,7 +241,7 @@ export function BoardCard({
       <HrefLink
         href={taskPath(slug, card.task, filters)}
         draggable={false}
-        className="text-card leading-snug font-medium text-text outline-none after:absolute after:inset-0 after:rounded-m"
+        className="text-card leading-snug font-medium wrap-anywhere text-text outline-none after:absolute after:inset-0 after:rounded-m"
       >
         {card.title}
       </HrefLink>
