@@ -53,8 +53,8 @@ pub use checkpoints::{CheckpointView, Restored};
 pub use cleanup::{DirectoryRemoval, follow_closed_workspaces};
 pub(crate) use compare::CARRY_CACHE_ENTRIES;
 pub use compare::{
-    CarriedComparison, Carry, CarryCache, ResolvedState, StateComparison, StateKind, StateRef,
-    StateSummary,
+    BatchMergeComparison, CarriedComparison, Carry, CarryCache, ResolvedState, StateComparison,
+    StateKind, StateRef, StateSummary,
 };
 pub use direct::OpenedMainWorkspace;
 pub(crate) use direct::{main_agent, main_agent_in_tx};

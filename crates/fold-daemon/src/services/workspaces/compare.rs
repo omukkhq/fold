@@ -9,6 +9,7 @@ use fold_core::{
 };
 use fold_store::Store;
 use fold_store::workspaces::{self, WorkspaceState};
+use fold_vcs::batch::{BatchConflict, BatchMember, merged_batch_state};
 use fold_vcs::compare::{self as vcs, CarriedState, FileChange, FileDiff, State, Totals};
 use fold_vcs::paths::RepoPath;
 use fold_vcs::snapshot::Warning;
@@ -216,6 +217,17 @@ pub struct CarriedComparison {
 }
 
 /// Where a state's entries come from before any file is read.
+/// The change a batch's members make together on main: see [`WorkspaceService::compare_batch_merge`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchMergeComparison {
+    pub files: Vec<FileChange>,
+    pub totals: Totals,
+    /// How many members, from the first, the compared tree holds.
+    pub merged: usize,
+    /// The first member that does not merge; the tree holds the members before it.
+    pub conflict: Option<BatchConflict>,
+}
+
 enum Source {
     Tree(ObjectHash),
     Working {
@@ -357,6 +369,46 @@ impl WorkspaceService {
             })?;
             let to = State::recorded(vcs::load_flat(&objects, &to)?);
             vcs::file_diff(&objects, &carried.state, &to, &path)
+        })
+        .await
+    }
+
+    /// main's tree `main` against `members` merged onto it in merge order, by the merge a batch checkout is made with. The merged tree is built in memory and nothing is written, so a read never adds objects to the store.
+    pub async fn compare_batch_merge(
+        &self,
+        main: ObjectHash,
+        members: Vec<BatchMember>,
+    ) -> Result<BatchMergeComparison, WorkspaceError> {
+        let paths = self.paths.clone();
+        blocking(move || {
+            let objects = open_objects(&paths)?;
+            let merged = merged_batch_state(&objects, &main, &members)?;
+            let from = State::recorded(vcs::load_flat(&objects, &main)?);
+            let comparison = vcs::compare(&objects, &from, &merged.state)?;
+            Ok(BatchMergeComparison {
+                files: comparison.files,
+                totals: comparison.totals,
+                merged: merged.merged,
+                conflict: merged.conflict,
+            })
+        })
+        .await
+    }
+
+    /// The hunks of one file of [`WorkspaceService::compare_batch_merge`].
+    pub async fn diff_file_batch_merge(
+        &self,
+        main: ObjectHash,
+        members: Vec<BatchMember>,
+        path: &str,
+    ) -> Result<FileDiff, WorkspaceError> {
+        let path = RepoPath::parse(path.as_bytes()).map_err(FoldError::from)?;
+        let paths = self.paths.clone();
+        blocking(move || {
+            let objects = open_objects(&paths)?;
+            let merged = merged_batch_state(&objects, &main, &members)?;
+            let from = State::recorded(vcs::load_flat(&objects, &main)?);
+            vcs::file_diff(&objects, &from, &merged.state, &path)
         })
         .await
     }
