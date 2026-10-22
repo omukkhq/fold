@@ -83,7 +83,7 @@ function HeadPath({ path, split }: { path: string; split: boolean }) {
   const cut = path.lastIndexOf("/") + 1;
   return (
     <h2 className="min-w-0 flex-1 font-mono text-code break-all text-text">
-      <span className="font-normal text-text-faint">{path.slice(0, cut)}</span>
+      <span className="font-regular text-text-faint">{path.slice(0, cut)}</span>
       <span className="font-semibold">{path.slice(cut)}</span>
     </h2>
   );

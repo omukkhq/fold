@@ -55,7 +55,7 @@ export function ProjectSwitcher({ slug }: { slug: string }) {
               <Menu.RadioItem key={p.slug} value={p.slug} className={menuItem}>
                 <span className="truncate">{p.name}</span>
                 {p.detail !== null ? (
-                  <Mono className="text-meta font-normal text-text-muted">
+                  <Mono className="text-meta font-regular text-text-muted">
                     {p.detail}
                   </Mono>
                 ) : null}
