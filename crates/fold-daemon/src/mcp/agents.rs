@@ -133,7 +133,7 @@ pub struct RestartWorkerInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct ListWorkersInput {
-    /// True lists the stopped workers too. Leave it out to list only the workers that run or failed, with stopped_count, the number of stopped workers left out.
+    /// True lists the stopped workers too. Leave it out to list only the workers that run or failed, with stopped_count, the number of stopped workers.
     #[serde(default)]
     pub include_stopped: bool,
     /// True gives each area's instructions. Leave it out to give only instructions_chars, their length.
@@ -495,9 +495,11 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
     let mut listed = Vec::with_capacity(workers.len());
     let mut stopped_count = 0;
     for worker in &workers {
-        if worker.state == WorkerState::Stopped && !input.include_stopped {
+        if worker.state == WorkerState::Stopped {
             stopped_count += 1;
-            continue;
+            if !input.include_stopped {
+                continue;
+            }
         }
         let mut value = worker_process_json(worker);
         value["cache_ttl"] = config.as_ref().map_or(Value::Null, |config| {

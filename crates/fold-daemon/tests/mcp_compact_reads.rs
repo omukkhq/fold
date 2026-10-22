@@ -492,7 +492,7 @@ async fn list_workers_leaves_out_stopped_workers_and_area_instructions_unless_as
     every.extend(workers.iter().cloned());
     assert_eq!(names(&full), every);
     assert_eq!(short["stopped_count"], 3);
-    assert_eq!(full["stopped_count"], 0);
+    assert_eq!(full["stopped_count"], 3);
     assert_eq!(short["workers"][1], full["workers"][1]);
     for (index, area) in short["areas"].as_array().unwrap().iter().enumerate() {
         let whole = &full["areas"][index];
