@@ -12,9 +12,12 @@ import {
   defaultSince,
   detailHref,
   emptyChangeText,
+  changesSearch,
+  detailTab,
   parseDetailSearch,
   resolveView,
   shownVersion,
+  tabSearch,
   versionTabs,
 } from "./view";
 
@@ -48,9 +51,54 @@ describe("parseDetailSearch", () => {
     });
   });
 
+  it("keeps a tab, a check run and a step", () => {
+    expect(
+      parseDetailSearch({ tab: "checks", run: "cr-12", step: " web " }),
+    ).toEqual({ tab: "checks", run: "cr-12", step: "web" });
+  });
+
   it("drops anything else", () => {
     expect(parseDetailSearch({ version: 0, since: 1.5, path: "" })).toEqual({});
     expect(parseDetailSearch({ version: "x", path: 3 })).toEqual({});
+    expect(parseDetailSearch({ tab: "files", run: "cr-0", step: "" })).toEqual(
+      {},
+    );
+    expect(parseDetailSearch({ run: "r12" })).toEqual({});
+  });
+});
+
+describe("detailTab", () => {
+  it("shows the named tab, else the change for a file or an earlier version, else the overview", () => {
+    expect(detailTab({ tab: "checks", path: "a.sql" })).toBe("checks");
+    expect(detailTab({ path: "a.sql" })).toBe("changes");
+    expect(detailTab({ since: 1 })).toBe("changes");
+    expect(detailTab({ version: 1 })).toBe("overview");
+    expect(detailTab({})).toBe("overview");
+  });
+});
+
+describe("tabSearch", () => {
+  it("keeps the change and the run for another tab", () => {
+    const search = {
+      tab: "changes" as const,
+      version: 1,
+      since: 1,
+      path: "a.sql",
+      run: "cr-2",
+      step: "web",
+    };
+    expect(tabSearch(search, "checks")).toEqual({ ...search, tab: "checks" });
+    expect(tabSearch(search, "overview")).toEqual({
+      ...search,
+      tab: "overview",
+    });
+    expect(tabSearch({ tab: "checks", version: 2 }, "overview")).toEqual({
+      version: 2,
+    });
+    expect(changesSearch({ path: "a.sql" })).toEqual({
+      tab: "changes",
+      path: "a.sql",
+    });
   });
 });
 
@@ -151,11 +199,16 @@ describe("changeOptions", () => {
 
   it("offers the full change and the change since the version the review asked changes on", () => {
     expect(changeOptions(p, resolveView(p, {}))).toEqual([
-      { key: "full", label: "Full change", search: {}, selected: true },
+      {
+        key: "full",
+        label: "Full change",
+        search: { tab: "changes" },
+        selected: true,
+      },
       {
         key: "since",
         label: "Since v1",
-        search: { since: 1 },
+        search: { tab: "changes", since: 1 },
         selected: false,
       },
     ]);
@@ -172,7 +225,10 @@ describe("changeOptions", () => {
     });
     expect(
       changeOptions(p3, resolveView(p3, { version: 2 }))?.map((o) => o.search),
-    ).toEqual([{ version: 2 }, { version: 2, since: 1 }]);
+    ).toEqual([
+      { tab: "changes", version: 2 },
+      { tab: "changes", version: 2, since: 1 },
+    ]);
     const unreviewed = { ...p3, reviews: [] };
     expect(changeOptions(unreviewed, resolveView(unreviewed, {}))).toBeNull();
   });
@@ -186,7 +242,10 @@ describe("versionTabs", () => {
       ["v2 · approved", true],
       ["v1 · changes requested", false],
     ]);
-    expect(tabs.map((t) => t.search)).toEqual([{}, { version: 1 }]);
+    expect(tabs.map((t) => t.search)).toEqual([
+      { tab: "changes" },
+      { tab: "changes", version: 1 },
+    ]);
     expect(
       versionTabs(p, resolveView(p, { since: 1 })).map((t) => t.selected),
     ).toEqual([true, false]);
@@ -199,5 +258,8 @@ describe("detailHref", () => {
     expect(
       detailHref("demo", "P-4", { version: 1, since: 1, path: "a b.sql" }),
     ).toBe("/p/demo/proposals/P-4?version=1&since=1&path=a+b.sql");
+    expect(
+      detailHref("demo", "P-4", { tab: "checks", run: "cr-2", step: "web" }),
+    ).toBe("/p/demo/proposals/P-4?tab=checks&run=cr-2&step=web");
   });
 });

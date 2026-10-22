@@ -2,13 +2,29 @@ import type { ChangeRange, CommentSide, ProposalDetail } from "@/api/proposals";
 import { versionRef, versionVerdict } from "./present";
 import { projectPath, withQuery } from "@/routes/paths";
 
-/** The detail screen's address: the version on screen, an earlier version whose change since it the screen shows instead of the full change, and the file. */
+/** The four tabs of the detail screen; Overview is the default. */
+export type DetailTab = "overview" | "changes" | "checks" | "conversation";
+
+const TABS: readonly DetailTab[] = [
+  "overview",
+  "changes",
+  "checks",
+  "conversation",
+];
+
+/** The detail screen's address: the tab, the version on screen, an earlier version whose change since it the screen shows instead of the full change, the file, and the check run and step the Checks tab shows. */
 export interface DetailSearch {
+  /** Absent, the tab is Changes for an address that names a file or an earlier version, and Overview otherwise. */
+  tab?: DetailTab;
   /** The current version when absent. */
   version?: number;
   /** An earlier version; the screen then shows only what changed after it. */
   since?: number;
   path?: string;
+  /** A check run, such as `cr-4`. */
+  run?: string;
+  /** The name of a command of `run`. */
+  step?: string;
 }
 
 function positive(value: unknown): number | undefined {
@@ -16,17 +32,57 @@ function positive(value: unknown): number | undefined {
   return typeof n === "number" && Number.isInteger(n) && n >= 1 ? n : undefined;
 }
 
+function text(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function isTab(value: unknown): value is DetailTab {
+  return TABS.some((tab) => tab === value);
+}
+
 export function parseDetailSearch(
   search: Record<string, unknown>,
 ): DetailSearch {
   const version = positive(search.version);
   const since = positive(search.since);
-  const path = typeof search.path === "string" ? search.path.trim() : "";
+  const path = text(search.path);
+  const run = text(search.run);
+  const step = text(search.step);
   return {
+    ...(isTab(search.tab) ? { tab: search.tab } : {}),
     ...(version === undefined ? {} : { version }),
     ...(since === undefined ? {} : { since }),
     ...(path === "" ? {} : { path }),
+    ...(/^cr-[1-9][0-9]*$/.test(run) ? { run } : {}),
+    ...(step === "" ? {} : { step }),
   };
+}
+
+/** The tab the address shows. Older links name only a file or an earlier version, and those open the change. */
+export function detailTab(search: DetailSearch): DetailTab {
+  if (search.tab !== undefined) return search.tab;
+  return search.path !== undefined || search.since !== undefined
+    ? "changes"
+    : "overview";
+}
+
+/** The address of another tab: the version, change and file stay for the Changes tab, and the run and step for the Checks tab. */
+export function tabSearch(search: DetailSearch, tab: DetailTab): DetailSearch {
+  const kept: DetailSearch = {
+    ...(search.version === undefined ? {} : { version: search.version }),
+    ...(search.since === undefined ? {} : { since: search.since }),
+    ...(search.path === undefined ? {} : { path: search.path }),
+    ...(search.run === undefined ? {} : { run: search.run }),
+    ...(search.step === undefined ? {} : { step: search.step }),
+  };
+  return tab === "overview" && detailTab(kept) === "overview"
+    ? kept
+    : { ...kept, tab };
+}
+
+/** The Changes tab at `search`. */
+export function changesSearch(search: DetailSearch): DetailSearch {
+  return { ...search, tab: "changes" };
 }
 
 /**
@@ -88,7 +144,9 @@ export function changeOptions(
 ): ChangeOption[] | null {
   const since = view.range.since ?? defaultSince(p, view.version);
   if (since === null) return null;
-  const version = view.current ? {} : { version: view.version };
+  const version: DetailSearch = view.current
+    ? { tab: "changes" }
+    : { tab: "changes", version: view.version };
   return [
     {
       key: "full",
@@ -127,7 +185,7 @@ export interface VersionTab {
   selected: boolean;
 }
 
-/** The newest version first, each with its latest verdict. */
+/** The newest version first, each with its latest verdict, as the version menu of the Changes tab lists them. */
 export function versionTabs(p: ProposalDetail, view: DetailView): VersionTab[] {
   const current = p.summary.current_version;
   return [...p.versions]
@@ -135,7 +193,10 @@ export function versionTabs(p: ProposalDetail, view: DetailView): VersionTab[] {
     .map((v) => ({
       key: `v${String(v.version)}`,
       label: `v${String(v.version)} · ${versionVerdict(v.version, p.reviews)}`,
-      search: v.version === current ? {} : { version: v.version },
+      search:
+        v.version === current
+          ? { tab: "changes" }
+          : { tab: "changes", version: v.version },
       selected: view.version === v.version,
     }));
 }
@@ -146,10 +207,13 @@ export function detailHref(
   search: DetailSearch,
 ): string {
   const params = new URLSearchParams();
+  if (search.tab !== undefined) params.set("tab", search.tab);
   if (search.version !== undefined)
     params.set("version", String(search.version));
   if (search.since !== undefined) params.set("since", String(search.since));
   if (search.path !== undefined) params.set("path", search.path);
+  if (search.run !== undefined) params.set("run", search.run);
+  if (search.step !== undefined) params.set("step", search.step);
   return withQuery(projectPath(slug, "proposals", id), params);
 }
 
