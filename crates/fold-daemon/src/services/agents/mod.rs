@@ -273,7 +273,24 @@ impl AgentService {
         let interactive_main = origin == TagOrigin::Handshake
             && ctx.peer == SessionPeer::Unsupervised
             && tags.iter().any(Tag::is_main);
-        let gate = self.workers.as_ref().filter(|_| interactive_main);
+        // A worker of another role never holds the tag, and the tag rule refuses it in the registration.
+        let role = if interactive_main {
+            let mut conn = self
+                .store
+                .read()
+                .acquire()
+                .await
+                .map_err(StoreError::from)?;
+            agents::find_worker_process(&mut conn, name)
+                .await?
+                .map(|row| row.role)
+        } else {
+            None
+        };
+        let gate = self
+            .workers
+            .as_ref()
+            .filter(|_| interactive_main && role.is_none_or(|role| role == fold_core::Role::Main));
         if let Some(supervisor) = gate {
             supervisor.enter_interactive_main(session_id, name)?;
         }

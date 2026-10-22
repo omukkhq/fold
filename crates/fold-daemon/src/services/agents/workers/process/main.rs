@@ -278,6 +278,10 @@ impl Supervisor {
         if parts.is_empty() {
             return Ok(());
         }
+        // The message turn says fold stops the main once it has answered.
+        if !owed.is_empty() {
+            lock(&self.inner.answering).insert(row.agent.clone());
+        }
         match self.resume(&row.agent, parts.join("\n\n"), &[]).await {
             Ok(watch) => {
                 for owed in &owed {
@@ -288,7 +292,10 @@ impl Supervisor {
                 }
                 Ok(())
             }
-            Err(error) => Err(error),
+            Err(error) => {
+                lock(&self.inner.answering).remove(&row.agent);
+                Err(error)
+            }
         }
     }
 

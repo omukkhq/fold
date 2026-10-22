@@ -278,6 +278,36 @@ async fn the_interactive_and_the_supervised_main_refuse_each_other() {
         untagged.ok,
         "the supervised main's own adapter has no tag request"
     );
+    harness
+        .call(
+            "frontend",
+            "create_label",
+            json!({"name": "ui", "color": "sage"}),
+        )
+        .await;
+    let (status, body) = http(
+        &harness,
+        Method::POST,
+        "/areas",
+        Some(json!({"name": "web", "label": "ui"})),
+    )
+    .await;
+    assert!(status.is_success(), "{body}");
+    let (status, body) = http(
+        &harness,
+        Method::POST,
+        "/workers",
+        Some(json!({"role": "area_lead", "area": "web"})),
+    )
+    .await;
+    assert!(status.is_success(), "{body}");
+    until_state(&harness, "web-lead", WorkerState::Idle).await;
+    let lead = handshake_of(&harness, "web-lead", &["main"]).await;
+    assert_eq!(
+        lead.error.map(|error| error.code),
+        Some("main_tag_denied".to_owned()),
+        "a running lead is no main agent"
+    );
 
     stop(&harness).await;
     harness.connect_tagged(MAIN, &["main"]).await;
