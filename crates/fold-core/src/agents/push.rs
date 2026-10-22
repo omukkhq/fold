@@ -528,7 +528,7 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
     if kind == types::PROJECT_PAUSED {
         return Some((
             ctx.main_agents.iter().cloned().collect(),
-            "the agents are paused: every worker is stopped; start no work until a resume"
+            "the agents are paused: every worker is stopped; start no work until a resume; pass include_stopped true to see the stopped workers"
                 .to_owned(),
             "list_workers",
         ));
@@ -1573,7 +1573,7 @@ mod tests {
             sent(&notice_for(&paused, &ctx)),
             vec![row(
                 "main",
-                "fold: the agents are paused: every worker is stopped; start no work until a resume. Call list_workers.",
+                "fold: the agents are paused: every worker is stopped; start no work until a resume; pass include_stopped true to see the stopped workers. Call list_workers.",
                 "list_workers"
             )]
         );

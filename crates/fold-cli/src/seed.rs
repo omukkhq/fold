@@ -647,7 +647,10 @@ impl Seeder {
             .as_array()
             .ok_or(SeedError::Unexpected { tool: "get_board" })?;
         let proposals = self.route(Method::GET, "/proposals", None).await?;
-        let workers = self.main.call("list_workers", json!({})).await?;
+        let workers = self
+            .main
+            .call("list_workers", json!({"include_stopped": true}))
+            .await?;
         let length = |value: &Value| value.as_array().map_or(0, Vec::len);
         Ok(Built {
             tasks: self.tasks,
