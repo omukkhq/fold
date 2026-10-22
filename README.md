@@ -81,7 +81,7 @@ Tell the main agent what you want to build, the constraints, and how you will ch
 
 The main agent presents a plan for your approval, then starts the agents that build and review it.
 
-Open **[127.0.0.1:7420](http://127.0.0.1:7420)** in your browser to follow the project. The board shows tasks across **Backlog**, **Todo**, **In Progress**, **Review**, and **Done**. **Needs you** brings together questions, permissions, reviews, and other items that need your decision. **Messages** shows the threads with you, and **Mark answered** closes an agent's question that you answered somewhere else, for example to the main agent, unless the agent waits for your reply. The **Messages** and **Proposals** tabs count the threads and proposals that wait for you.
+Run `fld web` and open the link it prints in your browser to follow the project at **127.0.0.1:7420**. The link signs you in once and works for a few minutes. Every browser needs a sign-in, also on your own machine, so a program cannot act as you by only naming you in a request. The board shows tasks across **Backlog**, **Todo**, **In Progress**, **Review**, and **Done**. **Needs you** brings together questions, permissions, reviews, and other items that need your decision. **Messages** shows the threads with you, and **Mark answered** closes an agent's question that you answered somewhere else, for example to the main agent, unless the agent waits for your reply. The **Messages** and **Proposals** tabs count the threads and proposals that wait for you.
 
 ## How it works
 
@@ -153,7 +153,7 @@ Run these commands inside your project:
 | `fld doctor` | Check the installation, daemon, and projects, with suggested fixes. It names the running daemon and its version, says why workers cannot sign in, and repeats every problem with its fix at the end. |
 | `fld transcript` | Find an agent's Claude Code transcript: `fld transcript <agent>` prints the path of the file of its current session, and `fld transcript <agent> --tail N` prints the file's last N lines. |
 | `fld gc` | Delete objects that nothing refers to, prune old automatic checkpoints, remove the folder of a closed workspace that is still there, and prune the checkpoints of workspaces closed for longer than `closed_workspace_days` (14 days by default). fold removes a workspace's folder as soon as the workspace closes and its agent has no running worker and no open session, after a final checkpoint of the tracked files it had not recorded. That checkpoint is a record, not a restore point. `fld gc` retries a removal that failed. The daemon also runs it every day; `fld gc` needs a running daemon. `fld gc --dry-run` counts what a run would remove and changes nothing. |
-| `fld token` | Manage the tokens that sign a person in to the web interface off localhost: `fld token create`, `fld token list`, and `fld token revoke`. |
+| `fld token` | Manage the tokens that sign a person in to the web interface from a browser that cannot open a link from `fld web`, such as one on another machine: `fld token create`, `fld token list`, and `fld token revoke`. |
 | `fld --help` | See the command reference. |
 
 A project pause stops workers; approved proposals can still integrate.
