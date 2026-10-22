@@ -1012,3 +1012,25 @@ pub async fn waiting_batch_requests(
         })
         .collect()
 }
+
+/// Records that fold told the review lead that the batch waits for a verdict on the version row `version_id`, in the caller's write. False, with nothing written, when it told it already.
+pub async fn note_batch_wait(
+    tx: &mut WriteTx,
+    batch: ReviewBatchId,
+    version_id: i64,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let (number, now) = (batch.to_db(), now.as_millis());
+    let inserted = sqlx::query!(
+        "INSERT INTO review_batch_waits (batch_id, version_id, created_at)
+         SELECT b.id, ?2, ?3 FROM review_batches b WHERE b.number = ?1
+         ON CONFLICT (batch_id, version_id) DO NOTHING",
+        number,
+        version_id,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(inserted == 1)
+}

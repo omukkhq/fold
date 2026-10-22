@@ -88,6 +88,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::REVIEW_PLAN_LEFT,
         types::REVIEW_PLAN_WAIT_ENDED,
         types::REVIEW_PLAN_ENDED,
+        types::REVIEW_BATCH_WAITING,
     ]
     .contains(&event.event_type)
 }
@@ -310,6 +311,19 @@ fn listed(items: &[String], count: usize, one: &str, many: &str, spelled: bool) 
 
 fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'static str)> {
     let kind = event.event_type;
+    // A submitted batch holds its approved members while a member's current version has only comments; the daemon writes the event once per member and version.
+    if kind == types::REVIEW_BATCH_WAITING {
+        let proposal = event.proposal?;
+        let batch = event.data.get("batch")?.as_str()?;
+        let version = event.data.get("version")?.as_u64()?;
+        return Some((
+            ctx.review_leads.iter().cloned().collect(),
+            format!(
+                "{batch} waits for a verdict on {proposal} v{version}: its reviewer must approve or request changes"
+            ),
+            "get_review_batch",
+        ));
+    }
     if kind == types::PROPOSAL_HUMAN_EDITED {
         let proposal = event.proposal?;
         let version = event.data.get("version")?.as_u64()?;
@@ -1714,6 +1728,30 @@ mod tests {
             )]
         );
         assert!(notice_for(&with_data(fixed, json!({})), &ctx()).is_empty());
+    }
+
+    #[test]
+    fn a_batch_that_waits_on_a_comment_reaches_the_review_leads() {
+        let waiting = Event {
+            data: json!({"batch": "rb-2", "version": 3}),
+            ..event(types::REVIEW_BATCH_WAITING, "fold")
+        };
+        assert!(is_pushed(&waiting));
+        let text = "fold: rb-2 waits for a verdict on P-3 v3: its reviewer must approve or request changes. Call get_review_batch.";
+        assert!(text.len() <= MAX_NOTICE_LEN);
+        assert_eq!(
+            sent(&notice_for(&waiting, &ctx())),
+            vec![
+                row("frontend", text, "get_review_batch"),
+                row("lead", text, "get_review_batch"),
+                row("review", text, "get_review_batch"),
+            ]
+        );
+        let bare = Event {
+            data: json!({}),
+            ..event(types::REVIEW_BATCH_WAITING, "fold")
+        };
+        assert!(notice_for(&bare, &ctx()).is_empty());
     }
 
     #[test]

@@ -741,3 +741,90 @@ async fn a_batch_with_no_member_ready_ends_its_turn_and_frees_the_rest() {
         "none"
     );
 }
+
+#[tokio::test]
+async fn a_member_with_only_a_comment_holds_the_batch_and_the_review_lead_hears_of_it_once() {
+    let scene = Scene::new().await;
+    give_role(&scene.fx.handle.store, "lead", Role::ReviewLead, None).await;
+    let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sink = std::sync::Arc::clone(&heard);
+    scene.fx.handle.push.register_stdin(
+        &AgentName::parse("lead").unwrap(),
+        std::sync::Arc::new(move |text: &str| {
+            sink.lock().unwrap().push(text.to_owned());
+            true
+        }),
+    );
+    let batch = scene.batch(&[1, 2]).await;
+    scene
+        .fx
+        .reviews()
+        .submit_batch_review(
+            &scene.review,
+            batch,
+            vec![
+                BatchVerdict {
+                    proposal: p(1),
+                    verdict: Verdict::Approve,
+                    body: String::new(),
+                },
+                BatchVerdict {
+                    proposal: p(2),
+                    verdict: Verdict::Comment,
+                    body: "What happens on an empty list?".to_owned(),
+                },
+            ],
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        scene
+            .fx
+            .reviews()
+            .integrate_ready()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        scene.fx.reviews().batch_integration_view(batch).await.unwrap(),
+        BatchIntegrationView::Waiting { pending } if pending == [p(2)]
+    ));
+    assert_eq!(scene.fx.reviews().note_batch_waits().await.unwrap(), 1);
+    assert_eq!(scene.fx.reviews().note_batch_waits().await.unwrap(), 0);
+    let waiting = scene.events("review.batch_waiting").await;
+    assert_eq!(waiting.len(), 1, "one notice per member and version");
+    assert_eq!(waiting[0].proposal, Some(p(2)));
+    assert_eq!(waiting[0].data["batch"], "rb-1");
+    assert_eq!(waiting[0].data["version"], 1);
+    let notice = "fold: rb-1 waits for a verdict on P-2 v1: its reviewer must approve or request changes. Call get_review_batch.";
+    eventually(WAIT, async || {
+        let told: Vec<String> = heard
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|text| text.contains("waits for a verdict"))
+            .cloned()
+            .collect();
+        if told.len() == 1 && told[0].contains(notice) {
+            Ok(())
+        } else {
+            Err(told)
+        }
+    })
+    .await;
+
+    // A verdict that decides ends the wait: the approved member integrates and nothing more is told.
+    scene
+        .fx
+        .reviews()
+        .submit_review(&scene.review, p(2), 1, Verdict::Approve, "fine", Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(scene.fx.reviews().note_batch_waits().await.unwrap(), 0);
+    let done = scene.fx.reviews().integrate_ready().await.unwrap();
+    assert_eq!(done.len(), 2);
+    assert_eq!(scene.events("review.batch_waiting").await.len(), 1);
+}

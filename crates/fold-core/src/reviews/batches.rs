@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::ids::{ProposalId, TaskId};
 use crate::policy::GateRefusal;
+use crate::reviews::Verdict;
 use crate::tasks::define_names;
 
 /// Where one member of a submitted review batch stands for the batch's integration.
@@ -56,6 +57,13 @@ pub fn member_standing(facts: &StandingFacts) -> MemberStanding {
             | GateRefusal::AuthorCannotIntegrate,
         ) => MemberStanding::Pending,
     }
+}
+
+/// Whether a pending member waits only because its current version got comments and no verdict that decides: its reviewer must approve or request changes before the batch can integrate, so fold tells the review lead. `verdicts` are those on the member's current version.
+pub fn waits_on_comment(standing: &MemberStanding, verdicts: &[Verdict]) -> bool {
+    *standing == MemberStanding::Pending
+        && !verdicts.is_empty()
+        && verdicts.iter().all(|verdict| *verdict == Verdict::Comment)
 }
 
 /// One member as the batch decision reads it, in the batch's merge order.
@@ -295,6 +303,23 @@ mod tests {
             batch_readiness(&cycle),
             BatchReadiness::Final { members: vec![] }
         );
+    }
+
+    #[test]
+    fn only_a_pending_member_with_nothing_but_comments_waits_on_a_comment() {
+        let pending = MemberStanding::Pending;
+        assert!(waits_on_comment(&pending, &[Verdict::Comment]));
+        assert!(waits_on_comment(
+            &pending,
+            &[Verdict::Comment, Verdict::Comment]
+        ));
+        assert!(!waits_on_comment(&pending, &[]), "no review yet");
+        assert!(!waits_on_comment(
+            &pending,
+            &[Verdict::Comment, Verdict::RequestChanges]
+        ));
+        assert!(!waits_on_comment(&approved(&[]), &[Verdict::Comment]));
+        assert!(!waits_on_comment(&MemberStanding::Out, &[Verdict::Comment]));
     }
 
     #[test]

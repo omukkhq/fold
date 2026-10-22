@@ -673,6 +673,10 @@ describe("eventLine", () => {
     expect(ended({})).toBe(
       "a review batch had no member to integrate together",
     );
+    expect(
+      eventLine(event("review.batch_waiting", { data: { batch: "rb-3" } }))
+        .text,
+    ).toBe("rb-3 waits for a verdict on P-4");
   });
 
   it("marks integrations, main moves, request approvals, recorded human changes and batch integrations as emphasised, review approvals by their verdict", () => {

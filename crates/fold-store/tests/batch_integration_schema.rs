@@ -194,3 +194,24 @@ async fn a_batch_has_one_waiting_request_and_a_request_ends_once() {
         0
     );
 }
+
+#[tokio::test]
+async fn fold_notes_a_wait_once_per_batch_and_version() {
+    let (_dir, store) = seeded().await;
+    let first = store
+        .write(async |tx| batches::note_batch_wait(tx, rb(2), 2, at(6)).await)
+        .await
+        .unwrap();
+    assert!(first);
+    let again = store
+        .write(async |tx| batches::note_batch_wait(tx, rb(2), 2, at(7)).await)
+        .await
+        .unwrap();
+    assert!(!again);
+    for sql in [
+        "UPDATE review_batch_waits SET created_at = 9",
+        "DELETE FROM review_batch_waits",
+    ] {
+        assert!(refused(&store, sql).await.contains("append-only"), "{sql}");
+    }
+}

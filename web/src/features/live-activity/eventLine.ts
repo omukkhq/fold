@@ -939,6 +939,10 @@ const SPECS: Record<EventType, Spec> = {
     text: batchIntegratedText,
     emphasis: true,
   },
+  "review.batch_waiting": {
+    icon: Hourglass,
+    text: (e) => `${batchOf(e)} waits for a verdict on ${proposalOf(e)}`,
+  },
 };
 
 /** Every stored event type this build writes a line for. */

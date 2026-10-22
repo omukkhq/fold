@@ -5,7 +5,7 @@ use fold_core::object::ObjectHash;
 use fold_core::policy::{CallerFacts, GateRefusal};
 use fold_core::reviews::batches::{
     BatchMemberFacts, BatchOutcome, BatchReadiness, MemberStanding, StandingFacts, batch_readiness,
-    member_standing,
+    member_standing, waits_on_comment,
 };
 use fold_core::reviews::checks::{RunReason, Stage};
 use fold_core::revision::{Revision, StoredRevision};
@@ -318,6 +318,55 @@ impl ReviewService {
         }
         read.commit().await.map_err(StoreError::from)?;
         Ok(holds)
+    }
+
+    /// Tells the review lead, with `review.batch_waiting` by fold, about each member of a submitted batch whose current version has only comments while the batch waits: its reviewer must approve or request changes before the approved members integrate. Each member version is told once, so a pass over the batches that finds nothing new writes nothing. Returns how many it told.
+    pub async fn note_batch_waits(&self) -> Result<usize, ReviewError> {
+        let mut waits = Vec::new();
+        let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
+        for batch in batches::undecided_batches(&mut *read).await? {
+            let (standing, members) = standing_on(&mut read, batch).await?;
+            if !matches!(standing.readiness, Some(BatchReadiness::Waiting { .. })) {
+                continue;
+            }
+            for member in members {
+                let Some(facts) = member.facts else {
+                    continue;
+                };
+                let verdicts: Vec<_> = facts.reviews.iter().map(|review| review.verdict).collect();
+                if waits_on_comment(&member.standing.standing, &verdicts) {
+                    waits.push((batch, facts));
+                }
+            }
+        }
+        read.commit().await.map_err(StoreError::from)?;
+        let mut told = 0;
+        for (batch, facts) in waits {
+            let now = self.clock.now();
+            let mut buffer = EventBuffer::new();
+            let noted = self
+                .store
+                .write(async |tx| {
+                    if !batches::note_batch_wait(tx, batch, facts.target.version_id, now).await? {
+                        return Ok(false);
+                    }
+                    let event = NewEvent::new(types::REVIEW_BATCH_WAITING, EventActor::fold())?
+                        .task(facts.proposal.task)
+                        .proposal(facts.proposal.id)
+                        .data(json!({
+                            "batch": batch.to_string(),
+                            "version": facts.target.version,
+                        }))?;
+                    buffer.append(tx, &event, now).await?;
+                    Ok::<_, ReviewError>(true)
+                })
+                .await?;
+            if noted {
+                self.bus.publish(buffer);
+                told += 1;
+            }
+        }
+        Ok(told)
     }
 
     /// Integrates the approved members of a submitted batch together, by an agent that decides reviews or a named human, once every member has its final state for the batch. A member that went back to its author, was taken out, ended, or waits for a human or for a member that is not in the integration is left out and integrates later on its own rules. The integration is one turn of the project's integration mutex: the members merge onto main in dependency order, the integration checks run once on the whole merge, and on a pass one transaction publishes one revision per member and completes each task. A member that conflicts integrates on its own after the others, which sends it back alone; a failed check run integrates the members one at a time, each with its own run. When the project has integration checks, the batch waits in the integration queue and the answer is `Queued`. Integrating one member alone with `integrate_proposal` stays possible.

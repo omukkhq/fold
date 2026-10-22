@@ -493,6 +493,10 @@ async fn integrate_ready(
     handle: &ProjectHandle,
     progress: &watch::Sender<JobProgress>,
 ) {
+    // A batch that waits on a member with only comments waits whether fold integrates automatically or not.
+    if let Err(error) = handle.reviews(&state.registry).note_batch_waits().await {
+        tracing::warn!(project = %handle.slug, code = error.log_code(), "the waits of the review batches could not be told; the next event tries again");
+    }
     let integrated = match projects::load_config(&handle.paths).await {
         Ok(config) if config.integration.automatic => {
             match handle.reviews(&state.registry).integrate_ready().await {

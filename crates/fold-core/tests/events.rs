@@ -135,6 +135,7 @@ fn all_equals_the_plans_event_types() {
         "review.plan_started",
         "review.plan_ended",
         "review.batch_integrated",
+        "review.batch_waiting",
     ]);
     assert_eq!(declared, expected);
 }

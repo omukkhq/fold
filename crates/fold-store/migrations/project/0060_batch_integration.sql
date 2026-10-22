@@ -71,3 +71,22 @@ WHEN OLD.ended_at IS NOT NULL
 BEGIN
     SELECT RAISE(ABORT, 'review_batch_requests_end_once');
 END;
+
+-- A member version of a submitted batch that has only comments, which holds the approved members until its reviewer approves or requests changes. fold tells the review lead once per member version, and this row records that it did.
+CREATE TABLE review_batch_waits (
+    id INTEGER PRIMARY KEY,
+    batch_id INTEGER NOT NULL REFERENCES review_batches (id),
+    version_id INTEGER NOT NULL REFERENCES proposal_versions (id),
+    created_at INTEGER NOT NULL,
+    UNIQUE (batch_id, version_id)
+);
+
+CREATE TRIGGER review_batch_waits_no_update BEFORE UPDATE ON review_batch_waits
+BEGIN
+    SELECT RAISE(ABORT, 'review_batch_waits is append-only');
+END;
+
+CREATE TRIGGER review_batch_waits_no_delete BEFORE DELETE ON review_batch_waits
+BEGIN
+    SELECT RAISE(ABORT, 'review_batch_waits is append-only');
+END;
