@@ -29,6 +29,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { DurableEvent } from "../../api/events";
+import { isHumanName } from "../../people/names";
 import { codeData } from "../../format/codeText";
 import { COLUMNS } from "../board/columns";
 
@@ -730,10 +731,12 @@ const SPECS: Record<EventType, Spec> = {
     text: (e) => {
       const list: unknown[] = Array.isArray(e.data.ids) ? e.data.ids : [];
       const ids = list.flatMap((id) => text(id) ?? []);
+      // A human acknowledges by opening or answering a thread, which the Messages screen calls reading it.
+      const verb = isHumanName(e.actor) ? "read" : "acknowledged";
       if (ids.length > 1) {
-        return `acknowledged ${String(ids.length)} messages`;
+        return `${verb} ${String(ids.length)} messages`;
       }
-      return `acknowledged ${ids[0] ?? "a message"}`;
+      return `${verb} ${ids[0] ?? "a message"}`;
     },
   },
   "message.ask_closed": {
