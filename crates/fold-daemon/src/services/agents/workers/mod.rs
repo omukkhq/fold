@@ -327,6 +327,18 @@ impl AgentService {
             .collect()
     }
 
+    /// Whether the worker runs in a session that last read the role text of another fld than the one that runs the daemon, so its next turn starts with the update note; `false` for a worker that does not run and for a service that runs no worker processes.
+    pub fn on_older_fold(&self, row: &WorkerProcessRow) -> bool {
+        let Some(supervisor) = &self.workers else {
+            return false;
+        };
+        row.state.is_running()
+            && fold_core::roles::needs_update_note(
+                row.fold_fingerprint.as_deref(),
+                supervisor.fingerprint(row.role).as_deref(),
+            )
+    }
+
     pub async fn list_workers(&self) -> Result<Vec<WorkerProcessRow>, AgentError> {
         let mut conn = self
             .store

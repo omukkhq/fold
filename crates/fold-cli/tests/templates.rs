@@ -851,6 +851,12 @@ fn each_role_skill_has_its_frontmatter_its_sections_then_the_shared_ones() {
     for role in Role::ALL {
         let text = role_skill(role);
         let name = skill_name(role_skill_file(role));
+        assert_eq!(
+            name,
+            role.skill(),
+            "the update note names the skill of {role}"
+        );
+        assert_eq!(text, claude_files::role_skill(role), "{role}");
         let (frontmatter, body) = frontmatter(text);
         let keys: Vec<&str> = frontmatter
             .lines()

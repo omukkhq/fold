@@ -1,8 +1,9 @@
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use fold_core::layout::{HOOKS, hook_group};
-use fold_core::roles::Role;
+use fold_core::roles::{Role, session_fingerprint};
 use fold_core::{FoldError, codes};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
@@ -122,6 +123,31 @@ pub fn role_skill_file(role: Role) -> &'static str {
         Role::Reviewer => REVIEWER_SKILL_FILE,
     }
 }
+
+/// The text of the skill that holds the steps of `role`, which [`role_skill_file`] names.
+pub fn role_skill(role: Role) -> &'static str {
+    match role {
+        Role::Main => MAIN_SKILL,
+        Role::AreaLead => AREA_LEAD_SKILL,
+        Role::ReviewLead => REVIEW_LEAD_SKILL,
+        Role::TaskWorker => TASK_WORKER_SKILL,
+        Role::Reviewer => REVIEWER_SKILL,
+    }
+}
+
+/// The fingerprint of the role text this fld gives a worker of each role: its version, the role's shipped prompt and its skill.
+pub fn worker_fingerprints() -> BTreeMap<Role, String> {
+    Role::ALL
+        .into_iter()
+        .map(|role| {
+            let fingerprint = session_fingerprint(VERSION, role.prompt(), role_skill(role));
+            (role, fingerprint)
+        })
+        .collect()
+}
+
+/// The version of the fld that holds these skills.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// `details.reason` of a Claude Code file that fold cannot merge into.
 pub const MALFORMED_REASON: &str = "malformed_claude_file";
@@ -780,6 +806,21 @@ pub fn shadowing_warning(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_role_has_a_fingerprint_of_this_version_and_its_own_texts() {
+        let fingerprints = worker_fingerprints();
+        assert_eq!(fingerprints.len(), Role::ALL.len());
+        for role in Role::ALL {
+            let fingerprint = &fingerprints[&role];
+            assert!(fingerprint.starts_with(&format!("{VERSION}+")), "{role}");
+            assert_eq!(
+                *fingerprint,
+                session_fingerprint(VERSION, role.prompt(), role_skill(role))
+            );
+        }
+        assert_eq!(role_skill(Role::Main), MAIN_SKILL);
+    }
 
     #[test]
     fn a_symlinked_file_stays_a_link_and_its_target_changes() {

@@ -181,6 +181,7 @@ mod worker_questions;
 mod worker_restart;
 mod worker_resume;
 mod worker_transcript;
+mod worker_update;
 mod workers;
 #[cfg(feature = "failpoints")]
 mod workers_failpoints;
