@@ -17,7 +17,7 @@ use crate::config::{DaemonConfig, LockOwner};
 use crate::http::{self, assets::AssetSource};
 use crate::jobs::{self, Job};
 use crate::mcp;
-use crate::projects::{Projects, resume_workers};
+use crate::projects::{FolderFiles, Projects, resume_workers};
 use crate::services::agents::Launcher;
 use crate::services::agents::environment::WorkerEnvironment;
 use crate::socket::SocketServer;
@@ -136,17 +136,19 @@ impl Daemon {
             launcher,
             WorkerEnvironment::default(),
             StartedBy::Hand,
+            FolderFiles::default(),
         )
         .await
     }
 
-    /// Takes the host lock, opens the registry, binds the HTTP listener, opens every registered project through its start-up sequence, binds the socket, starts the jobs and the HTTP server, and only then resumes the workers of the projects, so a resumed worker's adapter finds the socket. A failed bind leaves no socket file, no worker and no open project database behind. `clock` goes to every project handle; `launcher` names the programs every worker process runs, and `environment` what the caller found about the environment they run in, and `started_by` what started this process.
+    /// Takes the host lock, opens the registry, binds the HTTP listener, opens every registered project through its start-up sequence, binds the socket, starts the jobs and the HTTP server, and only then resumes the workers of the projects, so a resumed worker's adapter finds the socket. A failed bind leaves no socket file, no worker and no open project database behind. `clock` goes to every project handle; `launcher` names the programs every worker process runs, and `environment` what the caller found about the environment they run in, and `started_by` what started this process; `folder_files` writes the program's own files into each project folder as the project opens.
     pub async fn start_on_host(
         config: DaemonConfig,
         clock: Arc<dyn Clock>,
         launcher: Launcher,
         environment: WorkerEnvironment,
         started_by: StartedBy,
+        folder_files: FolderFiles,
     ) -> Result<RunningDaemon, DaemonError> {
         let start = DaemonStart {
             started_at: clock.now(),
@@ -187,7 +189,8 @@ impl Daemon {
                 .with_environment(environment)
                 .with_start(start)
                 .with_registry(registry.clone())
-                .with_push_files(config.push_dir()),
+                .with_push_files(config.push_dir())
+                .with_folder_files(folder_files),
             registry,
             clock: clock.clone(),
             assets: config

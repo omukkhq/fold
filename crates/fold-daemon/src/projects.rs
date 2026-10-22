@@ -23,7 +23,7 @@ use crate::services::reviews::ReviewService;
 use crate::services::reviews::checks::{CheckPermits, CheckRunner, recover_check_runs};
 use crate::services::tasks::TaskService;
 use crate::services::workspaces::{
-    CarryCache, WorkspaceLocks, WorkspaceService, follow_closed_workspaces,
+    BatchMergeCache, CarryCache, WorkspaceLocks, WorkspaceService, follow_closed_workspaces,
 };
 use crate::support::unpoisoned;
 
@@ -62,6 +62,8 @@ pub struct ProjectHandle {
     pub live: LiveState,
     /// The earlier proposal versions that reads carried onto a newer base, shared by every review read of the project.
     pub carries: Arc<CarryCache>,
+    /// The batches that reads merged in memory, shared by every review read of the project.
+    pub batch_merges: Arc<BatchMergeCache>,
     /// The Claude Code inbox sockets of the project's agents. They live in memory only, so a restarted daemon has none until the session-start hooks run again.
     pub push: PushTargets,
     push_task: PushTask,
@@ -237,6 +239,7 @@ impl ProjectHandle {
             capabilities,
             live,
             carries: Arc::new(CarryCache::default()),
+            batch_merges: Arc::new(BatchMergeCache::default()),
             push,
             push_task,
             workers,
@@ -474,6 +477,40 @@ pub enum Slot {
     Unavailable,
 }
 
+/// Writes the files that the program which runs the daemon keeps in every project folder, such as `fld`'s Claude Code skills, which this crate does not hold. The daemon calls it with the project root each time it opens a project, before any worker of the project starts, so every worker finds the files of the running binary also in a project that an older fold set up.
+#[derive(Clone, Default)]
+pub struct FolderFiles(Option<Arc<WriteFolder>>);
+
+/// The write of [`FolderFiles`], given the project root.
+type WriteFolder = dyn Fn(&Path) + Send + Sync;
+
+impl FolderFiles {
+    pub fn new(write: impl Fn(&Path) + Send + Sync + 'static) -> Self {
+        Self(Some(Arc::new(write)))
+    }
+
+    async fn write(&self, root: &Path) {
+        let Some(write) = self.0.clone() else {
+            return;
+        };
+        let root = root.to_owned();
+        if tokio::task::spawn_blocking(move || write(&root))
+            .await
+            .is_err()
+        {
+            tracing::error!("the write of the project folder's files stopped");
+        }
+    }
+}
+
+impl std::fmt::Debug for FolderFiles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("FolderFiles")
+            .field(&self.0.is_some())
+            .finish()
+    }
+}
+
 /// The projects the daemon has tried to open, by slug.
 #[derive(Debug, Default)]
 pub struct Projects {
@@ -496,6 +533,7 @@ pub struct Projects {
     away: RwLock<HashSet<String>>,
     /// The daemon's folder of kept push targets, one subfolder per project slug; `None` keeps them in memory only.
     push_files: Option<PathBuf>,
+    folder_files: FolderFiles,
 }
 
 impl Projects {
@@ -532,6 +570,12 @@ impl Projects {
     #[must_use]
     pub fn with_registry(mut self, registry: Store) -> Self {
         self.registry = Some(registry);
+        self
+    }
+
+    #[must_use]
+    pub fn with_folder_files(mut self, files: FolderFiles) -> Self {
+        self.folder_files = files;
         self
     }
 
@@ -611,6 +655,7 @@ impl Projects {
             .map(|handle| handle.with_check_permits(self.check_permits.clone()))
             .map(ProjectHandle::share);
         if let Ok(handle) = &outcome {
+            self.folder_files.write(root).await;
             unpoisoned(self.removed.write()).remove(&row.slug);
             if let Some(registry) = &self.registry {
                 handle.workers.set_registry(registry.clone());

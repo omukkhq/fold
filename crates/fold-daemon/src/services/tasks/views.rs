@@ -159,6 +159,14 @@ pub struct TaskDetail {
     pub blocker_allowed: bool,
 }
 
+/// The task graph as `graph` reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskGraph {
+    pub tasks: Vec<GraphTask>,
+    /// Every Done task that is not archived, also when `tasks` leaves them out.
+    pub done_count: usize,
+}
+
 /// One node of the task graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphTask {
@@ -488,11 +496,16 @@ impl TaskService {
         Ok(readers)
     }
 
-    /// The tasks that are not archived, in number order, with their direct prerequisites and claim holders. Done tasks only when `include_done`.
-    pub async fn graph(&self, include_done: bool) -> Result<Vec<GraphTask>, TaskError> {
+    /// The tasks that are not archived, in number order, with their direct prerequisites and claim holders. Done tasks only when `include_done`; `done_count` counts them either way.
+    pub async fn graph(&self, include_done: bool) -> Result<TaskGraph, TaskError> {
         let mut snapshot = tasks::board_snapshot(self.store.read()).await?;
         let needs = needs_by_task(&snapshot);
-        Ok(std::mem::take(&mut snapshot.tasks)
+        let done_count = snapshot
+            .tasks
+            .iter()
+            .filter(|row| row.status == TaskStatus::Done)
+            .count();
+        let tasks = std::mem::take(&mut snapshot.tasks)
             .into_iter()
             .filter(|row| include_done || row.status != TaskStatus::Done)
             .map(|row| GraphTask {
@@ -506,7 +519,8 @@ impl TaskService {
                 kind: row.kind,
                 hold: row.hold,
             })
-            .collect())
+            .collect();
+        Ok(TaskGraph { tasks, done_count })
     }
 
     /// The five columns in board order. Backlog to Review hold every task in number order; Done holds the [`BOARD_DONE_LIMIT`] most recently completed tasks, newest first, and counts the rest in `total`.

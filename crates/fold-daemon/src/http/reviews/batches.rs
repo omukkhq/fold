@@ -12,14 +12,15 @@ use utoipa_axum::routes;
 
 use super::super::Project;
 use super::super::actor::Human;
+use super::super::diff::{FileDiffView, file_view};
 use super::super::error::{ApiError, ApiQuery, ErrorEnvelope};
 use super::super::tasks::id;
-use super::super::workspaces::ComparisonTotals;
+use super::super::workspaces::{ChangeSource, ComparedFile, ComparisonTotals};
 use super::{ProposalStateView, ReviewVerdict, service};
 use crate::daemon::AppState;
 use crate::services::reviews::{
-    BatchIntegration, BatchIntegrationView, IntegrationOutcome, MemberIntegration,
-    ReviewBatchView as Batch,
+    BatchIntegration, BatchIntegrationView, BatchMergedChange, IntegrationOutcome,
+    MemberIntegration, MergedBasis, ReviewBatchView as Batch,
 };
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -27,6 +28,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_review_batches))
         .routes(routes!(get_review_batch))
         .routes(routes!(integrate_review_batch))
+        .routes(routes!(get_review_batch_diff))
+        .routes(routes!(get_review_batch_file_diff))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
@@ -485,4 +488,165 @@ pub async fn integrate_review_batch(
         run,
         members: members.into_iter().filter_map(member_result).collect(),
     }))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewBatchDiffBasis {
+    /// main's head `base` with the members merged onto it in merge order, built when the change is read: the tree a batch checkout made now holds.
+    Merged,
+    /// The change of main from `base`, the revision before the members the batch's integration published together, to `head`, the last of them.
+    Integrated,
+    /// No open member is left to merge.
+    NoMembers,
+    /// Every member left the batch without a batch review.
+    Closed,
+    /// The batch's integration ended without publishing members together, so each member's change is on its own page.
+    NotTogether,
+}
+
+/// A member version the merged tree holds.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewBatchDiffMember {
+    #[schema(value_type = String, example = "P-3")]
+    pub proposal: ProposalId,
+    pub version: u32,
+}
+
+/// The first member that does not merge onto main with the members before it. The change holds only the members before it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewBatchDiffConflict {
+    #[schema(value_type = String, example = "P-4")]
+    pub proposal: ProposalId,
+    /// The member version that conflicts.
+    pub version: u32,
+    /// The earlier member it conflicts with; null when it conflicts with main itself.
+    #[schema(value_type = Option<String>, required = true, example = "P-3")]
+    pub with: Option<ProposalId>,
+    /// The conflicted paths, in path order.
+    pub paths: Vec<String>,
+}
+
+/// The change a batch's members make on main together, without hunks.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewBatchDiff {
+    #[schema(value_type = String, example = "rb-3")]
+    pub batch: ReviewBatchId,
+    pub basis: ReviewBatchDiffBasis,
+    /// The old side: main's head for `merged`, the revision before the batch's revisions for `integrated`; null otherwise.
+    #[schema(value_type = Option<String>, required = true, example = "r17")]
+    pub base: Option<RevisionId>,
+    /// The last member's revision for `integrated`; null otherwise, as a merged tree is built only in memory.
+    #[schema(value_type = Option<String>, required = true, example = "r19")]
+    pub head: Option<RevisionId>,
+    /// The members the new side holds, in merge order.
+    pub members: Vec<ReviewBatchDiffMember>,
+    #[schema(required = true)]
+    pub conflict: Option<ReviewBatchDiffConflict>,
+    /// In path order.
+    pub files: Vec<ComparedFile>,
+    pub totals: ComparisonTotals,
+}
+
+impl From<BatchMergedChange> for ReviewBatchDiff {
+    fn from(change: BatchMergedChange) -> Self {
+        let (basis, base, head) = match change.basis {
+            MergedBasis::Merged { base } => (ReviewBatchDiffBasis::Merged, Some(base), None),
+            MergedBasis::Integrated { base, head } => {
+                (ReviewBatchDiffBasis::Integrated, Some(base), Some(head))
+            }
+            MergedBasis::NoMembers => (ReviewBatchDiffBasis::NoMembers, None, None),
+            MergedBasis::Closed => (ReviewBatchDiffBasis::Closed, None, None),
+            MergedBasis::NotTogether => (ReviewBatchDiffBasis::NotTogether, None, None),
+        };
+        Self {
+            batch: change.batch,
+            basis,
+            base,
+            head,
+            members: change
+                .members
+                .into_iter()
+                .map(|member| ReviewBatchDiffMember {
+                    proposal: member.proposal,
+                    version: member.version,
+                })
+                .collect(),
+            conflict: change.conflict.map(|conflict| ReviewBatchDiffConflict {
+                proposal: conflict.proposal,
+                version: conflict.version,
+                with: conflict.with,
+                paths: conflict.paths,
+            }),
+            files: change.files.into_iter().map(ComparedFile::from).collect(),
+            totals: change.totals.into(),
+        }
+    }
+}
+
+/// The merged change of a batch, calculated on request: before the batch's integration, main's head against every member merged onto it in merge order, by the merge a batch checkout is made with, built in memory without a checkout and without writing objects; after it, the change of main across the revisions the batch published together. The members are those in the batch, or, once it is submitted, those its review covered, at the version each joined at, while the proposal is open. A member that conflicts stops the merge: the change holds the members before it and `conflict` names it.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/reviews/batches/{id}/diff",
+    operation_id = "get_review_batch_diff",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The review batch id, such as rb-3"),
+    ),
+    responses(
+        (status = 200, description = "The merged change's files", body = ReviewBatchDiff),
+        (status = 400, description = "`invalid_id`", body = ErrorEnvelope),
+        (status = 404, description = "`review_batch_not_found`, `revision_not_found`: main has no revision, or `project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn get_review_batch_diff(
+    State(state): State<AppState>,
+    project: Project,
+    Path((_slug, batch)): Path<(String, String)>,
+) -> Result<Json<ReviewBatchDiff>, ApiError> {
+    let batch: ReviewBatchId = id(&batch)?;
+    let change = service(&state, &project)
+        .batch_merged_changes(batch)
+        .await?;
+    Ok(Json(change.into()))
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ReviewBatchFileQuery {
+    /// A changed file of the merged change, such as `src/lib.rs`: its new path for a rename, its old path for a deletion.
+    pub path: String,
+}
+
+/// The hunks of one file of the batch's merged change, from the same sides as `get_review_batch_diff`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/reviews/batches/{id}/diff/file",
+    operation_id = "get_review_batch_file_diff",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The review batch id, such as rb-3"),
+        ReviewBatchFileQuery,
+    ),
+    responses(
+        (status = 200, description = "The file's hunks", body = FileDiffView),
+        (status = 400, description = "`invalid_id`, `invalid_path`, or `invalid_request`: the query string is not valid", body = ErrorEnvelope),
+        (status = 404, description = "`review_batch_not_found`, `path_not_in_comparison`, `revision_not_found`: main has no revision, or `project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn get_review_batch_file_diff(
+    State(state): State<AppState>,
+    project: Project,
+    Path((_slug, batch)): Path<(String, String)>,
+    ApiQuery(query): ApiQuery<ReviewBatchFileQuery>,
+) -> Result<Json<FileDiffView>, ApiError> {
+    let batch: ReviewBatchId = id(&batch)?;
+    let diff = service(&state, &project)
+        .batch_merged_file_diff(batch, &query.path)
+        .await?;
+    Ok(Json(file_view(ChangeSource::Recorded, diff)))
 }

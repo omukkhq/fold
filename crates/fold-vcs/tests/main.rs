@@ -2,6 +2,7 @@
 #[cfg(test)]
 pub mod common;
 
+mod batch;
 mod browse;
 mod checkout;
 mod compare;

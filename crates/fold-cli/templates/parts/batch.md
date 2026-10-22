@@ -1,0 +1,6 @@
+## Review batches
+
+A batch is two or more proposals that one reviewer reviews together: the review lead's `start_worker` makes one for its reviewer, and the main agent makes one with `create_review_batch(proposals[], scopes?)` only when the user tells it to.
+
+1. To review a batch, call `create_batch_checkout(id)`: a checkout of main with every member merged in order. A member that conflicts with another gives `batch_conflict`. Take it out with `remove_from_batch(id, proposal)`, which gives up its review claim, and tell the review lead its id. Build and test the checkout once.
+2. Call `submit_batch_review(id, verdicts[], comments[]?)` with one verdict for each member. Inspect `reviewed` and `left_out`: new versions, closed proposals and lost claims can leave verdicts unwritten. Read omitted proposals again: review the current version of a member that still has your claim with `submit_review`, and return the ids of the others to the review lead. A successful call does not mean every verdict was stored. A member you fixed with `submit_review_fix` has a new version, so the batch review leaves it out; review that version with `submit_review`. Batch line comments go to the member that brought the lines; other lines give `unattributed_lines`. Use `list_review_batches(open?)` and `get_review_batch(id)` to recover existing batches.

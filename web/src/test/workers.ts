@@ -1,4 +1,8 @@
-import type { ReviewBatch, ReviewBatchMember } from "@/api/reviews";
+import type {
+  ReviewBatch,
+  ReviewBatchDiff,
+  ReviewBatchMember,
+} from "@/api/reviews";
 import type { ProposalSummary } from "@/api/proposals";
 import type {
   AreaEntry,
@@ -178,6 +182,31 @@ export function proposalSummary(
     created_at: 1_760_000_000_000,
     updated_at: 1_760_000_000_000,
     integration_queued: false,
+    ...fields,
+  };
+}
+
+/** The merged change of `rb-3`: main r17 with P-3 v2 and P-4 v1 merged onto it, adding nothing until `files` says. */
+export function batchDiff(
+  fields: Partial<ReviewBatchDiff> = {},
+): ReviewBatchDiff {
+  const files = fields.files ?? [];
+  return {
+    batch: "rb-3",
+    basis: "merged",
+    base: "r17",
+    head: null,
+    members: [
+      { proposal: "P-3", version: 2 },
+      { proposal: "P-4", version: 1 },
+    ],
+    conflict: null,
+    files,
+    totals: {
+      files: files.length,
+      added_lines: files.reduce((n, f) => n + f.added_lines, 0),
+      removed_lines: files.reduce((n, f) => n + f.removed_lines, 0),
+    },
     ...fields,
   };
 }

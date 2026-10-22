@@ -4,9 +4,9 @@ This directory is a fold project. Its files are fold main, the integrated code, 
 
 The user starts the main agent here with `fld claude`, which starts fold when needed and continues the last main session, or with `fld new` for a new session. The main agent talks with the user, plans the work as areas and tasks, and has fold start a lead for each area and a review lead. Every other agent is a worker that fold starts and supervises: the area leads start task workers, which build one task each in a workspace and send a proposal, and the review lead reviews the proposals or starts reviewers. fold integrates each approved proposal.
 
-The `fold` skill holds the full workflow for the main agent, orchestrators, workers and reviewers, for the worker agents fold runs, and for requests. Load it before you start.
+Each role has its own skill with its full workflow: `fold-main`, `fold-area-lead`, `fold-review-lead`, `fold-task-worker` and `fold-reviewer`. Load the skill of your role before you start; the `fold` skill is the index for a session without a role.
 
-In text for people (messages, review comments, evidence, task descriptions), write `#T-12` to name a fold item and `@path` to name a file. The `fold` skill lists the marks.
+In text for people (messages, review comments, evidence, task descriptions), write `#T-12` to name a fold item and `@path` to name a file. The Mentions section of each role's skill lists the marks.
 
 Rules for files:
 

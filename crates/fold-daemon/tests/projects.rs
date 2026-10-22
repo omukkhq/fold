@@ -5,7 +5,7 @@ use fold_core::{Clock, HostPaths, ManualClock, ProjectConfig, ProjectPaths};
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::jobs::QuietCheckpoints;
-use fold_daemon::projects::Projects;
+use fold_daemon::projects::{FolderFiles, Projects};
 use fold_daemon::services::projects::{
     self as project_service, DEFAULT_SESSION_LIFETIME, Lease, ProjectError, RepositorySetup,
     deleted_project_slug, init_project, init_project_from_git, load_config,
@@ -1126,5 +1126,47 @@ async fn the_daemon_closes_a_project_whose_fold_data_was_deleted_and_opens_the_n
     assert!(Arc::ptr_eq(&newest, &again));
     newest.bus.close();
     newest.store.close().await.unwrap();
+    state.registry.close().await.unwrap();
+}
+
+/// The program that runs the daemon writes its own files into a project folder each time the daemon opens the project, and not again while the project stays open.
+#[tokio::test]
+async fn the_folder_files_are_written_once_when_the_project_opens() {
+    let host = Host::new();
+    let project = init_project(
+        &host.paths,
+        &host.root("app"),
+        None,
+        &crate::common::ana(),
+        &host.clock,
+    )
+    .await
+    .unwrap();
+    let written = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = written.clone();
+    let files = FolderFiles::new(move |root| seen.lock().unwrap().push(root.to_owned()));
+    let registry = host.registry().await;
+    let state: AppState = Arc::new(DaemonState {
+        projects: Projects::default()
+            .with_registry(registry.clone())
+            .with_folder_files(files),
+        registry,
+        clock: Arc::new(host.clock.clone()),
+        assets: AssetSource::Embedded,
+        listen: "127.0.0.1:0".parse().unwrap(),
+        session_lifetime: DEFAULT_SESSION_LIFETIME,
+    });
+    project_service::open(&state, &project.slug).await.unwrap();
+    assert_eq!(
+        *written.lock().unwrap(),
+        std::slice::from_ref(&project.root)
+    );
+    project_service::open(&state, &project.slug).await.unwrap();
+    assert_eq!(written.lock().unwrap().len(), 1);
+    for handle in state.projects.handles() {
+        handle.bus.close();
+        handle.stop_tasks(std::time::Duration::from_secs(5)).await;
+        handle.store.close().await.unwrap();
+    }
     state.registry.close().await.unwrap();
 }

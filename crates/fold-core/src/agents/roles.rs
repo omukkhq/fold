@@ -969,14 +969,31 @@ mod tests {
     #[test]
     fn the_main_agent_and_the_leads_are_pointed_to_the_reference() {
         assert!(main_prompt().contains(
-            "Read the skill's `REFERENCE.md` before you plan checks, config or areas, or tell the user a command."
+            "Read the `fold` skill's `REFERENCE.md` before you plan checks, config or areas, or tell the user a command."
         ));
         for role in [Role::ReviewLead, Role::AreaLead] {
             assert!(
                 role.prompt()
-                    .contains("Checks section of the skill's `REFERENCE.md`"),
+                    .contains("Checks section of the `fold` skill's `REFERENCE.md`"),
                 "{role}"
             );
+        }
+    }
+
+    #[test]
+    fn every_prompt_loads_the_skill_of_its_role_once() {
+        for (prompt, skill) in [
+            (Role::Main.prompt(), "fold-main"),
+            (main_prompt(), "fold-main"),
+            (Role::AreaLead.prompt(), "fold-area-lead"),
+            (Role::ReviewLead.prompt(), "fold-review-lead"),
+            (Role::TaskWorker.prompt(), "fold-task-worker"),
+            (Role::Reviewer.prompt(), "fold-reviewer"),
+        ] {
+            let load = format!("Load the `{skill}` skill, the steps of your role.");
+            assert_eq!(prompt.matches(&load).count(), 1, "{skill}");
+            assert!(!prompt.contains("Load the `fold` skill"), "{skill}");
+            assert!(!prompt.contains("Orchestrating section"), "{skill}");
         }
     }
 

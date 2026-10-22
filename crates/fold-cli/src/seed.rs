@@ -654,7 +654,10 @@ impl Seeder {
             .as_array()
             .ok_or(SeedError::Unexpected { tool: "get_board" })?;
         let proposals = self.route(Method::GET, "/proposals", None).await?;
-        let workers = self.main.call("list_workers", json!({})).await?;
+        let workers = self
+            .main
+            .call("list_workers", json!({"include_stopped": true}))
+            .await?;
         let link = self
             .human
             .request(Method::POST, "/api/v1/sign-in-links", None)

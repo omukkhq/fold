@@ -139,7 +139,7 @@ pub fn run_new(args: &NewArgs, dirs: &Dirs) -> Result<(), ClaudeError> {
     }
 }
 
-/// Starts the daemon when it is not running, then replaces this process with the user's own `claude`, an interactive session in the project root that is the main agent. `FOLD_AGENT` and `--name` give the session its agent name and its messaging socket, and `FOLD_AGENT_TAGS` makes `fld mcp` register it with the `main` tag. The main agent prompt is appended to the session's system prompt on every start and resume, because a system prompt flag holds only for the `claude` run that gets it. fold chooses the id of every new session and records it, so that [`Session::Continue`] resumes the session `fld` started and never one the user started without it, which `claude --continue` could pick. It offers once to add fold to the user's Claude Code configuration, and a session of a user without that setup gets fold's server, permission and hooks as flags; it writes no project settings. It returns only when it could not start `claude`.
+/// Starts the daemon when it is not running, then replaces this process with the user's own `claude`, an interactive session in the project root that is the main agent. `FOLD_AGENT` and `--name` give the session its agent name and its messaging socket, and `FOLD_AGENT_TAGS` makes `fld mcp` register it with the `main` tag. The main agent prompt is appended to the session's system prompt on every start and resume, because a system prompt flag holds only for the `claude` run that gets it. fold chooses the id of every new session and records it, so that [`Session::Continue`] resumes the session `fld` started and never one the user started without it, which `claude --continue` could pick. It offers once to add fold to the user's Claude Code configuration, and a session of a user without that setup gets fold's server, permission and hooks as flags; it writes no project settings, and only the files of fold's skills that differ from this binary's. It returns only when it could not start `claude`.
 pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), ClaudeError> {
     let agent = AgentName::parse(&args.name).map_err(FoldError::from)?;
     let host = host_paths(dirs)?;
@@ -181,6 +181,13 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
         Ok::<_, ClaudeError>(root)
     })?;
     drop(runtime);
+    // A daemon that already runs opened the project before this binary may have changed, so the main agent's session writes the skills its prompt names too. A refused write only warns: the session starts with the skills the folder holds.
+    if let Err(error) = claude_files::write_skills(&root) {
+        let _ = crate::output::line(
+            &mut io::stdout(),
+            &format!("warning: fold's skills were not updated: {error}"),
+        );
+    }
     let paths = ProjectPaths::new(&root);
     let prompt = if picks_system_prompt(&args.claude_args) {
         None

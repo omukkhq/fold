@@ -252,12 +252,29 @@ async fn get_proposal_shows_versions_gates_and_files() {
     assert_eq!(view["version"], "v1");
     assert_eq!(view["current_version"], "v1");
     assert_eq!(view["base"], "r1");
-    assert_eq!(view["evidence"], "tests pass");
+    assert_eq!(view.get("evidence"), None);
+    assert_eq!(view["evidence_chars"], "tests pass".len());
     assert_eq!(view["versions"].as_array().unwrap().len(), 1);
     assert_eq!(
         view["task"],
-        json!({"id": "T-1", "title": "report", "status": "review", "description": "what to build"})
+        json!({"id": "T-1", "title": "report", "status": "review"})
     );
+    let full = ok(
+        &review,
+        "get_proposal",
+        json!({"id": "P-1", "detail": "full"}),
+    )
+    .await;
+    assert_eq!(full["evidence"], "tests pass");
+    assert_eq!(full.get("evidence_chars"), None);
+    assert_eq!(full["task"]["description"], "what to build");
+    let error = err(
+        &review,
+        "get_proposal",
+        json!({"id": "P-1", "detail": "all"}),
+    )
+    .await;
+    assert_eq!(error["code"], "invalid_request");
     assert_eq!(view["needs"], json!([]));
     assert_eq!(view["claim"], Value::Null);
     assert_eq!(view["human_review"], Value::Null);
@@ -342,6 +359,18 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
 
     let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
     assert_eq!(view["last_reviewed"], "v1");
+    assert_eq!(view["reviews"][0]["body"], "add z");
+    assert_eq!(
+        view["reviews"][0]["body_chars"], 5,
+        "a review of an earlier version"
+    );
+    let full = ok(
+        &review,
+        "get_proposal",
+        json!({"id": "P-1", "detail": "full"}),
+    )
+    .await;
+    assert_eq!(full["reviews"][0].get("body_chars"), None);
     let since = ok(
         &review,
         "get_proposal_diff",
@@ -382,10 +411,7 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
     .await;
     assert_eq!(
         hunks["hunks"],
-        json!([{"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 2, "lines": [
-            {"kind": "context", "old_no": 1, "new_no": 1, "text": "pub fn y() {}\n"},
-            {"kind": "added", "old_no": null, "new_no": 2, "text": "pub fn z() {}\n"},
-        ]}])
+        json!([{"header": "@@ -1,1 +1,2 @@", "lines": [" 1 pub fn y() {}\n", "+2 pub fn z() {}\n"]}])
     );
     ok(
         &review,
@@ -548,10 +574,7 @@ async fn a_change_since_an_earlier_version_leaves_out_what_main_gained() {
     .await;
     assert_eq!(
         hunks["hunks"],
-        json!([{"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 2, "lines": [
-            {"kind": "context", "old_no": 1, "new_no": 1, "text": "pub fn y() {}\n"},
-            {"kind": "added", "old_no": null, "new_no": 2, "text": "pub fn z() {}\n"},
-        ]}])
+        json!([{"header": "@@ -1,1 +1,2 @@", "lines": [" 1 pub fn y() {}\n", "+2 pub fn z() {}\n"]}])
     );
     let error = err(
         &review,
@@ -737,7 +760,12 @@ async fn submit_review_fix_makes_the_reviewers_version_and_the_reviewer_approves
     assert_eq!(fixed["checkout"], "ws-2");
     assert_eq!(fixed["status"], "review");
     assert!(fixed["changeset"].as_str().unwrap().starts_with("C-"));
-    let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
+    let view = ok(
+        &review,
+        "get_proposal",
+        json!({"id": "P-1", "detail": "full"}),
+    )
+    .await;
     assert_eq!(view["versions"][1]["created_by"], "review");
     assert_eq!(view["versions"][1]["reviewer_fix"], true);
     assert_eq!(view["versions"][0].get("reviewer_fix"), None);
