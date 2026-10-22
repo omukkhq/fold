@@ -77,8 +77,22 @@ code=$(curl -s -o "$work/fallback.html" -w '%{http_code}' "$base/nonexistent/rou
 [ "$code" = 200 ] || fail "GET /nonexistent/route returned $code, expected 200"
 cmp -s "$work/index.html" "$work/fallback.html" || fail "GET /nonexistent/route did not return index.html"
 
+step=no-session
+code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Accept: application/json' "$base/api/v1/projects") || fail "GET /api/v1/projects could not connect"
+[ "$code" = 401 ] || fail "GET /api/v1/projects without a session returned $code, expected 401"
+
+# A browser opens the link that fld web prints; the sign-in screen sends the secret from its fragment to the session route.
+step=sign-in
+printed=$(FOLD_HUMAN=smoke "$bin" web 2>"$work/web.log") || fail "fld web exited with an error: $(tail -n 5 "$work/web.log")"
+link=${printed%%$'\n'*}
+secret=${link#*#link=}
+[ -n "$secret" ] && [ "$secret" != "$link" ] || fail "fld web printed no sign-in link on its first line: $link"
+code=$(curl -s -c "$work/cookies" -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H 'x-fold-client: release-smoke' --data "{\"link\":\"$secret\"}" "$base/api/v1/session") ||
+  fail "POST /api/v1/session could not connect"
+[ "$code" = 204 ] || fail "POST /api/v1/session with the sign-in link returned $code, expected 204"
+
 step=api
-code=$(curl -s -o "$work/projects.json" -w '%{http_code}' -H 'Accept: application/json' "$base/api/v1/projects") || fail "GET /api/v1/projects could not connect"
+code=$(curl -s -b "$work/cookies" -o "$work/projects.json" -w '%{http_code}' -H 'Accept: application/json' "$base/api/v1/projects") || fail "GET /api/v1/projects could not connect"
 [ "$code" = 200 ] || fail "GET /api/v1/projects returned $code, expected 200"
 python3 -I -c 'import json, sys; json.load(open(sys.argv[1]))' "$work/projects.json" 2>/dev/null ||
   fail "GET /api/v1/projects did not return JSON"
