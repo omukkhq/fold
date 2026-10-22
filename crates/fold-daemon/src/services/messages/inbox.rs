@@ -201,7 +201,7 @@ impl MessageService {
     }
 }
 
-/// The unacknowledged rows of every worker of the agent `agent_id`, read from the read pool: the unread part of the footer.
+/// The unacknowledged rows of the worker of the agent `agent_id`, read from the read pool: the unread part of the footer.
 pub async fn unread_count(store: &Store, agent_id: i64) -> Result<u64, MessageError> {
     Ok(messages::unread_count(store.read(), agent_id).await?)
 }

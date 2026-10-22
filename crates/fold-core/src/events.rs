@@ -452,7 +452,7 @@ impl EventFilter {
     }
 }
 
-/// What decides whether an event concerns one agent. It is loaded once per call from the claims, dependencies and proposals of every worker of the agent.
+/// What decides whether an event concerns one agent. It is loaded once per call from the claims, dependencies and proposals of the agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentEventFacts {
     pub agent: AgentName,

@@ -169,7 +169,7 @@ impl AgentService {
         self.session_context(project, agent, tasks).await
     }
 
-    /// The unacknowledged messages of every worker of `agent`, for the stop hook.
+    /// The unacknowledged messages of `agent`'s worker, for the stop hook.
     pub async fn unread_of(&self, agent: &AgentName) -> Result<u64, AgentError> {
         let row = agents::find_agent(self.store.read(), agent)
             .await?

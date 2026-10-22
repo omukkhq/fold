@@ -26,7 +26,7 @@ export function reviewerActor(reviewer: string | null): string | null {
   return reviewer === null ? null : `${HUMAN_PREFIX}${reviewer}`;
 }
 
-/** The names a mention can point at. Agents hold both agent names and worker names (`frontend`, `frontend/ui`). */
+/** The names a mention can point at. An agent's worker has the agent's name, so agents hold agent names (`frontend`). */
 export interface People {
   humans: readonly string[];
   agents: readonly string[];

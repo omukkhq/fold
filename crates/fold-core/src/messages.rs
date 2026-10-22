@@ -257,7 +257,7 @@ impl From<ResolveError> for FoldError {
                 .with_hint("a human is known once they have used the CLI or the web interface"),
             ResolveError::NoRecipient { to } => FoldError::new(codes::RECIPIENT_NOT_FOUND, message)
                 .with_details([("to", json!(to))])
-                .with_hint("address an agent, a worker or a human by name"),
+                .with_hint("address an agent or a human by name"),
         }
     }
 }

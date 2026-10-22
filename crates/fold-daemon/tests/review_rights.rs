@@ -538,7 +538,7 @@ async fn a_stored_approval_of_the_review_lead_still_counts() {
 }
 
 #[cfg(test)]
-/// Who removes `T-2` while `web-worker` holds it: the holder's agent through any of its workers, its area lead and a human.
+/// Who removes `T-2` while `web-worker` holds it: the holder's agent, its area lead and a human.
 const REMOVERS: [(&str, bool); 8] = [
     ("web-worker", true),
     ("web-lead", true),
