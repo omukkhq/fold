@@ -58,7 +58,7 @@ pub struct WaitForEventsInput {
     /// Wake only for events about this proposal, such as P-3.
     #[serde(default)]
     pub proposal: Option<String>,
-    /// The longest wait in seconds: 300 when left out, at most 1500. A task worker or reviewer with the 5-minute prompt cache waits at most 270, whatever this says; call again when a wait returns with nothing new.
+    /// The longest wait in seconds: 300 when left out, at most 1500. When fold started you with the five-minute prompt cache, it ends the wait after at most 270 whatever this says; call again when a wait returns with nothing new.
     #[serde(default)]
     pub timeout_s: Option<u64>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
