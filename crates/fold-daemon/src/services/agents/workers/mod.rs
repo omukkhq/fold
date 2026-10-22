@@ -8,7 +8,7 @@ use fold_core::roles::{
 use fold_core::tasks::areas::{check_led_area, check_new_area};
 use fold_core::{
     Actor, AgentName, AreaName, FoldError, LabelName, NewEvent, ProjectConfig, ProposalId,
-    ReviewBatchId, Role, TaskId, WorkerName, WorkspaceId, codes,
+    ReviewBatchId, ReviewPlanId, Role, TaskId, WorkerName, WorkspaceId, codes,
 };
 use fold_store::agents::{self, AreaRow, NewWorkerProcess, WorkerProcessRow, WorkerRow};
 use fold_store::{StoreError, WriteTx};
@@ -38,7 +38,7 @@ pub use process::{Launcher, MCP_RETRY_TURN, PAUSE_TURN, RESTART_TURN, StopTimeou
 /// The most default names tried for one start before the start gives up.
 const MAX_NAME_ATTEMPTS: u32 = 100;
 
-/// What `start_worker` asks for. `area` names the area of an area lead; a task worker takes its lead's area. `tasks` binds a task worker and `proposals` a reviewer.
+/// What `start_worker` asks for. `area` names the area of an area lead; a task worker takes its lead's area. `tasks` binds a task worker, and `proposals` or the open proposals of `plan` a reviewer.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StartWorker {
     pub role: Option<Role>,
@@ -46,6 +46,8 @@ pub struct StartWorker {
     pub area: Option<AreaName>,
     pub tasks: Vec<TaskId>,
     pub proposals: Vec<ProposalId>,
+    /// The review plan whose open proposals a reviewer gets, in place of `proposals`.
+    pub plan: Option<ReviewPlanId>,
     /// The scopes the review lead chooses for the reviews of some of a reviewer's proposals; the others follow fold's suggestion.
     pub scopes: Vec<ScopeChoice>,
     pub model: Option<String>,
@@ -146,6 +148,8 @@ fn area_not_found(area: &AreaName) -> AgentError {
 struct Assigned {
     adopted: Vec<WorkspaceId>,
     batch: Option<ReviewBatchId>,
+    /// The proposals the start gave the reviewer: its request's, or its plan's open ones.
+    proposals: Vec<ProposalId>,
 }
 
 /// What a start found inside its transaction: a new worker, or a lead that exists and is stopped and resumes instead.
@@ -371,7 +375,7 @@ impl AgentService {
         Ok(held)
     }
 
-    /// Starts a worker agent: the agent and its main worker, its process row in state `starting`, its binding and its claims, in one transaction with `worker.started`; then its Claude Code process with its first turn. Only a lead claims, so the start gives the new worker its work: a task worker the implementation claim on each of its tasks (see [`assign_in_tx`]), a reviewer the review claim on its one proposal or a batch of its two or more (see [`assign_reviews_in_tx`]). A claim that cannot be given refuses the whole start, so no worker runs without its claims. A task worker is refused for a human task (`task_needs_human`) and for a task on hold (`task_on_hold`). A lead whose area or role already has a stopped or failed lead resumes that lead instead, under its own name whatever name the start asked for, and starts it in a new session when its old one is gone; [`StartedWorker`] says so.
+    /// Starts a worker agent: the agent and its main worker, its process row in state `starting`, its binding and its claims, in one transaction with `worker.started`; then its Claude Code process with its first turn. Only a lead claims, so the start gives the new worker its work: a task worker the implementation claim on each of its tasks (see [`assign_in_tx`]), a reviewer the review claim on its one proposal or a batch of its two or more (see [`assign_reviews_in_tx`]); a reviewer started for a review plan gets the plan's open proposals, the plan's waiting tasks leave it, and the plan records the reviewer and the batch with `review.plan_started`. A claim that cannot be given refuses the whole start, so no worker runs without its claims. A task worker is refused for a human task (`task_needs_human`) and for a task on hold (`task_on_hold`). A lead whose area or role already has a stopped or failed lead resumes that lead instead, under its own name whatever name the start asked for, and starts it in a new session when its old one is gone; [`StartedWorker`] says so.
     pub async fn start_worker(
         &self,
         actor: &Actor,
@@ -521,7 +525,17 @@ impl AgentService {
                 for task in &request.tasks {
                     agents::bind_task(tx, id, *task).await?;
                 }
-                for proposal in &request.proposals {
+                let plan_start = match request.plan {
+                    Some(plan) => {
+                        Some(crate::services::reviews::take_plan_for_start(tx, plan, now).await?)
+                    }
+                    None => None,
+                };
+                let proposals = plan_start.as_ref().map_or_else(
+                    || request.proposals.clone(),
+                    |start| start.proposals.clone(),
+                );
+                for proposal in &proposals {
                     if !agents::bind_proposal(tx, id, *proposal).await? {
                         return Err(crate::services::reviews::proposal_missing(*proposal).into());
                     }
@@ -536,7 +550,8 @@ impl AgentService {
                     "role": role.as_str(),
                     "area": area.as_ref().map(AreaName::as_str),
                     "tasks": request.tasks.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                    "proposals": request.proposals.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                    "proposals": proposals.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                    "plan": request.plan.map(|plan| plan.to_string()),
                     "model": model,
                 }))?;
                 buffer.append(tx, &event, now).await?;
@@ -564,21 +579,20 @@ impl AgentService {
                         assigned.adopted.push(workspace);
                     }
                 }
-                let proposals = &request.proposals;
                 let lease = lease_minutes;
                 crate::services::reviews::free_reviews_for_start(
                     tx,
                     &mut buffer,
                     &worker,
-                    proposals,
+                    &proposals,
                     own,
                     lease,
                     now,
                 )
                 .await?;
-                if !request.proposals.is_empty() {
+                if !proposals.is_empty() {
                     let assignment = Assignment {
-                        proposals: &request.proposals,
+                        proposals: &proposals,
                         scopes: &request.scopes,
                         by: &by,
                     };
@@ -592,6 +606,19 @@ impl AgentService {
                     )
                     .await?;
                 }
+                if let Some(start) = &plan_start {
+                    crate::services::reviews::mark_plan_started(
+                        tx,
+                        &mut buffer,
+                        &by,
+                        start,
+                        &name,
+                        assigned.batch,
+                        now,
+                    )
+                    .await?;
+                }
+                assigned.proposals = proposals;
                 let row = agents::find_worker_process(tx.conn(), &name)
                     .await?
                     .ok_or(StoreError::Corrupt("worker_processes"))?;
@@ -618,7 +645,7 @@ impl AgentService {
                 name,
                 area: area.as_ref().zip(label.as_ref()),
                 tasks: &request.tasks,
-                proposals: &request.proposals,
+                proposals: &assigned.proposals,
                 batch: assigned.batch,
                 instructions: request.instructions.as_deref(),
             })
@@ -700,7 +727,13 @@ fn binding_area(
     request: &StartWorker,
 ) -> Result<Option<AreaName>, AgentError> {
     let no_tasks = request.tasks.is_empty();
-    let no_proposals = request.proposals.is_empty();
+    let no_proposals = request.proposals.is_empty() && request.plan.is_none();
+    if request.plan.is_some() && !request.proposals.is_empty() {
+        return Err(invalid(
+            "a reviewer gets the proposals of its plan or the proposals it names, not both",
+            "pass plan alone, or proposals alone",
+        ));
+    }
     if role != Role::Reviewer && !request.scopes.is_empty() {
         return Err(invalid(
             "only a reviewer's start takes review scopes",
@@ -758,7 +791,7 @@ fn binding_area(
             if no_proposals || !no_tasks || request.area.is_some() {
                 return Err(invalid(
                     "a reviewer is bound to one or more proposals",
-                    "pass the proposal ids in proposals",
+                    "pass the proposal ids in proposals, or a review plan in plan",
                 ));
             }
             named_once(&request.proposals, "proposals")?;

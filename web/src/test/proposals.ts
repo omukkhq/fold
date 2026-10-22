@@ -144,6 +144,7 @@ export function proposalDetail(
     files: [],
     totals: { files: 2, added_lines: 10, removed_lines: 2 },
     checks: [],
+    review_plan: null,
     ...fields,
   };
 }

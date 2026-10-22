@@ -17,6 +17,7 @@ pub use fold_store::reviews::ReviewRow as ReviewView;
 use super::checks::CheckRunView;
 use super::claims::ReviewClaimView;
 use super::integrate::caller_facts;
+use super::plans::{ProposalPlan, proposal_plan};
 use super::proposals::{ProposalDetail, proposal_detail, proposal_not_found};
 use super::{ReviewError, ReviewService};
 use crate::services::workspaces::StateRef;
@@ -66,6 +67,8 @@ pub struct ProposalView {
     pub totals: Totals,
     /// The check runs of the selected version, newest first, without logs: the proposal-stage runs of its exact files and its integration runs.
     pub checks: Vec<CheckRunView>,
+    /// The review plan the open proposal waits in for related tasks, to be reviewed with them as one batch.
+    pub review_plan: Option<ProposalPlan>,
 }
 
 impl ReviewService {
@@ -100,6 +103,7 @@ impl ReviewService {
         .await?;
         let scope_choice =
             reviews::latest_scope_choice(&mut *read, proposal, detail.selected.version).await?;
+        let review_plan = proposal_plan(&mut read, proposal).await?;
         read.commit().await.map_err(StoreError::from)?;
         let claim = match holder {
             Some(row) => Some(ReviewClaimView {
@@ -168,6 +172,7 @@ impl ReviewService {
             files: comparison.files,
             totals: comparison.totals,
             checks,
+            review_plan,
         })
     }
 }

@@ -16,7 +16,7 @@ use super::Project;
 use super::actor::Human;
 use super::error::{ApiError, ApiJson, ErrorEnvelope, fold};
 use super::events::{CheckpointSummary, DurableEventType};
-use super::reviews::ReviewVerdict;
+use super::reviews::{ReviewPlanWait, ReviewVerdict};
 use crate::daemon::AppState;
 use crate::services::tasks::{self as service, ItemContent};
 
@@ -307,6 +307,9 @@ pub struct BoardProposal {
     /// The revision an integrated proposal became; null before integration.
     #[schema(required = true, example = "r8")]
     pub revision: Option<String>,
+    /// The review plan the open proposal waits in, to be reviewed with related proposals as one batch; null when it waits in none.
+    #[schema(required = true)]
+    pub review_plan: Option<ReviewPlanWait>,
 }
 
 impl From<service::CardProposal> for BoardProposal {
@@ -317,6 +320,7 @@ impl From<service::CardProposal> for BoardProposal {
             version: proposal.version,
             checks_failed: proposal.checks_failed,
             revision: proposal.revision.map(|revision| revision.to_string()),
+            review_plan: proposal.review_plan.map(ReviewPlanWait::from),
         }
     }
 }
