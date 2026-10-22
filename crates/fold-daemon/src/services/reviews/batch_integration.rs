@@ -4,8 +4,8 @@ use fold_core::events::types;
 use fold_core::object::ObjectHash;
 use fold_core::policy::{CallerFacts, GateRefusal};
 use fold_core::reviews::batches::{
-    BatchMemberFacts, BatchOutcome, BatchReadiness, MemberStanding, StandingFacts, batch_readiness,
-    member_standing, waits_on_comment,
+    BatchMark, BatchMemberFacts, BatchOutcome, BatchReadiness, MemberStanding, StandingFacts,
+    batch_readiness, batch_wait_cutoff, member_standing, waits_on_comment,
 };
 use fold_core::reviews::checks::RunReason;
 use fold_core::revision::{Revision, StoredRevision};
@@ -229,9 +229,10 @@ async fn standing_on(
     let members = read_members(conn, batch).await?;
     let ended = batches::batch_integration(&mut *conn, batch).await?;
     let queued = batches::batch_request_waiting(&mut *conn, batch).await?;
+    let wait_ended = batches::has_mark(&mut *conn, batch, BatchMark::WaitEnded).await?;
     let facts: Vec<BatchMemberFacts> = members.iter().map(|m| m.standing.clone()).collect();
-    let readiness =
-        (row.state == BatchState::Submitted && ended.is_none()).then(|| batch_readiness(&facts));
+    let readiness = (row.state == BatchState::Submitted && ended.is_none())
+        .then(|| batch_readiness(&facts, wait_ended));
     Ok((
         BatchStanding {
             batch,
@@ -312,6 +313,45 @@ impl ReviewService {
         }
         read.commit().await.map_err(StoreError::from)?;
         Ok(holds)
+    }
+
+    /// Ends the wait of every submitted batch whose review was submitted [`BATCH_WAIT`] ago or longer by the clock's time, each in its own transaction: from then on its members without a final state are out of its turn, so the approved members integrate together and the others later on their own rules. Each gets `review.batch_wait_ended` by fold, whose `left` names the members that waited and tells the review lead about them; it is empty for a batch that does not wait now, whose end keeps a member that waits later from holding it. Returns how many batches let members go.
+    ///
+    /// [`BATCH_WAIT`]: fold_core::reviews::batches::BATCH_WAIT
+    pub async fn end_due_batch_waits(&self) -> Result<usize, ReviewError> {
+        let now = self.clock.now();
+        let Some(cutoff) = batch_wait_cutoff(now) else {
+            return Ok(0);
+        };
+        let mut ended = 0;
+        for batch in batches::due_batch_waits(self.store.read(), cutoff).await? {
+            let mut buffer = EventBuffer::new();
+            let left = self
+                .store
+                .write(async |tx| {
+                    let (standing, _) = standing_on(tx.conn(), batch).await?;
+                    let left = match standing.readiness {
+                        Some(BatchReadiness::Waiting { pending }) => pending,
+                        Some(BatchReadiness::Final { .. }) => Vec::new(),
+                        None => return Ok::<_, ReviewError>(false),
+                    };
+                    if !batches::add_mark(tx, batch, BatchMark::WaitEnded, now).await? {
+                        return Ok(false);
+                    }
+                    let names: Vec<String> = left.iter().map(ToString::to_string).collect();
+                    let event = NewEvent::new(types::REVIEW_BATCH_WAIT_ENDED, EventActor::fold())?
+                        .data(json!({"batch": batch.to_string(), "left": names}))?;
+                    buffer.append(tx, &event, now).await?;
+                    Ok(!left.is_empty())
+                })
+                .await?;
+            self.bus.publish(buffer);
+            if left {
+                tracing::info!(batch = %batch, "the wait of a review batch ended; its members without a final state left its turn");
+                ended += 1;
+            }
+        }
+        Ok(ended)
     }
 
     /// Tells the review lead, with `review.batch_waiting` by fold, about each member of a submitted batch whose current version has only comments while the batch waits: its reviewer must approve or request changes before the approved members integrate. Each member version is told once, so a pass over the batches that finds nothing new writes nothing. Returns how many it told.

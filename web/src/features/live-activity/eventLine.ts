@@ -945,6 +945,15 @@ const SPECS: Record<EventType, Spec> = {
     icon: Hourglass,
     text: (e) => `${batchOf(e)} waits for a verdict on ${proposalOf(e)}`,
   },
+  "review.batch_wait_ended": {
+    icon: Hourglass,
+    text: (e) => {
+      const left = idsOf(e.data.left);
+      return left.length === 0
+        ? `the wait of ${batchOf(e)} ended`
+        : `the wait of ${batchOf(e)} ended; ${left.join(", ")} left its turn`;
+    },
+  },
 };
 
 /** Every stored event type this build writes a line for. */

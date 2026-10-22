@@ -141,6 +141,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "review_batch_comments",
         "review_batch_integrations",
         "review_batch_lines",
+        "review_batch_marks",
         "review_batch_members",
         "review_batch_requests",
         "review_batch_waits",

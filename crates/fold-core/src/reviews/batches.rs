@@ -1,9 +1,27 @@
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use crate::ids::{ProposalId, TaskId};
 use crate::policy::GateRefusal;
 use crate::reviews::Verdict;
 use crate::tasks::define_names;
+use crate::time::Timestamp;
+
+/// How long a submitted batch waits for members without a final state, counted from the submission of its review. After it, those members leave the batch's turn, so the approved members integrate together and the others later on their own rules.
+pub const BATCH_WAIT: Duration = Duration::from_secs(60 * 60);
+
+/// The latest submission time whose batch's wait has ended at `now`; `None` only at the start of time.
+pub fn batch_wait_cutoff(now: Timestamp) -> Option<Timestamp> {
+    now.checked_sub(BATCH_WAIT)
+}
+
+define_names!(
+    /// What fold recorded about a submitted batch, once each. `wait_ended` is the end of the batch's wait after [`BATCH_WAIT`], which turns its members without a final state out of its turn.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum BatchMark {
+        WaitEnded = "wait_ended",
+    }
+);
 
 /// Where one member of a submitted review batch stands for the batch's integration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,14 +113,14 @@ impl BatchReadiness {
     }
 }
 
-/// The batch decides once no member is pending. An approved member integrates with it when each prerequisite that is not Done is the task of another member that integrates with it, so a member that needs one that went back waits and is left out. The members come in dependency order, ties in the batch's own order.
-pub fn batch_readiness(members: &[BatchMemberFacts]) -> BatchReadiness {
+/// The batch decides once no member is pending, or once its wait ended (`wait_ended`), which leaves a pending member out of its turn. An approved member integrates with it when each prerequisite that is not Done is the task of another member that integrates with it, so a member that needs one that went back waits and is left out. The members come in dependency order, ties in the batch's own order.
+pub fn batch_readiness(members: &[BatchMemberFacts], wait_ended: bool) -> BatchReadiness {
     let pending: Vec<ProposalId> = members
         .iter()
         .filter(|member| member.standing == MemberStanding::Pending)
         .map(|member| member.proposal)
         .collect();
-    if !pending.is_empty() {
+    if !pending.is_empty() && !wait_ended {
         return BatchReadiness::Waiting { pending };
     }
     let mut ready: Vec<(&BatchMemberFacts, &[TaskId])> = members
@@ -243,7 +261,7 @@ mod tests {
             member(2, MemberStanding::Pending),
             member(3, MemberStanding::Out),
         ];
-        let readiness = batch_readiness(&members);
+        let readiness = batch_readiness(&members, false);
         assert_eq!(
             readiness,
             BatchReadiness::Waiting {
@@ -256,6 +274,39 @@ mod tests {
     }
 
     #[test]
+    fn once_the_wait_ended_a_pending_member_leaves_and_the_approved_ones_integrate() {
+        let members = [
+            member(1, approved(&[])),
+            member(2, MemberStanding::Pending),
+            member(3, approved(&[2])),
+        ];
+        let readiness = batch_readiness(&members, true);
+        assert_eq!(
+            readiness,
+            BatchReadiness::Final {
+                members: vec![p(1)]
+            }
+        );
+        assert!(
+            !readiness.holds(&members, p(2)),
+            "the pending member is free"
+        );
+        assert!(
+            !readiness.holds(&members, p(3)),
+            "it needs the one that left"
+        );
+    }
+
+    #[test]
+    fn the_wait_ends_an_hour_after_the_submission() {
+        let submitted = Timestamp::from_millis(10_000_000).unwrap();
+        let hour_later = submitted.checked_add(BATCH_WAIT).unwrap();
+        assert_eq!(batch_wait_cutoff(hour_later), Some(submitted));
+        assert_eq!(BatchMark::WaitEnded.as_str(), "wait_ended");
+        assert_eq!(BatchMark::parse("wait_ended"), Some(BatchMark::WaitEnded));
+    }
+
+    #[test]
     fn approved_members_integrate_together_and_one_that_needs_a_sent_back_member_waits() {
         // T-3 needs T-1, which went back; T-4 needs T-2, which integrates with it.
         let members = [
@@ -265,7 +316,7 @@ mod tests {
             member(4, approved(&[2])),
             member(5, approved(&[])),
         ];
-        let readiness = batch_readiness(&members);
+        let readiness = batch_readiness(&members, false);
         assert_eq!(
             readiness,
             BatchReadiness::Final {
@@ -284,7 +335,7 @@ mod tests {
             member(3, approved(&[2])),
         ];
         assert_eq!(
-            batch_readiness(&members),
+            batch_readiness(&members, false),
             BatchReadiness::Final {
                 members: vec![p(2), p(3), p(1)]
             }
@@ -295,12 +346,12 @@ mod tests {
     fn a_wait_outside_the_batch_or_a_cycle_leaves_the_members_out() {
         let outside = [member(1, approved(&[9])), member(2, approved(&[1]))];
         assert_eq!(
-            batch_readiness(&outside),
+            batch_readiness(&outside, false),
             BatchReadiness::Final { members: vec![] }
         );
         let cycle = [member(1, approved(&[2])), member(2, approved(&[1]))];
         assert_eq!(
-            batch_readiness(&cycle),
+            batch_readiness(&cycle, false),
             BatchReadiness::Final { members: vec![] }
         );
     }

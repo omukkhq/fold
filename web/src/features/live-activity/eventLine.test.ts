@@ -685,6 +685,14 @@ describe("eventLine", () => {
       eventLine(event("review.batch_waiting", { data: { batch: "rb-3" } }))
         .text,
     ).toBe("rb-3 waits for a verdict on P-4");
+    const waitEnded = (data: Record<string, unknown>) =>
+      eventLine(event("review.batch_wait_ended", { data })).text;
+    expect(waitEnded({ batch: "rb-3", left: ["P-4", "P-6"] })).toBe(
+      "the wait of rb-3 ended; P-4, P-6 left its turn",
+    );
+    expect(waitEnded({ batch: "rb-3", left: [] })).toBe(
+      "the wait of rb-3 ended",
+    );
   });
 
   it("marks integrations, main moves, request approvals, recorded human changes and batch integrations as emphasised, review approvals by their verdict", () => {

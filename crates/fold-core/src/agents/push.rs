@@ -93,6 +93,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::REVIEW_PLAN_WAIT_ENDED,
         types::REVIEW_PLAN_ENDED,
         types::REVIEW_BATCH_WAITING,
+        types::REVIEW_BATCH_WAIT_ENDED,
     ]
     .contains(&event.event_type)
 }
@@ -324,6 +325,28 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
             ctx.review_leads.iter().cloned().collect(),
             format!(
                 "{batch} waits for a verdict on {proposal} v{version}: its reviewer must approve or request changes"
+            ),
+            "get_review_batch",
+        ));
+    }
+    // An hour after the review, members without a final verdict leave the batch's turn; the daemon writes the event once per batch.
+    if kind == types::REVIEW_BATCH_WAIT_ENDED {
+        let batch = event.data.get("batch")?.as_str()?;
+        let left: Vec<&str> = event
+            .data
+            .get("left")?
+            .as_array()?
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        if left.is_empty() {
+            return None;
+        }
+        return Some((
+            ctx.review_leads.iter().cloned().collect(),
+            format!(
+                "the wait of {batch} ended: its approved members integrate together, and {} left the batch to be reviewed alone",
+                left.join(", ")
             ),
             "get_review_batch",
         ));
@@ -1931,6 +1954,30 @@ mod tests {
             ..event(types::REVIEW_BATCH_WAITING, "fold")
         };
         assert!(notice_for(&bare, &ctx()).is_empty());
+    }
+
+    #[test]
+    fn the_end_of_a_batch_wait_reaches_the_review_leads_when_members_left() {
+        let ended = Event {
+            data: json!({"batch": "rb-2", "left": ["P-4"]}),
+            ..event(types::REVIEW_BATCH_WAIT_ENDED, "fold")
+        };
+        assert!(is_pushed(&ended));
+        let text = "fold: the wait of rb-2 ended: its approved members integrate together, and P-4 left the batch to be reviewed alone. Call get_review_batch.";
+        assert!(text.len() <= MAX_NOTICE_LEN);
+        assert_eq!(
+            sent(&notice_for(&ended, &ctx())),
+            vec![
+                row("frontend", text, "get_review_batch"),
+                row("lead", text, "get_review_batch"),
+                row("review", text, "get_review_batch"),
+            ]
+        );
+        let nobody_left = Event {
+            data: json!({"batch": "rb-2", "left": []}),
+            ..event(types::REVIEW_BATCH_WAIT_ENDED, "fold")
+        };
+        assert!(notice_for(&nobody_left, &ctx()).is_empty());
     }
 
     #[test]

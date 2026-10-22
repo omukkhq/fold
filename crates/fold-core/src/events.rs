@@ -165,6 +165,7 @@ define_event_types! {
     REVIEW_PLAN_ENDED = "review.plan_ended",
     REVIEW_BATCH_INTEGRATED = "review.batch_integrated",
     REVIEW_BATCH_WAITING = "review.batch_waiting",
+    REVIEW_BATCH_WAIT_ENDED = "review.batch_wait_ended",
 }
 
 impl EventType {

@@ -915,3 +915,117 @@ async fn a_member_with_only_a_comment_holds_the_batch_and_the_review_lead_hears_
     assert_eq!(done.len(), 2);
     assert_eq!(scene.events("review.batch_waiting").await.len(), 1);
 }
+
+/// The review lead hears every notice that contains `text`, collected through its session's input.
+fn listen(scene: &Scene, text: &'static str) -> std::sync::Arc<std::sync::Mutex<Vec<String>>> {
+    let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sink = std::sync::Arc::clone(&heard);
+    scene.fx.handle.push.register_stdin(
+        &AgentName::parse("lead").unwrap(),
+        std::sync::Arc::new(move |line: &str| {
+            if line.contains(text) {
+                sink.lock().unwrap().push(line.to_owned());
+            }
+            true
+        }),
+    );
+    heard
+}
+
+#[tokio::test]
+async fn an_hour_after_the_review_the_members_without_a_verdict_leave_and_the_approved_ones_integrate()
+ {
+    let scene = Scene::new().await;
+    give_role(&scene.fx.handle.store, "lead", Role::ReviewLead, None).await;
+    let heard = listen(&scene, "the wait of");
+    let batch = scene.batch(&[1, 2, 3]).await;
+    // P-3's author sends v2 before the review, so the batch review leaves it out and nobody reviews it yet.
+    scene.fx.write(3, "src/m3.rs", "member 3, second try\n");
+    scene
+        .fx
+        .reviews()
+        .update_proposal(&scene.authors[2], p(3), Some("tests pass"))
+        .await
+        .unwrap();
+    scene.review(batch, &[1, 2], &[]).await;
+    assert!(
+        scene
+            .fx
+            .reviews()
+            .integrate_ready()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    scene
+        .fx
+        .project
+        .clock()
+        .advance(Duration::from_secs(59 * 60))
+        .unwrap();
+    assert_eq!(scene.fx.reviews().end_due_batch_waits().await.unwrap(), 0);
+    assert!(scene.events("review.batch_wait_ended").await.is_empty());
+    scene
+        .fx
+        .project
+        .clock()
+        .advance(Duration::from_secs(60))
+        .unwrap();
+    assert_eq!(scene.fx.reviews().end_due_batch_waits().await.unwrap(), 1);
+    assert_eq!(scene.fx.reviews().end_due_batch_waits().await.unwrap(), 0);
+    let ended = scene.events("review.batch_wait_ended").await;
+    assert_eq!(ended.len(), 1, "the wait ends once");
+    assert_eq!(ended[0].data["batch"], "rb-1");
+    assert_eq!(ended[0].data["left"], serde_json::json!(["P-3"]));
+    let notice = "fold: the wait of rb-1 ended: its approved members integrate together, and P-3 left the batch to be reviewed alone. Call get_review_batch.";
+    eventually(WAIT, async || {
+        let told = heard.lock().unwrap().clone();
+        if told.len() == 1 && told[0].contains(notice) {
+            Ok(())
+        } else {
+            Err(told)
+        }
+    })
+    .await;
+    assert!(matches!(
+        scene.fx.reviews().batch_integration_view(batch).await.unwrap(),
+        BatchIntegrationView::Ready { members, .. } if members == [p(1), p(2)]
+    ));
+
+    let done = scene.fx.reviews().integrate_ready().await.unwrap();
+    assert_eq!(
+        succeeded(&done_members(&done)),
+        [(p(1), r(2)), (p(2), r(3))]
+    );
+    assert_eq!(
+        scene.integrations().await,
+        [(1, 2, Some(1)), (2, 3, Some(1))]
+    );
+    assert_eq!(scene.state(3).await, ProposalState::Open);
+    // P-3 left the batch's turn, so its approval later integrates it on its own.
+    scene
+        .fx
+        .reviews()
+        .submit_review(&scene.review, p(3), 2, Verdict::Approve, "ok", Vec::new())
+        .await
+        .unwrap();
+    let alone = scene.fx.reviews().integrate_ready().await.unwrap();
+    assert_eq!(alone.len(), 1);
+    assert_eq!(
+        scene.integrations().await,
+        [(1, 2, Some(1)), (2, 3, Some(1)), (3, 4, None)]
+    );
+    assert_consistent(&scene.fx.project).await;
+}
+
+fn done_members(
+    done: &[fold_daemon::services::reviews::AutomaticIntegration],
+) -> Vec<MemberIntegration> {
+    done.iter()
+        .map(|done| MemberIntegration {
+            proposal: done.proposal,
+            outcome: done.outcome.clone(),
+        })
+        .collect()
+}

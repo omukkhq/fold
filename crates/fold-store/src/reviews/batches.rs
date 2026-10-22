@@ -1,6 +1,6 @@
 use fold_core::object::ObjectHash;
 use fold_core::reviews::Verdict;
-use fold_core::reviews::batches::BatchOutcome;
+use fold_core::reviews::batches::{BatchMark, BatchOutcome};
 use fold_core::{
     CheckRunId, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId,
 };
@@ -1033,4 +1033,72 @@ pub async fn note_batch_wait(
     .await?
     .rows_affected();
     Ok(inserted == 1)
+}
+
+/// Whether fold recorded `mark` for the batch.
+pub async fn has_mark(
+    executor: impl SqliteExecutor<'_>,
+    batch: ReviewBatchId,
+    mark: BatchMark,
+) -> Result<bool, StoreError> {
+    let (number, kind) = (batch.to_db(), mark.as_str());
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM review_batch_marks m JOIN review_batches b ON b.id = m.batch_id
+               WHERE b.number = ?1 AND m.kind = ?2
+           ) AS "marked!: bool""#,
+        number,
+        kind
+    )
+    .fetch_one(executor)
+    .await?)
+}
+
+/// Records `mark` for the submitted batch in the caller's write. False, with nothing written, when it was recorded already.
+pub async fn add_mark(
+    tx: &mut WriteTx,
+    batch: ReviewBatchId,
+    mark: BatchMark,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let (number, kind, now) = (batch.to_db(), mark.as_str(), now.as_millis());
+    let inserted = sqlx::query!(
+        "INSERT INTO review_batch_marks (batch_id, kind, created_at)
+         SELECT b.id, ?2, ?3 FROM review_batches b WHERE b.number = ?1
+         ON CONFLICT (batch_id, kind) DO NOTHING",
+        number,
+        kind,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(inserted == 1)
+}
+
+/// The submitted batches whose turn has not ended, whose wait has not ended, and whose review was submitted at or before `cutoff`, in number order.
+pub async fn due_batch_waits(
+    executor: impl SqliteExecutor<'_>,
+    cutoff: Timestamp,
+) -> Result<Vec<ReviewBatchId>, StoreError> {
+    let cutoff = cutoff.as_millis();
+    let numbers = sqlx::query_scalar!(
+        r#"SELECT b.number AS "number!: i64"
+           FROM review_batches b
+           WHERE b.state = 'submitted' AND b.submitted_at <= ?
+             AND NOT EXISTS (SELECT 1 FROM review_batch_integrations i WHERE i.batch_id = b.id)
+             AND NOT EXISTS (
+                 SELECT 1 FROM review_batch_marks m WHERE m.batch_id = b.id AND m.kind = 'wait_ended'
+             )
+           ORDER BY b.number"#,
+        cutoff
+    )
+    .fetch_all(executor)
+    .await?;
+    numbers
+        .into_iter()
+        .map(|number| {
+            ReviewBatchId::try_from_db(number).ok_or(StoreError::Corrupt("review_batches.number"))
+        })
+        .collect()
 }

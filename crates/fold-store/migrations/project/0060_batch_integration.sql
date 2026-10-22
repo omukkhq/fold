@@ -91,6 +91,31 @@ BEGIN
     SELECT RAISE(ABORT, 'review_batch_waits is append-only');
 END;
 
+-- What fold recorded about a submitted batch, once per kind. `wait_ended`: an hour after the review, the members without a final state left the batch's turn, so its approved members integrate together.
+CREATE TABLE review_batch_marks (
+    id INTEGER PRIMARY KEY,
+    batch_id INTEGER NOT NULL REFERENCES review_batches (id),
+    kind TEXT NOT NULL CONSTRAINT review_batch_marks_kind_values CHECK (kind IN ('wait_ended')),
+    created_at INTEGER NOT NULL,
+    UNIQUE (batch_id, kind)
+);
+
+CREATE TRIGGER review_batch_marks_submitted BEFORE INSERT ON review_batch_marks
+WHEN (SELECT state FROM review_batches WHERE id = NEW.batch_id) IS NOT 'submitted'
+BEGIN
+    SELECT RAISE(ABORT, 'review_batch_marks_submitted');
+END;
+
+CREATE TRIGGER review_batch_marks_no_update BEFORE UPDATE ON review_batch_marks
+BEGIN
+    SELECT RAISE(ABORT, 'review_batch_marks is append-only');
+END;
+
+CREATE TRIGGER review_batch_marks_no_delete BEFORE DELETE ON review_batch_marks
+BEGIN
+    SELECT RAISE(ABORT, 'review_batch_marks is append-only');
+END;
+
 -- The review batch whose ready members an integration run checked together. The run is stored on the last member's version, and `check_run_members` names the version of every member it checked, so each member's page lists the run.
 ALTER TABLE check_runs ADD COLUMN review_batch_id INTEGER REFERENCES review_batches (id);
 
