@@ -571,6 +571,7 @@ pub(super) async fn insert_proposal_run(
         actor: new.actor.as_str(),
         title: new.waiting.title,
         evidence: new.waiting.evidence,
+        batch: None,
     };
     match checks::insert_run(tx, &row, now).await {
         Ok(()) => {}
@@ -957,6 +958,7 @@ mod tests {
             reason: None,
             created_at: Timestamp::from_millis(0).unwrap(),
             finished_at: None,
+            batch: None,
         }
     }
 

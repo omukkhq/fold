@@ -38,6 +38,7 @@ function run(fields: Partial<CheckRun> = {}): CheckRun {
     reason: null,
     created_at: 1,
     finished_at: 2,
+    batch: null,
     results: [result()],
     ...fields,
   };
@@ -94,6 +95,19 @@ describe("runViews", () => {
     });
     expect(views[1]?.note).toBeNull();
     expect(views[1]?.lines[0]?.hasLog).toBe(false);
+  });
+
+  it("titles the run of a batch by the batch, whichever member's page shows it", () => {
+    const [view] = runViews([
+      run({
+        stage: "integration",
+        purpose: "integrate",
+        version: 3,
+        base: "r9",
+        batch: "rb-2",
+      }),
+    ]);
+    expect(view?.title).toBe("Integration checks of batch rb-2 on r9");
   });
 
   it("has a sentence for every reason", () => {

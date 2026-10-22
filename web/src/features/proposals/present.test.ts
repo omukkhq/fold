@@ -98,6 +98,12 @@ describe("reviewPill", () => {
     expect(reviewPill(p6, { conflictMain: "r9" }).text).toBe("Conflict");
     const p5 = proposalSummary("P-5", { state: "integrated", turn: null });
     expect(reviewPill(p5, { revision: "r8" }).text).toBe("Integrated as r8");
+    expect(reviewPill(p5, { revision: "r8", batch: "rb-2" }).text).toBe(
+      "Integrated with batch rb-2 as r8",
+    );
+    expect(reviewPill(p5, { batch: "rb-2" }).text).toBe(
+      "Integrated with batch rb-2",
+    );
     expect(reviewPill(p5).text).toBe("Integrated");
     expect(
       reviewPill(proposalSummary("P-8", { state: "closed", turn: null })).text,

@@ -19,7 +19,13 @@ describe("integrationOf", () => {
       version: 2,
       at: revision(9).created_at,
       actor: null,
+      batch: null,
     });
+  });
+
+  it("names the review batch the proposal integrated with", () => {
+    const batched = [{ ...revision(9, "P-3"), batch: "rb-2" }];
+    expect(integrationOf(integrated, batched)?.batch).toBe("rb-2");
   });
 
   it("carries the Git commit of the revision once it is written", () => {
@@ -40,6 +46,7 @@ describe("integrationOf", () => {
       version: 2,
       at: 7,
       actor: null,
+      batch: null,
     });
     expect(
       integrationOf({ ...integrated, closed_at: null }, [], answer)?.at,

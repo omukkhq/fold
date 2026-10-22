@@ -88,6 +88,7 @@ impl ReviewService {
                         proposal,
                         version,
                         remote_commit: None,
+                        batch: None,
                     },
                     actor: label.as_str(),
                     created_at: now,

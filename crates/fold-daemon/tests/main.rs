@@ -33,6 +33,7 @@ mod acceptance_22_reviewer_resume;
 mod acceptance_23_message_resume;
 mod acceptance_24_review_plan;
 mod acceptance_25_supervised_main;
+mod acceptance_26_batch_integration;
 mod acceptance_2_messaging;
 mod acceptance_3_parallel_workspaces;
 mod acceptance_4_live_diff;
@@ -48,6 +49,7 @@ mod auto_checkpoints;
 mod auto_integrate;
 #[cfg(feature = "failpoints")]
 mod auto_integrate_failpoints;
+mod batch_integration;
 mod checklists_service;
 mod checks;
 #[cfg(feature = "failpoints")]

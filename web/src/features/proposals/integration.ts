@@ -13,6 +13,8 @@ export interface IntegrationView {
   at: number;
   /** Who integrated; null because neither the revisions nor the integrate answer name the integrating actor, so the slot draws nothing. */
   actor: string | null;
+  /** The review batch whose members integrated together with this proposal; null for a proposal integrated on its own, and while only the integrate answer names the revision. */
+  batch: string | null;
 }
 
 /**
@@ -33,6 +35,7 @@ export function integrationOf(
       version: p.current_version,
       at: revision.created_at,
       actor: null,
+      batch: revision.batch,
     };
   }
   if (answered?.proposal === p.id && answered.revision !== null) {
@@ -42,6 +45,7 @@ export function integrationOf(
       version: p.current_version,
       at: p.closed_at ?? p.updated_at,
       actor: null,
+      batch: null,
     };
   }
   return null;

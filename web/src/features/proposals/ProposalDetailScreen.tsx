@@ -455,6 +455,7 @@ export function ProposalDetailScreen({
         view={view}
         main={main}
         revision={integration?.revision ?? null}
+        batch={integration?.batch ?? null}
         now={now}
       />
       {shown?.place === "banner" ? (

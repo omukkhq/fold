@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM review_batch_marks m JOIN review_batches b ON b.id = m.batch_id\n               WHERE b.number = ?1 AND m.kind = ?2\n           ) AS \"marked!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "marked!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "75aefff9f77bc88f8b5e07256e3d69f93dc23019c2e2bcb3198154e6806d0088"
+}

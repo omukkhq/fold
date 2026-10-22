@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.number AS \"revision!: i64\", b.number AS \"batch?: i64\"\n           FROM integrations i\n           JOIN proposals p ON p.id = i.proposal_id\n           JOIN revisions r ON r.id = i.revision_id\n           LEFT JOIN review_batches b ON b.id = i.review_batch_id\n           WHERE p.number = ? AND i.kind = 'proposal' AND i.result = 'succeeded'",
+  "describe": {
+    "columns": [
+      {
+        "name": "revision!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "batch?: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batches",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "7aab0dd30d180a6b1f83e15fc33ae49c72ae88b45aea5f41d0f68880a173f0dd"
+}

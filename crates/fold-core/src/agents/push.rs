@@ -92,6 +92,9 @@ pub fn is_pushed(event: &Event) -> bool {
         types::REVIEW_PLAN_LEFT,
         types::REVIEW_PLAN_WAIT_ENDED,
         types::REVIEW_PLAN_ENDED,
+        types::REVIEW_BATCH_WAITING,
+        types::REVIEW_BATCH_WAIT_ENDED,
+        types::REVIEW_BATCH_READY,
     ]
     .contains(&event.event_type)
 }
@@ -314,6 +317,69 @@ fn listed(items: &[String], count: usize, one: &str, many: &str, spelled: bool) 
 
 fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'static str)> {
     let kind = event.event_type;
+    // A submitted batch holds its approved members while a member's current version has only comments; the daemon writes the event once per member and version.
+    if kind == types::REVIEW_BATCH_WAITING {
+        let proposal = event.proposal?;
+        let batch = event.data.get("batch")?.as_str()?;
+        let version = event.data.get("version")?.as_u64()?;
+        return Some((
+            ctx.review_leads.iter().cloned().collect(),
+            format!(
+                "{batch} waits for a verdict on {proposal} v{version}: its reviewer must approve or request changes"
+            ),
+            "get_review_batch",
+        ));
+    }
+    // An hour after the review, members without a final verdict leave the batch's turn; the daemon writes the event once per batch.
+    if kind == types::REVIEW_BATCH_WAIT_ENDED {
+        let batch = event.data.get("batch")?.as_str()?;
+        let left: Vec<&str> = event
+            .data
+            .get("left")?
+            .as_array()?
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        if left.is_empty() {
+            return None;
+        }
+        return Some((
+            ctx.review_leads.iter().cloned().collect(),
+            format!(
+                "the wait of {batch} ended: its approved members integrate together, and {} left the batch to be reviewed alone",
+                left.join(", ")
+            ),
+            "get_review_batch",
+        ));
+    }
+    // In a project that does not integrate automatically, a batch that waited at its submission and became ready later needs someone to integrate it; the daemon writes the event once per batch.
+    if kind == types::REVIEW_BATCH_READY {
+        let batch = event.data.get("batch")?.as_str()?;
+        let members: Vec<&str> = event
+            .data
+            .get("members")?
+            .as_array()?
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        let mut agents = ctx.review_leads.clone();
+        if let Some(holder) = event
+            .data
+            .get("holder")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|name| crate::agents::WorkerName::parse(name).ok())
+        {
+            agents.insert(holder.agent());
+        }
+        return Some((
+            agents.into_iter().collect(),
+            format!(
+                "{batch} is ready: {} integrate together",
+                members.join(", ")
+            ),
+            "integrate_review_batch",
+        ));
+    }
     if kind == types::PROPOSAL_HUMAN_EDITED {
         let proposal = event.proposal?;
         let version = event.data.get("version")?.as_u64()?;
@@ -339,9 +405,15 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
     if kind == types::INTEGRATION_SUCCEEDED {
         let proposal = event.proposal?;
         let agents = ctx.author.iter().chain(&ctx.reviewer).cloned().collect();
+        let with = event
+            .data
+            .get("batch")
+            .and_then(serde_json::Value::as_str)
+            .map(|batch| format!(" with batch {batch}"))
+            .unwrap_or_default();
         let text = match event.revision {
-            Some(revision) => format!("{proposal} integrated as {revision}"),
-            None => format!("{proposal} integrated"),
+            Some(revision) => format!("{proposal} integrated{with} as {revision}"),
+            None => format!("{proposal} integrated{with}"),
         };
         return Some((agents, text, "get_inbox"));
     }
@@ -1890,6 +1962,78 @@ mod tests {
     }
 
     #[test]
+    fn a_batch_that_waits_on_a_comment_reaches_the_review_leads() {
+        let waiting = Event {
+            data: json!({"batch": "rb-2", "version": 3}),
+            ..event(types::REVIEW_BATCH_WAITING, "fold")
+        };
+        assert!(is_pushed(&waiting));
+        let text = "fold: rb-2 waits for a verdict on P-3 v3: its reviewer must approve or request changes. Call get_review_batch.";
+        assert!(text.len() <= MAX_NOTICE_LEN);
+        assert_eq!(
+            sent(&notice_for(&waiting, &ctx())),
+            vec![
+                row("frontend", text, "get_review_batch"),
+                row("lead", text, "get_review_batch"),
+                row("review", text, "get_review_batch"),
+            ]
+        );
+        let bare = Event {
+            data: json!({}),
+            ..event(types::REVIEW_BATCH_WAITING, "fold")
+        };
+        assert!(notice_for(&bare, &ctx()).is_empty());
+    }
+
+    #[test]
+    fn the_end_of_a_batch_wait_reaches_the_review_leads_when_members_left() {
+        let ended = Event {
+            data: json!({"batch": "rb-2", "left": ["P-4"]}),
+            ..event(types::REVIEW_BATCH_WAIT_ENDED, "fold")
+        };
+        assert!(is_pushed(&ended));
+        let text = "fold: the wait of rb-2 ended: its approved members integrate together, and P-4 left the batch to be reviewed alone. Call get_review_batch.";
+        assert!(text.len() <= MAX_NOTICE_LEN);
+        assert_eq!(
+            sent(&notice_for(&ended, &ctx())),
+            vec![
+                row("frontend", text, "get_review_batch"),
+                row("lead", text, "get_review_batch"),
+                row("review", text, "get_review_batch"),
+            ]
+        );
+        let nobody_left = Event {
+            data: json!({"batch": "rb-2", "left": []}),
+            ..event(types::REVIEW_BATCH_WAIT_ENDED, "fold")
+        };
+        assert!(notice_for(&nobody_left, &ctx()).is_empty());
+    }
+
+    #[test]
+    fn a_batch_that_became_ready_reaches_the_review_leads_and_its_holder() {
+        let ready = Event {
+            data: json!({"batch": "rb-2", "members": ["P-3", "P-5"], "holder": "backend"}),
+            ..event(types::REVIEW_BATCH_READY, "fold")
+        };
+        assert!(is_pushed(&ready));
+        let text = "fold: rb-2 is ready: P-3, P-5 integrate together. Call integrate_review_batch.";
+        assert_eq!(
+            sent(&notice_for(&ready, &ctx())),
+            vec![
+                row("backend", text, "integrate_review_batch"),
+                row("frontend", text, "integrate_review_batch"),
+                row("lead", text, "integrate_review_batch"),
+                row("review", text, "integrate_review_batch"),
+            ]
+        );
+        let bare = Event {
+            data: json!({"batch": "rb-2"}),
+            ..event(types::REVIEW_BATCH_READY, "fold")
+        };
+        assert!(notice_for(&bare, &ctx()).is_empty());
+    }
+
+    #[test]
     fn an_integration_reaches_the_author_and_the_reviewer() {
         let integrated = Event {
             revision: Some(crate::ids::RevisionId::from_number(5).unwrap()),
@@ -1920,6 +2064,15 @@ mod tests {
         };
         assert!(is_pushed(&pull));
         assert!(notice_for(&pull, &ctx()).is_empty());
+        let batched = Event {
+            revision: Some(crate::ids::RevisionId::from_number(6).unwrap()),
+            data: json!({"batch": "rb-2"}),
+            ..event(types::INTEGRATION_SUCCEEDED, "fold")
+        };
+        assert_eq!(
+            sent(&notice_for(&batched, &ctx()))[0].1,
+            "fold: P-3 integrated with batch rb-2 as r6. Call get_inbox."
+        );
     }
 
     #[test]

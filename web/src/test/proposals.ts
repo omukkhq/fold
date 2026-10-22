@@ -259,6 +259,7 @@ export function revision(n: number, proposal: string | null = null): Revision {
     author: proposal === null ? null : "backend",
     pull: null,
     commit: null,
+    batch: null,
     tree: String(n).repeat(64).slice(0, 64),
     created_at: T0 + n * 3_600_000,
   };

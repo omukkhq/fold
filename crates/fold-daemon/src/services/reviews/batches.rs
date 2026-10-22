@@ -19,6 +19,7 @@ use fold_vcs::browse;
 use fold_vcs::compare::Totals;
 use serde_json::{Value, json};
 
+use super::batch_integration::{BatchIntegrationView, mark_ready_at_submission};
 use super::changes::ChangeRange;
 use super::checkouts::remove_unnamed_dir;
 use super::claims::{TAKEN_OVER, already_claimed, take_review_claim};
@@ -292,6 +293,8 @@ pub struct ReviewBatchView {
     pub verdicts: Vec<BatchVerdictView>,
     /// The comments about members together, each with the members it is on.
     pub comments: Vec<BatchCommentView>,
+    /// Whether the approved members integrate together now, wait for the others, or did.
+    pub integration: BatchIntegrationView,
 }
 
 /// A comment of a batch review about members together. Each member in `members` has a whole-version comment that points to it.
@@ -829,6 +832,7 @@ impl ReviewService {
                         })).collect::<Vec<Value>>(),
                     }))?;
                 buffer.append(tx, &event, now).await?;
+                mark_ready_at_submission(tx, batch, now).await?;
                 Ok::<_, ReviewError>(SubmittedBatch {
                     batch,
                     reviewed,
@@ -933,6 +937,7 @@ impl ReviewService {
                 created_at: comment.created_at,
             })
             .collect();
+        let integration = self.batch_integration_view(row.id).await?;
         Ok(ReviewBatchView {
             id: row.id,
             holder: row.holder,
@@ -944,6 +949,7 @@ impl ReviewService {
             checkout,
             verdicts,
             comments,
+            integration,
         })
     }
 
@@ -1284,7 +1290,7 @@ fn open_batch(row: Option<BatchRow>, batch: ReviewBatchId) -> Result<BatchRow, R
     .into())
 }
 
-fn batch_not_found(batch: ReviewBatchId) -> ReviewError {
+pub(super) fn batch_not_found(batch: ReviewBatchId) -> ReviewError {
     FoldError::new(
         codes::REVIEW_BATCH_NOT_FOUND,
         format!("{batch} does not exist"),

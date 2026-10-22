@@ -513,9 +513,27 @@ export function SidePanel({
         ) : null}
         {integration ? (
           <div className="flex flex-col gap-4 rounded-m bg-primary-soft px-12 py-10">
-            <p className="flex items-center gap-8 text-bar font-semibold text-primary-text">
+            <p className="flex flex-wrap items-center gap-x-8 gap-y-2 text-bar font-semibold text-primary-text">
               <GitMerge aria-hidden="true" size={14} />
-              Integrated as{" "}
+              {integration.batch ? (
+                <>
+                  <span className="whitespace-nowrap">
+                    Integrated with batch
+                  </span>
+                  <HrefLink
+                    href={projectPath(slug, "batches", integration.batch)}
+                    className={cn(
+                      "font-mono whitespace-nowrap underline",
+                      focusRing,
+                    )}
+                  >
+                    {integration.batch}
+                  </HrefLink>
+                  <span>as</span>
+                </>
+              ) : (
+                <span>Integrated as</span>
+              )}
               <HrefLink
                 href={idHref(slug, "revision", integration.revision)}
                 className={cn("font-mono underline", focusRing)}

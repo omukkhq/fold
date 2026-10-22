@@ -321,9 +321,10 @@ pub fn spawn_worker_idle(state: AppState, tick: Duration, stop: watch::Receiver<
     }
 }
 
-/// Starts the review plan job: every `tick` it ends the wait of each open review plan whose deadline passed by its project's clock, through [`ReviewService::end_due_plan_waits`], so the review lead hears that it now gives the plan's open proposals to one reviewer. A cycle is a tick that ended at least one wait. It stops when `stop` changes.
+/// Starts the review plan job: every `tick` it ends the wait of each open review plan whose deadline passed by its project's clock, through [`ReviewService::end_due_plan_waits`], so the review lead hears that it now gives the plan's open proposals to one reviewer, and the wait of each submitted review batch an hour after its review, through [`ReviewService::end_due_batch_waits`], so its approved members integrate together without the members that still wait. A cycle is a tick that ended at least one wait. It stops when `stop` changes.
 ///
 /// [`ReviewService::end_due_plan_waits`]: crate::services::reviews::ReviewService::end_due_plan_waits
+/// [`ReviewService::end_due_batch_waits`]: crate::services::reviews::ReviewService::end_due_batch_waits
 pub fn spawn_plan_deadlines(state: AppState, tick: Duration, stop: watch::Receiver<bool>) -> Job {
     let (progress, watcher) = watch::channel(JobProgress::default());
     let task = tokio::spawn(plan_deadlines(state, tick, stop, progress));
@@ -354,6 +355,14 @@ async fn plan_deadlines(
                     project = %handle.slug,
                     code = error.log_code(),
                     "the review plan deadlines were not checked; the next tick tries again"
+                ),
+            }
+            match handle.reviews(&state.registry).end_due_batch_waits().await {
+                Ok(batches) => ended += batches,
+                Err(error) => tracing::warn!(
+                    project = %handle.slug,
+                    code = error.log_code(),
+                    "the review batch waits were not checked; the next tick tries again"
                 ),
             }
         }
@@ -471,11 +480,14 @@ async fn integrate_project(
     handle.slug.clone()
 }
 
-/// A verdict, alone or in a batch review, a changed or cleared mark, a removed dependency, a status change, which covers a prerequisite becoming Done, an added tag, because an approval counts by the `main` tag and the role its agent holds now, and a move of main, which can fix the checks file that holds the integrations or clear fold's own failure to run the checks on the earlier main.
+/// A verdict, alone or in a batch review, a changed or cleared mark, a removed dependency, a status change, which covers a prerequisite becoming Done, an added tag, because an approval counts by the `main` tag and the role its agent holds now, and a move of main, which can fix the checks file that holds the integrations or clear fold's own failure to run the checks on the earlier main. A closed proposal and a closed batch can give the last member of a batch its final state, or let the members of a batch that ended without a review go on their own, and the end of a batch's wait lets its approved members go without the ones that wait.
 fn can_make_ready(event_type: EventType) -> bool {
     [
         types::REVIEW_SUBMITTED,
         types::REVIEW_BATCH_SUBMITTED,
+        types::REVIEW_BATCH_CLOSED,
+        types::REVIEW_BATCH_WAIT_ENDED,
+        types::PROPOSAL_CLOSED,
         types::TASK_HUMAN_REVIEW_SET,
         types::TASK_HUMAN_REVIEW_CLEARED,
         types::AGENT_TAG_ADDED,
@@ -491,6 +503,10 @@ async fn integrate_ready(
     handle: &ProjectHandle,
     progress: &watch::Sender<JobProgress>,
 ) {
+    // A batch that waits on a member with only comments waits whether fold integrates automatically or not.
+    if let Err(error) = handle.reviews(&state.registry).note_batch_waits().await {
+        tracing::warn!(project = %handle.slug, code = error.log_code(), "the waits of the review batches could not be told; the next event tries again");
+    }
     let integrated = match projects::load_config(&handle.paths).await {
         Ok(config) if config.integration.automatic => {
             match handle.reviews(&state.registry).integrate_ready().await {
@@ -501,7 +517,17 @@ async fn integrate_ready(
                 }
             }
         }
-        Ok(_) => 0,
+        // Without automatic integration no batch takes its turn by itself, so a batch that becomes ready is told and one with no member left ends.
+        Ok(_) => {
+            if let Err(error) = handle
+                .reviews(&state.registry)
+                .settle_batches_by_hand()
+                .await
+            {
+                tracing::warn!(project = %handle.slug, code = error.log_code(), "the ready review batches could not be told; the next event tries again");
+            }
+            0
+        }
         Err(error) => {
             tracing::warn!(project = %handle.slug, code = error.log_code(), "the automatic integration skipped a run; the configuration is invalid");
             0
