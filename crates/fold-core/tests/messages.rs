@@ -560,3 +560,53 @@ fn choices_keep_one_line_descriptions_and_a_short_header() {
     assert_eq!(short_line("a\nb", 12), None);
     assert_eq!(short_line(" ", 12), None);
 }
+
+#[test]
+fn a_line_excerpt_holds_the_run_without_line_endings() {
+    use fold_core::messages::line_excerpt;
+    let text = "one\r\ntwo\nthree\n";
+    assert_eq!(line_excerpt(text, 1, 1), Some(("one".to_owned(), false)));
+    assert_eq!(
+        line_excerpt(text, 2, 3),
+        Some(("two\nthree".to_owned(), false))
+    );
+    assert_eq!(line_excerpt("a\n\nb", 2, 2), Some((String::new(), false)));
+    assert_eq!(line_excerpt(text, 3, 4), None);
+    assert_eq!(line_excerpt(text, 0, 1), None);
+    assert_eq!(line_excerpt(text, 2, 1), None);
+}
+
+#[test]
+fn a_long_line_excerpt_keeps_its_first_lines() {
+    use fold_core::messages::{MAX_EXCERPT_CHARS, MAX_EXCERPT_LINES, line_excerpt};
+    let many: String = (1..=150).map(|n| format!("line {n}\n")).collect();
+    let (excerpt, cut) = line_excerpt(&many, 1, 150).unwrap();
+    assert!(cut);
+    assert_eq!(excerpt.lines().count(), MAX_EXCERPT_LINES);
+    assert!(excerpt.ends_with("line 100"));
+
+    let wide = format!("{}\n{}\n", "x".repeat(MAX_EXCERPT_CHARS - 2), "yy");
+    let (excerpt, cut) = line_excerpt(&wide, 1, 2).unwrap();
+    assert!(cut);
+    assert_eq!(excerpt.chars().count(), MAX_EXCERPT_CHARS - 2);
+
+    let huge = "z".repeat(MAX_EXCERPT_CHARS + 5);
+    let (excerpt, cut) = line_excerpt(&huge, 1, 1).unwrap();
+    assert!(cut);
+    assert_eq!(excerpt.chars().count(), MAX_EXCERPT_CHARS);
+}
+
+#[test]
+fn a_lone_carriage_return_ends_a_line_of_an_excerpt() {
+    use fold_core::messages::{line_excerpt, text_lines};
+    let text = "one\rtwo\r\nthree\nfour";
+    assert_eq!(text_lines(text), ["one", "two", "three", "four"]);
+    assert_eq!(text_lines("a\n\r\n"), ["a", ""]);
+    assert!(text_lines("").is_empty());
+    assert_eq!(
+        line_excerpt(text, 2, 3),
+        Some(("two\nthree".to_owned(), false))
+    );
+    assert_eq!(line_excerpt(text, 4, 4), Some(("four".to_owned(), false)));
+    assert_eq!(line_excerpt(text, 4, 5), None);
+}

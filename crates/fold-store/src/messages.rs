@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
+use fold_core::reviews::Side;
 use fold_core::{
     AddressedAs, AgentName, Choice, Directory, DirectoryAgent, HumanName, MessageId, ProposalId,
     Recipient, RequestId, Sender, Tag, Target, TaskId, Timestamp, WorkerName,
@@ -70,6 +71,36 @@ pub struct MessageRow {
     pub header: Option<String>,
     /// The sender marked the message as asking a human for an answer.
     pub asks_human: bool,
+    /// The lines of a proposal version the message asks about.
+    pub lines: Option<MessageLines>,
+}
+
+/// A run of lines of one file of a proposal version that a message asks about, 1-based and inclusive, in the version's base tree (`Old`) or its own tree (`New`). The version belongs to the message's proposal. The excerpt is file content, which is never logged, so the `Debug` form gives its length alone.
+#[derive(Clone, PartialEq, Eq)]
+pub struct MessageLines {
+    pub version: u32,
+    pub path: String,
+    pub side: Side,
+    pub start_line: u32,
+    pub end_line: u32,
+    /// The lines as the tree holds them, joined by newlines.
+    pub excerpt: String,
+    /// `excerpt` holds only the first lines of the run.
+    pub excerpt_cut: bool,
+}
+
+impl std::fmt::Debug for MessageLines {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MessageLines")
+            .field("version", &self.version)
+            .field("path", &self.path)
+            .field("side", &self.side)
+            .field("start_line", &self.start_line)
+            .field("end_line", &self.end_line)
+            .field("excerpt_len", &self.excerpt.len())
+            .field("excerpt_cut", &self.excerpt_cut)
+            .finish()
+    }
 }
 
 /// Inserts the message. A sender worker, task or proposal that does not exist leaves its column empty, which the sender check or the caller's earlier lookup refuses.
@@ -150,6 +181,41 @@ pub async fn insert_choices(
         .execute(tx.conn())
         .await?;
     }
+    Ok(())
+}
+
+/// Stores the lines of `proposal`'s version that `message` asks about. A version the message's proposal does not have is refused by the database.
+pub async fn insert_lines(
+    tx: &mut WriteTx,
+    message: MessageId,
+    proposal: ProposalId,
+    lines: &MessageLines,
+) -> Result<(), StoreError> {
+    let number = message.to_db();
+    let proposal = proposal.to_db();
+    let version = i64::from(lines.version);
+    let side = lines.side.as_str();
+    let start = i64::from(lines.start_line);
+    let end = i64::from(lines.end_line);
+    sqlx::query!(
+        "INSERT INTO message_line_refs
+             (message_id, version_id, path, side, start_line, end_line, excerpt, excerpt_cut)
+         VALUES ((SELECT id FROM messages WHERE number = ?1),
+                 (SELECT v.id FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id
+                  WHERE p.number = ?2 AND v.version = ?3),
+                 ?4, ?5, ?6, ?7, ?8, ?9)",
+        number,
+        proposal,
+        version,
+        lines.path,
+        side,
+        start,
+        end,
+        lines.excerpt,
+        lines.excerpt_cut
+    )
+    .execute(tx.conn())
+    .await?;
     Ok(())
 }
 
@@ -945,6 +1011,7 @@ impl RawMessage {
             choices: asked.choices,
             header: asked.header,
             asks_human: self.asks_human,
+            lines: asked.lines,
         })
     }
 }
@@ -1073,14 +1140,15 @@ pub async fn first_human_reply(
     .transpose()
 }
 
-/// The options and the header of a question message.
+/// What a message asks beyond its body: the options and the header of a question, and the lines of a proposal version it asks about.
 #[derive(Debug, Clone, Default)]
 struct Asked {
     choices: Vec<Choice>,
     header: Option<String>,
+    lines: Option<MessageLines>,
 }
 
-/// The choices and the header of each message whose number is in the JSON list `numbers`, the choices in order.
+/// The choices, the header and the lines of each message whose number is in the JSON list `numbers`, the choices in order.
 async fn choices_of(
     conn: &mut SqliteConnection,
     numbers: &str,
@@ -1102,6 +1170,17 @@ async fn choices_of(
            WHERE m.number IN (SELECT value FROM json_each(?))"#,
         numbers
     )
+    .fetch_all(&mut *conn)
+    .await?;
+    let lines = sqlx::query!(
+        r#"SELECT m.number, v.version, l.path, l.side, l.start_line, l.end_line, l.excerpt,
+                  l.excerpt_cut AS "excerpt_cut!: bool"
+           FROM message_line_refs l
+           JOIN messages m ON m.id = l.message_id
+           JOIN proposal_versions v ON v.id = l.version_id
+           WHERE m.number IN (SELECT value FROM json_each(?))"#,
+        numbers
+    )
     .fetch_all(conn)
     .await?;
     let mut asked: HashMap<i64, Asked> = HashMap::new();
@@ -1113,6 +1192,19 @@ async fn choices_of(
     }
     for row in headers {
         asked.entry(row.number).or_default().header = Some(row.header);
+    }
+    for row in lines {
+        let line =
+            |value: i64, column| u32::try_from(value).map_err(|_| StoreError::Corrupt(column));
+        asked.entry(row.number).or_default().lines = Some(MessageLines {
+            version: line(row.version, "proposal_versions.version")?,
+            path: row.path,
+            side: Side::parse(&row.side).ok_or(StoreError::Corrupt("message_line_refs.side"))?,
+            start_line: line(row.start_line, "message_line_refs.start_line")?,
+            end_line: line(row.end_line, "message_line_refs.end_line")?,
+            excerpt: row.excerpt,
+            excerpt_cut: row.excerpt_cut,
+        });
     }
     Ok(asked)
 }

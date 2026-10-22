@@ -93,6 +93,7 @@ pub(crate) async fn forward_in_tx(
             body: &body,
             choices: None,
             asks_human: false,
+            lines: None,
             recipients,
             now,
         },

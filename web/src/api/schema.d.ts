@@ -571,6 +571,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/proposals/{id}/questions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Asks the proposal's author about a run of lines of a version: one message from the named human to the worker holding the task's implementation claim, else the proposal's author, linked to the task and the proposal and carrying the lines and their text. It waits for the author's answer in its thread. It writes no review, verdict or comment and never changes whose turn it is, and it changes no task state. */
+        post: operations["ask_proposal_author"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/proposals/{id}/review-again": {
         parameters: {
             query?: never;
@@ -1554,6 +1571,32 @@ export interface components {
             model: string | null;
             /** @example web */
             name: string;
+        };
+        /** @description A human's question to a proposal's author about a run of lines of one file of a version. */
+        AskAuthorBody: {
+            /** @description The question, plain text with some visible character. In message text `#` names a fold item and `@` names a file; the daemon parses nothing. */
+            body: string;
+            /**
+             * Format: int32
+             * @description Inclusive.
+             */
+            end_line: number;
+            /**
+             * @description The file the lines belong to, relative to the project root.
+             * @example web/src/board.ts
+             */
+            path: string;
+            side: components["schemas"]["CommentSide"];
+            /**
+             * Format: int32
+             * @description From 1.
+             */
+            start_line: number;
+            /**
+             * Format: int32
+             * @description The version whose lines the question is about; any version of the proposal.
+             */
+            version: number;
         };
         AttentionItem: {
             /** @description For a `question`: one of the task's open asks is closable, so a human can mark it answered with the asks route, because it is no worker's `AskUserQuestion`, which only a reply in its thread ends. False for every other kind. */
@@ -2677,6 +2720,32 @@ export interface components {
             /** @example Recharts */
             label: string;
         };
+        /** @description A run of lines of one file of a proposal version, with their text. */
+        MessageLines: {
+            /**
+             * Format: int32
+             * @description Inclusive.
+             */
+            end_line: number;
+            /** @description The lines joined by newlines, without their line endings. */
+            excerpt: string;
+            /** @description The excerpt holds only the first lines of the run: at most 100 lines and 20000 characters. */
+            excerpt_cut: boolean;
+            /** @example web/src/board.ts */
+            path: string;
+            /** @description `old` reads the version's base, `new` the version. */
+            side: components["schemas"]["CommentSide"];
+            /**
+             * Format: int32
+             * @description From 1.
+             */
+            start_line: number;
+            /**
+             * Format: int32
+             * @description The version of the message's proposal.
+             */
+            version: number;
+        };
         /** @description A notice about a message got through to a session or the worker process of a recipient agent for the first time, so the message's thread shows that the message waits there. It is the `data` of the live `message.pushed` event; the recipients' `pushed_at` is committed before it is sent. */
         MessagePushed: {
             /**
@@ -2707,6 +2776,7 @@ export interface components {
             header: string | null;
             /** @example m-31 */
             id: string;
+            lines: components["schemas"]["MessageLines"] | null;
             /** @example P-3 */
             proposal: string | null;
             recipients: components["schemas"]["RecipientView"][];
@@ -7930,6 +8000,98 @@ export interface operations {
                 };
             };
             /** @description `project_unavailable`, or `integration_failed` (`details.cause`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    ask_proposal_author: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The proposal id, such as P-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskAuthorBody"];
+            };
+        };
+        responses: {
+            /** @description The stored question */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageView"];
+                };
+            };
+            /** @description `invalid_request`: an empty body or a malformed request; `invalid_path` or `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_found`: no such proposal or version, or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_comment_path` or `invalid_comment_range`: the lines are not in the file on that side */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
             503: {
                 headers: {
                     [name: string]: unknown;

@@ -28,6 +28,7 @@ import { controlClasses } from "@/components/form/Field";
 import { MarkAnswered } from "@/features/messages/MarkAnswered";
 import { taskCanMarkAnswered } from "@/features/messages/answered";
 import { MessageBody } from "@/features/messages/MessageBody";
+import { QuotedLines } from "@/features/messages/QuotedLines";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { MentionTextarea } from "@/mentions/MentionTextarea";
@@ -65,6 +66,13 @@ function Message({ slug, message }: { slug: string; message: TaskMessage }) {
           {clockTime(message.sent_at)}
         </HrefLink>
       </div>
+      {message.lines === null ? null : (
+        <QuotedLines
+          slug={slug}
+          proposal={message.proposal}
+          lines={message.lines}
+        />
+      )}
       <MessageBody body={message.body} slug={slug} />
     </li>
   );

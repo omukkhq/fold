@@ -96,6 +96,7 @@ export function requestMessage(
     choices: [],
     header: null,
     asks_human: false,
+    lines: null,
     body,
     sent_at: T0 + n * 1000,
     recipients: [
