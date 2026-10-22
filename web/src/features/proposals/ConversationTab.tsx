@@ -26,7 +26,6 @@ import { idHref } from "@/routes/paths";
 import { questionSchema, type QuestionValues } from "./compose";
 import {
   filterConversation,
-  forwards,
   KIND_TEXT,
   kindOptions,
   laterChange,
@@ -431,43 +430,46 @@ function ThreadCard({
       {source.type === "message" ? (
         <>
           <ol className="flex flex-col px-16">
-            {source.thread.messages.map((message) => (
-              <li
-                key={message.id}
-                className="flex flex-col gap-6 border-b border-border-subtle py-12 last:border-b-0"
-              >
-                <p className="flex flex-wrap items-center gap-x-8 text-code text-text-muted">
-                  <PersonName name={message.sender} className="font-semibold" />
-                  <ArrowRight
-                    aria-label="to"
-                    role="img"
-                    size={12}
-                    className="shrink-0 text-text-faint"
-                  />
-                  <PersonList names={recipientActors(message)} />
-                  <span className="text-text-faint">
-                    · {formatAsOfMinute(now, message.sent_at)}
-                  </span>
-                </p>
-                {message.lines === null ? null : (
-                  <QuotedLines
-                    slug={slug}
-                    proposal={message.proposal}
-                    lines={message.lines}
-                  />
-                )}
-                <MessageBody body={message.body} slug={slug} />
-                {forwards(message).map((forward) => (
-                  <p
-                    key={forward.from}
-                    className="text-meta text-text-faint italic"
-                  >
-                    fold sent it on to <PersonName name={forward.to} />:{" "}
-                    <PersonName name={forward.from} /> cannot start now.
+            {source.thread.messages.map((message) =>
+              message.sender === "fold" ? (
+                <li
+                  key={message.id}
+                  className="border-b border-border-subtle py-8 text-meta text-text-faint italic last:border-b-0"
+                >
+                  <MentionText text={message.body} slug={slug} />
+                </li>
+              ) : (
+                <li
+                  key={message.id}
+                  className="flex flex-col gap-6 border-b border-border-subtle py-12 last:border-b-0"
+                >
+                  <p className="flex flex-wrap items-center gap-x-8 text-code text-text-muted">
+                    <PersonName
+                      name={message.sender}
+                      className="font-semibold"
+                    />
+                    <ArrowRight
+                      aria-label="to"
+                      role="img"
+                      size={12}
+                      className="shrink-0 text-text-faint"
+                    />
+                    <PersonList names={recipientActors(message)} />
+                    <span className="text-text-faint">
+                      · {formatAsOfMinute(now, message.sent_at)}
+                    </span>
                   </p>
-                ))}
-              </li>
-            ))}
+                  {message.lines === null ? null : (
+                    <QuotedLines
+                      slug={slug}
+                      proposal={message.proposal}
+                      lines={message.lines}
+                    />
+                  )}
+                  <MessageBody body={message.body} slug={slug} />
+                </li>
+              ),
+            )}
           </ol>
           <div className="flex flex-col gap-8 border-t border-border-subtle px-16 py-10">
             {threadCanMarkAnswered(source.thread) ? (

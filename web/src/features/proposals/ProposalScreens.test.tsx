@@ -1496,8 +1496,19 @@ describe("Proposal tabs", () => {
           message("m-32", {
             sender: "human:tanim",
             proposal: "P-4",
-            recipients: [recipient("backend/db", { forwarded_to: "db-lead" })],
+            recipients: [
+              recipient("backend/db", { forwarded_to: "db-lead" }),
+              recipient("db-lead"),
+            ],
             body: "Why TEXT dates?",
+            sent_at: Date.now(),
+          }),
+          message("m-28", {
+            thread: "m-32",
+            sender: "fold",
+            proposal: "P-4",
+            recipients: [recipient("human:tanim"), recipient("db-lead")],
+            body: "@backend/db cannot start now, so fold sent m-32 on to @db-lead.",
             sent_at: Date.now(),
           }),
         ],
@@ -1512,8 +1523,9 @@ describe("Proposal tabs", () => {
       name: "Question to the author m-32",
     });
     expect(
-      within(waiting).getByText(byContent(/fold sent it on to @db-lead/)),
+      within(waiting).getByText(byContent(/so fold sent m-32 on to @db-lead/)),
     ).toBeTruthy();
+    expect(within(waiting).queryByText(/delivered|waiting for/)).toBeNull();
     expect(screen.getAllByRole("article")).toHaveLength(3);
     const filters = screen.getByRole("complementary", { name: "Filters" });
     await user.click(

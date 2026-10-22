@@ -98,14 +98,18 @@ function messageThread(
     };
   }
   if (kind === "to_author") {
-    const lastHuman = thread.messages.findLastIndex((m) =>
-      isHumanName(m.sender),
-    );
-    const answered = thread.messages
-      .slice(lastHuman + 1)
-      .some((m) => isAgent(m.sender));
-    const asked = thread.messages[lastHuman];
-    return answered || !asked
+    // The newest human message is the open question until an agent writes after it; fold's own notes answer nothing.
+    let asked = first;
+    let answered = false;
+    for (const m of thread.messages) {
+      if (isHumanName(m.sender)) {
+        asked = m;
+        answered = false;
+      } else if (isAgent(m.sender)) {
+        answered = true;
+      }
+    }
+    return answered
       ? { ...base, kind, state: "closed", stateText: "Answered" }
       : {
           ...base,
@@ -359,27 +363,24 @@ export function rangeLines(
   );
 }
 
-/** A message's recipients that fold sent it on to their area lead because they could not start to answer it, with that lead. */
-export function forwards(message: MessageView): { from: string; to: string }[] {
-  return message.recipients.flatMap((r) =>
-    r.forwarded_to === null || r.forwarded_to === message.sender
-      ? []
-      : [{ from: r.name, to: r.forwarded_to }],
-  );
-}
-
 /** The first line of the newest entry, for the overview's list. */
 export function lastLine(thread: ConversationThread): {
   author: string;
   text: string;
 } {
   const source = thread.source;
-  const last =
+  const entries =
     source.type === "message"
-      ? source.thread.messages.at(-1)
-      : source.thread.comments.at(-1)?.comment;
-  const author =
-    last === undefined ? "" : "sender" in last ? last.sender : last.author;
-  const text = (last?.body ?? "").trim().split("\n")[0] ?? "";
-  return { author, text };
+      ? source.thread.messages.map((m) => ({ author: m.sender, body: m.body }))
+      : source.thread.comments.map(({ comment }) => ({
+          author: comment.author,
+          body: comment.body,
+        }));
+  let author = "";
+  let body = "";
+  for (const entry of entries) {
+    author = entry.author;
+    body = entry.body;
+  }
+  return { author, text: body.trim().split("\n")[0] ?? "" };
 }

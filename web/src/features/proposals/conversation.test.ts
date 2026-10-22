@@ -10,7 +10,6 @@ import {
 import {
   conversationThreads,
   filterConversation,
-  forwards,
   laterChange,
   linesChanged,
   rangeLines,
@@ -53,6 +52,13 @@ const waiting = thread("m-1", {
       recipients: [recipient("frontend")],
       body: "Why two constants?",
       lines,
+      sent_at: T0 + 300,
+    }),
+    message("m-7", {
+      thread: "m-1",
+      sender: "fold",
+      recipients: [recipient("frontend")],
+      body: "frontend starts again to answer.",
       sent_at: T0 + 300,
     }),
   ],
@@ -254,15 +260,12 @@ describe("words", () => {
     });
   });
 
-  it("lists the newest threads and the forwards to a lead", () => {
+  it("lists the newest threads", () => {
     expect(latestThreads(all()).map((t) => t.key)).toEqual([
       "m-1",
       "m-2",
       "m-4",
     ]);
-    const sent = agents.messages[0];
-    if (!sent) throw new Error("no message");
-    expect(forwards(sent)).toEqual([{ from: "frontend", to: "web-lead" }]);
   });
 
   it("finds the version current at a time", () => {

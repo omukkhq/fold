@@ -8,7 +8,6 @@ import {
   Hourglass,
   ListChecks,
   MessageSquare,
-  ShieldAlert,
   type LucideIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -88,7 +87,7 @@ function Notice({
   children,
 }: {
   icon: LucideIcon;
-  tone: "muted" | "danger" | "human";
+  tone: "muted" | "danger";
   children: ReactNode;
 }) {
   return (
@@ -97,7 +96,6 @@ function Notice({
         "flex items-start gap-8 rounded-m px-12 py-9 text-code leading-snug",
         tone === "danger" && "bg-danger-soft text-danger",
         tone === "muted" && "bg-sunken text-text-muted",
-        tone === "human" && "bg-secondary-soft text-secondary-text",
       )}
     >
       <Icon aria-hidden="true" size={14} className="mt-2 shrink-0" />
@@ -130,7 +128,6 @@ function IntegrationCard({
   const summary = proposal.summary;
   const waiting = waitingSummary(proposal);
   const checksNote = queued ?? checksFailedNote(summary);
-  const mark = summary.human_review;
   return (
     <section
       aria-label="Integration"
@@ -182,19 +179,6 @@ function IntegrationCard({
           );
         })}
       </ul>
-      {mark ? (
-        <Notice icon={ShieldAlert} tone="human">
-          <span className="font-semibold">Human review</span>
-          {mark.reviewer ? (
-            <>
-              {" "}
-              by <PersonName name={`human:${mark.reviewer}`} />
-            </>
-          ) : null}
-          , marked by <PersonName name={mark.set_by} />:{" "}
-          <MentionInline text={mark.reason} slug={slug} />
-        </Notice>
-      ) : null}
       {waiting ? (
         <Notice icon={Hourglass} tone="muted">
           <ActorText segments={waiting} slot="waitingLine" />
@@ -354,7 +338,10 @@ function VersionCard({
             ? ""
             : ` · merge of main ${entry.mergedMain}`}
           {v.review_again ? " · sent for review again" : ""} ·{" "}
-          {formatAsOfMinute(now, v.created_at)}
+          {formatAsOfMinute(now, v.created_at)} ·{" "}
+          <span className="font-mono text-meta">
+            {v.changeset} on {v.base}
+          </span>
         </span>
         <HrefLink
           href={detailHref(slug, id, entry.diff.search)}
