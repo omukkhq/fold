@@ -91,11 +91,11 @@ BEGIN
     SELECT RAISE(ABORT, 'review_batch_waits is append-only');
 END;
 
--- What fold recorded about a submitted batch, once per kind. `wait_ended`: an hour after the review, the members without a final state left the batch's turn, so its approved members integrate together.
+-- What fold recorded about a submitted batch, once per kind. `wait_ended`: an hour after the review, the members without a final state left the batch's turn, so its approved members integrate together. `ready`: the review lead and the holder know the batch is ready, because it was ready at its submission or because fold told them when it became ready later in a project that does not integrate automatically.
 CREATE TABLE review_batch_marks (
     id INTEGER PRIMARY KEY,
     batch_id INTEGER NOT NULL REFERENCES review_batches (id),
-    kind TEXT NOT NULL CONSTRAINT review_batch_marks_kind_values CHECK (kind IN ('wait_ended')),
+    kind TEXT NOT NULL CONSTRAINT review_batch_marks_kind_values CHECK (kind IN ('wait_ended', 'ready')),
     created_at INTEGER NOT NULL,
     UNIQUE (batch_id, kind)
 );

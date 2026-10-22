@@ -19,7 +19,7 @@ use fold_vcs::browse;
 use fold_vcs::compare::Totals;
 use serde_json::{Value, json};
 
-use super::batch_integration::BatchIntegrationView;
+use super::batch_integration::{BatchIntegrationView, mark_ready_at_submission};
 use super::changes::ChangeRange;
 use super::checkouts::remove_unnamed_dir;
 use super::claims::{TAKEN_OVER, already_claimed, take_review_claim};
@@ -832,6 +832,7 @@ impl ReviewService {
                         })).collect::<Vec<Value>>(),
                     }))?;
                 buffer.append(tx, &event, now).await?;
+                mark_ready_at_submission(tx, batch, now).await?;
                 Ok::<_, ReviewError>(SubmittedBatch {
                     batch,
                     reviewed,

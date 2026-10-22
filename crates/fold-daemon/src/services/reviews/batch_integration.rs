@@ -11,11 +11,12 @@ use fold_core::reviews::checks::RunReason;
 use fold_core::revision::{Revision, StoredRevision};
 use fold_core::{
     Actor, AddressedAs, CheckRunId, EventActor, FoldError, IdKind, IntegrationId, MessageBody,
-    NewEvent, ProposalId, Recipient, ReviewBatchId, RevisionId, Target, TaskId, WorkspaceId, codes,
+    NewEvent, ProposalId, Recipient, ReviewBatchId, RevisionId, Target, TaskId, Timestamp,
+    WorkspaceId, codes,
 };
 use fold_store::reviews::batches::{self, BatchRevisionRow, BatchState, MemberRelease};
 use fold_store::reviews::{self, IntegrationFacts, ProposalState, checks};
-use fold_store::{SqliteConnection, StoreError, agents, counters, workspaces};
+use fold_store::{SqliteConnection, StoreError, WriteTx, agents, counters, workspaces};
 use fold_vcs::integrate::MergeOutcome;
 use serde_json::{Value, json};
 
@@ -246,7 +247,77 @@ async fn standing_on(
     ))
 }
 
+/// Records, in the write that submits the batch's review, that the holder knows the batch is ready when some members integrate together right away, so fold tells the review lead and the holder only of a batch that becomes ready later.
+pub(super) async fn mark_ready_at_submission(
+    tx: &mut WriteTx,
+    batch: ReviewBatchId,
+    now: Timestamp,
+) -> Result<(), ReviewError> {
+    let (standing, _) = standing_on(tx.conn(), batch).await?;
+    if let Some(BatchReadiness::Final { members }) = &standing.readiness
+        && !members.is_empty()
+    {
+        batches::add_mark(tx, batch, BatchMark::Ready, now).await?;
+    }
+    Ok(())
+}
+
 impl ReviewService {
+    /// In a project that does not integrate automatically, where no batch takes its turn by itself: tells the review lead and the batch's holder once, with `review.batch_ready` by fold, when a submitted batch that was not ready at its submission becomes ready, so one of them calls `integrate_review_batch`, and ends the turn of a batch with no member left to integrate together as `none`, which leaves its members to their own rules. Returns how many batches it told or ended.
+    pub async fn settle_batches_by_hand(&self) -> Result<usize, ReviewError> {
+        let mut ready = Vec::new();
+        let mut empty = Vec::new();
+        let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
+        for batch in batches::undecided_batches(&mut *read).await? {
+            let (standing, _) = standing_on(&mut read, batch).await?;
+            let Some(BatchReadiness::Final { members }) = standing.readiness else {
+                continue;
+            };
+            if members.is_empty() {
+                empty.push(batch);
+            } else if !batches::has_mark(&mut *read, batch, BatchMark::Ready).await? {
+                let holder = batches::get_batch(&mut *read, batch)
+                    .await?
+                    .ok_or_else(|| batch_not_found(batch))?
+                    .holder;
+                ready.push((batch, members, holder));
+            }
+        }
+        read.commit().await.map_err(StoreError::from)?;
+        let mut settled = 0;
+        for batch in empty {
+            self.end_turn(&Actor::System, batch, BatchOutcome::Nothing, None, &[])
+                .await?;
+            settled += 1;
+        }
+        for (batch, members, holder) in ready {
+            let now = self.clock.now();
+            let mut buffer = EventBuffer::new();
+            let told = self
+                .store
+                .write(async |tx| {
+                    if !batches::add_mark(tx, batch, BatchMark::Ready, now).await? {
+                        return Ok::<_, ReviewError>(false);
+                    }
+                    let members: Vec<String> = members.iter().map(ToString::to_string).collect();
+                    let event = NewEvent::new(types::REVIEW_BATCH_READY, EventActor::fold())?
+                        .data(json!({
+                            "batch": batch.to_string(),
+                            "members": members,
+                            "holder": holder.as_str(),
+                        }))?;
+                    buffer.append(tx, &event, now).await?;
+                    Ok(true)
+                })
+                .await?;
+            if told {
+                self.bus.publish(buffer);
+                settled += 1;
+            }
+        }
+        Ok(settled)
+    }
+
     /// Where the batch stands for integration. It reads only.
     pub async fn batch_standing(&self, batch: ReviewBatchId) -> Result<BatchStanding, ReviewError> {
         let mut read = self.store.read().begin().await.map_err(StoreError::from)?;

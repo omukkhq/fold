@@ -1029,3 +1029,104 @@ fn done_members(
         })
         .collect()
 }
+
+#[tokio::test]
+async fn without_automatic_integration_a_batch_that_becomes_ready_later_is_told_once() {
+    let scene = Scene::new().await;
+    give_role(&scene.fx.handle.store, "lead", Role::ReviewLead, None).await;
+    let heard = listen(&scene, "is ready");
+    let waiting = scene.batch(&[1, 2]).await;
+    scene
+        .fx
+        .reviews()
+        .submit_batch_review(
+            &scene.review,
+            waiting,
+            vec![
+                BatchVerdict {
+                    proposal: p(1),
+                    verdict: Verdict::Approve,
+                    body: String::new(),
+                },
+                BatchVerdict {
+                    proposal: p(2),
+                    verdict: Verdict::Comment,
+                    body: "What happens on an empty list?".to_owned(),
+                },
+            ],
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    // A batch ready at its submission is the holder's to integrate, so it is not told.
+    let at_once = scene.batch(&[3, 4]).await;
+    scene.review(at_once, &[3, 4], &[]).await;
+    assert_eq!(
+        scene.fx.reviews().settle_batches_by_hand().await.unwrap(),
+        0
+    );
+
+    scene
+        .fx
+        .reviews()
+        .submit_review(&scene.review, p(2), 1, Verdict::Approve, "fine", Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        scene.fx.reviews().settle_batches_by_hand().await.unwrap(),
+        1
+    );
+    assert_eq!(
+        scene.fx.reviews().settle_batches_by_hand().await.unwrap(),
+        0
+    );
+    let ready = scene.events("review.batch_ready").await;
+    assert_eq!(ready.len(), 1, "told once");
+    assert_eq!(ready[0].data["batch"], "rb-1");
+    assert_eq!(ready[0].data["members"], serde_json::json!(["P-1", "P-2"]));
+    assert_eq!(ready[0].data["holder"], "review");
+    let notice = "fold: rb-1 is ready: P-1, P-2 integrate together. Call integrate_review_batch.";
+    eventually(WAIT, async || {
+        let told = heard.lock().unwrap().clone();
+        if told.len() == 1 && told[0].contains(notice) {
+            Ok(())
+        } else {
+            Err(told)
+        }
+    })
+    .await;
+    assert!(
+        scene.integrations().await.is_empty(),
+        "nothing integrates by itself"
+    );
+}
+
+#[tokio::test]
+async fn without_automatic_integration_a_batch_with_no_member_left_ends_its_turn() {
+    let scene = Scene::new().await;
+    scene
+        .fx
+        .handle
+        .tasks
+        .add_dependency(&human("tanim"), t(2), t(1))
+        .await
+        .unwrap();
+    let batch = scene.batch(&[1, 2]).await;
+    scene.review(batch, &[1, 2], &[1]).await;
+    assert_eq!(
+        scene.fx.reviews().settle_batches_by_hand().await.unwrap(),
+        1
+    );
+    assert!(matches!(
+        scene.fx.reviews().batch_integration_view(batch).await.unwrap(),
+        BatchIntegrationView::Ended { outcome: fold_core::reviews::batches::BatchOutcome::Nothing, revisions, .. } if revisions.is_empty()
+    ));
+    let ended = scene.events("review.batch_integrated").await;
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0].data["outcome"], "none");
+    assert!(scene.events("review.batch_ready").await.is_empty());
+    assert_eq!(
+        scene.fx.reviews().settle_batches_by_hand().await.unwrap(),
+        0
+    );
+}

@@ -954,6 +954,15 @@ const SPECS: Record<EventType, Spec> = {
         : `the wait of ${batchOf(e)} ended; ${left.join(", ")} left its turn`;
     },
   },
+  "review.batch_ready": {
+    icon: GitMerge,
+    text: (e) => {
+      const members = idsOf(e.data.members);
+      return members.length === 0
+        ? `${batchOf(e)} is ready to integrate`
+        : `${batchOf(e)} is ready: ${members.join(", ")} integrate together`;
+    },
+  },
 };
 
 /** Every stored event type this build writes a line for. */

@@ -94,6 +94,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::REVIEW_PLAN_ENDED,
         types::REVIEW_BATCH_WAITING,
         types::REVIEW_BATCH_WAIT_ENDED,
+        types::REVIEW_BATCH_READY,
     ]
     .contains(&event.event_type)
 }
@@ -349,6 +350,34 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
                 left.join(", ")
             ),
             "get_review_batch",
+        ));
+    }
+    // In a project that does not integrate automatically, a batch that waited at its submission and became ready later needs someone to integrate it; the daemon writes the event once per batch.
+    if kind == types::REVIEW_BATCH_READY {
+        let batch = event.data.get("batch")?.as_str()?;
+        let members: Vec<&str> = event
+            .data
+            .get("members")?
+            .as_array()?
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        let mut agents = ctx.review_leads.clone();
+        if let Some(holder) = event
+            .data
+            .get("holder")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|name| crate::agents::WorkerName::parse(name).ok())
+        {
+            agents.insert(holder.agent());
+        }
+        return Some((
+            agents.into_iter().collect(),
+            format!(
+                "{batch} is ready: {} integrate together",
+                members.join(", ")
+            ),
+            "integrate_review_batch",
         ));
     }
     if kind == types::PROPOSAL_HUMAN_EDITED {
@@ -1978,6 +2007,30 @@ mod tests {
             ..event(types::REVIEW_BATCH_WAIT_ENDED, "fold")
         };
         assert!(notice_for(&nobody_left, &ctx()).is_empty());
+    }
+
+    #[test]
+    fn a_batch_that_became_ready_reaches_the_review_leads_and_its_holder() {
+        let ready = Event {
+            data: json!({"batch": "rb-2", "members": ["P-3", "P-5"], "holder": "backend"}),
+            ..event(types::REVIEW_BATCH_READY, "fold")
+        };
+        assert!(is_pushed(&ready));
+        let text = "fold: rb-2 is ready: P-3, P-5 integrate together. Call integrate_review_batch.";
+        assert_eq!(
+            sent(&notice_for(&ready, &ctx())),
+            vec![
+                row("backend", text, "integrate_review_batch"),
+                row("frontend", text, "integrate_review_batch"),
+                row("lead", text, "integrate_review_batch"),
+                row("review", text, "integrate_review_batch"),
+            ]
+        );
+        let bare = Event {
+            data: json!({"batch": "rb-2"}),
+            ..event(types::REVIEW_BATCH_READY, "fold")
+        };
+        assert!(notice_for(&bare, &ctx()).is_empty());
     }
 
     #[test]

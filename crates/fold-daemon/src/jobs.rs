@@ -517,7 +517,17 @@ async fn integrate_ready(
                 }
             }
         }
-        Ok(_) => 0,
+        // Without automatic integration no batch takes its turn by itself, so a batch that becomes ready is told and one with no member left ends.
+        Ok(_) => {
+            if let Err(error) = handle
+                .reviews(&state.registry)
+                .settle_batches_by_hand()
+                .await
+            {
+                tracing::warn!(project = %handle.slug, code = error.log_code(), "the ready review batches could not be told; the next event tries again");
+            }
+            0
+        }
         Err(error) => {
             tracing::warn!(project = %handle.slug, code = error.log_code(), "the automatic integration skipped a run; the configuration is invalid");
             0

@@ -693,6 +693,12 @@ describe("eventLine", () => {
     expect(waitEnded({ batch: "rb-3", left: [] })).toBe(
       "the wait of rb-3 ended",
     );
+    const ready = (data: Record<string, unknown>) =>
+      eventLine(event("review.batch_ready", { data })).text;
+    expect(ready({ batch: "rb-3", members: ["P-4", "P-6"] })).toBe(
+      "rb-3 is ready: P-4, P-6 integrate together",
+    );
+    expect(ready({ batch: "rb-3" })).toBe("rb-3 is ready to integrate");
   });
 
   it("marks integrations, main moves, request approvals, recorded human changes and batch integrations as emphasised, review approvals by their verdict", () => {

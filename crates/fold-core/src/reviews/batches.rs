@@ -16,10 +16,11 @@ pub fn batch_wait_cutoff(now: Timestamp) -> Option<Timestamp> {
 }
 
 define_names!(
-    /// What fold recorded about a submitted batch, once each. `wait_ended` is the end of the batch's wait after [`BATCH_WAIT`], which turns its members without a final state out of its turn.
+    /// What fold recorded about a submitted batch, once each. `wait_ended` is the end of the batch's wait after [`BATCH_WAIT`], which turns its members without a final state out of its turn. `ready` means the review lead and the holder know the batch is ready: it was ready when the holder submitted its review, or fold told them when it became ready later.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum BatchMark {
         WaitEnded = "wait_ended",
+        Ready = "ready",
     }
 );
 
@@ -304,6 +305,7 @@ mod tests {
         assert_eq!(batch_wait_cutoff(hour_later), Some(submitted));
         assert_eq!(BatchMark::WaitEnded.as_str(), "wait_ended");
         assert_eq!(BatchMark::parse("wait_ended"), Some(BatchMark::WaitEnded));
+        assert_eq!(BatchMark::Ready.as_str(), "ready");
     }
 
     #[test]
