@@ -239,7 +239,9 @@ export function ProposalDetailScreen({
     const read = earlierReads[index]?.data;
     if (read) runs.set(version, read.checks);
   });
-  const runItems = runs.size === data.versions.length ? allRuns(runs) : null;
+  // A version whose read failed leaves its runs out rather than holding the Checks tab in its loading state.
+  const settled = earlierReads.every((read) => !read.isPending);
+  const runItems = settled ? allRuns(runs) : null;
   const conversation =
     threads.data && comments.data
       ? conversationThreads(data, threads.data.items, comments.data)

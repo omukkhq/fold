@@ -337,6 +337,28 @@ export function linesChanged(
   );
 }
 
+/** One line of a review comment's range as its version's change holds it. */
+export interface RangeLine {
+  n: number;
+  text: string;
+  kind: "added" | "removed" | "context";
+}
+
+/** The lines of `range` that the hunks of its version's full change hold, in order; lines outside every hunk are left out. */
+export function rangeLines(
+  hunks: readonly Hunk[],
+  range: DiffSelection,
+): RangeLine[] {
+  return hunks.flatMap((hunk) =>
+    hunk.lines.flatMap((line): RangeLine[] => {
+      const n = range.side === "new" ? line.new_no : line.old_no;
+      return n !== null && n >= range.start_line && n <= range.end_line
+        ? [{ n, text: line.text.replace(/\r?\n$/, ""), kind: line.kind }]
+        : [];
+    }),
+  );
+}
+
 /** A message's recipients that fold sent it on to their area lead because they could not start to answer it, with that lead. */
 export function forwards(message: MessageView): { from: string; to: string }[] {
   return message.recipients.flatMap((r) =>

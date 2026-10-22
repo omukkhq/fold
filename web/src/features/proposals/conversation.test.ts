@@ -13,6 +13,7 @@ import {
   forwards,
   laterChange,
   linesChanged,
+  rangeLines,
   kindOptions,
   lastLine,
   latestThreads,
@@ -301,5 +302,27 @@ describe("lines a later version changed", () => {
       false,
     );
     expect(linesChanged([], range)).toBe(false);
+  });
+});
+
+describe("rangeLines", () => {
+  it("takes the range's lines on its side from the hunks", () => {
+    const hunks = [hunk(1, 1, [ctx("a"), del("b"), add("B"), ctx("c")])];
+    const range = {
+      path: "a",
+      side: "new" as const,
+      start_line: 2,
+      end_line: 3,
+    };
+    expect(rangeLines(hunks, range)).toEqual([
+      { n: 2, text: "B", kind: "added" },
+      { n: 3, text: "c", kind: "context" },
+    ]);
+    expect(
+      rangeLines(hunks, { ...range, side: "old", start_line: 2, end_line: 2 }),
+    ).toEqual([{ n: 2, text: "b", kind: "removed" }]);
+    expect(rangeLines(hunks, { ...range, start_line: 9, end_line: 9 })).toEqual(
+      [],
+    );
   });
 });

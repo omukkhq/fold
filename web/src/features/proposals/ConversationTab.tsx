@@ -32,6 +32,7 @@ import {
   laterChange,
   linesChanged,
   NO_FILTER,
+  rangeLines,
   stateOptions,
   versionOptions,
   versionText,
@@ -297,6 +298,55 @@ function useLinesChanged(
   );
 }
 
+/** The commented lines as the comment's version holds them, read from that version's change. */
+function CommentLines({
+  slug,
+  proposal,
+  thread,
+}: {
+  slug: string;
+  proposal: ProposalDetail;
+  thread: ConversationThread;
+}) {
+  const range = thread.lines;
+  const query = useQuery({
+    ...proposalFileDiffQuery(
+      slug,
+      proposal.summary.id,
+      { version: thread.version ?? 1, since: null },
+      range?.path ?? "",
+    ),
+    enabled: range !== null && thread.version !== null,
+  });
+  const lines =
+    range === null || query.data === undefined
+      ? []
+      : rangeLines(query.data.hunks, range);
+  if (lines.length === 0) return null;
+  return (
+    <pre className="overflow-x-auto border-b border-border-subtle bg-bg py-6 font-mono text-code leading-snug text-text">
+      {lines.map((line) => (
+        <div
+          key={`${line.kind}:${String(line.n)}`}
+          className={cn(
+            "flex",
+            line.kind === "added" && "bg-diff-add",
+            line.kind === "removed" && "bg-diff-del",
+          )}
+        >
+          <span
+            aria-hidden="true"
+            className="w-diff-number shrink-0 pr-8 text-right text-text-faint select-none"
+          >
+            {line.n}
+          </span>
+          <code className="pr-10 whitespace-pre">{line.text}</code>
+        </div>
+      ))}
+    </pre>
+  );
+}
+
 function ThreadCard({
   slug,
   proposal,
@@ -436,6 +486,7 @@ function ThreadCard({
         </>
       ) : (
         <>
+          <CommentLines slug={slug} proposal={proposal} thread={thread} />
           <ol className="flex flex-col px-16">
             {source.thread.comments.map((entry) => (
               <li
