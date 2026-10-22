@@ -1,4 +1,6 @@
 import type {
+  CheckResult,
+  CheckRun,
   ConflictReport,
   Gate,
   ProposalDetail,
@@ -261,5 +263,42 @@ export function revision(n: number, proposal: string | null = null): Revision {
     commit: null,
     tree: String(n).repeat(64).slice(0, 64),
     created_at: T0 + n * 3_600_000,
+  };
+}
+
+/** One command of a check run as the run route sends it, passed with a short log. */
+export function checkResult(
+  name: string,
+  fields: Partial<CheckResult> = {},
+): CheckResult {
+  return {
+    name,
+    setup: false,
+    required: true,
+    outcome: "passed",
+    exit_code: 0,
+    duration_ms: 1200,
+    log_bytes: 9,
+    log: "all good\n",
+    truncated: false,
+    ...fields,
+  };
+}
+
+/** A passed proposal-stage run of one command. */
+export function checkRun(id: number, fields: Partial<CheckRun> = {}): CheckRun {
+  return {
+    id: `cr-${String(id)}`,
+    stage: "proposal",
+    purpose: "create_proposal",
+    task: "T-3",
+    version: null,
+    base: "r7",
+    state: "passed",
+    reason: null,
+    created_at: T0 + id * 1_000,
+    finished_at: T0 + id * 1_000 + 500,
+    results: [checkResult("test")],
+    ...fields,
   };
 }
