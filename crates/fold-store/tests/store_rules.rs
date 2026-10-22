@@ -295,7 +295,7 @@ async fn a_session_acts_for_the_human_of_its_token() {
     let (_dir, store) = registry().await;
     for sql in [
         "INSERT INTO humans (id, name, created_at) VALUES (1, 'ana', 0), (2, 'bo', 0)",
-        "INSERT INTO web_tokens (id, number, token_hash, human_id, created_at) VALUES (1, 1, x'01', 1, 0)",
+        "INSERT INTO web_tokens (id, number, token_hash, human_id, created_at) VALUES (1, 1, x'01', 1, 0), (2, 2, x'02', 2, 0)",
     ] {
         exec(&store, sql).await.unwrap();
     }
@@ -309,8 +309,12 @@ async fn a_session_acts_for_the_human_of_its_token() {
     exec(&store, &session("0b", 1)).await.unwrap();
     for (sql, rule) in [
         (
-            "UPDATE web_sessions SET human_id = 2",
+            "UPDATE web_sessions SET token_id = 2",
             "web_sessions_human_of_token",
+        ),
+        (
+            "UPDATE web_sessions SET human_id = 2",
+            "web_sessions_human_fixed",
         ),
         (
             "UPDATE web_tokens SET human_id = 2",
@@ -323,16 +327,18 @@ async fn a_session_acts_for_the_human_of_its_token() {
 }
 
 #[tokio::test]
-async fn a_session_without_a_token_comes_from_a_sign_in_link_and_takes_any_human() {
+async fn a_session_without_a_token_comes_from_a_sign_in_link_and_keeps_its_human() {
     let (_dir, store) = registry().await;
     for sql in [
         "INSERT INTO humans (id, name, created_at) VALUES (1, 'ana', 0), (2, 'bo', 0)",
         "INSERT INTO sign_in_links (link_hash, human_id, created_at, expires_at) VALUES (x'01', 2, 0, 10)",
         "INSERT INTO web_sessions (session_hash, token_id, human_id, created_at, last_used_at, expires_at) VALUES (x'0c', NULL, 2, 0, 0, 10)",
-        "UPDATE web_sessions SET human_id = 1",
+        "UPDATE web_sessions SET human_id = 2, last_used_at = 5",
     ] {
         exec(&store, sql).await.unwrap();
     }
+    let message = refused(&store, "UPDATE web_sessions SET human_id = 1").await;
+    assert!(message.contains("web_sessions_human_fixed"), "{message}");
     let message = refused(
         &store,
         "INSERT INTO sign_in_links (link_hash, human_id, created_at, expires_at) VALUES (x'02', 1, 10, 10)",

@@ -45,3 +45,10 @@ WHEN NEW.token_id IS NOT NULL
 BEGIN
     SELECT RAISE(ABORT, 'web_sessions_human_of_token');
 END;
+
+-- A session acts for one human from its start to its end, also when no token ties it to one.
+CREATE TRIGGER web_sessions_human_fixed BEFORE UPDATE OF human_id ON web_sessions
+WHEN NEW.human_id <> OLD.human_id
+BEGIN
+    SELECT RAISE(ABORT, 'web_sessions_human_fixed');
+END;
