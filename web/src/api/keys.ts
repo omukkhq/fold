@@ -119,6 +119,11 @@ export const keys = {
   /** Under the batches prefix, so every event that refreshes the batches also refreshes the open batch. */
   reviewBatch: (slug: string, batch: string) =>
     [slug, "review-batches", batch] as const,
+  /** Under the batch, so every event that refreshes the batch also builds its merged change again. */
+  reviewBatchDiff: (slug: string, batch: string) =>
+    [slug, "review-batches", batch, "diff"] as const,
+  reviewBatchFileDiff: (slug: string, batch: string, path: string) =>
+    [slug, "review-batches", batch, "diff", path] as const,
   /** The workspaces a stored event ended since the last snapshot, written only by the event stream. */
   endedWorkspaces: (slug: string) => [slug, "ended-workspaces"] as const,
 };

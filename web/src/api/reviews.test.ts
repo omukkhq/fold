@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorReply, stubFetch } from "@/test/stubFetch";
 import { isApiError } from "./errors";
-import { batch } from "@/test/workers";
+import { batch, batchDiff } from "@/test/workers";
+import { comparedFile } from "@/test/diff";
 import {
   getReviewBatch,
+  getReviewBatchDiff,
+  getReviewBatchFileDiff,
   listReviewBatches,
   listReviewCheckouts,
 } from "./reviews";
@@ -66,6 +69,48 @@ describe("review batches", () => {
     });
     await expect(getReviewBatch("demo", "rb-9")).rejects.toSatisfy(
       (e: unknown) => isApiError(e, "review_batch_not_found"),
+    );
+  });
+});
+
+describe("the merged change of a batch", () => {
+  it("reads the files and the hunks of one file", async () => {
+    const diff = batchDiff({ files: [comparedFile("src/a.ts", "added")] });
+    const file = {
+      source: "recorded",
+      path: "src/a.ts",
+      previous_path: null,
+      change: "added",
+      binary: false,
+      too_large: false,
+      old_hash: null,
+      new_hash: "h1",
+      hunks: [],
+    };
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo/reviews/batches/rb-3/diff": { body: diff },
+      "GET /api/v1/projects/demo/reviews/batches/rb-3/diff/file": {
+        body: file,
+      },
+    });
+    expect(await getReviewBatchDiff("demo", "rb-3")).toEqual(diff);
+    expect(await getReviewBatchFileDiff("demo", "rb-3", "src/a.ts")).toEqual(
+      file,
+    );
+    expect(calls[1]?.search.get("path")).toBe("src/a.ts");
+  });
+
+  it("rejects a path the change does not list with its code", async () => {
+    stubFetch({
+      "GET /api/v1/projects/demo/reviews/batches/rb-3/diff/file": errorReply(
+        404,
+        "path_not_in_comparison",
+      ),
+    });
+    await expect(
+      getReviewBatchFileDiff("demo", "rb-3", "gone.ts"),
+    ).rejects.toSatisfy((e: unknown) =>
+      isApiError(e, "path_not_in_comparison"),
     );
   });
 });

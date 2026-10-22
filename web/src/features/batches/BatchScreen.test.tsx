@@ -6,6 +6,8 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  useNavigate,
+  useSearch,
 } from "@tanstack/react-router";
 import {
   cleanup,
@@ -19,15 +21,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { keys } from "@/api/keys";
 import type { Session } from "@/api/session";
 import type { ReviewBatch } from "@/api/reviews";
-import { errorReply, stubFetch, type StubReply } from "@/test/stubFetch";
+import {
+  errorReply,
+  stubFetch,
+  type StubReply,
+  type StubRequest,
+} from "@/test/stubFetch";
+import { comparedFile, hunk, add, ctx } from "@/test/diff";
 import {
   batch,
+  batchDiff,
   member,
   proposalSummary,
   workerList,
   workerProcess,
 } from "@/test/workers";
 import { BatchScreen } from "./BatchScreen";
+import { parseBatchSearch } from "./merged";
 
 afterEach(() => {
   cleanup();
@@ -52,13 +62,34 @@ const reviewer = workerProcess("review-b3", {
   turns: 21,
 });
 
+/** The screen at the route's address, which a tab or a file changes as the app's route does. */
+function Routed({ id }: { id: string }) {
+  const search = parseBatchSearch(useSearch({ strict: false }));
+  const navigate = useNavigate();
+  return (
+    <BatchScreen
+      slug="demo"
+      id={id}
+      search={search}
+      onSearch={(next, history = "replace") => {
+        void navigate({
+          to: "/",
+          search: next,
+          replace: history === "replace",
+        });
+      }}
+    />
+  );
+}
+
 async function setup(
   shown: ReviewBatch,
   extra: Record<
     string,
-    StubReply | (() => StubReply | Promise<StubReply>)
+    StubReply | ((request: StubRequest) => StubReply | Promise<StubReply>)
   > = {},
   session: Session = { human: "tanim", authenticated: true },
+  entry = "/",
 ) {
   const calls = stubFetch({
     [`GET ${BASE}/proposals`]: {
@@ -97,11 +128,12 @@ async function setup(
   const index = createRoute({
     getParentRoute: () => root,
     path: "/",
-    component: () => <BatchScreen slug="demo" id={shown.id} />,
+    validateSearch: parseBatchSearch,
+    component: () => <Routed id={shown.id} />,
   });
   const router = createRouter({
     routeTree: root.addChildren([index]),
-    history: createMemoryHistory({ initialEntries: ["/"] }),
+    history: createMemoryHistory({ initialEntries: [entry] }),
   });
   render(
     <QueryClientProvider client={client}>
@@ -109,7 +141,7 @@ async function setup(
     </QueryClientProvider>,
   );
   await screen.findByRole("heading", { name: /Review batch/ });
-  return calls;
+  return { calls, router };
 }
 
 describe("BatchScreen", () => {
@@ -262,7 +294,7 @@ describe("BatchScreen", () => {
       release = resolve;
     });
     let integrated = false;
-    const calls = await setup(ready, {
+    const { calls } = await setup(ready, {
       [`POST ${BASE}/reviews/batches/rb-3/integrate`]: async () => {
         await answered;
         integrated = true;
@@ -350,5 +382,133 @@ describe("BatchScreen", () => {
     expect((await screen.findByRole("alert")).textContent).toContain(
       "code: worker_process_not_found",
     );
+  });
+
+  it("opens the merged change with the file tree and the diff of the file the address names", async () => {
+    const user = userEvent.setup();
+    const diff = batchDiff({
+      files: [
+        comparedFile("src/forms/login.ts", "modified", {
+          added_lines: 2,
+          removed_lines: 1,
+        }),
+        comparedFile("src/pages/login.tsx", "added", {
+          added_lines: 1,
+          removed_lines: 0,
+        }),
+      ],
+    });
+    const file = (path: string) => ({
+      body: {
+        source: "recorded",
+        path,
+        previous_path: null,
+        change: "modified",
+        binary: false,
+        too_large: false,
+        old_hash: "a",
+        new_hash: "b",
+        hunks: [hunk(1, 1, [ctx("import x"), add(`merged ${path}`)])],
+      },
+    });
+    const { calls, router } = await setup(rb3, {
+      [`GET ${BASE}/reviews/batches/rb-3/diff`]: { body: diff },
+      [`GET ${BASE}/reviews/batches/rb-3/diff/file`]: (request) =>
+        file(request.search.get("path") ?? ""),
+    });
+    expect(calls.some((c) => c.path.endsWith("/batches/rb-3/diff"))).toBe(
+      false,
+    );
+    await user.click(screen.getByRole("tab", { name: "Merged changes" }));
+    expect(
+      await screen.findByText("main r17 + P-3 v2 + P-4 v1, merged in order"),
+    ).toBeTruthy();
+    expect(screen.getByText("2 files · +3 −1")).toBeTruthy();
+    expect(await screen.findByText("merged src/forms/login.ts")).toBeTruthy();
+    expect(screen.getByText("0 of 2 viewed")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /login\.tsx/ }));
+    expect(await screen.findByText("merged src/pages/login.tsx")).toBeTruthy();
+    expect(router.state.location.search).toEqual({
+      tab: "changes",
+      path: "src/pages/login.tsx",
+    });
+    await user.click(screen.getByRole("checkbox", { name: "Viewed" }));
+    expect(screen.getByText("1 of 2 viewed")).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "Members" }));
+    expect(screen.getByRole("table", { name: "Members" })).toBeTruthy();
+    expect(router.state.location.search).toEqual({});
+  });
+
+  it("names the member that conflicts and shows the members before it", async () => {
+    await setup(
+      rb3,
+      {
+        [`GET ${BASE}/reviews/batches/rb-3/diff`]: {
+          body: batchDiff({
+            members: [{ proposal: "P-3", version: 2 }],
+            conflict: {
+              proposal: "P-4",
+              version: 1,
+              with: "P-3",
+              paths: ["README.md"],
+            },
+          }),
+        },
+      },
+      undefined,
+      "/?tab=changes",
+    );
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("P-4 v1 conflicts with P-3")).toBeTruthy();
+    expect(
+      within(alert).getByText(
+        "The change shows only P-3 v2, the members before it. Conflicted file: README.md.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(alert)
+        .getByRole("link", { name: "Open P-4" })
+        .getAttribute("href"),
+    ).toBe("/p/demo/proposals/P-4");
+    expect(screen.getByRole("region", { name: "No changes" })).toBeTruthy();
+  });
+
+  it("says why a batch without a merged change shows nothing, and offers a retry when the read fails", async () => {
+    await setup(
+      rb3,
+      {
+        [`GET ${BASE}/reviews/batches/rb-3/diff`]: {
+          body: batchDiff({ basis: "closed", base: null, members: [] }),
+        },
+      },
+      undefined,
+      "/?tab=changes",
+    );
+    expect(
+      await screen.findByRole("region", { name: "No merged change" }),
+    ).toBeTruthy();
+    cleanup();
+    let reads = 0;
+    await setup(
+      rb3,
+      {
+        [`GET ${BASE}/reviews/batches/rb-3/diff`]: () => {
+          reads += 1;
+          return reads === 1
+            ? errorReply(500, "internal_error")
+            : { body: batchDiff() };
+        },
+      },
+      undefined,
+      "/?tab=changes",
+    );
+    const alert = await screen.findByRole("alert");
+    expect(
+      within(alert).getByText("The merged change could not load."),
+    ).toBeTruthy();
+    await userEvent.click(within(alert).getByRole("button", { name: /Retry/ }));
+    expect(
+      await screen.findByRole("region", { name: "No changes" }),
+    ).toBeTruthy();
   });
 });

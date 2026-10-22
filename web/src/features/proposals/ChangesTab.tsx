@@ -98,7 +98,7 @@ function browserStore(): MarkStore | null {
 }
 
 /** The viewed marks of one change in this browser. */
-function useViewed(key: string) {
+export function useViewed(key: string) {
   const [viewed, setViewed] = useState(() => readViewed(browserStore(), key));
   const toggle = (path: string) => {
     const next = toggleViewed(viewed, path);
