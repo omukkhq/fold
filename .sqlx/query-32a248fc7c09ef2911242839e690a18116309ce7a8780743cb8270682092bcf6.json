@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT m.number AS \"number!: i64\"\n           FROM events e\n           JOIN messages m ON m.number = e.message_id\n           JOIN message_recipients r ON r.message_id = m.id\n           WHERE e.seq IN (SELECT value FROM json_each(?1))\n             AND e.type = ?3\n             AND e.actor <> (SELECT s.name FROM workers s WHERE s.id = ?2)\n             AND (r.delivered_at IS NULL OR r.delivered_at >= ?4) AND r.acked_at IS NULL\n             AND r.worker_id = ?2\n           GROUP BY m.number\n           ORDER BY MIN(e.seq)",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "32a248fc7c09ef2911242839e690a18116309ce7a8780743cb8270682092bcf6"
+}

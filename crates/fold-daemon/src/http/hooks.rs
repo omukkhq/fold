@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use axum::extract::State;
 use axum::{Extension, Json};
-use fold_core::{AgentName, FoldError};
+use fold_core::{AgentName, FoldError, MessageId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
@@ -19,6 +19,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(session_start))
         .routes(routes!(stop))
+        .routes(routes!(stop_delivered))
         .routes(routes!(edit))
 }
 
@@ -51,8 +52,29 @@ pub struct StopHook {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct StopUnread {
-    /// The unacknowledged messages of every worker of the agent.
+    /// The unacknowledged messages of the agent's worker.
     pub unread: u64,
+    /// The hook's reason to keep the turn going: the messages that no inbox, notice or wait has shown the agent yet, oldest first, up to 16 KB of text, then how many more there are. `null` when there is none.
+    #[schema(required = true)]
+    pub reason: Option<String>,
+    /// The messages `reason` carries, such as `m-4`. They count as delivered once the hook reports them to `/api/v1/hooks/stop/delivered`.
+    pub messages: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct StopDelivered {
+    /// The session's canonical working directory.
+    pub cwd: String,
+    /// `FOLD_AGENT` of the session.
+    pub agent: String,
+    /// The messages of the reason the hook gave to its session.
+    pub messages: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct StopMarked {
+    /// The recipient rows this call marked delivered.
+    pub delivered: u64,
 }
 
 /// The Claude Code session-start hook of an agent: stores the session's inbox socket for the session push when `socket` and `token` are both present, and keeps it in the daemon's own file of the agent, outside the project folder, for a restarted daemon; the inbox of an agent the project does not know yet waits in the daemon's memory until a session's adapter registers the agent. Then it returns the session's context. Socket only. A process under a worker names only that worker's own agent.
@@ -90,14 +112,14 @@ pub async fn session_start(
     Ok(Json(SessionStartContext { context }))
 }
 
-/// The Claude Code stop hook of an agent: how many messages the agent has not acknowledged. Socket only. A process under a worker names only that worker's own agent.
+/// The Claude Code stop hook of an agent: how many messages the agent has not acknowledged, and the text that carries those it has not seen yet. Nothing is marked here, because the hook may give up on the answer; the hook reports what it used to `/api/v1/hooks/stop/delivered`. Socket only. A process under a worker names only that worker's own agent.
 #[utoipa::path(
     post,
     path = "/api/v1/hooks/stop",
     operation_id = "hook_stop",
     request_body = StopHook,
     responses(
-        (status = 200, description = "The agent's unread count", body = StopUnread),
+        (status = 200, description = "The agent's unread count and the messages", body = StopUnread),
         (status = 400, description = "The body or the agent name is not valid", body = ErrorEnvelope),
         (status = 403, description = "`worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, no registered project holds `cwd`, or the agent is not registered (`agent_not_registered`)", body = ErrorEnvelope),
@@ -115,7 +137,62 @@ pub async fn stop(
     let handle = projects::open_for_dir(&state, Path::new(&request.cwd)).await?;
     peers::require_peer_agent(&state.projects, pid(peer), &handle.slug, &agent).await?;
     let unread = handle.agents().unread_of(&agent).await?;
-    Ok(Json(StopUnread { unread }))
+    let carried = if unread == 0 {
+        None
+    } else {
+        handle
+            .messages(&state.registry)
+            .carry_for_stop(&agent)
+            .await?
+    };
+    Ok(Json(match carried {
+        Some(carried) => StopUnread {
+            unread,
+            reason: Some(carried.text),
+            messages: carried.messages.iter().map(ToString::to_string).collect(),
+        },
+        None => StopUnread {
+            unread,
+            reason: None,
+            messages: Vec::new(),
+        },
+    }))
+}
+
+/// The Claude Code stop hook of an agent after it gave its reason to the session: the messages the reason carried count as delivered, as an inbox read marks them. Socket only. A process under a worker names only that worker's own agent.
+#[utoipa::path(
+    post,
+    path = "/api/v1/hooks/stop/delivered",
+    operation_id = "hook_stop_delivered",
+    request_body = StopDelivered,
+    responses(
+        (status = 200, description = "How many rows were marked delivered", body = StopMarked),
+        (status = 400, description = "The body, the agent name or a message id is not valid", body = ErrorEnvelope),
+        (status = 403, description = "`worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket, or no registered project holds `cwd`", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn stop_delivered(
+    _socket: SocketOnly,
+    State(state): State<AppState>,
+    peer: Option<Extension<SocketPeer>>,
+    ApiJson(request): ApiJson<StopDelivered>,
+) -> Result<Json<StopMarked>, ApiError> {
+    let agent = AgentName::parse(&request.agent).map_err(FoldError::from)?;
+    let messages = request
+        .messages
+        .iter()
+        .map(|id| id.parse::<MessageId>().map_err(FoldError::from))
+        .collect::<Result<Vec<_>, _>>()?;
+    let handle = projects::open_for_dir(&state, Path::new(&request.cwd)).await?;
+    peers::require_peer_agent(&state.projects, pid(peer), &handle.slug, &agent).await?;
+    let delivered = handle
+        .messages(&state.registry)
+        .mark_carried(&agent, &messages)
+        .await?;
+    Ok(Json(StopMarked { delivered }))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

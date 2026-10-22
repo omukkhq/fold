@@ -199,7 +199,7 @@ The top bar switches project, pauses and resumes the agents, and opens Needs you
 
 Every fold tool by purpose; the skill holds their arguments and workflows.
 
-- Identity and agents: `register_agent`, `register_worker`, `list_agents`, `get_activity`.
+- Identity and agents: `register_agent`, `list_agents`, `get_activity`.
 - Areas and workers: `define_area`, `update_area`, `start_worker`, `stop_worker`, `list_workers`, `set_worker_limits`, `write_handoff`, `restart_worker`, `pause_project`, `resume_project`.
 - Messages and events: `send_message`, `get_inbox`, `get_thread`, `acknowledge_message`, `mark_answered`, `get_events`, `wait_for_events`.
 - Tasks: `get_task_graph`, `get_ready_tasks`, `get_task`, `create_task`, `create_task_plan`, `update_task`, `delete_task`, `archive_task`, `add_dependency`, `remove_dependency`, `create_label`, `set_blocker`, `clear_blocker`, `require_human_review`.

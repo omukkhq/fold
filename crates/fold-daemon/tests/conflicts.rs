@@ -63,7 +63,7 @@ async fn move_main(fx: &Fixture, files: &[(&str, &[u8])]) {
 /// `review` is a reviewer and acts with it.
 async fn reviewer(fx: &Fixture) -> Actor {
     give_role(fx.project.store(), "review", Role::Reviewer, None).await;
-    fx.agents.actor(&fx.review.ctx, None).await.unwrap()
+    fx.agents.actor(&fx.review.ctx).await.unwrap()
 }
 
 async fn approve(fx: &Fixture, actor: &Actor) {

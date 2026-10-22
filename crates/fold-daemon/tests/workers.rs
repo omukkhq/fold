@@ -435,7 +435,11 @@ async fn a_fold_notice_reaches_a_worker_once_as_a_user_turn() {
         "{}",
         run.stdin[2]
     );
-    assert!(!run.stdin[2].contains("plover"));
+    assert!(
+        run.stdin[2].contains("the plover task"),
+        "the notice carries the message: {}",
+        run.stdin[2]
+    );
     eventually(WAIT, async || {
         let row = worker(&harness, &lead).await;
         if row.turns == 2 && row.state == WorkerState::Idle {
@@ -1435,16 +1439,9 @@ async fn a_worker_claims_through_no_path_of_its_own() {
             .refused("backend", "claim_task", json!({"id": "T-3"}))
             .await,
     );
-    harness
-        .call("web-worker", "register_worker", json!({"name": "tests"}))
-        .await;
     denied(
         &harness
-            .refused(
-                "web-worker",
-                "claim_task",
-                json!({"id": "T-3", "as": "web-worker/tests"}),
-            )
+            .refused("web-worker", "claim_task", json!({"id": "T-3"}))
             .await,
     );
 

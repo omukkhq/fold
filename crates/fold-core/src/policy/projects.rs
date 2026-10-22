@@ -177,7 +177,6 @@ mod tests {
             Starter::AreaLead(AreaName::parse("web").unwrap()),
             Starter::ReviewLead,
             Starter::ShortLived,
-            Starter::Subagent,
             Starter::System,
         ] {
             let denied = can_add_exclude_patterns(&starter).unwrap_err();

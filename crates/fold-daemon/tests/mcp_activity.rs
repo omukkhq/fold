@@ -259,11 +259,10 @@ fn names(items: &Value, key: &str) -> Vec<String> {
 async fn list_agents_shows_presence_workers_claims_and_workspaces() {
     let fx = Fixture::new().await;
     let (frontend, frontend_session) = fx.agent("frontend").await;
-    call(&frontend, "register_worker", json!({"name": "ui"})).await;
     let (_backend, _) = fx.agent("backend").await;
     let created = fx.now();
     fx.workspaces
-        .create_workspace(&actor("frontend/ui"), t(1))
+        .create_workspace(&actor("frontend"), t(1))
         .await
         .unwrap();
     fx.tasks.claim_task(&actor("backend"), t(2)).await.unwrap();
@@ -276,17 +275,10 @@ async fn list_agents_shows_presence_workers_claims_and_workspaces() {
     assert_eq!(front["presence"], "active");
     assert_eq!(front["tags"], json!([]));
     assert_eq!(front["last_call_at"], json!(created));
-    assert_eq!(
-        names(&front["workers"], "name"),
-        ["frontend", "frontend/ui"]
-    );
-    let main = &front["workers"][0];
-    assert_eq!(main["parent"], Value::Null);
-    assert_eq!(main["activity"], "register_worker");
-    assert_eq!(main["claims"], json!([]));
-    let ui = &front["workers"][1];
-    assert_eq!(ui["parent"], "frontend");
-    assert_eq!(ui["last_call_at"], Value::Null);
+    assert_eq!(names(&front["workers"], "name"), ["frontend"]);
+    let ui = &front["workers"][0];
+    assert_eq!(ui["activity"], "register_agent");
+    assert_eq!(ui["last_call_at"], json!(created));
     assert_eq!(
         ui["claims"],
         json!([{
@@ -372,12 +364,11 @@ async fn a_claim_past_its_lease_is_stale() {
 #[tokio::test]
 async fn get_activity_returns_the_workers_of_every_agent_or_of_one() {
     let fx = Fixture::new().await;
-    let (frontend, _) = fx.agent("frontend").await;
-    call(&frontend, "register_worker", json!({"name": "ui"})).await;
+    let (_frontend, _) = fx.agent("frontend").await;
     let (_backend, _) = fx.agent("backend").await;
     let (review, _) = fx.agent("review").await;
     fx.workspaces
-        .create_workspace(&actor("frontend/ui"), t(1))
+        .create_workspace(&actor("frontend"), t(1))
         .await
         .unwrap();
     let before = fx.event_count().await;
@@ -385,23 +376,15 @@ async fn get_activity_returns_the_workers_of_every_agent_or_of_one() {
     let all = call(&review, "get_activity", json!({})).await;
     assert_eq!(
         names(&all["workers"], "worker"),
-        ["frontend", "frontend/ui", "backend", "review"]
+        ["frontend", "backend", "review"]
     );
-    let ui = &all["workers"][1];
+    let ui = &all["workers"][0];
     assert_eq!(ui["claims"][0]["task"], "T-1");
     assert_eq!(ui["workspaces"][0]["ws"], "ws-1");
     assert_eq!(ui["proposals"], json!([]), "empty while no proposal exists");
 
-    let one = call(
-        &review,
-        "get_activity",
-        json!({"agent": "frontend", "as": "review"}),
-    )
-    .await;
-    assert_eq!(
-        names(&one["workers"], "worker"),
-        ["frontend", "frontend/ui"]
-    );
+    let one = call(&review, "get_activity", json!({"agent": "frontend"})).await;
+    assert_eq!(names(&one["workers"], "worker"), ["frontend"]);
     let backend = call(&review, "get_activity", json!({"agent": "backend"})).await;
     assert_eq!(
         backend,
@@ -422,11 +405,10 @@ async fn get_activity_returns_the_workers_of_every_agent_or_of_one() {
 #[tokio::test]
 async fn a_missing_workspace_a_proposal_and_a_review_claim_are_listed() {
     let fx = Fixture::new().await;
-    let (frontend, _) = fx.agent("frontend").await;
-    call(&frontend, "register_worker", json!({"name": "ui"})).await;
+    let (_frontend, _) = fx.agent("frontend").await;
     let (review, _) = fx.agent("review").await;
     fx.workspaces
-        .create_workspace(&actor("frontend/ui"), t(1))
+        .create_workspace(&actor("frontend"), t(1))
         .await
         .unwrap();
     let now = fx.now();
@@ -441,10 +423,10 @@ async fn a_missing_workspace_a_proposal_and_a_review_claim_are_listed() {
                  SELECT 5, id, '{hash}', 'auto', 'quiet', {now}, {now} FROM workspaces WHERE number = 1;
              INSERT INTO proposals (number, task_id, author_worker_id, title, state, close_reason, created_at, updated_at)
                  SELECT 1, t.id, w.id, 'Old attempt', 'closed', 'replaced', {now}, {now}
-                 FROM tasks t, workers w WHERE t.number = 1 AND w.name = 'frontend/ui';
+                 FROM tasks t, workers w WHERE t.number = 1 AND w.name = 'frontend';
              INSERT INTO proposals (number, task_id, author_worker_id, title, conflicted, created_at, updated_at)
                  SELECT 2, t.id, w.id, 'Login form', 1, {now}, {now}
-                 FROM tasks t, workers w WHERE t.number = 1 AND w.name = 'frontend/ui';
+                 FROM tasks t, workers w WHERE t.number = 1 AND w.name = 'frontend';
              INSERT INTO claims (kind, proposal_id, worker_id, acquired_at, renewed_at)
                  SELECT 'review', p.id, w.id, {now}, {now}
                  FROM proposals p, workers w WHERE p.number = 2 AND w.name = 'review';"
@@ -453,8 +435,8 @@ async fn a_missing_workspace_a_proposal_and_a_review_claim_are_listed() {
     .await;
 
     let all = call(&review, "get_activity", json!({})).await;
-    let ui = &all["workers"][1];
-    assert_eq!(ui["worker"], "frontend/ui");
+    let ui = &all["workers"][0];
+    assert_eq!(ui["worker"], "frontend");
     assert_eq!(ui["workspaces"][0]["state"], "missing");
     assert_eq!(ui["workspaces"][0]["changed_files"], 3);
     assert_eq!(
@@ -479,7 +461,7 @@ async fn a_missing_workspace_a_proposal_and_a_review_claim_are_listed() {
 
     let (reader, _) = fx.connect().await;
     let listed = call(&reader, "list_agents", json!({})).await;
-    let ui = &agent(&listed, "frontend")["workers"][1];
+    let ui = &agent(&listed, "frontend")["workers"][0];
     assert_eq!(ui["workspaces"][0]["ws"], "ws-1");
     assert_eq!(ui["workspaces"][0]["state"], "missing");
 
@@ -490,7 +472,7 @@ async fn a_missing_workspace_a_proposal_and_a_review_claim_are_listed() {
     .await;
     let all = call(&review, "get_activity", json!({"agent": "frontend"})).await;
     assert_eq!(
-        all["workers"][1]["workspaces"],
+        all["workers"][0]["workspaces"],
         json!([]),
         "a closed workspace is left out"
     );

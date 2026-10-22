@@ -4,7 +4,7 @@ use crate::error::codes;
 
 use super::{AgentStanding, PolicyDenied, Starter, can_review};
 
-/// A review batch holds the review claims of its members for the worker that created it, so only that worker's agent changes it, through any of its workers, as with a single review claim. `holder` is the batch's worker.
+/// A review batch holds the review claims of its members for the worker that created it, so only that worker's agent changes it, as with a single review claim. `holder` is the batch's worker.
 pub fn can_change_batch<'a>(
     actor: &'a Actor,
     holder: &WorkerName,
@@ -100,7 +100,6 @@ mod tests {
             Starter::System,
             Starter::Unsupervised,
             Starter::ShortLived,
-            Starter::Subagent,
         ] {
             let denied = can_plan_reviews(&starter).unwrap_err();
             assert_eq!(denied.code(), codes::REVIEW_PLAN_DENIED);
@@ -121,7 +120,6 @@ mod tests {
             Starter::System,
             Starter::Unsupervised,
             Starter::ShortLived,
-            Starter::Subagent,
         ] {
             for adds in [true, false] {
                 let denied = can_change_plan(&starter, adds).unwrap_err();

@@ -205,7 +205,7 @@ async fn every_task_tool_succeeds_and_ends_with_the_footer() {
         ok(
             &client,
             "create_task",
-            json!({"title": "Handler", "parent": "T-2", "as": "frontend"})
+            json!({"title": "Handler", "parent": "T-2"})
         )
         .await,
         json!({"id": "T-3", "status": "todo"})
@@ -530,8 +530,6 @@ async fn bad_input_is_refused_with_a_code() {
     }
     let error = err(&client, "add_checklist_item", json!({"task": "T-1"})).await;
     assert!(error["hint"].as_str().unwrap().contains("linked_task"));
-    let error = err(&client, "get_task", json!({"id": "T-1", "as": "backend"})).await;
-    assert_eq!(error["code"], "worker_not_found");
 }
 
 #[test]
@@ -540,11 +538,14 @@ fn every_task_tool_input_field_has_a_description() {
     assert_eq!(tools.len(), 23);
     for tool in &tools {
         assert!(tool.description.is_some(), "{}", tool.name);
-        let properties = tool.input_schema["properties"]
-            .as_object()
-            .unwrap_or_else(|| panic!("{} has no properties", tool.name));
-        assert!(properties.contains_key("as"), "{}", tool.name);
-        for (field, schema) in properties {
+        let properties = tool
+            .input_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        assert!(!properties.contains_key("as"), "{}", tool.name);
+        for (field, schema) in &properties {
             let described = schema["description"]
                 .as_str()
                 .is_some_and(|text| !text.trim().is_empty());

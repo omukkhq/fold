@@ -16,7 +16,7 @@ const HINTS: &[(&str, &str)] = &[
     (codes::INVALID_EVENT_FILTER, "call get_events"),
     (codes::MESSAGE_NOT_FOUND, "call get_inbox"),
     (codes::RECIPIENT_NOT_FOUND, "call list_agents"),
-    (codes::WORKER_NOT_FOUND, "call register_worker"),
+    (codes::WORKER_NOT_FOUND, "call register_agent"),
     (
         codes::PROJECT_NOT_FOUND,
         "run `fld init` in the project root",
@@ -127,7 +127,7 @@ mod tests {
         let bare = FoldError::new(codes::WORKER_NOT_FOUND, "gone");
         assert_eq!(
             ErrorBody::from(&bare).hint.as_deref(),
-            Some("call register_worker")
+            Some("call register_agent")
         );
         let own = FoldError::new(codes::HUMAN_REQUIRED, "no").with_hint("ask a human");
         assert_eq!(ErrorBody::from(&own).hint.as_deref(), Some("ask a human"));

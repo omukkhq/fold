@@ -25,7 +25,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
 /// One recipient row. Names starting `human:` are humans.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RecipientView {
-    #[schema(example = "frontend/ui")]
+    #[schema(example = "frontend")]
     pub name: String,
     /// How the sender reached this recipient: `agent`, `worker`, `tag`, `all`, `human` or `humans`.
     pub addressed_as: String,
@@ -57,7 +57,7 @@ pub struct MessageView {
     #[schema(required = true, example = "m-30")]
     pub reply_to: Option<String>,
     /// A worker, `human:<name>` or `fold`.
-    #[schema(example = "frontend/ui")]
+    #[schema(example = "frontend")]
     pub sender: String,
     #[schema(required = true, example = "T-12")]
     pub task: Option<String>,
@@ -228,7 +228,7 @@ pub struct ThreadList {
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ListMessagesParams {
-    /// Threads in which this agent (any of its workers) or this exact `agent/worker` sent or received a message.
+    /// Threads in which this agent sent or received a message.
     pub agent: Option<String>,
     /// Threads with a message linked to this task, such as `T-12`.
     pub task: Option<String>,
@@ -258,7 +258,7 @@ pub struct FeedbackRequest {
     /// The message to answer, such as `m-31`. The reply joins its thread and takes its task and request.
     #[serde(default)]
     pub reply_to: Option<String>,
-    /// The recipients, as an agent, `agent/worker`, `tag:<tag>`, `all`, `human:<name>` or `humans`. Feedback on a task takes only the task's readers, and left out it goes to the first of them; left out, a request message to the request's drafter and a reply to the parent's sender.
+    /// The recipients, as an agent, `tag:<tag>`, `all`, `human:<name>` or `humans`. Feedback on a task takes only the task's readers, and left out it goes to the first of them; left out, a request message to the request's drafter and a reply to the parent's sender.
     #[serde(default)]
     pub to: Option<Vec<String>>,
 }

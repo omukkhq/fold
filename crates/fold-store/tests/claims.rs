@@ -17,7 +17,7 @@ fn worker_name(name: &str) -> WorkerName {
     WorkerName::parse(name).unwrap()
 }
 
-/// A project with tasks T-1 and T-2 and the agents `frontend` (workers `frontend` and `frontend/ui`) and `backend`. Returns the three worker row ids in that order.
+/// A project with tasks T-1 and T-2 and the agents `frontend`, `design` and `backend`. Returns their three worker row ids in that order.
 #[cfg(test)]
 async fn setup() -> (TestProject, [i64; 3]) {
     let project = TestProject::new().await;
@@ -43,15 +43,13 @@ async fn setup() -> (TestProject, [i64; 3]) {
             }
             let frontend =
                 agents::insert_agent(tx, &AgentName::parse("frontend").unwrap(), now).await?;
-            let main =
-                agents::insert_worker(tx, frontend, &worker_name("frontend"), None, now).await?;
-            let ui =
-                agents::insert_worker(tx, frontend, &worker_name("frontend/ui"), Some(main), now)
-                    .await?;
+            let main = agents::insert_worker(tx, frontend, &worker_name("frontend"), now).await?;
+            let design =
+                agents::insert_agent(tx, &AgentName::parse("design").unwrap(), now).await?;
+            let ui = agents::insert_worker(tx, design, &worker_name("design"), now).await?;
             let backend =
                 agents::insert_agent(tx, &AgentName::parse("backend").unwrap(), now).await?;
-            let other =
-                agents::insert_worker(tx, backend, &worker_name("backend"), None, now).await?;
+            let other = agents::insert_worker(tx, backend, &worker_name("backend"), now).await?;
             Ok::<_, StoreError>([main, ui, other])
         })
         .await
@@ -240,35 +238,4 @@ async fn renew_touches_only_unreleased_claims_of_the_given_workers() {
         .await
         .unwrap();
     assert_eq!(renewed, 0);
-}
-
-#[tokio::test]
-async fn worker_ids_lists_every_worker_of_one_agent() {
-    let (project, [main, ui, other]) = setup().await;
-    let frontend = agents::find_agent(
-        project.store().read(),
-        &AgentName::parse("frontend").unwrap(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let backend = agents::find_agent(
-        project.store().read(),
-        &AgentName::parse("backend").unwrap(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(
-        agents::worker_ids(project.store().read(), frontend.id)
-            .await
-            .unwrap(),
-        vec![main, ui]
-    );
-    assert_eq!(
-        agents::worker_ids(project.store().read(), backend.id)
-            .await
-            .unwrap(),
-        vec![other]
-    );
 }

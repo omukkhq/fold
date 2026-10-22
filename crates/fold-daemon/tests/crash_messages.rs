@@ -51,13 +51,7 @@ async fn a_crash_inside_the_send_transaction_leaves_no_message() {
     assert_eq!(fx.count("SELECT COUNT(*) FROM message_recipients").await, 0);
     assert_eq!(fx.last_seq().await, seq);
     let backend = by(&fx.backend.worker);
-    assert!(
-        messages(&fx)
-            .inbox(&backend, false)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(messages(&fx).inbox(&backend).await.unwrap().is_empty());
     assert_consistent(&fx.project).await;
 
     let sent = messages(&fx)
@@ -88,10 +82,7 @@ async fn a_crash_after_the_send_commit_keeps_the_message() {
         names(&fx.events_after(seq).await),
         [types::MESSAGE_SENT.as_str()]
     );
-    let inbox = messages(&fx)
-        .inbox(&by(&fx.backend.worker), false)
-        .await
-        .unwrap();
+    let inbox = messages(&fx).inbox(&by(&fx.backend.worker)).await.unwrap();
     assert_eq!(inbox.len(), 1);
     assert_eq!(inbox[0].body, "the schema changed");
     assert_consistent(&fx.project).await;

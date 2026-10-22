@@ -6,8 +6,11 @@ use crate::events::{Event, types};
 use crate::ids::{MessageId, ProposalId, RequestId, TaskId};
 use crate::tasks::status::TaskStatus;
 
-/// The longest notice text. A notice names ids and a tool, so it never comes near it.
+/// The longest notice text, one line of ids and the next tool. A notice whose next tool is `get_inbox` carries the messages the agent has not seen yet in place of that call, up to [`crate::carry::MAX_CARRIED_LEN`]; see [`Notice::carrier_head`].
 pub const MAX_NOTICE_LEN: usize = 200;
+
+/// The next tool of a notice that the daemon sends with the unread messages in place of naming the tool.
+pub const CARRIER_TOOL: &str = "get_inbox";
 
 /// The facts about an event's task and proposal that decide who gets a notice. The daemon loads them from the read pool after the event commits.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -54,6 +57,16 @@ pub struct Notice {
     pub agent: AgentName,
     pub text: String,
     pub next_tool: &'static str,
+}
+
+impl Notice {
+    /// The notice's first sentence without `Call get_inbox.`, for a notice that carries the unread messages; `None` for any other notice.
+    pub fn carrier_head(&self) -> Option<&str> {
+        if self.next_tool != CARRIER_TOOL {
+            return None;
+        }
+        self.text.strip_suffix(" Call get_inbox.")
+    }
 }
 
 /// The event types a rule reads; the daemon loads no context for any other type.
@@ -1478,6 +1491,11 @@ mod tests {
                 row("docs", text, "get_inbox"),
             ]
         );
+        let notices = notice_for(&event, &ctx());
+        assert_eq!(
+            notices[0].carrier_head(),
+            Some("fold: message m-4 arrived.")
+        );
     }
 
     #[test]
@@ -1830,6 +1848,10 @@ mod tests {
                     notice
                         .text
                         .ends_with(&format!("Call {}.", notice.next_tool))
+                );
+                assert_eq!(
+                    notice.carrier_head().is_some(),
+                    notice.next_tool == CARRIER_TOOL
                 );
             }
         }

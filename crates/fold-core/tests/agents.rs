@@ -24,23 +24,17 @@ fn agent_names_and_tags_follow_one_pattern() {
 }
 
 #[test]
-fn worker_names_are_slash_separated_segments() {
+fn a_worker_is_named_as_its_agent_and_a_stored_name_reads_as_that_agents() {
     let main = WorkerName::parse("frontend").unwrap();
     assert!(main.is_main());
-    assert_eq!(main.parent(), None);
-    let child = WorkerName::parse("frontend/ui").unwrap();
-    assert!(!child.is_main());
-    assert_eq!(child.parent(), Some(main.clone()));
-    assert_eq!(child.agent().as_str(), "frontend");
-    assert_eq!(main.child("ui").unwrap(), child);
-    let grandchild = child.child("btn").unwrap();
-    assert_eq!(grandchild.as_str(), "frontend/ui/btn");
-    assert_eq!(grandchild.parent(), Some(child));
     assert_eq!(
-        WorkerName::main(&AgentName::parse("be").unwrap()).as_str(),
-        "be"
+        WorkerName::main(&AgentName::parse("frontend").unwrap()),
+        main
     );
-    assert_eq!(grandchild.to_string(), "frontend/ui/btn");
+    let stored = WorkerName::parse("frontend/ui").unwrap();
+    assert!(!stored.is_main());
+    assert_eq!(stored.agent().as_str(), "frontend");
+    assert_eq!(stored.to_string(), "frontend/ui");
 }
 
 #[test]
@@ -55,11 +49,6 @@ fn bad_worker_names_are_refused() {
     assert!(WorkerName::parse(&format!("{}/{}", "a".repeat(32), "b".repeat(32))).is_ok());
     let long = vec!["a".repeat(32); 5].join("/");
     assert_eq!(WorkerName::parse(&long), Err(NameError::InvalidWorker));
-    let main = WorkerName::parse("a").unwrap();
-    assert_eq!(main.child("Bad"), Err(NameError::InvalidSegment));
-    assert_eq!(main.child(""), Err(NameError::InvalidSegment));
-    let deep = WorkerName::parse(&vec!["a".repeat(32); 3].join("/")).unwrap();
-    assert_eq!(deep.child(&"b".repeat(32)), Err(NameError::InvalidWorker));
 }
 
 #[test]

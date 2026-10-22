@@ -64,7 +64,7 @@ async fn register(agents: &AgentService, name: &str) -> (SessionContext, WorkerR
         .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &[])
         .await
         .unwrap();
-    let worker = agents.resolve_worker(&ctx, None).await.unwrap();
+    let worker = agents.resolve_worker(&ctx).await.unwrap();
     (ctx, worker)
 }
 

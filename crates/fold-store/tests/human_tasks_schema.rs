@@ -43,8 +43,7 @@ async fn setup() -> (TestProject, i64) {
             }
             let agent =
                 agents::insert_agent(tx, &AgentName::parse("backend").unwrap(), now).await?;
-            agents::insert_worker(tx, agent, &WorkerName::parse("backend").unwrap(), None, now)
-                .await
+            agents::insert_worker(tx, agent, &WorkerName::parse("backend").unwrap(), now).await
         })
         .await
         .unwrap();

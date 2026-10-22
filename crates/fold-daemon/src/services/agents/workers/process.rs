@@ -142,6 +142,8 @@ struct Running {
     detached: Arc<AtomicBool>,
     /// Set once the process is reaped, after which its pid may belong to another process and is never signalled.
     reaped: Arc<AtomicBool>,
+    /// The user turns written to the process's stdin that no result has ended yet. Claude Code queues a turn written during another one, and a worker whose next turn waits in that queue has not answered it.
+    open_turns: Arc<AtomicU64>,
 }
 
 /// The worker processes of one project, in memory, with the task that stops a short-lived worker once its work is done. Every process is spawned with `kill_on_drop`, so none outlives the handle.
@@ -217,6 +219,8 @@ struct Process {
     /// The worker row's Claude Code session id.
     session_id: String,
     stderr: stderr::StderrTail,
+    /// Shared with [`Running::open_turns`].
+    open_turns: Arc<AtomicU64>,
 }
 
 impl Supervisor {

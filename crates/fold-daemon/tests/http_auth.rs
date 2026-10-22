@@ -88,7 +88,7 @@ impl Fixture {
             )
             .await
             .unwrap();
-        let review = agents.actor(&ctx, None).await.unwrap();
+        let review = agents.actor(&ctx).await.unwrap();
         handle
             .tasks
             .create_task(

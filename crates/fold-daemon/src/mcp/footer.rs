@@ -1,8 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use fold_core::WorkerName;
-
 use crate::services::agents::SessionContext;
 use crate::services::events::NEW_EVENTS_CAP;
 
@@ -82,14 +80,4 @@ pub trait FooterSource: Send + Sync {
         &'a self,
         session: &'a SessionContext,
     ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>>;
-
-    /// The count for the call that `as_worker` names the worker of, `None` for the main worker. A count of the whole agent ignores the worker.
-    fn count_as<'a>(
-        &'a self,
-        session: &'a SessionContext,
-        as_worker: Option<&'a WorkerName>,
-    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
-        let _ = as_worker;
-        self.count(session)
-    }
 }

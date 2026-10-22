@@ -105,8 +105,8 @@ pub struct LiveWorkspace {
     /// The workspace's task; null for the main workspace, which belongs to no task.
     #[schema(value_type = Option<String>, required = true, example = "T-12")]
     pub task: Option<TaskId>,
-    /// The worker label, `agent` or `agent/worker`.
-    #[schema(example = "frontend/ui")]
+    /// The worker label, which is its agent's name.
+    #[schema(example = "frontend")]
     pub worker: String,
     /// The revision the workspace is based on.
     #[schema(value_type = String, example = "r17")]

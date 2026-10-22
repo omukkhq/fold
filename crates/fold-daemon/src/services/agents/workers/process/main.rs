@@ -394,7 +394,7 @@ impl Supervisor {
                     None => {
                         let id = agents::insert_agent(tx, &agent, now).await?;
                         let main = WorkerName::main(&agent);
-                        agents::insert_worker(tx, id, &main, None, now).await?;
+                        agents::insert_worker(tx, id, &main, now).await?;
                         for (kind, data) in [
                             (types::AGENT_REGISTERED, json!({"agent": agent.as_str()})),
                             (

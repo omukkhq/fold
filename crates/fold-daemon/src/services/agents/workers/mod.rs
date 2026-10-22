@@ -169,7 +169,7 @@ impl AgentService {
         })
     }
 
-    /// Who the actor is for the worker rules: a human, the main agent, an agent that is neither, a supervised worker of some role, a subagent or the daemon.
+    /// Who the actor is for the worker rules: a human, the main agent, an agent that is neither, a supervised worker of some role or the daemon.
     pub async fn starter(&self, actor: &Actor) -> Result<Starter, AgentError> {
         let supervised = match actor {
             Actor::Agent(agent) => {
@@ -498,7 +498,7 @@ impl AgentService {
                 };
                 let agent_id = agents::insert_agent(tx, &name, now).await?;
                 let main = WorkerName::main(&name);
-                let worker_id = agents::insert_worker(tx, agent_id, &main, None, now).await?;
+                let worker_id = agents::insert_worker(tx, agent_id, &main, now).await?;
                 for (kind, data) in [
                     (types::AGENT_REGISTERED, json!({"agent": name.as_str()})),
                     (
@@ -559,7 +559,6 @@ impl AgentService {
                     id: worker_id,
                     agent_id,
                     name: main,
-                    parent_id: None,
                     last_call_at: None,
                     activity: None,
                 };

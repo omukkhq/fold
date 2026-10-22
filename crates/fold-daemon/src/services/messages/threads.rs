@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use fold_core::messages::reply_addresses;
 use fold_core::{
     Actor, Address, AgentName, FoldError, HumanName, MessageBody, MessageId, ProposalId, RequestId,
-    Sender, TaskId, Timestamp, WorkerName, codes, policy,
+    Sender, TaskId, Timestamp, codes, policy,
 };
 use fold_store::SqliteConnection;
 use fold_store::StoreError;
@@ -25,7 +25,7 @@ pub const MAX_THREAD_LIMIT: u32 = 200;
 /// A thread listing as a transport receives it. The service parses it, so every transport refuses the same input with the same code.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ThreadQuery {
-    /// An agent name, which matches every worker of the agent, or a full worker name.
+    /// An agent name.
     pub agent: Option<String>,
     pub task: Option<String>,
     pub proposal: Option<String>,
@@ -252,16 +252,11 @@ pub(super) fn no_drafter(request: RequestId) -> FoldError {
 }
 
 fn parse_query(query: &ThreadQuery) -> Result<(ThreadFilter, u32), FoldError> {
-    let (agent, worker) = match query.agent.as_deref() {
-        None => (None, None),
-        Some(name) if name.contains('/') => (None, Some(WorkerName::parse(name)?)),
-        Some(name) => (Some(AgentName::parse(name)?), None),
-    };
+    let agent = query.agent.as_deref().map(AgentName::parse).transpose()?;
     let limit = page_limit(query.limit, MAX_THREAD_LIMIT)?.unwrap_or(DEFAULT_THREAD_LIMIT);
     Ok((
         ThreadFilter {
             agent,
-            worker,
             task: query
                 .task
                 .as_deref()

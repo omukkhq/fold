@@ -108,7 +108,7 @@ async fn the_hook_prints_the_session_context_as_additional_context() {
     .await;
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(text(&output.stderr), "");
-    let context = "fold project app.\nYou are agent frontend, main worker frontend.\nUnread messages: 0.\nClaims: none.\nReady tasks:\n- T-1 Build the login form";
+    let context = "fold project app.\nYou are agent frontend.\nUnread messages: 0.\nClaims: none.\nReady tasks:\n- T-1 Build the login form";
     assert_eq!(
         text(&output.stdout),
         format!(
