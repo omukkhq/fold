@@ -2,13 +2,26 @@ import { useSyncExternalStore } from "react";
 import type { EventEnvelope } from "@/live/envelope";
 import { createBatcher, type Batcher, type Timers } from "./batch";
 import {
+  EMPTY_FEED,
   addEntries,
+  clearAll,
   clearEntry,
+  entryKey,
+  keeps,
   markRead,
+  mergeHistory,
   parseFeed,
+  removeTask,
   type FeedEntry,
+  type FeedState,
 } from "./feed";
-import { createMoveReader, type CardMove, type MoveReader } from "./moves";
+import { loadMoves, type PageReader } from "./history";
+import {
+  createMoveReader,
+  deletedTask,
+  type CardMove,
+  type MoveReader,
+} from "./moves";
 import { toastParts } from "./text";
 
 /** At most this many toasts show at once; an older one closes when a newer one arrives. */
@@ -30,36 +43,72 @@ export interface NotificationOptions {
   windowMs?: number;
 }
 
+/** What comes with one frame of a project's stream. */
+export interface Frame {
+  /** True for a stored event the stream sends before its snapshot, which happened while no stream was open: it joins the list but shows no toast. */
+  replay: boolean;
+  /** The task's title in the cached board, or null. */
+  title: (task: string) => string | null;
+  /** The signed-in human as an actor (`human:ana`), or null. A move that this human's command caused is no notification for them. */
+  self: string | null;
+}
+
+/** Where a fill reads the daemon's history and what it adds to each move. */
+export interface HistorySource {
+  read: PageReader;
+  title: (task: string) => string | null;
+  /** The signed-in human as an actor, read when the history arrives. */
+  self: () => string | null;
+}
+
 export interface NotificationStore {
   subscribe: (listener: () => void) => () => void;
   /** The project's list, newest first; the same array until it changes. */
   feed: (slug: string) => readonly FeedEntry[];
   toasts: () => readonly MoveToast[];
-  /** Takes one frame of the project's stream. A move that `replay` marks happened while the stream was closed: it joins the list but shows no toast. */
-  receive: (
-    slug: string,
-    event: EventEnvelope,
-    replay: boolean,
-    title: (task: string) => string | null,
-  ) => void;
+  /** Takes one frame of the project's stream. */
+  receive: (slug: string, event: EventEnvelope, frame: Frame) => void;
+  /** Fills the project's list from the daemon's history once per stream: the moves made while no page was open join it without a toast, and the stored entries the history does not hold leave. The source is kept, so {@link refill} can try again after a failure. */
+  fill: (slug: string, source: HistorySource) => Promise<void>;
+  /** Fills the list again from the last source when no fill succeeded since the stream opened. */
+  refill: (slug: string) => Promise<void>;
   /** The project's stream closed: the moves that wait for a toast are dropped and its toasts close. */
   leave: (slug: string) => void;
+  /** Another page of this browser stored a list: `key` and `value` of the `storage` event. */
+  sync: (key: string | null, value: string | null) => void;
   markRead: (slug: string) => void;
   clear: (slug: string, key: string) => void;
   clearAll: (slug: string) => void;
   dismiss: (id: number) => void;
 }
 
+type TitledMove = CardMove & { title: string | null };
+
+const PREFIX = "fold.notifications.";
+
 export function storageKey(slug: string): string {
-  return `fold.notifications.${slug}`;
+  return `${PREFIX}${slug}`;
+}
+
+type FillState = "idle" | "loading" | "done";
+
+interface Filler extends HistorySource {
+  state: FillState;
+}
+
+function othersMove(move: CardMove, self: string | null): boolean {
+  return move.by === null || move.by !== self;
 }
 
 export function createNotificationStore(
   options: NotificationOptions,
 ): NotificationStore {
-  const feeds = new Map<string, readonly FeedEntry[]>();
+  const feeds = new Map<string, FeedState>();
   const readers = new Map<string, MoveReader>();
-  const batchers = new Map<string, Batcher<CardMove>>();
+  const batchers = new Map<string, Batcher<TitledMove>>();
+  const fillers = new Map<string, Filler>();
+  /** The keys of the entries the stream brought since the project's stream opened. */
+  const lives = new Map<string, Set<string>>();
   const listeners = new Set<() => void>();
   let toasts: readonly MoveToast[] = [];
   let nextToast = 1;
@@ -70,41 +119,53 @@ export function createNotificationStore(
     }
   }
 
-  function feed(slug: string): readonly FeedEntry[] {
-    let list = feeds.get(slug);
-    if (list === undefined) {
+  function state(slug: string): FeedState {
+    let found = feeds.get(slug);
+    if (found === undefined) {
       try {
-        list = parseFeed(options.storage()?.getItem(storageKey(slug)) ?? null);
+        found = parseFeed(options.storage()?.getItem(storageKey(slug)) ?? null);
       } catch {
-        list = [];
+        found = EMPTY_FEED;
       }
-      feeds.set(slug, list);
+      feeds.set(slug, found);
     }
-    return list;
+    return found;
   }
 
-  function setFeed(slug: string, list: readonly FeedEntry[]): void {
-    if (list === feed(slug)) {
+  function setState(slug: string, next: FeedState): void {
+    if (next === state(slug)) {
       return;
     }
-    feeds.set(slug, list);
+    feeds.set(slug, next);
     try {
-      options.storage()?.setItem(storageKey(slug), JSON.stringify(list));
+      options.storage()?.setItem(storageKey(slug), JSON.stringify(next));
     } catch {
       // The list stays in memory for this page.
     }
     emit();
   }
 
-  function batcher(slug: string): Batcher<CardMove> {
+  function live(slug: string): Set<string> {
+    let found = lives.get(slug);
+    if (found === undefined) {
+      found = new Set();
+      lives.set(slug, found);
+    }
+    return found;
+  }
+
+  function batcher(slug: string): Batcher<TitledMove> {
     let found = batchers.get(slug);
     if (found === undefined) {
-      found = createBatcher<CardMove>(
+      found = createBatcher<TitledMove>(
         (moves) => {
-          toasts = [
-            ...toasts,
-            { id: nextToast++, slug, parts: toastParts(moves) },
-          ].slice(-TOAST_LIMIT);
+          const parts = toastParts(moves);
+          if (parts.length === 0) {
+            return;
+          }
+          toasts = [...toasts, { id: nextToast++, slug, parts }].slice(
+            -TOAST_LIMIT,
+          );
           emit();
         },
         options.windowMs,
@@ -124,6 +185,34 @@ export function createNotificationStore(
     return found;
   }
 
+  async function run(slug: string, filler: Filler): Promise<void> {
+    filler.state = "loading";
+    let moves: CardMove[];
+    try {
+      moves = await loadMoves(
+        filler.read,
+        (move) => keeps(state(slug), move) && othersMove(move, filler.self()),
+      );
+    } catch {
+      if (fillers.get(slug) === filler) {
+        filler.state = "idle";
+      }
+      return;
+    }
+    if (fillers.get(slug) !== filler) {
+      return;
+    }
+    filler.state = "done";
+    setState(
+      slug,
+      mergeHistory(
+        state(slug),
+        moves.map((move) => ({ ...move, title: filler.title(move.task) })),
+        live(slug),
+      ),
+    );
+  }
+
   return {
     subscribe(listener) {
       listeners.add(listener);
@@ -131,43 +220,72 @@ export function createNotificationStore(
         listeners.delete(listener);
       };
     },
-    feed,
+    feed: (slug) => state(slug).entries,
     toasts: () => toasts,
-    receive(slug, event, replay, title) {
+    receive(slug, event, frame) {
+      const gone = deletedTask(event);
+      if (gone !== null) {
+        setState(slug, removeTask(state(slug), gone));
+      }
       const move = reader(slug)(event);
-      if (move === null) {
+      if (move === null || !othersMove(move, frame.self)) {
         return;
       }
-      const before = feed(slug);
-      const after = addEntries(before, [
-        { ...move, title: title(move.task), unread: true },
-      ]);
-      if (after.length === before.length && after[0] === before[0]) {
+      const entry: TitledMove = { ...move, title: frame.title(move.task) };
+      const before = state(slug);
+      const after = addEntries(before, [entry]);
+      if (after === before) {
         return;
       }
-      setFeed(slug, after);
-      if (!replay) {
-        batcher(slug).add(move);
+      live(slug).add(entryKey(move));
+      setState(slug, after);
+      if (!frame.replay) {
+        batcher(slug).add(entry);
+      }
+    },
+    fill(slug, source) {
+      const filler: Filler = { ...source, state: "idle" };
+      fillers.set(slug, filler);
+      return run(slug, filler);
+    },
+    async refill(slug) {
+      const filler = fillers.get(slug);
+      if (filler?.state === "idle") {
+        await run(slug, filler);
       }
     },
     leave(slug) {
       batchers.get(slug)?.cancel();
+      fillers.delete(slug);
+      lives.delete(slug);
       const kept = toasts.filter((toast) => toast.slug !== slug);
       if (kept.length !== toasts.length) {
         toasts = kept;
         emit();
       }
     },
+    sync(key, value) {
+      if (key === null) {
+        if (feeds.size > 0) {
+          feeds.clear();
+          emit();
+        }
+        return;
+      }
+      if (!key.startsWith(PREFIX)) {
+        return;
+      }
+      feeds.set(key.slice(PREFIX.length), parseFeed(value));
+      emit();
+    },
     markRead(slug) {
-      setFeed(slug, markRead(feed(slug)));
+      setState(slug, markRead(state(slug)));
     },
     clear(slug, key) {
-      setFeed(slug, clearEntry(feed(slug), key));
+      setState(slug, clearEntry(state(slug), key));
     },
     clearAll(slug) {
-      if (feed(slug).length > 0) {
-        setFeed(slug, []);
-      }
+      setState(slug, clearAll(state(slug)));
     },
     dismiss(id) {
       const kept = toasts.filter((toast) => toast.id !== id);
@@ -177,6 +295,23 @@ export function createNotificationStore(
       }
     },
   };
+}
+
+export interface StorageEvents {
+  addEventListener(
+    type: "storage",
+    listener: (event: Pick<StorageEvent, "key" | "newValue">) => void,
+  ): void;
+}
+
+/** Keeps the store in step with the other pages of this browser, which share its storage. */
+export function watchStorage(
+  store: NotificationStore,
+  target: StorageEvents,
+): void {
+  target.addEventListener("storage", (event) => {
+    store.sync(event.key, event.newValue);
+  });
 }
 
 function browserStorage(): FeedStorage | null {
@@ -191,6 +326,10 @@ function browserStorage(): FeedStorage | null {
 export const notificationStore = createNotificationStore({
   storage: browserStorage,
 });
+
+if (typeof window !== "undefined") {
+  watchStorage(notificationStore, window);
+}
 
 export function useFeed(slug: string): readonly FeedEntry[] {
   const read = () => notificationStore.feed(slug);

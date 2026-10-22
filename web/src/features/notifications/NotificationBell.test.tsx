@@ -45,9 +45,11 @@ function moved(seq: number, task: string, to: TaskStatus): EventEnvelope {
 
 function receive(slug: string, event: EventEnvelope, replay = false) {
   act(() => {
-    notificationStore.receive(slug, event, replay, (task) =>
-      task === "T-12" ? "Add the bell" : null,
-    );
+    notificationStore.receive(slug, event, {
+      replay,
+      title: (task) => (task === "T-12" ? "Add the bell" : null),
+      self: null,
+    });
   });
 }
 
@@ -129,7 +131,7 @@ describe("NotificationBell", () => {
       within(list).getByRole("button", { name: "Clear all" }),
     );
     expect(within(list).queryAllByRole("listitem")).toHaveLength(0);
-    expect(within(list).getByText("No card has moved yet.")).toBeTruthy();
+    expect(within(list).getByText("No card moves")).toBeTruthy();
     expect(
       within(list).queryByRole("button", { name: "Clear all" }),
     ).toBeNull();
@@ -139,7 +141,7 @@ describe("NotificationBell", () => {
     await renderBell("toast");
     receive("toast", moved(1, "T-12", "review"));
     receive("toast", moved(2, "T-14", "done"));
-    const text = "T-12 moved to Review · T-14 moved to Done";
+    const text = "T-12 “Add the bell” moved to Review · T-14 moved to Done";
     const region = screen.getByRole("region", { name: "Card moves (F8)" });
     await waitFor(
       () => {

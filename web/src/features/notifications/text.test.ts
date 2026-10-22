@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { TaskStatus } from "@/api/board";
 import type { CardMove } from "./moves";
-import { bellLabel, moveText, toastText } from "./text";
+import { TOAST_TITLE, bellLabel, moveText, toastLine, toastText } from "./text";
 
-function move(seq: number, task: string, to: TaskStatus): CardMove {
-  return { seq, task, from: "in_progress", to, at: seq };
+function move(
+  seq: number,
+  task: string,
+  to: TaskStatus,
+  from: TaskStatus = "in_progress",
+  title: string | null = null,
+): CardMove & { title: string | null } {
+  return { seq, task, from, to, at: seq, by: null, title };
 }
 
 describe("toastText", () => {
@@ -18,10 +24,26 @@ describe("toastText", () => {
     expect(
       toastText([
         move(1, "T-12", "review"),
-        move(2, "T-14", "in_progress"),
-        move(3, "T-12", "done"),
+        move(2, "T-14", "review"),
+        move(3, "T-12", "done", "review"),
       ]),
-    ).toBe("T-14 moved to In Progress · T-12 moved to Done");
+    ).toBe("T-14 moved to Review · T-12 moved to Done");
+  });
+
+  it("leaves out a task that ended in the column it started from", () => {
+    expect(
+      toastText([
+        move(1, "T-12", "todo", "backlog"),
+        move(2, "T-14", "done", "review"),
+        move(3, "T-12", "backlog", "todo"),
+      ]),
+    ).toBe("T-14 moved to Done");
+    expect(
+      toastText([
+        move(1, "T-12", "todo", "backlog"),
+        move(2, "T-12", "backlog", "todo"),
+      ]),
+    ).toBe("");
   });
 
   it("counts the tasks past the third", () => {
@@ -36,6 +58,15 @@ describe("toastText", () => {
     ).toBe(
       "T-1 moved to Todo · T-2 moved to Todo · T-3 moved to Todo · 2 more",
     );
+  });
+
+  it("names the task's title and cuts a long one", () => {
+    expect(
+      toastText([move(1, "T-12", "review", "in_progress", "Add the bell")]),
+    ).toBe("T-12 “Add the bell” moved to Review");
+    const long = "a".repeat(TOAST_TITLE + 5);
+    const line = toastLine({ task: "T-1", to: "done", title: long });
+    expect(line).toBe(`T-1 “${"a".repeat(TOAST_TITLE - 1)}…” moved to Done`);
   });
 });
 

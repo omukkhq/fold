@@ -31,3 +31,19 @@ export async function listEvents(slug: string): Promise<DurableEvent[]> {
   );
   return events;
 }
+
+/** One page of the project's stored events, newest first: `limit` events before `before`, or the newest ones when it is null. */
+export async function listEventPage(
+  slug: string,
+  before: number | null,
+  limit: number,
+): Promise<{ events: DurableEvent[]; before: number | null }> {
+  return unwrap(
+    api.GET("/api/v1/projects/{slug}/events/history", {
+      params: {
+        path: { slug },
+        query: before === null ? { limit } : { before, limit },
+      },
+    }),
+  );
+}

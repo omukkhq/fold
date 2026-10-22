@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { EventEnvelope, StoredEvent } from "@/live/envelope";
-import { cardTitle, columnName, createMoveReader } from "./moves";
+import type { DurableEvent } from "@/api/events";
+import {
+  cardTitle,
+  columnName,
+  createMoveReader,
+  deletedTask,
+  historyMoves,
+} from "./moves";
 
 function event(
   seq: number,
@@ -8,12 +15,13 @@ function event(
   task: string | null,
   data: Record<string, unknown> = {},
   at = 1_000,
-): EventEnvelope {
+  actor = "fold",
+): EventEnvelope & DurableEvent {
   return {
     kind: "event",
     seq,
     type,
-    actor: "fold",
+    actor,
     task,
     proposal: null,
     workspace: null,
@@ -30,7 +38,14 @@ describe("createMoveReader", () => {
       read(
         event(7, "task.status_changed", "T-12", { from: "review", to: "done" }),
       ),
-    ).toEqual({ seq: 7, task: "T-12", from: "review", to: "done", at: 1_000 });
+    ).toEqual({
+      seq: 7,
+      task: "T-12",
+      from: "review",
+      to: "done",
+      at: 1_000,
+      by: null,
+    });
   });
 
   it("skips the first status of a task created in the same transaction", () => {
@@ -85,6 +100,90 @@ describe("createMoveReader", () => {
         event(5, "task.status_changed", "T-1", { from: "done", to: "done" }),
       ),
     ).toBeNull();
+  });
+});
+
+describe("the human of a move", () => {
+  it("names the human whose command made the change in the same transaction", () => {
+    const read = createMoveReader();
+    expect(
+      read(event(1, "integration.succeeded", "T-12", {}, 1_000, "human:ana")),
+    ).toBeNull();
+    read(event(2, "task.completed", "T-12"));
+    expect(
+      read(
+        event(3, "task.status_changed", "T-12", { from: "review", to: "done" }),
+      ),
+    ).toMatchObject({ by: "human:ana" });
+    expect(
+      read(
+        event(
+          4,
+          "task.status_changed",
+          "T-13",
+          { from: "backlog", to: "todo" },
+          2_000,
+        ),
+      ),
+    ).toMatchObject({ by: null });
+  });
+
+  it("names no human for an agent's command", () => {
+    const read = createMoveReader();
+    read(event(1, "claim.acquired", "T-12", {}, 1_000, "frontend"));
+    expect(
+      read(
+        event(2, "task.status_changed", "T-12", {
+          from: "todo",
+          to: "in_progress",
+        }),
+      ),
+    ).toMatchObject({ by: null });
+  });
+});
+
+describe("deletedTask", () => {
+  it("names the task of task.deleted only", () => {
+    expect(deletedTask(event(1, "task.deleted", "T-4"))).toBe("T-4");
+    expect(deletedTask(event(1, "task.updated", "T-4"))).toBeNull();
+    expect(deletedTask({ kind: "snapshot", seq: 1, workspaces: [] })).toBe(
+      null,
+    );
+  });
+});
+
+describe("historyMoves", () => {
+  const change = (seq: number, task: string, at: number) =>
+    event(seq, "task.status_changed", task, { from: "todo", to: "done" }, at);
+
+  it("reads the moves of newest-first pages, newest first", () => {
+    const moves = historyMoves(
+      [change(3, "T-2", 3_000), change(1, "T-1", 1_000)],
+      true,
+    );
+    expect(moves.map((move) => move.seq)).toEqual([3, 1]);
+  });
+
+  it("skips an arrival and the moves of a task deleted later", () => {
+    const moves = historyMoves(
+      [
+        event(5, "task.deleted", "T-1", {}, 5_000),
+        change(4, "T-2", 4_000),
+        change(3, "T-3", 2_000),
+        event(2, "task.created", "T-3", {}, 2_000),
+        change(1, "T-1", 1_000),
+      ],
+      true,
+    );
+    expect(moves.map((move) => move.task)).toEqual(["T-2"]);
+  });
+
+  it("leaves out the oldest transaction while older pages remain", () => {
+    const events = [change(4, "T-2", 4_000), change(3, "T-3", 2_000)];
+    expect(historyMoves(events, false).map((move) => move.task)).toEqual([
+      "T-2",
+    ]);
+    expect(historyMoves([], false)).toEqual([]);
   });
 });
 

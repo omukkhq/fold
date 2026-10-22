@@ -94,7 +94,7 @@ function MoveToasts({ slug }: { slug: string }) {
               notificationStore.dismiss(toast.id);
             }
           }}
-          className="flex items-start gap-10 rounded-m bg-ink px-14 py-10 text-on-ink shadow-dialog"
+          className="flex items-start gap-10 rounded-m bg-ink px-14 py-10 text-on-ink shadow-dialog data-[swipe=cancel]:translate-x-0 data-[swipe=cancel]:transition-transform data-[swipe=end]:translate-x-(--radix-toast-swipe-end-x) data-[swipe=end]:opacity-0 data-[swipe=end]:transition-[translate,opacity] data-[swipe=move]:translate-x-(--radix-toast-swipe-move-x) motion-reduce:transition-none"
         >
           <SquareKanban
             aria-hidden="true"
@@ -105,7 +105,7 @@ function MoveToasts({ slug }: { slug: string }) {
             {toast.parts.map((part, index) => (
               <span key={part}>
                 {index > 0 ? " · " : null}
-                <span className="whitespace-nowrap">{part}</span>
+                <span className="break-words">{part}</span>
               </span>
             ))}
           </Toast.Description>
@@ -148,6 +148,7 @@ export function NotificationBell({ slug }: { slug: string }) {
             setFresh(
               new Set(feed.filter((e) => e.unread).map((e) => entryKey(e))),
             );
+            void notificationStore.refill(slug);
           }
           notificationStore.markRead(slug);
           setOpen(next);
@@ -202,7 +203,7 @@ export function NotificationBell({ slug }: { slug: string }) {
             </div>
             {feed.length === 0 ? (
               <p className="px-16 py-14 text-body text-text-muted">
-                No card has moved yet.
+                No card moves
               </p>
             ) : (
               <ul className="py-4">
