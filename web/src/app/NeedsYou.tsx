@@ -2,7 +2,6 @@ import * as RadixPopover from "@radix-ui/react-popover";
 import { CodeText } from "@/components/code/CodeText";
 import { useQuery } from "@tanstack/react-query";
 import {
-  Bell,
   ChevronRight,
   CloudOff,
   FileWarning,
@@ -13,6 +12,7 @@ import {
   GitPullRequest,
   Hand,
   Inbox,
+  ListTodo,
   MessagesSquare,
   SearchX,
   ShieldAlert,
@@ -149,7 +149,7 @@ export function NeedsYou({ slug }: { slug: string }) {
             focusRing,
           )}
         >
-          <Bell aria-hidden="true" size={13} className="text-warning" />
+          <ListTodo aria-hidden="true" size={13} className="text-warning" />
           <span className="text-code font-medium text-text">Needs you</span>
           <span className="text-code font-semibold text-warning">
             {items.length}
