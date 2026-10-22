@@ -17,6 +17,8 @@ use crate::workers_support::FakeClaude;
 const HUMAN: &str = "tanim";
 const LEAD: &str = "web-lead";
 const REVIEW_LEAD: &str = "review";
+/// The review lead that the main agent starts, which starts the reviewers.
+const STARTED_REVIEW_LEAD: &str = "review-lead";
 const REVIEWER: &str = "reviewer";
 
 /// A human's message from the web app, returned by id: feedback on `T-1`, which goes to its claim holder, or with `reply_to` a reply in that message's thread.
@@ -184,11 +186,16 @@ async fn know_the_human(harness: &Harness) {
     .unwrap();
 }
 
-/// `review`, the review lead, starts the reviewer of `P-1` and its session connects.
+/// The main agent starts the review lead, which starts the reviewer of `P-1`; both sessions connect.
 async fn start_the_reviewer(harness: &mut Harness) {
+    harness
+        .call(MAIN, "start_worker", json!({"role": "review_lead"}))
+        .await;
+    until_state(harness, STARTED_REVIEW_LEAD, WorkerState::Idle).await;
+    harness.connect(STARTED_REVIEW_LEAD).await;
     let started = harness
         .call(
-            REVIEW_LEAD,
+            STARTED_REVIEW_LEAD,
             "start_worker",
             json!({"role": "reviewer", "proposals": ["P-1"]}),
         )
@@ -534,7 +541,11 @@ async fn acceptance_23_a_reviewer_that_asked_the_human_and_was_stopped_resumes_w
     );
     assert_eq!(harness.inbox(REVIEWER).await, std::slice::from_ref(&answer));
     harness
-        .send(REVIEWER, &[REVIEW_LEAD], "The page replaces the dialog.")
+        .send(
+            REVIEWER,
+            &[STARTED_REVIEW_LEAD],
+            "The page replaces the dialog.",
+        )
         .await;
 
     harness
@@ -598,9 +609,9 @@ async fn acceptance_23_a_reviewer_that_cannot_start_sends_the_message_on_to_the_
         .send(MAIN, &[REVIEWER], "Which version did you read?")
         .await;
     let row = until_forwarded(&harness, &message, REVIEWER).await;
-    assert_eq!(row["forwarded_to"], REVIEW_LEAD, "{row}");
+    assert_eq!(row["forwarded_to"], STARTED_REVIEW_LEAD, "{row}");
     let note = until_forward_note(&harness, &message).await;
-    assert_eq!(names(&note), [MAIN, REVIEW_LEAD]);
+    assert_eq!(names(&note), [MAIN, STARTED_REVIEW_LEAD]);
     assert_eq!(fake.runs_of(REVIEWER).len(), 1);
 }
 
