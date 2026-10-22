@@ -19,6 +19,9 @@ pub const DEFAULT_TIMEOUT_S: u64 = 300;
 /// The longest wait; a larger `timeout_s` is lowered to it.
 pub const MAX_TIMEOUT_S: u64 = 1500;
 
+/// The longest wait of a worker whose prompt cache lives five minutes: a longer wait lets the cache expire, and the next turn pays to write it again.
+pub const SHORT_CACHE_MAX_TIMEOUT_S: u64 = 270;
+
 /// How often a waiter reports that it is still alive.
 pub const TICK: Duration = Duration::from_secs(60);
 

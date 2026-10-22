@@ -871,6 +871,7 @@ mod tests {
         let worker = Role::TaskWorker.prompt();
         assert!(worker.contains("call `run_checks` for the task before `create_proposal`"));
         assert!(worker.contains("Wait for `checks.finished` with `wait_for_events`"));
+        assert!(worker.contains("`wait_for_events` with `timeout_s` of at most 270"));
         let lead = Role::ReviewLead.prompt();
         assert!(lead.contains("before taking claims or creating a batch"));
         assert!(lead.contains("You decide the scope when you assign the review"));

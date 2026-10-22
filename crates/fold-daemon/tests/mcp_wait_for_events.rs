@@ -950,6 +950,51 @@ async fn a_timeout_above_the_limit_is_lowered_to_1500_seconds() {
     assert!(started.elapsed() < Duration::from_secs(1600));
 }
 
+/// Starts a wait for 99 999 s as the agent `frontend`, which fold supervises with `role`, and returns it with the paused clock that drives it.
+#[cfg(test)]
+async fn supervised_wait(
+    role: &str,
+) -> (Fixture, ManualTime, tokio::task::JoinHandle<CallToolResult>) {
+    let fx = Fixture::new().await;
+    let session = fx.connect("frontend").await;
+    fx.sql(&format!(
+        "INSERT INTO worker_processes (agent_id, role, session_id, state, started_by, started_at) \
+         SELECT id, '{role}', 'session-1', 'working', 'main', 1 FROM agents WHERE name = 'frontend'"
+    ))
+    .await;
+    let time = ManualTime::start();
+    let client = session.client.clone();
+    let waiting = tokio::spawn(async move {
+        client
+            .call_tool(params("wait_for_events", json!({"timeout_s": 99_999})))
+            .await
+            .unwrap()
+    });
+    time.until(|| fx.bus.waiters() == 1).await;
+    (fx, time, waiting)
+}
+
+#[tokio::test]
+async fn a_reviewer_with_the_five_minute_cache_waits_at_most_270_seconds() {
+    let (_fx, time, waiting) = supervised_wait("reviewer").await;
+    tokio::time::advance(Duration::from_secs(271)).await;
+    let result = time.within(waiting).await.unwrap();
+    assert_eq!(body(&result), json!({"timed_out": true}));
+}
+
+#[tokio::test]
+async fn a_lead_with_the_one_hour_cache_keeps_its_longer_wait() {
+    let (_fx, time, waiting) = supervised_wait("review_lead").await;
+    tokio::time::advance(Duration::from_secs(271)).await;
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!waiting.is_finished());
+    tokio::time::advance(Duration::from_secs(1230)).await;
+    let result = time.within(waiting).await.unwrap();
+    assert_eq!(body(&result), json!({"timed_out": true}));
+}
+
 #[tokio::test]
 async fn a_ready_match_wins_over_a_deadline_that_has_passed() {
     let fx = Fixture::new().await;

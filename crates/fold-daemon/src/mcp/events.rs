@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use fold_core::roles::CacheTtl;
 use fold_core::{Event, FoldError, WorkerName};
 use fold_store::agents::WorkerRow;
 use fold_store::events::WaitingMessage;
@@ -16,7 +17,10 @@ use super::error::{from_agent, from_events};
 use super::parse;
 use super::{FoldServer, FooterPart, FooterSource};
 use crate::services::agents::{AgentService, SessionContext};
-use crate::services::events::{EventPage, EventQuery, EventService, WaitQuery, WaitStep};
+use crate::services::events::{
+    DEFAULT_TIMEOUT_S, EventPage, EventQuery, EventService, SHORT_CACHE_MAX_TIMEOUT_S, WaitQuery,
+    WaitStep,
+};
 
 pub const GET_EVENTS: &str = "get_events";
 pub const WAIT_FOR_EVENTS: &str = "wait_for_events";
@@ -56,7 +60,7 @@ pub struct WaitForEventsInput {
     /// Wake only for events about this proposal, such as P-3.
     #[serde(default)]
     pub proposal: Option<String>,
-    /// The longest wait in seconds: 300 when left out, at most 1500.
+    /// The longest wait in seconds: 300 when left out, at most 1500. A task worker or reviewer with the 5-minute prompt cache waits at most 270, whatever this says; call again when a wait returns with nothing new.
     #[serde(default)]
     pub timeout_s: Option<u64>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
@@ -148,6 +152,29 @@ pub async fn get_events(
     Ok(page_json(&page))
 }
 
+/// The wait of a fold-launched worker whose effective cache lifetime is five minutes is cut to [`SHORT_CACHE_MAX_TIMEOUT_S`], so its cache is still warm when the wait returns; the default wait is cut too. Other callers keep the requested wait. The project's `cache_ttl` decides when it can be read, else the role's default.
+async fn capped_timeout(server: &FoldServer, requested: Option<u64>) -> Option<u64> {
+    let session = server.session().await;
+    let Some(agent) = session.agent else {
+        return requested;
+    };
+    let Ok(process) = server.agents.get_worker(&agent).await else {
+        return requested;
+    };
+    let ttl = match server.agents.worker_config().await {
+        Some(config) => config.role(process.role).cache_ttl,
+        None => process.role.default_cache_ttl(),
+    };
+    if ttl != CacheTtl::FiveMinutes {
+        return requested;
+    }
+    Some(
+        requested
+            .unwrap_or(DEFAULT_TIMEOUT_S)
+            .min(SHORT_CACHE_MAX_TIMEOUT_S),
+    )
+}
+
 /// Waits on the bus until a match, the timeout or the client's cancellation. Each tick renews the worker and the session as any tool call does, and sends a progress notification when the request carries a progress token.
 pub async fn wait_for_events(
     server: &FoldServer,
@@ -156,11 +183,12 @@ pub async fn wait_for_events(
     context: &RequestContext<RoleServer>,
 ) -> Result<Value, FoldError> {
     let input: WaitForEventsInput = parse(arguments)?;
+    let timeout_s = capped_timeout(server, input.timeout_s).await;
     let query = WaitQuery {
         types: input.types,
         task: input.task,
         proposal: input.proposal,
-        timeout_s: input.timeout_s,
+        timeout_s,
     };
     let mut waiter = server
         .events
