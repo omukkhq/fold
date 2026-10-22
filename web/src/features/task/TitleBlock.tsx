@@ -167,7 +167,7 @@ export function TitleBlock({ slug, task, strip }: Props) {
         </>
       ) : (
         <div className="flex items-start gap-8">
-          <RadixDialog.Title className="min-w-0 flex-1 text-page leading-snug font-semibold text-text">
+          <RadixDialog.Title className="min-w-0 flex-1 text-page leading-snug font-semibold wrap-anywhere text-text">
             {task.title}
           </RadixDialog.Title>
           <IconButton

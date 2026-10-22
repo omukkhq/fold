@@ -9,6 +9,7 @@ import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { Skeleton } from "@/components/states/Skeleton";
+import { CODE_BOX, textFlow } from "@/components/text/textFlow";
 import { MarkAnswered } from "@/features/messages/MarkAnswered";
 import { MessageBody } from "@/features/messages/MessageBody";
 import { QuotedLines } from "@/features/messages/QuotedLines";
@@ -321,7 +322,12 @@ function CommentLines({
       : rangeLines(query.data.hunks, range);
   if (lines.length === 0) return null;
   return (
-    <pre className="overflow-x-auto border-b border-border-subtle bg-bg py-6 font-mono text-code leading-snug text-text">
+    <pre
+      className={cn(
+        CODE_BOX,
+        "border-b border-border-subtle bg-bg py-6 font-mono text-code leading-snug text-text",
+      )}
+    >
       {lines.map((line) => (
         <div
           key={`${line.kind}:${String(line.n)}`}
@@ -337,7 +343,7 @@ function CommentLines({
           >
             {line.n}
           </span>
-          <code className="pr-10 whitespace-pre">{line.text}</code>
+          <code className={cn("pr-10", textFlow("code"))}>{line.text}</code>
         </div>
       ))}
     </pre>
@@ -558,7 +564,7 @@ export function ConversationTab({
   const all = threads ?? [];
   const shown = filterConversation(all, filter);
   return (
-    <div className="flex w-page max-w-full flex-col gap-24 px-16 py-20 md:px-24 lg:flex-row lg:items-start">
+    <div className="flex min-w-0 flex-col gap-24 px-16 py-20 md:px-24 lg:flex-row lg:items-start">
       <aside
         aria-label="Filters"
         className="flex min-w-0 flex-col gap-18 lg:w-filter-column lg:shrink-0"

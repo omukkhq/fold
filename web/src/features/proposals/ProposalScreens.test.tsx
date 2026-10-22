@@ -32,6 +32,7 @@ import { expectMentionPopover } from "@/test/mentionBox";
 import { mentionRoutes } from "@/test/mentionRoutes";
 import { message, recipient, thread } from "@/test/messages";
 import {
+  checkRun,
   conflictReport,
   humanGates,
   proposalDetail,
@@ -1056,6 +1057,67 @@ describe("Proposal detail", () => {
     );
   });
 
+  it("disables Approve while a check of the current version runs, and enables it when the stream reports the end", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      checks: [checkRun(16, { state: "running", finished_at: null })],
+    }));
+    const { queryClient } = renderAt("/p/demo/proposals/P-4");
+    const panel = await integration();
+    const approve = within(panel).getByRole("button", { name: "Approve v2" });
+    expect(approve).toHaveProperty("disabled", true);
+    expect(
+      document.getElementById(approve.getAttribute("aria-describedby") ?? "")
+        ?.textContent,
+    ).toBe("A check runs on v2. Approve when it ends.");
+    expect(
+      within(panel).getByRole("button", { name: "Request changes" }),
+    ).toHaveProperty("disabled", false);
+    update("P-4", (p) => ({ ...p, checks: [checkRun(16)] }));
+    deliver(queryClient, "checks.finished", {
+      proposal: "P-4",
+      task: "T-3",
+      data: { run: "cr-16", stage: "proposal", state: "passed" },
+    });
+    await waitFor(() => {
+      expect(
+        within(panel).getByRole("button", { name: "Approve v2" }),
+      ).toHaveProperty("disabled", false);
+    });
+    expect(
+      within(panel).queryByText("A check runs on v2. Approve when it ends."),
+    ).toBeNull();
+  });
+
+  it("disables Integrate while an integration check of the current version runs that no queued request of it started", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      checks: [
+        checkRun(17, {
+          stage: "integration",
+          purpose: "integrate",
+          version: 2,
+          state: "running",
+          finished_at: null,
+        }),
+      ],
+    }));
+    renderAt("/p/demo/proposals/P-4");
+    const panel = await integration();
+    const integrate = within(panel).getByRole("button", { name: "Integrate" });
+    expect(integrate).toHaveProperty("disabled", true);
+    expect(
+      document.getElementById(integrate.getAttribute("aria-describedby") ?? "")
+        ?.textContent,
+    ).toBe("fold runs the integration checks of v2. Integrate when they end.");
+    expect(
+      within(panel).getByRole("button", { name: "Approve v2" }),
+    ).toHaveProperty("disabled", true);
+    expect(
+      within(panel).getByRole("button", { name: "Request changes" }),
+    ).toHaveProperty("disabled", false);
+  });
+
   it("shows Approve as pending, then the human approval once the server answers", async () => {
     const user = userEvent.setup();
     renderAt("/p/demo/proposals/P-4");
@@ -1084,6 +1146,15 @@ describe("Proposal detail", () => {
     expect(
       within(panel).getByText(byContent(/Approved by @tanim/)),
     ).toBeTruthy();
+    const approved = within(panel).getByRole("button", { name: "Approve v2" });
+    expect(approved).toHaveProperty("disabled", true);
+    expect(
+      document.getElementById(approved.getAttribute("aria-describedby") ?? "")
+        ?.textContent,
+    ).toBe("You approved v2.");
+    expect(
+      within(panel).getByRole("button", { name: "Integrate" }),
+    ).toHaveProperty("disabled", false);
     expect(
       writes("POST /api/v1/projects/demo/proposals/P-4/reviews")[0]?.body,
     ).toEqual({
@@ -1490,7 +1561,7 @@ describe("Proposal tabs", () => {
     expect(within(v2).queryByText("The checks could not be read.")).toBeNull();
   });
 
-  it("lists the changed files as folders that close, open, filter and mark the viewed files", async () => {
+  it("lists the changed files as folders that close, open, filter and mark the files the reader opens as viewed", async () => {
     window.localStorage.clear();
     const user = userEvent.setup();
     const { container } = renderAt("/p/demo/proposals/P-4?tab=changes");
@@ -1525,17 +1596,22 @@ describe("Proposal tabs", () => {
     expect(within(tree).getByText("No file matches.")).toBeTruthy();
     await user.clear(within(tree).getByLabelText("Files"));
     await user.click(within(tree).getByRole("button", { name: "Expand all" }));
-    expect(within(tree).getByText("0 of 1 viewed")).toBeTruthy();
-    await user.click(screen.getByRole("checkbox", { name: "Viewed" }));
+    const row = within(tree).getByRole("button", {
+      name: /0004_reports\.sql/,
+    });
     expect(within(tree).getByText("1 of 1 viewed")).toBeTruthy();
-    expect(
-      within(tree)
-        .getByRole("button", { name: /0004_reports\.sql/ })
-        .getAttribute("data-viewed"),
-    ).toBe("true");
+    expect(row.getAttribute("data-viewed")).toBe("true");
     expect(window.localStorage.getItem("fold.viewed.demo.P-4.base..v2")).toBe(
       JSON.stringify([SCHEMA]),
     );
+    await user.click(screen.getByRole("checkbox", { name: "Viewed" }));
+    expect(within(tree).getByText("0 of 1 viewed")).toBeTruthy();
+    expect(row.getAttribute("data-viewed")).toBeNull();
+    expect(window.localStorage.getItem("fold.viewed.demo.P-4.base..v2")).toBe(
+      "[]",
+    );
+    await user.click(row);
+    expect(within(tree).getByText("1 of 1 viewed")).toBeTruthy();
   });
 
   it("says when the conversation left out older message threads", async () => {

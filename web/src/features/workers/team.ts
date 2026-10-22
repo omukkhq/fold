@@ -672,6 +672,13 @@ export function mainNote(group: TeamGroup): string {
 }
 
 /** `area · lead owns 4 tasks`; an area named apart from its label says its name. */
+/** The area's instructions as the group head's More and Less buttons name them. */
+export function instructionsSubject(group: TeamGroup): string {
+  return group.area === null
+    ? "the area instructions"
+    : `the ${group.area} instructions`;
+}
+
 export function areaNote(group: TeamGroup): string {
   const name =
     group.area === null || group.area === group.label?.name

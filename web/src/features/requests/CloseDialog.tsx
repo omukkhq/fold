@@ -90,7 +90,7 @@ export function CloseDialog({
           <p role="alert" className="text-meta font-medium text-danger">
             {failure.text}
             {failure.code ? (
-              <span className="font-mono font-normal">
+              <span className="font-mono font-regular">
                 {" "}
                 code: {failure.code}
               </span>

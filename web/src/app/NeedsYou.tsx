@@ -81,7 +81,7 @@ function Line({
               {line.chip}
             </span>
           ) : null}
-          <span>
+          <span className="min-w-0 wrap-anywhere">
             <CodeText text={line.text} />
           </span>
         </span>

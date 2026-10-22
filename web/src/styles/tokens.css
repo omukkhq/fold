@@ -70,7 +70,6 @@
   --width-file-list: 280px;
   --width-side-panel: 300px;
   --width-content: 1120px;
-  --width-page: 1280px;
   --width-history: 440px;
   --width-sign-in: 400px;
   --width-thread-list: 420px;
@@ -89,6 +88,7 @@
   --width-column: 224px;
   --width-fact-label: 70px;
   --width-filter-column: 260px;
+  --width-group-head: calc(100cqw - 2 * var(--space-16));
 }
 
 :root {

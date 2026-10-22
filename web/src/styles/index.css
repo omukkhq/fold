@@ -149,8 +149,6 @@
   --width-search: var(--width-search);
   --width-file-list: var(--width-file-list);
   --width-side-panel: var(--width-side-panel);
-  --width-content: var(--width-content);
-  --width-page: var(--width-page);
   --width-history: var(--width-history);
   --width-sign-in: var(--width-sign-in);
   --width-thread-list: var(--width-thread-list);
@@ -169,6 +167,7 @@
   --width-column: var(--width-column);
   --width-fact-label: var(--width-fact-label);
   --width-filter-column: var(--width-filter-column);
+  --width-group-head: var(--width-group-head);
 
   --height-*: initial;
   --height-bar: var(--height-bar);

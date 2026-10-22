@@ -1,4 +1,5 @@
 import { Fragment } from "react";
+import { textFlow } from "@/components/text/textFlow";
 import { cn } from "@/lib/cn";
 import { MentionLink } from "./MentionLink";
 import { mentionHref, splitMentions, type Known } from "./parse";
@@ -38,7 +39,8 @@ export function MentionText({
   return (
     <p
       className={cn(
-        "text-body leading-normal whitespace-pre-wrap text-text",
+        "text-body leading-normal text-text",
+        textFlow("prose"),
         className,
       )}
     >

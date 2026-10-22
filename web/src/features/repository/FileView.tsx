@@ -4,6 +4,8 @@ import { SyntaxText } from "@/components/code/SyntaxText";
 import { Mono } from "@/components/mono/Mono";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
+import { CODE_BOX } from "@/components/text/textFlow";
+import { cn } from "@/lib/cn";
 import { fileState, formatSize } from "./describe";
 import { fileQuery } from "@/api/repositoryQueries";
 import { languageForPath } from "@/syntax/languages";
@@ -36,7 +38,12 @@ export function FileView({ slug, revision, path }: FileViewProps) {
         />
       ) : null}
       {shown?.kind === "text" ? (
-        <pre className="overflow-x-auto px-14 py-12 font-mono text-code leading-normal text-text">
+        <pre
+          className={cn(
+            CODE_BOX,
+            "px-14 py-12 font-mono text-code leading-normal text-text",
+          )}
+        >
           <SyntaxText code={shown.text} language={languageForPath(path)} />
         </pre>
       ) : null}

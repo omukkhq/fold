@@ -78,7 +78,7 @@ export function ProposalHeader({
         </ol>
       </nav>
       <div className="flex flex-wrap items-center gap-12">
-        <h1 className="text-screen leading-snug font-semibold text-text">
+        <h1 className="min-w-0 text-screen leading-snug font-semibold wrap-anywhere text-text">
           {summary.title}
         </h1>
         <ReviewPill
