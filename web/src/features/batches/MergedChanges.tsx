@@ -81,7 +81,7 @@ function MergedBody({
             <p className="text-body font-semibold text-danger">
               {conflict.title}
             </p>
-            <p className="text-bar break-words text-text-muted">
+            <p className="text-bar wrap-anywhere text-text-muted">
               {conflict.text}
             </p>
           </div>
