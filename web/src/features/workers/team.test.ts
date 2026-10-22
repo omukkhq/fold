@@ -33,6 +33,7 @@ import {
   pillSpec,
   rowError,
   roleModel,
+  showsSupervisedMain,
   roleName,
   stepOf,
   stopControl,
@@ -500,25 +501,65 @@ describe("teamGroups", () => {
     expect(hasNoLeads(groups)).toBe(false);
     expect(mainAgentName(groups)).toBe("main");
 
+    const stoppedMain = workerProcess("main", {
+      role: "main",
+      area: null,
+      state: "stopped",
+    });
     const stopped = teamGroups(
       input({
-        workers: workerList({
-          workers: [
-            workerProcess("main", {
-              role: "main",
-              area: null,
-              state: "stopped",
-            }),
-          ],
-        }),
+        agents: [agent("main")],
+        workers: workerList({ workers: [stoppedMain], main_supervised: true }),
       }),
     );
-    expect(stopped[0]?.rows[0]).toMatchObject({ stop: null, restart: true });
+    expect(stopped[0]?.rows).toHaveLength(1);
+    expect(stopped[0]?.rows[0]).toMatchObject({
+      stop: null,
+      restart: true,
+      supervised: true,
+    });
     const interactive = teamGroups(input({ agents: [agent("main")] }));
     expect(interactive[0] && isSupervisedMain(interactive[0])).toBe(false);
     expect(interactive[0] && mainNote(interactive[0])).toBe(
       "your terminal session",
     );
+  });
+
+  it("shows the terminal session once the setting no longer has fold run the main agent", () => {
+    const stoppedMain = workerProcess("main", {
+      role: "main",
+      area: null,
+      state: "stopped",
+    });
+    const off = teamGroups(
+      input({
+        agents: [agent("main")],
+        workers: workerList({ workers: [stoppedMain] }),
+      }),
+    );
+    expect(off.map((g) => g.key)).toEqual(["main"]);
+    expect(off[0]?.rows).toHaveLength(1);
+    expect(off[0]?.rows[0]).toMatchObject({
+      name: "main",
+      roleLine: "Main agent · your terminal session",
+      supervised: false,
+      stop: null,
+      restart: false,
+    });
+    expect(off[0] && mainNote(off[0])).toBe("your terminal session");
+
+    const running = workerProcess("main", {
+      role: "main",
+      area: null,
+      state: "working",
+    });
+    expect(showsSupervisedMain(running, false)).toBe(true);
+    expect(showsSupervisedMain(stoppedMain, false)).toBe(false);
+    expect(
+      showsSupervisedMain({ ...stoppedMain, state: "failed" }, false),
+    ).toBe(false);
+    expect(showsSupervisedMain(stoppedMain, true)).toBe(true);
+    expect(showsSupervisedMain(workerProcess("web-lead"), true)).toBe(false);
   });
 
   it("words the bound column of workers with nothing bound", () => {

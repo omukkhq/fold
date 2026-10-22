@@ -554,12 +554,17 @@ export function waitsForTaskWorkers(
  */
 export function teamGroups(input: TeamInput): TeamGroup[] {
   const { workers, areas } = input.workers;
-  const supervised = new Set(workers.map((w) => w.name));
+  const shownMains = workers.filter((w) =>
+    showsSupervisedMain(w, input.workers.main_supervised),
+  );
+  const supervised = new Set(
+    workers
+      .filter((w) => w.role !== "main" || shownMains.includes(w))
+      .map((w) => w.name),
+  );
   const groups: TeamGroup[] = [];
   const mains = [
-    ...workers
-      .filter((w) => w.role === "main")
-      .map((w) => workerRow(w, input, false)),
+    ...shownMains.map((w) => workerRow(w, input, false)),
     ...input.agents
       .filter((agent) => !supervised.has(agent.name))
       .map((agent) => mainRow(agent, input.human)),
@@ -641,6 +646,17 @@ function orderRows(
     rows.push(...children.map((child) => workerRow(child, input, true)));
   }
   return rows;
+}
+
+/** A worker of role `main` is the main agent while the project's setting has fold run it, or while its process still runs; after the setting goes off, its ended row is left from that time and the agent is the user's terminal session again. */
+export function showsSupervisedMain(
+  worker: WorkerProcess,
+  mainSupervised: boolean,
+): boolean {
+  if (worker.role !== "main") return false;
+  return (
+    mainSupervised || (worker.state !== "stopped" && worker.state !== "failed")
+  );
 }
 
 /** Fold runs the main agent of the group, so it has no terminal and no person runs it. */

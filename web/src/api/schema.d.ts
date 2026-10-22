@@ -4553,6 +4553,8 @@ export interface components {
              * @example main
              */
             main_label: string;
+            /** @description Whether `supervised = true` under `[main]` has fold run the main agent as the worker of role `main`; false when fold cannot read `.fold/config.toml`. With it off, the main agent is the user's own `fld claude` session, and a row of role `main` is left from a time it was on. */
+            main_supervised: boolean;
             pause: components["schemas"]["PauseEntry"];
             /** @description Each role with the cache time a new worker of the role gets; empty when fold cannot read `.fold/config.toml`. */
             roles: components["schemas"]["RoleEntry"][];

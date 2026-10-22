@@ -45,6 +45,8 @@ pub struct WorkerList {
     #[schema(required = true)]
     pub limits: Option<LimitsEntry>,
     pub pause: PauseEntry,
+    /// Whether `supervised = true` under `[main]` has fold run the main agent as the worker of role `main`; false when fold cannot read `.fold/config.toml`. With it off, the main agent is the user's own `fld claude` session, and a row of role `main` is left from a time it was on.
+    pub main_supervised: bool,
 }
 
 /// Whether the project's agents are paused. While paused, fold runs no worker process; a worker that was working, idle or starting keeps that state and runs again in its own session at the resume.
@@ -476,6 +478,7 @@ pub async fn list_workers(project: Project) -> Result<Json<WorkerList>, ApiError
         roles,
         limits: config.as_ref().map(|config| config.workers.limits().into()),
         pause: agents.pause_state().await?.into(),
+        main_supervised: config.as_ref().is_some_and(|config| config.main.supervised),
     }))
 }
 
