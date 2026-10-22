@@ -283,4 +283,39 @@ describe("ThreadPanel question", () => {
     expect(alert.textContent).toContain("The answer was not sent.");
     expect(alert.textContent).toContain("code: message_not_found");
   });
+
+  it("quotes the lines a question to the author is about and links them to the proposal's diff", async () => {
+    const asked = baseThread(MESSAGE, {
+      proposal: "P-4",
+      messages: [
+        message(MESSAGE, {
+          sender: "human:tanim",
+          proposal: "P-4",
+          recipients: [recipient("backend/db")],
+          body: "Why two constants?",
+          lines: {
+            version: 2,
+            path: "web/src/board.ts",
+            side: "new",
+            start_line: 7,
+            end_line: 120,
+            excerpt: "const a = 1;\nconst b = 2;",
+            excerpt_cut: true,
+          },
+        }),
+      ],
+    });
+    await setup(() => Promise.resolve(), asked);
+    const quote = screen.getByRole("figure");
+    expect(
+      within(quote)
+        .getByRole("link", {
+          name: "web/src/board.ts · v2 · lines 7–120 · new side",
+        })
+        .getAttribute("href"),
+    ).toBe("/p/demo/proposals/P-4?version=2&path=web%2Fsrc%2Fboard.ts");
+    expect(within(quote).getByText("const b = 2;")).toBeTruthy();
+    expect(within(quote).getByText("8")).toBeTruthy();
+    expect(within(quote).getByText("The first 2 of 114 lines.")).toBeTruthy();
+  });
 });

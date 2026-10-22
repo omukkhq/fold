@@ -3,6 +3,7 @@ import { errorReply, stubFetch } from "../test/stubFetch";
 import { isApiError } from "./errors";
 import {
   countAwaitingHuman,
+  listProposalThreads,
   listThreads,
   markAnswered,
   sendMessage,
@@ -27,6 +28,21 @@ describe("listThreads", () => {
     expect(more).toBe(false);
     expect(calls[0]?.search.get("limit")).toBe("200");
     expect(calls[0]?.search.get("mine")).toBe("true");
+  });
+});
+
+describe("listProposalThreads", () => {
+  it("reads every page of the threads linked to the proposal", async () => {
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo/messages": (request) =>
+        request.search.get("before") === "m-40"
+          ? { body: { items: [thread("m-30")], next: null } }
+          : { body: { items: [thread("m-50")], next: "m-40" } },
+    });
+    const { items } = await listProposalThreads("demo", "P-4");
+    expect(items.map((t) => t.id)).toEqual(["m-50", "m-30"]);
+    expect(calls[0]?.search.get("proposal")).toBe("P-4");
+    expect(calls[0]?.search.has("mine")).toBe(false);
   });
 });
 

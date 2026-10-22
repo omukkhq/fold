@@ -277,6 +277,27 @@ impl WorkspaceService {
         })
         .await
     }
+
+    /// The text of the file at `path` in `tree`, `None` when the tree holds no text file there: no entry, a directory, a symlink, a binary file or one too large to show.
+    pub(crate) async fn text_file(
+        &self,
+        tree: ObjectHash,
+        path: RepoPath,
+    ) -> Result<Option<String>, WorkspaceError> {
+        let paths = self.paths.clone();
+        blocking(move || {
+            let objects = open_objects(&paths)?;
+            match browse::read_file(&objects, &tree, &path) {
+                Ok(file) if file.kind == EntryKind::File && !file.binary && !file.too_large => {
+                    Ok(Some(String::from_utf8_lossy(&file.bytes).into_owned()))
+                }
+                Ok(_) => Ok(None),
+                Err(error) if error.code() == fold_core::codes::NOT_FOUND => Ok(None),
+                Err(error) => Err(error),
+            }
+        })
+        .await
+    }
 }
 
 /// A file path as a caller writes it: relative, normalised and not empty, so the root is refused with `invalid_path`.

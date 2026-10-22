@@ -14,8 +14,10 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Comparison, FileDiff } from "@/api/diff";
+import type { ThreadView } from "@/api/messages";
 import type {
   ChangeRange,
+  NewQuestion,
   ProposalDetail,
   ProposalSummary,
   ReviewComment,
@@ -28,6 +30,7 @@ import { isEventEnvelope } from "@/live/envelope";
 import { daemon, ok, refuse, type Call } from "@/test/daemon";
 import { expectMentionPopover } from "@/test/mentionBox";
 import { mentionRoutes } from "@/test/mentionRoutes";
+import { message, recipient, thread } from "@/test/messages";
 import {
   conflictReport,
   humanGates,
@@ -109,6 +112,8 @@ const mark = {
 /** The project as the fake daemon holds it between requests. */
 let proposals: Map<string, ProposalDetail>;
 let comments: Map<string, ReviewComment[]>;
+/** The threads of questions to authors, by proposal. */
+let questions: Map<string, ThreadView[]>;
 let revisions: Revision[];
 let nextComment: number;
 /** While set, every write waits for it, so a test can see the write pending. */
@@ -142,6 +147,7 @@ function seed(): void {
   revisions = [revision(8, "P-5"), revision(7, "P-2"), revision(1)];
   proposals = new Map();
   comments = new Map();
+  questions = new Map();
   put(
     proposalDetail(
       proposalSummary("P-4", {
@@ -294,6 +300,42 @@ function routes(): void {
   daemon.on("GET /api/v1/projects/:slug/proposals/:id/comments", (call) =>
     ok({ comments: comments.get(call.params.id ?? "") ?? [] }),
   );
+  daemon.on("GET /api/v1/projects/:slug/messages", (call) => {
+    const query = new URLSearchParams(call.path.split("?")[1] ?? "");
+    const items = questions.get(query.get("proposal") ?? "") ?? [];
+    return ok({ items, next: null, total_awaiting_human: 0 });
+  });
+  daemon.on(
+    "POST /api/v1/projects/:slug/proposals/:id/questions",
+    async (call) => {
+      if (held) await held;
+      const id = call.params.id ?? "";
+      const body = call.body as NewQuestion;
+      const list = questions.get(id) ?? [];
+      const number = `m-${String(40 + list.length)}`;
+      const stored = message(number, {
+        sender: "human:tanim",
+        recipients: [recipient("backend/db", { addressed_as: "worker" })],
+        body: body.body,
+        task: "T-4",
+        proposal: id,
+        lines: {
+          version: body.version,
+          path: body.path,
+          side: body.side,
+          start_line: body.start_line,
+          end_line: body.end_line,
+          excerpt: "x",
+          excerpt_cut: false,
+        },
+      });
+      questions.set(id, [
+        ...list,
+        thread(number, { proposal: id, messages: [stored] }),
+      ]);
+      return ok(stored, 201);
+    },
+  );
   daemon.on("GET /api/v1/projects/:slug/revisions", () =>
     ok({ revisions, before: null }),
   );
@@ -444,6 +486,15 @@ async function lineCell(container: HTMLElement, key: string) {
   const cell = container.querySelector(`[data-line="${key}"]`);
   if (!(cell instanceof HTMLElement)) throw new Error(`no line ${key}`);
   return cell;
+}
+
+/** Picks an action of the menu at the selected lines. */
+async function choose(
+  user: ReturnType<typeof userEvent.setup>,
+  action: "Ask the author" | "Review comment",
+): Promise<void> {
+  const menu = await screen.findByRole("group", { name: "Selected lines" });
+  await user.click(within(menu).getByRole("button", { name: action }));
 }
 
 function writes(route: string): Call[] {
@@ -632,6 +683,7 @@ describe("Proposal detail", () => {
         .getAttribute("aria-current"),
     ).toBe("page");
     await user.click(await lineCell(container, "new:4"));
+    await choose(user, "Review comment");
     const form = await screen.findByRole("form", {
       name: "Comment on line 4 · new side · tanim",
     });
@@ -655,6 +707,7 @@ describe("Proposal detail", () => {
     const user = userEvent.setup();
     const { container } = renderAt("/p/demo/proposals/P-4");
     await user.click(await lineCell(container, "new:4"));
+    await choose(user, "Review comment");
     let form = await screen.findByRole("form", {
       name: "Comment on line 4 · new side · tanim",
     });
@@ -677,6 +730,7 @@ describe("Proposal detail", () => {
 
     await user.click(await lineCell(container, "new:2"));
     fireEvent.click(await lineCell(container, "new:4"), { shiftKey: true });
+    await choose(user, "Review comment");
     form = await screen.findByRole("form", {
       name: "Comment on lines 2–4 · new side · tanim",
     });
@@ -732,6 +786,7 @@ describe("Proposal detail", () => {
     const user = userEvent.setup();
     const { container } = renderAt("/p/demo/proposals/P-4");
     await user.click(await lineCell(container, "new:4"));
+    await choose(user, "Review comment");
     const form = await screen.findByRole("form", {
       name: "Comment on line 4 · new side · tanim",
     });
@@ -803,6 +858,7 @@ describe("Proposal detail", () => {
     const user = userEvent.setup();
     const { container } = renderAt("/p/demo/proposals/P-4");
     await user.click(await lineCell(container, "new:3"));
+    await choose(user, "Review comment");
     const form = await screen.findByRole("form", { name: /Comment on line 3/ });
     await user.type(within(form).getByLabelText("Comment"), "x");
     await user.click(
@@ -812,6 +868,138 @@ describe("Proposal detail", () => {
       await within(form).findByText(
         "The comment was not saved. These lines are not in the file on that side.",
       ),
+    ).toBeTruthy();
+  });
+
+  it("asks the author about selected lines, pending until the daemon answers, then marks the lines with a link to the thread and writes no review", async () => {
+    const user = userEvent.setup();
+    const { container } = renderAt("/p/demo/proposals/P-4");
+    await user.click(await lineCell(container, "new:2"));
+    fireEvent.click(await lineCell(container, "new:3"), { shiftKey: true });
+    await choose(user, "Ask the author");
+    const form = await screen.findByRole("form", {
+      name: "Ask the author about lines 2–3 · new side · v2",
+    });
+    await user.click(
+      within(form).getByRole("button", { name: "Send question" }),
+    );
+    expect(within(form).getByText("Write a question first.")).toBeTruthy();
+    await user.type(
+      within(form).getByLabelText("Question"),
+      "Why is id nullable?",
+    );
+    const release = hold();
+    await user.click(
+      within(form).getByRole("button", { name: "Send question" }),
+    );
+    expect(
+      within(form)
+        .getByRole("button", { name: "Sending question…" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    expect(
+      screen.queryByRole("link", { name: /^Question m-40 to/ }),
+    ).toBeNull();
+    release();
+    const markers = await screen.findAllByRole("link", {
+      name: "Question m-40 to backend/db about lines 2–3, waiting for an answer",
+    });
+    expect(markers).toHaveLength(2);
+    expect(markers.map((m) => m.getAttribute("href"))).toEqual([
+      "/p/demo/messages?thread=m-40",
+      "/p/demo/messages?thread=m-40",
+    ]);
+    expect(markers.map((m) => m.tabIndex)).toEqual([0, -1]);
+    expect(screen.queryByRole("form", { name: /^Ask the author/ })).toBeNull();
+    expect(
+      writes("POST /api/v1/projects/demo/proposals/P-4/questions")[0]?.body,
+    ).toEqual({
+      version: 2,
+      path: SCHEMA,
+      side: "new",
+      start_line: 2,
+      end_line: 3,
+      body: "Why is id nullable?",
+    });
+    expect(writes("POST /api/v1/projects/demo/proposals/P-4/comments")).toEqual(
+      [],
+    );
+    expect(writes("POST /api/v1/projects/demo/proposals/P-4/reviews")).toEqual(
+      [],
+    );
+  });
+
+  it("marks the lines of a question on the version it asks about, answered once the author wrote back, and a click on the mark opens the thread without selecting the line", async () => {
+    const asked = message("m-24", {
+      sender: "human:tanim",
+      proposal: "P-4",
+      recipients: [recipient("backend/db")],
+      lines: {
+        version: 1,
+        path: SCHEMA,
+        side: "new",
+        start_line: 4,
+        end_line: 4,
+        excerpt: "  report_date TEXT",
+        excerpt_cut: false,
+      },
+    });
+    questions.set("P-4", [
+      thread("m-24", {
+        proposal: "P-4",
+        messages: [
+          asked,
+          message("m-28", { thread: "m-24", sender: "backend/db" }),
+        ],
+      }),
+    ]);
+    const user = userEvent.setup();
+    const current = renderAt("/p/demo/proposals/P-4");
+    await lineCell(current.container, "new:4");
+    expect(
+      screen.queryByRole("link", { name: /^Question m-24 to/ }),
+    ).toBeNull();
+    cleanup();
+    const { container, router } = renderAt("/p/demo/proposals/P-4?version=1");
+    const marker = await screen.findByRole("link", {
+      name: "Question m-24 to backend/db about line 4, answered",
+    });
+    await user.click(marker);
+    expect(container.querySelector('[aria-selected="true"]')).toBeNull();
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/p/demo/messages");
+    });
+    expect(router.state.location.search).toEqual({ thread: "m-24" });
+  });
+
+  it("offers a question where a version takes no comment, and shows a refusal on the question box", async () => {
+    daemon.on(
+      "POST /api/v1/projects/:slug/proposals/:id/questions",
+      refuse(422, "invalid_comment_range"),
+    );
+    const user = userEvent.setup();
+    const { container } = renderAt("/p/demo/proposals/P-4?version=1");
+    await user.click(await lineCell(container, "new:3"));
+    const menu = await screen.findByRole("group", { name: "Selected lines" });
+    expect(
+      within(menu).getByRole("button", { name: "Review comment" }),
+    ).toHaveProperty("disabled", true);
+    await choose(user, "Ask the author");
+    const form = await screen.findByRole("form", {
+      name: "Ask the author about line 3 · new side · v1",
+    });
+    await user.type(within(form).getByLabelText("Question"), "Why?");
+    await user.click(
+      within(form).getByRole("button", { name: "Send question" }),
+    );
+    expect(
+      await within(form).findByText(
+        "The question was not sent. These lines are not in the file on that side.",
+      ),
+    ).toBeTruthy();
+    await user.click(within(form).getByRole("button", { name: "Cancel" }));
+    expect(
+      await screen.findByRole("group", { name: "Selected lines" }),
     ).toBeTruthy();
   });
 
