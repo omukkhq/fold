@@ -72,7 +72,7 @@ impl Fixture {
             )
             .await
             .unwrap();
-        let review = agents.actor(&ctx, None).await.unwrap();
+        let review = agents.actor(&ctx).await.unwrap();
         handle
             .tasks
             .create_task(
@@ -343,11 +343,6 @@ async fn the_agents_route_returns_the_overview_in_registration_order() {
     let fixture = Fixture::new().await;
     let registered = fixture.project.now().as_millis();
     let backend = fixture.register("backend").await;
-    fixture
-        .agents()
-        .register_worker(&backend, "api", None)
-        .await
-        .unwrap();
     let (status, body) = call(fixture.http().await, Method::GET, AGENTS, &[]).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let names: Vec<&str> = body["agents"]
@@ -372,9 +367,7 @@ async fn the_agents_route_returns_the_overview_in_registration_order() {
             "open_sessions": [{"started_at": registered, "pid": 2, "cwd": null}],
             "attention": [],
             "workers": [
-                {"name": "backend", "parent": null, "last_call_at": null, "activity": null,
-                 "claims": [], "workspaces": [], "proposals": []},
-                {"name": "backend/api", "parent": "backend", "last_call_at": null, "activity": null,
+                {"name": "backend", "last_call_at": null, "activity": null,
                  "claims": [], "workspaces": [], "proposals": []},
             ],
             "events": [],
@@ -490,14 +483,26 @@ async fn open_sessions_carry_the_working_directory_of_the_handshake() {
 #[tokio::test]
 async fn events_returns_at_most_the_requested_number_newest_first() {
     let fixture = Fixture::new().await;
-    let backend = fixture.register("backend").await;
-    let agents = fixture.agents();
-    for index in 0..60 {
-        agents
-            .register_worker(&backend, &format!("w{index}"), None)
-            .await
-            .unwrap();
-    }
+    fixture.register("backend").await;
+    let now = fixture.project.now();
+    fixture
+        .handle
+        .store
+        .write(async |tx| {
+            for index in 0..60 {
+                let event = fold_core::NewEvent::new(
+                    fold_core::events::types::MAIN_ADVANCED,
+                    fold_core::EventActor::parse("backend").unwrap(),
+                )
+                .unwrap()
+                .data(json!({"index": index}))
+                .unwrap();
+                events::append(tx, &event, now).await?;
+            }
+            Ok::<_, fold_store::StoreError>(())
+        })
+        .await
+        .unwrap();
     let (status, body) = call(
         fixture.http().await,
         Method::GET,
@@ -513,9 +518,9 @@ async fn events_returns_at_most_the_requested_number_newest_first() {
         seqs.windows(2).all(|pair| pair[0] > pair[1]),
         "newest first: {seqs:?}"
     );
-    assert_eq!(events[0]["type"], "worker.registered");
+    assert_eq!(events[0]["type"], "main.advanced");
     assert_eq!(events[0]["actor"], "backend");
-    assert_eq!(events[0]["data"]["worker"], "backend/w59");
+    assert_eq!(events[0]["data"]["index"], 59);
     let review = body["agents"][0]["events"].as_array().unwrap();
     assert!(review.len() <= 3);
     assert!(

@@ -1044,29 +1044,6 @@ async fn errors_carry_code_message_and_hint() {
 }
 
 #[tokio::test]
-async fn as_acts_for_a_subagent_worker() {
-    let fx = Fixture::new().await;
-    let frontend = connect(&fx, "frontend").await;
-    let review = main_reviewer(&fx).await;
-    open_p1(&fx, &frontend).await;
-    ok(&review, "register_worker", json!({"name": "checker"})).await;
-    let claim = ok(
-        &review,
-        "claim_review",
-        json!({"id": "P-1", "as": "review/checker"}),
-    )
-    .await;
-    assert_eq!(claim["holder"], "review/checker");
-    let checkout = ok(
-        &review,
-        "create_review_checkout",
-        json!({"id": "P-1", "as": "review/checker"}),
-    )
-    .await;
-    assert_eq!(checkout["version"], "v1");
-}
-
-#[tokio::test]
 async fn two_transports_open_one_proposal() {
     let fx = Fixture::new().await;
     let first = connect(&fx, "frontend").await;

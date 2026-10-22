@@ -253,7 +253,7 @@ pub struct DurableEvent {
     pub seq: u64,
     #[schema(rename = "type")]
     pub event_type: DurableEventType,
-    /// A worker (`frontend`, `frontend/ui`), a human (`human:ana`) or `fold`.
+    /// A worker (`frontend`), a human (`human:ana`) or `fold`.
     pub actor: String,
     #[schema(value_type = Option<String>, required = true, example = "T-12")]
     pub task: Option<TaskId>,

@@ -85,7 +85,7 @@ impl Fixture {
             .register_agent(&mut session, &AgentName::parse("frontend").unwrap(), &[])
             .await
             .unwrap();
-        let actor = agents.actor(&session, None).await.unwrap();
+        let actor = agents.actor(&session).await.unwrap();
         crate::common::roles::lead_work_areas(&handle.store).await;
         handle
             .tasks

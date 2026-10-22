@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use fold_daemon::services::agents::Launcher;
 use tempfile::TempDir;
 
-/// A stand-in for `claude -p` in stream-json mode, so no test needs Claude Code. It records its arguments, environment, working directory and every stdin line under `FOLD_FAKE_CLAUDE_DIR`, answers `initialize` and `interrupt` as Claude Code does, replays the fixture `FOLD_FAKE_CLAUDE_TURN` for each user turn, waits after a `can_use_tool` request until fold answers it, and exits when stdin closes. With `FOLD_FAKE_CLAUDE_STUBBORN` set it ignores SIGINT and a closed stdin, so only SIGTERM or SIGKILL ends it. With `FOLD_FAKE_CLAUDE_RESUME_TURN` naming a fixture, a run with `--resume` replays that one for each user turn instead, so a resumed session can go on with the running total of the session. With `FOLD_FAKE_CLAUDE_LOST` naming a fixture, a run with `--resume` answers its first user turn with that fixture and exits with code 1, as Claude Code does for a session it cannot find. With `FOLD_FAKE_CLAUDE_STDERR` set it answers its first user turn by writing a line and that text in red to stderr and exits with code 1, as a process that cannot run does. With `FOLD_FAKE_CLAUDE_WARN` set it writes that text to stderr when it starts and runs on. With `FOLD_FAKE_CLAUDE_CHILD` set it starts a background `sleep` first, as a tool's command would, and records its pid; with `FOLD_FAKE_CLAUDE_NOISE` set it writes a line that is not UTF-8 and a line over the supervisor's length cap before each turn. Once its stdin closes it records that.
+/// A stand-in for `claude -p` in stream-json mode, so no test needs Claude Code. It records its arguments, environment, working directory and every stdin line under `FOLD_FAKE_CLAUDE_DIR`, answers `initialize` and `interrupt` as Claude Code does, replays the fixture `FOLD_FAKE_CLAUDE_TURN` for each user turn, waits after a `can_use_tool` request until fold answers it, and exits when stdin closes. With `FOLD_FAKE_CLAUDE_STUBBORN` set it ignores SIGINT and a closed stdin, so only SIGTERM or SIGKILL ends it. With `FOLD_FAKE_CLAUDE_RESUME_TURN` naming a fixture, a run with `--resume` replays that one for each user turn instead, so a resumed session can go on with the running total of the session. With `FOLD_FAKE_CLAUDE_HOLD` naming a folder, user turn n of a run with `--resume` waits until the file `n` is in that folder and replays the fixture that the file names, or the run's own when the file is empty, so a test can write a line to stdin while a turn is under way. With `FOLD_FAKE_CLAUDE_LOST` naming a fixture, a run with `--resume` answers its first user turn with that fixture and exits with code 1, as Claude Code does for a session it cannot find. With `FOLD_FAKE_CLAUDE_STDERR` set it answers its first user turn by writing a line and that text in red to stderr and exits with code 1, as a process that cannot run does. With `FOLD_FAKE_CLAUDE_WARN` set it writes that text to stderr when it starts and runs on. With `FOLD_FAKE_CLAUDE_CHILD` set it starts a background `sleep` first, as a tool's command would, and records its pid; with `FOLD_FAKE_CLAUDE_NOISE` set it writes a line that is not UTF-8 and a line over the supervisor's length cap before each turn. Once its stdin closes it records that.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 dir="$FOLD_FAKE_CLAUDE_DIR"
 for arg in "$@"; do printf '%s\n' "$arg"; done > "$dir/$$.args"
@@ -18,9 +18,12 @@ if [ -n "$FOLD_FAKE_CLAUDE_CHILD" ]; then
   printf '%s\n' "$!" > "$dir/$$.child"
 fi
 lost=""
+resumed=""
+turns=0
 turn="$FOLD_FAKE_CLAUDE_TURN"
 for arg in "$@"; do
   if [ "$arg" = "--resume" ]; then
+    resumed=1
     [ -n "$FOLD_FAKE_CLAUDE_LOST" ] && lost=1
     [ -n "$FOLD_FAKE_CLAUDE_RESUME_TURN" ] && turn="$FOLD_FAKE_CLAUDE_RESUME_TURN"
   fi
@@ -45,6 +48,12 @@ while IFS= read -r line; do
         head -c 17000000 /dev/zero | tr '\0' a
         printf '\n'
       fi
+      turns=$((turns + 1))
+      play="$turn"
+      if [ -n "$FOLD_FAKE_CLAUDE_HOLD" ] && [ -n "$resumed" ]; then
+        while [ ! -e "$FOLD_FAKE_CLAUDE_HOLD/$turns" ]; do sleep 0.05; done
+        if [ -s "$FOLD_FAKE_CLAUDE_HOLD/$turns" ]; then play=$(cat "$FOLD_FAKE_CLAUDE_HOLD/$turns"); fi
+      fi
       while IFS= read -r out <&3; do
         printf '%s\n' "$out"
         case "$out" in
@@ -55,7 +64,7 @@ while IFS= read -r line; do
               case "$reply" in *'"type":"control_response"'*) break ;; esac
             done ;;
         esac
-      done 3< "$turn" ;;
+      done 3< "$play" ;;
   esac
 done
 : > "$dir/$$.eof"
@@ -176,6 +185,29 @@ impl FakeClaude {
             .env
             .push(("FOLD_FAKE_CLAUDE_WARN".to_owned(), text.to_owned()));
         self
+    }
+
+    /// Each user turn of a run with `--resume` waits for [`FakeClaude::release`].
+    #[must_use]
+    pub fn holding_resumed_turns(mut self) -> Self {
+        let hold = self.dir.path().join("hold");
+        std::fs::create_dir(&hold).unwrap();
+        self.launcher.env.push((
+            "FOLD_FAKE_CLAUDE_HOLD".to_owned(),
+            hold.to_string_lossy().into_owned(),
+        ));
+        self
+    }
+
+    /// Lets user turn `n` of each held run go on, replaying the fixture `turn`, or the run's own one when `turn` is `None`.
+    pub fn release(&self, n: u32, turn: Option<&str>) {
+        let hold = self.dir.path().join("hold");
+        let content = turn
+            .map(|name| fixture(name).to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let partial = hold.join(format!(".{n}"));
+        std::fs::write(&partial, content).unwrap();
+        std::fs::rename(partial, hold.join(n.to_string())).unwrap();
     }
 
     /// Each run starts a background child of its own.

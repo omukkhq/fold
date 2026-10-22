@@ -93,7 +93,7 @@ impl Project {
             .register_agent(&mut session, &AgentName::parse("frontend").unwrap(), &[])
             .await
             .unwrap();
-        let actor = self.agents.actor(&session, None).await.unwrap();
+        let actor = self.agents.actor(&session).await.unwrap();
         crate::common::roles::lead_work_areas(&self.store).await;
         self.tasks
             .create_task(
@@ -555,7 +555,7 @@ async fn second_agent(fixture: &Project) -> Actor {
         .await
         .unwrap();
     crate::common::roles::give_main_tag(&fixture.store, "backend").await;
-    fixture.agents.actor(&session, None).await.unwrap()
+    fixture.agents.actor(&session).await.unwrap()
 }
 
 /// A takeover that reaches a workspace while its stale owner's sync is writing waits for the sync to finish, so no file changes after the new owner has it, and the old owner's next sync is refused.

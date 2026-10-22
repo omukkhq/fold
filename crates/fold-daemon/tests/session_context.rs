@@ -11,7 +11,7 @@ use fold_core::{
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::{router, socket_router};
+use fold_daemon::http::socket_router;
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::{
     ContextClaim, MAX_SESSION_CONTEXT, SessionFacts, render_session_context,
@@ -45,7 +45,7 @@ fn agent(worker: &str) -> Actor {
     })
 }
 
-/// Project `demo` with agents `frontend` (and its worker `frontend/ui`) and `backend`, and the tasks `T-1` to `T-8`, created at one instant so they are ready in number order.
+/// Project `demo` with agents `frontend` and `backend`, and the tasks `T-1` to `T-8`, created at one instant so they are ready in number order.
 #[cfg(test)]
 struct Fixture {
     project: TestProject,
@@ -92,9 +92,6 @@ impl Fixture {
                 .register_agent(&mut ctx, &name(agent), &[])
                 .await
                 .unwrap();
-            if agent == "frontend" {
-                agents.register_worker(&ctx, "ui", None).await.unwrap();
-            }
         }
         let ana = HumanName::parse("ana").unwrap();
         project
@@ -126,6 +123,10 @@ impl Fixture {
     }
 
     async fn send_to_frontend(&self) {
+        self.send_text_to_frontend("text").await;
+    }
+
+    async fn send_text_to_frontend(&self, body: &str) {
         let messages = MessageService::new(
             self.handle.store.clone(),
             self.project.registry().clone(),
@@ -137,7 +138,7 @@ impl Fixture {
                 &agent("backend"),
                 SendMessage {
                     to: Address::parse_all(&["frontend"]).unwrap(),
-                    body: MessageBody::parse("text").unwrap(),
+                    body: MessageBody::parse(body).unwrap(),
                     task: None,
                     proposal: None,
                     reply_to: None,
@@ -186,7 +187,7 @@ async fn the_context_names_the_agent_its_unread_messages_claims_with_minutes_lef
     fixture
         .handle
         .tasks
-        .claim_task(&agent("frontend/ui"), t(2))
+        .claim_task(&agent("frontend"), t(2))
         .await
         .unwrap();
     fixture.advance_minutes(2.5);
@@ -200,11 +201,11 @@ async fn the_context_names_the_agent_its_unread_messages_claims_with_minutes_lef
     assert_eq!(
         context,
         "fold project demo.\n\
-         You are agent frontend, main worker frontend.\n\
+         You are agent frontend.\n\
          Unread messages: 2. Call get_inbox.\n\
          Claims:\n\
          - T-1 implementation: 17 minutes left\n\
-         - T-2 implementation by frontend/ui: 27 minutes left\n\
+         - T-2 implementation: 27 minutes left\n\
          Ready tasks:\n\
          - T-3 Task 3\n\
          - T-4 Task 4\n\
@@ -221,7 +222,7 @@ async fn the_context_names_the_agent_its_unread_messages_claims_with_minutes_lef
         .unwrap();
     assert!(
         backend.starts_with(
-            "fold project demo.\nYou are agent backend, main worker backend.\nUnread messages: 0.\nClaims: none.\nReady tasks:\n- T-3 Task 3\n"
+            "fold project demo.\nYou are agent backend.\nUnread messages: 0.\nClaims: none.\nReady tasks:\n- T-3 Task 3\n"
         ),
         "{backend}"
     );
@@ -302,12 +303,43 @@ async fn the_stop_route_counts_unread_messages_and_refuses_a_directory_outside_t
     let body = json!({"cwd": fixture.root, "agent": "frontend"});
     assert_eq!(
         post(socket.clone(), path, &body).await,
-        (StatusCode::OK, json!({"unread": 0}))
+        (
+            StatusCode::OK,
+            json!({"unread": 0, "reason": null, "messages": []})
+        )
     );
     fixture.send_to_frontend().await;
+    let carried = json!({
+        "unread": 1,
+        "reason": "fold: 1 new message. [m-1 from backend] \"text\"",
+        "messages": ["m-1"],
+    });
     assert_eq!(
         post(socket.clone(), path, &body).await,
-        (StatusCode::OK, json!({"unread": 1}))
+        (StatusCode::OK, carried.clone())
+    );
+    assert_eq!(
+        post(socket.clone(), path, &body).await,
+        (StatusCode::OK, carried),
+        "a hook that never reported its reason as used leaves the message undelivered for the next wake"
+    );
+    let delivered = json!({"cwd": fixture.root, "agent": "frontend", "messages": ["m-1"]});
+    assert_eq!(
+        post(socket.clone(), "/api/v1/hooks/stop/delivered", &delivered).await,
+        (StatusCode::OK, json!({"delivered": 1}))
+    );
+    assert_eq!(
+        post(socket.clone(), "/api/v1/hooks/stop/delivered", &delivered).await,
+        (StatusCode::OK, json!({"delivered": 0})),
+        "a delivered row keeps its first time"
+    );
+    assert_eq!(
+        post(socket.clone(), path, &body).await,
+        (
+            StatusCode::OK,
+            json!({"unread": 1, "reason": null, "messages": []})
+        ),
+        "the reported message counts as delivered and stays unread until acknowledged"
     );
     let (status, answer) = post(
         socket.clone(),
@@ -336,6 +368,51 @@ async fn the_stop_route_counts_unread_messages_and_refuses_a_directory_outside_t
 }
 
 #[tokio::test]
+async fn the_stop_route_carries_what_fits_and_leaves_the_rest_undelivered() {
+    let fixture = Fixture::new().await;
+    let socket = socket_router(fixture.state.clone());
+    let path = "/api/v1/hooks/stop";
+    let body = json!({"cwd": fixture.root, "agent": "frontend"});
+    let long = "x".repeat(7000);
+    for _ in 0..3 {
+        fixture.send_text_to_frontend(&long).await;
+    }
+    let entry = |n: u32| format!(" [m-{n} from backend] \"{long}\"");
+
+    let (_, first) = post(socket.clone(), path, &body).await;
+    assert_eq!(
+        first["reason"],
+        json!(format!(
+            "fold: 3 new messages.{}{} 1 more message: call get_inbox.",
+            entry(1),
+            entry(2)
+        ))
+    );
+    assert_eq!(first["messages"], json!(["m-1", "m-2"]));
+    let used = json!({"cwd": fixture.root, "agent": "frontend", "messages": first["messages"]});
+    post(socket.clone(), "/api/v1/hooks/stop/delivered", &used).await;
+    let (_, second) = post(socket.clone(), path, &body).await;
+    assert_eq!(
+        second["reason"],
+        json!(format!("fold: 1 new message.{}", entry(3))),
+        "only the carried messages were marked delivered"
+    );
+    assert_eq!(second["unread"], json!(3));
+    let used = json!({"cwd": fixture.root, "agent": "frontend", "messages": second["messages"]});
+    post(socket.clone(), "/api/v1/hooks/stop/delivered", &used).await;
+
+    fixture.send_text_to_frontend(&"y".repeat(20_000)).await;
+    let (_, cut) = post(socket, path, &body).await;
+    let reason = cut["reason"].as_str().unwrap();
+    assert!(reason.len() <= 16 * 1024, "{}", reason.len());
+    assert!(
+        reason.ends_with("y\" (cut: read m-4 whole with get_thread)"),
+        "{}",
+        &reason[reason.len() - 80..]
+    );
+}
+
+#[tokio::test]
 async fn every_hook_route_is_not_found_on_the_tcp_router() {
     let fixture = Fixture::new().await;
     let body = json!({
@@ -348,9 +425,15 @@ async fn every_hook_route_is_not_found_on_the_tcp_router() {
     for path in [
         "/api/v1/hooks/session-start",
         "/api/v1/hooks/stop",
+        "/api/v1/hooks/stop/delivered",
         "/api/v1/hooks/edit",
     ] {
-        let (status, answer) = post(router(fixture.state.clone()), path, &body).await;
+        let (status, answer) = post(
+            crate::common::signed_in_router(&fixture.state, "ana").await,
+            path,
+            &body,
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
         assert_eq!(answer["error"]["code"], codes::NOT_FOUND, "{path}");
     }
@@ -359,7 +442,6 @@ async fn every_hook_route_is_not_found_on_the_tcp_router() {
 
 #[test]
 fn the_context_is_capped_at_1500_characters_and_counts_the_claims_it_leaves_out() {
-    let worker = WorkerName::parse("frontend/a-worker-with-a-long-name").unwrap();
     let claims = (1..=14)
         .map(|number| ContextClaim {
             task: t(number),
@@ -368,12 +450,11 @@ fn the_context_is_capped_at_1500_characters_and_counts_the_claims_it_leaves_out(
             } else {
                 ClaimKind::Implementation
             },
-            worker: worker.clone(),
             minutes_left: u64::from(number % 3),
         })
         .collect();
     let facts = SessionFacts {
-        project: "p".repeat(200),
+        project: "p".repeat(600),
         agent: name("frontend"),
         registered: true,
         unread: 3,
@@ -385,17 +466,9 @@ fn the_context_is_capped_at_1500_characters_and_counts_the_claims_it_leaves_out(
     let text = render_session_context(&facts);
     assert_eq!(text.chars().count(), MAX_SESSION_CONTEXT);
     assert!(text.ends_with('…'));
-    assert!(
-        text.contains(
-            "- T-1 implementation by frontend/a-worker-with-a-long-name: 1 minute left\n"
-        )
-    );
-    assert!(text.contains("- T-2 review by frontend/a-worker-with-a-long-name: 2 minutes left\n"));
-    assert!(
-        text.contains(
-            "- T-3 implementation by frontend/a-worker-with-a-long-name: lease expired\n"
-        )
-    );
+    assert!(text.contains("- T-1 implementation: 1 minute left\n"));
+    assert!(text.contains("- T-2 review: 2 minutes left\n"));
+    assert!(text.contains("- T-3 implementation: lease expired\n"));
     assert!(text.contains("- and 4 more\n"));
     let title = format!("- T-20 {}…\n", "é".repeat(99));
     assert!(text.contains(&title), "a title is cut to 100 characters");
@@ -409,6 +482,6 @@ fn the_context_is_capped_at_1500_characters_and_counts_the_claims_it_leaves_out(
     };
     assert_eq!(
         render_session_context(&short),
-        "fold project demo.\nYou are agent frontend, main worker frontend.\nUnread messages: 0.\nClaims: none.\nReady tasks: none."
+        "fold project demo.\nYou are agent frontend.\nUnread messages: 0.\nClaims: none.\nReady tasks: none."
     );
 }

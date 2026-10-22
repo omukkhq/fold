@@ -12,7 +12,7 @@ pub struct TaskHolder {
     pub leads: Vec<AgentName>,
 }
 
-/// Archiving releases the holder's claim and archives its workspace, so a held task is archived only by the holding worker's agent, through any of its workers, by its lead or by a named human; the main agent asks the lead. A task nobody holds is archived by anyone.
+/// Archiving releases the holder's claim and archives its workspace, so a held task is archived only by the holding worker's agent, by its lead or by a named human; the main agent asks the lead. A task nobody holds is archived by anyone.
 pub fn can_archive_task(actor: &Actor, holder: Option<&TaskHolder>) -> Result<(), PolicyDenied> {
     if may_remove(actor, holder) {
         return Ok(());
@@ -36,7 +36,7 @@ pub fn can_delete_task(actor: &Actor, holder: Option<&TaskHolder>) -> Result<(),
     })
 }
 
-/// A plain step records what the task's work covers, so the agents that do or lead that work change its checklists: on a held task the holding worker's agent, through any of its workers, or its lead; on a task nobody holds the lead of an area whose label it carries (`area_leads`). The main agent, through any worker of the agent with the `main` tag, and a named human change every checklist. Linked items and the Done lock are the checklist commands' own rules.
+/// A plain step records what the task's work covers, so the agents that do or lead that work change its checklists: on a held task the holding worker's agent or its lead; on a task nobody holds the lead of an area whose label it carries (`area_leads`). The main agent, the agent with the `main` tag, and a named human change every checklist. Linked items and the Done lock are the checklist commands' own rules.
 pub fn can_change_checklist(
     actor: &Actor,
     holder: Option<&TaskHolder>,
@@ -174,7 +174,6 @@ mod tests {
             ("lead", agent("web-lead"), true),
             ("lead's other worker", agent("web-lead/plan"), true),
             ("main agent", tagged("main", "main"), true),
-            ("main agent's subagent", tagged("main/plan", "main"), true),
             ("other task worker", agent("api-worker"), false),
             ("other tag", tagged("api-worker", "backend"), false),
             (

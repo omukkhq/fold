@@ -53,21 +53,48 @@ pub fn run(args: &HookArgs, out: &mut impl Write) {
     else {
         return;
     };
+    let mut carried = None;
     let (name, outcome) = match &args.command {
         HookCommand::SessionStart(options) => ("session-start", session_start(options, &agent)),
-        HookCommand::Stop(options) => ("stop", stop(options, &agent)),
+        HookCommand::Stop(options) => ("stop", stop(options, &agent, &mut carried)),
         HookCommand::PreToolUse(options) => ("pre-tool-use", pre_tool_use(options, &agent)),
     };
-    let written = match outcome {
-        Ok(Some(answer)) => output::line(out, &answer.to_string()),
-        Ok(None) => Ok(()),
-        Err(code) => output::line(
+    let failed = |code: String| {
+        output::line(
             &mut io::stderr().lock(),
             &format!("fld hook {name}: {code}"),
-        ),
+        )
+    };
+    let written = match outcome {
+        Ok(Some(answer)) => output::line(out, &answer.to_string()).and_then(|()| out.flush()),
+        Ok(None) => Ok(()),
+        Err(code) => failed(code),
     };
     // Claude Code may close the pipe first; the session goes on either way.
-    let _ = written;
+    if written.is_ok()
+        && let Some(carried) = carried
+        && let Err(code) = carried.delivered()
+    {
+        let _ = failed(code);
+    }
+}
+
+/// The messages a Stop hook's reason carried, which become delivered only once the reason is written for the session: a hook that gave up on a slow answer leaves them for the next wake.
+struct Carried {
+    config: ClientConfig,
+    body: Value,
+}
+
+impl Carried {
+    fn delivered(self) -> Result<(), String> {
+        exchange(
+            self.config,
+            ANSWER_TIMEOUT,
+            "/api/v1/hooks/stop/delivered",
+            &self.body,
+        )
+        .map(|_| ())
+    }
 }
 
 /// Claude Code's JSON from stdin. The text is never echoed, because it can hold the session's paths and messages.
@@ -143,23 +170,35 @@ fn follow_session(input: &Value, agent: &str) {
     }
 }
 
-fn stop(options: &HookOptions, agent: &str) -> Result<Option<Value>, String> {
+fn stop(
+    options: &HookOptions,
+    agent: &str,
+    carried: &mut Option<Carried>,
+) -> Result<Option<Value>, String> {
     let input = input()?;
     if input["stop_hook_active"].as_bool() == Some(true) {
         return Ok(None);
     }
-    let body = json!({"cwd": cwd(&input)?, "agent": agent});
+    let cwd = cwd(&input)?;
+    let body = json!({"cwd": cwd, "agent": agent});
     let config = ClientConfig::running(socket(options, &Dirs::from_env())?);
-    let answer = exchange(config, ANSWER_TIMEOUT, "/api/v1/hooks/stop", &body)?;
+    let answer = exchange(config.clone(), ANSWER_TIMEOUT, "/api/v1/hooks/stop", &body)?;
     let unread = answer["unread"].as_u64().ok_or(codes::INTERNAL_ERROR)?;
     if unread == 0 {
         return Ok(None);
     }
+    let reason = match answer["reason"].as_str() {
+        Some(reason) => {
+            *carried = Some(Carried {
+                config,
+                body: json!({"cwd": cwd, "agent": agent, "messages": answer["messages"]}),
+            });
+            reason.to_owned()
+        }
+        None => format!("{unread} unread fold messages. Call get_inbox."),
+    };
     // A Stop hook keeps the turn going only through a block decision; Claude Code then sets `stop_hook_active` on the next stop.
-    Ok(Some(json!({
-        "decision": "block",
-        "reason": format!("{unread} unread fold messages. Call get_inbox."),
-    })))
+    Ok(Some(json!({"decision": "block", "reason": reason})))
 }
 
 /// Claude Code reads a deny decision from this hook even where no permission rule could express it: its path rules cannot deny a folder but one folder below it, and they would bind the human's own sessions too, while this hook runs for agents only.

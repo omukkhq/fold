@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT m.thread_id AS \"thread!: i64\", MAX(m.number) AS \"last!: i64\"\n           FROM messages m\n           WHERE (?1 IS NULL OR EXISTS (\n                     SELECT 1 FROM messages x JOIN tasks t ON t.id = x.task_id\n                     WHERE x.thread_id = m.thread_id AND t.number = ?1))\n             AND (?2 IS NULL OR EXISTS (\n                     SELECT 1 FROM messages x JOIN proposals p ON p.id = x.proposal_id\n                     WHERE x.thread_id = m.thread_id AND p.number = ?2))\n             AND (?3 IS NULL OR EXISTS (\n                     SELECT 1 FROM messages x\n                     JOIN workers w ON w.id = x.sender_worker_id\n                     JOIN agents a ON a.id = w.agent_id\n                     WHERE x.thread_id = m.thread_id AND a.name = ?3\n                     UNION ALL\n                     SELECT 1 FROM messages x\n                     JOIN message_recipients r ON r.message_id = x.id\n                     JOIN workers w ON w.id = r.worker_id\n                     JOIN agents a ON a.id = w.agent_id\n                     WHERE x.thread_id = m.thread_id AND a.name = ?3))\n             AND (NOT ?4 OR EXISTS (\n                     SELECT 1 FROM open_human_questions q\n                     JOIN message_recipients r ON r.message_id = q.id\n                     WHERE q.thread_id = m.thread_id\n                       AND (?7 IS NULL OR r.human = ?7 OR r.addressed_as = 'humans')))\n             AND (?7 IS NULL OR EXISTS (\n                     SELECT 1 FROM messages x\n                     WHERE x.thread_id = m.thread_id AND x.sender_human = ?7\n                     UNION ALL\n                     SELECT 1 FROM messages x\n                     JOIN message_recipients r ON r.message_id = x.id\n                     WHERE x.thread_id = m.thread_id\n                       AND (r.human = ?7 OR r.addressed_as = 'humans')))\n           GROUP BY m.thread_id\n           HAVING ?5 IS NULL OR MAX(m.number) < ?5\n           ORDER BY MAX(m.number) DESC\n           LIMIT ?6",
+  "describe": {
+    "columns": [
+      {
+        "name": "thread!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "last!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "2ec05c3748f63acda99e4443603a22a95e5f34957856a6046a8d300620310e91"
+}

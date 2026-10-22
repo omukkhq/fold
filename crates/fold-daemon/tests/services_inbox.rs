@@ -74,7 +74,7 @@ struct Fixture {
 
 #[cfg(test)]
 impl Fixture {
-    /// Agents `backend`, `frontend` with child worker `frontend/ui`, and `review`; humans `ana` and `tanim`; tasks `T-1` and `T-2`.
+    /// Agents `backend`, `frontend`, `design` and `review`; humans `ana` and `tanim`; tasks `T-1` and `T-2`.
     async fn new() -> Self {
         let project = TestProject::new().await;
         let bus = EventBus::new();
@@ -87,8 +87,8 @@ impl Fixture {
             bus,
             clock,
         );
-        let frontend = register(&agents, "frontend").await;
-        agents.register_worker(&frontend, "ui", None).await.unwrap();
+        register(&agents, "frontend").await;
+        register(&agents, "design").await;
         register(&agents, "backend").await;
         register(&agents, "review").await;
         for name in ["tanim", "ana"] {
@@ -176,11 +176,7 @@ async fn the_inbox_marks_exactly_the_rows_it_returns_and_keeps_the_first_deliver
     let first = fixture.send("frontend", &["backend"]).await;
     let other = fixture.send("frontend", &["review"]).await;
     let delivered = fixture.project.now().as_millis();
-    let inbox = fixture
-        .messages
-        .inbox(&agent("backend"), false)
-        .await
-        .unwrap();
+    let inbox = fixture.messages.inbox(&agent("backend")).await.unwrap();
     assert_eq!(
         inbox.iter().map(|item| item.id).collect::<Vec<_>>(),
         vec![first]
@@ -198,11 +194,7 @@ async fn the_inbox_marks_exactly_the_rows_it_returns_and_keeps_the_first_deliver
         .clock()
         .advance(Duration::from_secs(60))
         .unwrap();
-    let again = fixture
-        .messages
-        .inbox(&agent("backend"), false)
-        .await
-        .unwrap();
+    let again = fixture.messages.inbox(&agent("backend")).await.unwrap();
     assert_eq!(again.len(), 1, "reading never acknowledges");
     assert_eq!(again[0].delivered_at.as_millis(), delivered);
     assert_eq!(fixture.row(first, "backend").await, (Some(delivered), None));
@@ -215,13 +207,7 @@ async fn a_failed_inbox_read_leaves_no_row_marked_delivered() {
     let first = fixture.send("frontend", &["backend"]).await;
     let scenario = fail::FailScenario::setup();
     fail::cfg("inbox_after_delivery", "return").unwrap();
-    let error = refusal(
-        fixture
-            .messages
-            .inbox(&agent("backend"), false)
-            .await
-            .unwrap_err(),
-    );
+    let error = refusal(fixture.messages.inbox(&agent("backend")).await.unwrap_err());
     fail::remove("inbox_after_delivery");
     scenario.teardown();
     assert_eq!(error.code(), codes::FAILPOINT);
@@ -229,52 +215,6 @@ async fn a_failed_inbox_read_leaves_no_row_marked_delivered() {
         fixture.row(first, "backend").await,
         (None, None),
         "the marking rolled back with the read"
-    );
-}
-
-#[tokio::test]
-async fn include_workers_reads_every_worker_of_the_agent_and_as_reads_one() {
-    let fixture = Fixture::new().await;
-    let main = fixture.send("backend", &["frontend"]).await;
-    let child = fixture.send("backend", &["frontend/ui"]).await;
-    let both = fixture.send("backend", &["frontend", "frontend/ui"]).await;
-    let names = |items: &[fold_daemon::services::messages::InboxItem]| {
-        items
-            .iter()
-            .map(|item| (item.id, item.to.to_string()))
-            .collect::<Vec<_>>()
-    };
-    let own = fixture
-        .messages
-        .inbox(&agent("frontend"), false)
-        .await
-        .unwrap();
-    assert_eq!(
-        names(&own),
-        vec![(main, "frontend".into()), (both, "frontend".into())]
-    );
-    let ui = fixture
-        .messages
-        .inbox(&agent("frontend/ui"), false)
-        .await
-        .unwrap();
-    assert_eq!(
-        names(&ui),
-        vec![(child, "frontend/ui".into()), (both, "frontend/ui".into())]
-    );
-    let all = fixture
-        .messages
-        .inbox(&agent("frontend"), true)
-        .await
-        .unwrap();
-    assert_eq!(
-        names(&all),
-        vec![
-            (main, "frontend".into()),
-            (child, "frontend/ui".into()),
-            (both, "frontend".into()),
-            (both, "frontend/ui".into()),
-        ]
     );
 }
 
@@ -332,7 +272,7 @@ async fn acknowledge_sets_one_row_or_every_earlier_row_and_is_idempotent() {
         "another recipient's row is untouched"
     );
     assert_eq!(fixture.row(d, "backend").await.1, None);
-    let left = fixture.messages.inbox(&backend, false).await.unwrap();
+    let left = fixture.messages.inbox(&backend).await.unwrap();
     assert_eq!(left.iter().map(|item| item.id).collect::<Vec<_>>(), vec![d]);
 }
 
@@ -414,19 +354,15 @@ async fn the_acknowledged_event_names_its_newest_message_so_it_reaches_the_recip
 }
 
 #[tokio::test]
-async fn unread_count_counts_every_worker_of_the_agent() {
+async fn unread_count_counts_the_agents_unacknowledged_messages() {
     let fixture = Fixture::new().await;
     let store = fixture.project.store();
     let frontend = fixture.agent_id("frontend").await;
     assert_eq!(unread_count(store, frontend).await.unwrap(), 0);
     fixture.send("backend", &["frontend"]).await;
-    let child = fixture.send("backend", &["frontend/ui", "review"]).await;
+    let shared = fixture.send("backend", &["frontend", "review"]).await;
     assert_eq!(unread_count(store, frontend).await.unwrap(), 2);
-    fixture
-        .messages
-        .inbox(&agent("frontend"), true)
-        .await
-        .unwrap();
+    fixture.messages.inbox(&agent("frontend")).await.unwrap();
     assert_eq!(
         unread_count(store, frontend).await.unwrap(),
         2,
@@ -434,7 +370,7 @@ async fn unread_count_counts_every_worker_of_the_agent() {
     );
     fixture
         .messages
-        .acknowledge(&agent("frontend/ui"), child, false)
+        .acknowledge(&agent("frontend"), shared, false)
         .await
         .unwrap();
     assert_eq!(fixture.messages.unread_count(frontend).await.unwrap(), 1);
@@ -445,13 +381,7 @@ async fn unread_count_counts_every_worker_of_the_agent() {
 #[tokio::test]
 async fn only_a_registered_worker_has_an_inbox() {
     let fixture = Fixture::new().await;
-    let error = refusal(
-        fixture
-            .messages
-            .inbox(&human("ana"), false)
-            .await
-            .unwrap_err(),
-    );
+    let error = refusal(fixture.messages.inbox(&human("ana")).await.unwrap_err());
     assert_eq!(error.code(), codes::INVALID_REQUEST);
     let error = refusal(
         fixture
@@ -461,14 +391,8 @@ async fn only_a_registered_worker_has_an_inbox() {
             .unwrap_err(),
     );
     assert_eq!(error.code(), codes::INVALID_REQUEST);
-    for name in ["ghost", "frontend/ghost"] {
-        let error = refusal(
-            fixture
-                .messages
-                .inbox(&agent(name), false)
-                .await
-                .unwrap_err(),
-        );
+    for name in ["ghost"] {
+        let error = refusal(fixture.messages.inbox(&agent(name)).await.unwrap_err());
         assert_eq!(error.code(), codes::WORKER_NOT_FOUND);
     }
 }
@@ -560,17 +484,19 @@ async fn feedback_needs_a_task_or_a_reply_and_only_a_human_sends_it() {
         "frontend",
         "without a claim holder the area lead reads it"
     );
-    fixture
-        .tasks
-        .claim_task(&agent("frontend/ui"), t(1))
-        .await
-        .unwrap();
+    crate::common::roles::give_claim(
+        fixture.project.store(),
+        "design",
+        t(1),
+        fixture.project.now(),
+    )
+    .await;
     let sent = fixture
         .messages
         .feedback(&human("ana"), feedback(Some(t(1)), None))
         .await
         .unwrap();
-    assert_eq!(sent.recipients[0].name.to_string(), "frontend/ui");
+    assert_eq!(sent.recipients[0].name.to_string(), "design");
     assert_eq!(sent.task, Some(t(1)));
 }
 
@@ -613,7 +539,7 @@ async fn a_reply_goes_to_the_parent_sender_and_inherits_its_task() {
     let question = fixture
         .messages
         .send(
-            &agent("frontend/ui"),
+            &agent("design"),
             SendMessage {
                 task: Some(t(2)),
                 ..message(&["humans"], "which one?")
@@ -644,7 +570,7 @@ async fn a_reply_goes_to_the_parent_sender_and_inherits_its_task() {
             .iter()
             .map(|r| r.name.to_string())
             .collect::<Vec<_>>(),
-        vec!["frontend/ui"]
+        vec!["design"]
     );
     let follow_up = fixture
         .messages
@@ -667,7 +593,7 @@ async fn a_reply_goes_to_the_parent_sender_and_inherits_its_task() {
             .iter()
             .map(|r| r.name.to_string())
             .collect::<Vec<_>>(),
-        vec!["frontend/ui"],
+        vec!["design"],
         "a reply to your own message goes to its other recipients"
     );
     let named = fixture
@@ -706,7 +632,7 @@ async fn threads_list_newest_activity_first_with_filters_and_pages() {
         .unwrap()
         .id;
     let second = fixture.send("backend", &["review"]).await;
-    let third = fixture.send("review", &["frontend/ui"]).await;
+    let third = fixture.send("review", &["design"]).await;
     let reply = fixture
         .messages
         .send(
@@ -765,14 +691,8 @@ async fn threads_list_newest_activity_first_with_filters_and_pages() {
             .map(|thread| thread.id)
             .collect::<Vec<_>>()
     };
-    assert_eq!(
-        ids(query(Some("frontend"), None, false)).await,
-        vec![first, third]
-    );
-    assert_eq!(
-        ids(query(Some("frontend/ui"), None, false)).await,
-        vec![third]
-    );
+    assert_eq!(ids(query(Some("frontend"), None, false)).await, vec![first]);
+    assert_eq!(ids(query(Some("design"), None, false)).await, vec![third]);
     assert_eq!(
         ids(query(Some("review"), None, false)).await,
         vec![third, second]
@@ -846,11 +766,7 @@ async fn messages_never_change_task_state() {
             .await
             .unwrap();
     let id = fixture.send("frontend", &["backend"]).await;
-    fixture
-        .messages
-        .inbox(&agent("backend"), false)
-        .await
-        .unwrap();
+    fixture.messages.inbox(&agent("backend")).await.unwrap();
     fixture
         .messages
         .acknowledge(&agent("backend"), id, true)

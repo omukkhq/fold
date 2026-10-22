@@ -125,7 +125,7 @@ impl Notified {
     }
 
     async fn actor(&self, agent: &reviews_support::Agent) -> Actor {
-        self.fx.agents.actor(&agent.ctx, None).await.unwrap()
+        self.fx.agents.actor(&agent.ctx).await.unwrap()
     }
 
     fn register(&self, agent: &str, socket: PathBuf) {
@@ -288,22 +288,23 @@ async fn integration_messages_go_to_author_reviewer_and_owners_of_newly_todo_tas
             .await,
         1
     );
-    // The integration notice comes first, then the message's own notice.
+    // The integration notice carries the message, so the message's own notice has nothing new and is skipped.
     assert_eq!(
         frontend.next().await,
-        "fold: P-1 integrated as r2. Call get_inbox."
+        format!("fold: P-1 integrated as r2. [m-{number} from fold on T-1, P-1] \"{body}\"")
     );
+    n.send(&agent("backend"), &["frontend"]).await;
+    let sentinel = number + 1;
     assert_eq!(
         frontend.next().await,
-        format!("fold: message m-{number} arrived. Call get_inbox.")
+        format!("fold: message m-{sentinel} arrived. [m-{sentinel} from backend] \"sentinel\"")
     );
 }
 
 #[tokio::test]
 async fn an_agent_with_several_roles_gets_one_message() {
     let n = Notified::new().await;
-    let ui = n.fx.subagent(&n.fx.frontend, "ui").await;
-    n.dependent_task(&by(&ui)).await;
+    n.dependent_task(&by(&n.fx.frontend.worker)).await;
     n.fx.proposal().await;
     give_main_tag(n.fx.project.store(), "backend").await;
     let backend = n.actor(&n.fx.backend).await;
@@ -321,10 +322,11 @@ async fn an_agent_with_several_roles_gets_one_message() {
         pairs(&[("backend", "agent"), ("frontend", "agent")])
     );
     // The released claim is gone, so the push finds the reviewer through the approval; the integrating human's own approval reaches nobody once the proposal is integrated.
-    let integrated = "fold: P-1 integrated as r2. Call get_inbox.";
-    let arrived = format!("fold: message m-{} arrived. Call get_inbox.", messages[0].0);
+    let integrated = format!(
+        "fold: P-1 integrated as r2. [m-{} from fold on T-1, P-1] \"{}\"",
+        messages[0].0, messages[0].3
+    );
     assert_eq!(reviewer.next().await, integrated);
-    assert_eq!(reviewer.next().await, arrived);
     assert_eq!(author.next().await, integrated);
 }
 
@@ -354,7 +356,7 @@ async fn push_goes_to_the_review_lead_on_proposal_opened() {
     n.send(&agent("frontend"), &["backend"]).await;
     assert_eq!(
         backend.next().await,
-        "fold: message m-1 arrived. Call get_inbox."
+        "fold: message m-1 arrived. [m-1 from frontend] \"sentinel\""
     );
 }
 
@@ -383,7 +385,7 @@ async fn push_failure_is_dropped_and_the_event_stays() {
     n.send(&agent("backend"), &["review"]).await;
     assert_eq!(
         review.next().await,
-        "fold: message m-1 arrived. Call get_inbox."
+        "fold: message m-1 arrived. [m-1 from backend] \"sentinel\""
     );
 }
 
@@ -399,7 +401,7 @@ async fn human_approval_pushes_only_the_review_claim_holder() {
     // Without a claim holder nobody is told, the review lead and the author's agent included.
     n.approve(&human()).await;
     n.send(&agent("backend"), &["review", "frontend"]).await;
-    let arrived = "fold: message m-1 arrived. Call get_inbox.";
+    let arrived = "fold: message m-1 arrived. [m-1 from backend] \"sentinel\"";
     assert_eq!(review.next().await, arrived);
     assert_eq!(author.next().await, arrived);
 
@@ -409,7 +411,7 @@ async fn human_approval_pushes_only_the_review_claim_holder() {
     n.send(&agent("frontend"), &["backend"]).await;
     assert_eq!(
         backend.next().await,
-        "fold: message m-2 arrived. Call get_inbox."
+        "fold: message m-2 arrived. [m-2 from frontend] \"sentinel\""
     );
 }
 
@@ -454,9 +456,11 @@ async fn pull_integration_sends_no_message_or_push() {
     // Push keeps event order, so a later message's notice arriving first means the pull sent none.
     n.send(&human(), &["frontend", "backend", "review"]).await;
     for inbox in &mut inboxes {
-        assert_eq!(
-            inbox.next().await,
-            "fold: message m-1 arrived. Call get_inbox."
+        assert!(
+            inbox
+                .next()
+                .await
+                .starts_with("fold: message m-1 arrived. [m-1 from human:")
         );
     }
 }

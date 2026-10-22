@@ -47,7 +47,7 @@ struct Fixture {
 
 #[cfg(test)]
 impl Fixture {
-    /// Humans `tanim` and `ana`; agents `frontend` with child worker `frontend/ui`, `backend` and `review`; tasks `T-1` and `T-2`; proposal `P-1` on `T-1`.
+    /// Humans `tanim` and `ana`; agents `frontend`, `design`, `backend` and `review`; tasks `T-1` and `T-2`; proposal `P-1` on `T-1`.
     async fn new() -> Self {
         let project = TestProject::new().await;
         let clock = Arc::new(project.clock().clone());
@@ -79,15 +79,12 @@ impl Fixture {
             handle.bus.clone(),
             handle.clock.clone(),
         );
-        for name in ["frontend", "backend", "review"] {
+        for name in ["frontend", "design", "backend", "review"] {
             let mut ctx = agents.start_session(1).await.unwrap();
             agents
                 .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &[])
                 .await
                 .unwrap();
-            if name == "frontend" {
-                agents.register_worker(&ctx, "ui", None).await.unwrap();
-            }
         }
         let tasks = TaskService::new(
             handle.store.clone(),
@@ -265,9 +262,7 @@ async fn the_list_filters_by_agent_task_proposal_and_awaiting_human() {
     let fixture = Fixture::new().await;
     fixture.send("frontend", &["humans"], Some(1), None).await;
     fixture.send("backend", &["review"], None, Some(1)).await;
-    fixture
-        .send("review", &["frontend/ui"], Some(2), None)
-        .await;
+    fixture.send("review", &["design"], Some(2), None).await;
     let (status, all) = fixture.get("/messages").await;
     assert_eq!(status, StatusCode::OK, "{all}");
     assert_eq!(thread_ids(&all), ["m-3", "m-2", "m-1"]);
@@ -306,8 +301,8 @@ async fn the_list_filters_by_agent_task_proposal_and_awaiting_human() {
     );
     assert_eq!(recipients(message), ["human:ana", "human:tanim"]);
     for (query, expected) in [
-        ("?agent=frontend", vec!["m-3", "m-1"]),
-        ("?agent=frontend/ui", vec!["m-3"]),
+        ("?agent=frontend", vec!["m-1"]),
+        ("?agent=design", vec!["m-3"]),
         ("?agent=review", vec!["m-3", "m-2"]),
         ("?task=T-2", vec!["m-3"]),
         ("?proposal=P-1", vec!["m-2"]),
@@ -477,11 +472,13 @@ async fn feedback_goes_to_the_first_reader_and_only_to_the_readers() {
         ["frontend"],
         "without a claim the area lead reads it"
     );
-    fixture
-        .tasks
-        .claim_task(&agent("frontend/ui"), "T-1".parse().unwrap())
-        .await
-        .unwrap();
+    crate::common::roles::give_claim(
+        &fixture.handle.store,
+        "design",
+        "T-1".parse().unwrap(),
+        fixture.handle.clock.now(),
+    )
+    .await;
     let (status, sent) = fixture
         .feedback(true, json!({"body": "use the short copy", "task": "T-1"}))
         .await;
@@ -489,21 +486,17 @@ async fn feedback_goes_to_the_first_reader_and_only_to_the_readers() {
     assert_eq!(sent["id"], "m-2");
     assert_eq!(sent["sender"], "human:tanim");
     assert_eq!(sent["task"], "T-1");
-    assert_eq!(recipients(&sent), ["frontend/ui"]);
-    let inbox = fixture
-        .messages
-        .inbox(&agent("frontend/ui"), false)
-        .await
-        .unwrap();
+    assert_eq!(recipients(&sent), ["design"]);
+    let inbox = fixture.messages.inbox(&agent("design")).await.unwrap();
     assert_eq!(inbox[0].id.to_string(), "m-2");
     let (status, named) = fixture
         .feedback(
             true,
-            json!({"body": "fyi", "task": "T-1", "to": ["frontend", "frontend/ui"]}),
+            json!({"body": "fyi", "task": "T-1", "to": ["frontend", "design"]}),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{named}");
-    assert_eq!(recipients(&named), ["frontend", "frontend/ui"]);
+    assert_eq!(recipients(&named), ["frontend", "design"]);
     for to in [
         json!(["backend"]),
         json!(["frontend", "tag:ui"]),
@@ -546,9 +539,7 @@ async fn feedback_goes_to_the_first_reader_and_only_to_the_readers() {
 #[tokio::test]
 async fn a_human_reply_joins_the_thread_and_goes_to_the_asking_worker() {
     let fixture = Fixture::new().await;
-    fixture
-        .send("frontend/ui", &["humans"], Some(2), None)
-        .await;
+    fixture.send("design", &["humans"], Some(2), None).await;
     let (status, reply) = call(
         socket_router(fixture.state.clone()),
         Method::POST,
@@ -562,7 +553,7 @@ async fn a_human_reply_joins_the_thread_and_goes_to_the_asking_worker() {
     assert_eq!(reply["reply_to"], "m-1");
     assert_eq!(reply["task"], "T-2");
     assert_eq!(reply["sender"], "human:ana");
-    assert_eq!(recipients(&reply), ["frontend/ui"]);
+    assert_eq!(recipients(&reply), ["design"]);
     let (_, thread) = fixture.get("/threads/m-1").await;
     assert_eq!(thread["messages"].as_array().unwrap().len(), 2);
     let (status, body) = fixture
@@ -706,15 +697,17 @@ async fn a_task_offers_its_claim_holder_its_area_lead_and_the_main_agent_as_read
         ],
         "without a claim the area lead is the default"
     );
-    fixture
-        .tasks
-        .claim_task(&agent("frontend/ui"), "T-1".parse().unwrap())
-        .await
-        .unwrap();
+    crate::common::roles::give_claim(
+        &fixture.handle.store,
+        "design",
+        "T-1".parse().unwrap(),
+        fixture.handle.clock.now(),
+    )
+    .await;
     assert_eq!(
         readers(&fixture, "T-1").await,
         [
-            reader("frontend/ui", "claim_holder"),
+            reader("design", "claim_holder"),
             reader("frontend", "area_lead"),
             reader("review", "main_agent"),
         ],
@@ -722,7 +715,7 @@ async fn a_task_offers_its_claim_holder_its_area_lead_and_the_main_agent_as_read
     );
     fixture
         .tasks
-        .release_task(&agent("frontend/ui"), "T-1".parse().unwrap())
+        .release_task(&agent("design"), "T-1".parse().unwrap())
         .await
         .unwrap();
     assert_eq!(

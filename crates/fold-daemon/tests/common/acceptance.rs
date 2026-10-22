@@ -933,8 +933,12 @@ pub fn multipart_form(parts: &[FormPart<'_>]) -> Vec<u8> {
 
 /// The bytes a session's inbox receives for one notice: the auth line, then the notice in fold's cross-session envelope.
 pub fn wire(token: &str, text: &str) -> String {
+    let content = serde_json::to_string(&format!(
+        "<cross-session-message from-name=\"fold\">\n{text}\n</cross-session-message>"
+    ))
+    .unwrap();
     format!(
-        "{{\"type\":\"auth\",\"token\":\"{token}\"}}\n{{\"type\":\"user\",\"priority\":\"next\",\"message\":{{\"role\":\"user\",\"content\":\"<cross-session-message from-name=\\\"fold\\\">\\n{text}\\n</cross-session-message>\"}}}}\n"
+        "{{\"type\":\"auth\",\"token\":\"{token}\"}}\n{{\"type\":\"user\",\"priority\":\"next\",\"message\":{{\"role\":\"user\",\"content\":{content}}}}}\n"
     )
 }
 
@@ -948,9 +952,9 @@ pub fn ready_notice(task: &str) -> String {
     format!("fold: {task} is ready in your area. Call start_worker.")
 }
 
-/// The notice text for a new message.
-pub fn message_notice(message: &str) -> String {
-    format!("fold: message {message} arrived. Call get_inbox.")
+/// The notice text for a new message that carries only that message: `from` is its sender with any reply and links, such as `frontend on RQ-1`.
+pub fn message_notice(message: &str, from: &str, body: &str) -> String {
+    format!("fold: message {message} arrived. [{message} from {from}] \"{body}\"")
 }
 
 /// Copies every file and folder of `from` into `to`, which it creates.

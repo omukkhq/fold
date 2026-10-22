@@ -29,15 +29,13 @@ export function workspace(fields: Partial<WorkspaceView> = {}): WorkspaceView {
   };
 }
 
-/** A worker of the given name; the parent is the part before the first `/`. */
+/** A worker of the given name. */
 export function worker(
   name: string,
   fields: Partial<WorkerView> = {},
 ): WorkerView {
-  const slash = name.indexOf("/");
   return {
     name,
-    parent: slash < 0 ? null : name.slice(0, slash),
     last_call_at: null,
     activity: null,
     claims: [],

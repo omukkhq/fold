@@ -51,7 +51,7 @@ async fn project(host: &Host) -> ProjectPaths {
         )
         .await
         .unwrap();
-    let author = agents.actor(&ctx, None).await.unwrap();
+    let author = agents.actor(&ctx).await.unwrap();
     let task = TaskId::from_number(1).unwrap();
     TaskService::new(store.clone(), bus.clone(), clock.clone(), 5)
         .create_task(

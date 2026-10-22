@@ -4,9 +4,8 @@ const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 const REFERENCE: &str = include_str!("../templates/REFERENCE.md");
 
-const FOLD_TOOLS: [&str; 97] = [
+const FOLD_TOOLS: [&str; 96] = [
     "register_agent",
-    "register_worker",
     "list_agents",
     "define_area",
     "update_area",
@@ -617,6 +616,16 @@ fn the_skill_maps_existing_code_into_areas_before_planning() {
 fn the_skill_uses_exactly_the_four_verdicts() {
     for verdict in ["comment", "request_changes", "approve", "reject"] {
         assert!(SKILL.contains(&format!("`{verdict}`")), "{verdict}");
+    }
+}
+
+#[test]
+fn the_skill_sends_missing_work_back_and_new_work_to_a_request() {
+    for rule in [
+        "Send work that this task still misses, such as an unticked checklist step or an acceptance criterion with no work, back with `request_changes`.",
+        "Describe new work outside the task, such as a feature the task did not ask for, with `create_request`; the proposal can still be approved.",
+    ] {
+        assert!(SKILL.contains(rule), "{rule}");
     }
 }
 

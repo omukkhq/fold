@@ -13,6 +13,17 @@ fn read(dir: &TempDir) -> String {
 }
 
 #[test]
+fn the_section_sends_missing_work_back_and_new_work_to_a_request() {
+    for rule in [
+        "Send work that this task still misses back with `request_changes`.",
+        "Describe new work outside the task with `create_request`; the proposal can still be approved.",
+        "Ask the humans with `asks_human` for a product decision",
+    ] {
+        assert!(SECTION.contains(rule), "{rule}");
+    }
+}
+
+#[test]
 fn a_new_project_agents_file_holds_only_the_marked_section() {
     let dir = TempDir::new().unwrap();
     claude_files::write(dir.path()).unwrap();

@@ -12,7 +12,7 @@ Rules for files:
 
 - Edit files only inside your own workspace under `.fold/ws/`.
 - Build and test only in a workspace or in a review checkout. Never build or test in the project folder itself.
-- During review, edit only your own review checkout of one proposal, and only for a fix you send with `submit_review_fix`. Send product questions and feature-size work back with `request_changes`.
+- During review, edit only your own review checkout of one proposal, and only for a fix you send with `submit_review_fix`. Send work that this task still misses back with `request_changes`. Describe new work outside the task with `create_request`; the proposal can still be approved. Ask the humans with `asks_human` for a product decision or a conflict with a settled decision.
 - Never edit the files of the project folder. They change only through integration: of an approved proposal, of a direct change that the user approved in the main agent's conversation, or of a change the human made there and recorded with `fld record`.
 - Only the main agent makes a direct change, from its main workspace with `submit_main_change`. Nobody writes into the project folder or `.fold/` another way, such as a shell command or a local Git remote with `fld pull`.
 

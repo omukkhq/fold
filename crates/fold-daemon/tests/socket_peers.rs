@@ -417,10 +417,12 @@ async fn a_hook_from_a_workers_process_tree_names_only_the_workers_own_agent() {
     let host = Host::start().await;
     host.record_worker("web-worker", std::process::id()).await;
     let body = |agent: &str| {
-        json!({"cwd": host.root, "agent": agent, "workspace": ".fold/ws/review-p-1"}).to_string()
+        json!({"cwd": host.root, "agent": agent, "workspace": ".fold/ws/review-p-1", "messages": []})
+            .to_string()
     };
     for hook in [
         "/api/v1/hooks/stop",
+        "/api/v1/hooks/stop/delivered",
         "/api/v1/hooks/session-start",
         "/api/v1/hooks/edit",
     ] {

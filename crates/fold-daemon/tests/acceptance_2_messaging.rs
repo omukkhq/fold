@@ -112,10 +112,16 @@ async fn acceptance_2_the_push_wakes_an_idle_session_and_skips_an_agent_without_
         .send("frontend", &["review"], "P-1 is ready for review")
         .await;
     let posted = review.next().await;
-    assert_eq!(posted, wire(TOKEN, &message_notice(&first)));
+    assert_eq!(
+        posted,
+        wire(
+            TOKEN,
+            &message_notice(&first, "frontend", "P-1 is ready for review")
+        )
+    );
     let lines: Vec<&str> = posted.lines().collect();
     assert_eq!(lines.len(), 2, "the auth line, then one notice line");
-    assert!(lines[1].contains("get_inbox"), "{posted}");
+    assert!(lines[1].contains("P-1 is ready for review"), "{posted}");
 
     let backend = AgentName::parse("backend").unwrap();
     assert!(harness.handle.push.sockets(&backend).is_empty());
@@ -123,7 +129,10 @@ async fn acceptance_2_the_push_wakes_an_idle_session_and_skips_an_agent_without_
         .send("frontend", &["backend"], "no socket for this one")
         .await;
     let sentinel = harness.send("frontend", &["review"], "second").await;
-    assert_eq!(review.next().await, wire(TOKEN, &message_notice(&sentinel)));
+    assert_eq!(
+        review.next().await,
+        wire(TOKEN, &message_notice(&sentinel, "frontend", "second"))
+    );
     assert_eq!(harness.inbox("backend").await, [unpushed]);
     assert_eq!(harness.inbox("review").await, [first, sentinel]);
 }
@@ -163,7 +172,10 @@ async fn acceptance_2_a_proposal_opened_while_review_is_idle_wakes_it_through_th
     assert_eq!(backend.next().await, wire(TOKEN, &ready_notice(&task)));
     assert_eq!(
         backend.next().await,
-        wire(TOKEN, &message_notice(&sentinel))
+        wire(
+            TOKEN,
+            &message_notice(&sentinel, "frontend", "after the proposal")
+        )
     );
 }
 

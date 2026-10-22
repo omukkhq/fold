@@ -33,20 +33,13 @@ pub const ADD_EXCLUDE_PATTERNS: &str = "add_exclude_patterns";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
-pub struct GetRepositoryStateInput {
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
-}
+pub struct GetRepositoryStateInput {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct GetRevisionInput {
     /// The revision, such as r17.
     pub r: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -59,9 +52,6 @@ pub struct CompareRevisionsInput {
     /// One changed file, such as src/lib.rs. With it the result holds that file's hunks; without it, the list of changed files.
     #[serde(default)]
     pub path: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -69,9 +59,6 @@ pub struct CompareRevisionsInput {
 pub struct CreateWorkspaceInput {
     /// The task to work on, such as T-12. The create claims it for your worker when nobody holds it.
     pub task: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -83,9 +70,6 @@ pub struct GetWorkspaceInput {
     /// A task such as T-12, to read its live workspace, or its newest one when none is live.
     #[serde(default)]
     pub task: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -93,9 +77,6 @@ pub struct GetWorkspaceInput {
 pub struct GetWorkspaceChangesInput {
     /// The workspace, such as ws-9.
     pub ws: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -106,9 +87,6 @@ pub struct RecordCheckpointInput {
     /// A short note to find the checkpoint again, at most 200 characters.
     #[serde(default)]
     pub label: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -116,9 +94,6 @@ pub struct RecordCheckpointInput {
 pub struct ListCheckpointsInput {
     /// The workspace, such as ws-9.
     pub ws: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -126,9 +101,6 @@ pub struct ListCheckpointsInput {
 pub struct RestoreCheckpointInput {
     /// The checkpoint to put back, such as ck-88. Its workspace gets its files and its base revision.
     pub ck: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -138,9 +110,6 @@ pub struct RecordChangesInput {
     pub ws: String,
     /// What the changes do and why, 1 to 2000 characters.
     pub message: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -148,9 +117,6 @@ pub struct RecordChangesInput {
 pub struct SyncWorkspaceInput {
     /// Your workspace, such as ws-9.
     pub ws: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -160,27 +126,17 @@ pub struct AbandonWorkspaceInput {
     pub ws: String,
     /// Why you stop, 1 to 500 characters. Other agents read it in the workspace.abandoned event.
     pub reason: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
-pub struct OpenMainWorkspaceInput {
-    /// The worker that makes this call. Only the main agent's main worker opens the main workspace, so leave it out.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
-}
+pub struct OpenMainWorkspaceInput {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct AddExcludePatternsInput {
     /// The patterns to add to .fold/exclude, each one line of .gitignore syntax, such as build/ or *.log. A pattern the file lists already is left out.
     pub patterns: Vec<String>,
-    /// The worker that makes this call. Only the main agent's main worker adds patterns, so leave it out.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {
@@ -463,18 +419,17 @@ pub async fn compare_revisions(
     }))
 }
 
-/// Runs one workspace tool for the session's agent, acting as `as_worker` or the main worker. `None` when `tool` is not a workspace tool.
+/// Runs one workspace tool for the session's agent, as its worker. `None` when `tool` is not a workspace tool.
 pub async fn call(
     server: &FoldServer,
     tool: &str,
-    as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Option<Value>, FoldError> {
     let value = match tool {
         CREATE_WORKSPACE => {
             let input: CreateWorkspaceInput = parse(arguments)?;
             let task = id::<TaskId>(&input.task, "task", "T-12")?;
-            let actor = server.actor(as_worker).await?;
+            let actor = server.actor().await?;
             let created = server
                 .workspaces
                 .create_workspace(&actor, task)
@@ -535,7 +490,7 @@ pub async fn call(
         RECORD_CHECKPOINT => {
             let input: RecordCheckpointInput = parse(arguments)?;
             let workspace = id::<WorkspaceId>(&input.ws, "ws", "ws-9")?;
-            let actor = server.actor(as_worker).await?;
+            let actor = server.actor().await?;
             let checkpoint = server
                 .workspaces
                 .record_checkpoint(&actor, workspace, input.label.as_deref())
@@ -568,7 +523,7 @@ pub async fn call(
         RESTORE_CHECKPOINT => {
             let input: RestoreCheckpointInput = parse(arguments)?;
             let checkpoint = id::<CheckpointId>(&input.ck, "ck", "ck-88")?;
-            let actor = server.actor(as_worker).await?;
+            let actor = server.actor().await?;
             let restored = server
                 .workspaces
                 .restore_checkpoint(&actor, checkpoint)
@@ -583,7 +538,7 @@ pub async fn call(
         RECORD_CHANGES => {
             let input: RecordChangesInput = parse(arguments)?;
             let workspace = id::<WorkspaceId>(&input.ws, "ws", "ws-9")?;
-            let actor = server.actor(as_worker).await?;
+            let actor = server.actor().await?;
             let recorded = server
                 .workspaces
                 .record_changes(&actor, workspace, &input.message)
@@ -597,7 +552,7 @@ pub async fn call(
         SYNC_WORKSPACE => {
             let input: SyncWorkspaceInput = parse(arguments)?;
             let workspace = id::<WorkspaceId>(&input.ws, "ws", "ws-9")?;
-            let actor = server.actor(as_worker).await?;
+            let actor = server.actor().await?;
             let synced = server
                 .workspaces
                 .sync_workspace(&actor, workspace)
@@ -612,7 +567,7 @@ pub async fn call(
         ABANDON_WORKSPACE => {
             let input: AbandonWorkspaceInput = parse(arguments)?;
             let workspace = id::<WorkspaceId>(&input.ws, "ws", "ws-9")?;
-            let actor = server.actor(as_worker).await?;
+            let actor = server.actor().await?;
             let abandoned = server
                 .workspaces
                 .abandon_workspace(&actor, workspace, &input.reason)
@@ -625,7 +580,7 @@ pub async fn call(
         }
         OPEN_MAIN_WORKSPACE => {
             let _: OpenMainWorkspaceInput = parse(arguments)?;
-            let actor = server.actor(as_worker).await?;
+            let actor = server.actor().await?;
             let opened = server
                 .workspaces
                 .open_main_workspace(&actor)
@@ -650,7 +605,7 @@ pub async fn call(
         }
         ADD_EXCLUDE_PATTERNS => {
             let input: AddExcludePatternsInput = parse(arguments)?;
-            let actor = server.actor(as_worker).await?;
+            let actor = server.actor().await?;
             let added = server
                 .workspaces
                 .add_exclude_patterns(&actor, input.patterns)

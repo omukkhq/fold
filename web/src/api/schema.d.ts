@@ -64,8 +64,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** The Claude Code stop hook of an agent: how many messages the agent has not acknowledged. Socket only. A process under a worker names only that worker's own agent. */
+        /** The Claude Code stop hook of an agent: how many messages the agent has not acknowledged, and the text that carries those it has not seen yet. Nothing is marked here, because the hook may give up on the answer; the hook reports what it used to `/api/v1/hooks/stop/delivered`. Socket only. A process under a worker names only that worker's own agent. */
         post: operations["hook_stop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hooks/stop/delivered": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The Claude Code stop hook of an agent after it gave its reason to the session: the messages the reason carried count as delivered, as an inbox read marks them. Socket only. A process under a worker names only that worker's own agent. */
+        post: operations["hook_stop_delivered"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1767,7 +1784,7 @@ export interface components {
             /** @example T-12 */
             task: string;
             title: string;
-            /** @description The worker holding the implementation claim, `agent` or `agent/worker`. */
+            /** @description The worker holding the implementation claim, named as its agent. */
             worker: string | null;
             /**
              * @description The live task workspace.
@@ -2374,7 +2391,7 @@ export interface components {
         };
         /** @description A stored event. The related ids are public ids. */
         DurableEvent: {
-            /** @description A worker (`frontend`, `frontend/ui`), a human (`human:ana`) or `fold`. */
+            /** @description A worker (`frontend`), a human (`human:ana`) or `fold`. */
             actor: string;
             /**
              * Format: int64
@@ -2510,7 +2527,7 @@ export interface components {
             request?: string | null;
             /** @description The task the feedback is about, such as `T-12`. Needed when neither `request` nor `reply_to` is given. */
             task?: string | null;
-            /** @description The recipients, as an agent, `agent/worker`, `tag:<tag>`, `all`, `human:<name>` or `humans`. Feedback on a task takes only the task's readers, and left out it goes to the first of them; left out, a request message to the request's drafter and a reply to the parent's sender. */
+            /** @description The recipients, as an agent, `tag:<tag>`, `all`, `human:<name>` or `humans`. Feedback on a task takes only the task's readers, and left out it goes to the first of them; left out, a request message to the request's drafter and a reply to the parent's sender. */
             to?: string[] | null;
         };
         /** @enum {string} */
@@ -2797,8 +2814,8 @@ export interface components {
              */
             task: string | null;
             /**
-             * @description The worker label, `agent` or `agent/worker`.
-             * @example frontend/ui
+             * @description The worker label, which is its agent's name.
+             * @example frontend
              */
             worker: string;
             /** @example ws-9 */
@@ -2900,7 +2917,7 @@ export interface components {
             request: string | null;
             /**
              * @description A worker, `human:<name>` or `fold`.
-             * @example frontend/ui
+             * @example frontend
              */
             sender: string;
             /**
@@ -3302,7 +3319,7 @@ export interface components {
          */
         ProposalStateView: "open" | "integrated" | "closed";
         ProposalSummary: {
-            /** @description The worker that opened the proposal, `agent` or `agent/worker`. */
+            /** @description The worker that opened the proposal, named as its agent. */
             author: string;
             /** @description The integration checks of the current version failed on its merge with main, so the proposal is with its author until a new version. */
             checks_failed: boolean;
@@ -3490,7 +3507,7 @@ export interface components {
              * @example web-lead
              */
             forwarded_to: string | null;
-            /** @example frontend/ui */
+            /** @example frontend */
             name: string;
             /**
              * Format: int64
@@ -3917,7 +3934,7 @@ export interface components {
              * @description UTC milliseconds.
              */
             claimed_at: number;
-            /** @description The worker, `agent` or `agent/worker`. */
+            /** @description The worker, named as its agent. */
             holder: string;
             /**
              * Format: int64
@@ -4001,7 +4018,7 @@ export interface components {
             revisions: components["schemas"]["RevisionView"][];
         };
         RevisionView: {
-            /** @description The agent whose proposal was integrated, the human who pulled, or the main worker that made a direct change. */
+            /** @description The agent whose proposal was integrated, the human who pulled, or the main agent that made a direct change. */
             author: string | null;
             /**
              * @description The review batch whose approved members integrated together with this proposal, each as its own revision.
@@ -4184,16 +4201,35 @@ export interface components {
         StashState: "nothing" | "stashed";
         /** @enum {string} */
         StateKindView: "revision" | "changeset" | "checkpoint" | "workspace" | "tree";
+        StopDelivered: {
+            /** @description `FOLD_AGENT` of the session. */
+            agent: string;
+            /** @description The session's canonical working directory. */
+            cwd: string;
+            /** @description The messages of the reason the hook gave to its session. */
+            messages: string[];
+        };
         StopHook: {
             /** @description `FOLD_AGENT` of the session. */
             agent: string;
             /** @description The session's canonical working directory. */
             cwd: string;
         };
-        StopUnread: {
+        StopMarked: {
             /**
              * Format: int64
-             * @description The unacknowledged messages of every worker of the agent.
+             * @description The recipient rows this call marked delivered.
+             */
+            delivered: number;
+        };
+        StopUnread: {
+            /** @description The messages `reason` carries, such as `m-4`. They count as delivered once the hook reports them to `/api/v1/hooks/stop/delivered`. */
+            messages: string[];
+            /** @description The hook's reason to keep the turn going: the messages that no inbox, notice or wait has shown the agent yet, oldest first, up to 16 KB of text, then how many more there are. `null` when there is none. */
+            reason: string | null;
+            /**
+             * Format: int64
+             * @description The unacknowledged messages of the agent's worker.
              */
             unread: number;
         };
@@ -4227,7 +4263,7 @@ export interface components {
              * @description UTC milliseconds.
              */
             claimed_at: number;
-            /** @description The worker, `agent` or `agent/worker`. */
+            /** @description The worker, named as its agent. */
             holder: string;
             kind: components["schemas"]["ClaimKind"];
             /**
@@ -4347,7 +4383,7 @@ export interface components {
         };
         TaskReader: {
             /**
-             * @description The worker, `agent` or `agent/worker`; feedback addressed to it by name reaches it.
+             * @description The worker, named as its agent; feedback addressed to it by name reaches it.
              * @example web-t12
              */
             name: string;
@@ -4689,10 +4725,8 @@ export interface components {
              * @description UTC milliseconds; null before the first call.
              */
             last_call_at: number | null;
-            /** @description `agent` or `agent/worker`. */
+            /** @description The worker's name, which is its agent's name. */
             name: string;
-            /** @description Null for the main worker. */
-            parent: string | null;
             /** @description Open proposals the worker wrote. */
             proposals: components["schemas"]["AuthoredProposal"][];
             /** @description Workspaces in state `active` or `missing`. */
@@ -4975,7 +5009,7 @@ export interface components {
              */
             last_activity_at: number | null;
             live: components["schemas"]["LiveWorkspace"] | null;
-            /** @description The worker that owns the workspace, such as `frontend/ui`. */
+            /** @description The worker that owns the workspace, such as `frontend`. */
             owner: string | null;
             /** @description Relative to the project root. */
             path: string;
@@ -5245,7 +5279,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The agent's unread count */
+            /** @description The agent's unread count and the messages */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5282,6 +5316,84 @@ export interface operations {
                 };
             };
             /** @description Not on the socket, no registered project holds `cwd`, or the agent is not registered (`agent_not_registered`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    hook_stop_delivered: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StopDelivered"];
+            };
+        };
+        responses: {
+            /** @description How many rows were marked delivered */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StopMarked"];
+                };
+            };
+            /** @description The body, the agent name or a message id is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or no registered project holds `cwd` */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -7243,7 +7355,7 @@ export interface operations {
     list_messages: {
         parameters: {
             query?: {
-                /** @description Threads in which this agent (any of its workers) or this exact `agent/worker` sent or received a message. */
+                /** @description Threads in which this agent sent or received a message. */
                 agent?: string;
                 /** @description Threads with a message linked to this task, such as `T-12`. */
                 task?: string;

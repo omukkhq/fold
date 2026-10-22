@@ -25,9 +25,6 @@ pub struct CreateReviewPlanInput {
     pub proposals: Vec<String>,
     /// The related tasks to wait for, such as ["T-7", "T-8"]: To do or In progress tasks whose proposals belong in the same batch. Together with the proposals' tasks at most 5.
     pub tasks: Vec<String>,
-    /// The worker that makes this call, such as review/plan. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -47,9 +44,6 @@ pub struct ChangeReviewPlanInput {
     /// Take every member out and end the plan, so its proposals are reviewed on their own. Not with add_proposals or add_tasks.
     #[serde(default)]
     pub close: bool,
-    /// The worker that makes this call, such as review/plan. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -57,9 +51,6 @@ pub struct ChangeReviewPlanInput {
 pub struct ReviewPlanIdInput {
     /// The review plan, such as rp-2.
     pub id: String,
-    /// The worker that makes this call, such as review/plan. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -71,9 +62,6 @@ pub struct ListReviewPlansInput {
     /// The most plans to return, the newest ones, in number order: 1 to 100, 20 when left out.
     #[serde(default)]
     pub limit: Option<u32>,
-    /// The worker that makes this call, such as review/plan. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {

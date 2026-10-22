@@ -710,7 +710,7 @@ async fn the_first_session_of_a_new_project_gets_notices_once_its_adapter_regist
     assert!(
         next_notice(&mut inbox)
             .await
-            .contains("fold: message m-1 arrived. Call get_inbox.")
+            .contains("fold: message m-1 arrived. [m-1 from human:ana]")
     );
     client.cancel().await.unwrap();
     host.daemon.shutdown().await;

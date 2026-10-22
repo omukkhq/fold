@@ -73,6 +73,22 @@ async fn acceptance_21_a_human_asks_the_author_about_lines_of_the_diff() {
                "excerpt": "export const b = 2;\nexport const c = 3;", "excerpt_cut": false})
     );
 
+    // A wait that the question ends carries it with the quoted lines, so the author needs no inbox read; the inbox still lists it until it is acknowledged.
+    let woke = h
+        .call(
+            "frontend",
+            "wait_for_events",
+            json!({"types": ["integration.succeeded"], "timeout_s": 1}),
+        )
+        .await;
+    let carried = woke["inbox"].as_str().unwrap();
+    assert!(
+        carried.ends_with(&format!(
+            "[{question} from human:{HUMAN} on {task}, {proposal}] \"Why two constants here?\" about lines 2-3 (new side) of {proposal} v1 in \"{FILE}\": \"export const b = 2;\\nexport const c = 3;\""
+        )),
+        "{carried}"
+    );
+
     // The author reads the question with the lines in its inbox and in the thread.
     let inbox = h.call("frontend", "get_inbox", json!({})).await;
     let item = inbox["messages"]

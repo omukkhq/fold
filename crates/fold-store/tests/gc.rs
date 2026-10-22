@@ -247,7 +247,7 @@ async fn a_closed_workspace_waits_while_a_worker_process_of_its_agent_runs() {
     assert_eq!(
         due().await,
         vec![2],
-        "a subagent's workspace waits for its agent's process"
+        "a workspace of a row named `agent/name` waits for its agent's process"
     );
     for state in ["starting", "idle", "stopping"] {
         execute(

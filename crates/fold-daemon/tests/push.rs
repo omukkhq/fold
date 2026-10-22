@@ -250,11 +250,10 @@ fn id(number: u32) -> RevisionId {
 const PROPOSAL: &str = "
 INSERT INTO agents (id, name, created_at) VALUES (1, 'frontend', 0);
 INSERT INTO workers (id, agent_id, name, created_at) VALUES (1, 1, 'frontend', 0);
-INSERT INTO workers (id, agent_id, name, parent_worker_id, created_at) VALUES (2, 1, 'frontend/ui', 1, 0);
 INSERT INTO tasks (id, number, title, created_by, created_at, updated_at) VALUES (1, 3, 'three', 'frontend', 0, 0);
-INSERT INTO workspaces (id, number, task_id, worker_id, kind, path, base_revision_id, state, created_at) VALUES (1, 1, 1, 2, 'task', '.fold/ws/t-3', 1, 'active', 0);
-INSERT INTO changesets (id, number, workspace_id, task_id, base_revision_id, tree_hash, message, created_by, created_at) VALUES (1, 1, 1, 1, 1, 't', 'm', 'frontend/ui', 0);
-INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 4, 1, 2, 'Login form', 0, 0);
+INSERT INTO workspaces (id, number, task_id, worker_id, kind, path, base_revision_id, state, created_at) VALUES (1, 1, 1, 1, 'task', '.fold/ws/t-3', 1, 'active', 0);
+INSERT INTO changesets (id, number, workspace_id, task_id, base_revision_id, tree_hash, message, created_by, created_at) VALUES (1, 1, 1, 1, 1, 't', 'm', 'frontend', 0);
+INSERT INTO proposals (id, number, task_id, author_worker_id, title, created_at, updated_at) VALUES (1, 4, 1, 1, 'Login form', 0, 0);
 INSERT INTO proposal_versions (id, proposal_id, version, base_revision_id, tree_hash, head_changeset_id, created_by, created_at) VALUES (1, 1, 1, 1, 't', 1, 'frontend', 0);
 INSERT INTO integrations (id, number, kind, proposal_id, version_id, result, actor, created_at) VALUES (2, 2, 'proposal', 1, 1, 'succeeded', 'human:ana', 0);
 ";
@@ -450,7 +449,7 @@ async fn a_commit_from_another_clone_makes_the_push_remote_ahead() {
 async fn a_push_needs_a_remote_and_the_git_program() {
     let host = Host::new();
     let project = host.plain_project().await;
-    let worker = fold_core::WorkerName::parse("frontend/ui").unwrap();
+    let worker = fold_core::WorkerName::parse("frontend").unwrap();
     let agent = Actor::Agent(fold_core::AgentActor {
         agent: worker.agent(),
         worker,

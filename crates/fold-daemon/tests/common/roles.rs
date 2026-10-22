@@ -33,7 +33,7 @@ pub async fn give_role(store: &Store, agent: &str, role: Role, area: Option<&str
                 Some(row) => row.id,
                 None => {
                     let id = agents::insert_agent(tx, &name, now).await?;
-                    agents::insert_worker(tx, id, &WorkerName::main(&name), None, now).await?;
+                    agents::insert_worker(tx, id, &WorkerName::main(&name), now).await?;
                     id
                 }
             };

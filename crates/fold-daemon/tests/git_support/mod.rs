@@ -54,7 +54,7 @@ pub fn start_watched_job(fx: &Fixture, git: Git) -> (AutoCommit, RemoteContext) 
 pub async fn approved(fx: &Fixture) -> Actor {
     fx.proposal().await;
     give_role(fx.project.store(), "review", Role::Reviewer, None).await;
-    let review = fx.agents.actor(&fx.review.ctx, None).await.unwrap();
+    let review = fx.agents.actor(&fx.review.ctx).await.unwrap();
     fx.reviews
         .submit_review(
             &review,

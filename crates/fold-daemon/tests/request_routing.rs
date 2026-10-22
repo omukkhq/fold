@@ -22,7 +22,7 @@ async fn expect(inbox: &mut FakeInbox, text: &str) {
 async fn nothing_before_a_message(h: &Harness, inbox: &mut FakeInbox, agent: &str) {
     let from = if agent == MAIN { "backend" } else { MAIN };
     let message = h.send(from, &[agent], "ping").await;
-    expect(inbox, &message_notice(&message)).await;
+    expect(inbox, &message_notice(&message, from, "ping")).await;
 }
 
 /// `agent` gets the `main` tag from a handshake, as the session that `fld claude` starts does.
@@ -307,7 +307,7 @@ async fn approved_cards_go_to_the_lead_of_their_area_and_the_rest_to_the_main_ag
         "{web:?}"
     );
     let ping = h.send(MAIN, &["api-lead"], "ping").await;
-    let api = until_stdin(&fake, "api-lead", &message_notice(&ping)).await;
+    let api = until_stdin(&fake, "api-lead", &format!("fold: message {ping} arrived.")).await;
     assert!(
         !api.iter().any(|line| line.contains("T-3 is ready")),
         "{api:?}"
@@ -403,7 +403,12 @@ async fn a_label_added_to_a_claimed_task_offers_it_to_nobody() {
     h.call(MAIN, "update_task", json!({"id": "T-1", "labels": ["ui"]}))
         .await;
     let message = h.send(MAIN, &["web-lead"], "ping").await;
-    let lines = until_stdin(&fake, "web-lead", &message_notice(&message)).await;
+    let lines = until_stdin(
+        &fake,
+        "web-lead",
+        &format!("fold: message {message} arrived."),
+    )
+    .await;
     assert!(
         !lines.iter().any(|line| line.contains("T-1 is ready")),
         "{lines:?}"
