@@ -29,8 +29,9 @@ export function normalizeSearch(raw: Record<string, unknown>): MessagesSearch {
   if (task !== undefined) search.task = task;
   if (proposal !== undefined) search.proposal = proposal;
   if (thread !== undefined) search.thread = thread;
-  if (raw.waiting === "1" || raw.waiting === 1 || raw.waiting === true) {
-    search.waiting = true;
+  for (const key of ["waiting", "questions", "mine"] as const) {
+    const value = raw[key];
+    if (value === "1" || value === 1 || value === true) search[key] = true;
   }
   return search;
 }
@@ -42,6 +43,8 @@ export function messagesHref(slug: string, search: MessagesSearch): string {
     const value = search[key];
     if (value !== undefined) params.set(key, value);
   }
-  if (search.waiting === true) params.set("waiting", "1");
+  for (const key of ["waiting", "questions", "mine"] as const) {
+    if (search[key] === true) params.set(key, "1");
+  }
   return withQuery(projectPath(slug, "messages"), params);
 }

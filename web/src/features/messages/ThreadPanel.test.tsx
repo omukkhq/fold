@@ -130,7 +130,7 @@ describe("ThreadPanel", () => {
     ).toBe("/p/demo/t/T-12");
   });
 
-  it("says a message to humans was sent to them and marks the signed-in human", async () => {
+  it("says a message to humans was sent to them and names the signed-in human you", async () => {
     daemon.on("GET /api/v1/session", {
       status: 200,
       body: { human: "tanim", authenticated: true },
@@ -140,20 +140,81 @@ describe("ThreadPanel", () => {
       messages: [
         message(MESSAGE, {
           sender: "web-worker",
-          recipients: [recipient("human:tanim"), recipient("human:rafeed")],
+          recipients: [recipient("human:rafeed"), recipient("human:tanim")],
           body: "Which one?",
           sent_at: NOW,
         }),
       ],
     });
-    const lines = await screen.findAllByText("sent to", { exact: false });
+    const article = screen.getByRole("article");
     await waitFor(() => {
-      expect(lines.map((line) => line.textContent)).toEqual([
-        "sent to@tanim (you)",
-        "sent to@rafeed",
-      ]);
+      expect(article.textContent).toContain("to you and @rafeed");
     });
+    expect(article.textContent).toContain("Sent to @rafeed|Sent to you");
+    expect(screen.getByText("Today")).toBeTruthy();
     expect(screen.queryByText("not delivered to", { exact: false })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+  });
+
+  it("folds the receipts of many recipients and opens the full list in place", async () => {
+    await setup(() => Promise.resolve(), {
+      ...thread,
+      messages: [
+        message(MESSAGE, {
+          sender: "main",
+          recipients: [
+            recipient("backend", { pushed_at: NOW }),
+            recipient("frontend", { acknowledged_at: NOW }),
+            recipient("review", { acknowledged_at: NOW }),
+          ],
+          body: "Decisions.",
+          sent_at: NOW,
+        }),
+      ],
+    });
+    const details = screen.getByRole("button", { name: "Details" });
+    expect(details.getAttribute("aria-expanded")).toBe("false");
+    expect(details.parentElement?.textContent).toContain(
+      "Waiting for @backend · acknowledged by 2",
+    );
+    await userEvent.click(details);
+    expect(details.getAttribute("aria-expanded")).toBe("true");
+    const list = screen.getByRole("list", { name: "Delivery" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(3);
+    expect(
+      within(list).getByText("it is busy until its current step ends", {
+        exact: false,
+      }),
+    ).toBeTruthy();
+  });
+
+  it("draws your own message as a bubble and another human's under their initial", async () => {
+    daemon.on("GET /api/v1/session", {
+      status: 200,
+      body: { human: "tanim", authenticated: true },
+    });
+    const OTHER = `m-${String(32)}`;
+    await setup(() => Promise.resolve(), {
+      ...thread,
+      messages: [
+        message(MESSAGE, {
+          sender: "human:tanim",
+          body: "Mine.",
+          sent_at: NOW,
+        }),
+        message(OTHER, {
+          sender: "human:rafeed",
+          body: "Theirs.",
+          sent_at: NOW,
+        }),
+      ],
+    });
+    await screen.findByText("You");
+    const [own, other] = screen.getAllByRole("article");
+    expect(own?.textContent).toContain("Mine.");
+    expect(own?.closest("li")?.className).toContain("justify-end");
+    expect(other?.textContent).toContain("rafeed");
+    expect(other?.closest("li")?.textContent).toContain("R");
   });
 
   it("refuses an empty reply", async () => {
@@ -227,12 +288,32 @@ describe("ThreadPanel", () => {
     });
   });
 
+  it("sends the same text again from the failure line", async () => {
+    const onReply = vi
+      .fn<(replyTo: string, body: string) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce(undefined);
+    await setup(onReply);
+    await userEvent.type(screen.getByLabelText("Reply"), "Hi");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Send again" }),
+    );
+    expect(onReply.mock.calls).toEqual([
+      [MESSAGE, "Hi"],
+      [MESSAGE, "Hi"],
+    ]);
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+  });
+
   it("keeps the text and says the reply did not arrive when it fails", async () => {
     await setup(() => Promise.reject(new Error("boom")));
     await userEvent.type(screen.getByLabelText("Reply"), "Hi");
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
     expect((await screen.findByRole("alert")).textContent).toBe(
-      "The reply was not sent. The request did not reach the daemon. Try again.",
+      "Not sent: The request did not reach the daemon. Try again.",
     );
     expect(screen.getByLabelText<HTMLTextAreaElement>("Reply").value).toBe(
       "Hi",
@@ -249,6 +330,7 @@ describe("ThreadPanel question", () => {
     messages: [
       message(QUESTION, {
         sender: "frontend",
+        recipients: [recipient("human:tanim")],
         body: "Recharts or plain SVG?",
         header: "Chart library",
         choices: [
@@ -300,9 +382,7 @@ describe("ThreadPanel question", () => {
   it("answers with the chosen option and stays pending until the thread shows the answer", async () => {
     const onReply = vi.fn(() => Promise.resolve());
     renderThread(asked, onReply);
-    expect(
-      await screen.findByText("Question · waiting for an answer"),
-    ).toBeTruthy();
+    expect(await screen.findByText("Waits for your answer")).toBeTruthy();
     expect(screen.getByText("Chart library")).toBeTruthy();
     expect(
       screen.getByText("Ready-made bar and line components."),
@@ -323,46 +403,99 @@ describe("ThreadPanel question", () => {
       answered,
       vi.fn(() => Promise.resolve()),
     );
-    expect(await screen.findByText("Question · answered")).toBeTruthy();
+    const strip = (await screen.findByText("Answered")).closest("p");
+    expect(strip?.textContent).toMatch(
+      /^Answeredby @tanim · \d\d:\d\dChart library$/,
+    );
     const choices = screen.getByRole("list", { name: "Choices" });
     const marked = within(choices).getAllByRole("img", { name: "chosen" });
     expect(marked).toHaveLength(1);
     expect(marked[0]?.closest("button")?.textContent).toContain("Recharts");
-    expect(marked[0]?.getAttribute("class")).toContain("text-success");
+    expect(marked[0]?.parentElement?.className).toContain("text-success-text");
     for (const button of within(choices).getAllByRole("button")) {
       expect(button.className).not.toContain("opacity");
-      expect(button.textContent).not.toContain("· chosen");
+      expect(button).toHaveProperty("disabled", true);
     }
     expect(
-      screen.getByText("Chosen option of the question above."),
+      screen.getByText("Chosen option of the question above"),
     ).toBeTruthy();
-    expect(screen.queryByLabelText("Your own answer")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /write your own answer/ }),
+    ).toBeNull();
   });
 
-  it("answers on Enter in the own-answer box", async () => {
+  it("answers the question from the reply box after the own-answer row", async () => {
+    const NOTE = `m-${String(36)}`;
     const onReply = vi.fn(() => Promise.resolve());
-    renderThread(asked, onReply);
-    await userEvent.type(
-      await screen.findByLabelText("Your own answer"),
-      "Neither{Shift>}{Enter}{/Shift}Use SVG{Enter}",
+    renderThread(
+      {
+        ...asked,
+        messages: [
+          ...asked.messages,
+          message(NOTE, { sender: "frontend", body: "I wait for you." }),
+        ],
+      },
+      onReply,
     );
+    const box = await screen.findByLabelText("Reply");
+    expect(screen.queryByText("Your own answer to the question of")).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Or write your own answer in the reply box below",
+      }),
+    );
+    expect(document.activeElement).toBe(box);
+    expect(
+      screen.getByText("Your own answer to the question of", { exact: false })
+        .textContent,
+    ).toBe("Your own answer to the question of @frontend");
+    await userEvent.type(box, "Neither{Shift>}{Enter}{/Shift}Use SVG{Enter}");
     expect(onReply).toHaveBeenCalledWith(QUESTION, "Neither\nUse SVG");
   });
 
-  it("sends a free answer and shows a refusal with its code", async () => {
+  it("shows a refusal of a chosen option with its code", async () => {
     const onReply = vi.fn(() =>
       Promise.reject(new ApiError("message_not_found", "")),
     );
     renderThread(asked, onReply);
-    await userEvent.type(
-      await screen.findByLabelText("Your own answer"),
-      "Neither",
+    const choices = await screen.findByRole("list", { name: "Choices" });
+    await userEvent.click(
+      within(choices).getByRole("button", { name: /^Plain SVG/ }),
     );
-    await userEvent.click(screen.getByRole("button", { name: "Answer" }));
-    expect(onReply).toHaveBeenCalledWith(QUESTION, "Neither");
+    expect(onReply).toHaveBeenCalledWith(QUESTION, "Plain SVG");
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("The answer was not sent.");
     expect(alert.textContent).toContain("code: message_not_found");
+  });
+
+  it("marks a free question that waits for you and answers it from the reply box", async () => {
+    const FREE = `m-${String(37)}`;
+    const onReply = vi.fn(() => Promise.resolve());
+    renderThread(
+      baseThread(FREE, {
+        awaiting_human: true,
+        messages: [
+          message(FREE, {
+            sender: "backend",
+            recipients: [recipient("human:tanim")],
+            asks_human: true,
+            body: "Null or other?",
+          }),
+          message(`m-${String(38)}`, {
+            sender: "backend",
+            body: "Meanwhile I wait.",
+          }),
+        ],
+      }),
+      onReply,
+    );
+    expect(await screen.findByText("Waits for your answer")).toBeTruthy();
+    expect(
+      screen.getByText("Your own answer to the question of", { exact: false })
+        .textContent,
+    ).toBe("Your own answer to the question of @backend");
+    await userEvent.type(screen.getByLabelText("Reply"), "Null{Enter}");
+    expect(onReply).toHaveBeenCalledWith(FREE, "Null");
   });
 
   it("quotes the lines a question to the author is about and links them to the proposal's diff", async () => {

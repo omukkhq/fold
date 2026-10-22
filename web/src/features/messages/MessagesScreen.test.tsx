@@ -109,7 +109,9 @@ describe("MessagesScreen", () => {
     await setup({}, [question]);
     const list = screen.getByRole("list", { name: "Threads" });
     expect(within(list).getByText("Which chart library?")).toBeTruthy();
-    expect(within(list).getByText("Waits for you")).toBeTruthy();
+    expect(
+      within(list).getByRole("img", { name: "waits for you" }),
+    ).toBeTruthy();
   });
 
   it("marks each thread the badge counts and shows only them with the waiting filter", async () => {
@@ -127,20 +129,63 @@ describe("MessagesScreen", () => {
     await setup({}, threads);
     const list = screen.getByRole("list", { name: "Threads" });
     const total = threads.filter((t) => t.awaiting_human).length;
-    expect(within(list).getAllByText("Waits for you")).toHaveLength(total);
+    expect(
+      within(list).getAllByRole("img", { name: "waits for you" }),
+    ).toHaveLength(total);
     expect(
       screen
-        .getByRole("button", { name: `Waits for you (${String(total)})` })
+        .getByRole("button", { name: `Waits for you · ${String(total)}` })
         .getAttribute("aria-pressed"),
     ).toBe("false");
     cleanup();
     await setup({ waiting: true }, threads);
     const filtered = screen.getByRole("list", { name: "Threads" });
     expect(within(filtered).queryByText("The build passes.")).toBeNull();
-    expect(within(filtered).getAllByText("Waits for you")).toHaveLength(total);
+    expect(
+      within(filtered).getAllByRole("img", { name: "waits for you" }),
+    ).toHaveLength(total);
     expect(
       screen
-        .getByRole("button", { name: `Waits for you (${String(total)})` })
+        .getByRole("button", { name: `Waits for you · ${String(total)}` })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      screen.getByRole("button", { name: "All" }).getAttribute("aria-pressed"),
+    ).toBe("false");
+  });
+
+  it("narrows the list by the search field and by the questions chip", async () => {
+    const report = thread(SECOND, {
+      participants: ["backend", "human:tanim"],
+      last_at: 2000,
+      messages: [message(SECOND, { body: "The build passes.", sent_at: 2000 })],
+    });
+    const asked = thread(`m-${String(41)}`, {
+      last_at: 500,
+      messages: [
+        message(`m-${String(41)}`, {
+          body: "Which port?",
+          choices: [{ label: "7420", description: null }],
+        }),
+      ],
+    });
+    await setup({}, [report, asked]);
+    const list = () => screen.getByRole("list", { name: "Threads" });
+    await userEvent.type(screen.getByLabelText("Search threads"), "build");
+    expect(within(list()).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(list()).getAllByText("The build passes.")).toHaveLength(2);
+    await userEvent.clear(screen.getByLabelText("Search threads"));
+    await userEvent.type(screen.getByLabelText("Search threads"), "nothing");
+    expect(
+      screen.getByRole("region", { name: "No thread matches" }),
+    ).toBeTruthy();
+    cleanup();
+    await setup({ questions: true }, [report, asked]);
+    expect(within(list()).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(list()).getAllByText("Which port?")).toHaveLength(2);
+    expect(
+      screen
+        .getByRole("button", { name: "Questions" })
         .getAttribute("aria-pressed"),
     ).toBe("true");
   });
@@ -229,9 +274,9 @@ describe("MessagesScreen", () => {
       within(panel).getByLabelText<HTMLTextAreaElement>("Reply").value,
     ).toBe("");
     expect(
-      within(screen.getByRole("list", { name: "Threads" })).queryByText(
-        "Waits for you",
-      ),
+      within(screen.getByRole("list", { name: "Threads" })).queryByRole("img", {
+        name: "waits for you",
+      }),
     ).toBeNull();
   });
 });

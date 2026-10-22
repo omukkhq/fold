@@ -1,23 +1,21 @@
-import { PersonList, PersonName } from "@/people/PersonName";
+import { PersonList } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
-import { ArrowRight, Send, SquareKanban } from "lucide-react";
+import { ArrowLeft, GitPullRequest, SquareKanban } from "lucide-react";
 import { HrefLink } from "@/app/HrefLink";
 import type { ThreadView } from "@/api/messages";
 import { sessionQuery } from "@/api/queries";
-import { Button } from "@/components/button/Button";
 import {
   buttonClasses,
   buttonIconClass,
 } from "@/components/button/buttonStyles";
-import { MessageComposer } from "@/mentions/MessageComposer";
 import { failureText } from "@/format/failure";
-import { formatAsOf } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing, insetFocusRing } from "@/lib/focus";
 import { replySchema, type ReplyValues } from "./compose";
+import { withDays } from "./days";
 import {
   browserSizeObserver,
   followNewest,
@@ -25,18 +23,13 @@ import {
   isFollowing,
   toBottom,
 } from "./follow";
-import { deliveryLines, recipientActors } from "./delivery";
 import { replyPlaceholder } from "./filters";
 import { MarkAnswered } from "./MarkAnswered";
 import { threadCanMarkAnswered } from "./answered";
-import { MessageBody } from "./MessageBody";
-import { QuotedLines } from "./QuotedLines";
-import { chosenAnswers, isQuestion } from "./question";
-import {
-  QuestionBadge,
-  QuestionChoices,
-  QuestionHeader,
-} from "./QuestionChoices";
+import { MessageItem } from "./MessageItem";
+import { chosenAnswers } from "./question";
+import { ReplyBox } from "./ReplyBox";
+import { replyTarget } from "./replyTarget";
 import { threadTitle } from "./title";
 import { projectPath } from "@/routes/paths";
 
@@ -46,17 +39,30 @@ interface ThreadPanelProps {
   now: number;
   /** Resolves once the daemon has taken the reply; rejects with its error. */
   onReply: (replyTo: string, body: string) => Promise<void>;
+  /** The thread list's address, for the back arrow at phone width. */
+  backHref?: string;
 }
 
-export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
-  const last = thread.messages.at(-1);
+const CHIP =
+  "hidden items-center gap-6 rounded-chip bg-surface px-10 py-3 text-code text-text-muted inset-ring inset-ring-border hover:text-text lg:inline-flex";
+
+export function ThreadPanel({
+  slug,
+  thread,
+  now,
+  onReply,
+  backHref,
+}: ThreadPanelProps) {
   const chosen = chosenAnswers(thread);
   const you = useQuery(sessionQuery()).data?.human ?? null;
+  const [picked, setPicked] = useState<string | null>(null);
+  const target = replyTarget(thread, you, picked);
   const {
     control,
     handleSubmit,
     reset,
     setError,
+    setFocus,
     formState: { errors, isSubmitting },
   } = useForm<ReplyValues>({
     resolver: zodResolver(replySchema),
@@ -89,48 +95,92 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
   };
 
   const send = async ({ body }: ReplyValues) => {
-    if (!last) {
+    if (!target) {
       return;
     }
     try {
-      await reply(last.id, body.trim());
+      await reply(target.replyTo, body.trim());
       reset();
+      setPicked(null);
     } catch (error) {
       setError("root", { message: failureText(error) });
     }
   };
 
+  const title = threadTitle(thread);
   return (
     <section
-      aria-label={threadTitle(thread)}
-      className="flex min-h-0 min-w-0 flex-1 flex-col rounded-l bg-surface inset-ring inset-ring-border-subtle"
+      aria-label={title}
+      className="flex min-h-0 min-w-0 flex-1 flex-col bg-bg"
     >
-      <header className="flex shrink-0 items-center gap-10 border-b border-border-subtle px-18 py-14">
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
-          <h2 className="text-section leading-snug font-semibold text-text">
-            {threadTitle(thread)}
+      <header className="flex shrink-0 items-center gap-8 border-b border-border-subtle py-6 pr-8 pl-4 lg:items-start lg:gap-16 lg:px-28 lg:py-16">
+        {backHref === undefined ? null : (
+          <HrefLink
+            href={backHref}
+            aria-label="Back to threads"
+            className={cn(
+              "grid size-44 shrink-0 place-items-center rounded-m text-text hover:bg-sunken lg:hidden",
+              focusRing,
+            )}
+          >
+            <ArrowLeft aria-hidden="true" size={20} />
+          </HrefLink>
+        )}
+        <div className="flex min-w-0 flex-1 flex-col gap-2 lg:gap-8">
+          <h2 className="truncate text-card leading-snug font-semibold text-text lg:text-section lg:whitespace-normal">
+            {title}
           </h2>
-          <p className="font-mono text-meta text-text-muted">
-            thread {thread.id}
-            {thread.task ? ` · linked to ${thread.task}` : ""}
-            {thread.proposal ? ` · ${thread.proposal}` : ""} ·{" "}
-            <PersonList names={thread.participants} you={you} />
+          <p className="flex flex-wrap items-center gap-x-8 gap-y-4 text-meta text-text-faint">
+            {thread.task ? (
+              <HrefLink
+                href={projectPath(slug, "t", thread.task)}
+                className={cn(CHIP, focusRing)}
+              >
+                <SquareKanban aria-hidden="true" size={13} />
+                <span className="font-mono text-meta">{thread.task}</span>
+              </HrefLink>
+            ) : null}
+            {thread.proposal ? (
+              <HrefLink
+                href={projectPath(slug, "proposals", thread.proposal)}
+                className={cn(CHIP, focusRing)}
+              >
+                <GitPullRequest aria-hidden="true" size={13} />
+                <span className="font-mono text-meta">{thread.proposal}</span>
+              </HrefLink>
+            ) : null}
+            <span className="hidden font-mono lg:inline">{thread.id}</span>
+            <span aria-hidden="true" className="hidden lg:inline">
+              ·
+            </span>
+            <PersonList
+              names={thread.participants}
+              you={you}
+              youWord
+              nameClassName="text-meta lg:text-bar"
+            />
           </p>
         </div>
-        {threadCanMarkAnswered(thread) ? (
-          <MarkAnswered slug={slug} scope={{ thread: thread.id }} />
-        ) : null}
-        {thread.task ? (
-          <HrefLink
-            href={projectPath(slug, "t", thread.task)}
-            className={cn(buttonClasses("secondary", "md"), focusRing)}
-          >
-            <span className={buttonIconClass("secondary")}>
-              <SquareKanban aria-hidden="true" size={15} />
-            </span>
-            Open {thread.task}
-          </HrefLink>
-        ) : null}
+        <div className="flex shrink-0 items-center gap-8">
+          {threadCanMarkAnswered(thread) ? (
+            <MarkAnswered slug={slug} scope={{ thread: thread.id }} />
+          ) : null}
+          {thread.task ? (
+            <HrefLink
+              href={projectPath(slug, "t", thread.task)}
+              className={cn(
+                buttonClasses("secondary", "md"),
+                "max-lg:size-44 max-lg:bg-transparent max-lg:p-0 max-lg:inset-ring-0",
+                focusRing,
+              )}
+            >
+              <span className={cn(buttonIconClass("secondary"), "lg:hidden")}>
+                <SquareKanban aria-hidden="true" size={18} />
+              </span>
+              <span className="max-lg:sr-only">Open {thread.task}</span>
+            </HrefLink>
+          ) : null}
+        </div>
       </header>
 
       <div
@@ -142,135 +192,68 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
         aria-label="Messages"
         tabIndex={0}
         className={cn(
-          "flex min-h-0 flex-1 flex-col overflow-y-auto",
+          "flex min-h-0 flex-1 flex-col overflow-y-auto px-16 lg:px-28",
           insetFocusRing,
         )}
       >
-        <ol ref={content} className="mt-auto flex flex-col gap-12 p-18">
-          {thread.messages.map((message) => (
-            <li key={message.id} className="flex flex-col gap-4">
-              {isQuestion(message) ? (
-                <QuestionBadge thread={thread} question={message} />
-              ) : null}
-              {isQuestion(message) && message.header !== null ? (
-                <QuestionHeader header={message.header} />
-              ) : null}
-              <article className="flex flex-col gap-4 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
-                <p className="flex items-center gap-8 font-mono text-caption text-text-muted">
-                  <PersonName
-                    name={message.sender}
-                    slot="messageHead"
-                    you={you}
-                  />
-                  <ArrowRight
-                    aria-label="to"
-                    role="img"
-                    size={12}
-                    className="shrink-0 text-text-faint"
-                  />
-                  <PersonList
-                    names={recipientActors(message)}
-                    nameClassName="text-bar"
-                    you={you}
-                  />
-                  <span className="ml-auto font-ui text-meta text-text-faint">
-                    {formatAsOf(now, message.sent_at)}
-                  </span>
-                </p>
-                {message.lines === null ? null : (
-                  <QuotedLines
-                    slug={slug}
-                    proposal={message.proposal}
-                    lines={message.lines}
-                  />
-                )}
-                {chosen.has(message.id) ? (
-                  <div className="flex flex-col gap-4">
-                    <p className="text-body font-semibold text-text">
-                      {message.body.trim()}
-                    </p>
-                    <p className="text-code text-text-muted">
-                      Chosen option of the question above.
-                    </p>
-                  </div>
-                ) : (
-                  <MessageBody body={message.body} slug={slug} />
-                )}
-                {isQuestion(message) ? (
-                  <QuestionChoices
-                    slug={slug}
-                    thread={thread}
-                    question={message}
-                    onReply={reply}
-                  />
-                ) : null}
-              </article>
-              <ul className="flex flex-col gap-2">
-                {deliveryLines(message, now).map((line) => (
-                  <li
-                    key={line.actor}
-                    className="flex items-center gap-6 text-meta text-text-faint"
-                  >
-                    {line.lead}
-                    <PersonName
-                      name={line.actor}
-                      className="text-bar"
-                      you={you}
-                    />
-                    {line.at === null ? null : ` · ${line.at}`}
-                    {line.note === null ? null : ` · ${line.note}`}
-                  </li>
-                ))}
-              </ul>
-            </li>
-          ))}
+        <ol
+          ref={content}
+          className="mt-auto flex w-full max-w-thread-column flex-col gap-18 pt-14 pb-8 lg:gap-22 lg:pt-20"
+        >
+          {withDays(thread.messages, now).map((item) =>
+            item.kind === "day" ? (
+              <li key={item.key} className="flex items-center gap-12">
+                <span
+                  aria-hidden="true"
+                  className="h-px flex-1 bg-border-subtle"
+                />
+                <span className="text-meta font-medium text-text-faint">
+                  {item.label}
+                </span>
+                <span
+                  aria-hidden="true"
+                  className="h-px flex-1 bg-border-subtle"
+                />
+              </li>
+            ) : (
+              <MessageItem
+                key={item.key}
+                slug={slug}
+                thread={thread}
+                message={item.message}
+                now={now}
+                you={you}
+                chosen={chosen.has(item.message.id)}
+                onReply={reply}
+                onWriteOwn={(question) => {
+                  setPicked(question.id);
+                  setFocus("body");
+                }}
+              />
+            ),
+          )}
         </ol>
       </div>
 
-      <form
-        onSubmit={(event) => void handleSubmit(send)(event)}
-        noValidate
-        className="flex shrink-0 flex-col gap-6 border-t border-border-subtle px-18 py-12"
-      >
-        <div className="flex items-end gap-8">
-          <Controller
-            control={control}
-            name="body"
-            render={({ field }) => (
-              <MessageComposer
-                slug={slug}
-                aria-label="Reply"
-                placeholder={replyPlaceholder(thread)}
-                pending={isSubmitting}
-                aria-invalid={errors.body ? true : undefined}
-                ref={field.ref}
-                value={field.value}
-                onValueChange={field.onChange}
-                onBlur={field.onBlur}
-              />
-            )}
-          />
-          <Button
-            type="submit"
-            variant="primary"
+      <Controller
+        control={control}
+        name="body"
+        render={({ field }) => (
+          <ReplyBox
+            slug={slug}
+            value={field.value}
+            onValueChange={field.onChange}
+            onBlur={field.onBlur}
+            boxRef={field.ref}
+            placeholder={replyPlaceholder(thread)}
             pending={isSubmitting}
-            pendingLabel="Sending…"
-            icon={<Send aria-hidden="true" size={13} />}
-          >
-            Send
-          </Button>
-        </div>
-        {errors.body ? (
-          <p className="text-meta font-medium text-danger">
-            {errors.body.message}
-          </p>
-        ) : null}
-        {errors.root ? (
-          <p role="alert" className="text-meta font-medium text-danger">
-            The reply was not sent. {errors.root.message}
-          </p>
-        ) : null}
-      </form>
+            answering={target?.answers?.sender ?? null}
+            invalid={errors.body?.message ?? null}
+            failure={errors.root?.message ?? null}
+            onSubmit={(event) => void handleSubmit(send)(event)}
+          />
+        )}
+      />
     </section>
   );
 }

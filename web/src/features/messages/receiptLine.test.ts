@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { RecipientView } from "@/api/messages";
 import { segmentsText } from "@/people/segments";
 import { message, recipient } from "@/test/messages";
-import { detailRow, receipts } from "./receipts";
+import { detailRow, receipts } from "./receiptLine";
 
 const NOW = new Date(2026, 9, 22, 22, 30).getTime();
 const AT = new Date(2026, 9, 22, 22, 19).getTime();
