@@ -920,6 +920,27 @@ fn each_role_reaches_every_step_of_its_role() {
     }
 }
 
+/// The tools a role's session loads at once are the tools its steps call: each one is named in the role's prompt or its part of the skill.
+#[test]
+fn the_tools_a_role_loads_at_once_are_named_in_its_steps() {
+    use fold_daemon::mcp::loading::{Seat, always_loaded};
+    for role in Role::ALL {
+        let named: BTreeSet<String> = backticked_identifiers(role.prompt())
+            .into_iter()
+            .chain(backticked_identifiers(part(role)))
+            .collect();
+        let loaded = always_loaded(Seat::Role(role));
+        assert!(!loaded.is_empty(), "{role}");
+        for tool in loaded {
+            assert!(
+                named.contains(*tool),
+                "{role} loads `{tool}`, which its steps never name"
+            );
+        }
+    }
+    assert!(SKILL.contains("`register_agent`"));
+}
+
 #[test]
 fn the_skill_maps_existing_code_into_areas_before_planning() {
     for rule in [
