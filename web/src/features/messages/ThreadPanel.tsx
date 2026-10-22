@@ -10,7 +10,7 @@ import {
   buttonClasses,
   buttonIconClass,
 } from "@/components/button/buttonStyles";
-import { MentionTextarea } from "@/mentions/MentionTextarea";
+import { MessageComposer } from "@/mentions/MessageComposer";
 import { failureText } from "@/format/failure";
 import { formatAsOf } from "@/format/time";
 import { cn } from "@/lib/cn";
@@ -187,6 +187,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
                 )}
                 {isQuestion(message) ? (
                   <QuestionChoices
+                    slug={slug}
                     thread={thread}
                     question={message}
                     onReply={reply}
@@ -216,19 +217,17 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
         noValidate
         className="flex shrink-0 flex-col gap-6 border-t border-border-subtle px-18 py-12"
       >
-        <div className="flex items-center gap-8">
+        <div className="flex items-end gap-8">
           <Controller
             control={control}
             name="body"
             render={({ field }) => (
-              <MentionTextarea
+              <MessageComposer
                 slug={slug}
-                rows={1}
                 aria-label="Reply"
                 placeholder={replyPlaceholder(thread)}
-                readOnly={isSubmitting}
+                pending={isSubmitting}
                 aria-invalid={errors.body ? true : undefined}
-                className="resize-none py-9"
                 ref={field.ref}
                 value={field.value}
                 onValueChange={field.onChange}

@@ -27,7 +27,7 @@ import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { MentionText } from "@/mentions/MentionText";
-import { MentionTextarea } from "@/mentions/MentionTextarea";
+import { MessageComposer } from "@/mentions/MessageComposer";
 import type { Known } from "@/mentions/parse";
 import { messageSchema, type MessageValues } from "./compose";
 import type { Failure } from "./errors";
@@ -484,24 +484,22 @@ export function ThreadSection({
         onSubmit={(event) => void submit(event)}
         className="flex flex-col gap-6"
       >
-        <div className="flex items-start gap-8">
+        <div className="flex items-end gap-8">
           <Controller
             control={control}
             name="body"
             render={({ field }) => (
-              <MentionTextarea
+              <MessageComposer
                 slug={slug}
-                rows={1}
                 ref={field.ref}
                 value={field.value}
                 onValueChange={field.onChange}
                 onBlur={field.onBlur}
                 aria-label="Message"
                 disabled={closed !== null}
-                readOnly={isSubmitting}
+                pending={isSubmitting}
                 aria-invalid={errors.body ? true : undefined}
                 placeholder={`Reply to ${target} about ${id}…`}
-                className="resize-none py-9"
               />
             )}
           />

@@ -1,14 +1,14 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, Send } from "lucide-react";
 import { useState } from "react";
-import { useForm, useWatch } from "react-hook-form";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import type { MessageView, ThreadView } from "@/api/messages";
 import { apiErrorCode } from "@/api/errors";
 import { Button } from "@/components/button/Button";
-import { controlClasses } from "@/components/form/Field";
 import { failureText } from "@/format/failure";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
+import { MessageComposer } from "@/mentions/MessageComposer";
 import { replySchema, type ReplyValues } from "./compose";
 import { answerPending, questionState } from "./question";
 
@@ -48,10 +48,12 @@ export function QuestionHeader({ header }: { header: string }) {
  * The options of an agent's question as cards a human picks, and a free answer. An answer is a reply that names the option; it stays pending until the thread shows it.
  */
 export function QuestionChoices({
+  slug,
   thread,
   question,
   onReply,
 }: {
+  slug: string;
   thread: ThreadView;
   question: MessageView;
   onReply: (replyTo: string, body: string) => Promise<void>;
@@ -60,7 +62,7 @@ export function QuestionChoices({
   const [sending, setSending] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
   const [failure, setFailure] = useState<unknown>(null);
-  const { register, handleSubmit, reset, control } = useForm<ReplyValues>({
+  const { handleSubmit, reset, control } = useForm<ReplyValues>({
     resolver: zodResolver(replySchema),
     defaultValues: { body: "" },
   });
@@ -126,17 +128,26 @@ export function QuestionChoices({
       </ul>
       {answered ? null : (
         <form
-          className="flex items-center gap-8"
+          className="flex items-end gap-8"
           onSubmit={(event) => {
             void handleSubmit((values) => answer(values.body.trim()))(event);
           }}
         >
-          <input
-            aria-label="Your own answer"
-            placeholder="Or write your own answer…"
-            readOnly={pending}
-            className={cn(controlClasses, focusRing, "py-7")}
-            {...register("body")}
+          <Controller
+            control={control}
+            name="body"
+            render={({ field }) => (
+              <MessageComposer
+                slug={slug}
+                aria-label="Your own answer"
+                placeholder="Or write your own answer…"
+                pending={pending}
+                ref={field.ref}
+                value={field.value}
+                onValueChange={field.onChange}
+                onBlur={field.onBlur}
+              />
+            )}
           />
           <Button
             type="submit"
