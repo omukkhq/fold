@@ -325,6 +325,17 @@ function createdTasks(event: StoredEvent): string[] {
   return isTaskIds(tasks) ? tasks : [];
 }
 
+/** The version of a proposal that an event names in `data.version`, such as the version a check run checked or a review reviewed. */
+function versionKeys(slug: string, event: StoredEvent): QueryKey[] {
+  const version = event.data.version;
+  return event.proposal !== null &&
+    typeof version === "number" &&
+    Number.isInteger(version) &&
+    version >= 1
+    ? [keys.proposalVersion(slug, event.proposal, version)]
+    : [];
+}
+
 function invalidationKeys(
   slug: string,
   type: string,
@@ -626,7 +637,10 @@ function applyStored(
     });
     markEnded(queryClient, slug, event.workspace);
   }
-  for (const queryKey of invalidationKeys(slug, event.type, domain, event)) {
+  for (const queryKey of [
+    ...invalidationKeys(slug, event.type, domain, event),
+    ...versionKeys(slug, event),
+  ]) {
     void queryClient.invalidateQueries({ queryKey });
   }
 }
