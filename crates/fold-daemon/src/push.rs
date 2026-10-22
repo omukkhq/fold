@@ -1062,7 +1062,15 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
                 .await?
                 .and_then(|row| starter_agent(&row.started_by));
         }
-        ctx.unreviewed = unreviewed_of(store, &agent).await?;
+        // A reviewer whose session was gone starts in a new one at once, so it leaves nothing to the review lead.
+        let session_lost = event
+            .data
+            .get("session_lost")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+        if !session_lost {
+            ctx.unreviewed = unreviewed_of(store, &agent).await?;
+        }
         if !ctx.unreviewed.is_empty() {
             ctx.review_leads = review_leads(store).await?;
         }

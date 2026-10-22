@@ -287,6 +287,8 @@ impl Supervisor {
             Some(0) => None,
             _ => process.stderr.text(LAST_LINES).await,
         };
+        // A `--resume` that found no session exits too; fold starts the worker in a new session next, so the event says so.
+        let session_lost = *process.session.borrow() == Some(false);
         let mut buffer = EventBuffer::new();
         let agent = &process.agent;
         self.inner
@@ -307,11 +309,15 @@ impl Supervisor {
                         agents::set_exit_error(tx, id, stderr, now).await?;
                     }
                     agents::record_exit(tx, id, ProcessEnd::Failed("exited"), code, now).await?;
-                    NewEvent::new(types::WORKER_FAILED, EventActor::fold())?.data(json!({
+                    let mut data = json!({
                         "agent": agent.as_str(),
                         "reason": "exited",
                         "exit_code": code,
-                    }))?
+                    });
+                    if session_lost {
+                        data["session_lost"] = json!(true);
+                    }
+                    NewEvent::new(types::WORKER_FAILED, EventActor::fold())?.data(data)?
                 };
                 buffer.append(tx, &event, now).await?;
                 Ok(())

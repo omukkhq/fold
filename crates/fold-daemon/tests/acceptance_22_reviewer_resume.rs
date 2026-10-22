@@ -289,6 +289,18 @@ async fn acceptance_22_a_reviewer_whose_session_is_gone_reviews_the_new_version_
     );
     until_state(&harness, REVIEWER, WorkerState::Idle).await;
     assert_eq!(review_claim_holder(&harness).await, REVIEWER);
+    // fold starts the reviewer again at once, so the review lead hears nothing of the version.
+    let lead_lines: Vec<String> = fake
+        .runs_of(LEAD)
+        .into_iter()
+        .flat_map(|run| run.stdin)
+        .collect();
+    assert!(
+        lead_lines
+            .iter()
+            .all(|line| !line.contains("ended with no verdict")),
+        "{lead_lines:?}"
+    );
     harness
         .call(REVIEWER, "create_review_checkout", json!({"id": "P-1"}))
         .await;
