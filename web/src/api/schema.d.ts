@@ -3803,7 +3803,7 @@ export interface components {
             /** Format: int32 */
             version: number;
         };
-        /** @description The review plan an open first version waits in: the review lead gives it to one reviewer together with the plan's other proposals once the awaited tasks open theirs or the wait ends. */
+        /** @description The review plan an open proposal without a review waits in: the review lead gives it to one reviewer together with the plan's other proposals once the awaited tasks open theirs or the wait ends. */
         ReviewPlanWait: {
             /** @description The tasks whose proposals the plan still waits for, by task number. */
             awaited: string[];

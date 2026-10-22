@@ -503,3 +503,23 @@ pub async fn plan_of_batch(
         })
         .transpose()
 }
+
+/// Whether a version of the proposal has a review with a verdict; a review with only comments is none. A plan holds only proposals without one, so a version after a review is reviewed alone with its review scope.
+pub async fn has_verdict(
+    executor: impl SqliteExecutor<'_>,
+    proposal: ProposalId,
+) -> Result<bool, StoreError> {
+    let number = proposal.to_db();
+    let found = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM reviews r
+               JOIN proposal_versions v ON v.id = r.version_id
+               JOIN proposals p ON p.id = v.proposal_id
+               WHERE p.number = ? AND r.verdict <> 'comment'
+           ) AS "found!: bool""#,
+        number
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(found)
+}

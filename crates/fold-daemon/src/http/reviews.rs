@@ -723,7 +723,7 @@ impl From<ConflictReport> for ConflictReportView {
     }
 }
 
-/// The review plan an open first version waits in: the review lead gives it to one reviewer together with the plan's other proposals once the awaited tasks open theirs or the wait ends.
+/// The review plan an open proposal without a review waits in: the review lead gives it to one reviewer together with the plan's other proposals once the awaited tasks open theirs or the wait ends.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct ReviewPlanWait {
     #[schema(example = "rp-2")]

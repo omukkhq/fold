@@ -19,7 +19,7 @@ pub const LIST_REVIEW_PLANS: &str = "list_review_plans";
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct CreateReviewPlanInput {
-    /// The open first versions that wait, such as ["P-3"]: the new proposal, and any open first version of a related task that nobody reviews yet.
+    /// The open proposals that wait, such as ["P-3"]: the new proposal, and any open proposal of a related task that nobody reviewed or claimed yet.
     pub proposals: Vec<String>,
     /// The related tasks to wait for, such as ["T-7", "T-8"]: To do or In progress tasks whose proposals belong in the same batch. Together with the proposals' tasks at most 5.
     pub tasks: Vec<String>,
@@ -33,7 +33,7 @@ pub struct CreateReviewPlanInput {
 pub struct ChangeReviewPlanInput {
     /// The review plan, such as rp-2.
     pub id: String,
-    /// Open first versions to add, such as ["P-9"].
+    /// Open proposals without a review to add, such as ["P-9"].
     #[serde(default)]
     pub add_proposals: Vec<String>,
     /// Related tasks to wait for too, such as ["T-9"]; only before the plan's wait ended.
@@ -72,12 +72,12 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             CREATE_REVIEW_PLAN,
-            "Review lead only: when a first version (v1) opens and related To do or In progress tasks will open proposals that belong in the same review, make a plan that waits for them, so one reviewer reviews all of them as one batch. At most 5 tasks, the proposals' tasks included. The wait ends an hour after the plan is made. fold adds each awaited task's proposal when it opens and tells you when it joins, when every awaited task opened one, when a task stops being eligible and leaves, and when the wait ends; then call start_worker with role reviewer and plan. Refusals: review_plan_too_large, proposal_not_plannable (a later version, a reviewed, claimed or batched proposal, or the human review mark: review it alone), task_not_awaitable (details.reason, such as blocker, backlog or depends_on_member: a task that needs a member's task would wait for the plan itself), main_area, already_in_plan and review_plan_denied.",
+            "Review lead only: when a proposal opens and related To do or In progress tasks will open proposals that belong in the same review, make a plan that waits for them, so one reviewer reviews all of them as one batch. At most 5 tasks, the proposals' tasks included. The wait ends an hour after the plan is made. fold adds each awaited task's proposal when it opens and tells you when it joins, when a member leaves (such as at a verdict or a review claim), when every awaited task opened one, when a task stops being eligible and leaves, and when the wait ends; then call start_worker with role reviewer and plan. Refusals: review_plan_too_large, proposal_not_plannable (a verdict on any version, a review claim, a batch or the human review mark: review it alone), task_not_awaitable (details.reason, such as blocker, backlog or depends_on_member: a task that needs a member's task would wait for the plan itself), main_area, already_in_plan and review_plan_denied.",
             schema_for_type::<CreateReviewPlanInput>(),
         ),
         Tool::new(
             CHANGE_REVIEW_PLAN,
-            "Review lead only: add open first versions or awaited tasks to an open plan, or take tasks out of it. The deadline stays. A plan left without members ends. Refusals as for create_review_plan, and review_plan_not_open.",
+            "Review lead only: add open proposals without a review or awaited tasks to an open plan, or take tasks out of it. The deadline stays. A plan left without members ends. Refusals as for create_review_plan, and review_plan_not_open.",
             schema_for_type::<ChangeReviewPlanInput>(),
         ),
         Tool::new(

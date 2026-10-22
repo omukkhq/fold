@@ -123,6 +123,8 @@ define_names!(
         Deadline = "deadline",
         Removed = "removed",
         Closed = "closed",
+        Reviewed = "reviewed",
+        Claimed = "claimed",
         Archived = "archived",
         NotProposalKind = "not_proposal_kind",
         MainArea = "main_area",
@@ -152,10 +154,9 @@ impl From<AwaitIssue> for PlanRelease {
 }
 
 define_names!(
-    /// Why an open proposal cannot be put in a plan. Only a first version that nobody reviewed or claimed waits for a group; a later version is reviewed alone with its review scope.
+    /// Why an open proposal cannot be put in a plan. Only a proposal that nobody reviewed or claimed waits for a group; a version after a review is reviewed alone with its review scope.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum PlanProposalIssue {
-        LaterVersion = "later_version",
         Reviewed = "reviewed",
         Claimed = "claimed",
         InBatch = "in_batch",
@@ -167,10 +168,9 @@ impl PlanProposalIssue {
     /// Why the proposal cannot wait, without its id.
     pub fn message(self) -> &'static str {
         match self {
-            PlanProposalIssue::LaterVersion => {
-                "has a version after its first, which is reviewed alone with its review scope"
+            PlanProposalIssue::Reviewed => {
+                "has a review with a verdict, so its next version is reviewed alone with its review scope"
             }
-            PlanProposalIssue::Reviewed => "has a review already, so it never waits for a group",
             PlanProposalIssue::Claimed => "has a review claim, so its reviewer has it",
             PlanProposalIssue::InBatch => "is in a review batch",
             PlanProposalIssue::HumanReview => {
@@ -180,28 +180,53 @@ impl PlanProposalIssue {
     }
 }
 
-/// The facts of an open proposal that decide whether it can be put in a plan.
+/// The facts of an open proposal that decide whether it can be put in a plan, or keep it in one. `reviewed` is a verdict on any of its versions; a review with only comments is none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlanProposalFacts {
-    pub current_version: u32,
     pub reviewed: bool,
     pub claimed: bool,
     pub in_batch: bool,
     pub human_review: bool,
 }
 
-/// An open proposal waits in a plan only at its first version, before any review, claim or batch, and without the human review mark, which has it reviewed alone.
+/// An open proposal waits in a plan only before any verdict, claim or batch, and without the human review mark, which has it reviewed alone. A new version that its author makes before any review still waits.
 pub fn proposal_issue(facts: &PlanProposalFacts) -> Option<PlanProposalIssue> {
     if facts.human_review {
         Some(PlanProposalIssue::HumanReview)
-    } else if facts.current_version > 1 {
-        Some(PlanProposalIssue::LaterVersion)
     } else if facts.reviewed {
         Some(PlanProposalIssue::Reviewed)
     } else if facts.claimed {
         Some(PlanProposalIssue::Claimed)
     } else if facts.in_batch {
         Some(PlanProposalIssue::InBatch)
+    } else {
+        None
+    }
+}
+
+/// The facts of a joined member's proposal that decide whether it stays in its plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JoinedFacts {
+    pub open: bool,
+    pub main_area: bool,
+    pub human_review: bool,
+    /// A verdict on any version of the proposal; a review with only comments is none.
+    pub reviewed: bool,
+    pub claimed: bool,
+}
+
+/// Why a joined member leaves its plan, or `None` while it stays. A proposal leaves once it closes, comes into main, gets the human review mark, gets a verdict, such as a human's request for changes, or gets a review claim, so a version after a review is reviewed alone with its review scope. A new version without a review stays.
+pub fn joined_release(facts: &JoinedFacts) -> Option<PlanRelease> {
+    if !facts.open {
+        Some(PlanRelease::Closed)
+    } else if facts.main_area {
+        Some(PlanRelease::MainArea)
+    } else if facts.human_review {
+        Some(PlanRelease::HumanReview)
+    } else if facts.reviewed {
+        Some(PlanRelease::Reviewed)
+    } else if facts.claimed {
+        Some(PlanRelease::Claimed)
     } else {
         None
     }
@@ -325,9 +350,8 @@ mod tests {
     }
 
     #[test]
-    fn only_an_unreviewed_first_version_waits_in_a_plan() {
+    fn only_an_unreviewed_unclaimed_proposal_waits_in_a_plan() {
         let fresh = PlanProposalFacts {
-            current_version: 1,
             reviewed: false,
             claimed: false,
             in_batch: false,
@@ -335,13 +359,6 @@ mod tests {
         };
         assert_eq!(proposal_issue(&fresh), None);
         let cases = [
-            (
-                PlanProposalFacts {
-                    current_version: 2,
-                    ..fresh
-                },
-                PlanProposalIssue::LaterVersion,
-            ),
             (
                 PlanProposalFacts {
                     reviewed: true,
@@ -366,7 +383,7 @@ mod tests {
             (
                 PlanProposalFacts {
                     human_review: true,
-                    current_version: 3,
+                    reviewed: true,
                     ..fresh
                 },
                 PlanProposalIssue::HumanReview,
@@ -375,6 +392,62 @@ mod tests {
         for (facts, issue) in cases {
             assert_eq!(proposal_issue(&facts), Some(issue), "{facts:?}");
             assert!(!issue.message().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_joined_proposal_leaves_at_a_verdict_or_a_claim_but_not_at_a_new_version() {
+        let waiting = JoinedFacts {
+            open: true,
+            main_area: false,
+            human_review: false,
+            reviewed: false,
+            claimed: false,
+        };
+        assert_eq!(joined_release(&waiting), None);
+        let cases = [
+            (
+                JoinedFacts {
+                    open: false,
+                    reviewed: true,
+                    ..waiting
+                },
+                PlanRelease::Closed,
+            ),
+            (
+                JoinedFacts {
+                    main_area: true,
+                    human_review: true,
+                    ..waiting
+                },
+                PlanRelease::MainArea,
+            ),
+            (
+                JoinedFacts {
+                    human_review: true,
+                    claimed: true,
+                    ..waiting
+                },
+                PlanRelease::HumanReview,
+            ),
+            (
+                JoinedFacts {
+                    reviewed: true,
+                    claimed: true,
+                    ..waiting
+                },
+                PlanRelease::Reviewed,
+            ),
+            (
+                JoinedFacts {
+                    claimed: true,
+                    ..waiting
+                },
+                PlanRelease::Claimed,
+            ),
+        ];
+        for (facts, release) in cases {
+            assert_eq!(joined_release(&facts), Some(release), "{facts:?}");
         }
     }
 

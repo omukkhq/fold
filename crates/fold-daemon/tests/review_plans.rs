@@ -46,7 +46,7 @@ async fn plan(h: &Harness, id: &str) -> Value {
         .await
 }
 
-/// fold refuses what a plan may never hold, each with a stable code and a hint: more than five tasks, a task after a member's task, a blocked task, a task with an open proposal, a later version, an actor other than the review lead, and a proposal of a plan given to a reviewer alone.
+/// fold refuses what a plan may never hold, each with a stable code and a hint: more than five tasks, a task after a member's task, a blocked task, a task with an open proposal, a proposal with a verdict, which also takes a member out while an unreviewed new version stays, an actor other than the review lead, and a proposal of a plan given to a reviewer alone.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_plan_refuses_what_could_never_be_one_batch() {
     let (h, _fake) = with_review_lead().await;
@@ -108,15 +108,49 @@ async fn a_plan_refuses_what_could_never_be_one_batch() {
     assert_eq!(refused["details"]["reason"], "proposal_open", "{refused}");
     assert!(refused["hint"].as_str().unwrap().contains(&p2));
 
-    work.write(&[("src/two.rs", "pub fn b() {}\n")]);
-    h.call(
-        "frontend",
-        "record_changes",
-        json!({"ws": work.workspace, "message": "Rename"}),
-    )
-    .await;
-    h.call("frontend", "update_proposal", json!({"id": p2}))
+    // A version that the author makes before any review still waits, also after the plan took the proposal.
+    let revise = async |body: &str| {
+        work.write(&[("src/two.rs", body)]);
+        h.call(
+            "frontend",
+            "record_changes",
+            json!({"ws": work.workspace, "message": "Rename"}),
+        )
         .await;
+        h.call("frontend", "update_proposal", json!({"id": p2}))
+            .await;
+    };
+    revise("pub fn b() {}\n").await;
+    let planned = h
+        .call(
+            "review-lead",
+            "create_review_plan",
+            json!({"proposals": [p2], "tasks": [others[4]]}),
+        )
+        .await;
+    assert_eq!(planned["id"], "rp-1");
+    revise("pub fn c() {}\n").await;
+    assert_eq!(plan(&h, "rp-1").await["proposals"], json!([p2]));
+
+    // A verdict takes the proposal out, and a proposal with a verdict never waits again.
+    let path = format!("/api/v1/projects/demo/proposals/{p2}/reviews");
+    let (status, answer) = h
+        .http(
+            Method::POST,
+            &path,
+            Some(&json!({"version": 3, "verdict": "request_changes", "body": "rename back"})),
+            HUMAN,
+        )
+        .await;
+    assert!(status.is_success(), "{status}: {answer}");
+    let read = plan(&h, "rp-1").await;
+    assert_eq!(read["proposals"], json!([]), "{read}");
+    let events = h.events().await;
+    let left = kinds(&events, "review.plan_left");
+    assert_eq!(
+        (&left[0].data["proposal"], &left[0].data["reason"]),
+        (&json!(p2), &json!("reviewed"))
+    );
     let refused = h
         .refused(
             "review-lead",
@@ -125,7 +159,7 @@ async fn a_plan_refuses_what_could_never_be_one_batch() {
         )
         .await;
     assert_eq!(refused["code"], codes::PROPOSAL_NOT_PLANNABLE, "{refused}");
-    assert_eq!(refused["details"]["reason"], "later_version");
+    assert_eq!(refused["details"]["reason"], "reviewed");
 
     let refused = h
         .refused(
@@ -143,7 +177,7 @@ async fn a_plan_refuses_what_could_never_be_one_batch() {
             json!({"proposals": [p1], "tasks": [others[2]]}),
         )
         .await;
-    assert_eq!(created["id"], "rp-1");
+    assert_eq!(created["id"], "rp-2");
     let refused = h
         .refused(
             "review-lead",
@@ -152,7 +186,7 @@ async fn a_plan_refuses_what_could_never_be_one_batch() {
         )
         .await;
     assert_eq!(refused["code"], codes::ALREADY_IN_PLAN, "{refused}");
-    assert!(refused["hint"].as_str().unwrap().contains("plan rp-1"));
+    assert!(refused["hint"].as_str().unwrap().contains("plan rp-2"));
     let refused = h
         .refused(
             "review-lead",
@@ -162,7 +196,7 @@ async fn a_plan_refuses_what_could_never_be_one_batch() {
         .await;
     assert_eq!(refused["code"], codes::ALREADY_IN_PLAN, "{refused}");
     let events = h.events().await;
-    assert_eq!(kinds(&events, "review.plan_created").len(), 1);
+    assert_eq!(kinds(&events, "review.plan_created").len(), 2);
 }
 
 /// The proposal of an awaited task joins the plan when it opens, the review lead's start gives every open proposal to one reviewer as one batch, and the batch finds its plan.

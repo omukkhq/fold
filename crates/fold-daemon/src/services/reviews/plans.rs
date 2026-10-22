@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use fold_core::dag::Dag;
 use fold_core::events::types;
 use fold_core::reviews::plans::{
-    AwaitFacts, MAX_PLAN_TASKS, PlanProposalFacts, PlanRelease, PlanState, await_issue,
-    depends_on_member, plan_deadline, proposal_issue,
+    AwaitFacts, JoinedFacts, MAX_PLAN_TASKS, PlanProposalFacts, PlanRelease, PlanState,
+    await_issue, depends_on_member, joined_release, plan_deadline, proposal_issue,
 };
 use fold_core::{
     Actor, AgentName, EventActor, FoldError, IdKind, NewEvent, ProposalId, ReviewBatchId,
@@ -214,7 +214,7 @@ pub(crate) async fn mark_plan_started(
     Ok(())
 }
 
-/// Keeps every open plan true to its members inside the caller's write; every command that changes a fact a member's eligibility reads runs it, and `recompute` runs it at its end. An awaited task whose proposal opened joins the plan with that version; an awaited task that stopped being eligible, by the rule that refuses it at the plan's creation, leaves with that reason; a joined proposal that closed, or whose task got the human review mark or came into main, leaves. Each change appends `review.plan_joined` or `review.plan_left` by fold with the plan's open proposals and awaited tasks after it, and a plan with no member left ends with `review.plan_ended`.
+/// Keeps every open plan true to its members inside the caller's write; every command that changes a fact a member's eligibility reads runs it, and `recompute` runs it at its end. An awaited task whose proposal opened joins the plan with that version; an awaited task that stopped being eligible, by the rule that refuses it at the plan's creation, leaves with that reason; a joined proposal leaves by [`joined_release`]: it closed, came into main, got the human review mark, a verdict or a review claim. Each change appends `review.plan_joined` or `review.plan_left` by fold with the plan's open proposals and awaited tasks after it, and a plan with no member left ends with `review.plan_ended`.
 pub(crate) async fn settle_plans(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
@@ -379,13 +379,17 @@ async fn settle_joined(
     let Some(row) = row.filter(|row| row.state == ProposalState::Open) else {
         return Ok(Settled::Leaves(PlanRelease::Closed));
     };
-    if task_in_main_area(tx.conn(), task).await? {
-        return Ok(Settled::Leaves(PlanRelease::MainArea));
-    }
-    if row.human_review.is_some() {
-        return Ok(Settled::Leaves(PlanRelease::HumanReview));
-    }
-    Ok(Settled::Stays)
+    let facts = JoinedFacts {
+        open: true,
+        main_area: task_in_main_area(tx.conn(), task).await?,
+        human_review: row.human_review.is_some(),
+        reviewed: store::has_verdict(tx.conn(), proposal).await?,
+        claimed: row.review_claim.is_some(),
+    };
+    Ok(match joined_release(&facts) {
+        Some(reason) => Settled::Leaves(reason),
+        None => Settled::Stays,
+    })
 }
 
 async fn end_plan(
@@ -478,7 +482,7 @@ fn named_once<T: Ord + Copy + ToString>(items: &[T], field: &str) -> Result<(), 
     Ok(())
 }
 
-/// An open first version that may wait in a plan, by [`proposal_issue`], not of main and not in another plan.
+/// An open proposal that may wait in a plan, by [`proposal_issue`], not of main and not in another plan.
 async fn plannable(tx: &mut WriteTx, proposal: ProposalId) -> Result<ProposalRow, ReviewError> {
     let row = require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
     let main_task = task_in_main_area(tx.conn(), row.task).await?;
@@ -489,8 +493,7 @@ async fn plannable(tx: &mut WriteTx, proposal: ProposalId) -> Result<ProposalRow
         return Err(in_plan(&format!("{proposal}"), plan));
     }
     let facts = PlanProposalFacts {
-        current_version: row.current_version,
-        reviewed: row.latest_verdict.is_some(),
+        reviewed: store::has_verdict(tx.conn(), proposal).await?,
         claimed: row.review_claim.is_some(),
         in_batch: batches::open_batch_of(tx.conn(), proposal).await?.is_some(),
         human_review: row.human_review.is_some(),
@@ -592,9 +595,9 @@ async fn add_member(
     }
 }
 
-/// Review plans: open first versions that wait up to an hour for related tasks to open their proposals, so the review lead gives them all to one reviewer as one batch.
+/// Review plans: open proposals without a review that wait up to an hour for related tasks to open their proposals, so the review lead gives them all to one reviewer as one batch.
 impl ReviewService {
-    /// Makes a plan of the review lead for the open first versions `proposals` that waits for the related `tasks`, in one transaction with `review.plan_created`. Its wait ends an hour after now. fold refuses a plan of more than five tasks (`review_plan_too_large`), a proposal that is not an unreviewed, unclaimed first version outside a batch and without the human review mark (`proposal_not_plannable`), a proposal of main (`main_area`), and a task the plan cannot wait for (`task_not_awaitable`): one with an open proposal, one that is not a To do or In progress agent task of kind proposal, one with the human review mark or a blocker, one of main, and one that needs the task of another member directly or not. A proposal or task in another live plan is `already_in_plan`.
+    /// Makes a plan of the review lead for the open proposals `proposals` that waits for the related `tasks`, in one transaction with `review.plan_created`. Its wait ends an hour after now. fold refuses a plan of more than five tasks (`review_plan_too_large`), a proposal with a verdict on any version, a review claim, a batch or the human review mark (`proposal_not_plannable`), a proposal of main (`main_area`), and a task the plan cannot wait for (`task_not_awaitable`): one with an open proposal, one that is not a To do or In progress agent task of kind proposal, one with the human review mark or a blocker, one of main, and one that needs the task of another member directly or not. A proposal or task in another live plan is `already_in_plan`.
     pub async fn create_review_plan(
         &self,
         actor: &Actor,
