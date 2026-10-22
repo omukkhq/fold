@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { applyEvent, invalidateProject } from "./apply";
-import { isSnapshot } from "./envelope";
+import { isSnapshot, type EventEnvelope } from "./envelope";
 import type { LiveStatusStore } from "./status";
 import { startStream, type StreamHandle, type Transport } from "./stream";
 
@@ -16,7 +16,7 @@ function cursorsOf(queryClient: QueryClient): Map<string, number> {
   return map;
 }
 
-/** Opens the stream of one project: events go to the Query cache and the connection state goes to the status store. `onAuthRequired` runs once when the daemon ends the stream with `auth_required`, and `onProjectGone` once when it answers `project_not_found`. */
+/** Opens the stream of one project: events go to the Query cache and the connection state goes to the status store. `onAuthRequired` runs once when the daemon ends the stream with `auth_required`, and `onProjectGone` once when it answers `project_not_found`. `observe` sees each frame after the cache took it; `replay` is true for the stored events a connection sends before its snapshot, which happened while no stream was open. */
 export function connectProject(
   queryClient: QueryClient,
   slug: string,
@@ -25,18 +25,25 @@ export function connectProject(
   now: () => number = Date.now,
   onAuthRequired: () => void = () => undefined,
   onProjectGone: () => void = () => undefined,
+  observe: (event: EventEnvelope, replay: boolean) => void = () => undefined,
 ): StreamHandle {
   status.reset();
+  let replaying = true;
   const saved = cursorsOf(queryClient);
   const handle = startStream({
     transport,
     lastSeq: saved.get(slug) ?? null,
     handlers: {
       onOpen: () => {
+        replaying = true;
         status.set({ state: "live", retryAt: null });
       },
       onEvent: (event) => {
         applyEvent(queryClient, slug, event);
+        if (isSnapshot(event)) {
+          replaying = false;
+        }
+        observe(event, replaying);
         // A worker step arrives many times a second and changes nothing a screen draws from this clock.
         if (event.kind === "worker_output") {
           return;
