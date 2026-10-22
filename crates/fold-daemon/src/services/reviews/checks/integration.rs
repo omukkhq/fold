@@ -49,7 +49,7 @@ pub(crate) enum IntegrationChecks {
 
 /// The proposal version an attempt integrates, as the checks need it.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Integrating {
+pub(crate) struct Integrating<'a> {
     pub proposal: ProposalId,
     pub task: TaskId,
     pub version: u32,
@@ -57,8 +57,10 @@ pub(crate) struct Integrating {
     pub head: RevisionId,
     pub head_tree: ObjectHash,
     pub merged: ObjectHash,
-    /// The submitted batch whose members merge together into `merged`; the run is stored on `proposal`, the last of them. A failed run of a batch sends nobody back: the caller integrates the members one at a time.
+    /// The submitted batch whose members merge together into `merged`; the run is stored on `proposal`, the last of them, and names the batch. A failed run of a batch sends nobody back: the caller integrates the members one at a time.
     pub batch: Option<ReviewBatchId>,
+    /// The version row ids of the batch's members in `merged`, which the run names so each member's page lists it; empty for one proposal.
+    pub members: &'a [i64],
 }
 
 impl ReviewService {
@@ -66,7 +68,7 @@ impl ReviewService {
     pub(crate) async fn integration_checks(
         &self,
         actor: &Actor,
-        at: Integrating,
+        at: Integrating<'_>,
         carried: &mut Option<PassedRun>,
     ) -> Result<IntegrationChecks, ReviewError> {
         let input = self
@@ -262,7 +264,7 @@ impl ReviewService {
     async fn start_integration_run(
         &self,
         actor: &Actor,
-        at: Integrating,
+        at: Integrating<'_>,
     ) -> Result<CheckRunRow, ReviewError> {
         let now = self.clock.now();
         let label = actor.event_actor();
@@ -287,8 +289,12 @@ impl ReviewService {
                     actor: label.as_str(),
                     title: None,
                     evidence: None,
+                    batch: at.batch,
                 };
                 checks::insert_run(tx, &new, now).await?;
+                if at.batch.is_some() {
+                    checks::insert_run_members(tx, id, at.members).await?;
+                }
                 let mut data = json!({
                     "run": id.to_string(),
                     "stage": Stage::Integration.as_str(),
@@ -319,7 +325,7 @@ impl ReviewService {
     async fn send_back_for_checks(
         &self,
         actor: &Actor,
-        at: Integrating,
+        at: Integrating<'_>,
         run: &CheckRunRow,
         results: &[CommandResult],
         verdict: Verdict,
@@ -407,7 +413,7 @@ impl ReviewService {
 }
 
 /// The answer to an integration whose checks fold itself could not run: nothing was published and the version keeps its place, so the caller asks again once the fault is fixed.
-pub(crate) fn fold_failed_refusal(at: Integrating, run: CheckRunId) -> FoldError {
+pub(crate) fn fold_failed_refusal(at: Integrating<'_>, run: CheckRunId) -> FoldError {
     FoldError::new(
         codes::WORKSPACE_IO,
         format!(
@@ -429,7 +435,7 @@ async fn tell(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
     to: &BTreeSet<WorkerName>,
-    at: Integrating,
+    at: Integrating<'_>,
     body: &str,
     now: fold_core::Timestamp,
 ) -> Result<(), ReviewError> {
@@ -455,7 +461,7 @@ async fn tell(
 
 /// The message of failed integration checks: what failed on which merge, and the end of the first failed log.
 fn send_back_message(
-    at: Integrating,
+    at: Integrating<'_>,
     run: &CheckRunRow,
     results: &[CommandResult],
     verdict: Verdict,
@@ -519,6 +525,7 @@ mod tests {
             head_tree: ObjectHash::from_bytes([1; 32]),
             merged: ObjectHash::from_bytes([2; 32]),
             batch: None,
+            members: &[],
         };
         let run = CheckRunRow {
             id: CheckRunId::from_number(9).unwrap(),
@@ -538,6 +545,7 @@ mod tests {
             reason: None,
             created_at: Timestamp::from_millis(0).unwrap(),
             finished_at: None,
+            batch: None,
         };
         let results = [CommandResult {
             check: Some("e2e".to_owned()),

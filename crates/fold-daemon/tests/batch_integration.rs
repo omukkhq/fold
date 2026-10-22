@@ -336,6 +336,30 @@ async fn four_approved_members_of_a_five_member_batch_integrate_with_one_check_r
     for task in 2..=5 {
         assert_eq!(scene.status(task).await, TaskStatus::Done);
     }
+    // The one run names the batch and shows on the page of each member it checked, not on the member that went back.
+    let mut shown = Vec::new();
+    for member in 1..=5 {
+        let view = scene
+            .fx
+            .reviews()
+            .view_proposal(&human("tanim"), p(member), None)
+            .await
+            .unwrap();
+        shown.push(
+            view.checks
+                .iter()
+                .filter(|check| check.run.batch == Some(batch))
+                .map(|check| check.run.id)
+                .collect::<Vec<_>>(),
+        );
+    }
+    assert!(shown[0].is_empty(), "P-1 went back: {shown:?}");
+    assert!(
+        shown[1..]
+            .iter()
+            .all(|runs| runs.len() == 1 && runs[0] == shown[4][0]),
+        "{shown:?}"
+    );
     assert_eq!(scene.state(1).await, ProposalState::Open);
     let batch_events = scene.events("review.batch_integrated").await;
     assert_eq!(batch_events.len(), 1);

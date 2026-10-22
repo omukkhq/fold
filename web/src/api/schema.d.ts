@@ -1846,6 +1846,11 @@ export interface components {
              */
             base: string;
             /**
+             * @description The review batch whose members an integration run checked together; the run shows on each member's page.
+             * @example rb-2
+             */
+            batch: string | null;
+            /**
              * Format: int64
              * @description UTC milliseconds.
              */

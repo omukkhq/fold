@@ -101,6 +101,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "areas",
         "changesets",
         "check_results",
+        "check_run_members",
         "check_runs",
         "checklist_items",
         "checklists",

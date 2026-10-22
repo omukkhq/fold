@@ -1,8 +1,11 @@
 use crate::common::{count, exec, open};
+use fold_core::object::ObjectHash;
 use fold_core::reviews::batches::BatchOutcome;
-use fold_core::{ProposalId, ReviewBatchId, Timestamp};
+use fold_core::reviews::checks::{Purpose, RunState, Stage};
+use fold_core::{CheckRunId, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp};
 use fold_store::Store;
 use fold_store::reviews::batches;
+use fold_store::reviews::checks::{self, NewCheckRun};
 
 /// An open batch rb-1 and a submitted batch rb-2, each with one member, and a request-changes review of P-1 v1.
 const SEED: &str = "
@@ -193,6 +196,73 @@ async fn a_batch_has_one_waiting_request_and_a_request_ends_once() {
         .await,
         0
     );
+}
+
+#[tokio::test]
+async fn a_batch_run_names_its_batch_and_shows_on_each_member_version() {
+    let (_dir, store) = seeded().await;
+    let p1 = ProposalId::from_number(1).unwrap();
+    let p2 = ProposalId::from_number(2).unwrap();
+    let run = |number: u32, batch: Option<ReviewBatchId>| NewCheckRun {
+        id: CheckRunId::from_number(number).unwrap(),
+        stage: Stage::Integration,
+        purpose: Purpose::Integrate,
+        task: TaskId::from_number(2).unwrap(),
+        workspace: None,
+        worker_id: None,
+        proposal: Some(p2),
+        version: Some(1),
+        base: RevisionId::from_number(1).unwrap(),
+        tree: ObjectHash::from_bytes([9; 32]),
+        actor: "fold",
+        title: None,
+        evidence: None,
+        batch,
+    };
+    let batched = run(1, Some(rb(2)));
+    store
+        .write(async |tx| {
+            checks::insert_run(tx, &batched, at(6)).await?;
+            checks::insert_run_members(tx, batched.id, &[1, 2]).await
+        })
+        .await
+        .unwrap();
+    let shown = checks::runs_of_version(store.read(), TaskId::from_number(1).unwrap(), p1, 1)
+        .await
+        .unwrap();
+    assert_eq!(shown.len(), 1, "P-1 v1 lists the run stored on P-2");
+    assert_eq!(shown[0].batch, Some(rb(2)));
+    assert!(
+        refused(
+            &store,
+            "UPDATE check_runs SET review_batch_id = NULL WHERE number = 1"
+        )
+        .await
+        .contains("check_runs_review_batch_fixed")
+    );
+    store
+        .write(async |tx| checks::finish_run(tx, batched.id, RunState::Passed, None, at(7)).await)
+        .await
+        .unwrap();
+    let alone = run(2, None);
+    store
+        .write(async |tx| checks::insert_run(tx, &alone, at(8)).await)
+        .await
+        .unwrap();
+    assert!(
+        refused(
+            &store,
+            "INSERT INTO check_run_members (run_id, version_id) SELECT id, 1 FROM check_runs WHERE number = 2"
+        )
+        .await
+        .contains("check_run_members_of_batch")
+    );
+    for sql in [
+        "UPDATE check_run_members SET version_id = 2",
+        "DELETE FROM check_run_members",
+    ] {
+        assert!(refused(&store, sql).await.contains("append-only"), "{sql}");
+    }
 }
 
 #[tokio::test]

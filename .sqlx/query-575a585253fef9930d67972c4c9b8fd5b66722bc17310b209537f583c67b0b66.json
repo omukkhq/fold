@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT c.number AS \"number!: i64\", c.stage, c.purpose,\n                      t.number AS \"task!: i64\",\n                      w.number AS \"workspace?: i64\",\n                      k.name AS \"worker?: String\",\n                      p.number AS \"proposal?: i64\",\n                      v.version AS \"version?: i64\",\n                      r.number AS \"base!: i64\",\n                      c.tree_hash, c.actor, c.title, c.evidence, c.state, c.reason,\n                      c.created_at, c.finished_at\n               FROM check_runs c\n               JOIN tasks t ON t.id = c.task_id\n               JOIN revisions r ON r.id = c.base_revision_id\n               LEFT JOIN workspaces w ON w.id = c.workspace_id\n               LEFT JOIN workers k ON k.id = c.worker_id\n               LEFT JOIN proposals p ON p.id = c.proposal_id\n               LEFT JOIN proposal_versions v ON v.id = c.version_id\n               WHERE t.number = ?1 AND (\n               (c.stage = 'proposal' AND c.state <> 'running' AND EXISTS (\n                   SELECT 1 FROM proposal_versions x JOIN proposals y ON y.id = x.proposal_id\n                   WHERE y.number = ?2 AND x.version = ?3\n                     AND x.base_revision_id = c.base_revision_id AND x.tree_hash = c.tree_hash\n               ))\n               OR (p.number = ?2 AND v.version = ?3)\n           )\n         ORDER BY c.id DESC",
+  "query": "SELECT c.number AS \"number!: i64\", c.stage, c.purpose,\n                      t.number AS \"task!: i64\",\n                      w.number AS \"workspace?: i64\",\n                      k.name AS \"worker?: String\",\n                      p.number AS \"proposal?: i64\",\n                      v.version AS \"version?: i64\",\n                      r.number AS \"base!: i64\",\n                      c.tree_hash, c.actor, c.title, c.evidence, c.state, c.reason,\n                      c.created_at, c.finished_at, b.number AS \"batch?: i64\"\n               FROM check_runs c\n               JOIN tasks t ON t.id = c.task_id\n               JOIN revisions r ON r.id = c.base_revision_id\n               LEFT JOIN workspaces w ON w.id = c.workspace_id\n               LEFT JOIN workers k ON k.id = c.worker_id\n               LEFT JOIN proposals p ON p.id = c.proposal_id\n               LEFT JOIN proposal_versions v ON v.id = c.version_id\n               LEFT JOIN review_batches b ON b.id = c.review_batch_id\n               WHERE c.state = 'running' ORDER BY c.id",
   "describe": {
     "columns": [
       {
@@ -189,10 +189,21 @@
             "name": "finished_at"
           }
         }
+      },
+      {
+        "name": "batch?: i64",
+        "ordinal": 17,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batches",
+            "name": "number"
+          }
+        }
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 0
     },
     "nullable": [
       false,
@@ -211,8 +222,9 @@
       false,
       true,
       false,
+      true,
       true
     ]
   },
-  "hash": "2139acb7e788d2b1893d8cb3e40eb10fc2a55167b9a68631eb0f403d5e2dd9b0"
+  "hash": "575a585253fef9930d67972c4c9b8fd5b66722bc17310b209537f583c67b0b66"
 }

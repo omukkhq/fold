@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT c.number AS \"number!: i64\", c.stage, c.purpose,\n                      t.number AS \"task!: i64\",\n                      w.number AS \"workspace?: i64\",\n                      k.name AS \"worker?: String\",\n                      p.number AS \"proposal?: i64\",\n                      v.version AS \"version?: i64\",\n                      r.number AS \"base!: i64\",\n                      c.tree_hash, c.actor, c.title, c.evidence, c.state, c.reason,\n                      c.created_at, c.finished_at\n               FROM check_runs c\n               JOIN tasks t ON t.id = c.task_id\n               JOIN revisions r ON r.id = c.base_revision_id\n               LEFT JOIN workspaces w ON w.id = c.workspace_id\n               LEFT JOIN workers k ON k.id = c.worker_id\n               LEFT JOIN proposals p ON p.id = c.proposal_id\n               LEFT JOIN proposal_versions v ON v.id = c.version_id\n               WHERE c.number = ?1",
+  "query": "SELECT c.number AS \"number!: i64\", c.stage, c.purpose,\n                      t.number AS \"task!: i64\",\n                      w.number AS \"workspace?: i64\",\n                      k.name AS \"worker?: String\",\n                      p.number AS \"proposal?: i64\",\n                      v.version AS \"version?: i64\",\n                      r.number AS \"base!: i64\",\n                      c.tree_hash, c.actor, c.title, c.evidence, c.state, c.reason,\n                      c.created_at, c.finished_at, b.number AS \"batch?: i64\"\n               FROM check_runs c\n               JOIN tasks t ON t.id = c.task_id\n               JOIN revisions r ON r.id = c.base_revision_id\n               LEFT JOIN workspaces w ON w.id = c.workspace_id\n               LEFT JOIN workers k ON k.id = c.worker_id\n               LEFT JOIN proposals p ON p.id = c.proposal_id\n               LEFT JOIN proposal_versions v ON v.id = c.version_id\n               LEFT JOIN review_batches b ON b.id = c.review_batch_id\n               WHERE w.number = ?1 AND c.state = 'running'",
   "describe": {
     "columns": [
       {
@@ -189,6 +189,17 @@
             "name": "finished_at"
           }
         }
+      },
+      {
+        "name": "batch?: i64",
+        "ordinal": 17,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batches",
+            "name": "number"
+          }
+        }
       }
     ],
     "parameters": {
@@ -199,7 +210,7 @@
       false,
       false,
       false,
-      true,
+      false,
       true,
       true,
       true,
@@ -211,8 +222,9 @@
       false,
       true,
       false,
+      true,
       true
     ]
   },
-  "hash": "39c0c9c878ed77fa8a529e56b3119fc9516646e9962cea40f0409757d1eb7c4d"
+  "hash": "add668d62859f1e9af306be15f496109961660784539d21e34d20acf0f7ac3c1"
 }

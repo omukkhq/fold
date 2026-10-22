@@ -1,6 +1,8 @@
 use fold_core::object::ObjectHash;
 use fold_core::reviews::checks::{Outcome, Purpose, RunReason, RunState, Stage};
-use fold_core::{CheckRunId, ProposalId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId};
+use fold_core::{
+    CheckRunId, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId,
+};
 use sqlx::SqliteExecutor;
 
 use crate::columns::{count, optional_time, time};
@@ -25,6 +27,8 @@ pub struct NewCheckRun<'a> {
     pub actor: &'a str,
     pub title: Option<&'a str>,
     pub evidence: Option<&'a str>,
+    /// The submitted review batch whose ready members an integration run checks together.
+    pub batch: Option<ReviewBatchId>,
 }
 
 /// One stored run with public ids only.
@@ -47,6 +51,8 @@ pub struct CheckRunRow {
     pub reason: Option<RunReason>,
     pub created_at: Timestamp,
     pub finished_at: Option<Timestamp>,
+    /// The review batch whose members the integration run checked together.
+    pub batch: Option<ReviewBatchId>,
 }
 
 /// One command of a run as the runner reports it.
@@ -93,16 +99,19 @@ pub async fn insert_run(
     let version = new.version.map(i64::from);
     let (stage, purpose) = (new.stage.as_str(), new.purpose.as_str());
     let (base, tree, now) = (new.base.to_db(), new.tree.to_string(), now.as_millis());
+    let batch = new.batch.map(ReviewBatchId::to_db);
     let inserted = sqlx::query!(
         "INSERT INTO check_runs (number, stage, purpose, task_id, workspace_id, worker_id, proposal_id,
-                                 version_id, base_revision_id, tree_hash, actor, title, evidence, created_at)
+                                 version_id, base_revision_id, tree_hash, actor, title, evidence, created_at,
+                                 review_batch_id)
          SELECT ?1, ?2, ?3, t.id,
                 (SELECT w.id FROM workspaces w WHERE w.number = ?4),
                 ?5,
                 (SELECT p.id FROM proposals p WHERE p.number = ?6),
                 (SELECT v.id FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id
                  WHERE p.number = ?6 AND v.version = ?7),
-                r.id, ?9, ?10, ?11, ?12, ?13
+                r.id, ?9, ?10, ?11, ?12, ?13,
+                (SELECT b.id FROM review_batches b WHERE b.number = ?15)
          FROM tasks t, revisions r WHERE t.number = ?14 AND r.number = ?8",
         number,
         stage,
@@ -117,7 +126,8 @@ pub async fn insert_run(
         new.title,
         new.evidence,
         now,
-        task
+        task,
+        batch
     )
     .execute(tx.conn())
     .await?
@@ -129,6 +139,26 @@ pub async fn insert_run(
             "the task or base revision does not exist",
         ))
     }
+}
+
+/// Names, in the caller's write, the version of each member that a batch's integration run checks together; `versions` are proposal version row ids.
+pub async fn insert_run_members(
+    tx: &mut WriteTx,
+    run: CheckRunId,
+    versions: &[i64],
+) -> Result<(), StoreError> {
+    let number = run.to_db();
+    for version in versions {
+        sqlx::query!(
+            "INSERT INTO check_run_members (run_id, version_id)
+             SELECT r.id, ?2 FROM check_runs r WHERE r.number = ?1",
+            number,
+            version
+        )
+        .execute(tx.conn())
+        .await?;
+    }
+    Ok(())
 }
 
 /// Writes one result of a running run in the caller's write; the run's end follows in the same write.
@@ -223,6 +253,7 @@ struct RawRun {
     reason: Option<String>,
     created_at: i64,
     finished_at: Option<i64>,
+    batch: Option<i64>,
 }
 
 impl RawRun {
@@ -275,6 +306,13 @@ impl RawRun {
                 .transpose()?,
             created_at: time(row.created_at, "check_runs.created_at")?,
             finished_at: optional_time(row.finished_at, "check_runs.finished_at")?,
+            batch: row
+                .batch
+                .map(|number| {
+                    ReviewBatchId::try_from_db(number)
+                        .ok_or(StoreError::Corrupt("review_batches.number"))
+                })
+                .transpose()?,
         })
     }
 }
@@ -292,7 +330,7 @@ macro_rules! select_runs {
                       v.version AS "version?: i64",
                       r.number AS "base!: i64",
                       c.tree_hash, c.actor, c.title, c.evidence, c.state, c.reason,
-                      c.created_at, c.finished_at
+                      c.created_at, c.finished_at, b.number AS "batch?: i64"
                FROM check_runs c
                JOIN tasks t ON t.id = c.task_id
                JOIN revisions r ON r.id = c.base_revision_id
@@ -300,6 +338,7 @@ macro_rules! select_runs {
                LEFT JOIN workers k ON k.id = c.worker_id
                LEFT JOIN proposals p ON p.id = c.proposal_id
                LEFT JOIN proposal_versions v ON v.id = c.version_id
+               LEFT JOIN review_batches b ON b.id = c.review_batch_id
                "# + $tail
             $(, $arg)*
         )
@@ -350,7 +389,7 @@ pub async fn running_in_workspace(
     Ok(rows(raw)?.pop())
 }
 
-/// The runs of one proposal version, newest first: the ended proposal-stage runs of its task on its base and tree, which checked exactly its files, and the integration runs of the version.
+/// The runs of one proposal version, newest first: the ended proposal-stage runs of its task on its base and tree, which checked exactly its files, the integration runs of the version, and the integration runs of a review batch that checked the version together with other members.
 pub async fn runs_of_version(
     executor: impl SqliteExecutor<'_>,
     task: TaskId,
@@ -359,13 +398,19 @@ pub async fn runs_of_version(
 ) -> Result<Vec<CheckRunRow>, StoreError> {
     let (task, proposal, version) = (task.to_db(), proposal.to_db(), i64::from(version));
     let raw = select_runs!(
-        "WHERE t.number = ?1 AND (
+        "WHERE (t.number = ?1 AND (
                (c.stage = 'proposal' AND c.state <> 'running' AND EXISTS (
                    SELECT 1 FROM proposal_versions x JOIN proposals y ON y.id = x.proposal_id
                    WHERE y.number = ?2 AND x.version = ?3
                      AND x.base_revision_id = c.base_revision_id AND x.tree_hash = c.tree_hash
                ))
                OR (p.number = ?2 AND v.version = ?3)
+           ))
+           OR c.id IN (
+               SELECT m.run_id FROM check_run_members m
+               JOIN proposal_versions x ON x.id = m.version_id
+               JOIN proposals y ON y.id = x.proposal_id
+               WHERE y.number = ?2 AND x.version = ?3
            )
          ORDER BY c.id DESC",
         task,

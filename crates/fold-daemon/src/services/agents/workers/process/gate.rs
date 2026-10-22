@@ -239,6 +239,7 @@ mod tests {
             reason: Some(RunReason::CheckFailed),
             created_at: Timestamp::from_millis(0).unwrap(),
             finished_at: Some(Timestamp::from_millis(1).unwrap()),
+            batch: None,
         };
         let text = gate_turn(&run, &["unit".to_owned()]);
         assert!(

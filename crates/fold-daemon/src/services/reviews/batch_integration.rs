@@ -580,6 +580,7 @@ impl ReviewService {
                 set_aside,
             });
         };
+        let versions: Vec<i64> = merged.iter().map(|(member, _)| member.version_id).collect();
         let at = Integrating {
             proposal: last.proposal,
             task: last.task,
@@ -588,6 +589,7 @@ impl ReviewService {
             head_tree: head.tree_hash,
             merged: tree,
             batch: Some(batch),
+            members: &versions,
         };
         match self.integration_checks(actor, at, carried).await? {
             IntegrationChecks::None | IntegrationChecks::Passed => {}

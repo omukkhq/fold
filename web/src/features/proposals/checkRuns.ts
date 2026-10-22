@@ -72,10 +72,13 @@ export function outcomeText(result: CheckResult): string {
 }
 
 function title(run: CheckRun): string {
+  if (run.stage !== "integration") return `Proposal checks on ${run.base}`;
+  // A batch's run checked every member together and is stored on the last of them, so its version names only that member.
+  if (run.batch !== null) {
+    return `Integration checks of batch ${run.batch} on ${run.base}`;
+  }
   const version = run.version === null ? "" : ` of v${String(run.version)}`;
-  return run.stage === "integration"
-    ? `Integration checks${version} on ${run.base}`
-    : `Proposal checks on ${run.base}`;
+  return `Integration checks${version} on ${run.base}`;
 }
 
 /** The runs of the shown version as the section lists them, in the order the daemon sends them: newest first. */

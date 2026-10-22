@@ -90,3 +90,42 @@ CREATE TRIGGER review_batch_waits_no_delete BEFORE DELETE ON review_batch_waits
 BEGIN
     SELECT RAISE(ABORT, 'review_batch_waits is append-only');
 END;
+
+-- The review batch whose ready members an integration run checked together. The run is stored on the last member's version, and `check_run_members` names the version of every member it checked, so each member's page lists the run.
+ALTER TABLE check_runs ADD COLUMN review_batch_id INTEGER REFERENCES review_batches (id);
+
+CREATE TRIGGER check_runs_review_batch_shape BEFORE INSERT ON check_runs
+WHEN NEW.review_batch_id IS NOT NULL AND NEW.stage <> 'integration'
+BEGIN
+    SELECT RAISE(ABORT, 'check_runs_review_batch_shape');
+END;
+
+CREATE TRIGGER check_runs_review_batch_fixed BEFORE UPDATE ON check_runs
+WHEN NEW.review_batch_id IS NOT OLD.review_batch_id
+BEGIN
+    SELECT RAISE(ABORT, 'check_runs_review_batch_fixed');
+END;
+
+CREATE TABLE check_run_members (
+    run_id INTEGER NOT NULL REFERENCES check_runs (id),
+    version_id INTEGER NOT NULL REFERENCES proposal_versions (id),
+    PRIMARY KEY (run_id, version_id)
+);
+
+CREATE INDEX check_run_members_version ON check_run_members (version_id);
+
+CREATE TRIGGER check_run_members_of_batch BEFORE INSERT ON check_run_members
+WHEN (SELECT review_batch_id FROM check_runs WHERE id = NEW.run_id) IS NULL
+BEGIN
+    SELECT RAISE(ABORT, 'check_run_members_of_batch');
+END;
+
+CREATE TRIGGER check_run_members_no_update BEFORE UPDATE ON check_run_members
+BEGIN
+    SELECT RAISE(ABORT, 'check_run_members is append-only');
+END;
+
+CREATE TRIGGER check_run_members_no_delete BEFORE DELETE ON check_run_members
+BEGIN
+    SELECT RAISE(ABORT, 'check_run_members is append-only');
+END;

@@ -1559,6 +1559,7 @@ describe("Checks", () => {
       reason: null,
       created_at: 1,
       finished_at: 2,
+      batch: null,
       results: [passed],
       ...fields,
     };

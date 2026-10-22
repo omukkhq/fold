@@ -777,6 +777,7 @@ impl ReviewService {
                 head_tree: head.tree_hash,
                 merged: tree,
                 batch: None,
+                members: &[],
             };
             match self.integration_checks(actor, at, carried).await? {
                 IntegrationChecks::None => {}
