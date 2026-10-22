@@ -436,7 +436,8 @@ pub async fn touch_web_token(
 pub struct WebSessionRow {
     pub id: i64,
     pub session_hash: Vec<u8>,
-    pub token_id: i64,
+    /// `None` for a session that a sign-in link opened.
+    pub token_id: Option<i64>,
     pub human: HumanName,
     pub last_used_at: Timestamp,
     pub expires_at: Timestamp,
@@ -446,7 +447,8 @@ pub struct WebSessionRow {
 #[derive(Debug, Clone, Copy)]
 pub struct NewWebSession<'a> {
     pub session_hash: &'a [u8],
-    pub token_id: i64,
+    /// `None` for a session that a sign-in link opens.
+    pub token_id: Option<i64>,
     pub human_id: i64,
     pub now: Timestamp,
     pub expires_at: Timestamp,
@@ -472,7 +474,7 @@ pub async fn insert_web_session(
     .await?)
 }
 
-/// The session whose hash is `session_hash`, while its token is unrevoked. Expiry is the caller's decision, so the row comes back even when `expires_at` has passed.
+/// The session whose hash is `session_hash`, while the token it was made from, if any, is unrevoked. Expiry is the caller's decision, so the row comes back even when `expires_at` has passed.
 pub async fn find_web_session(
     executor: impl SqliteExecutor<'_>,
     session_hash: &[u8],
@@ -480,9 +482,9 @@ pub async fn find_web_session(
     let row = sqlx::query!(
         r#"SELECT s.id AS "id!: i64", s.session_hash, s.token_id, h.name, s.last_used_at, s.expires_at
            FROM web_sessions s
-           JOIN web_tokens t ON t.id = s.token_id
+           LEFT JOIN web_tokens t ON t.id = s.token_id
            JOIN humans h ON h.id = s.human_id
-           WHERE s.session_hash = ? AND t.revoked_at IS NULL"#,
+           WHERE s.session_hash = ? AND (s.token_id IS NULL OR t.revoked_at IS NULL)"#,
         session_hash
     )
     .fetch_optional(executor)
@@ -500,7 +502,7 @@ pub async fn find_web_session(
     .transpose()
 }
 
-/// Sets `last_used_at` of the session and of its token to `now`, each unless it is already later than `stale_before`.
+/// Sets `last_used_at` of the session and of its token, if it has one, to `now`, each unless it is already later than `stale_before`.
 pub async fn touch_web_session(
     tx: &mut WriteTx,
     session: &WebSessionRow,
@@ -517,14 +519,16 @@ pub async fn touch_web_session(
     )
     .execute(tx.conn())
     .await?;
-    sqlx::query!(
-        "UPDATE web_tokens SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)",
-        now,
-        session.token_id,
-        stale_before
-    )
-    .execute(tx.conn())
-    .await?;
+    if let Some(token_id) = session.token_id {
+        sqlx::query!(
+            "UPDATE web_tokens SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)",
+            now,
+            token_id,
+            stale_before
+        )
+        .execute(tx.conn())
+        .await?;
+    }
     Ok(())
 }
 
@@ -546,6 +550,82 @@ pub async fn delete_expired_web_sessions(
 ) -> Result<u64, StoreError> {
     let now = now.as_millis();
     let result = sqlx::query!("DELETE FROM web_sessions WHERE expires_at <= ?", now)
+        .execute(tx.conn())
+        .await?;
+    Ok(result.rows_affected())
+}
+
+/// A one-time sign-in link. The registry holds only the BLAKE3 hash of the link's secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignInLinkRow {
+    pub id: i64,
+    pub link_hash: Vec<u8>,
+    pub human_id: i64,
+    pub human: HumanName,
+    pub expires_at: Timestamp,
+}
+
+pub async fn insert_sign_in_link(
+    tx: &mut WriteTx,
+    link_hash: &[u8],
+    human_id: i64,
+    now: Timestamp,
+    expires_at: Timestamp,
+) -> Result<(), StoreError> {
+    let now = now.as_millis();
+    let expires_at = expires_at.as_millis();
+    sqlx::query!(
+        "INSERT INTO sign_in_links (link_hash, human_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+        link_hash,
+        human_id,
+        now,
+        expires_at
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
+/// The link whose hash is `link_hash`, with the human it signs in. Expiry is the caller's decision, so the row comes back even when `expires_at` has passed.
+pub async fn find_sign_in_link(
+    executor: impl SqliteExecutor<'_>,
+    link_hash: &[u8],
+) -> Result<Option<SignInLinkRow>, StoreError> {
+    let row = sqlx::query!(
+        r#"SELECT l.id AS "id!: i64", l.link_hash, l.human_id, h.name, l.expires_at
+           FROM sign_in_links l JOIN humans h ON h.id = l.human_id
+           WHERE l.link_hash = ?"#,
+        link_hash
+    )
+    .fetch_optional(executor)
+    .await?;
+    row.map(|row| {
+        Ok(SignInLinkRow {
+            id: row.id,
+            link_hash: row.link_hash,
+            human_id: row.human_id,
+            human: HumanName::parse(&row.name).map_err(|_| StoreError::Corrupt("humans.name"))?,
+            expires_at: time(row.expires_at, "sign_in_links.expires_at")?,
+        })
+    })
+    .transpose()
+}
+
+/// Deletes the link with row id `id`. True when a row went.
+pub async fn delete_sign_in_link(tx: &mut WriteTx, id: i64) -> Result<bool, StoreError> {
+    let result = sqlx::query!("DELETE FROM sign_in_links WHERE id = ?", id)
+        .execute(tx.conn())
+        .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Deletes every link whose `expires_at` is not later than `now`, and returns how many went.
+pub async fn delete_expired_sign_in_links(
+    tx: &mut WriteTx,
+    now: Timestamp,
+) -> Result<u64, StoreError> {
+    let now = now.as_millis();
+    let result = sqlx::query!("DELETE FROM sign_in_links WHERE expires_at <= ?", now)
         .execute(tx.conn())
         .await?;
     Ok(result.rows_affected())

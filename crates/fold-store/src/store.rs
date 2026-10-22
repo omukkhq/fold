@@ -1,4 +1,7 @@
-use std::path::Path;
+use std::ffi::OsString;
+use std::fs::Permissions;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use fold_core::ProjectPaths;
@@ -21,6 +24,42 @@ const OPEN_WAIT: Duration = Duration::from_secs(60);
 const BUSY_RETRY: Duration = Duration::from_millis(10);
 const BUSY_RETRY_MAX: Duration = Duration::from_millis(250);
 const SQLITE_BUSY: i32 = 5;
+
+/// The registry holds every human's name and the hashes of the web tokens, sessions and sign-in links, so only the host's user may open it or list its folder. SQLite gives the `-wal` and `-shm` files the mode of the database file when it creates them; ones left from before get it here.
+async fn restrict_registry(path: &Path) -> Result<(), StoreError> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)
+            .await?;
+        tokio::fs::set_permissions(parent, Permissions::from_mode(0o700)).await?;
+    }
+    tokio::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path)
+        .await?;
+    for file in [
+        path.to_owned(),
+        suffixed(path, "-wal"),
+        suffixed(path, "-shm"),
+    ] {
+        match tokio::fs::set_permissions(&file, Permissions::from_mode(0o600)).await {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            result => result?,
+        }
+    }
+    Ok(())
+}
+
+fn suffixed(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = OsString::from(path.as_os_str());
+    name.push(suffix);
+    PathBuf::from(name)
+}
 
 /// One SQLite database: a single writer connection and a pool of read-only connections. Clones share both pools.
 #[derive(Debug, Clone)]
@@ -54,8 +93,9 @@ impl Store {
         .await
     }
 
-    /// Opens the host registry database and applies the registry migrations before returning.
+    /// Opens the host registry database and applies the registry migrations before returning. The file is `0600` and its folder `0700`, also when they exist from before.
     pub async fn open_registry(path: &Path) -> Result<Store, StoreError> {
+        restrict_registry(path).await?;
         Self::open(
             path,
             &REGISTRY_MIGRATIONS,
@@ -73,6 +113,7 @@ impl Store {
         wait: Duration,
         busy_timeout: Duration,
     ) -> Result<Store, StoreError> {
+        restrict_registry(path).await?;
         Self::open(path, &REGISTRY_MIGRATIONS, "registry", wait, busy_timeout).await
     }
 

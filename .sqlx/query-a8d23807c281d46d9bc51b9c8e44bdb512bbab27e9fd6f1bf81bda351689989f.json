@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT s.id AS \"id!: i64\", s.session_hash, s.token_id, h.name, s.last_used_at, s.expires_at\n           FROM web_sessions s\n           JOIN web_tokens t ON t.id = s.token_id\n           JOIN humans h ON h.id = s.human_id\n           WHERE s.session_hash = ? AND t.revoked_at IS NULL",
+  "query": "SELECT l.id AS \"id!: i64\", l.link_hash, l.human_id, h.name, l.expires_at\n           FROM sign_in_links l JOIN humans h ON h.id = l.human_id\n           WHERE l.link_hash = ?",
   "describe": {
     "columns": [
       {
@@ -9,30 +9,30 @@
         "type_info": "Integer",
         "origin": {
           "Table": {
-            "table": "web_sessions",
+            "table": "sign_in_links",
             "name": "id"
           }
         }
       },
       {
-        "name": "session_hash",
+        "name": "link_hash",
         "ordinal": 1,
         "type_info": "Blob",
         "origin": {
           "Table": {
-            "table": "web_sessions",
-            "name": "session_hash"
+            "table": "sign_in_links",
+            "name": "link_hash"
           }
         }
       },
       {
-        "name": "token_id",
+        "name": "human_id",
         "ordinal": 2,
         "type_info": "Integer",
         "origin": {
           "Table": {
-            "table": "web_sessions",
-            "name": "token_id"
+            "table": "sign_in_links",
+            "name": "human_id"
           }
         }
       },
@@ -48,23 +48,12 @@
         }
       },
       {
-        "name": "last_used_at",
+        "name": "expires_at",
         "ordinal": 4,
         "type_info": "Integer",
         "origin": {
           "Table": {
-            "table": "web_sessions",
-            "name": "last_used_at"
-          }
-        }
-      },
-      {
-        "name": "expires_at",
-        "ordinal": 5,
-        "type_info": "Integer",
-        "origin": {
-          "Table": {
-            "table": "web_sessions",
+            "table": "sign_in_links",
             "name": "expires_at"
           }
         }
@@ -78,9 +67,8 @@
       false,
       false,
       false,
-      false,
       false
     ]
   },
-  "hash": "87d15642702202eb3d66c14fa2c27a0ef36f62c87e60f5af5dcd232c96361338"
+  "hash": "a8d23807c281d46d9bc51b9c8e44bdb512bbab27e9fd6f1bf81bda351689989f"
 }

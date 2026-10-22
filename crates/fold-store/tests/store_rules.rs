@@ -323,6 +323,31 @@ async fn a_session_acts_for_the_human_of_its_token() {
 }
 
 #[tokio::test]
+async fn a_session_without_a_token_comes_from_a_sign_in_link_and_takes_any_human() {
+    let (_dir, store) = registry().await;
+    for sql in [
+        "INSERT INTO humans (id, name, created_at) VALUES (1, 'ana', 0), (2, 'bo', 0)",
+        "INSERT INTO sign_in_links (link_hash, human_id, created_at, expires_at) VALUES (x'01', 2, 0, 10)",
+        "INSERT INTO web_sessions (session_hash, token_id, human_id, created_at, last_used_at, expires_at) VALUES (x'0c', NULL, 2, 0, 0, 10)",
+        "UPDATE web_sessions SET human_id = 1",
+    ] {
+        exec(&store, sql).await.unwrap();
+    }
+    let message = refused(
+        &store,
+        "INSERT INTO sign_in_links (link_hash, human_id, created_at, expires_at) VALUES (x'02', 1, 10, 10)",
+    )
+    .await;
+    assert!(message.contains("CHECK"), "{message}");
+    let message = refused(
+        &store,
+        "INSERT INTO sign_in_links (link_hash, human_id, created_at, expires_at) VALUES (x'01', 1, 0, 10)",
+    )
+    .await;
+    assert!(message.contains("UNIQUE"), "{message}");
+}
+
+#[tokio::test]
 async fn human_names_and_slugs_keep_their_pattern() {
     let (_dir, store) = registry().await;
     let at = Timestamp::from_millis(0).unwrap();

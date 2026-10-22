@@ -168,7 +168,7 @@ pub async fn create_web_session(
                 tx,
                 NewWebSession {
                     session_hash: session_hash.as_bytes(),
-                    token_id: row.id,
+                    token_id: Some(row.id),
                     human_id: row.human_id,
                     now,
                     expires_at,
