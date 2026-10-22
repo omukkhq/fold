@@ -34,7 +34,7 @@ impl FromRequestParts<AppState> for Human {
                 codes::HUMAN_NAME_REQUIRED,
                 "the request does not name a human",
             )
-            .with_hint("set FOLD_HUMAN for the CLI, or sign in to the web interface")
+            .with_hint("set FOLD_HUMAN to your name, then run the command again")
             .into()
         })
     }
