@@ -1,13 +1,12 @@
 use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 
-use fold_core::claims::stale_cutoff;
 use fold_core::dag::Dag;
 use fold_core::readiness::{Candidate, ready_order, unblock_count};
 use fold_core::roles::{
     CatchUpFacts, FLD_MISSING, Role, StartFacts, catch_up_turn, first_turn, needs_restart,
 };
-use fold_core::{AgentName, WorkerName, WorkerState};
+use fold_core::{AgentName, ProposalId, WorkerName, WorkerState};
 use fold_store::agents::{self, WorkerProcessRow};
 use fold_store::reviews::{self, ProposalRow, ProposalState};
 use fold_store::tasks::LabelRow;
@@ -16,7 +15,6 @@ use fold_store::{StoreError, tasks};
 use super::{Supervisor, lock, resume, reviewer_batch};
 use crate::services::agents::AgentError;
 use crate::services::agents::workers::code_of;
-use crate::services::projects::load_config;
 
 /// The turn a worker that was working gets after a daemon restart resumed its session.
 pub const RESTART_TURN: &str = "fold restarted while you were working. Check your claims and your workspace, then continue your work.";
@@ -61,6 +59,7 @@ impl Supervisor {
         tokio::spawn(self.clone().resume_owed_send_backs());
         tokio::spawn(self.clone().resume_owed_gate_runs());
         tokio::spawn(self.clone().resume_owed_reviewers(None));
+        tokio::spawn(self.clone().resume_owed_messages());
         Ok(())
     }
 
@@ -186,6 +185,7 @@ impl Supervisor {
         tokio::spawn(self.clone().resume_owed_send_backs());
         tokio::spawn(self.clone().resume_owed_gate_runs());
         tokio::spawn(self.clone().resume_owed_reviewers(None));
+        tokio::spawn(self.clone().resume_owed_messages());
         Ok(())
     }
 
@@ -244,7 +244,7 @@ impl Supervisor {
         (!parts.is_empty()).then(|| parts.join("\n\n"))
     }
 
-    /// The work that waits for a lead, see [`catch_up_turn`]. A claim hides its task or proposal while its worker runs or is among `kept`, the workers the same start runs again; a review claim whose lease has not run out hides its proposal also when its reviewer has ended, since fold resumes that reviewer for a new version. A read that fails is logged and names nothing, so the lead still runs.
+    /// The work that waits for a lead, see [`catch_up_turn`]. A claim hides its task or proposal while its worker runs or is among `kept`, the workers the same start runs again; a review claim also hides its proposal while fold owes its reviewer that has ended a resume for the newest version (see [`agents::reviews_owed_to_ended_reviewers`]). A read that fails is logged and names nothing, so the lead still runs.
     async fn catch_up(&self, row: &WorkerProcessRow, kept: &BTreeSet<AgentName>) -> Option<String> {
         match self.waiting_for(row, kept).await {
             Ok(text) => text,
@@ -297,11 +297,13 @@ impl Supervisor {
                 (ready_order(&candidates), Vec::new(), Vec::new())
             }
             Role::ReviewLead => {
-                let lease_minutes = load_config(&self.inner.paths).await?.lease_minutes;
-                let live_after = stale_cutoff(self.inner.clock.now(), lease_minutes);
-                let open =
-                    reviews::list_proposals(read, Some(ProposalState::Open), Some(live_after))
-                        .await?;
+                let open = reviews::list_proposals(read, Some(ProposalState::Open), None).await?;
+                let owed: BTreeSet<ProposalId> =
+                    agents::reviews_owed_to_ended_reviewers(read, None)
+                        .await?
+                        .into_iter()
+                        .map(|review| review.proposal)
+                        .collect();
                 let planned = reviews::plans::list_plans(read, true).await?;
                 let mut proposals = Vec::new();
                 for proposal in open {
@@ -316,7 +318,7 @@ impl Supervisor {
                         && proposal
                             .review_claim
                             .as_ref()
-                            .is_none_or(|holder| !holds(holder));
+                            .is_none_or(|holder| !holds(holder) && !owed.contains(&proposal.id));
                     // A human or the main agent decides a proposal of a task of Main, never the review lead.
                     if waits
                         && !tasks::labels_for(read, proposal.task)

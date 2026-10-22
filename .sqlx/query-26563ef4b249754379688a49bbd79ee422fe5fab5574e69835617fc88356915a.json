@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT m.number, v.version, l.path, l.side, l.start_line, l.end_line, l.excerpt,\n                  l.excerpt_cut AS \"excerpt_cut!: bool\"\n           FROM message_line_refs l\n           JOIN messages m ON m.id = l.message_id\n           JOIN proposal_versions v ON v.id = l.version_id\n           WHERE m.number IN (SELECT value FROM json_each(?))",
+  "describe": {
+    "columns": [
+      {
+        "name": "number",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "version",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "path",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "message_line_refs",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "name": "side",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "message_line_refs",
+            "name": "side"
+          }
+        }
+      },
+      {
+        "name": "start_line",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "message_line_refs",
+            "name": "start_line"
+          }
+        }
+      },
+      {
+        "name": "end_line",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "message_line_refs",
+            "name": "end_line"
+          }
+        }
+      },
+      {
+        "name": "excerpt",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "message_line_refs",
+            "name": "excerpt"
+          }
+        }
+      },
+      {
+        "name": "excerpt_cut!: bool",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "message_line_refs",
+            "name": "excerpt_cut"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "26563ef4b249754379688a49bbd79ee422fe5fab5574e69835617fc88356915a"
+}

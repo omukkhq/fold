@@ -750,7 +750,7 @@ pub(super) async fn proposal_detail(
     })
 }
 
-/// Ends an open proposal inside the caller's transaction: sets its state, close reason and `closed_at`, releases its review claim with the outcome as `release_reason` (`claim.released`), and archives every live review checkout of the proposal (`workspace.archived`), whose directories stay until garbage collection. Close, reject and integration share it; the caller appends its own `proposal.*` event and runs `recompute` for the returned task.
+/// Ends an open proposal inside the caller's transaction: sets its state, close reason and `closed_at`, releases its review claim with the outcome as `release_reason` (`claim.released`), and archives every live review checkout of the proposal (`workspace.archived`), whose directories fold removes after the commit. Close, reject and integration share it; the caller appends its own `proposal.*` event and runs `recompute` for the returned task.
 pub async fn retire_proposal(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,

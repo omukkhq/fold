@@ -328,11 +328,11 @@ async fn flow() {
         )
         .await;
     harness
-        .call("backend", "acknowledge_message", json!({"id": question}))
+        .call("backend", "acknowledge_message", json!({"ids": [question]}))
         .await;
     assert_eq!(harness.inbox("frontend").await, [answer.as_str()]);
     harness
-        .call("frontend", "acknowledge_message", json!({"id": answer}))
+        .call("frontend", "acknowledge_message", json!({"ids": [answer]}))
         .await;
     assert!(harness.inbox("backend").await.is_empty());
     assert!(harness.inbox("frontend").await.is_empty());

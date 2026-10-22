@@ -87,6 +87,7 @@ async fn delete_in_tx(
             (history.proposal, "proposal"),
             (history.completion, "completion"),
             (history.message, "message"),
+            (history.turn, "turn"),
             (history.review_plan, "review_plan"),
         ]
         .into_iter()

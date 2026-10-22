@@ -28,6 +28,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(board))
         .routes(routes!(list_tasks, create_task))
         .routes(routes!(get_task, update_task, delete_task))
+        .routes(routes!(task_readers))
         .routes(routes!(attach_label, detach_label))
         .routes(routes!(archive_task))
         .routes(routes!(complete_task))
@@ -1127,6 +1128,72 @@ pub async fn get_task(
 ) -> Result<Json<TaskView>, ApiError> {
     let view = project.0.tasks.get_view(id(&task)?).await?;
     Ok(Json(task_view(view, human.ok().as_ref())))
+}
+
+/// Why a reader is offered for a human's feedback on a task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReaderRole {
+    ClaimHolder,
+    AreaLead,
+    MainAgent,
+}
+
+impl From<fold_core::tasks::areas::ReaderRole> for ReaderRole {
+    fn from(role: fold_core::tasks::areas::ReaderRole) -> Self {
+        match role {
+            fold_core::tasks::areas::ReaderRole::ClaimHolder => Self::ClaimHolder,
+            fold_core::tasks::areas::ReaderRole::AreaLead => Self::AreaLead,
+            fold_core::tasks::areas::ReaderRole::MainAgent => Self::MainAgent,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct TaskReader {
+    /// The worker, `agent` or `agent/worker`; feedback addressed to it by name reaches it.
+    #[schema(example = "web-t12")]
+    pub name: String,
+    pub role: ReaderRole,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct TaskReaders {
+    /// The default reader first: the claim holder, else the area lead, else the main agent. Each worker once, under its first role.
+    pub readers: Vec<TaskReader>,
+}
+
+/// Who a human's feedback on the task can go to: the worker that holds the implementation claim, the lead of the task's area (none for a task of Main or in no area) and the main agent. Only they answer for the task.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/tasks/{id}/readers",
+    operation_id = "task_readers",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The task id, such as T-12"),
+    ),
+    responses(
+        (status = 200, description = "The readers, the default first", body = TaskReaders),
+        (status = 400, description = "`invalid_id`", body = ErrorEnvelope),
+        (status = 404, description = "`task_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn task_readers(
+    project: Project,
+    Path((_slug, task)): Path<(String, String)>,
+) -> Result<Json<TaskReaders>, ApiError> {
+    let readers = project.0.tasks.readers(id(&task)?).await?;
+    Ok(Json(TaskReaders {
+        readers: readers
+            .into_iter()
+            .map(|reader| TaskReader {
+                name: reader.name.to_string(),
+                role: reader.role.into(),
+            })
+            .collect(),
+    }))
 }
 
 /// Changes the title, the description or the label set.

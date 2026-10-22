@@ -9,6 +9,7 @@ export type RecipientView = Schemas["RecipientView"];
 export type MessageView = Schemas["MessageView"];
 export type MessageChoice = Schemas["MessageChoice"];
 export type ThreadView = Schemas["ThreadView"];
+export type MessageLines = Schemas["MessageLines"];
 
 /** A human reply (`reply_to`) or feedback linked to a task. The daemon picks the recipients. */
 export type NewMessage = { body: string } & (
@@ -19,7 +20,7 @@ export type NewMessage = { body: string } & (
 const PAGE_SIZE = 200;
 const MAX_PAGES = 5;
 
-/** The threads that concern the signed-in human, newest first, in at most `MAX_PAGES` pages of `PAGE_SIZE`; `more` says that older threads were left out. The daemon filters them; agent-to-agent threads stay on the task screen and in Activity. */
+/** The threads that concern the signed-in human, newest first, in at most `MAX_PAGES` pages of `PAGE_SIZE`; `more` says that older threads were left out. The daemon filters them; threads only between agents stay in Activity. */
 export async function listThreads(slug: string): Promise<Pages<ThreadView>> {
   return readPages(async (before) => {
     const page = await unwrap(
@@ -27,6 +28,24 @@ export async function listThreads(slug: string): Promise<Pages<ThreadView>> {
         params: {
           path: { slug },
           query: { mine: true, before, limit: PAGE_SIZE },
+        },
+      }),
+    );
+    return { items: page.items, next: page.next };
+  }, MAX_PAGES);
+}
+
+/** The threads with a message linked to the proposal, newest first, in at most `MAX_PAGES` pages of `PAGE_SIZE`; `more` says that older threads were left out. */
+export async function listProposalThreads(
+  slug: string,
+  proposal: string,
+): Promise<Pages<ThreadView>> {
+  return readPages(async (before) => {
+    const page = await unwrap(
+      api.GET("/api/v1/projects/{slug}/messages", {
+        params: {
+          path: { slug },
+          query: { proposal, before, limit: PAGE_SIZE },
         },
       }),
     );

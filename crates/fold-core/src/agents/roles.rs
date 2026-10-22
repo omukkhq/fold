@@ -11,8 +11,10 @@ mod profile;
 
 pub use answers::{PermissionBehavior, ask_answer_turn, permission_answer_turn};
 pub use handoff::{
-    HANDOFF_REQUEST, HANDOFF_TURNS, MAX_HANDOFF_CHARS, RefreshFacts, SUMMARY_ITEMS,
-    SummaryProposal, SummaryTask, check_handoff, handoff_due, handoff_overdue, refresh_turn,
+    DEFAULT_HANDOFF_LARGE_PERCENT, DEFAULT_HANDOFF_LARGE_WINDOW, DEFAULT_HANDOFF_SMALL_PERCENT,
+    HANDOFF_REQUEST, HANDOFF_TURNS, HandoffAt, MAX_HANDOFF_CHARS, RefreshFacts, SUMMARY_ITEMS,
+    SummaryProposal, SummaryTask, check_handoff, default_handoff_percent, handoff_due,
+    handoff_overdue, refresh_turn,
 };
 pub use profile::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, FieldChange, MAX_AREA_INSTRUCTIONS_CHARS,
@@ -37,11 +39,11 @@ impl Role {
         matches!(self, Role::AreaLead | Role::ReviewLead)
     }
 
-    /// Leads and reviewers keep long gaps between turns (a reviewer runs long tests), so their prompt cache lives an hour; a task worker works in short bursts.
+    /// Leads keep long gaps between turns, so their prompt cache lives an hour. A task worker and a reviewer each work in one short burst with no gap of five minutes, so the hour would cost more than it saves; a project whose checks run long can set `cache_ttl = "1h"` for its reviewers.
     pub fn default_cache_ttl(self) -> CacheTtl {
         match self {
-            Role::TaskWorker => CacheTtl::FiveMinutes,
-            Role::AreaLead | Role::ReviewLead | Role::Reviewer => CacheTtl::OneHour,
+            Role::TaskWorker | Role::Reviewer => CacheTtl::FiveMinutes,
+            Role::AreaLead | Role::ReviewLead => CacheTtl::OneHour,
         }
     }
 
@@ -453,7 +455,7 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
     }
 }
 
-/// What waits for a lead whose process starts again in its own session: for an area lead the ready tasks of its area in the ready order, for the review lead the open proposals that have no verdict on their current version and no live review claim. A task claim hides its task only while its worker runs or the same start runs it again, because a start moves the claim of a worker that has ended. A review claim hides its proposal until its lease runs out, also when its reviewer has ended: fold resumes that reviewer for a new version, so the proposal is not the review lead's work.
+/// What waits for a lead whose process starts again in its own session: for an area lead the ready tasks of its area in the ready order, for the review lead the open proposals that have no verdict on their current version and that no reviewer works on. A claim hides its task or proposal only while its worker runs or the same start runs it again, because a start moves the claim of a worker that has ended; a review claim also hides its proposal while fold owes its ended reviewer a resume for the newest version, since that reviewer gets the version.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatchUpFacts<'a> {
     pub role: Role,
@@ -494,7 +496,7 @@ pub fn catch_up_turn(facts: &CatchUpFacts<'_>) -> Option<String> {
             let mut parts = Vec::new();
             if !facts.proposals.is_empty() {
                 parts.push(format!(
-                    "These open proposals wait for a review and nobody holds a live review claim of them: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, and give them to reviewers with start_worker, which also moves a stale claim. Leave a proposal whose reviewer holds a live claim to that reviewer: fold resumes it for a new version.",
+                    "These open proposals wait for a review and no reviewer works on them: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, and give them to reviewers with start_worker, which also moves the claim of a reviewer that has ended. Leave a proposal to a reviewer that runs or that fold resumes for a new version.",
                     listed(facts.proposals.iter().map(ToString::to_string).collect())
                 ));
             }
@@ -656,10 +658,10 @@ mod tests {
     }
 
     #[test]
-    fn leads_and_reviewers_cache_for_an_hour_and_task_workers_for_five_minutes() {
+    fn leads_cache_for_an_hour_and_task_workers_and_reviewers_for_five_minutes() {
         assert_eq!(Role::AreaLead.default_cache_ttl(), CacheTtl::OneHour);
         assert_eq!(Role::ReviewLead.default_cache_ttl(), CacheTtl::OneHour);
-        assert_eq!(Role::Reviewer.default_cache_ttl(), CacheTtl::OneHour);
+        assert_eq!(Role::Reviewer.default_cache_ttl(), CacheTtl::FiveMinutes);
         assert_eq!(Role::TaskWorker.default_cache_ttl(), CacheTtl::FiveMinutes);
         assert!(Role::AreaLead.is_long_lived() && Role::ReviewLead.is_long_lived());
         assert!(!Role::TaskWorker.is_long_lived() && !Role::Reviewer.is_long_lived());
@@ -720,6 +722,74 @@ mod tests {
                 < 1800,
             "the prompt stays in context every turn"
         );
+    }
+
+    #[test]
+    fn workers_ask_the_humans_directly_and_main_gets_only_plan_boundaries() {
+        for role in Role::ALL {
+            let prompt = role.prompt();
+            assert!(
+                prompt.to_lowercase().contains("ask the humans directly"),
+                "{role}"
+            );
+            assert!(prompt.contains("`asks_human` true"), "{role}");
+            assert!(
+                prompt.contains("the answer comes to you in the same thread"),
+                "{role}"
+            );
+            assert!(!prompt.contains("bring it to the main agent"), "{role}");
+        }
+        for role in [Role::AreaLead, Role::ReviewLead] {
+            assert!(
+                role.prompt().contains(
+                    "When you ask, send the main agent one short line with the thread id, without the question"
+                ),
+                "{role}"
+            );
+        }
+        for role in [Role::ReviewLead, Role::Reviewer] {
+            assert!(
+                role.prompt().contains(
+                    "or describe it with `create_request`, when it is work the size of a feature of its own. Ask the humans"
+                ),
+                "{role}"
+            );
+        }
+        assert!(
+            Role::AreaLead
+                .prompt()
+                .contains("call `mark_answered` on that ask when the task is Done")
+        );
+        assert!(
+            Role::AreaLead
+                .prompt()
+                .contains("Ask the main agent only about a change to those boundaries")
+        );
+        assert!(
+            !Role::ReviewLead
+                .prompt()
+                .contains("ask the main agent with")
+        );
+        assert!(!Role::Reviewer.prompt().contains("ask the review lead with"));
+        let main = main_prompt();
+        assert!(main.contains(
+            "about changes to the approved plan's boundaries (section 8), repeated failures, worker limits, blockers, human tasks and requests"
+        ));
+        assert!(main.contains("never relay their questions"));
+        assert!(main.contains(
+            "Ask the user yourself about your own responsibilities: the plan and its boundaries, project-wide settings, and project checks"
+        ));
+        assert!(main.contains(
+            "Bring pending tool permissions, human reviews, request drafts, ready human tasks and blockers to the user, with each item id"
+        ));
+        assert!(shared_prompt().contains(
+            "Ask the humans directly about your own work; the main agent asks the user about the plan"
+        ));
+        assert!(main.contains(
+            "When the user answers a lead's ask here, reply to the asker in its thread, then call `mark_answered`"
+        ));
+        assert!(main.contains("the leads' short lines name"));
+        assert!(!main.contains("Bring human questions"));
     }
 
     #[test]
@@ -815,6 +885,12 @@ mod tests {
         let worker = Role::TaskWorker.prompt();
         assert!(worker.contains("call `run_checks` for the task before `create_proposal`"));
         assert!(worker.contains("Wait for `checks.finished` with `wait_for_events`"));
+        assert!(worker.contains("fold ends a `wait_for_events` after at most 270 s"));
+        assert!(
+            Role::Reviewer
+                .prompt()
+                .contains("fold ends a `wait_for_events` after at most 270 s")
+        );
         let lead = Role::ReviewLead.prompt();
         assert!(lead.contains("You decide the scope when you assign the review"));
         assert!(lead.contains("never resolve it yourself"));
@@ -1082,7 +1158,7 @@ mod tests {
         })
         .unwrap();
         assert!(
-            review.contains("nobody holds a live review claim of them: P-4."),
+            review.contains("no reviewer works on them: P-4."),
             "{review}"
         );
         assert!(!review.contains("yourself"), "{review}");

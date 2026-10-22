@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
+use fold_core::reviews::Side;
 use fold_core::{
     AddressedAs, AgentName, Choice, Directory, DirectoryAgent, HumanName, MessageId, ProposalId,
     Recipient, RequestId, Sender, Tag, Target, TaskId, Timestamp, WorkerName,
@@ -47,6 +48,8 @@ pub struct RecipientRow {
     pub acked_at: Option<Timestamp>,
     /// The first time a notice about the message reached the recipient's agent.
     pub pushed_at: Option<Timestamp>,
+    /// The worker fold sent the message on to because this recipient, a stopped worker, could not start to answer it.
+    pub forwarded_to: Option<WorkerName>,
 }
 
 /// A stored message with its recipients in the order they were written.
@@ -68,6 +71,36 @@ pub struct MessageRow {
     pub header: Option<String>,
     /// The sender marked the message as asking a human for an answer.
     pub asks_human: bool,
+    /// The lines of a proposal version the message asks about.
+    pub lines: Option<MessageLines>,
+}
+
+/// A run of lines of one file of a proposal version that a message asks about, 1-based and inclusive, in the version's base tree (`Old`) or its own tree (`New`). The version belongs to the message's proposal. The excerpt is file content, which is never logged, so the `Debug` form gives its length alone.
+#[derive(Clone, PartialEq, Eq)]
+pub struct MessageLines {
+    pub version: u32,
+    pub path: String,
+    pub side: Side,
+    pub start_line: u32,
+    pub end_line: u32,
+    /// The lines as the tree holds them, joined by newlines.
+    pub excerpt: String,
+    /// `excerpt` holds only the first lines of the run.
+    pub excerpt_cut: bool,
+}
+
+impl std::fmt::Debug for MessageLines {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MessageLines")
+            .field("version", &self.version)
+            .field("path", &self.path)
+            .field("side", &self.side)
+            .field("start_line", &self.start_line)
+            .field("end_line", &self.end_line)
+            .field("excerpt_len", &self.excerpt.len())
+            .field("excerpt_cut", &self.excerpt_cut)
+            .finish()
+    }
 }
 
 /// Inserts the message. A sender worker, task or proposal that does not exist leaves its column empty, which the sender check or the caller's earlier lookup refuses.
@@ -148,6 +181,41 @@ pub async fn insert_choices(
         .execute(tx.conn())
         .await?;
     }
+    Ok(())
+}
+
+/// Stores the lines of `proposal`'s version that `message` asks about. A version the message's proposal does not have is refused by the database.
+pub async fn insert_lines(
+    tx: &mut WriteTx,
+    message: MessageId,
+    proposal: ProposalId,
+    lines: &MessageLines,
+) -> Result<(), StoreError> {
+    let number = message.to_db();
+    let proposal = proposal.to_db();
+    let version = i64::from(lines.version);
+    let side = lines.side.as_str();
+    let start = i64::from(lines.start_line);
+    let end = i64::from(lines.end_line);
+    sqlx::query!(
+        "INSERT INTO message_line_refs
+             (message_id, version_id, path, side, start_line, end_line, excerpt, excerpt_cut)
+         VALUES ((SELECT id FROM messages WHERE number = ?1),
+                 (SELECT v.id FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id
+                  WHERE p.number = ?2 AND v.version = ?3),
+                 ?4, ?5, ?6, ?7, ?8, ?9)",
+        number,
+        proposal,
+        version,
+        lines.path,
+        side,
+        start,
+        end,
+        lines.excerpt,
+        lines.excerpt_cut
+    )
+    .execute(tx.conn())
+    .await?;
     Ok(())
 }
 
@@ -391,6 +459,150 @@ pub async fn mark_pushed(
     .execute(tx.conn())
     .await?;
     Ok(done.rows_affected())
+}
+
+/// A message to a stopped or failed worker that it has not read, that no notice reached and that fold has not settled by sending it on: the worker must start again to answer it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwedMessage {
+    /// The recipient worker's agent.
+    pub agent: AgentName,
+    pub message: MessageId,
+    pub thread: MessageId,
+    pub task: Option<TaskId>,
+    pub sender: Sender,
+}
+
+/// Every [`OwedMessage`] in message number order, of `agent` alone when it is given. Only rows addressed to the agent or to one of its workers by name count, so a message to a tag or to every agent starts no stopped worker, and fold's own messages never do. An agent with a connected session, or with a session opened since its process stopped, such as one a person runs in a terminal of their own, is left out: that session takes the message, and a second process must not run beside it.
+pub async fn owed_to_stopped(
+    executor: impl SqliteExecutor<'_>,
+    agent: Option<&AgentName>,
+) -> Result<Vec<OwedMessage>, StoreError> {
+    let agent = agent.map(AgentName::as_str);
+    let rows = sqlx::query!(
+        r#"SELECT DISTINCT g.name AS "agent!: String", m.number AS "number!: i64",
+                  m.thread_id AS "thread!: i64", t.number AS "task?: i64", m.sender_kind,
+                  sw.name AS "worker?: String", m.sender_human
+           FROM message_recipients r
+           JOIN messages m ON m.id = r.message_id
+           JOIN workers k ON k.id = r.worker_id
+           JOIN agents g ON g.id = k.agent_id
+           JOIN worker_processes p ON p.agent_id = k.agent_id
+           LEFT JOIN workers sw ON sw.id = m.sender_worker_id
+           LEFT JOIN tasks t ON t.id = m.task_id
+           WHERE p.state IN ('stopped', 'failed') AND (?1 IS NULL OR g.name = ?1)
+             AND r.addressed_as IN ('agent', 'worker') AND m.sender_kind <> 'fold'
+             AND r.delivered_at IS NULL AND r.acked_at IS NULL AND r.pushed_at IS NULL
+             AND r.forwarded_at IS NULL
+             AND NOT EXISTS (
+                 SELECT 1 FROM sessions s
+                 WHERE s.agent_id = g.id AND (s.ended_at IS NULL OR s.started_at > p.stopped_at)
+             )
+           ORDER BY m.number, g.name"#,
+        agent
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let sender = match (row.sender_kind.as_str(), row.worker, row.sender_human) {
+                ("worker", Some(worker), None) => Sender::Worker(
+                    WorkerName::parse(&worker).map_err(|_| StoreError::Corrupt("workers.name"))?,
+                ),
+                ("human", None, Some(name)) => Sender::Human(
+                    HumanName::parse(&name)
+                        .map_err(|_| StoreError::Corrupt("messages.sender_human"))?,
+                ),
+                _ => return Err(StoreError::Corrupt("messages.sender_kind")),
+            };
+            Ok(OwedMessage {
+                agent: AgentName::parse(&row.agent)
+                    .map_err(|_| StoreError::Corrupt("agents.name"))?,
+                message: message_id(row.number, "messages.number")?,
+                thread: message_id(row.thread, "messages.thread_id")?,
+                task: row.task.map(task_id).transpose()?,
+                sender,
+            })
+        })
+        .collect()
+}
+
+/// Records on `agent`'s rows of `message` that fold settled them at `now`, because the stopped worker could not start to answer it: sent on to `to`, or held with nobody to take it when `to` is `None`. Rows settled before keep their record. Returns how many rows it set.
+pub async fn mark_forwarded(
+    tx: &mut WriteTx,
+    message: MessageId,
+    agent: &AgentName,
+    to: Option<&WorkerName>,
+    now: Timestamp,
+) -> Result<u64, StoreError> {
+    let message = message.to_db();
+    let agent = agent.as_str();
+    let to_agent = to.map(WorkerName::agent);
+    let to_agent = to_agent.as_ref().map(AgentName::as_str);
+    let to = to.map(WorkerName::as_str);
+    let now = now.as_millis();
+    let done = sqlx::query!(
+        "UPDATE message_recipients
+         SET forwarded_to = (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id
+                             WHERE a.name = ?4 AND w.name = ?3),
+             forwarded_at = ?1
+         WHERE forwarded_at IS NULL
+           AND message_id = (SELECT id FROM messages WHERE number = ?2)
+           AND worker_id IN (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id
+                             WHERE a.name = ?5)",
+        now,
+        message,
+        to,
+        to_agent,
+        agent
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(done.rows_affected())
+}
+
+/// Whether `worker` has a row of `message`.
+pub async fn is_recipient(
+    conn: &mut SqliteConnection,
+    message: MessageId,
+    worker: &WorkerName,
+) -> Result<bool, StoreError> {
+    let message = message.to_db();
+    let agent = worker.agent();
+    let agent = agent.as_str();
+    let worker = worker.as_str();
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM message_recipients r
+               JOIN workers w ON w.id = r.worker_id
+               JOIN agents a ON a.id = w.agent_id
+               WHERE r.message_id = (SELECT id FROM messages WHERE number = ?1)
+                 AND a.name = ?2 AND w.name = ?3
+           ) AS "found!: bool""#,
+        message,
+        agent,
+        worker
+    )
+    .fetch_one(conn)
+    .await?)
+}
+
+/// How many rows of `agent`'s workers no inbox has returned yet.
+pub async fn undelivered_count(
+    executor: impl SqliteExecutor<'_>,
+    agent: &AgentName,
+) -> Result<u64, StoreError> {
+    let agent = agent.as_str();
+    let count = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!: i64"
+           FROM message_recipients r
+           JOIN workers w ON w.id = r.worker_id
+           JOIN agents a ON a.id = w.agent_id
+           WHERE a.name = ? AND r.delivered_at IS NULL AND r.acked_at IS NULL"#,
+        agent
+    )
+    .fetch_one(executor)
+    .await?;
+    u64::try_from(count).map_err(|_| StoreError::Corrupt("message_recipients"))
 }
 
 /// Acknowledges the worker's row of `message`, or with `up_to` every unacknowledged row of the worker up to that number, and returns the numbers it changed in order. `None` when the worker has no row for `message`; a row acknowledged before keeps its time.
@@ -799,6 +1011,7 @@ impl RawMessage {
             choices: asked.choices,
             header: asked.header,
             asks_human: self.asks_human,
+            lines: asked.lines,
         })
     }
 }
@@ -844,10 +1057,11 @@ async fn with_recipients(
         .map_err(|_| StoreError::Invalid("message numbers"))?;
     let recipients = sqlx::query!(
         r#"SELECT m.number, w.name AS "worker?: String", r.human, r.addressed_as,
-                  r.delivered_at, r.acked_at, r.pushed_at
+                  r.delivered_at, r.acked_at, r.pushed_at, fw.name AS "forwarded_to?: String"
            FROM message_recipients r
            JOIN messages m ON m.id = r.message_id
            LEFT JOIN workers w ON w.id = r.worker_id
+           LEFT JOIN workers fw ON fw.id = r.forwarded_to
            WHERE m.number IN (SELECT value FROM json_each(?))
            ORDER BY m.number, r.id"#,
         numbers
@@ -885,6 +1099,12 @@ async fn with_recipients(
                 .pushed_at
                 .map(|millis| time(millis, "message_recipients.pushed_at"))
                 .transpose()?,
+            forwarded_to: row
+                .forwarded_to
+                .map(|name| {
+                    WorkerName::parse(&name).map_err(|_| StoreError::Corrupt("workers.name"))
+                })
+                .transpose()?,
         });
     }
     rows.into_iter()
@@ -920,14 +1140,15 @@ pub async fn first_human_reply(
     .transpose()
 }
 
-/// The options and the header of a question message.
+/// What a message asks beyond its body: the options and the header of a question, and the lines of a proposal version it asks about.
 #[derive(Debug, Clone, Default)]
 struct Asked {
     choices: Vec<Choice>,
     header: Option<String>,
+    lines: Option<MessageLines>,
 }
 
-/// The choices and the header of each message whose number is in the JSON list `numbers`, the choices in order.
+/// The choices, the header and the lines of each message whose number is in the JSON list `numbers`, the choices in order.
 async fn choices_of(
     conn: &mut SqliteConnection,
     numbers: &str,
@@ -949,6 +1170,17 @@ async fn choices_of(
            WHERE m.number IN (SELECT value FROM json_each(?))"#,
         numbers
     )
+    .fetch_all(&mut *conn)
+    .await?;
+    let lines = sqlx::query!(
+        r#"SELECT m.number, v.version, l.path, l.side, l.start_line, l.end_line, l.excerpt,
+                  l.excerpt_cut AS "excerpt_cut!: bool"
+           FROM message_line_refs l
+           JOIN messages m ON m.id = l.message_id
+           JOIN proposal_versions v ON v.id = l.version_id
+           WHERE m.number IN (SELECT value FROM json_each(?))"#,
+        numbers
+    )
     .fetch_all(conn)
     .await?;
     let mut asked: HashMap<i64, Asked> = HashMap::new();
@@ -960,6 +1192,19 @@ async fn choices_of(
     }
     for row in headers {
         asked.entry(row.number).or_default().header = Some(row.header);
+    }
+    for row in lines {
+        let line =
+            |value: i64, column| u32::try_from(value).map_err(|_| StoreError::Corrupt(column));
+        asked.entry(row.number).or_default().lines = Some(MessageLines {
+            version: line(row.version, "proposal_versions.version")?,
+            path: row.path,
+            side: Side::parse(&row.side).ok_or(StoreError::Corrupt("message_line_refs.side"))?,
+            start_line: line(row.start_line, "message_line_refs.start_line")?,
+            end_line: line(row.end_line, "message_line_refs.end_line")?,
+            excerpt: row.excerpt,
+            excerpt_cut: row.excerpt_cut,
+        });
     }
     Ok(asked)
 }

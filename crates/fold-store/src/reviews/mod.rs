@@ -697,6 +697,43 @@ pub async fn review_target(
     .transpose()
 }
 
+/// Version `version` of the proposal and its two trees, as [`review_target`] reads the current one; `None` when the proposal has no such version.
+pub async fn version_target(
+    executor: impl SqliteExecutor<'_>,
+    proposal: ProposalId,
+    version: u32,
+) -> Result<Option<ReviewTarget>, StoreError> {
+    let number = proposal.to_db();
+    let version = i64::from(version);
+    let row = sqlx::query!(
+        r#"SELECT v.id AS "id!: i64", v.version, r.tree_hash AS base_tree, v.tree_hash
+           FROM proposal_versions v
+           JOIN proposals p ON p.id = v.proposal_id
+           JOIN revisions r ON r.id = v.base_revision_id
+           WHERE p.number = ?1 AND v.version = ?2"#,
+        number,
+        version
+    )
+    .fetch_optional(executor)
+    .await?;
+    row.map(|row| {
+        Ok(ReviewTarget {
+            version_id: row.id,
+            version: u32::try_from(row.version)
+                .map_err(|_| StoreError::Corrupt("proposal_versions.version"))?,
+            base_tree: row
+                .base_tree
+                .parse()
+                .map_err(|_| StoreError::Corrupt("revisions.tree_hash"))?,
+            tree: row
+                .tree_hash
+                .parse()
+                .map_err(|_| StoreError::Corrupt("proposal_versions.tree_hash"))?,
+        })
+    })
+    .transpose()
+}
+
 /// Inserts a review of the version row `version_id` in the caller's write and returns its row id. The table is append-only, so a review is never changed afterwards.
 pub async fn insert_review(
     tx: &mut WriteTx,

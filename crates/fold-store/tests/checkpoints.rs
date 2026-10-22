@@ -347,7 +347,10 @@ async fn reasons_round_trip_and_fix_the_kind() {
         assert_eq!(CheckpointReason::parse(reason.as_str()), Some(reason));
         let expected = if matches!(
             reason,
-            CheckpointReason::Explicit | CheckpointReason::HumanEdit | CheckpointReason::ReviewFix
+            CheckpointReason::Explicit
+                | CheckpointReason::HumanEdit
+                | CheckpointReason::ReviewFix
+                | CheckpointReason::BeforeRemoval
         ) {
             CheckpointKind::Explicit
         } else {

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE message_recipients\n         SET forwarded_to = (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id\n                             WHERE a.name = ?4 AND w.name = ?3),\n             forwarded_at = ?1\n         WHERE forwarded_at IS NULL\n           AND message_id = (SELECT id FROM messages WHERE number = ?2)\n           AND worker_id IN (SELECT w.id FROM workers w JOIN agents a ON a.id = w.agent_id\n                             WHERE a.name = ?5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "d668887dc798450cc10e67376398b51b2ae86e44f890ff365f7ab03e40e6ecf4"
+}

@@ -25,6 +25,7 @@ mod integrate;
 mod notify;
 mod plans;
 mod proposals;
+mod questions;
 mod review_fixes;
 mod scopes;
 mod verdicts;

@@ -49,6 +49,13 @@ beforeEach(() => {
 
 const hit = (key: readonly unknown[]) =>
   invalidated.includes(JSON.stringify(key));
+/** An invalidated key refreshes every key it is a prefix of. */
+const refreshes = (key: readonly unknown[]) =>
+  invalidated.some((made) => {
+    if (made === undefined) return false;
+    const prefix = JSON.parse(made) as unknown[];
+    return prefix.every((part, i) => part === key[i]);
+  });
 /** A stored event is always a new row of the activity list. */
 const onlyActivity = [JSON.stringify(keys.activity(slug))];
 
@@ -313,8 +320,10 @@ describe("patch rules", () => {
     client.setQueryData(keys.agentBar(slug), [
       { name: "frontend", presence: "active", working: 1, stalled: 0 },
     ]);
-    const targets = { agents: ["frontend"], tags: [] };
-    client.setQueryData(keys.messageTargets(slug), targets);
+    const readers = {
+      readers: [{ name: "frontend", role: "area_lead" }],
+    };
+    client.setQueryData(keys.taskReaders(slug, "T-2"), readers);
     applyEvent(
       client,
       slug,
@@ -331,7 +340,7 @@ describe("patch rules", () => {
     expect(client.getQueryData(keys.agentBar(slug))).toEqual([
       { name: "frontend", presence: "idle", working: 1, stalled: 0 },
     ]);
-    expect(client.getQueryData(keys.messageTargets(slug))).toBe(targets);
+    expect(client.getQueryData(keys.taskReaders(slug, "T-2"))).toBe(readers);
     expect(invalidated).toEqual([]);
   });
 
@@ -385,6 +394,8 @@ describe("patch rules", () => {
       expect(hit(keys.workers(slug)), step).toBe(true);
       expect(hit(keys.activity(slug)), step).toBe(false);
       expect(hit(keys.needsYou(slug)), step).toBe(step !== "init");
+      expect(hit(keys.cost(slug)), step).toBe(step !== "init");
+      expect(hit(keys.projects()), step).toBe(step !== "init");
     }
   });
 
@@ -715,6 +726,23 @@ describe("invalidation rules", () => {
         expect(hit(key)).toBe(true);
       }
     }
+  });
+
+  it("refreshes a task's feedback readers when the task, its claim, a worker or the main tag changes", () => {
+    for (const [type, extra] of [
+      ["task.updated", { task: "T-3" }],
+      ["task.human_review_set", { task: "T-3" }],
+      ["claim.acquired", { task: "T-3" }],
+      ["worker.started", {}],
+      ["agent.tag_added", {}],
+    ] as const) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type, extra));
+      expect(refreshes(keys.taskReaders(slug, "T-3")), type).toBe(true);
+    }
+    invalidated = [];
+    applyEvent(client, slug, ev("task.updated", { task: "T-4" }));
+    expect(refreshes(keys.taskReaders(slug, "T-3"))).toBe(false);
   });
 
   it("refreshes the workers for a new or changed area", () => {

@@ -21,6 +21,7 @@ function message(
     choices: labels.map((label) => ({ label, description: null })),
     header: null,
     asks_human: false,
+    lines: null,
     proposal: null,
     recipients: [],
     reply_to: null,

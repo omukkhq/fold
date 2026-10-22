@@ -32,6 +32,11 @@ name = "acceptance"
 run = "make acceptance"
 stage = "integration"
 timeout = "2h"
+
+[[check]]
+name = "build"
+run = "cargo build --workspace"
+stage = ["proposal", "integration"]
 ```
 
 Keys. Every key is known, and a misspelt key refuses the whole file with `checks_file_invalid`, whose message names the line or the check:
@@ -42,7 +47,7 @@ Keys. Every key is known, and a misspelt key refuses the whole file with `checks
   - `run`: the shell command, at most 4000 characters. It runs as `sh -c` in the check directory, with stdin closed and without fold's agent and human variables. A fold call from inside a check acts only as the agent of the worker that asked for the run, never as a human.
   - `files`: optional. A regular expression, not a glob, searched anywhere in each changed path; `'^web/'` matches the folder `web` at the root and `'\.rs$'` every Rust file. A check whose pattern matches no changed path is `skipped`. Without it the check always runs.
   - `required`: optional, `true` by default. A check with `required = false` shows its result and never blocks.
-  - `stage`: optional, `proposal` (the default) or `integration`.
+  - `stage`: optional, `proposal` (the default), `integration`, or a list such as `["proposal", "integration"]` to run the check in both stages under one name. A string is a list of one. An empty list, an unknown name or a repeated name refuses the file.
   - `timeout`: optional, a whole number with `s`, `m` or `h`, such as `"90s"`, `"10m"` or `"2h"`, from 1s to 24h. The default is 30 minutes. fold stops a command's whole process group at its timeout (`timed_out`), and at its end, so a server that a test started ends with it.
 
 The file is at most 256 KiB. Prefer one check per tool or part of the repository with a `files` pattern, so a change of the docs runs no test suite.
@@ -70,7 +75,7 @@ auto_checkpoint_quiet_seconds = 120  # quiet time before an automatic checkpoint
 auto_checkpoints_kept = 20           # automatic checkpoints each workspace keeps
 max_file_bytes = 52428800            # a larger file keeps its recorded version and gives a warning
 stall_minutes = 5                    # a claimed task without a file change for this long counts as stalled
-closed_workspace_days = 14           # how long `fld gc` keeps a closed workspace directory
+closed_workspace_days = 14           # how long `fld gc` keeps the checkpoints of a closed workspace, a record only
 
 [git]
 branch = "main"                      # the branch of the project folder's .git that every integration commits to
@@ -90,12 +95,12 @@ max_per_area = 2                     # optional: task workers of one area at onc
 
 [roles.task_worker]                  # also area_lead, review_lead and reviewer
 model = "sonnet"                     # passed to Claude Code as --model
-cache_ttl = "5m"                     # "1h" or "5m": "1h" for leads and reviewers and "5m" for task workers by default
+cache_ttl = "5m"                     # "1h" or "5m": "1h" for leads and "5m" for reviewers and task workers by default
 idle_minutes = 15                    # task_worker and reviewer only: an idle worker stops after this long
 mcp = ["fold", "pencil"]             # the servers the role may load: fold and servers of the project's .mcp.json
 
 [roles.review_lead]
-handoff_at = 60                      # area_lead and review_lead only: the percent of the context window past which fold refreshes the lead through a hand-off note
+handoff_at = 50                      # area_lead and review_lead only: the percent of the context window past which fold refreshes the lead through a hand-off note; without it, 85% of the window below 220k tokens and 60% from 220k
 ```
 
 - The top-level numbers must be whole numbers above 0. A worker limit has no upper bound, and 0 lets no worker of its role start; the leads are outside the limits, and a lower limit never stops a running worker.
@@ -154,11 +159,12 @@ Work in the project folder:
 - `fld pause` and `fld resume`: stop every worker of the project, keeping its session and claims, and run them again.
 - `fld worker restart NAME [--instructions TEXT]`: start the worker `NAME` of any role again in a new Claude Code session, for example when its session is broken; it keeps its name, claims and workers, and its old session id stays in its previous sessions.
 - `fld log [-n N] [--oneline]`: list main's revisions, newest first, as the web app's repository screen shows them: the revision id with main's head marked, the title by origin (the proposal and its title, a pull, a direct change, a record or the genesis), the task, the author, the time in UTC and the Git commit. `-n` sets how many (20 by default, at most 1000); `--oneline` prints only the id and the title.
+- `fld cost [--since WHEN] [--by SPLIT] [--task T-N] [--json]`: print what the project's supervised workers cost, from the values Claude Code reported: the total of all time, today and the last 7 days (UTC days), the tokens (cache read, cache write, output and input), then by role, by area and the top tasks with their build and review cost and their tokens. `--since` takes today, 12h, 7d, a date or an RFC 3339 time; `--by` prints one split in full (role, area, model, worker or task); `--task` prints one task's cost per worker; `--json` prints the daemon's answer. The main agent's own session is not supervised, so its cost is not counted.
 - `fld transcript AGENT [--tail N]`: print the path of the agent's Claude Code transcript, the file of its current session: the main agent's recorded session, or the session fold runs for a worker. `--tail N` prints the file's last N lines instead; fld reads them itself, and the daemon never opens a transcript.
 
 Maintenance and access:
 
-- `fld gc [--dry-run]`: delete unreferenced objects, prune automatic checkpoints beyond `auto_checkpoints_kept`, and remove closed workspace directories older than `closed_workspace_days`. `--dry-run` only counts.
+- `fld gc [--dry-run]`: delete unreferenced objects, prune automatic checkpoints beyond `auto_checkpoints_kept`, remove the closed workspace directories that are still there, and prune the checkpoints of workspaces closed longer than `closed_workspace_days`. fold removes a workspace's directory as soon as the workspace closes and its owning agent has no running worker process and no open session, after a final checkpoint of the tracked files it had not recorded (a review checkout takes none). That checkpoint is a record, not a restore point: a closed workspace is never restored. `fld gc` retries a removal that failed. `--dry-run` only counts.
 - `fld token create NAME [--label TEXT]`: create a sign-in token for the web app off localhost for the human `NAME` and print it once. `fld token list` shows the tokens without their secrets, and `fld token revoke ID` (such as `wt-3`) ends every session made from one.
 - `fld subscribe [EMAIL]`: subscribe an address to fold release news.
 
@@ -180,7 +186,7 @@ The daemon serves the web app at `http://127.0.0.1:7420` by default. On loopback
 - Proposals: the list, with the proposals that wait for your review marked Waits for you, counted on the tab and shown alone by a filter, and each proposal's diff (full or since the last review), its check runs and conflicts. A person comments on lines, approves the version, requests changes, integrates, edits a file into a new version and sends that version for review again. A batch page shows a review batch's members and stops its reviewer. A first version that waits in a review plan for related tasks shows the awaited tasks and the time the wait ends, on its page and its board card.
 - Requests: create a request with attachments; on a request, approve a draft, request changes, edit the draft into a new version, close it and answer its clarification thread.
 - Agents: the main agent, the leads and their workers with state, model, turns, cost and context. Start an area lead or the review lead, stop a worker, start a worker in a new session, and allow or deny a worker's tool permission.
-- Messages: the threads that concern you, filtered by agent, task or proposal, or to those marked Waits for you, which the tab's count counts; reply, answer a question with its choices or free text, mark a thread's questions answered, and send feedback. Agents' messages to each other are on each task and in Activity.
+- Messages: the threads that concern you, filtered by agent, task or proposal, or to those marked Waits for you, which the tab's count counts; reply, answer a question with its choices or free text, mark a thread's questions answered, and send feedback. Agents' messages to each other are on each task and in Activity. The leads, the reviewers and the task workers ask the humans directly with `asks_human`, so their questions wait in Needs you under Questions, and a reply goes back to the asker in the same thread, never through the main agent.
 - Repository: revisions, the tree, files and a compare of two revisions.
 
 The top bar switches project, pauses and resumes the agents, and opens Needs you, which lists what waits for a human, each with a link to the screen that handles it: Questions, Permissions, Reviews, Request drafts, Human tasks, Blockers, Your changes (a conflicting change from the project folder), Git branch, Project folder (unrecorded changes in files main changed), Unstash conflict, Checks file and Worker connection (a worker that needs `fld restart`). The web app has no settings screen: config, areas, worker limits and tokens change through `.fold/config.toml`, the fold tools and `fld`.

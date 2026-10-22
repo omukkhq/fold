@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT w.number AS \"number!: i64\"\n           FROM workspaces w JOIN checkpoints c ON c.workspace_id = w.id\n           WHERE w.state IN ('archived', 'abandoned') AND c.pruned_at IS NULL\n             AND w.closed_at < ?1 AND w.directory_removed_at < ?1\n           ORDER BY w.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e37e26286c678b88d2b1d17955ba1ab57d8d9cb52df05adc0f18b874d2349d72"
+}

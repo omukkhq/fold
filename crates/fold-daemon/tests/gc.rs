@@ -345,7 +345,7 @@ async fn the_sweep_waits_while_a_writer_holds_the_object_lock() {
 }
 
 #[tokio::test]
-async fn closed_workspaces_past_their_retention_lose_directories_and_checkpoints() {
+async fn closed_workspace_directories_go_at_once_and_their_checkpoints_after_the_retention() {
     let fixture = Fixture::new("demo").await;
     fixture
         .workspace(1, "task", "archived", Some(15), "t-1")
@@ -354,9 +354,24 @@ async fn closed_workspaces_past_their_retention_lose_directories_and_checkpoints
         .workspace(2, "review", "archived", Some(15), "review-p-1")
         .await;
     fixture
-        .workspace(3, "task", "abandoned", Some(13), "t-1-2")
+        .workspace(3, "task", "abandoned", Some(1), "t-1-2")
         .await;
     fixture.workspace(4, "task", "active", None, "t-1-3").await;
+    let dir = |name: &str| fixture.root().join(".fold/ws").join(name);
+    // ws-1 lost its directory when it closed; ws-3 holds only its base files, so it needs no final checkpoint.
+    fs::remove_dir_all(dir("t-1")).unwrap();
+    let removed_at = fixture.project.now().checked_sub(DAY * 15).unwrap();
+    execute(
+        fixture.store(),
+        &format!(
+            "UPDATE workspaces SET directory_removed_at = {} WHERE number = 1;",
+            removed_at.as_millis()
+        ),
+    )
+    .await;
+    fs::remove_dir_all(dir("t-1-2")).unwrap();
+    fs::create_dir_all(dir("t-1-2")).unwrap();
+    fs::write(dir("t-1-2").join("file"), b"base").unwrap();
     let gone = [
         fixture
             .checkpoint(1, "one auto", CheckpointReason::BeforeRecord)
@@ -402,27 +417,22 @@ async fn closed_workspaces_past_their_retention_lose_directories_and_checkpoints
     let before = fixture.state().await;
     let planned = gc(&fixture.handle, true).await.unwrap();
     assert_eq!(fixture.state().await, before);
-    for name in ["t-1", "review-p-1", "t-1-2", "t-1-3"] {
-        let file = fixture
-            .root()
-            .join(".fold/ws")
-            .join(name)
-            .join("src")
-            .join("lib.rs");
-        assert!(file.is_file(), "{name}");
-    }
+    assert!(dir("review-p-1").join("src").join("lib.rs").is_file());
+    assert!(dir("t-1-2").join("file").is_file());
     let report = gc(&fixture.handle, false).await.unwrap();
     assert_eq!(counts(&planned), counts(&report));
     assert_eq!(report.workspaces_removed, 2);
     assert_eq!(report.checkpoints_pruned, 3);
     assert_eq!(report.deleted, 6);
 
-    let dir = |name: &str| fixture.root().join(".fold/ws").join(name);
-    assert!(!dir("t-1").exists() && !dir("review-p-1").exists());
-    assert!(dir("t-1-2").join("src").join("lib.rs").is_file());
+    assert!(!dir("review-p-1").exists() && !dir("t-1-2").exists());
     assert!(dir("t-1-3").join("src").join("lib.rs").is_file());
     assert!(fixture.unpruned(1).await.is_empty() && fixture.unpruned(2).await.is_empty());
-    assert_eq!(fixture.unpruned(3).await, vec![4]);
+    assert_eq!(
+        fixture.unpruned(3).await,
+        vec![4],
+        "no final checkpoint of base files"
+    );
     assert_eq!(fixture.unpruned(4).await, vec![5]);
     for tree in gone {
         assert!(!fixture.objects.contains(&tree).unwrap());
@@ -442,9 +452,43 @@ async fn closed_workspaces_past_their_retention_lose_directories_and_checkpoints
             (1, "ck-3".to_owned())
         ]
     );
+    let removed: Vec<i64> = sqlx::query_scalar(
+        "SELECT number FROM workspaces WHERE directory_removed_at IS NOT NULL ORDER BY number",
+    )
+    .fetch_all(fixture.store().read())
+    .await
+    .unwrap();
+    assert_eq!(removed, vec![1, 2, 3]);
 
     let again = gc(&fixture.handle, false).await.unwrap();
     assert_eq!((again.workspaces_removed, again.checkpoints_pruned), (0, 0));
+}
+
+#[tokio::test]
+async fn gc_takes_the_final_checkpoint_of_unrecorded_files_before_it_removes_a_directory() {
+    let fixture = Fixture::new("demo").await;
+    fixture
+        .workspace(1, "task", "abandoned", Some(1), "t-1")
+        .await;
+    let planned = gc(&fixture.handle, true).await.unwrap();
+    assert_eq!(planned.workspaces_removed, 1);
+    assert!(fixture.unpruned(1).await.is_empty(), "a dry run takes none");
+
+    let report = gc(&fixture.handle, false).await.unwrap();
+    assert_eq!(report.workspaces_removed, 1);
+    assert!(!fixture.root().join(".fold/ws").join("t-1").exists());
+    let checkpoints = list_checkpoints(fixture.store().read(), ws(1), false)
+        .await
+        .unwrap();
+    assert_eq!(checkpoints.len(), 1);
+    assert_eq!(checkpoints[0].reason, CheckpointReason::BeforeRemoval);
+    let files = fold_vcs::compare::load_flat(&fixture.objects, &checkpoints[0].tree).unwrap();
+    let content = fixture
+        .objects
+        .read(&files[b"src/lib.rs".as_slice()].hash)
+        .unwrap()
+        .payload;
+    assert_eq!(content, b"secret content");
 }
 
 #[tokio::test]
@@ -493,8 +537,12 @@ async fn a_closed_workspace_already_gone_counts_once() {
     assert_eq!(counts(&planned), counts(&report));
     assert_eq!(
         (report.workspaces_removed, report.checkpoints_pruned),
-        (1, 1)
+        (1, 0)
     );
+    // The retention counts from the removal, so the checkpoint goes once that is old too.
+    fixture.project.clock().advance(DAY * 15).unwrap();
+    let later = gc(&fixture.handle, false).await.unwrap();
+    assert_eq!((later.workspaces_removed, later.checkpoints_pruned), (0, 1));
 }
 
 async fn state_with(fixtures: &[&Fixture], clock: &ManualClock) -> AppState {

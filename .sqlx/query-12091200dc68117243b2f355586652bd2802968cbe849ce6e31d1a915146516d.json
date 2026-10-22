@@ -1,0 +1,57 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.number AS \"number!: i64\", w.path, w.closed_at AS \"closed_at!: i64\",\n                  w.removal_started_at IS NOT NULL AS \"removal_started!: bool\"\n           FROM workspaces w\n           WHERE w.state IN ('archived', 'abandoned') AND w.closed_at IS NOT NULL\n             AND w.directory_removed_at IS NULL\n             AND (?1 IS NULL OR w.number = ?1)\n             AND NOT EXISTS (\n               SELECT 1 FROM workers k JOIN worker_processes p ON p.agent_id = k.agent_id\n               WHERE k.id = w.worker_id AND p.state NOT IN ('stopped', 'failed'))\n             AND NOT EXISTS (\n               SELECT 1 FROM workers k JOIN sessions s ON s.agent_id = k.agent_id\n               WHERE k.id = w.worker_id AND s.ended_at IS NULL)\n           ORDER BY w.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "path",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "name": "closed_at!: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "closed_at"
+          }
+        }
+      },
+      {
+        "name": "removal_started!: bool",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "12091200dc68117243b2f355586652bd2802968cbe849ce6e31d1a915146516d"
+}

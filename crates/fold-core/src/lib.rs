@@ -16,7 +16,7 @@ pub mod time;
 pub mod workspaces;
 
 // Every domain submodule is also reachable at the crate root, so callers outside the crate name it without its domain.
-pub use agents::{presence, push, roles, transcript, turn_errors};
+pub use agents::{cost, presence, push, roles, transcript, turn_errors};
 pub use tasks::{claims, container, dag, readiness, requests, status};
 pub use workspaces::{checkpoint_policy, merge, object, revision, stall, tree};
 
