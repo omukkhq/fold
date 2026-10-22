@@ -1,10 +1,19 @@
-import { formatAsOf } from "@/format/time";
+import { formatAsOfMinute } from "@/format/time";
 import type { MessageView, RecipientView } from "@/api/messages";
 import { atName, isHumanName } from "@/people/names";
 import { actorSegment, seg, type Segment } from "@/people/segments";
 
+/** How far a message got to one recipient, worst first: `failed` (not delivered), `waiting` (the notice waits in a busy session), `forwarded` (a stopped worker's message went on to its lead), `delivered` (delivered or, for a human, sent) and `read` (acknowledged or read). */
+export type DeliveryTone =
+  | "failed"
+  | "waiting"
+  | "forwarded"
+  | "delivered"
+  | "read";
+
 /** One recipient's delivery: `acknowledged by` / `read by` (a human) / `sent to` (a human, whose read the daemon has not recorded) / `delivered to` (the agent read its inbox) / `waiting for` (the notice reached the agent's session, which takes it when its current step ends) / `not delivered to`, the recipient, the time the daemon recorded, if any, and a note that says why the message waits. A stopped task worker that could not start for the message has no lead word, and its note names the lead the daemon sent the message on to. */
 export interface Delivery {
+  tone: DeliveryTone;
   lead: string;
   actor: string;
   at: string | null;
@@ -18,26 +27,35 @@ export function recipientState(
 ): Delivery {
   if (r.acknowledged_at !== null) {
     return {
+      tone: "read",
       lead: isHumanName(r.name) ? "read by" : "acknowledged by",
       actor: r.name,
-      at: formatAsOf(now, r.acknowledged_at),
+      at: formatAsOfMinute(now, r.acknowledged_at),
       note: null,
     };
   }
   // A human's message shows in their Messages screen as soon as it is sent; no inbox read or notice applies to them.
   if (isHumanName(r.name) && r.delivered_at === null) {
-    return { lead: "sent to", actor: r.name, at: null, note: null };
+    return {
+      tone: "delivered",
+      lead: "sent to",
+      actor: r.name,
+      at: null,
+      note: null,
+    };
   }
   if (r.delivered_at !== null) {
     return {
+      tone: "delivered",
       lead: "delivered to",
       actor: r.name,
-      at: formatAsOf(now, r.delivered_at),
+      at: formatAsOfMinute(now, r.delivered_at),
       note: null,
     };
   }
   if (r.forwarded_to !== null) {
     return {
+      tone: "forwarded",
       lead: "",
       actor: r.name,
       at: null,
@@ -51,13 +69,15 @@ export function recipientState(
   // A notice that got through stays in the session even when a later post to the agent fails.
   if (r.pushed_at !== null) {
     return {
+      tone: "waiting",
       lead: "waiting for",
       actor: r.name,
-      at: formatAsOf(now, r.pushed_at),
+      at: formatAsOfMinute(now, r.pushed_at),
       note: unreachable ?? "it is busy until its current step ends",
     };
   }
   return {
+    tone: "failed",
     lead: "not delivered to",
     actor: r.name,
     at: null,

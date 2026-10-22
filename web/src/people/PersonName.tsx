@@ -11,6 +11,7 @@ export function PersonName({
   className,
   slot,
   you = null,
+  youWord = false,
 }: {
   /** `human:<name>` or an agent or worker name. */
   name: string;
@@ -18,8 +19,11 @@ export function PersonName({
   slot?: PersonSlot;
   /** The signed-in human's bare name: their own name gets `(you)` after it. */
   you?: string | null;
+  /** The signed-in human reads as the word `you` instead of `@name (you)`, inside a sentence such as `Read by you`. */
+  youWord?: boolean;
 }) {
   const human = isHumanName(name);
+  const own = isYou(name, you);
   return (
     <span
       data-person={human ? "human" : "agent"}
@@ -30,8 +34,8 @@ export function PersonName({
         human ? "text-primary-text" : "text-secondary-text",
       )}
     >
-      @{bareName(name)}
-      {isYou(name, you) ? (
+      {own && youWord ? "you" : `@${bareName(name)}`}
+      {own && !youWord ? (
         <span className="font-normal text-text-muted"> (you)</span>
       ) : null}
     </span>
@@ -45,12 +49,14 @@ export function PersonList({
   nameClassName,
   slot,
   you,
+  youWord = false,
 }: {
   names: readonly string[];
   className?: string;
   nameClassName?: string;
   slot?: PersonSlot;
   you?: string | null;
+  youWord?: boolean;
 }) {
   return (
     <span className={className}>
@@ -62,6 +68,7 @@ export function PersonList({
             className={nameClassName}
             slot={slot}
             you={you}
+            youWord={youWord}
           />
         </span>
       ))}

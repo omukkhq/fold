@@ -40,9 +40,10 @@ describe("delivery", () => {
       lead: "acknowledged by",
       actor: "frontend/ui",
     });
-    expect(states[0]?.at).toMatch(/^\d\d:\d\d:\d\d$/);
+    expect(states[0]?.at).toMatch(/^\d\d:\d\d$/);
     expect(states[1]).toMatchObject({ lead: "delivered to", actor: "backend" });
     expect(states[2]).toEqual({
+      tone: "failed",
       lead: "not delivered to",
       actor: "review",
       at: null,
@@ -52,6 +53,7 @@ describe("delivery", () => {
   });
   it("says a human's message was sent until the daemon records the read", () => {
     expect(recipientState(recipient("human:rafeed"), NOW)).toEqual({
+      tone: "delivered",
       lead: "sent to",
       actor: "human:rafeed",
       at: null,
@@ -64,6 +66,7 @@ describe("delivery", () => {
   it("says when fold cannot tell an agent that the message waits", () => {
     const unreachable = recipient("main", { reachable: false });
     expect(recipientState(unreachable, NOW)).toEqual({
+      tone: "failed",
       lead: "not delivered to",
       actor: "main",
       at: null,
@@ -87,7 +90,7 @@ describe("delivery", () => {
       actor: "backend-lead",
       note: "it is busy until its current step ends",
     });
-    expect(state.at).toMatch(/^\d\d:\d\d:\d\d$/);
+    expect(state.at).toMatch(/^\d\d:\d\d$/);
     expect(
       recipientState(
         recipient("backend-lead", { pushed_at: NOW, reachable: false }),
@@ -125,6 +128,7 @@ describe("delivery", () => {
       forwarded_to: "backend-lead",
     });
     expect(recipientState(forwarded, NOW, "human:tanim")).toEqual({
+      tone: "forwarded",
       lead: "",
       actor: "backend-worker-10",
       at: null,
