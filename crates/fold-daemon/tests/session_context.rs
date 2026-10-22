@@ -306,20 +306,43 @@ async fn the_stop_route_counts_unread_messages_and_refuses_a_directory_outside_t
     let body = json!({"cwd": fixture.root, "agent": "frontend"});
     assert_eq!(
         post(socket.clone(), path, &body).await,
-        (StatusCode::OK, json!({"unread": 0, "reason": null}))
+        (
+            StatusCode::OK,
+            json!({"unread": 0, "reason": null, "messages": []})
+        )
     );
     fixture.send_to_frontend().await;
+    let carried = json!({
+        "unread": 1,
+        "reason": "fold: 1 new message. [m-1 from backend] \"text\"",
+        "messages": ["m-1"],
+    });
+    assert_eq!(
+        post(socket.clone(), path, &body).await,
+        (StatusCode::OK, carried.clone())
+    );
+    assert_eq!(
+        post(socket.clone(), path, &body).await,
+        (StatusCode::OK, carried),
+        "a hook that never reported its reason as used leaves the message undelivered for the next wake"
+    );
+    let delivered = json!({"cwd": fixture.root, "agent": "frontend", "messages": ["m-1"]});
+    assert_eq!(
+        post(socket.clone(), "/api/v1/hooks/stop/delivered", &delivered).await,
+        (StatusCode::OK, json!({"delivered": 1}))
+    );
+    assert_eq!(
+        post(socket.clone(), "/api/v1/hooks/stop/delivered", &delivered).await,
+        (StatusCode::OK, json!({"delivered": 0})),
+        "a delivered row keeps its first time"
+    );
     assert_eq!(
         post(socket.clone(), path, &body).await,
         (
             StatusCode::OK,
-            json!({"unread": 1, "reason": "fold: 1 new message. [m-1 from backend] \"text\""})
-        )
-    );
-    assert_eq!(
-        post(socket.clone(), path, &body).await,
-        (StatusCode::OK, json!({"unread": 1, "reason": null})),
-        "the carried message counts as delivered and stays unread until acknowledged"
+            json!({"unread": 1, "reason": null, "messages": []})
+        ),
+        "the reported message counts as delivered and stays unread until acknowledged"
     );
     let (status, answer) = post(
         socket.clone(),
@@ -368,6 +391,9 @@ async fn the_stop_route_carries_what_fits_and_leaves_the_rest_undelivered() {
             entry(2)
         ))
     );
+    assert_eq!(first["messages"], json!(["m-1", "m-2"]));
+    let used = json!({"cwd": fixture.root, "agent": "frontend", "messages": first["messages"]});
+    post(socket.clone(), "/api/v1/hooks/stop/delivered", &used).await;
     let (_, second) = post(socket.clone(), path, &body).await;
     assert_eq!(
         second["reason"],
@@ -375,6 +401,8 @@ async fn the_stop_route_carries_what_fits_and_leaves_the_rest_undelivered() {
         "only the carried messages were marked delivered"
     );
     assert_eq!(second["unread"], json!(3));
+    let used = json!({"cwd": fixture.root, "agent": "frontend", "messages": second["messages"]});
+    post(socket.clone(), "/api/v1/hooks/stop/delivered", &used).await;
 
     fixture.send_text_to_frontend(&"y".repeat(20_000)).await;
     let (_, cut) = post(socket, path, &body).await;
@@ -400,6 +428,7 @@ async fn every_hook_route_is_not_found_on_the_tcp_router() {
     for path in [
         "/api/v1/hooks/session-start",
         "/api/v1/hooks/stop",
+        "/api/v1/hooks/stop/delivered",
         "/api/v1/hooks/edit",
     ] {
         let (status, answer) = post(router(fixture.state.clone()), path, &body).await;

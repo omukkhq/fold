@@ -27,7 +27,7 @@ mod threads;
 
 pub use asks::DismissScope;
 pub(crate) use forward::{forward_in_tx, tell_lead_in_tx};
-pub use inbox::{InboxItem, unread_count};
+pub use inbox::{InboxItem, StopCarry, unread_count};
 pub(crate) use inbox::{carry_for_push, record_pushed};
 pub use threads::{
     DEFAULT_THREAD_LIMIT, Feedback, MAX_THREAD_LIMIT, ThreadPage, ThreadQuery, ThreadView,

@@ -64,8 +64,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** The Claude Code stop hook of an agent: how many messages the agent has not acknowledged, and the text that carries those it has not seen yet, which marks them delivered as an inbox read does. Socket only. A process under a worker names only that worker's own agent. */
+        /** The Claude Code stop hook of an agent: how many messages the agent has not acknowledged, and the text that carries those it has not seen yet. Nothing is marked here, because the hook may give up on the answer; the hook reports what it used to `/api/v1/hooks/stop/delivered`. Socket only. A process under a worker names only that worker's own agent. */
         post: operations["hook_stop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hooks/stop/delivered": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The Claude Code stop hook of an agent after it gave its reason to the session: the messages the reason carried count as delivered, as an inbox read marks them. Socket only. A process under a worker names only that worker's own agent. */
+        post: operations["hook_stop_delivered"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4009,14 +4026,31 @@ export interface components {
         StashState: "nothing" | "stashed";
         /** @enum {string} */
         StateKindView: "revision" | "changeset" | "checkpoint" | "workspace" | "tree";
+        StopDelivered: {
+            /** @description `FOLD_AGENT` of the session. */
+            agent: string;
+            /** @description The session's canonical working directory. */
+            cwd: string;
+            /** @description The messages of the reason the hook gave to its session. */
+            messages: string[];
+        };
         StopHook: {
             /** @description `FOLD_AGENT` of the session. */
             agent: string;
             /** @description The session's canonical working directory. */
             cwd: string;
         };
+        StopMarked: {
+            /**
+             * Format: int64
+             * @description The recipient rows this call marked delivered.
+             */
+            delivered: number;
+        };
         StopUnread: {
-            /** @description The hook's reason to keep the turn going: the messages that no inbox, notice or wait has shown the agent yet, oldest first, up to 16 KB of text, then how many more there are. The messages in it count as delivered. `null` when there is none. */
+            /** @description The messages `reason` carries, such as `m-4`. They count as delivered once the hook reports them to `/api/v1/hooks/stop/delivered`. */
+            messages: string[];
+            /** @description The hook's reason to keep the turn going: the messages that no inbox, notice or wait has shown the agent yet, oldest first, up to 16 KB of text, then how many more there are. `null` when there is none. */
             reason: string | null;
             /**
              * Format: int64
@@ -5107,6 +5141,84 @@ export interface operations {
                 };
             };
             /** @description Not on the socket, no registered project holds `cwd`, or the agent is not registered (`agent_not_registered`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    hook_stop_delivered: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StopDelivered"];
+            };
+        };
+        responses: {
+            /** @description How many rows were marked delivered */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StopMarked"];
+                };
+            };
+            /** @description The body, the agent name or a message id is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or no registered project holds `cwd` */
             404: {
                 headers: {
                     [name: string]: unknown;

@@ -139,16 +139,54 @@ impl MessageService {
         Ok(acknowledged)
     }
 
-    /// The Stop hook's text for `agent`: the messages to its workers that no inbox, notice or wait has shown yet, as many as fit, or `None` when there is none. The same write transaction marks the carried rows delivered, as [`MessageService::inbox`] marks the rows it returns.
-    pub async fn carry_for_stop(&self, agent: &AgentName) -> Result<Option<String>, MessageError> {
+    /// The Stop hook's text for `agent`: the messages to its workers that no inbox, notice or wait has shown yet, as many as fit, with the ids it carries, or `None` when there is none. Nothing is marked: the hook may not get the answer to its session in time, so it reports the ids it used with [`MessageService::mark_carried`].
+    pub async fn carry_for_stop(
+        &self,
+        agent: &AgentName,
+    ) -> Result<Option<StopCarry>, MessageError> {
+        let mut conn = self
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        let Some(row) = agents::find_agent(&mut *conn, agent).await? else {
+            return Ok(None);
+        };
+        let workers = agents::worker_ids(&mut *conn, row.id).await?;
+        let reader = WorkerName::main(agent);
+        let rows = undelivered(messages::inbox(&mut conn, &workers).await?, &reader);
+        let Some(head) = new_messages_head(&rows) else {
+            return Ok(None);
+        };
+        let carried = carry_rows(&head, &rows, &reader);
+        Ok(Some(StopCarry {
+            text: carried.text,
+            messages: carried.messages.into_iter().map(|(id, _)| id).collect(),
+        }))
+    }
+
+    /// Marks `agent`'s rows of `messages` delivered, as an inbox read does, once the Stop hook has given its text to the session. Rows read or acknowledged since keep their times; an id the agent has no unacknowledged row of is skipped. Returns how many rows it marked.
+    pub async fn mark_carried(
+        &self,
+        agent: &AgentName,
+        carried: &[MessageId],
+    ) -> Result<u64, MessageError> {
         let now = self.clock.now();
         self.store
             .write(async |tx| {
                 let Some(row) = agents::find_agent(tx.conn(), agent).await? else {
-                    return Ok(None);
+                    return Ok(0);
                 };
                 let workers = agents::worker_ids(tx.conn(), row.id).await?;
-                carry_in_tx(tx, &workers, &WorkerName::main(agent), now).await
+                let rows: Vec<i64> = messages::inbox(tx.conn(), &workers)
+                    .await?
+                    .into_iter()
+                    .filter(|row| row.delivered_at.is_none() && carried.contains(&row.message.id))
+                    .map(|row| row.row)
+                    .collect();
+                messages::mark_delivered(tx, &rows, now).await?;
+                Ok::<_, MessageError>(rows.len() as u64)
             })
             .await
     }
@@ -206,6 +244,12 @@ pub(crate) async fn record_pushed(
         .await?)
 }
 
+/// The Stop hook's text and the messages it carries, which count as delivered once the hook reports that it used them.
+pub struct StopCarry {
+    pub text: String,
+    pub messages: Vec<MessageId>,
+}
+
 /// What a wake carries: its text, the recipient rows of the messages in it, which count as delivered once the text reaches the agent, and each message with its thread.
 pub(crate) struct CarriedInbox {
     pub text: String,
@@ -236,17 +280,21 @@ async fn carry_in_tx(
     now: Timestamp,
 ) -> Result<Option<String>, MessageError> {
     let rows = undelivered(messages::inbox(tx.conn(), workers).await?, reader);
-    let count = distinct_messages(&rows).len();
-    if count == 0 {
+    let Some(head) = new_messages_head(&rows) else {
         return Ok(None);
-    }
-    let head = match count {
-        1 => "fold: 1 new message.".to_owned(),
-        _ => format!("fold: {count} new messages."),
     };
     let carried = carry_rows(&head, &rows, reader);
     messages::mark_delivered(tx, &carried.rows, now).await?;
     Ok(Some(carried.text))
+}
+
+/// The first sentence of a wake that has no event of its own, or `None` without a message.
+fn new_messages_head(rows: &[InboxRow]) -> Option<String> {
+    match distinct_messages(rows).len() {
+        0 => None,
+        1 => Some("fold: 1 new message.".to_owned()),
+        count => Some(format!("fold: {count} new messages.")),
+    }
 }
 
 /// A wake carries only the rows no inbox, notice or wait has shown: a delivered message that waits for its acknowledgement, such as fold's note of an integration, would fill the text before the message that caused the wake. A message `reader` sent, such as a main worker's message to its child, is never carried back to it.
