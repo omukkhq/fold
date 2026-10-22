@@ -249,7 +249,9 @@ async fn the_graph_leaves_out_archived_tasks_and_done_tasks_unless_asked() {
     fx.tasks.archive_task(&human(), t(4)).await.unwrap();
     fx.tasks.claim_task(&agent("backend"), t(2)).await.unwrap();
 
-    let open = fx.tasks.graph(false).await.unwrap();
+    let graph = fx.tasks.graph(false).await.unwrap();
+    assert_eq!(graph.done_count, 1, "the Done task it leaves out");
+    let open = graph.tasks;
     let ids: Vec<TaskId> = open.iter().map(|task| task.id).collect();
     assert_eq!(ids, vec![t(2), t(3)]);
     assert_eq!(open[0].needs, vec![t(1), t(3)]);
@@ -257,7 +259,9 @@ async fn the_graph_leaves_out_archived_tasks_and_done_tasks_unless_asked() {
     assert_eq!(open[0].holder.as_ref().unwrap().as_str(), "backend");
     assert_eq!(open[1].holder, None);
 
-    let all = fx.tasks.graph(true).await.unwrap();
+    let graph = fx.tasks.graph(true).await.unwrap();
+    assert_eq!(graph.done_count, 1);
+    let all = graph.tasks;
     let ids: Vec<TaskId> = all.iter().map(|task| task.id).collect();
     assert_eq!(ids, vec![t(1), t(2), t(3)]);
     assert_eq!(all[0].status, TaskStatus::Done);

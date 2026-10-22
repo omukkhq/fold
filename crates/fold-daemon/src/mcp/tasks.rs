@@ -5,8 +5,7 @@ use std::str::FromStr;
 use fold_core::tasks::{PlanRef, PlannedChecklistItem, PlannedReview, PlannedTask};
 use fold_core::{
     Actor, ChecklistItemId, ChecklistName, FoldError, HumanName, IdParseError, LabelColor,
-    LabelName, StepText, TaskDescription, TaskId, TaskKind, TaskStatus, TaskTitle, WorkerName,
-    codes,
+    LabelName, StepText, TaskDescription, TaskId, TaskKind, TaskTitle, WorkerName, codes,
 };
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
@@ -598,15 +597,10 @@ async fn run(
 async fn get_task_graph(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let tasks = &server.tasks;
     let input: GetTaskGraphInput = parse(arguments)?;
-    // The whole graph, so the answer can count the Done tasks it leaves out.
-    let graph = tasks.graph(true).await.map_err(from_task)?;
-    let done_count = graph
-        .iter()
-        .filter(|task| task.status == TaskStatus::Done)
-        .count();
+    let graph = tasks.graph(input.include_done).await.map_err(from_task)?;
     let tasks: Vec<Value> = graph
+        .tasks
         .iter()
-        .filter(|task| input.include_done || task.status != TaskStatus::Done)
         .map(|task| {
             let mut node = json!({
                 "id": task.id,
@@ -624,7 +618,7 @@ async fn get_task_graph(server: &FoldServer, arguments: &JsonObject) -> Result<V
             node
         })
         .collect();
-    Ok(json!({"tasks": tasks, "done_count": done_count}))
+    Ok(json!({"tasks": tasks, "done_count": graph.done_count}))
 }
 
 async fn get_ready_tasks(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
