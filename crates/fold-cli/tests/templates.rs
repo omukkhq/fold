@@ -820,6 +820,10 @@ fn each_part_of_the_skill_has_its_role_sections_then_the_shared_ones() {
             .collect();
         assert_eq!(headings, expected, "{role}");
         assert!(text.starts_with("# fold: "), "{role}");
+        assert!(
+            text.contains("read `ERRORS.md` next to this file"),
+            "{role}"
+        );
         assert_eq!(text.matches("\n# ").count(), 0, "{role}: one title");
     }
     let errors = skill_text(claude_files::ERRORS_FILE);

@@ -65,6 +65,8 @@ A worker may spawn Claude Code subagents for small, atomic tasks inside its own 
 
 ## Recovery
 
+When the hint of a refusal does not settle the next step, read `ERRORS.md` next to this file: every error code with what to do.
+
 When Claude Code's auto mode is not sure about a tool call of a worker, fold asks a human and the worker waits for the answer. A worker that uses `AskUserQuestion` asks the humans a question with choices, and the human's reply is its answer.
 
 After resumption, read current tasks, claims, workers and proposal versions, and reuse existing resources. A notice is a cue to read state, not a new assignment. After an interrupted or uncertain write, read state before retrying. Correct known input errors first; if the same failure remains, report its code, affected ids and next needed action to the lead, or to the user for the main agent, then end the turn. Never report an approval, integration or completion without fold's confirmation.
