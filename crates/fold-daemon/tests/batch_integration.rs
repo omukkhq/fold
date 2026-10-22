@@ -798,6 +798,55 @@ async fn a_crash_inside_the_batch_transaction_publishes_none_of_its_revisions() 
     scenario.teardown();
 }
 
+#[cfg(feature = "failpoints")]
+#[tokio::test]
+async fn a_stop_after_the_revision_objects_publishes_none_of_them_and_the_batch_integrates_again() {
+    let scenario = fail::FailScenario::setup();
+    let mut scene = Scene::new().await;
+    let batch = scene.batch(&[1, 2, 3]).await;
+    scene.review(batch, &[1, 2, 3], &[]).await;
+    fail::cfg("batch_integration_after_objects", "return").unwrap();
+    let stopped = scene
+        .fx
+        .reviews()
+        .integrate_review_batch(&human("tanim"), batch)
+        .await;
+    fail::remove("batch_integration_after_objects");
+    assert_eq!(refusal(stopped).code(), "failpoint");
+    scene.fx.restart().await;
+
+    // The three revision objects are written, but no row names them, so main and every member stay as they were.
+    assert_eq!(scene.count("SELECT COUNT(*) FROM revisions").await, 1);
+    assert_eq!(scene.count("SELECT COUNT(*) FROM integrations").await, 0);
+    assert_eq!(scene.count("SELECT COUNT(*) FROM completions").await, 0);
+    assert_eq!(
+        scene
+            .count("SELECT COUNT(*) FROM review_batch_integrations")
+            .await,
+        0
+    );
+    for proposal in 1..=3 {
+        assert_eq!(scene.state(proposal).await, ProposalState::Open);
+    }
+    assert_consistent(&scene.fx.project).await;
+
+    let outcome = scene
+        .fx
+        .reviews()
+        .integrate_review_batch(&human("tanim"), batch)
+        .await
+        .unwrap();
+    let BatchIntegration::Together { members } = outcome else {
+        panic!("expected the members together, got {outcome:?}");
+    };
+    assert_eq!(
+        succeeded(&members),
+        [(p(1), r(2)), (p(2), r(3)), (p(3), r(4))]
+    );
+    assert_consistent(&scene.fx.project).await;
+    scenario.teardown();
+}
+
 #[tokio::test]
 async fn a_batch_with_no_member_ready_ends_its_turn_and_frees_the_rest() {
     let scene = Scene::new().await;

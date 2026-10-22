@@ -1,11 +1,74 @@
+use std::path::Path;
+
 use crate::common::{count, exec, open};
 use fold_core::object::ObjectHash;
 use fold_core::reviews::batches::BatchOutcome;
 use fold_core::reviews::checks::{Purpose, RunState, Stage};
-use fold_core::{CheckRunId, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp};
+use fold_core::{
+    CheckRunId, ProjectPaths, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp,
+};
 use fold_store::Store;
 use fold_store::reviews::batches;
 use fold_store::reviews::checks::{self, NewCheckRun};
+use sqlx::Connection;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
+
+/// A batch submitted before batches integrated together had its members integrate on their own, so the migration ends its turn; an open or closed batch keeps none.
+#[tokio::test]
+async fn the_migration_ends_the_turn_of_every_batch_submitted_before_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let before = dir.path().join("before");
+    std::fs::create_dir(&before).unwrap();
+    let source = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations/project"));
+    for entry in std::fs::read_dir(source).unwrap() {
+        let name = entry.unwrap().file_name().into_string().unwrap();
+        let version: u32 = name.split('_').next().unwrap().parse().unwrap();
+        if name.ends_with(".sql") && version < 60 {
+            std::fs::copy(source.join(&name), before.join(&name)).unwrap();
+        }
+    }
+    let paths = ProjectPaths::new(dir.path().join("project"));
+    std::fs::create_dir_all(paths.db().parent().unwrap()).unwrap();
+    let options = SqliteConnectOptions::new()
+        .filename(paths.db())
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+    sqlx::migrate::Migrator::new(before.as_path())
+        .await
+        .unwrap()
+        .run(&mut conn)
+        .await
+        .unwrap();
+    for sql in [
+        "INSERT INTO agents (id, name, created_at) VALUES (1, 'review', 0)",
+        "INSERT INTO workers (id, agent_id, name, created_at) VALUES (1, 1, 'review', 0)",
+        "INSERT INTO review_batches (id, number, holder_worker_id, state, created_at, submitted_at, closed_at) VALUES (1, 1, 1, 'open', 0, NULL, NULL), (2, 2, 1, 'submitted', 0, 5, NULL), (3, 3, 1, 'closed', 0, NULL, 6), (4, 4, 1, 'submitted', 0, 7, NULL)",
+    ] {
+        sqlx::query(sql).execute(&mut conn).await.unwrap();
+    }
+    conn.close().await.unwrap();
+
+    let store = Store::open_project(&paths).await.unwrap();
+    let ended: Vec<(i64, String, i64)> = sqlx::query_as(
+        "SELECT b.number, i.outcome, i.created_at FROM review_batch_integrations i
+         JOIN review_batches b ON b.id = i.batch_id ORDER BY b.number",
+    )
+    .fetch_all(store.read())
+    .await
+    .unwrap();
+    assert_eq!(
+        ended,
+        [(2, "none".to_owned(), 5), (4, "none".to_owned(), 7)],
+        "each submitted batch ends at its submission"
+    );
+    assert!(
+        batches::undecided_batches(store.read())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
 
 /// An open batch rb-1 and a submitted batch rb-2, each with one member, and a request-changes review of P-1 v1.
 const SEED: &str = "
