@@ -199,7 +199,7 @@ export function splitMentions(
 /** The screen a mention opens; a human has none. */
 export function mentionHref(slug: string, mention: Mention): string | null {
   if (isPerson(mention)) {
-    // The board filters by agent, so a worker such as `frontend/ui` opens its agent's cards.
+    // The board filters by agent, so a name such as `frontend/ui` in an older message opens its agent's cards.
     return mention.person === "agent"
       ? withQuery(projectPath(slug, "board"), {
           agent: mention.name.split("/")[0] ?? mention.name,

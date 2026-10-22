@@ -96,7 +96,7 @@ pub fn can_set_worker_limits(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
-/// The main agent or a named human starts the leads; an area lead starts the task workers of its own area; the review lead starts the reviewers. A subagent worker, a short-lived worker and a lead of another kind start nothing, and nobody starts the supervised main: fold runs it when the project's setting says so.
+/// The main agent or a named human starts the leads; an area lead starts the task workers of its own area; the review lead starts the reviewers. A short-lived worker and a lead of another kind start nothing, and nobody starts the supervised main: fold runs it when the project's setting says so.
 pub fn can_start_worker(starter: &Starter, role: Role) -> Result<(), PolicyDenied> {
     match (role, starter) {
         (Role::AreaLead | Role::ReviewLead, Starter::Human | Starter::MainAgent)
@@ -271,7 +271,7 @@ pub fn can_complete_human_task(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
-/// A direct change reaches main without a task, a proposal or a review: the user's word in the conversation is its approval. Only the main agent talks with the user, so it alone opens the main workspace and submits a direct change. A lead, a worker, a subagent and the daemon are refused, and so is a human, who changes the files of the project folder and records them with `fld record`.
+/// A direct change reaches main without a task, a proposal or a review: the user's word in the conversation is its approval. Only the main agent talks with the user, so it alone opens the main workspace and submits a direct change. A lead, a worker and the daemon are refused, and so is a human, who changes the files of the project folder and records them with `fld record`.
 pub fn can_change_main_directly(starter: &Starter) -> Result<(), PolicyDenied> {
     match starter {
         Starter::MainAgent => Ok(()),

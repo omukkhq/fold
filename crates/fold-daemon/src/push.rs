@@ -1059,7 +1059,7 @@ async fn deliver_events(
     }
 }
 
-/// The agent of a worker row's `started_by`, an event actor such as `web-lead` or `web-lead/sub` for a subagent; `None` for a human and for fold.
+/// The agent of a worker row's `started_by`, an event actor such as `web-lead`; `None` for a human and for fold.
 fn starter_agent(started_by: &str) -> Option<AgentName> {
     let actor = fold_core::EventActor::parse(started_by).ok()?;
     AgentName::parse(actor.agent()?).ok()

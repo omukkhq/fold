@@ -10,6 +10,7 @@ use fold_core::{
     MessageId, NewEvent, TaskDescription, TaskId, TaskTitle, Timestamp,
 };
 use fold_daemon::mcp::FoldServer;
+use fold_daemon::push::{self, PushTargets, PushTask};
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBuffer, EventBus, EventService, WaitQuery, WaitStep};
 use fold_daemon::services::messages::{MessageService, SendMessage};
@@ -25,6 +26,8 @@ use rmcp::model::{
 use rmcp::service::{NotificationContext, PeerRequestOptions, RunningService};
 use rmcp::{ClientHandler, RoleClient, ServiceExt};
 use serde_json::{Value, json};
+use tokio::io::AsyncReadExt;
+use tokio::net::UnixListener;
 use tokio::sync::mpsc;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -1152,6 +1155,11 @@ async fn a_message_the_agent_has_read_never_wakes_its_next_filtered_wait() {
         Some(3),
         "{inbox}"
     );
+    // A wait counts a row delivered in its own first millisecond as new, so the read is a millisecond earlier.
+    fx.project
+        .clock()
+        .advance(Duration::from_millis(1))
+        .unwrap();
     let filter = json!({"types": ["proposal.opened"], "timeout_s": 1});
     assert_eq!(
         call(&backend, "wait_for_events", filter.clone()).await,
@@ -1190,6 +1198,10 @@ async fn a_wait_names_no_message_the_worker_has_read_or_sent() {
     let backend = fx.connect("backend").await;
     let read = send_as_human(&fx, "backend").await;
     call(&backend, "get_inbox", json!({})).await;
+    fx.project
+        .clock()
+        .advance(Duration::from_millis(1))
+        .unwrap();
     let own = call(
         &backend,
         "send_message",
@@ -1217,5 +1229,163 @@ async fn a_wait_names_no_message_the_worker_has_read_or_sent() {
             "fold: 1 new message. [{unread} from human:ana] \"are you there?\""
         )),
         "the worker's own message is never carried back to it"
+    );
+}
+
+/// The session push of the fixture's project on `bus`, which posts each notice to the agents' inbox sockets and marks the messages it carries delivered.
+#[cfg(test)]
+fn start_push(fx: &mut Fixture, bus: &EventBus) -> PushTask {
+    let targets = PushTargets::new();
+    fx.agents = fx.agents.clone().with_push_targets(targets.clone());
+    push::run(
+        fx.store().clone(),
+        Arc::new(fx.project.clock().clone()),
+        bus,
+        targets,
+    )
+}
+
+/// A stand-in for the inbox socket of `agent`'s Claude Code session: it reads each post to its end and passes it on.
+#[cfg(test)]
+async fn session_inbox(
+    fx: &Fixture,
+    dir: &std::path::Path,
+    agent: &str,
+) -> mpsc::UnboundedReceiver<String> {
+    let path = dir.join(format!("{agent}.sock"));
+    let listener = UnixListener::bind(&path).unwrap();
+    let (sender, received) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let mut bytes = Vec::new();
+            if stream.read_to_end(&mut bytes).await.is_ok() && !bytes.is_empty() {
+                let _ = sender.send(String::from_utf8_lossy(&bytes).into_owned());
+            }
+        }
+    });
+    fx.agents
+        .register_push_target(
+            &AgentName::parse(agent).unwrap(),
+            path,
+            "0123456789abcdef0123456789abcdef",
+        )
+        .await
+        .unwrap();
+    received
+}
+
+#[cfg(test)]
+async fn delivered_and_pushed(fx: &Fixture, message: MessageId) -> (Option<i64>, Option<i64>) {
+    let row = format!(
+        "FROM message_recipients WHERE message_id = (SELECT id FROM messages WHERE number = {})",
+        message.number()
+    );
+    (
+        fx.millis(&format!("SELECT delivered_at {row}")).await,
+        fx.millis(&format!("SELECT pushed_at {row}")).await,
+    )
+}
+
+#[tokio::test]
+async fn a_wait_ends_for_a_message_that_a_push_notice_carries_while_it_waits() {
+    let mut fx = Fixture::new().await;
+    // The push hears the message on a bus of its own, so its notice delivers the message before the wait reads the event.
+    let push_bus = EventBus::new();
+    let _push = start_push(&mut fx, &push_bus);
+    let dir = tempfile::tempdir().unwrap();
+    let backend = fx.connect("backend").await;
+    let mut inbox = session_inbox(&fx, dir.path(), "backend").await;
+    let waiting = wait_in_background(
+        &backend,
+        json!({"types": ["proposal.opened"], "timeout_s": 5}),
+    );
+    subscribed(&fx.bus, 1).await;
+    fx.project
+        .clock()
+        .advance(Duration::from_millis(1))
+        .unwrap();
+
+    let sent = MessageService::new(
+        fx.store().clone(),
+        fx.project.registry().clone(),
+        push_bus.clone(),
+        Arc::new(fx.project.clock().clone()),
+    )
+    .send(
+        &Actor::human(HumanName::parse("ana").unwrap()),
+        SendMessage {
+            to: Address::parse_all(&["backend"]).unwrap(),
+            body: MessageBody::parse("are you there?").unwrap(),
+            task: None,
+            proposal: None,
+            reply_to: None,
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let notice = tokio::time::timeout(WAIT, inbox.recv())
+        .await
+        .expect("a push notice within the wait")
+        .unwrap();
+    assert!(notice.contains("are you there?"), "{notice}");
+    eventually(WAIT, async || match delivered_and_pushed(&fx, sent).await {
+        (Some(_), Some(_)) => Ok(()),
+        other => Err(other),
+    })
+    .await;
+    assert!(
+        !waiting.is_finished(),
+        "the wait has not read the event yet"
+    );
+
+    // The next message wakes the wait, which reads the page with both: the one the notice delivered still counts.
+    let next = send_as_human(&fx, "backend").await;
+    let woke = body(&tokio::time::timeout(WAIT, waiting).await.unwrap().unwrap());
+    assert_eq!(
+        woke["messages"],
+        json!([sent.to_string(), next.to_string()]),
+        "{woke}"
+    );
+    assert_eq!(
+        woke["inbox"],
+        json!(format!(
+            "fold: 1 new message. [{next} from human:ana] \"are you there?\""
+        )),
+        "the notice carried the first message, so the wait carries only the second"
+    );
+}
+
+#[tokio::test]
+async fn a_message_that_a_push_notice_delivered_in_the_waits_first_millisecond_ends_the_wait() {
+    let mut fx = Fixture::new().await;
+    let bus = fx.bus.clone();
+    let _push = start_push(&mut fx, &bus);
+    let dir = tempfile::tempdir().unwrap();
+    let backend = fx.connect("backend").await;
+    let mut inbox = session_inbox(&fx, dir.path(), "backend").await;
+    let sent = send_as_human(&fx, "backend").await;
+    tokio::time::timeout(WAIT, inbox.recv())
+        .await
+        .expect("a push notice within the wait")
+        .unwrap();
+    eventually(WAIT, async || match delivered_and_pushed(&fx, sent).await {
+        (Some(_), Some(_)) => Ok(()),
+        other => Err(other),
+    })
+    .await;
+
+    // The clock has not moved, so the wait starts in the millisecond the notice delivered the message: the notice waits in the session until the wait returns.
+    let woke = call(
+        &backend,
+        "wait_for_events",
+        json!({"types": ["proposal.opened"], "timeout_s": 1}),
+    )
+    .await;
+    assert_eq!(woke["messages"], json!([sent.to_string()]), "{woke}");
+    assert_eq!(
+        woke.get("inbox"),
+        None,
+        "the notice carried the message, so the wait does not carry it again: {woke}"
     );
 }
