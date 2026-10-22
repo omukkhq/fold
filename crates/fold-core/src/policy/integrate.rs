@@ -228,7 +228,7 @@ fn caller(input: &IntegrateInput<'_>) -> Option<GateRefusal> {
         CallerFacts::Agent { agent, .. } if *agent == input.proposal.author => {
             Some(GateRefusal::AuthorCannotIntegrate)
         }
-        CallerFacts::Agent { standing, .. } if standing.decides_reviews() => None,
+        CallerFacts::Agent { standing, .. } if standing.acts_on_reviews() => None,
         CallerFacts::Agent { .. } => Some(GateRefusal::IntegratorRequired),
     }
 }

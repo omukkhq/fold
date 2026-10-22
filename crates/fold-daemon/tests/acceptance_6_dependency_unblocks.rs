@@ -57,9 +57,7 @@ async fn acceptance_6_frontend_task_moves_from_backlog_to_todo_when_backend_reac
         .propose("backend", &work, "Add the login endpoint")
         .await;
     assert_eq!(status(&harness, &screen).await, "backlog");
-    harness
-        .call("review", "claim_review", json!({"id": proposal}))
-        .await;
+    harness.give_review("review", &proposal).await;
     harness.approve(&proposal).await;
     harness
         .call("review", "integrate_proposal", json!({"id": proposal}))

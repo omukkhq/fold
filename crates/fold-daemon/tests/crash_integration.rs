@@ -16,10 +16,10 @@ fn r(number: u32) -> RevisionId {
     RevisionId::from_number(number).unwrap()
 }
 
-/// `P-1` approved by `review`, the review lead, which acts with the returned actor.
+/// `P-1` approved by `review`, a reviewer, which acts with the returned actor.
 async fn approved(fx: &Fixture) -> Actor {
     fx.proposal().await;
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     let review = fx.agents.actor(&fx.review.ctx, None).await.unwrap();
     fx.reviews
         .submit_review(

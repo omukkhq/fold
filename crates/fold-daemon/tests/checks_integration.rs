@@ -19,7 +19,7 @@ use crate::reviews_support::{Fixture, by, human, p, t};
 
 const WAIT: Duration = Duration::from_secs(30);
 
-/// `frontend` opens a proposal for `task` in a fresh workspace after `edit`, and the review lead `review` approves its v1. Returns the proposal's number.
+/// `frontend` opens a proposal for `task` in a fresh workspace after `edit`, and the reviewer `review` approves its v1. Returns the proposal's number.
 #[cfg(test)]
 async fn approved(fx: &Fixture, task: u32, edit: impl FnOnce(&Path)) -> u32 {
     let author = by(&fx.frontend.worker);
@@ -107,7 +107,7 @@ async fn revision_of(fx: &Fixture, proposal: u32) -> i64 {
 #[tokio::test]
 async fn green_integration_checks_let_the_proposal_reach_main() {
     let fx = Fixture::new().await;
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     let proposal = approved(&fx, 1, |dir| {
         checks_file(dir, "test -f src/lib.rs && echo merged");
     })
@@ -145,7 +145,7 @@ async fn green_integration_checks_let_the_proposal_reach_main() {
 #[tokio::test]
 async fn red_integration_checks_send_the_proposal_back_to_its_author() {
     let fx = Fixture::new().await;
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     let proposal = approved(&fx, 1, |dir| {
         checks_file(dir, "echo the suite broke; exit 3");
     })
@@ -223,7 +223,7 @@ async fn red_integration_checks_send_the_proposal_back_to_its_author() {
 async fn a_version_whose_integration_checks_failed_is_refused_approval_and_integration_until_a_new_version()
  {
     let fx = Fixture::new().await;
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     let proposal = approved(&fx, 1, |dir| checks_file(dir, "exit 3")).await;
     fx.reviews
         .integrate_proposal(&human(), p(proposal), Some(1))
@@ -282,7 +282,7 @@ async fn a_version_whose_integration_checks_failed_is_refused_approval_and_integ
 #[tokio::test]
 async fn queued_integrations_run_one_at_a_time_in_the_order_asked() {
     let fx = Fixture::new().await;
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     let outside = tempfile::tempdir().unwrap();
     let (hold, go) = (outside.path().join("hold"), outside.path().join("go"));
     let wait = format!(
@@ -351,7 +351,7 @@ async fn queued_integrations_run_one_at_a_time_in_the_order_asked() {
 #[tokio::test]
 async fn a_queued_integration_that_conflicts_is_told_to_the_integrating_agent() {
     let fx = Fixture::new().await;
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     let first = approved(&fx, 1, |dir| checks_file(dir, "true")).await;
     fx.reviews
         .integrate_proposal(&human(), p(first), Some(1))
@@ -412,7 +412,7 @@ async fn a_queued_integration_that_conflicts_is_told_to_the_integrating_agent() 
 #[tokio::test]
 async fn a_queued_integration_shows_on_the_proposal_and_a_second_request_is_refused() {
     let fx = Fixture::new().await;
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     let outside = tempfile::tempdir().unwrap();
     let go = outside.path().join("go");
     let wait = format!("until [ -e '{}' ]; do sleep 0.05; done", go.display());
@@ -467,7 +467,7 @@ async fn a_queued_integration_shows_on_the_proposal_and_a_second_request_is_refu
 #[tokio::test]
 async fn a_fault_of_folds_own_stops_the_run_sends_nothing_back_and_is_not_retried_on_its_own() {
     let fx = Fixture::new().await;
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     let first = approved(&fx, 1, |dir| checks_file(dir, "true")).await;
     fx.reviews
         .integrate_proposal(&human(), p(first), Some(1))
@@ -612,7 +612,7 @@ async fn a_fault_of_folds_own_stops_the_run_sends_nothing_back_and_is_not_retrie
 #[tokio::test]
 async fn a_project_without_integration_checks_integrates_at_once() {
     let fx = Fixture::new().await;
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     let proposal = approved(&fx, 1, |dir| {
         std::fs::write(dir.join("src/lib.rs"), "pub fn y() {}\n").unwrap();
     })
@@ -629,7 +629,7 @@ async fn a_project_without_integration_checks_integrates_at_once() {
 #[tokio::test]
 async fn an_invalid_checks_file_of_the_merge_sends_the_proposal_back() {
     let fx = Fixture::new().await;
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     let proposal = approved(&fx, 1, |dir| checks_file(dir, "true")).await;
     // A human edit makes a version without running the proposal checks, so only the integration finds the file invalid.
     fx.reviews
@@ -735,7 +735,7 @@ async fn held_items(fx: &Fixture) -> Vec<fold_daemon::services::agents::NeedsYou
 async fn an_invalid_checks_file_on_main_holds_the_integrations_until_main_fixes_it() {
     // `backend` is the main agent, which writes onto main directly.
     let fx = Fixture::with_reviewers().await;
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     let proposal = approved(&fx, 1, |dir| {
         std::fs::write(dir.join("one.txt"), "1\n").unwrap();
     })
@@ -801,7 +801,7 @@ async fn an_invalid_checks_file_on_main_holds_the_integrations_until_main_fixes_
 #[tokio::test]
 async fn a_queued_integration_that_a_stop_cut_short_runs_again_at_the_next_start() {
     let mut fx = Fixture::new().await;
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     let outside = tempfile::tempdir().unwrap();
     let go = outside.path().join("go");
     let wait = format!("until [ -e '{}' ]; do sleep 0.05; done", go.display());
@@ -853,7 +853,7 @@ async fn a_queued_integration_that_a_stop_cut_short_runs_again_at_the_next_start
 #[tokio::test]
 async fn a_process_of_an_integration_check_acts_as_no_agent() {
     let fx = Fixture::new().await;
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     let gate = tempfile::tempdir().unwrap();
     let (pids, go) = (gate.path().join("pids"), gate.path().join("go"));
     let run = format!(

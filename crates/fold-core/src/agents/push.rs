@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use crate::agents::roles::{CLAUDE_NOT_FOUND, FLD_MISSING, MCP_UNAVAILABLE};
 use crate::agents::{AgentName, AreaName};
 use crate::events::{Event, types};
-use crate::ids::{MessageId, RequestId, TaskId};
+use crate::ids::{MessageId, ProposalId, RequestId, TaskId};
 use crate::tasks::status::TaskStatus;
 
 /// The longest notice text. A notice names ids and a tool, so it never comes near it.
@@ -42,6 +42,8 @@ pub struct PushContext {
     pub starter: Option<AgentName>,
     /// The event's proposal belongs to a task of the area Main, which no review agent reviews.
     pub main_task: bool,
+    /// For `worker.stopped` and `worker.failed` of a reviewer, the open proposals whose review claim it still holds, whose newest version has no verdict and for which fold owes it no resume; empty while the project is paused, because the resume of the pause runs the reviewer again.
+    pub unreviewed: Vec<ProposalId>,
 }
 
 /// One line for one agent's Claude Code session. `text` holds public ids and the next tool only.
@@ -80,6 +82,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::HUMAN_CHANGE_WITHDRAWN,
         types::PROPOSAL_REVIEWER_FIXED,
         types::INTEGRATION_HELD,
+        types::WORKER_STOPPED,
         types::WORKER_FAILED,
         types::WORKER_MODEL_UNREACHABLE,
     ]
@@ -98,7 +101,7 @@ pub fn request_of(event: &Event) -> Option<RequestId> {
 
 /// The notices one committed event sends. An agent never hears about what its own workers did, and an event that misses an id its rule names sends nothing.
 pub fn notice_for(event: &Event, ctx: &PushContext) -> Vec<Notice> {
-    let rules = match human_change_rules(event, ctx) {
+    let rules = match human_change_rules(event, ctx).or_else(|| review_rules(event, ctx)) {
         Some(rules) => rules,
         None => rule(event, ctx).into_iter().collect(),
     };
@@ -301,26 +304,6 @@ fn listed(items: &[String], count: usize, one: &str, many: &str, spelled: bool) 
 
 fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'static str)> {
     let kind = event.event_type;
-    if kind == types::PROPOSAL_OPENED {
-        let proposal = event.proposal?;
-        let text = match event.task {
-            Some(task) => format!("{proposal} opened for {task}"),
-            None => format!("{proposal} opened"),
-        };
-        return Some((reviewers(ctx), text, "claim_review"));
-    }
-    if kind == types::PROPOSAL_VERSION_ADDED {
-        let proposal = event.proposal?;
-        let text = match event
-            .data
-            .get("version")
-            .and_then(serde_json::Value::as_u64)
-        {
-            Some(version) => format!("{proposal} has version {version}"),
-            None => format!("{proposal} has a new version"),
-        };
-        return Some((reviewers(ctx), text, "create_review_checkout"));
-    }
     if kind == types::PROPOSAL_HUMAN_EDITED {
         let proposal = event.proposal?;
         let version = event.data.get("version")?.as_u64()?;
@@ -341,15 +324,6 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
                 "the reviewer fixed {proposal} as version {version}; sync your workspace before you work in it"
             ),
             "sync_workspace",
-        ));
-    }
-    if kind == types::PROPOSAL_REVIEW_AGAIN_REQUESTED {
-        let proposal = event.proposal?;
-        let version = event.data.get("version")?.as_u64()?;
-        return Some((
-            reviewers(ctx),
-            format!("a human sent {proposal} version {version} for review again"),
-            "create_review_checkout",
         ));
     }
     if kind == types::INTEGRATION_SUCCEEDED {
@@ -472,7 +446,10 @@ fn rule(event: &Event, ctx: &PushContext) -> Option<(Vec<AgentName>, String, &'s
         ));
     }
     if kind == types::WORKER_FAILED {
-        return unreachable_worker_rule(event, ctx);
+        return unreachable_worker_rule(event, ctx).or_else(|| ended_reviewer_rule(event, ctx));
+    }
+    if kind == types::WORKER_STOPPED {
+        return ended_reviewer_rule(event, ctx);
     }
     if kind == types::WORKER_MODEL_UNREACHABLE {
         return model_unreachable_rule(event, ctx);
@@ -529,6 +506,32 @@ fn unreachable_worker_rule(
         .cloned()
         .collect();
     Some((agents, text, "list_workers"))
+}
+
+/// A reviewer that ended with versions that have no verdict, which fold does not resume it for, reaches the review lead: fold resumes a reviewer once for each version, and the claim it keeps hides the versions from the review lead's notices. `start_worker` takes over the claim of a reviewer that has ended.
+fn ended_reviewer_rule(
+    event: &Event,
+    ctx: &PushContext,
+) -> Option<(Vec<AgentName>, String, &'static str)> {
+    if ctx.unreviewed.is_empty() {
+        return None;
+    }
+    let agent = event
+        .data
+        .get("agent")
+        .and_then(serde_json::Value::as_str)?;
+    let proposals: Vec<String> = ctx.unreviewed.iter().map(ToString::to_string).collect();
+    let text = format!(
+        "{agent} ended with no verdict on {}; a reviewer you start takes over its claim",
+        listed(&proposals, proposals.len(), "proposal", "proposals", true)
+    );
+    let leads = ctx
+        .review_leads
+        .iter()
+        .filter(|lead| lead.as_str() != agent)
+        .cloned()
+        .collect();
+    Some((leads, text, "start_worker"))
 }
 
 /// A worker whose turns keep failing before any token reached the model reaches the main agent and the agent that started it, so they ask the human to fix what Claude Code needs instead of sending the worker more work. Its error is on its row, which `list_workers` shows; the notice holds only the hint.
@@ -661,15 +664,60 @@ fn approved_text(request: RequestId, tasks: &[TaskId]) -> String {
     }
 }
 
-/// Every review lead but the author's agent, then the holder of the review claim. No review lead hears of a proposal of a task of Main.
-fn reviewers(ctx: &PushContext) -> Vec<AgentName> {
-    ctx.review_leads
+/// A proposal that needs a review reaches the review lead, which gives the review to a reviewer with `start_worker`, and the holder of its review claim, which checks out the version to review. A new version, or one a human sent for review again, reaches the review lead only while nobody holds the claim: fold resumes a holder that has ended for that version. A review lead that holds the claim cannot check the version out, so it is told to release the claim and give the review to a reviewer. No review lead hears of a proposal of a task of Main or of its own proposal.
+fn review_rules(
+    event: &Event,
+    ctx: &PushContext,
+) -> Option<Vec<(Vec<AgentName>, String, &'static str)>> {
+    let kind = event.event_type;
+    let proposal = event.proposal?;
+    let (text, leads_too) = if kind == types::PROPOSAL_OPENED {
+        let text = match event.task {
+            Some(task) => format!("{proposal} opened for {task}"),
+            None => format!("{proposal} opened"),
+        };
+        (text, true)
+    } else if kind == types::PROPOSAL_VERSION_ADDED {
+        let text = match event
+            .data
+            .get("version")
+            .and_then(serde_json::Value::as_u64)
+        {
+            Some(version) => format!("{proposal} has version {version}"),
+            None => format!("{proposal} has a new version"),
+        };
+        (text, ctx.review_claim.is_none())
+    } else if kind == types::PROPOSAL_REVIEW_AGAIN_REQUESTED {
+        let version = event.data.get("version")?.as_u64()?;
+        let text = format!("a human sent {proposal} version {version} for review again");
+        (text, ctx.review_claim.is_none())
+    } else {
+        return None;
+    };
+    let leads = ctx
+        .review_leads
         .iter()
-        .filter(|_| !ctx.main_task)
+        .filter(|_| leads_too && !ctx.main_task)
         .filter(|agent| ctx.author.as_ref() != Some(*agent))
-        .chain(&ctx.review_claim)
         .cloned()
-        .collect()
+        .collect();
+    let holder = ctx.review_claim.iter().cloned().collect();
+    let held_by_lead = ctx
+        .review_claim
+        .as_ref()
+        .is_some_and(|agent| ctx.review_leads.contains(agent));
+    let held = if held_by_lead {
+        (
+            holder,
+            format!(
+                "{text}; release your review claim with release_review, then give it to a reviewer"
+            ),
+            "start_worker",
+        )
+    } else {
+        (holder, text.clone(), "create_review_checkout")
+    };
+    Some(vec![(leads, text, "start_worker"), held])
 }
 
 /// `review.submitted` names its verdict in `data.verdict`, with the values of `reviews.verdict`.
@@ -730,6 +778,7 @@ mod tests {
             held_from_agents: false,
             starter: None,
             main_task: false,
+            unreviewed: Vec::new(),
         }
     }
 
@@ -758,13 +807,13 @@ mod tests {
             vec![
                 row(
                     "lead",
-                    "fold: P-3 opened for T-12. Call claim_review.",
-                    "claim_review"
+                    "fold: P-3 opened for T-12. Call start_worker.",
+                    "start_worker"
                 ),
                 row(
                     "review",
-                    "fold: P-3 opened for T-12. Call claim_review.",
-                    "claim_review"
+                    "fold: P-3 opened for T-12. Call start_worker.",
+                    "start_worker"
                 ),
             ]
         );
@@ -1269,6 +1318,47 @@ mod tests {
     }
 
     #[test]
+    fn a_reviewer_that_ends_with_versions_nobody_reviews_tells_the_review_leads() {
+        let ended = PushContext {
+            unreviewed: vec![
+                ProposalId::from_number(3).unwrap(),
+                ProposalId::from_number(5).unwrap(),
+            ],
+            ..ctx()
+        };
+        let text = "fold: reviewer-1 ended with no verdict on P-3, P-5; a reviewer you start takes over its claim. Call start_worker.";
+        for kind in [types::WORKER_STOPPED, types::WORKER_FAILED] {
+            let event = with_data(event(kind, "fold"), json!({"agent": "reviewer-1"}));
+            assert!(is_pushed(&event), "{kind}");
+            assert_eq!(
+                sent(&notice_for(&event, &ended)),
+                vec![
+                    row("frontend", text, "start_worker"),
+                    row("lead", text, "start_worker"),
+                    row("review", text, "start_worker"),
+                ],
+                "{kind}"
+            );
+            // A reviewer that left every version with a verdict, or that fold resumes, tells nobody.
+            assert!(notice_for(&event, &ctx()).is_empty(), "{kind}");
+        }
+        // A failure that needs a restart says what brings the reviewer back instead.
+        let unreachable = with_data(
+            event(types::WORKER_FAILED, "fold"),
+            json!({"agent": "reviewer-1", "reason": MCP_UNAVAILABLE}),
+        );
+        let notices = notice_for(
+            &unreachable,
+            &PushContext {
+                starter: Some(name("review")),
+                ..ended
+            },
+        );
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].next_tool, "list_workers");
+    }
+
+    #[test]
     fn a_worker_that_cannot_reach_the_model_tells_the_main_agent_and_its_starter() {
         let mut ctx = ctx();
         ctx.main_agents = [name("main")].into_iter().collect();
@@ -1353,7 +1443,7 @@ mod tests {
         };
         assert_eq!(
             notice_for(&taskless, &ctx())[0].text,
-            "fold: P-3 opened. Call claim_review."
+            "fold: P-3 opened. Call start_worker."
         );
     }
 
@@ -1426,22 +1516,44 @@ mod tests {
     }
 
     #[test]
-    fn a_new_version_reaches_the_claim_holder_and_the_review_leads() {
+    fn a_new_version_reaches_the_claim_holder_or_without_one_the_review_leads() {
         let event = with_data(
             event(types::PROPOSAL_VERSION_ADDED, "frontend/ui"),
             json!({"version": 2, "changeset": "C-4"}),
         );
+        let claimed = PushContext {
+            review_claim: Some(name("reviewer-1")),
+            ..ctx()
+        };
         let text = "fold: P-3 has version 2. Call create_review_checkout.";
         assert_eq!(
+            sent(&notice_for(&event, &claimed)),
+            vec![row("reviewer-1", text, "create_review_checkout")]
+        );
+        // A review lead that still holds a claim it took itself gives it up first.
+        assert_eq!(
             sent(&notice_for(&event, &ctx())),
+            vec![row(
+                "review",
+                "fold: P-3 has version 2; release your review claim with release_review, then give it to a reviewer. Call start_worker.",
+                "start_worker"
+            )]
+        );
+        let unclaimed = PushContext {
+            review_claim: None,
+            ..ctx()
+        };
+        let text = "fold: P-3 has version 2. Call start_worker.";
+        assert_eq!(
+            sent(&notice_for(&event, &unclaimed)),
             vec![
-                row("lead", text, "create_review_checkout"),
-                row("review", text, "create_review_checkout"),
+                row("lead", text, "start_worker"),
+                row("review", text, "start_worker"),
             ]
         );
         let bare = with_data(event.clone(), json!({}));
         assert_eq!(
-            notice_for(&bare, &ctx())[0].text,
+            notice_for(&bare, &claimed)[0].text,
             "fold: P-3 has a new version. Call create_review_checkout."
         );
     }
@@ -1464,13 +1576,30 @@ mod tests {
             event(types::PROPOSAL_REVIEW_AGAIN_REQUESTED, "human:tanim"),
             json!({"version": 4}),
         );
+        let claimed = PushContext {
+            review_claim: Some(name("reviewer-1")),
+            ..ctx()
+        };
         let text =
             "fold: a human sent P-3 version 4 for review again. Call create_review_checkout.";
         assert_eq!(
-            sent(&notice_for(&again, &ctx())),
+            sent(&notice_for(&again, &claimed)),
+            vec![row("reviewer-1", text, "create_review_checkout")]
+        );
+        let held = notice_for(&again, &ctx());
+        assert_eq!(held[0].next_tool, "start_worker");
+        assert!(held[0].text.contains("release_review"), "{}", held[0].text);
+        assert!(held[0].text.len() <= MAX_NOTICE_LEN);
+        let unclaimed = PushContext {
+            review_claim: None,
+            ..ctx()
+        };
+        let text = "fold: a human sent P-3 version 4 for review again. Call start_worker.";
+        assert_eq!(
+            sent(&notice_for(&again, &unclaimed)),
             vec![
-                row("lead", text, "create_review_checkout"),
-                row("review", text, "create_review_checkout"),
+                row("lead", text, "start_worker"),
+                row("review", text, "start_worker"),
             ]
         );
         for kind in [
