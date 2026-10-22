@@ -54,6 +54,8 @@ pub struct BatchMergedChange {
     /// In path order.
     pub files: Vec<FileChange>,
     pub totals: Totals,
+    /// For `Merged`, the hash of the merged tree, calculated in memory: the tree a batch checkout of the same members stores. `None` for every other basis.
+    pub merged_tree: Option<ObjectHash>,
 }
 
 /// The two sides of a batch's merged change.
@@ -84,6 +86,7 @@ impl ReviewService {
             conflict: None,
             files: Vec::new(),
             totals: Totals::default(),
+            merged_tree: None,
         };
         match self.merged_sides(batch).await? {
             Sides::Nothing(basis) => Ok(empty(basis)),
@@ -140,6 +143,7 @@ impl ReviewService {
                     conflict,
                     files: comparison.files,
                     totals: comparison.totals,
+                    merged_tree: Some(comparison.tree),
                     ..empty(MergedBasis::Merged { base })
                 })
             }

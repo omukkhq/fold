@@ -8,7 +8,7 @@ use fold_core::{FoldError, codes};
 use crate::compare::{State, load_flat};
 use crate::diff::is_binary;
 use crate::objects::ObjectStore;
-use crate::revision_store::write_initial_tree;
+use crate::revision_store::{initial_tree_hash, write_initial_tree};
 
 /// One proposal version to merge: the tree of its base revision and its own tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +57,8 @@ pub struct MergedBatch {
     /// How many members, from the first, `state` holds.
     pub merged: usize,
     pub conflict: Option<BatchConflict>,
+    /// The hash the tree of `state` has, calculated without storing it: the tree a batch checkout of the same members stores.
+    pub tree: ObjectHash,
 }
 
 /// Merges `members` one after another onto main's tree `main`, each against its own base, with the three-way tree merge an integration uses, so the result is what integrating them in this order gives. The merges run in memory; only a clean result is written, its merged blobs first and then its trees bottom-up. Blocking: call it through `spawn_blocking`.
@@ -97,7 +99,9 @@ pub fn merged_batch_state(
     let merging = merge_in_memory(objects, main, members)?;
     let last = merging.steps.last().cloned().unwrap_or_default();
     let blobs = used_blobs(&merging.texts.merged, &last);
+    let tree = initial_tree_hash(objects, last.clone())?;
     Ok(MergedBatch {
+        tree,
         state: State::with_blobs(last, blobs),
         merged: merging.versions.len(),
         conflict: merging.conflict,

@@ -94,6 +94,7 @@ fn the_merged_state_is_the_tree_the_batch_merge_stores_without_storing_it() {
         &load_flat(&objects, &tree_hash).unwrap(),
         merged.state.entries()
     );
+    assert_eq!(merged.tree, tree_hash, "the hash the stored tree gets");
     assert!(objects.contains(&a).unwrap());
 }
 

@@ -229,6 +229,14 @@ impl<K: PartialEq, V> MergeCache<K, V> {
         Ok(built)
     }
 
+    /// Keeps `value` as the state of `key` without a read, for a command that built it anyway.
+    pub fn insert(&self, key: K, value: V) {
+        let mut entries = lock(&self.entries);
+        entries.retain(|(held, _)| *held != key);
+        entries.push_front((key, Arc::new(value)));
+        entries.truncate(self.capacity);
+    }
+
     /// The entry of `key`, moved to the front.
     fn take(&self, key: &K) -> Option<Arc<V>> {
         let mut entries = lock(&self.entries);
@@ -273,6 +281,8 @@ pub struct BatchMergeComparison {
     pub merged: usize,
     /// The first member that does not merge; the tree holds the members before it.
     pub conflict: Option<BatchConflict>,
+    /// The compared tree's hash; nothing stores it.
+    pub tree: ObjectHash,
 }
 
 /// Where a state's entries come from before any file is read.
@@ -438,6 +448,7 @@ impl WorkspaceService {
                 totals: comparison.totals,
                 merged: view.merged.merged,
                 conflict: view.merged.conflict.clone(),
+                tree: view.merged.tree,
             })
         })
         .await

@@ -2,8 +2,9 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use fold_core::object::ObjectHash;
+use fold_core::object::{ObjectHash, ObjectKind, hash_object};
 use fold_core::reviews::Verdict;
+use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{ProposalId, ReviewBatchId};
 use fold_daemon::http::router;
 use http_body_util::BodyExt;
@@ -15,6 +16,7 @@ use crate::proposal_tools_support::{Fixture, t};
 use fold_core::roles::Role;
 use fold_daemon::services::reviews::BatchVerdict;
 use fold_vcs::objects::ObjectStore;
+use fold_vcs::revision_store::initial_tree_hash;
 
 async fn get(fx: &Fixture, path: &str) -> (StatusCode, Value) {
     let request = Request::builder()
@@ -283,6 +285,103 @@ async fn the_file_list_and_each_file_of_a_merged_change_share_one_merge() {
     assert_eq!(status, StatusCode::OK);
 
     assert_eq!((merges.misses(), merges.hits()), (1, 3));
+}
+
+/// The tree hash of the files under `dir`, read from the disk and hashed in memory.
+fn tree_of_dir(fx: &Fixture, dir: &std::path::Path) -> ObjectHash {
+    fn walk(root: &std::path::Path, dir: &std::path::Path, flat: &mut FlatTree) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(root, &path, flat);
+                continue;
+            }
+            let name = path.strip_prefix(root).unwrap().to_str().unwrap();
+            let entry = FlatEntry {
+                kind: EntryKind::File,
+                hash: hash_object(ObjectKind::Blob, &std::fs::read(&path).unwrap()),
+            };
+            flat.insert(name.as_bytes().to_vec(), entry);
+        }
+    }
+    let mut flat = FlatTree::new();
+    walk(dir, dir, &mut flat);
+    let objects = ObjectStore::open_existing(&fx.project.paths().fold_dir()).unwrap();
+    initial_tree_hash(&objects, flat).unwrap()
+}
+
+#[tokio::test]
+async fn a_batch_checkout_holds_the_tree_its_view_shows_and_the_view_reads_its_merge() {
+    let fx = batched_with(AROUND_README).await;
+    let batch = ReviewBatchId::from_number(1).unwrap();
+    let review = fx.agent("review").await;
+    let merges = &fx.handle.batch_merges;
+
+    let checkout = fx
+        .reviews()
+        .create_batch_checkout(&review, batch)
+        .await
+        .unwrap();
+    let (status, body) = get(&fx, "/reviews/batches/rb-1/diff").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(changed(&body), [pair("README.md", "modified")]);
+    assert_eq!(
+        (merges.misses(), merges.hits()),
+        (0, 1),
+        "the view reads the checkout's merge"
+    );
+
+    let change = fx.reviews().batch_merged_changes(batch).await.unwrap();
+    let dir = fx.project.paths().root().join(&checkout.workspace.path);
+    assert_eq!(change.merged_tree, Some(tree_of_dir(&fx, &dir)));
+}
+
+#[tokio::test]
+async fn a_view_after_main_moved_merges_once_onto_the_new_head() {
+    let fx = Fixture::new().await;
+    for (task, name, path) in [(1, "frontend", "src/one.rs"), (2, "backend", "src/two.rs")] {
+        let author = fx.agent(name).await;
+        fx.workspaces()
+            .create_workspace(&author, t(task))
+            .await
+            .unwrap();
+        fx.write(task, path, "one line\n");
+        fx.reviews()
+            .create_proposal(&author, t(task), "Add a file", None)
+            .await
+            .unwrap();
+    }
+    let review = fx.agent("review").await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
+    let p1 = ProposalId::from_number(1).unwrap();
+    let p2 = ProposalId::from_number(2).unwrap();
+    crate::common::roles::give_batch(&fx.handle.store, "review", &[p1], fx.handle.clock.now())
+        .await;
+    let merges = &fx.handle.batch_merges;
+    let (_, before) = get(&fx, "/reviews/batches/rb-1/diff").await;
+    assert_eq!(before["base"], "r1");
+    assert_eq!(merges.misses(), 1);
+
+    fx.reviews()
+        .submit_review(&review, p2, 1, Verdict::Approve, "good", Vec::new())
+        .await
+        .unwrap();
+    fx.reviews()
+        .integrate_proposal(&review, p2, None)
+        .await
+        .unwrap();
+
+    let (status, after) = get(&fx, "/reviews/batches/rb-1/diff").await;
+    assert_eq!(status, StatusCode::OK, "{after}");
+    assert_eq!(after["base"], "r2");
+    assert_eq!(changed(&after), [pair("src/one.rs", "added")]);
+    let (status, file) = get(&fx, "/reviews/batches/rb-1/diff/file?path=src/one.rs").await;
+    assert_eq!(status, StatusCode::OK, "{file}");
+    assert_eq!(
+        (merges.misses(), merges.hits()),
+        (2, 1),
+        "one merge onto the new head, which the file read reuses"
+    );
 }
 
 #[tokio::test]
