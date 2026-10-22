@@ -510,4 +510,42 @@ async fn list_workers_leaves_out_stopped_workers_and_area_instructions_unless_as
         .await;
     assert_eq!(names(&stopped), every);
     assert_eq!(stopped["areas"][0].get("instructions"), None);
+    let instructions = harness
+        .call(MAIN, "list_workers", json!({"include_instructions": true}))
+        .await;
+    assert_eq!(names(&instructions), names(&short));
+    assert_eq!(instructions["stopped_count"], 3);
+    assert_eq!(instructions["areas"], full["areas"]);
+}
+
+#[tokio::test]
+async fn an_area_without_instructions_lists_zero_instructions_chars() {
+    let fake = FakeClaude::new("result");
+    let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    harness
+        .call(
+            MAIN,
+            "create_label",
+            json!({"name": "docs", "color": "sage"}),
+        )
+        .await;
+    harness
+        .call(
+            MAIN,
+            "define_area",
+            json!({"name": "docs", "label": "docs"}),
+        )
+        .await;
+
+    let short = harness.call(MAIN, "list_workers", json!({})).await;
+    let full = harness
+        .call(MAIN, "list_workers", json!({"include_instructions": true}))
+        .await;
+    assert_eq!(short["areas"][0]["instructions_chars"], 0);
+    assert_eq!(short["areas"][0].get("instructions"), None);
+    assert_eq!(full["areas"][0]["instructions"], Value::Null);
+    assert_eq!(full["areas"][0].get("instructions_chars"), None);
+    assert_eq!(short["workers"], json!([]));
+    assert_eq!(short["stopped_count"], 0);
 }
