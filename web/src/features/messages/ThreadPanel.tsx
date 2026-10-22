@@ -141,9 +141,12 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
         role="region"
         aria-label="Messages"
         tabIndex={0}
-        className={cn("min-h-0 flex-1 overflow-y-auto", insetFocusRing)}
+        className={cn(
+          "flex min-h-0 flex-1 flex-col overflow-y-auto",
+          insetFocusRing,
+        )}
       >
-        <ol ref={content} className="flex flex-col gap-12 p-18">
+        <ol ref={content} className="mt-auto flex flex-col gap-12 p-18">
           {thread.messages.map((message) => (
             <li key={message.id} className="flex flex-col gap-4">
               {isQuestion(message) ? (
