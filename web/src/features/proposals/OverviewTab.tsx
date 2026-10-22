@@ -21,6 +21,7 @@ import type {
 import { HrefLink } from "@/app/HrefLink";
 import { CommitId } from "@/components/mono/CommitId";
 import { Dialog } from "@/components/overlay/Dialog";
+import { textFlow } from "@/components/text/textFlow";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
@@ -238,7 +239,7 @@ function ReviewCommentItem({
       <MentionText
         text={comment.body}
         slug={slug}
-        className="text-code leading-normal whitespace-pre-wrap"
+        className="text-code leading-normal"
       />
     </li>
   );
@@ -277,7 +278,7 @@ function FullReview({
           <MentionText
             text={item.review.body.trim() || item.head}
             slug={slug}
-            className="text-body leading-normal whitespace-pre-wrap"
+            className="text-body leading-normal"
           />
           {item.comments.length === 0 ? null : (
             <section
@@ -461,7 +462,10 @@ function VersionCard({
                   <MentionText
                     text={item.excerpt.text}
                     slug={slug}
-                    className="text-code leading-normal whitespace-pre-line text-text-muted"
+                    className={cn(
+                      "text-code leading-normal text-text-muted",
+                      textFlow("lines"),
+                    )}
                   />
                 )}
                 {item.excerpt.cut ||
@@ -483,7 +487,12 @@ function VersionCard({
             >
               Evidence from {evidenceSource(v)}
             </summary>
-            <pre className="mt-6 flex flex-col gap-2 overflow-x-auto rounded-m bg-sunken px-12 py-10 font-mono text-label">
+            <pre
+              className={cn(
+                "mt-6 flex min-w-0 flex-col gap-2 rounded-m bg-sunken px-12 py-10 font-mono text-label",
+                textFlow("prose"),
+              )}
+            >
               {evidenceLines(v.evidence).map((line, index) => (
                 <span
                   key={index}
