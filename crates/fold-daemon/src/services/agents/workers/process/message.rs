@@ -12,7 +12,6 @@ use fold_store::tasks::reports;
 use fold_store::{StoreError, WriteTx};
 use serde_json::json;
 
-use super::main::is_main_refusal;
 use super::resume::SessionStart;
 use super::{Input, Supervisor, lock};
 use crate::services::agents::AgentError;
@@ -70,9 +69,10 @@ impl Supervisor {
         if !ENDED.contains(&row.state) {
             return Ok(());
         }
-        // A supervised main that a human stopped keeps the messages owed for the session a human starts.
-        if self.is_held(&row).await? {
-            return Ok(());
+        // The supervised main has no lead to take its messages; its own start tells them with the other work that waits, and a human's stop holds them for the session a human starts.
+        if row.role == Role::Main {
+            drop(resuming);
+            return self.ensure_main(None).await;
         }
         let owed = messages::owed_to_stopped(read, Some(agent)).await?;
         if owed.is_empty() {
@@ -100,8 +100,8 @@ impl Supervisor {
             Err(error) => {
                 lock(&self.inner.answering).remove(agent);
                 return match error {
-                    // The messages stay owed: the resume of the pause serves them, and a supervised main that may not run reads them in the session that runs it.
-                    error if is_paused_refusal(&error) || is_main_refusal(&error) => Ok(()),
+                    // The messages stay owed, and the resume of the pause serves them.
+                    error if is_paused_refusal(&error) => Ok(()),
                     // A start outside this path came first; the worker takes this turn as its next one. A process that fold let go of takes no turn, so the messages stay owed.
                     AgentError::Fold(error) if error.code() == codes::WORKER_EXISTS => {
                         let input = lock(&self.inner.running)
@@ -252,7 +252,7 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Stops a worker that fold started to answer a message once it is idle, has read every message sent to it and nothing bound to it waits for its work. It is checked when a turn ends and when the worker sends or acknowledges a message.
+    /// Stops a worker that fold started to answer a message once it is idle, has read every message sent to it and nothing bound to it waits for its work. It is checked when a turn ends and when the worker sends or acknowledges a message. Work for the supervised main can arrive while it answers, as a notice to its process, so fold's stop of the main is followed by a catch-up (see [`Supervisor::catch_up_after_stop`]).
     pub(super) async fn stop_if_answered(&self, agent: &AgentName) {
         if !lock(&self.inner.answering).contains(agent) {
             return;

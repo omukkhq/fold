@@ -217,7 +217,31 @@ impl Supervisor {
         ))
     }
 
-    /// After a daemon start or the resume of a pause: when the setting lets fold run the main agent and its process does not run, starts it with the work that waits for it, the first time even when nothing waits, so the humans see it on the Agents screen.
+    /// After `worker.stopped` of the supervised main, such as fold's stop once it answered its messages: work can have reached its process as a notice while it answered, so the stop is followed by [`Supervisor::catch_up_main`]. A human's stop holds the row, and the catch-up starts nothing.
+    pub(super) async fn catch_up_after_stop(self, event: std::sync::Arc<Event>) {
+        let Some(agent) = event
+            .data
+            .get("agent")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|agent| AgentName::parse(agent).ok())
+        else {
+            return;
+        };
+        let main = async {
+            let mut conn = self.inner.store.read().acquire().await?;
+            agents::find_worker_process(&mut conn, &agent).await
+        };
+        match main.await {
+            Ok(Some(row)) if row.role == Role::Main => self.catch_up_main().await,
+            Ok(_) => {}
+            Err(error) => tracing::warn!(
+                code = error.log_code(),
+                "could not read the row of a stopped worker"
+            ),
+        }
+    }
+
+    /// After a daemon start, the resume of a pause or fold's stop of the main: when the setting lets fold run the main agent, its process does not run and no human's stop holds it, starts it with the work that waits for it, the first time even when nothing waits, so the humans see it on the Agents screen.
     pub(super) async fn catch_up_main(self) {
         let caught = async {
             let config = load_config(&self.inner.paths).await?;
@@ -244,7 +268,7 @@ impl Supervisor {
     }
 
     /// Runs the supervised main with `turn`: resumes its stopped or failed row in its own session, or creates its row and starts it in a new session. One start at a time: a turn that comes while one is under way is sent to the started process after its first turn. A start that a pause, the setting or an interactive session refuses starts nothing.
-    async fn ensure_main(&self, turn: Option<String>) -> Result<(), AgentError> {
+    pub(super) async fn ensure_main(&self, turn: Option<String>) -> Result<(), AgentError> {
         {
             let mut waking = lock(&self.inner.main_waking);
             if let Some(pending) = waking.as_mut() {
@@ -283,6 +307,14 @@ impl Supervisor {
         }
         // The start for these messages finds the main running and leaves them, so this start tells of them.
         let owed = messages::owed_to_stopped(self.inner.store.read(), Some(&row.agent)).await?;
+        // A start for messages alone also names the other work that waits, so the main does not stop after its answer with that work untold.
+        let turn = match turn {
+            Some(turn) => Some(turn),
+            None if !owed.is_empty() => self.main_waiting(&row, &Default::default(), false).await?,
+            None => None,
+        };
+        // Only a start for messages alone stops the main once it has answered, as the message turn says; with other work it stays, as the long-lived main it is.
+        let answering = turn.is_none() && !owed.is_empty();
         let parts: Vec<String> = turn
             .into_iter()
             .chain((!owed.is_empty()).then(|| message_turn(&owed)))
@@ -290,8 +322,7 @@ impl Supervisor {
         if parts.is_empty() {
             return Ok(());
         }
-        // The message turn says fold stops the main once it has answered.
-        if !owed.is_empty() {
+        if answering {
             lock(&self.inner.answering).insert(row.agent.clone());
         }
         match self.resume(&row.agent, parts.join("\n\n"), &[]).await {

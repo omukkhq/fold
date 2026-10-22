@@ -510,3 +510,93 @@ async fn a_closed_workspace_of_the_supervised_main_goes_once_its_turn_ends() {
     eventually(WAIT, async || if dir.exists() { Err(()) } else { Ok(()) }).await;
     assert_eq!(worker(&harness, MAIN).await.state, WorkerState::Idle);
 }
+
+/// A task of main, ready at once; returns its id.
+async fn main_task(harness: &Harness, title: &str) -> String {
+    let created = harness
+        .call(
+            "frontend",
+            "create_task",
+            json!({"title": title, "labels": ["main"]}),
+        )
+        .await;
+    created["id"].as_str().unwrap().to_owned()
+}
+
+/// What the catch-up turn says of the ready task `task` of main.
+fn ready_for_main(task: &str) -> String {
+    format!("These tasks of main are ready for you: {task}.")
+}
+
+#[tokio::test]
+async fn a_daemon_start_tells_the_stopped_main_its_messages_with_the_work_that_waits() {
+    let fake = FakeClaude::new("result");
+    let mut harness = supervised(&fake).await;
+    supervise(&harness, false);
+    harness.restart().await;
+    assert_eq!(
+        worker(&harness, MAIN).await.state,
+        WorkerState::Stopped,
+        "a daemon start with the setting off ends the running row"
+    );
+    let task = main_task(&harness, "Add the checks").await;
+    let message = harness.send("frontend", &[MAIN], "Which checks?").await;
+
+    // The setting turns on while the daemon is down, so only the start serves what waits.
+    harness.stop().await;
+    supervise(&harness, true);
+    harness.start_again().await;
+    harness.connect("frontend").await;
+    let run = until_told(&fake, &message).await;
+    assert!(run.has("--resume"));
+    assert_eq!(fake.runs_of(MAIN).len(), 2);
+    let first = &run.stdin[1];
+    assert!(first.contains(&ready_for_main(&task)), "{first}");
+    assert!(
+        first.contains(&format!("- {message} from frontend")),
+        "{first}"
+    );
+    until_state(&harness, MAIN, WorkerState::Idle).await;
+
+    connect_main(&mut harness, &fake).await;
+    harness
+        .send_with(
+            MAIN,
+            json!({"to": ["frontend"], "reply_to": message, "body": "Lint and tests."}),
+        )
+        .await;
+    let later = harness.send("frontend", &[MAIN], "Thanks.").await;
+    let told = until_told(&fake, &later).await;
+    assert_eq!(
+        told.pid, run.pid,
+        "a main told of other work stays after its answer"
+    );
+}
+
+#[tokio::test]
+async fn work_that_reaches_the_main_while_it_answers_starts_it_again_after_its_stop() {
+    let fake = FakeClaude::new("result");
+    let mut harness = supervised(&fake).await;
+    stop_by_fold(&harness).await;
+    let message = harness.send("frontend", &[MAIN], "Which checks?").await;
+    let answering = until_told(&fake, &message).await;
+    assert!(answering.has("--resume"));
+    let task = main_task(&harness, "Add the checks").await;
+    until_told(&fake, &format!("{task} is ready in area main")).await;
+    until_state(&harness, MAIN, WorkerState::Idle).await;
+
+    connect_main(&mut harness, &fake).await;
+    harness
+        .send_with(
+            MAIN,
+            json!({"to": ["frontend"], "reply_to": message, "body": "Lint and tests."}),
+        )
+        .await;
+    harness.disconnect(MAIN).await;
+    let again = until_told(&fake, &ready_for_main(&task)).await;
+    assert_ne!(
+        again.pid, answering.pid,
+        "fold stopped the main once it answered, then started it for the task"
+    );
+    assert!(again.has("--resume"));
+}

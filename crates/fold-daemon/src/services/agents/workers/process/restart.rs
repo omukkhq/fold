@@ -291,30 +291,7 @@ impl Supervisor {
                 };
                 (ready_in_area(read, &area.label, &holds).await?, Vec::new())
             }
-            Role::Main => {
-                let Some(area) = agents::find_area(read, &AreaName::main()).await? else {
-                    return Ok(None);
-                };
-                let tasks = ready_in_area(read, &area.label, &holds).await?;
-                let filter = requests::RequestFilter {
-                    state: Some(RequestState::Open),
-                    ..requests::RequestFilter::default()
-                };
-                let mut conn = read.acquire().await.map_err(StoreError::from)?;
-                let mut waiting: Vec<RequestId> = requests::list(&mut conn, &filter)
-                    .await?
-                    .into_iter()
-                    .filter(|request| request.drafter.is_none())
-                    .map(|request| request.id)
-                    .collect();
-                waiting.reverse();
-                let unread = messages::unread_count(&mut *conn, row.agent_id).await?;
-                return Ok(main_catch_up_turn(&MainCatchUp {
-                    tasks: &tasks,
-                    requests: &waiting,
-                    unread,
-                }));
-            }
+            Role::Main => return self.main_waiting(row, kept, true).await,
             Role::ReviewLead => {
                 let open = reviews::list_proposals(read, Some(ProposalState::Open), None).await?;
                 let owed: BTreeSet<ProposalId> =
@@ -349,6 +326,46 @@ impl Supervisor {
             area: row.area.as_ref(),
             tasks: &tasks,
             proposals: &proposals,
+        }))
+    }
+
+    /// The work that waits for the supervised main of `row`, see [`main_catch_up_turn`]: the ready tasks of main whose claim no running worker or one among `kept` holds, the open requests that nobody drafts, and with `unread` how many messages to it are unread. A start for the messages it owes leaves `unread` out, because its turn names them.
+    pub(super) async fn main_waiting(
+        &self,
+        row: &WorkerProcessRow,
+        kept: &BTreeSet<AgentName>,
+        unread: bool,
+    ) -> Result<Option<String>, AgentError> {
+        let holds = |worker: &WorkerName| {
+            let agent = worker.agent();
+            kept.contains(&agent) || self.is_running(&agent)
+        };
+        let read = self.inner.store.read();
+        let Some(area) = agents::find_area(read, &AreaName::main()).await? else {
+            return Ok(None);
+        };
+        let tasks = ready_in_area(read, &area.label, &holds).await?;
+        let filter = requests::RequestFilter {
+            state: Some(RequestState::Open),
+            ..requests::RequestFilter::default()
+        };
+        let mut conn = read.acquire().await.map_err(StoreError::from)?;
+        let mut waiting: Vec<RequestId> = requests::list(&mut conn, &filter)
+            .await?
+            .into_iter()
+            .filter(|request| request.drafter.is_none())
+            .map(|request| request.id)
+            .collect();
+        waiting.reverse();
+        let unread = if unread {
+            messages::unread_count(&mut *conn, row.agent_id).await?
+        } else {
+            0
+        };
+        Ok(main_catch_up_turn(&MainCatchUp {
+            tasks: &tasks,
+            requests: &waiting,
+            unread,
         }))
     }
 
