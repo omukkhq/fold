@@ -15,7 +15,7 @@ pub async fn give_role(store: &Store, agent: &str, role: Role, area: Option<&str
     let name = AgentName::parse(agent).unwrap();
     let area = match role {
         Role::AreaLead | Role::TaskWorker => Some(area.unwrap_or(DEFAULT_AREA)),
-        Role::ReviewLead | Role::Reviewer => area,
+        Role::ReviewLead | Role::Reviewer | Role::Main => area,
     }
     .map(|area| AreaName::parse(area).unwrap());
     let now = Timestamp::from_millis(1).unwrap();

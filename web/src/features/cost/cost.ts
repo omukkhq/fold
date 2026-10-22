@@ -95,7 +95,7 @@ export interface CostTile {
   tokens: string[];
 }
 
-/** The four totals: everything, then the task workers, the reviews (the review lead and the reviewers) and the area leads, each with its share and its workers. */
+/** The four totals: everything, then the task workers, the reviews (the review lead and the reviewers) and the leads (the area leads and the supervised main agent), each with its share and its workers. */
 export function costTiles(view: ProjectCost): CostTile[] {
   const total = view.total.cost_micro_usd;
   const sum = (roles: readonly WorkerRole[]) =>
@@ -130,7 +130,7 @@ export function costTiles(view: ProjectCost): CostTile[] {
     },
     part("Task workers", ["task_worker"]),
     part("Reviews", ["review_lead", "reviewer"]),
-    part("Leads", ["area_lead"]),
+    part("Leads", ["area_lead", "main"]),
   ];
 }
 
@@ -139,6 +139,7 @@ const ROLE_ROWS: Record<WorkerRole, string> = {
   review_lead: "Review lead",
   task_worker: "Task workers",
   reviewer: "Reviewers",
+  main: "Main agent",
 };
 
 /** Every role a turn can have, in the order the chart's tooltip lists them. */
@@ -147,6 +148,7 @@ export const CHART_ROLES: readonly WorkerRole[] = [
   "reviewer",
   "review_lead",
   "area_lead",
+  "main",
 ];
 
 export function roleRowName(role: WorkerRole): string {
@@ -405,6 +407,7 @@ const ONE_ROLE: Record<WorkerRole, string> = {
   review_lead: "Review lead",
   task_worker: "Task worker",
   reviewer: "Reviewer",
+  main: "Main agent",
 };
 
 export function workerRows(view: ProjectCost): WorkerRow[] {

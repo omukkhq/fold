@@ -259,17 +259,32 @@ impl Harness {
 
     /// [`Harness::connect`] with the tags of `FOLD_AGENT_TAGS` in the handshake line, as `fld claude` gives its session the `main` tag.
     pub async fn connect_tagged(&mut self, agent: &str, tags: &[&str]) {
+        self.connect_from(agent, tags, Default::default()).await;
+    }
+
+    /// [`Harness::connect`] from inside the process tree of the worker process `pid`, as the adapter that a supervised worker's Claude Code starts.
+    pub async fn connect_under(&mut self, agent: &str, pid: u32) {
+        self.connect_from(
+            agent,
+            &[],
+            fold_daemon::socket::SocketPeer { pid: Some(pid) },
+        )
+        .await;
+    }
+
+    async fn connect_from(
+        &mut self,
+        agent: &str,
+        tags: &[&str],
+        peer: fold_daemon::socket::SocketPeer,
+    ) {
         assert!(
             !self.sessions.contains_key(agent),
             "{agent} is already connected"
         );
         self.next_pid += 1;
         let (client_end, server_end) = tokio::io::duplex(256 * 1024);
-        let server = tokio::spawn(handshake::accept(
-            self.state.clone(),
-            server_end,
-            Default::default(),
-        ));
+        let server = tokio::spawn(handshake::accept(self.state.clone(), server_end, peer));
         let (read, mut write) = tokio::io::split(client_end);
         let hello = json!({"fold": PROTOCOL_VERSION, "cwd": self.root(), "pid": self.next_pid, "agent": agent, "tags": tags});
         write

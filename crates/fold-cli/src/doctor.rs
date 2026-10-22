@@ -1372,7 +1372,11 @@ fn role_prompts_check(paths: &ProjectPaths) -> Check {
         return Check::ok(NAME, "every prompt in .fold/roles names a role");
     }
     unknown.sort();
-    let roles: Vec<&str> = Role::ALL.iter().map(|role| role.as_str()).collect();
+    let roles: Vec<&str> = Role::ALL
+        .iter()
+        .filter(|role| **role != Role::Main)
+        .map(|role| role.as_str())
+        .collect();
     Check::warn(
         NAME,
         format!(

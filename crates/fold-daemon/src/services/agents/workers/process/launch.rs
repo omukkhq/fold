@@ -9,7 +9,9 @@ use fold_core::layout::{
     AGENT_ENV, AGENT_TAGS_ENV, MCP_COMMAND, MCP_SERVER_NAME, MCP_SERVERS_KEY, session_settings,
 };
 use fold_core::roles::{CLAUDE_NOT_FOUND, FLD_MISSING, area_prompt, needs_restart};
-use fold_core::{AgentName, AreaName, EventActor, NewEvent, ProjectPaths, WorkerState, codes};
+use fold_core::{
+    AgentName, AreaName, EventActor, NewEvent, ProjectPaths, Role, WorkerState, codes,
+};
 use fold_store::StoreError;
 use fold_store::agents::{self, ProcessEnd, WorkerProcessRow};
 use fold_store::tasks::claims::{self, ClaimTarget, ReleaseReason};
@@ -24,6 +26,7 @@ use super::{Input, Launcher, Process, Running, StartWatch, Supervisor, lock, own
 use crate::push::StdinSink;
 use crate::services::agents::AgentError;
 use crate::services::agents::claude::{ClaudeInput, OutgoingRequest};
+use crate::services::agents::workers::code_of;
 use crate::services::events::EventBuffer;
 use crate::services::projects::load_config;
 use crate::support::SESSION_ENV;
@@ -43,6 +46,19 @@ impl Supervisor {
                 self.fail(row.id, &row.agent, "config").await?;
                 return Ok(None);
             }
+        };
+        // Held until the process is in place, so no interactive main session binds meanwhile.
+        let _main_start = if row.role == Role::Main {
+            match self.claim_main_start(&config) {
+                Ok(start) => Some(start),
+                Err(refusal) => {
+                    tracing::warn!(agent = %row.agent, code = code_of(&refusal), "the supervised main may not run now");
+                    self.fail(row.id, &row.agent, code_of(&refusal)).await?;
+                    return Ok(None);
+                }
+            }
+        } else {
+            None
         };
         let mut settings = config.role(row.role);
         let mut area_instructions = None;
@@ -396,6 +412,7 @@ async fn write_files(
     let dir = paths.worker_dir(&row.agent);
     let fold_dir = paths.fold_dir();
     let override_prompt = paths.role_prompt(row.role);
+    let role = row.role;
     let project_mcp = paths.mcp_json();
     let fold = launcher.fold.clone();
     let agent = row.agent.clone();
@@ -414,7 +431,7 @@ async fn write_files(
         let own_settings = dir.join("settings.json");
         std::fs::write(&own_settings, session_settings().to_string())?;
         let role_prompt = if override_prompt.is_file() {
-            fold_core::with_shared_rules(&std::fs::read_to_string(&override_prompt)?)
+            role.with_own_text(&std::fs::read_to_string(&override_prompt)?)
         } else {
             prompt_text.to_owned()
         };

@@ -175,3 +175,6 @@ review_plan_denied
 task_not_awaitable
 proposal_not_plannable
 already_in_plan
+main_supervised
+main_interactive
+main_not_supervised

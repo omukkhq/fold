@@ -93,22 +93,26 @@ task_worker = 4                      # task workers running at once
 reviewer = 3                         # reviewers running at once
 max_per_area = 2                     # optional: task workers of one area at once
 
-[roles.task_worker]                  # also area_lead, review_lead and reviewer
+[main]
+supervised = false                   # true: fold runs the main agent as a supervised worker of role main, for a server where nobody runs `fld claude`
+
+[roles.task_worker]                  # also area_lead, review_lead, reviewer and main
 model = "sonnet"                     # passed to Claude Code as --model
 cache_ttl = "5m"                     # "1h" or "5m": "1h" for leads and "5m" for reviewers and task workers by default
 idle_minutes = 15                    # task_worker and reviewer only: an idle worker stops after this long
 mcp = ["fold", "pencil"]             # the servers the role may load: fold and servers of the project's .mcp.json
 
 [roles.review_lead]
-handoff_at = 50                      # area_lead and review_lead only: the percent of the context window past which fold refreshes the lead through a hand-off note; without it, 85% of the window below 220k tokens and 60% from 220k
+handoff_at = 50                      # area_lead, review_lead and main only: the percent of the context window past which fold refreshes the lead through a hand-off note; without it, 85% of the window below 220k tokens and 60% from 220k
 ```
 
 - The top-level numbers must be whole numbers above 0. A worker limit has no upper bound, and 0 lets no worker of its role start; the leads are outside the limits, and a lower limit never stops a running worker.
 - `automatic = true` integrates a proposal once a reviewer, the main agent or a human approved it, nothing asks for changes, a human approved it when the task is marked, and every prerequisite task is Done.
 - A role without `mcp` loads every server the user's own Claude Code loads. With `mcp`, the worker gets the fold server and each named server of the project's `.mcp.json`; servers of the user's own configuration are never copied.
 - An older file with `remote` and `push_on_integrate` in `[git]` is read as `[remotes.origin]` on the `[git]` branch.
+- `supervised = true` under `[main]` makes fold run the main agent itself: it starts it at the daemon's start, keeps its session, and resumes it for a message to it, a request, a ready task of `main` or a review it must act on, never while the project is paused. The humans talk to it in the web app, and `fld claude` refuses with `main_supervised`. While a `fld claude` session is the main agent, fold starts no supervised one (`main_interactive`), and once that session ends fold starts it. A human's Stop on the Agents screen holds the supervised main: fold starts it for no work until a human starts it in a new session.
 
-Role prompts. `.fold/roles/<role>.md` (`area_lead`, `review_lead`, `task_worker` or `reviewer`) replaces the prompt that ships with fold for that role, and `.fold/roles/main.md` replaces the main agent's; fold adds its shared authority and recovery rules after either. A worker gets a changed prompt at its next start.
+Role prompts. `.fold/roles/<role>.md` (`area_lead`, `review_lead`, `task_worker` or `reviewer`) replaces the prompt that ships with fold for that role, and `.fold/roles/main.md` replaces the main agent's; fold adds its shared authority and recovery rules after either. For the supervised main, fold first adds its rules of a main agent without a terminal after `.fold/roles/main.md`. A worker gets a changed prompt at its next start.
 
 ## Areas
 
@@ -145,7 +149,7 @@ Start and set up:
 - `fld` with no command: print fold's status: the fld version, whether the daemon runs, its web address and socket, whether a service runs it, and the project of the current folder. It never starts the daemon, and it names `fld restart` when the daemon runs another version.
 - `fld init [DIR] [--name NAME] [--with-git] [--git-name NAME --git-email EMAIL]`: make the folder a fold project and register it. Without `DIR` the current folder; a new `DIR` is created. `--with-git` turns Git sync on: in a Git repository its `HEAD` commit becomes the genesis, else fold creates `.git`, and every revision becomes a commit on the `[git]` branch. `fld init --refresh [DIR]` rewrites fold's Claude Code files (`AGENTS.md` or `CLAUDE.md` section, the skill and this file) in an existing project.
 - `fld setup [--no-start] [--claude] [--remove]`: install the service that starts the daemon at login (a systemd user unit on Linux, a launchd agent on macOS) and start it, then offer to add fold to the user's Claude Code config. `--claude` only adds fold to Claude Code; `--remove` takes fold's entries out of it.
-- `fld claude [--name NAME] [-- ARGS]`: start the daemon when needed and continue the main agent's last session, or start one. `fld new` (also `fld new claude`) starts a new main session.
+- `fld claude [--name NAME] [-- ARGS]`: start the daemon when needed and continue the main agent's last session, or start one. `fld new` (also `fld new claude`) starts a new main session. A project with `supervised = true` under `[main]` refuses it with `main_supervised`.
 - `fld serve [--listen ADDR] [--socket PATH] [--web-dir DIR]`: run the daemon in the foreground; the service runs it the same way.
 - `fld mcp`: the stdio connection of a Claude Code session to the daemon, which Claude Code starts itself.
 - `fld restart`: restart the daemon, so a newly installed fld takes over; supervised workers stop and continue in their sessions.

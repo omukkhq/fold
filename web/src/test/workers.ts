@@ -69,6 +69,7 @@ export function workerList(fields: Partial<WorkerList> = {}): WorkerList {
     roles: [],
     limits: null,
     pause: { paused_since: null, paused_by: null },
+    main_supervised: false,
     ...fields,
   };
 }
