@@ -4,6 +4,7 @@ use fold_core::policy::{Gate, GateState, GateStatus};
 use fold_core::reviews::{
     HumanReviewMark, ReviewScope, ReviewScopeRecord, ScopeChoice, Side, Verdict,
 };
+use fold_core::text::shorten;
 use fold_core::{
     Actor, ChangesetId, CommentId, FoldError, HumanName, IdParseError, ProposalId, TaskId,
     WorkerName, codes,
@@ -83,6 +84,19 @@ pub struct ProposalVersionInput {
     /// A version number, such as 2 for v2. Leave it out for the current version.
     #[serde(default)]
     pub version: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct GetProposalInput {
+    /// The proposal, such as P-3.
+    pub id: String,
+    /// A version number, such as 2 for v2. Leave it out for the current version.
+    #[serde(default)]
+    pub version: Option<u32>,
+    /// full adds the evidence text, the task description and the whole body of each review of an earlier version. Leave it out for the short form, which gives evidence_chars and the first 200 characters of those bodies with body_chars.
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -303,12 +317,12 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_PROPOSAL,
-            "Read one proposal: versions, evidence, the task and its prerequisites, the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again) and the changed files.",
-            schema_for_type::<ProposalVersionInput>(),
+            "Read one proposal: versions, the evidence size, the task and its prerequisites, the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again) and the changed files. The short form gives evidence_chars for the evidence, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the task description and every whole body, such as before a review or when the task description matters.",
+            schema_for_type::<GetProposalInput>(),
         ),
         Tool::new(
             GET_PROPOSAL_DIFF,
-            "Read the change of a proposal version: against its base, or with since only what changed after an earlier version, such as last_reviewed, the newest earlier version that has a verdict. Lists the changed files with line counts, or one file's hunks when you pass path. A since change leaves out what main gained when the worker synced, and its file list adds earlier (the earlier version's own change size), new_files (files the earlier version did not change), base_moved and base_conflicts (files where the worker merged main by hand), with fold's suggested_scope, change or full, and scope_rules, the rules behind a suggested full review: new_files, large_delta, base_conflicts or v3_or_later. On a since change, comment with side new and the new line numbers: they are the version's own lines.",
+            "Read the change of a proposal version: against its base, or with since only what changed after an earlier version, such as last_reviewed, the newest earlier version that has a verdict. Lists the changed files with line counts, or one file's hunks when you pass path. A since change leaves out what main gained when the worker synced, and its file list adds earlier (the earlier version's own change size), new_files (files the earlier version did not change), base_moved and base_conflicts (files where the worker merged main by hand), with fold's suggested_scope, change or full, and scope_rules, the rules behind a suggested full review: new_files, large_delta, base_conflicts or v3_or_later. On a since change, comment with side new and the new line numbers: they are the version's own lines. Each hunk has a header \"@@ -old_start,old_lines +new_start,new_lines @@\" and lines, each one string: a mark (space for context, - removed, + added), then the line's text; a \"\\ No newline at end of file\" line follows a last line without a terminator. Number the lines from the header: a context line takes the next old and new number, a removed line the next old number (side old), an added line the next new number (side new). The new numbers are the line numbers of the file in your review checkout.",
             schema_for_type::<GetProposalDiffInput>(),
         ),
         Tool::new(
@@ -529,7 +543,11 @@ fn scope_record_json(scope: &ReviewScopeRecord) -> Value {
     })
 }
 
-fn view_json(view: &ProposalView) -> Value {
+/// How much of a review body of an earlier version the short form of `get_proposal` shows: enough to see what the review was about. The reviews of the selected version keep their whole body, which is what its author acts on.
+const EARLIER_REVIEW_HEAD_CHARS: usize = 200;
+
+/// The answer of `get_proposal`. Without `full` it leaves out the evidence text, the task description and most of each earlier version's review bodies, the largest parts of a proposal that a caller rarely needs on every read.
+fn view_json(view: &ProposalView, full: bool) -> Value {
     let detail = &view.detail;
     let summary = &detail.summary;
     let selected = &detail.selected;
@@ -562,6 +580,10 @@ fn view_json(view: &ProposalView) -> Value {
                 "body": review.body,
                 "comments": review.comments,
             });
+            if !full && review.version < selected.version {
+                line["body"] = json!(shorten(&review.body, EARLIER_REVIEW_HEAD_CHARS));
+                line["body_chars"] = json!(review.body.chars().count());
+            }
             // A human edit keeps the agent approvals of the version it was made from.
             if let Some(kept) = review.kept_from {
                 line["kept_from"] = json!(version(kept));
@@ -572,7 +594,7 @@ fn view_json(view: &ProposalView) -> Value {
             line
         })
         .collect();
-    json!({
+    let mut value = json!({
         "id": summary.id,
         "title": summary.title,
         "author": summary.author.as_str(),
@@ -584,12 +606,10 @@ fn view_json(view: &ProposalView) -> Value {
         "versions": versions,
         "base": selected.base,
         "changeset": selected.changeset,
-        "evidence": selected.evidence,
         "task": {
             "id": view.task.id,
             "title": view.task.title.as_str(),
             "status": view.task.status.as_str(),
-            "description": view.task.description.as_str(),
         },
         "needs": view.prerequisites.iter().map(|task| json!({
             "id": task.id,
@@ -633,7 +653,19 @@ fn view_json(view: &ProposalView) -> Value {
             "added": view.totals.added_lines,
             "removed": view.totals.removed_lines,
         },
-    })
+    });
+    if full {
+        value["evidence"] = json!(selected.evidence);
+        value["task"]["description"] = json!(view.task.description.as_str());
+    } else {
+        value["evidence_chars"] = json!(
+            selected
+                .evidence
+                .as_deref()
+                .map_or(0, |text| text.chars().count())
+        );
+    }
+    value
 }
 
 fn comment_json(comment: &CommentView) -> Value {
@@ -747,12 +779,13 @@ async fn get_proposal(
     actor: &Actor,
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
-    let input: ProposalVersionInput = parse(arguments)?;
+    let input: GetProposalInput = parse(arguments)?;
+    let full = full_detail(input.detail.as_deref())?;
     let view = reviews
         .view_proposal(actor, proposal_id(&input.id)?, input.version)
         .await
         .map_err(from_review)?;
-    Ok(view_json(&view))
+    Ok(view_json(&view, full))
 }
 
 async fn get_proposal_diff(
@@ -814,6 +847,21 @@ async fn get_proposal_diff(
     value["since"] = json!(since.map(version));
     value["last_reviewed"] = json!(last.map(version));
     Ok(value)
+}
+
+/// Whether `detail` asks for the full form of `get_proposal`.
+fn full_detail(detail: Option<&str>) -> Result<bool, FoldError> {
+    match detail {
+        None => Ok(false),
+        Some("full") => Ok(true),
+        Some(_) => Err(
+            FoldError::new(codes::INVALID_REQUEST, "detail is full or left out")
+                .with_details([("field", json!("detail"))])
+                .with_hint(
+                    "call get_proposal with detail full, or leave detail out for the short form",
+                ),
+        ),
+    }
 }
 
 fn comparison_value(proposal: ProposalId, comparison: &StateComparison) -> Value {

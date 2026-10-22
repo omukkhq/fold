@@ -205,11 +205,8 @@ async fn compare_revisions_lists_files_or_gives_one_file_s_hunks() {
             "change": "modified",
             "binary": false,
             "hunks": [{
-                "old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 2,
-                "lines": [
-                    {"kind": "context", "old_no": 1, "new_no": 1, "text": "fn a() {}\n"},
-                    {"kind": "added", "old_no": null, "new_no": 2, "text": "fn b() {}\n"},
-                ],
+                "header": "@@ -1,1 +1,2 @@",
+                "lines": [" fn a() {}\n", "+fn b() {}\n"],
             }],
         })
     );
