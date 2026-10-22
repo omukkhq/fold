@@ -23,6 +23,7 @@ import { daemon } from "@/test/daemon";
 import { message, recipient, thread as baseThread } from "@/test/messages";
 import { ApiError } from "@/api/errors";
 import type { ThreadView } from "@/api/messages";
+import { formatAsOf } from "@/format/time";
 import { ThreadPanel } from "./ThreadPanel";
 
 afterEach(() => {
@@ -130,10 +131,14 @@ describe("ThreadPanel", () => {
     ).toBe("/p/demo/t/T-12");
   });
 
-  it("says a message to humans was sent to them and marks the signed-in human", async () => {
+  it("says a message to humans was delivered, marks the signed-in human and marks the thread read for them", async () => {
     daemon.on("GET /api/v1/session", {
       status: 200,
       body: { human: "tanim", authenticated: true },
+    });
+    daemon.on(`POST /api/v1/projects/demo/threads/${MESSAGE}/read`, {
+      status: 200,
+      body: { read: [MESSAGE] },
     });
     await setup(() => Promise.resolve(), {
       ...thread,
@@ -146,14 +151,22 @@ describe("ThreadPanel", () => {
         }),
       ],
     });
-    const lines = await screen.findAllByText("sent to", { exact: false });
     await waitFor(() => {
-      expect(lines.map((line) => line.textContent)).toEqual([
-        "sent to@tanim (you)",
-        "sent to@rafeed",
+      expect(
+        screen
+          .getAllByText("delivered to", { exact: false })
+          .map((line) => line.textContent),
+      ).toEqual([
+        `delivered to@tanim (you) · ${formatAsOf(NOW, NOW)}`,
+        `delivered to@rafeed · ${formatAsOf(NOW, NOW)}`,
       ]);
     });
     expect(screen.queryByText("not delivered to", { exact: false })).toBeNull();
+    await waitFor(() => {
+      expect(
+        daemon.made(`POST /api/v1/projects/demo/threads/${MESSAGE}/read`),
+      ).toHaveLength(1);
+    });
   });
 
   it("refuses an empty reply", async () => {

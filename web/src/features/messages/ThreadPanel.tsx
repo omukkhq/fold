@@ -1,11 +1,12 @@
 import { PersonList, PersonName } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { ArrowRight, Send, SquareKanban } from "lucide-react";
 import { HrefLink } from "@/app/HrefLink";
-import type { ThreadView } from "@/api/messages";
+import { keys } from "@/api/keys";
+import { markThreadRead, type ThreadView } from "@/api/messages";
 import { sessionQuery } from "@/api/queries";
 import { Button } from "@/components/button/Button";
 import {
@@ -25,7 +26,7 @@ import {
   isFollowing,
   toBottom,
 } from "./follow";
-import { deliveryLines, recipientActors } from "./delivery";
+import { deliveryLines, recipientActors, unreadBy } from "./delivery";
 import { replyPlaceholder } from "./filters";
 import { MarkAnswered } from "./MarkAnswered";
 import { threadCanMarkAnswered } from "./answered";
@@ -52,6 +53,21 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
   const last = thread.messages.at(-1);
   const chosen = chosenAnswers(thread);
   const you = useQuery(sessionQuery()).data?.human ?? null;
+  const queryClient = useQueryClient();
+  const unread = unreadBy(thread.messages, you);
+  // One call per newest unread message: a refused call is not repeated until another message arrives.
+  const marked = useRef<string | null>(null);
+  useEffect(() => {
+    if (unread === null || marked.current === unread) return;
+    marked.current = unread;
+    markThreadRead(slug, thread.id)
+      .then((read) => {
+        if (read.length > 0) {
+          void queryClient.invalidateQueries({ queryKey: keys.messages(slug) });
+        }
+      })
+      .catch(() => undefined);
+  }, [slug, thread.id, unread, queryClient]);
   const {
     control,
     handleSubmit,
