@@ -14,6 +14,7 @@ import {
   tabStop,
   threadPointsOf,
   threadsCovering,
+  marksAt,
   threadsEndingAt,
   type DiffSelection,
   type LinePoint,
@@ -431,5 +432,22 @@ describe("helpers", () => {
     expect(threadsEndingAt(threads, PATH, o(11)).map((t) => t.id)).toEqual([
       "b",
     ]);
+  });
+
+  it("finds the marks that hold a row's lines, each once, and whether the row starts them", () => {
+    const marks = [
+      { id: "q", range: range("new", 11, 13) },
+      { id: "r", range: range("old", 4, 6) },
+      { id: "s", range: { ...range("new", 11, 11), path: "other.ts" } },
+    ];
+    expect(marksAt(marks, PATH, [n(11), o(4)])).toEqual([
+      { mark: marks[0], first: true },
+      { mark: marks[1], first: true },
+    ]);
+    expect(marksAt(marks, PATH, [n(12), o(5)])).toEqual([
+      { mark: marks[0], first: false },
+      { mark: marks[1], first: false },
+    ]);
+    expect(marksAt(marks, PATH, [n(20)])).toEqual([]);
   });
 });

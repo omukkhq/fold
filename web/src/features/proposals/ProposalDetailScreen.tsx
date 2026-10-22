@@ -9,11 +9,13 @@ import { useState } from "react";
 import { keys } from "@/api/keys";
 import {
   addComment,
+  askAuthor,
   integrateProposal,
   sendForReviewAgain,
   submitReview,
   type ChangeRange,
   type NewComment,
+  type NewQuestion,
   type NewReview,
   type ProposalDetail,
   type ReviewComment,
@@ -23,6 +25,7 @@ import {
   proposalCommentsQuery,
   proposalFileDiffQuery,
   proposalQuery,
+  proposalThreadsQuery,
 } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
@@ -46,18 +49,27 @@ import {
   visibleActions,
   type HumanAction,
 } from "./actions";
-import { commentNote } from "./commentNote";
+import { AskAuthorBox } from "./AskAuthorBox";
 import { canEdit, editableFile } from "./edit";
 import { describeFailure, reloadsProposal } from "./errors";
 import { FileEditor } from "./FileEditor";
 import { QUEUED_BLOCK, queuedNote } from "./checkRuns";
 import { integrationOf, mainHead } from "./integration";
+import {
+  lineMenu,
+  lineQuestions,
+  questionHref,
+  questionLabel,
+  questionMarks,
+  type LineQuestion,
+} from "./lineQuestions";
 import { ProposalHeader } from "./ProposalHeader";
+import { QuestionMarker } from "./QuestionMarker";
+import { SelectionMenu } from "./SelectionMenu";
 import { SidePanel } from "./SidePanel";
 import { CommentComposer, ThreadBox } from "./Threads";
 import { buildThreads, heldLines, placeThreads } from "./threadsModel";
 import {
-  detailHref,
   emptyChangeText,
   resolveView,
   shownVersion,
@@ -102,19 +114,25 @@ function useFileDiff(
     : { status: "pending" };
 }
 
-/** A line comment from the diff selection, exactly as the selection gives its range. */
+/** A line comment or a question from the diff selection, exactly as the selection gives its range. */
 type LineComment = DiffSelection & { body: string };
+
+/** What the selected lines show: the menu, or the box of the action the human chose there. */
+type SelectionMode = "menu" | "ask" | "comment";
 
 interface DiffAreaProps {
   slug: string;
   proposal: ProposalDetail;
   comments: readonly ReviewComment[];
+  questions: readonly LineQuestion[];
   view: DetailView;
   search: DetailSearch;
   human: string | null;
   now: number;
   onSearch: (next: DetailSearch) => void;
   onComment: (comment: LineComment) => Promise<void>;
+  /** Resolves once the question is stored and the proposal's threads are read again. */
+  onAsk: (question: LineComment) => Promise<void>;
   /** Resolves once the proposal with the human's new version is read again. */
   onEdited: (path: string) => Promise<void>;
 }
@@ -123,17 +141,24 @@ function DiffArea({
   slug,
   proposal,
   comments,
+  questions,
   view,
   search,
   human,
   now,
   onSearch,
   onComment,
+  onAsk,
   onEdited,
 }: DiffAreaProps) {
   const id = proposal.summary.id;
   const comparison = useQuery(proposalChangesQuery(slug, id, view.range));
   const [selection, setSelection] = useState<DiffSelection | null>(null);
+  const [mode, setMode] = useState<SelectionMode>("menu");
+  const select = (next: DiffSelection | null) => {
+    setSelection(next);
+    setMode("menu");
+  };
   const [editing, setEditing] = useState<string | null>(null);
   const files = comparison.data ? listedFiles(comparison.data.files) : [];
   const file = currentFile(files, search.path);
@@ -160,6 +185,7 @@ function DiffArea({
     held,
   );
   const editable = canEdit(proposal, human, view) && editableFile(file);
+  const questionById = new Map(questions.map((q) => [q.id, q]));
 
   if (comparison.isPending) return <Skeleton className="min-w-0 flex-1" />;
   if (comparison.isError) {
@@ -197,7 +223,7 @@ function DiffArea({
             size="sm"
             icon={<Pencil aria-hidden="true" size={14} />}
             onClick={() => {
-              setSelection(null);
+              select(null);
               setEditing(file.path);
             }}
           >
@@ -213,13 +239,25 @@ function DiffArea({
           filesTitle="Files"
           selectedPath={file?.path}
           onSelectFile={(path) => {
-            setSelection(null);
+            select(null);
             onSearch({ ...search, path });
           }}
           fileDiff={fileDiff}
           selection={selection}
-          onSelect={setSelection}
+          onSelect={select}
           threads={placed}
+          marks={questionMarks(questions, view)}
+          renderMark={(mark, first) => {
+            const question = questionById.get(mark.id);
+            return question ? (
+              <QuestionMarker
+                href={questionHref(slug, question)}
+                label={questionLabel(question)}
+                answered={question.answered}
+                focusable={first}
+              />
+            ) : null;
+          }}
           renderThread={(anchor) => {
             const thread = byId.get(anchor.id);
             return thread ? (
@@ -227,41 +265,54 @@ function DiffArea({
             ) : null;
           }}
           renderComposer={(sel) => {
-            const note = commentNote(proposal, human, view, sel.side, sel.path);
-            if (note.kind === "note") {
+            const menu = lineMenu(proposal, human, view, sel.side, sel.path);
+            const key = `${sel.path}:${sel.side}:${String(sel.start_line)}:${String(sel.end_line)}`;
+            if (mode === "ask" && menu.ask !== null) {
               return (
-                <p role="status" className="text-code text-text-muted">
-                  {note.text}
-                  {note.link ? (
-                    <>
-                      {" "}
-                      <HrefLink
-                        href={detailHref(slug, id, note.link.search)}
-                        className={cn(
-                          "rounded-s text-primary-text underline",
-                          focusRing,
-                        )}
-                      >
-                        {note.link.label}
-                      </HrefLink>
-                    </>
-                  ) : null}
-                </p>
+                <AskAuthorBox
+                  slug={slug}
+                  key={key}
+                  selection={sel}
+                  version={view.version}
+                  failureText={failureText}
+                  onCancel={() => {
+                    setMode("menu");
+                  }}
+                  onSubmit={async (body) => {
+                    await onAsk({ ...sel, body });
+                    select(null);
+                  }}
+                />
+              );
+            }
+            if (mode === "comment" && menu.comment !== null) {
+              return (
+                <CommentComposer
+                  slug={slug}
+                  key={key}
+                  selection={sel}
+                  human={menu.comment}
+                  failureText={failureText}
+                  onCancel={() => {
+                    setMode("menu");
+                  }}
+                  onSubmit={async (body) => {
+                    await onComment({ ...sel, body });
+                    select(null);
+                  }}
+                />
               );
             }
             return (
-              <CommentComposer
+              <SelectionMenu
                 slug={slug}
-                key={`${sel.path}:${sel.side}:${String(sel.start_line)}:${String(sel.end_line)}`}
-                selection={sel}
-                human={note.human}
-                failureText={failureText}
-                onCancel={() => {
-                  setSelection(null);
+                id={id}
+                menu={menu}
+                onAsk={() => {
+                  setMode("ask");
                 }}
-                onSubmit={async (body) => {
-                  await onComment({ ...sel, body });
-                  setSelection(null);
+                onComment={() => {
+                  setMode("comment");
                 }}
               />
             );
@@ -296,6 +347,10 @@ export function ProposalDetailScreen({
   });
   const revisions = useQuery({
     ...revisionsQuery(slug),
+    enabled: data !== null,
+  });
+  const threads = useQuery({
+    ...proposalThreadsQuery(slug, id),
     enabled: data !== null,
   });
   const queryClient = useQueryClient();
@@ -339,6 +394,14 @@ export function ProposalDetailScreen({
   const comment = useMutation({
     mutationFn: (input: NewComment) => addComment(slug, id, input),
     onSuccess: reload,
+  });
+  const ask = useMutation({
+    mutationFn: (input: NewQuestion) => askAuthor(slug, id, input),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: keys.proposalThreads(slug, id),
+      });
+    },
   });
   const reviewAgain = useMutation({
     mutationFn: (version: number) => sendForReviewAgain(slug, id, version),
@@ -402,6 +465,7 @@ export function ProposalDetailScreen({
           slug={slug}
           proposal={data}
           comments={comments.data ?? []}
+          questions={lineQuestions(threads.data?.items ?? [], id)}
           view={view}
           search={search}
           human={human}
@@ -416,6 +480,16 @@ export function ProposalDetailScreen({
               end_line,
               body,
               reply_to: null,
+            });
+          }}
+          onAsk={async ({ path, side, start_line, end_line, body }) => {
+            await ask.mutateAsync({
+              version: view.version,
+              path,
+              side,
+              start_line,
+              end_line,
+              body,
             });
           }}
           onEdited={async (path) => {

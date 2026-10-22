@@ -1,10 +1,12 @@
+use std::collections::BTreeSet;
+
 use fold_core::events::types;
 use fold_core::{
     Actor, AddressedAs, AgentActor, AgentName, Choice, FoldError, MessageId, NewEvent, ProposalId,
     RequestId, Sender, TaskId, Timestamp, WorkerName, policy,
 };
 use fold_store::agents::WorkerRow;
-use fold_store::messages::{self, InboxRow};
+use fold_store::messages::{self, InboxRow, MessageLines};
 use fold_store::{Store, WriteTx, agents};
 use serde_json::json;
 
@@ -37,6 +39,8 @@ pub struct InboxItem {
     pub header: Option<String>,
     /// The sender marked the message as asking a human for an answer.
     pub asks_human: bool,
+    /// The lines of a version of the message's proposal that the message asks about.
+    pub lines: Option<MessageLines>,
 }
 
 fn item(row: InboxRow, now: Timestamp) -> InboxItem {
@@ -57,6 +61,7 @@ fn item(row: InboxRow, now: Timestamp) -> InboxItem {
         choices: message.choices,
         header: message.header,
         asks_human: message.asks_human,
+        lines: message.lines,
     }
 }
 
@@ -100,6 +105,16 @@ impl MessageService {
         message: MessageId,
         up_to: bool,
     ) -> Result<Vec<MessageId>, MessageError> {
+        self.acknowledge_all(actor, &[message], up_to).await
+    }
+
+    /// [`Self::acknowledge`] for several messages in one transaction: a message the worker did not receive refuses the whole call and acknowledges nothing. The ids come back in message number order.
+    pub async fn acknowledge_all(
+        &self,
+        actor: &Actor,
+        targets: &[MessageId],
+        up_to: bool,
+    ) -> Result<Vec<MessageId>, MessageError> {
         let agent = policy::can_use_inbox(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
@@ -107,18 +122,15 @@ impl MessageService {
             .store
             .write(async |tx| {
                 let worker = acting_worker(tx, agent).await?;
-                let ids = messages::acknowledge(tx, worker.id, message, up_to, now)
-                    .await?
-                    .ok_or_else(|| message_not_found(message))?;
-                // The event names the newest message it covers; `wait_for_events` returns it only to the acknowledging worker's agent, whose inbox it changed.
-                if let Some(newest) = ids.last() {
-                    let event = NewEvent::new(types::MESSAGE_ACKNOWLEDGED, actor.event_actor())?
-                        .message(*newest)
-                        .data(json!({
-                            "ids": ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                        }))?;
-                    buffer.append(tx, &event, now).await?;
+                let mut ids = BTreeSet::new();
+                for message in targets {
+                    let changed = messages::acknowledge(tx, worker.id, *message, up_to, now)
+                        .await?
+                        .ok_or_else(|| message_not_found(*message))?;
+                    ids.extend(changed);
                 }
+                let ids: Vec<MessageId> = ids.into_iter().collect();
+                append_acknowledged(tx, &mut buffer, actor, &ids, now).await?;
                 Ok::<_, MessageError>(ids)
             })
             .await?;
@@ -153,4 +165,23 @@ async fn acting_worker(tx: &mut WriteTx, agent: &AgentActor) -> Result<WorkerRow
     Ok(actor_worker(tx.conn(), agent)
         .await?
         .ok_or_else(worker_not_found)?)
+}
+
+/// Appends `message.acknowledged` for the ids a call changed; nothing when none changed. The event names the newest message it covers; `wait_for_events` returns it only to the acknowledging worker's agent, whose inbox it changed.
+pub(super) async fn append_acknowledged(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    actor: &Actor,
+    ids: &[MessageId],
+    now: Timestamp,
+) -> Result<(), MessageError> {
+    if let Some(newest) = ids.last() {
+        let event = NewEvent::new(types::MESSAGE_ACKNOWLEDGED, actor.event_actor())?
+            .message(*newest)
+            .data(json!({
+                "ids": ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            }))?;
+        buffer.append(tx, &event, now).await?;
+    }
+    Ok(())
 }

@@ -871,6 +871,12 @@ mod tests {
         let worker = Role::TaskWorker.prompt();
         assert!(worker.contains("call `run_checks` for the task before `create_proposal`"));
         assert!(worker.contains("Wait for `checks.finished` with `wait_for_events`"));
+        assert!(worker.contains("fold ends a `wait_for_events` after at most 270 s"));
+        assert!(
+            Role::Reviewer
+                .prompt()
+                .contains("fold ends a `wait_for_events` after at most 270 s")
+        );
         let lead = Role::ReviewLead.prompt();
         assert!(lead.contains("You decide the scope when you assign the review"));
         assert!(lead.contains("never resolve it yourself"));

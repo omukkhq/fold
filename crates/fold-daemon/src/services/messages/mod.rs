@@ -9,7 +9,7 @@ use fold_core::{
     HumanName, IdKind, MessageBody, MessageChoices, MessageId, NewEvent, ProposalId, Recipient,
     RequestId, Sender, Target, TaskId, Timestamp, WorkerName, codes, policy,
 };
-use fold_store::messages::{self, MessageHead, MessageRow, NewMessage, RecipientRow};
+use fold_store::messages::{self, MessageHead, MessageLines, MessageRow, NewMessage, RecipientRow};
 use fold_store::{Store, StoreError, WriteTx, agents, counters, projects, reviews, tasks};
 use serde_json::json;
 use thiserror::Error;
@@ -106,6 +106,8 @@ pub struct MessageView {
     pub header: Option<String>,
     /// The sender marked the message as asking a human for an answer.
     pub asks_human: bool,
+    /// The lines of a version of the message's proposal that the message asks about.
+    pub lines: Option<MessageLines>,
 }
 
 fn recipient_view(row: RecipientRow) -> RecipientView {
@@ -135,6 +137,7 @@ fn message_view(row: MessageRow) -> MessageView {
         choices: row.choices,
         header: row.header,
         asks_human: row.asks_human,
+        lines: row.lines,
     }
 }
 
@@ -268,7 +271,7 @@ impl MessageService {
         let view = self
             .store
             .write(async |tx| {
-                require_sender(tx, actor).await?;
+                let sender_worker = require_sender(tx, actor).await?;
                 let parent = match input.reply_to {
                     Some(parent) => Some(
                         messages::find(tx.conn(), parent)
@@ -321,10 +324,19 @@ impl MessageService {
                     body: &input.body,
                     choices: choices.as_ref(),
                     asks_human: send.asks_human,
+                    lines: None,
                     recipients,
                     now,
                 };
                 let view = write_message(tx, &mut buffer, draft).await?;
+                // A reply also acknowledges the message it answers for a sender that received it.
+                if let (Some(worker), Some(parent)) = (&sender_worker, parent) {
+                    let changed =
+                        fold_store::messages::acknowledge(tx, worker.id, parent.id, false, now)
+                            .await?
+                            .unwrap_or_default();
+                    inbox::append_acknowledged(tx, &mut buffer, actor, &changed, now).await?;
+                }
                 #[cfg(feature = "failpoints")]
                 fail::fail_point!("send_message_in_transaction", |_| Err(fired(
                     "send_message_in_transaction"
@@ -374,6 +386,7 @@ impl MessageService {
                     body: &body,
                     choices: None,
                     asks_human: false,
+                    lines: None,
                     recipients,
                     now,
                 };
@@ -408,6 +421,8 @@ struct Draft<'a> {
     body: &'a MessageBody,
     choices: Option<&'a MessageChoices>,
     asks_human: bool,
+    /// The lines of a version of `proposal` the message asks about.
+    lines: Option<MessageLines>,
     recipients: Vec<Recipient>,
     now: Timestamp,
 }
@@ -477,6 +492,9 @@ async fn write_message(
         .and_then(MessageChoices::header)
         .map(str::to_owned);
     messages::insert_choices(tx, id, &choices, header.as_deref()).await?;
+    if let (Some(lines), Some(proposal)) = (&draft.lines, draft.proposal) {
+        messages::insert_lines(tx, id, proposal, lines).await?;
+    }
     let names: Vec<String> = draft
         .recipients
         .iter()
@@ -527,6 +545,7 @@ async fn write_message(
         choices,
         header,
         asks_human: draft.asks_human,
+        lines: draft.lines,
     })
 }
 
@@ -550,8 +569,47 @@ pub(crate) async fn send_from_fold_in_tx(
         body,
         choices: None,
         asks_human: false,
+        lines: None,
         recipients,
         now,
+    };
+    write_message(tx, buffer, draft).await
+}
+
+/// A human's question to the worker `to` about `lines` of a version of `links.1`, linked to the proposal and its task `links.0`.
+pub(crate) struct LineQuestion<'a> {
+    pub actor: &'a Actor,
+    pub to: WorkerName,
+    pub links: (TaskId, ProposalId),
+    pub body: &'a MessageBody,
+    pub lines: MessageLines,
+    pub now: Timestamp,
+}
+
+/// Sends a question about lines of a proposal version inside the caller's transaction, as one message that starts its own thread. The worker is resolved as any other send resolves it. The caller publishes the buffer after the commit.
+pub(crate) async fn ask_about_lines_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    question: LineQuestion<'_>,
+) -> Result<MessageView, MessageError> {
+    let sender = Sender::of(question.actor);
+    let directory = messages::directory(tx.conn(), Vec::new()).await?;
+    let recipients = resolve(&[Address::of_worker(&question.to)], &directory, &sender)
+        .map_err(FoldError::from)?;
+    let draft = Draft {
+        actor: question.actor,
+        sender: &sender,
+        task: Some(question.links.0),
+        proposal: Some(question.links.1),
+        request: None,
+        join: None,
+        parent: None,
+        body: question.body,
+        choices: None,
+        asks_human: false,
+        lines: Some(question.lines),
+        recipients,
+        now: question.now,
     };
     write_message(tx, buffer, draft).await
 }
@@ -591,21 +649,25 @@ pub(crate) async fn ask_humans_in_tx(
         body: question.body,
         choices: question.choices,
         asks_human: false,
+        lines: None,
         recipients,
         now: question.now,
     };
     write_message(tx, buffer, draft).await
 }
 
-/// An agent sends through a registered worker; a human or the system needs no row.
-async fn require_sender(tx: &mut WriteTx, actor: &Actor) -> Result<(), MessageError> {
+/// The registered worker an agent sends through; a human or the system needs no row and gets `None`.
+async fn require_sender(
+    tx: &mut WriteTx,
+    actor: &Actor,
+) -> Result<Option<agents::WorkerRow>, MessageError> {
     let Actor::Agent(agent) = actor else {
-        return Ok(());
+        return Ok(None);
     };
-    if actor_worker(tx.conn(), agent).await?.is_none() {
-        return Err(worker_not_found().into());
+    match actor_worker(tx.conn(), agent).await? {
+        Some(worker) => Ok(Some(worker)),
+        None => Err(worker_not_found().into()),
     }
-    Ok(())
 }
 
 async fn require_task(tx: &mut WriteTx, task: TaskId) -> Result<(), MessageError> {

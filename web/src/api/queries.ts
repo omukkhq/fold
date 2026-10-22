@@ -3,7 +3,11 @@ import { getComparison, getFileDiff } from "./diff";
 import { RECENT_EVENTS, listAgents } from "./agents";
 import { getProjectGit } from "./git";
 import { keys } from "./keys";
-import { countAwaitingHuman, listThreads } from "./messages";
+import {
+  countAwaitingHuman,
+  listProposalThreads,
+  listThreads,
+} from "./messages";
 import { getProject, listProjects } from "./projects";
 import { localDayStart } from "../format/days";
 import {
@@ -91,6 +95,14 @@ export const threadQuery = (slug: string, thread: string) =>
   queryOptions({
     queryKey: keys.messagesThread(slug, thread),
     queryFn: () => getThread(slug, thread),
+    staleTime: Infinity,
+  });
+
+/** The threads linked to a proposal, which hold the questions about its lines. */
+export const proposalThreadsQuery = (slug: string, proposal: string) =>
+  queryOptions({
+    queryKey: keys.proposalThreads(slug, proposal),
+    queryFn: () => listProposalThreads(slug, proposal),
     staleTime: Infinity,
   });
 

@@ -6,6 +6,7 @@ use fold_core::{
     TaskId, Timestamp, codes,
 };
 use fold_store::agents::WorkerRow;
+use fold_store::messages::MessageLines;
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -37,7 +38,7 @@ pub struct SendMessageInput {
     /// Link the message to this proposal, such as P-3. A reply takes its parent's proposal when left out.
     #[serde(default)]
     pub proposal: Option<String>,
-    /// Reply to this message, such as m-31; the reply joins its thread.
+    /// Reply to this message, such as m-31; the reply joins its thread and acknowledges the message for you when it was sent to you.
     #[serde(default)]
     pub reply_to: Option<String>,
     /// Link the message to this request, such as RQ-4, to ask or answer about it: the message joins the request's clarification thread. A reply takes its parent's request when left out.
@@ -131,9 +132,10 @@ pub struct GetThreadInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct AcknowledgeMessageInput {
-    /// The message you handled, such as m-31.
-    pub id: String,
-    /// Also acknowledge every earlier unacknowledged message of the same worker.
+    /// The messages you handled, such as ["m-31", "m-32"]; give at least one. Each must be a message to you.
+    #[schemars(length(min = 1))]
+    pub ids: Vec<String>,
+    /// Also acknowledge every earlier unacknowledged message of the same worker, for each id.
     #[serde(default)]
     pub up_to: bool,
     /// The worker whose message to acknowledge, such as frontend/ui. Leave it out for the main worker.
@@ -150,7 +152,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_INBOX,
-            "Read your unacknowledged messages in id order. Reading does not acknowledge: a message comes back on every call until acknowledge_message.",
+            "Read your unacknowledged messages in id order. Reading does not acknowledge: a message comes back on every call until acknowledge_message. A message with `lines` is a human's question about those lines of your proposal; answer it with send_message and reply_to.",
             schema_for_type::<GetInboxInput>(),
         ),
         Tool::new(
@@ -160,7 +162,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             ACKNOWLEDGE_MESSAGE,
-            "Mark a message as handled, so it leaves your inbox and the unread count. With up_to, also every earlier message of the same worker.",
+            "Mark messages as handled, so they leave your inbox and the unread count. Give every message you handled in one call. A reply with send_message reply_to already acknowledges the message it answers when it was sent to you. With up_to, also every earlier message of the same worker.",
             schema_for_type::<AcknowledgeMessageInput>(),
         ),
         Tool::new(
@@ -224,6 +226,9 @@ fn inbox_json(item: &InboxItem) -> Value {
     if item.asks_human {
         object.insert("asks_human".into(), json!(true));
     }
+    if let Some(lines) = &item.lines {
+        object.insert("lines".into(), lines_json(lines));
+    }
     object.insert("sent_at".into(), json!(millis(item.sent_at)));
     Value::Object(object)
 }
@@ -259,8 +264,27 @@ fn thread_json(message: &MessageView) -> Value {
     if message.asks_human {
         object.insert("asks_human".into(), json!(true));
     }
+    if let Some(lines) = &message.lines {
+        object.insert("lines".into(), lines_json(lines));
+    }
     object.insert("sent_at".into(), json!(millis(message.sent_at)));
     Value::Object(object)
+}
+
+/// The lines of the message's proposal a human asks its author about, with their text; `excerpt_cut` appears only when the text holds just the first lines.
+fn lines_json(lines: &MessageLines) -> Value {
+    let mut object = json!({
+        "version": lines.version,
+        "path": lines.path,
+        "side": lines.side.as_str(),
+        "start_line": lines.start_line,
+        "end_line": lines.end_line,
+        "excerpt": lines.excerpt,
+    });
+    if lines.excerpt_cut {
+        object["excerpt_cut"] = json!(true);
+    }
+    object
 }
 
 fn millis(time: Timestamp) -> i64 {
@@ -357,11 +381,21 @@ pub async fn acknowledge_message(
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let input: AcknowledgeMessageInput = parse(arguments)?;
-    let id = message_id(&input.id)?;
+    let targets = input
+        .ids
+        .iter()
+        .map(|id| message_id(id))
+        .collect::<Result<Vec<_>, _>>()?;
+    if targets.is_empty() {
+        return Err(
+            FoldError::new(codes::INVALID_REQUEST, "give at least one id")
+                .with_hint("call acknowledge_message with ids such as [\"m-31\"]"),
+        );
+    }
     let actor = server.actor(Some(&worker.name)).await?;
     let acknowledged = server
         .messages
-        .acknowledge(&actor, id, input.up_to)
+        .acknowledge_all(&actor, &targets, input.up_to)
         .await
         .map_err(from_message)?;
     Ok(json!({ "acknowledged": ids(&acknowledged) }))

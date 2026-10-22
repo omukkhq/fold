@@ -25,6 +25,7 @@ mod changes;
 mod changesets;
 mod checkpoints;
 mod checks;
+mod cleanup;
 mod compare;
 mod direct;
 mod exclude;
@@ -49,6 +50,7 @@ pub use changes::{WorkspaceChanges, WorkspaceEntry};
 pub(crate) use changesets::ProposalSnapshot;
 pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};
+pub use cleanup::{DirectoryRemoval, follow_closed_workspaces};
 pub(crate) use compare::CARRY_CACHE_ENTRIES;
 pub use compare::{
     CarriedComparison, Carry, CarryCache, ResolvedState, StateComparison, StateKind, StateRef,

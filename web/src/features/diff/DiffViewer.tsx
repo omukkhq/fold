@@ -50,6 +50,9 @@ export interface DiffViewerProps {
   renderThread?: (thread: DiffThread) => ReactNode;
   /** Shown under the last selected line. */
   renderComposer?: (selection: DiffSelection) => ReactNode;
+  /** Ranges marked at each of their lines, such as questions to the author. */
+  marks?: readonly DiffThread[];
+  renderMark?: (mark: DiffThread, first: boolean) => ReactNode;
   /** The rows a file shows before "Show more". */
   rowLimit?: number;
 }

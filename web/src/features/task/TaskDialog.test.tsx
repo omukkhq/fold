@@ -482,6 +482,7 @@ function registerDaemon(): void {
         choices: [],
         header: null,
         asks_human: false,
+        lines: null,
         recipients: [],
         body: body.body,
         proposal: null,
@@ -660,6 +661,7 @@ describe("the task dialog route", () => {
         choices: [],
         header: null,
         asks_human: false,
+        lines: null,
         recipients: [
           {
             name: "review",
@@ -1861,6 +1863,7 @@ describe("the task's messages", () => {
     choices: [],
     header: null,
     asks_human: false,
+    lines: null,
     recipients: [],
     body: `message ${String(n)}`,
     proposal: null,

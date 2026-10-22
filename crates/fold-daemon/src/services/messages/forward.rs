@@ -93,6 +93,7 @@ pub(crate) async fn forward_in_tx(
             body: &body,
             choices: None,
             asks_human: false,
+            lines: None,
             recipients,
             now,
         },
@@ -131,6 +132,7 @@ pub(crate) async fn tell_lead_in_tx(
             parent: None,
             body: &body,
             choices: None,
+            lines: None,
             asks_human: false,
             recipients: vec![Recipient {
                 target: Target::Worker(WorkerName::main(&lead)),
