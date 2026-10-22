@@ -41,6 +41,19 @@ pub fn can_plan_reviews(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
+/// The review lead changes its review plans in every way. The main agent, only on the user's word as with its other review powers, may take members out of an open plan or close it, so a plan never holds its proposals back while no review lead starts it; adding is the review lead's grouping. `adds` is whether the change adds proposals or tasks.
+pub fn can_change_plan(starter: &Starter, adds: bool) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::MainAgent if adds => Err(PolicyDenied {
+            code: codes::REVIEW_PLAN_DENIED,
+            message: "the main agent only takes members out of a review plan or closes it; the review lead groups proposals",
+            hint: "call change_review_plan with remove or close only, or tell the review lead with send_message",
+        }),
+        Starter::MainAgent => Ok(()),
+        _ => can_plan_reviews(starter),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +105,28 @@ mod tests {
             let denied = can_plan_reviews(&starter).unwrap_err();
             assert_eq!(denied.code(), codes::REVIEW_PLAN_DENIED);
             assert!(denied.hint().contains("review lead"));
+        }
+    }
+
+    #[test]
+    fn the_main_agent_only_takes_members_out_of_a_plan_or_closes_it() {
+        assert!(can_change_plan(&Starter::ReviewLead, true).is_ok());
+        assert!(can_change_plan(&Starter::ReviewLead, false).is_ok());
+        assert!(can_change_plan(&Starter::MainAgent, false).is_ok());
+        let denied = can_change_plan(&Starter::MainAgent, true).unwrap_err();
+        assert_eq!(denied.code(), codes::REVIEW_PLAN_DENIED);
+        assert!(denied.hint().contains("remove or close"));
+        for starter in [
+            Starter::Human,
+            Starter::System,
+            Starter::Unsupervised,
+            Starter::ShortLived,
+            Starter::Subagent,
+        ] {
+            for adds in [true, false] {
+                let denied = can_change_plan(&starter, adds).unwrap_err();
+                assert_eq!(denied.code(), codes::REVIEW_PLAN_DENIED);
+            }
         }
     }
 

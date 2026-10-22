@@ -87,6 +87,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::WORKER_STOPPED,
         types::WORKER_FAILED,
         types::WORKER_MODEL_UNREACHABLE,
+        types::REVIEW_PLAN_CHANGED,
         types::REVIEW_PLAN_JOINED,
         types::REVIEW_PLAN_LEFT,
         types::REVIEW_PLAN_WAIT_ENDED,
@@ -729,13 +730,14 @@ fn review_rules(
     Some(vec![(leads, text, "start_worker"), held])
 }
 
-/// A review plan reaches the review lead when it changes without the lead: an awaited task opened its proposal and joined, or stopped being eligible and left; the wait ended at the deadline; or fold ended the plan because no member is left. Once no task is awaited, the notice names the proposals to give one reviewer with the plan. The daemon writes the plan's open proposals and awaited tasks after the change into the event.
+/// A review plan reaches the review lead when it changes without the lead: an awaited task opened its proposal and joined, or stopped being eligible and left; the main agent took members out or closed it; the wait ended at the deadline; or the plan ended because no member is left. Once no task is awaited, the notice names the proposals to give one reviewer with the plan. The daemon writes the plan's open proposals and awaited tasks after the change into the event.
 fn plan_rules(
     event: &Event,
     ctx: &PushContext,
 ) -> Option<Vec<(Vec<AgentName>, String, &'static str)>> {
     let kind = event.event_type;
     if ![
+        types::REVIEW_PLAN_CHANGED,
         types::REVIEW_PLAN_JOINED,
         types::REVIEW_PLAN_LEFT,
         types::REVIEW_PLAN_WAIT_ENDED,
@@ -782,9 +784,29 @@ fn plan_rules(
             "start_worker",
         )
     } else if kind == types::REVIEW_PLAN_ENDED {
+        let body = if text("reason") == Some("closed") {
+            format!("{plan} was closed: give its open proposals to reviewers")
+        } else {
+            format!("{plan} ended: no member is left to review")
+        };
+        (body, "list_proposals")
+    } else if kind == types::REVIEW_PLAN_CHANGED {
+        let removed = strings("removed");
+        let closed = event
+            .data
+            .get("closed")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if closed || removed.is_empty() {
+            // A closed plan ends in the same write, and its own notice follows.
+            return Some(Vec::new());
+        }
         (
-            format!("{plan} ended: no member is left to review"),
-            "list_proposals",
+            format!(
+                "{} left {plan}: give their open proposals to reviewers",
+                removed.join(", ")
+            ),
+            "get_review_plan",
         )
     } else {
         let task = text("task")?;
@@ -1025,6 +1047,27 @@ mod tests {
             sent(&notice_for(&gone, &ctx()))[0].1,
             "fold: rp-1 ended: no member is left to review. Call list_proposals."
         );
+        let closed = with_data(
+            event(types::REVIEW_PLAN_ENDED, "frontend"),
+            json!({"plan": "rp-1", "reason": "closed"}),
+        );
+        assert_eq!(
+            sent(&notice_for(&closed, &ctx()))[0].1,
+            "fold: rp-1 was closed: give its open proposals to reviewers. Call list_proposals."
+        );
+        let removed = with_data(
+            event(types::REVIEW_PLAN_CHANGED, "frontend"),
+            json!({"plan": "rp-1", "added_proposals": [], "added_tasks": [], "removed": ["T-14"], "closed": false}),
+        );
+        assert_eq!(
+            sent(&notice_for(&removed, &ctx()))[0].1,
+            "fold: T-14 left rp-1: give their open proposals to reviewers. Call get_review_plan."
+        );
+        let closing = with_data(
+            event(types::REVIEW_PLAN_CHANGED, "frontend"),
+            json!({"plan": "rp-1", "removed": ["T-14"], "closed": true}),
+        );
+        assert!(notice_for(&closing, &ctx()).is_empty());
         let by_lead = with_data(
             event(types::REVIEW_PLAN_ENDED, "review"),
             json!({"plan": "rp-1", "reason": "removed"}),

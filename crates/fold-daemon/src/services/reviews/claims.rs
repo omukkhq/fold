@@ -35,7 +35,7 @@ pub struct ReviewClaimView {
 
 /// Review claims. A review claim lives in its own row beside the task's implementation claim and never changes it, so neither command writes a status. Leases are renewed by the same session touch as implementation claims.
 impl ReviewService {
-    /// Takes the review claim on an open proposal for the actor's worker; `policy::can_claim_review` refuses the author's agent and every agent that does not decide reviews. The insert runs before any read of the holder, so the partial unique index on unreleased review claims decides a race: the loser gets `already_claimed` naming the holder. A repeat call by the holder renews the claim without a second `claim.acquired`. A holder whose lease has run out is taken over in the same transaction: its claim is released as `taken_over` with `claim.taken_over`, and the new claim follows with `claim.acquired`.
+    /// Takes the review claim on an open proposal for the actor's worker; `policy::can_claim_review` refuses the author's agent and every agent that does not decide reviews. The insert runs before any read of the holder, so the partial unique index on unreleased review claims decides a race: the loser gets `already_claimed` naming the holder. A repeat call by the holder renews the claim without a second `claim.acquired`. A holder whose lease has run out is taken over in the same transaction: its claim is released as `taken_over` with `claim.taken_over`, and the new claim follows with `claim.acquired`. A proposal that waits in a review plan is refused with `already_in_plan`.
     pub async fn claim_review(
         &self,
         actor: &Actor,
@@ -62,6 +62,7 @@ impl ReviewService {
             .write(async |tx| {
                 let row =
                     require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
+                super::refuse_planned(tx, proposal).await?;
                 let standing = agents::standing_of(tx.conn(), actor).await?;
                 let main_task = task_in_main_area(tx.conn(), row.task).await?;
                 let reviewer = policy::can_claim_review(actor, standing, &row.author, main_task)

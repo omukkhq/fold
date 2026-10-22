@@ -182,6 +182,16 @@ pub(crate) async fn take_plan_for_start(
     })
 }
 
+/// What `change_review_plan` does to an open plan.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlanChange {
+    pub add_proposals: Vec<ProposalId>,
+    pub add_tasks: Vec<TaskId>,
+    pub remove: Vec<TaskId>,
+    /// Takes every member out, so the plan ends.
+    pub close: bool,
+}
+
 /// What [`take_plan_for_start`] took from a plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PlanStart {
@@ -672,22 +682,36 @@ impl ReviewService {
         self.get_review_plan(plan).await
     }
 
-    /// Changes an open plan of the review lead in one transaction with `review.plan_changed`: `remove` takes tasks out, awaited or joined, as `removed`, so a removed proposal is reviewed on its own; `add_proposals` and `add_tasks` add members by the rules of [`ReviewService::create_review_plan`], tasks only before the wait ended. The deadline stays. A plan left without members ends with `review.plan_ended`.
+    /// Changes an open plan in one transaction with `review.plan_changed`: `remove` takes tasks out, awaited or joined, as `removed`, so a removed proposal is reviewed on its own; `close` takes every member out the same way; `add_proposals` and `add_tasks` add members by the rules of [`ReviewService::create_review_plan`], tasks only before the wait ended. The deadline stays. A plan left without members ends with `review.plan_ended`. The review lead changes a plan in every way, and the main agent only removes and closes (`policy::can_change_plan`).
     pub async fn change_review_plan(
         &self,
         actor: &Actor,
         plan: ReviewPlanId,
-        add_proposals: Vec<ProposalId>,
-        add_tasks: Vec<TaskId>,
-        remove: Vec<TaskId>,
+        change: PlanChange,
     ) -> Result<ReviewPlanView, ReviewError> {
-        if add_proposals.is_empty() && add_tasks.is_empty() && remove.is_empty() {
+        let PlanChange {
+            add_proposals,
+            add_tasks,
+            remove,
+            close,
+        } = change;
+        let adds = !add_proposals.is_empty() || !add_tasks.is_empty();
+        if !adds && remove.is_empty() && !close {
             return Err(
                 FoldError::new(codes::INVALID_REQUEST, "the change names nothing")
                     .with_details([("field", json!("add_tasks"))])
-                    .with_hint("pass add_proposals, add_tasks or remove")
+                    .with_hint("pass add_proposals, add_tasks, remove or close")
                     .into(),
             );
+        }
+        if close && adds {
+            return Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                "a change that closes the plan adds nothing",
+            )
+            .with_details([("field", json!("close"))])
+            .with_hint("pass close alone, or with remove")
+            .into());
         }
         named_once(&add_proposals, "add_proposals")?;
         let mut named: Vec<TaskId> = add_tasks.clone();
@@ -697,7 +721,8 @@ impl ReviewService {
         let mut buffer = EventBuffer::new();
         self.store
             .write(async |tx| {
-                plan_lead(tx, actor).await?;
+                let starter = starter_of(tx, actor).await?;
+                policy::can_change_plan(&starter, adds).map_err(FoldError::from)?;
                 let row = open_plan(tx, plan).await?;
                 if !add_tasks.is_empty() && (row.wait_ended_at.is_some() || now >= row.deadline_at)
                 {
@@ -723,12 +748,19 @@ impl ReviewService {
                         .into());
                     }
                 }
-                let live: Vec<TaskId> = store::members(tx.conn(), plan)
+                let mut removed = remove.clone();
+                let mut live: Vec<TaskId> = store::members(tx.conn(), plan)
                     .await?
                     .into_iter()
                     .filter(PlanMemberRow::is_live)
                     .map(|member| member.task)
                     .collect();
+                if close {
+                    for &task in &live {
+                        store::release_member(tx, plan, task, PlanRelease::Removed, now).await?;
+                    }
+                    removed.append(&mut live);
+                }
                 let count = live.len() + add_proposals.len() + add_tasks.len();
                 if count > MAX_PLAN_TASKS {
                     return Err(too_large(count));
@@ -756,12 +788,14 @@ impl ReviewService {
                         "plan": plan.to_string(),
                         "added_proposals": ids(&add_proposals),
                         "added_tasks": ids(&add_tasks),
-                        "removed": ids(&remove),
+                        "removed": ids(&removed),
+                        "closed": close,
                     }),
                 )?;
                 buffer.append(tx, &event, now).await?;
                 if tasks_of_plan.is_empty() {
-                    end_plan(tx, &mut buffer, &actor.event_actor(), plan, "removed", now).await?;
+                    let reason = if close { "closed" } else { "removed" };
+                    end_plan(tx, &mut buffer, &actor.event_actor(), plan, reason, now).await?;
                 }
                 Ok::<_, ReviewError>(())
             })

@@ -565,3 +565,75 @@ async fn the_review_lead_changes_an_open_plan_within_five_tasks() {
     })
     .await;
 }
+
+/// The main agent claims or batches no proposal of an open plan and never adds to a plan, but on the user's word takes a member out or closes the plan, whose proposals a reviewer can then get alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_main_agent_takes_members_out_of_a_plan_or_closes_it() {
+    let (h, _fake) = with_review_lead().await;
+    let first = task(&h, "First").await;
+    let second = task(&h, "Second").await;
+    let third = task(&h, "Third").await;
+    let fourth = task(&h, "Fourth").await;
+    let (p1, _) = open(&h, &first, "src/first.rs").await;
+    let (p2, _) = open(&h, &second, "src/second.rs").await;
+    h.call(
+        "review-lead",
+        "create_review_plan",
+        json!({"proposals": [p1, p2], "tasks": [third]}),
+    )
+    .await;
+    for (tool, arguments) in [
+        ("claim_review", json!({"id": p1})),
+        ("create_review_batch", json!({"proposals": [p1, p2]})),
+    ] {
+        let refused = h.refused("frontend", tool, arguments).await;
+        assert_eq!(refused["code"], codes::ALREADY_IN_PLAN, "{tool}: {refused}");
+    }
+    let refused = h
+        .refused(
+            "frontend",
+            "change_review_plan",
+            json!({"id": "rp-1", "add_tasks": [fourth]}),
+        )
+        .await;
+    assert_eq!(refused["code"], codes::REVIEW_PLAN_DENIED, "{refused}");
+
+    let changed = h
+        .call(
+            "frontend",
+            "change_review_plan",
+            json!({"id": "rp-1", "remove": [second]}),
+        )
+        .await;
+    assert_eq!(changed["proposals"], json!([p1]), "{changed}");
+    let closed = h
+        .call(
+            "frontend",
+            "change_review_plan",
+            json!({"id": "rp-1", "close": true}),
+        )
+        .await;
+    assert_eq!(closed["state"], "ended", "{closed}");
+    let events = h.events().await;
+    let changes = kinds(&events, "review.plan_changed");
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[1].data["closed"], true);
+    assert_eq!(changes[1].data["removed"], json!([first, third]));
+    let ended = kinds(&events, "review.plan_ended");
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0].data["reason"], "closed");
+    let refused = h
+        .refused(
+            "frontend",
+            "change_review_plan",
+            json!({"id": "rp-1", "remove": [first]}),
+        )
+        .await;
+    assert_eq!(refused["code"], codes::REVIEW_PLAN_NOT_OPEN, "{refused}");
+    h.call(
+        "review-lead",
+        "start_worker",
+        json!({"role": "reviewer", "proposals": [p1, p2]}),
+    )
+    .await;
+}

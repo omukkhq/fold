@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::super::error::from_review;
 use super::super::parse;
 use super::{id, proposal_id, version};
-use crate::services::reviews::{ProposalPlan, ReviewPlanView, ReviewService};
+use crate::services::reviews::{PlanChange, ProposalPlan, ReviewPlanView, ReviewService};
 
 pub const CREATE_REVIEW_PLAN: &str = "create_review_plan";
 pub const CHANGE_REVIEW_PLAN: &str = "change_review_plan";
@@ -42,6 +42,9 @@ pub struct ChangeReviewPlanInput {
     /// Tasks to take out of the plan, awaited or with their proposal, such as ["T-8"]. A removed proposal is reviewed on its own.
     #[serde(default)]
     pub remove: Vec<String>,
+    /// Take every member out and end the plan, so its proposals are reviewed on their own. Not with add_proposals or add_tasks.
+    #[serde(default)]
+    pub close: bool,
     /// The worker that makes this call, such as review/plan. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -77,7 +80,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CHANGE_REVIEW_PLAN,
-            "Review lead only: add open proposals without a review or awaited tasks to an open plan, or take tasks out of it. The deadline stays. A plan left without members ends. Refusals as for create_review_plan, and review_plan_not_open.",
+            "Review lead: add open proposals without a review or awaited tasks to an open plan, take tasks out of it, or close it. The main agent, only when the user tells it to, may take tasks out or close a plan that no review lead starts, never add. The deadline stays. A plan left without members ends. Refusals as for create_review_plan, and review_plan_not_open.",
             schema_for_type::<ChangeReviewPlanInput>(),
         ),
         Tool::new(
@@ -167,14 +170,14 @@ async fn change_review_plan(
         .iter()
         .map(|text| proposal_id(text))
         .collect::<Result<Vec<_>, _>>()?;
+    let change = PlanChange {
+        add_proposals,
+        add_tasks: task_ids(&input.add_tasks)?,
+        remove: task_ids(&input.remove)?,
+        close: input.close,
+    };
     let plan = reviews
-        .change_review_plan(
-            actor,
-            plan_id(&input.id)?,
-            add_proposals,
-            task_ids(&input.add_tasks)?,
-            task_ids(&input.remove)?,
-        )
+        .change_review_plan(actor, plan_id(&input.id)?, change)
         .await
         .map_err(from_review)?;
     Ok(plan_json(&plan))
