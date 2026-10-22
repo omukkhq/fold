@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { clampClass, isCut, showsToggle, toggleLabel } from "./clamp";
+import {
+  clampClass,
+  isCut,
+  showsToggle,
+  toggleLabel,
+  toggleName,
+} from "./clamp";
 
 describe("clampClass", () => {
   it("cuts a collapsed text to its lines", () => {
@@ -33,5 +39,14 @@ describe("the toggle", () => {
   it("says More to open and Less to close", () => {
     expect(toggleLabel(false)).toBe("More");
     expect(toggleLabel(true)).toBe("Less");
+  });
+
+  it("names the text it opens after the label it shows", () => {
+    expect(toggleName(false, "the web instructions")).toBe(
+      "More of the web instructions",
+    );
+    expect(toggleName(true, "the web instructions")).toBe(
+      "Less of the web instructions",
+    );
   });
 });

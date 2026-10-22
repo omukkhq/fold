@@ -48,4 +48,13 @@ describe("ClampText", () => {
     expect(classes(text)).toContain("line-clamp-2");
     screen.getByRole("button", { name: "More" });
   });
+
+  it("names the text in the toggle's accessible name", async () => {
+    textHeight(120, 36);
+    render(<ClampText subject="the web instructions">A long text.</ClampText>);
+    await userEvent.click(
+      screen.getByRole("button", { name: "More of the web instructions" }),
+    );
+    screen.getByRole("button", { name: "Less of the web instructions" });
+  });
 });

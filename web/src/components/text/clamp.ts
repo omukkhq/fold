@@ -23,3 +23,8 @@ export function showsToggle(expanded: boolean, cut: boolean): boolean {
 export function toggleLabel(expanded: boolean): "More" | "Less" {
   return expanded ? "Less" : "More";
 }
+
+/** The toggle's accessible name: it starts with the label it shows, and names the text so that several toggles on one screen differ. */
+export function toggleName(expanded: boolean, subject: string): string {
+  return `${toggleLabel(expanded)} of ${subject}`;
+}

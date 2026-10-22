@@ -14,6 +14,7 @@ import { SessionLine } from "./SessionLine";
 import { StopWorker } from "./StopWorker";
 import {
   areaNote,
+  instructionsSubject,
   isSupervisedMain,
   mainNote,
   type TeamGroup,
@@ -216,7 +217,11 @@ function GroupHead({
           ))}
         </span>
         {group.profile.instructions === null ? null : (
-          <ClampText lines={2} className="text-text-faint">
+          <ClampText
+            lines={2}
+            subject={instructionsSubject(group)}
+            className="text-text-faint"
+          >
             {group.profile.instructions}
           </ClampText>
         )}

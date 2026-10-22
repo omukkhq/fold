@@ -13,6 +13,7 @@ import {
   isCut,
   showsToggle,
   toggleLabel,
+  toggleName,
 } from "./clamp";
 import { textFlow } from "./textFlow";
 
@@ -20,10 +21,13 @@ import { textFlow } from "./textFlow";
 export function ClampText({
   children,
   lines = 3,
+  subject,
   className,
 }: {
   children: ReactNode;
   lines?: ClampLines;
+  /** What the text is, such as `the web instructions`, for the toggle's accessible name. */
+  subject?: string;
   className?: string;
 }) {
   const id = useId();
@@ -65,6 +69,9 @@ export function ClampText({
           type="button"
           aria-expanded={expanded}
           aria-controls={id}
+          aria-label={
+            subject === undefined ? undefined : toggleName(expanded, subject)
+          }
           onClick={() => {
             setExpanded(!expanded);
           }}
