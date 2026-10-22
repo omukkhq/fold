@@ -918,7 +918,13 @@ mod tests {
         for role in [Role::ReviewLead, Role::Reviewer] {
             assert!(
                 role.prompt().contains(
-                    "or describe it with `create_request`, when it is work the size of a feature of its own. Ask the humans"
+                    "work that this task still misses, such as an unticked checklist step or an acceptance criterion with no work, back with `request_changes`"
+                ),
+                "{role}"
+            );
+            assert!(
+                role.prompt().contains(
+                    "new work outside the task, such as a feature the task did not ask for, with `create_request`; the proposal can still be approved. Ask the humans"
                 ),
                 "{role}"
             );
