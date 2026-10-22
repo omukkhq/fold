@@ -15,21 +15,20 @@ pub fn can_create_request(actor: &Actor) -> Result<Requester, PolicyDenied> {
     })
 }
 
-/// Turning a request into cards is an orchestrator's job, so the main agent claims one, or an area lead that judges the request relevant to its area; fold does not check the request against the area. Only an agent's main worker claims: a subagent worker works inside its parent's plan, and a human answers the drafter instead. `role` is the role of the agent's worker process, `None` when fold does not supervise it. It returns the admitted agent, whose main worker becomes the drafter.
+/// Turning a request into cards is an orchestrator's job, so the main agent claims one, or an area lead that judges the request relevant to its area; fold does not check the request against the area. A human answers the drafter instead. `role` is the role of the agent's worker process, `None` when fold does not supervise it. It returns the admitted agent, whose worker becomes the drafter.
 pub fn can_claim_request(actor: &Actor, role: Option<Role>) -> Result<&AgentActor, PolicyDenied> {
     match actor {
         Actor::Agent(agent)
-            if agent.worker.is_main()
-                && (agent.tags.iter().any(Tag::is_main) || role == Some(Role::AreaLead)) =>
+            if agent.tags.iter().any(Tag::is_main) || role == Some(Role::AreaLead) =>
         {
             Ok(agent)
         }
-        Actor::Agent(agent) if agent.worker.is_main() => Err(PolicyDenied {
+        Actor::Agent(_) => Err(PolicyDenied {
             code: codes::ORCHESTRATOR_REQUIRED,
             message: "only the main agent or an area lead claims a request",
             hint: "ask the main agent or an area lead to call claim_request",
         }),
-        Actor::Agent(_) | Actor::Human { .. } | Actor::System => Err(PolicyDenied {
+        Actor::Human { .. } | Actor::System => Err(PolicyDenied {
             code: codes::ORCHESTRATOR_REQUIRED,
             message: "only an agent's main worker can claim a request",
             hint: "ask an orchestrator to call claim_request",
@@ -37,7 +36,7 @@ pub fn can_claim_request(actor: &Actor, role: Option<Role>) -> Result<&AgentActo
     }
 }
 
-/// The requester decides what the drafts become, so only they approve, ask for changes, edit or close: the same named human, or any worker of the requesting agent. `deputy` (see [`crate::tasks::requests::deputy`]) decides for a short-lived requester, which fold stops once its work is done.
+/// The requester decides what the drafts become, so only they approve, ask for changes, edit or close: the same named human, or the requesting agent. `deputy` (see [`crate::tasks::requests::deputy`]) decides for a short-lived requester, which fold stops once its work is done.
 pub fn is_requester(
     actor: &Actor,
     requester: &Requester,
@@ -53,7 +52,7 @@ pub fn is_requester(
     })
 }
 
-/// The drafter's agent writes and gives up the draft through any of its workers, so an orchestrator may hand the writing to a subagent. `drafter` is the request's drafter worker; a request nobody drafts is refused too.
+/// The drafter's agent writes and gives up the draft. `drafter` is the request's drafter worker; a request nobody drafts is refused too.
 pub fn is_drafter<'a>(
     actor: &'a Actor,
     drafter: Option<&WorkerName>,
@@ -95,7 +94,7 @@ mod tests {
     #[test]
     fn agents_and_humans_create_and_the_system_does_not() {
         assert_eq!(
-            can_create_request(&agent("backend/api")).unwrap().label(),
+            can_create_request(&agent("backend")).unwrap().label(),
             "backend"
         );
         assert_eq!(
@@ -142,12 +141,7 @@ mod tests {
             assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED, "{other:?}");
             assert!(denied.hint().contains("main agent or an area lead"));
         }
-        for actor in [
-            tagged("lead/sub", MAIN_TAG),
-            agent("web-lead/plan"),
-            human("tanim"),
-            Actor::System,
-        ] {
+        for actor in [human("tanim"), Actor::System] {
             let denied = can_claim_request(&actor, Some(Role::AreaLead)).unwrap_err();
             assert_eq!(denied.code(), codes::ORCHESTRATOR_REQUIRED);
             assert!(denied.hint().contains("claim_request"));
@@ -158,10 +152,6 @@ mod tests {
     fn only_the_requester_decides() {
         let backend = Requester::parse("backend").unwrap();
         assert_eq!(code(is_requester(&agent("backend"), &backend, None)), None);
-        assert_eq!(
-            code(is_requester(&agent("backend/sub"), &backend, None)),
-            None
-        );
         for actor in [agent("frontend"), human("backend"), Actor::System] {
             assert_eq!(
                 code(is_requester(&actor, &backend, None)),
@@ -180,11 +170,7 @@ mod tests {
     fn the_deputy_decides_for_its_short_lived_requester() {
         let task_worker = Requester::parse("web-worker").unwrap();
         let lead = Requester::parse("web-lead").unwrap();
-        for actor in [
-            agent("web-worker"),
-            agent("web-lead"),
-            agent("web-lead/sub"),
-        ] {
+        for actor in [agent("web-worker"), agent("web-lead")] {
             assert_eq!(code(is_requester(&actor, &task_worker, Some(&lead))), None);
         }
         for actor in [agent("frontend"), human("ana"), Actor::System] {
@@ -199,10 +185,6 @@ mod tests {
     fn the_drafters_agent_drafts() {
         let drafter = WorkerName::parse("review").unwrap();
         assert_eq!(code(is_drafter(&agent("review"), Some(&drafter))), None);
-        assert_eq!(
-            code(is_drafter(&agent("review/writer"), Some(&drafter))),
-            None
-        );
         for actor in [agent("frontend"), human("review"), Actor::System] {
             assert_eq!(
                 code(is_drafter(&actor, Some(&drafter))),

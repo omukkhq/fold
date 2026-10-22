@@ -11,7 +11,13 @@ import { RowErrorText, StatePill, StepText } from "./parts";
 import { RestartWorker } from "./RestartWorker";
 import { SessionLine } from "./SessionLine";
 import { StopWorker } from "./StopWorker";
-import { areaNote, type TeamGroup, type TeamRow } from "./team";
+import {
+  areaNote,
+  isSupervisedMain,
+  mainNote,
+  type TeamGroup,
+  type TeamRow,
+} from "./team";
 
 const HEADS = [
   "Worker",
@@ -83,6 +89,7 @@ function StopCell({
           ariaLabel={`Stop ${row.name}`}
           ariaBusyLabel={`Stopping ${row.name}…`}
           className="items-start"
+          note={row.stopNote}
         />
       )}
       {row.restart ? (
@@ -173,8 +180,8 @@ function GroupHead({
       <>
         <span className="font-semibold text-text">Main agent</span>
         <span className="text-text-muted">
-          your terminal session ·{" "}
-          {human === null ? null : (
+          {mainNote(group)} ·{" "}
+          {human === null || isSupervisedMain(group) ? null : (
             <>
               <PersonName name={`human:${human}`} slot="teamNote" /> ·{" "}
             </>
@@ -188,7 +195,7 @@ function GroupHead({
       <>
         <span className="font-semibold text-text">Review</span>
         <span className="text-text-muted">
-          review lead · groups open proposals into batches
+          review lead · gives open proposals to reviewers
         </span>
       </>
     );

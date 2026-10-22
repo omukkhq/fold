@@ -1,9 +1,9 @@
 import { formatAsOf } from "@/format/time";
 import type { MessageView, RecipientView } from "@/api/messages";
-import { isHumanName } from "@/people/names";
+import { atName, isHumanName } from "@/people/names";
 import { actorSegment, seg, type Segment } from "@/people/segments";
 
-/** One recipient's delivery: `acknowledged by` / `read by` (a human) / `delivered to` (the agent read its inbox) / `waiting for` (the notice reached the agent's session, which takes it when its current step ends) / `not delivered to`, the recipient, the time the daemon recorded, if any, and a note that says why the message waits. */
+/** One recipient's delivery: `acknowledged by` / `read by` (a human) / `delivered to` (the agent read its inbox) / `waiting for` (the notice reached the agent's session, which takes it when its current step ends) / `not delivered to`, the recipient, the time the daemon recorded, if any, and a note that says why the message waits. A stopped task worker that could not start for the message has no lead word, and its note names the lead the daemon sent the message on to. */
 export interface Delivery {
   lead: string;
   actor: string;
@@ -11,7 +11,11 @@ export interface Delivery {
   note: string | null;
 }
 
-export function recipientState(r: RecipientView, now: number): Delivery {
+export function recipientState(
+  r: RecipientView,
+  now: number,
+  sender: string | null = null,
+): Delivery {
   if (r.acknowledged_at !== null) {
     return {
       lead: isHumanName(r.name) ? "read by" : "acknowledged by",
@@ -26,6 +30,17 @@ export function recipientState(r: RecipientView, now: number): Delivery {
       actor: r.name,
       at: formatAsOf(now, r.delivered_at),
       note: null,
+    };
+  }
+  if (r.forwarded_to !== null) {
+    return {
+      lead: "",
+      actor: r.name,
+      at: null,
+      note:
+        r.forwarded_to === sender
+          ? CANNOT_START
+          : `${CANNOT_START} · sent on to ${atName(r.forwarded_to)}`,
     };
   }
   const unreachable = r.reachable === false ? UNREACHABLE_NOTE : null;
@@ -46,12 +61,14 @@ export function recipientState(r: RecipientView, now: number): Delivery {
   };
 }
 
+const CANNOT_START = "cannot start now";
+
 const UNREACHABLE_NOTE =
   "not reachable now · it gets the message when it reads its inbox";
 
 /** One line per recipient, in the order the daemon lists them. */
 export function deliveryLines(message: MessageView, now: number): Delivery[] {
-  return message.recipients.map((r) => recipientState(r, now));
+  return message.recipients.map((r) => recipientState(r, now, message.sender));
 }
 
 /** The recipients' actors, for the head of a message. */

@@ -39,3 +39,46 @@ pub async fn init_with_git(
     )
     .await
 }
+
+/// The `Cookie` value of a new web session of `human` in the registry of `state`, made as a sign-in makes one: a token, then a session from it.
+pub async fn session_cookie(state: &fold_daemon::daemon::AppState, human: &str) -> String {
+    let human = fold_core::HumanName::parse(human).unwrap();
+    let token = fold_daemon::services::projects::create_web_token(
+        &state.registry,
+        &human,
+        None,
+        state.clock.now(),
+    )
+    .await
+    .unwrap();
+    let signed_in = fold_daemon::services::projects::create_web_session(
+        &state.registry,
+        state.clock.as_ref(),
+        state.session_lifetime,
+        &token,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    format!(
+        "{}={}",
+        fold_daemon::http::auth::SESSION_COOKIE,
+        signed_in.session
+    )
+}
+
+/// The TCP router of `state` with every request signed in as `human`: each request gets the cookie of one real session, as a browser sends it after a sign-in.
+pub async fn signed_in_router(state: &fold_daemon::daemon::AppState, human: &str) -> axum::Router {
+    let cookie = axum::http::HeaderValue::from_str(&session_cookie(state, human).await).unwrap();
+    fold_daemon::http::router(state.clone()).layer(axum::middleware::map_request(
+        move |mut request: axum::extract::Request| {
+            let cookie = cookie.clone();
+            async move {
+                request
+                    .headers_mut()
+                    .append(axum::http::header::COOKIE, cookie);
+                request
+            }
+        },
+    ))
+}

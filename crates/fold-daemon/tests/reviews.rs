@@ -120,8 +120,8 @@ impl Fixture {
         let frontend = register(&agents, "frontend").await;
         let backend = register(&agents, "backend").await;
         register(&agents, "review").await;
-        // `backend` leads its area and reviews without the right to decide; `review` decides as the review lead.
-        give_role(project.store(), "review", Role::ReviewLead, None).await;
+        // `backend` leads its area and reviews without the right to decide; `review` decides as a reviewer.
+        give_role(project.store(), "review", Role::Reviewer, None).await;
         workspaces
             .create_workspace(&agent("frontend", &[]), t(1))
             .await
@@ -256,7 +256,7 @@ fn agent(name: &str, tags: &[&str]) -> Actor {
 }
 
 #[cfg(test)]
-fn review_lead() -> Actor {
+fn reviewer() -> Actor {
     agent("review", &[])
 }
 
@@ -272,7 +272,7 @@ async fn register(agents: &AgentService, name: &str) -> WorkerRow {
         .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &[])
         .await
         .unwrap();
-    agents.resolve_worker(&ctx, None).await.unwrap()
+    agents.resolve_worker(&ctx).await.unwrap()
 }
 
 #[cfg(test)]
@@ -348,7 +348,7 @@ async fn approve_after_request_changes_returns_task_to_review() {
     .unwrap();
     assert_eq!(fx.status().await, TaskStatus::InProgress);
     let approved = fx
-        .submit(&review_lead(), Verdict::Approve, "good now", Vec::new())
+        .submit(&reviewer(), Verdict::Approve, "good now", Vec::new())
         .await
         .unwrap();
     assert_eq!(approved.summary.turn, Some(Turn::WithReviewer));
@@ -385,7 +385,7 @@ async fn comment_after_request_changes_leaves_task_in_progress() {
 #[tokio::test]
 async fn new_version_returns_task_to_review_and_starts_unapproved() {
     let fx = Fixture::new().await;
-    fx.submit(&review_lead(), Verdict::Approve, "fine", Vec::new())
+    fx.submit(&reviewer(), Verdict::Approve, "fine", Vec::new())
         .await
         .unwrap();
     fx.submit(
@@ -412,7 +412,7 @@ async fn new_version_returns_task_to_review_and_starts_unapproved() {
     );
 
     let approved = fx
-        .submit(&review_lead(), Verdict::Approve, "fine", Vec::new())
+        .submit(&reviewer(), Verdict::Approve, "fine", Vec::new())
         .await
         .unwrap();
     assert_eq!(approved.version, 2);
@@ -590,10 +590,11 @@ async fn comments_show_outdated_on_a_later_version() {
 #[tokio::test]
 async fn a_version_added_between_the_checkout_and_the_verdict_refuses_the_approval() {
     let fx = Fixture::new().await;
-    fx.reviews.claim_review(&review_lead(), p(1)).await.unwrap();
+    crate::common::roles::give_review_claim(fx.project.store(), "review", p(1), fx.project.now())
+        .await;
     let checkout = fx
         .reviews
-        .create_review_checkout(&review_lead(), p(1))
+        .create_review_checkout(&reviewer(), p(1))
         .await
         .unwrap();
     assert_eq!(checkout.version, 1);
@@ -603,7 +604,7 @@ async fn a_version_added_between_the_checkout_and_the_verdict_refuses_the_approv
     let error = refusal(
         fx.reviews
             .submit_review(
-                &review_lead(),
+                &reviewer(),
                 p(1),
                 checkout.version,
                 Verdict::Approve,
@@ -623,14 +624,14 @@ async fn a_version_added_between_the_checkout_and_the_verdict_refuses_the_approv
 
     let checkout = fx
         .reviews
-        .create_review_checkout(&review_lead(), p(1))
+        .create_review_checkout(&reviewer(), p(1))
         .await
         .unwrap();
     assert_eq!(checkout.version, 2);
     let approved = fx
         .reviews
         .submit_review(
-            &review_lead(),
+            &reviewer(),
             p(1),
             checkout.version,
             Verdict::Approve,
@@ -646,18 +647,13 @@ async fn a_version_added_between_the_checkout_and_the_verdict_refuses_the_approv
 async fn reject_closes_the_proposal_with_the_reason() {
     let fx = Fixture::new().await;
     let empty = refusal(
-        fx.submit(&review_lead(), Verdict::Reject, "  ", vec![whole("x")])
+        fx.submit(&reviewer(), Verdict::Reject, "  ", vec![whole("x")])
             .await,
     );
     assert_eq!(empty.code(), codes::EMPTY_REVIEW);
     let before = fx.last_seq().await;
     let rejected = fx
-        .submit(
-            &review_lead(),
-            Verdict::Reject,
-            "wrong approach",
-            Vec::new(),
-        )
+        .submit(&reviewer(), Verdict::Reject, "wrong approach", Vec::new())
         .await
         .unwrap();
     assert_eq!(rejected.summary.state, ProposalState::Closed);
@@ -725,7 +721,7 @@ async fn approve_and_reject_need_the_right_to_decide() {
     );
     assert_eq!(system.code(), codes::HUMAN_REQUIRED);
     let approved = fx
-        .submit(&review_lead(), Verdict::Approve, "ok", Vec::new())
+        .submit(&reviewer(), Verdict::Approve, "ok", Vec::new())
         .await
         .unwrap();
     assert_eq!(approved.verdict, Verdict::Approve);
@@ -849,10 +845,10 @@ async fn only_text_files_inside_the_tree_take_line_comments() {
 async fn latest_verdict_agrees_with_the_status_cache() {
     let fx = Fixture::new().await;
     let steps = [
-        (review_lead(), Verdict::Comment),
+        (reviewer(), Verdict::Comment),
         (fx.reviewer(), Verdict::RequestChanges),
         (human(), Verdict::Comment),
-        (review_lead(), Verdict::Approve),
+        (reviewer(), Verdict::Approve),
         (fx.reviewer(), Verdict::RequestChanges),
         (human(), Verdict::Approve),
     ];
@@ -1031,7 +1027,8 @@ async fn a_version_added_while_a_checkout_is_written_refuses_the_checkout() {
 
     const FAILPOINT: &str = "review_checkout_after_files";
     let fx = Fixture::new().await;
-    fx.reviews.claim_review(&review_lead(), p(1)).await.unwrap();
+    crate::common::roles::give_review_claim(fx.project.store(), "review", p(1), fx.project.now())
+        .await;
     let scenario = fail::FailScenario::setup();
     let reached = Arc::new(AtomicBool::new(false));
     let open = Arc::new(AtomicBool::new(false));
@@ -1045,7 +1042,7 @@ async fn a_version_added_while_a_checkout_is_written_refuses_the_checkout() {
     .unwrap();
     let reviews = fx.reviews.clone();
     let checkout =
-        tokio::spawn(async move { reviews.create_review_checkout(&review_lead(), p(1)).await });
+        tokio::spawn(async move { reviews.create_review_checkout(&reviewer(), p(1)).await });
     tokio::time::timeout(Duration::from_secs(20), async {
         while !reached.load(Ordering::SeqCst) {
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -1080,7 +1077,7 @@ async fn a_version_added_while_a_checkout_is_written_refuses_the_checkout() {
 
     let checkout = fx
         .reviews
-        .create_review_checkout(&review_lead(), p(1))
+        .create_review_checkout(&reviewer(), p(1))
         .await
         .unwrap();
     assert_eq!(checkout.version, 2);

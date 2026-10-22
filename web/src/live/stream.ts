@@ -20,7 +20,7 @@ export interface StreamHandlers {
   onDrop(delayMs: number): void;
   /** Stored events may be missing from what was applied: a sequence number was skipped, or the daemon refused the cursor. */
   onResync(): void;
-  /** The daemon answered `auth_required`: the session ended off loopback. The stream stops and makes no further attempt. */
+  /** The daemon answered `auth_required`: the session ended. The stream stops and makes no further attempt. */
   onAuthRequired?(): void;
   /** The daemon answered `project_not_found`: fold does not know the project, as after its `.fold` folder was deleted. The stream stops and makes no further attempt. */
   onProjectGone?(): void;

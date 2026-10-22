@@ -10,6 +10,7 @@ import { isApiError } from "./errors";
 import { keys } from "./keys";
 import {
   addComment,
+  askAuthor,
   editProposalFile,
   getProposal,
   getProposalChanges,
@@ -29,6 +30,7 @@ import {
   proposalFileQuery,
   proposalQuery,
   proposalsQuery,
+  proposalThreadsQuery,
 } from "./queries";
 
 afterEach(() => {
@@ -51,16 +53,21 @@ describe("proposal reads", () => {
 
   it("reads a proposal, and answers null for one the project does not have", async () => {
     const detail = proposalDetail(proposalSummary("P-4"));
-    stubFetch({
+    const calls = stubFetch({
       [`GET ${P}/P-4`]: { body: detail },
       [`GET ${P}/P-99`]: errorReply(404, "proposal_not_found"),
       [`GET ${P}/P-5`]: errorReply(401, "human_name_required"),
     });
     await expect(getProposal("demo", "P-4")).resolves.toEqual(detail);
+    await expect(getProposal("demo", "P-4", 1)).resolves.toEqual(detail);
     await expect(getProposal("demo", "P-99")).resolves.toBeNull();
     await expect(getProposal("demo", "P-5")).rejects.toSatisfy((e: unknown) =>
       isApiError(e, "human_name_required"),
     );
+    expect(calls.slice(0, 2).map((c) => c.search.toString())).toEqual([
+      "",
+      "version=1",
+    ]);
   });
 
   it("reads every comment of every version", async () => {
@@ -169,6 +176,32 @@ describe("human writes", () => {
       body: "Defaults please.",
       reply_to: null,
     });
+  });
+
+  it("posts a question about lines to the author and answers with the stored message", async () => {
+    const calls = stubFetch({
+      [`POST ${P}/P-4/questions`]: {
+        status: 201,
+        body: { id: "m-7", thread: "m-7" },
+      },
+    });
+    const question = {
+      version: 1,
+      path: "migrations/0004_reports.sql",
+      side: "old" as const,
+      start_line: 3,
+      end_line: 3,
+      body: "Why here?",
+    };
+    const stored = await askAuthor("demo", "P-4", question);
+    expect(stored.id).toBe("m-7");
+    expect(calls[0]?.body).toEqual(question);
+  });
+
+  it("keys a proposal's threads under the messages prefix, so message events refresh them", () => {
+    const key = proposalThreadsQuery("demo", "P-4").queryKey;
+    expect(key).toEqual(keys.proposalThreads("demo", "P-4"));
+    expect(key.slice(0, 2)).toEqual(keys.messages("demo"));
   });
 
   it("posts a verdict with its body and comments", async () => {

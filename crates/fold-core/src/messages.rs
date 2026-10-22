@@ -19,9 +19,8 @@ pub(crate) const HUMANS: &str = "humans";
 /// One `to[]` entry. `all` and `humans` are reserved agent names, so the bare words always mean the broadcast forms.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Address {
-    /// The agent's main worker.
+    /// The agent's worker.
     Agent(AgentName),
-    Worker(WorkerName),
     /// The main worker of every agent carrying the tag when the message is sent.
     Tag(Tag),
     /// The main worker of every agent.
@@ -44,8 +43,6 @@ impl Address {
             Address::Tag(Tag::parse(tag).map_err(|_| invalid())?)
         } else if let Some(name) = entry.strip_prefix(HUMAN_PREFIX) {
             Address::Human(HumanName::parse(name).map_err(|_| invalid())?)
-        } else if entry.contains('/') {
-            Address::Worker(WorkerName::parse(entry).map_err(|_| invalid())?)
         } else {
             Address::Agent(AgentName::parse(entry).map_err(|_| invalid())?)
         };
@@ -63,7 +60,6 @@ impl Address {
     pub fn addressed_as(&self) -> AddressedAs {
         match self {
             Address::Agent(_) => AddressedAs::Agent,
-            Address::Worker(_) => AddressedAs::Worker,
             Address::Tag(_) => AddressedAs::Tag,
             Address::All => AddressedAs::All,
             Address::Human(_) => AddressedAs::Human,
@@ -71,13 +67,9 @@ impl Address {
         }
     }
 
-    /// The address that reaches exactly `worker`: the agent form for a main worker, the worker form for a child.
+    /// The address that reaches `worker`'s agent.
     pub fn of_worker(worker: &WorkerName) -> Address {
-        if worker.is_main() {
-            Address::Agent(worker.agent())
-        } else {
-            Address::Worker(worker.clone())
-        }
+        Address::Agent(worker.agent())
     }
 }
 
@@ -85,7 +77,6 @@ impl fmt::Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Address::Agent(agent) => write!(f, "{agent}"),
-            Address::Worker(worker) => write!(f, "{worker}"),
             Address::Tag(tag) => write!(f, "{TAG_PREFIX}{tag}"),
             Address::All => f.write_str(ALL),
             Address::Human(name) => write!(f, "{HUMAN_PREFIX}{name}"),
@@ -96,7 +87,7 @@ impl fmt::Display for Address {
 
 /// A `to[]` entry that is not an address. The entry is a name, never message content, so the error details may carry it.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("a recipient is an agent, an agent/worker path, tag:<tag>, all, human:<name> or humans")]
+#[error("a recipient is an agent, tag:<tag>, all, human:<name> or humans")]
 pub struct AddressError {
     entry: String,
 }
@@ -111,7 +102,7 @@ impl From<AddressError> for FoldError {
     fn from(error: AddressError) -> Self {
         FoldError::new(codes::INVALID_NAME, error.to_string())
             .with_details([("to", json!([error.entry]))])
-            .with_hint("list the agents and their workers with list_agents")
+            .with_hint("list the agents with list_agents")
     }
 }
 
@@ -233,11 +224,10 @@ pub struct DirectoryAgent {
     pub tags: Vec<Tag>,
 }
 
-/// The agents, workers and registry humans at send time. `tag`, `all` and `humans` expand in the order of these lists.
+/// The agents and registry humans at send time. `tag`, `all` and `humans` expand in the order of these lists.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Directory {
     pub agents: Vec<DirectoryAgent>,
-    pub workers: Vec<WorkerName>,
     pub humans: Vec<HumanName>,
 }
 
@@ -260,14 +250,14 @@ impl From<ResolveError> for FoldError {
             ResolveError::UnknownRecipient { to } => {
                 FoldError::new(codes::RECIPIENT_NOT_FOUND, message)
                     .with_details([("to", json!([to]))])
-                    .with_hint("list the agents and their workers with list_agents")
+                    .with_hint("list the agents with list_agents")
             }
             ResolveError::UnknownHuman { to } => FoldError::new(codes::UNKNOWN_HUMAN, message)
                 .with_details([("to", json!([to]))])
                 .with_hint("a human is known once they have used the CLI or the web interface"),
             ResolveError::NoRecipient { to } => FoldError::new(codes::RECIPIENT_NOT_FOUND, message)
                 .with_details([("to", json!(to))])
-                .with_hint("address an agent, a worker or a human by name"),
+                .with_hint("address an agent or a human by name"),
         }
     }
 }
@@ -289,14 +279,6 @@ pub fn resolve(
                     });
                 }
                 rows.add(Target::Worker(WorkerName::main(agent)), addressed_as);
-            }
-            Address::Worker(worker) => {
-                if !directory.workers.contains(worker) {
-                    return Err(ResolveError::UnknownRecipient {
-                        to: address.to_string(),
-                    });
-                }
-                rows.add(Target::Worker(worker.clone()), addressed_as);
             }
             Address::Tag(tag) => {
                 for agent in directory.agents.iter().filter(|a| a.tags.contains(tag)) {
@@ -538,4 +520,78 @@ pub fn chosen_answer(choices: &[String], reply: &str) -> String {
         .find(|label| label.to_lowercase() == reply.to_lowercase())
         .cloned()
         .unwrap_or_else(|| reply.to_owned())
+}
+
+/// The most lines of a run that a question about lines of a proposal keeps as its excerpt.
+pub const MAX_EXCERPT_LINES: usize = 100;
+
+/// The most characters a question's excerpt keeps.
+pub const MAX_EXCERPT_CHARS: usize = 20_000;
+
+/// The lines of `text` without their endings, split as the diff numbers them: a line ends at `\r\n`, at a lone `\r` or at `\n`, and text after the last ending is one more line.
+pub fn text_lines(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\r' => {
+                lines.push(&text[start..index]);
+                index += if bytes.get(index + 1) == Some(&b'\n') {
+                    2
+                } else {
+                    1
+                };
+                start = index;
+            }
+            b'\n' => {
+                lines.push(&text[start..index]);
+                index += 1;
+                start = index;
+            }
+            _ => index += 1,
+        }
+    }
+    if start < text.len() {
+        lines.push(&text[start..]);
+    }
+    lines
+}
+
+/// A question's excerpt: lines `start..=end` of `text` as [`text_lines`] splits it, 1-based and joined by newlines, and whether it was cut. A run longer than [`MAX_EXCERPT_LINES`] lines or [`MAX_EXCERPT_CHARS`] characters keeps its first lines, and a first line longer than that its first characters. `None` when the run is not a forward run from line 1 inside the text.
+pub fn line_excerpt(text: &str, start: u32, end: u32) -> Option<(String, bool)> {
+    if start == 0 || start > end {
+        return None;
+    }
+    let skip = usize::try_from(start - 1).ok()?;
+    let wanted = usize::try_from(end - start).ok()?.checked_add(1)?;
+    let lines: Vec<&str> = text_lines(text)
+        .into_iter()
+        .skip(skip)
+        .take(wanted)
+        .collect();
+    if lines.len() < wanted {
+        return None;
+    }
+    let mut excerpt = String::new();
+    let mut chars = 0;
+    let mut kept = 0;
+    for line in lines.iter().take(MAX_EXCERPT_LINES) {
+        let separator = usize::from(kept > 0);
+        let length = line.chars().count();
+        if chars + separator + length > MAX_EXCERPT_CHARS {
+            if kept == 0 {
+                excerpt.extend(line.chars().take(MAX_EXCERPT_CHARS));
+            }
+            return Some((excerpt, true));
+        }
+        if kept > 0 {
+            excerpt.push('\n');
+        }
+        excerpt.push_str(line);
+        chars += separator + length;
+        kept += 1;
+    }
+    Some((excerpt, kept < wanted))
 }

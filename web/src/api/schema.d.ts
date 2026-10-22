@@ -64,8 +64,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** The Claude Code stop hook of an agent: how many messages the agent has not acknowledged. Socket only. A process under a worker names only that worker's own agent. */
+        /** The Claude Code stop hook of an agent: how many messages the agent has not acknowledged, and the text that carries those it has not seen yet. Nothing is marked here, because the hook may give up on the answer; the hook reports what it used to `/api/v1/hooks/stop/delivered`. Socket only. A process under a worker names only that worker's own agent. */
         post: operations["hook_stop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hooks/stop/delivered": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The Claude Code stop hook of an agent after it gave its reason to the session: the messages the reason carried count as delivered, as an inbox read marks them. Socket only. A process under a worker names only that worker's own agent. */
+        post: operations["hook_stop_delivered"];
         delete?: never;
         options?: never;
         head?: never;
@@ -245,6 +262,40 @@ export interface paths {
         patch: operations["update_checklist_item"];
         trace?: never;
     };
+    "/api/v1/projects/{slug}/cost": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What the project's supervised workers cost: the total, the splits by role, area, model, worker and task, and the cost by slot and role. */
+        get: operations["project_cost"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/cost/tasks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What one task cost, with one row per worker that built it or reviewed one of its proposals. */
+        get: operations["task_cost"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/diff": {
         parameters: {
             query?: never;
@@ -269,7 +320,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The project's events as Server-Sent Events: every stored event after `Last-Event-ID`, then one `snapshot` of the live workspaces, then each stored and live event as it happens. A stored event's frame carries its `seq` as the SSE `id`; live and snapshot frames carry none, so the browser keeps the last stored `seq`. Live frames a client has not read yet collapse to the newest per workspace and per agent. A client that falls more than the bus capacity behind has its stream ended and reconnects with its last id. Off loopback the stream ends at the first keep-alive period after its session is signed out, revoked or expired, and the reconnect gets `auth_required`. */
+        /** The project's events as Server-Sent Events: every stored event after `Last-Event-ID`, then one `snapshot` of the live workspaces, then each stored and live event as it happens. A stored event's frame carries its `seq` as the SSE `id`; live and snapshot frames carry none, so the browser keeps the last stored `seq`. Live frames a client has not read yet collapse to the newest per workspace and per agent. A client that falls more than the bus capacity behind has its stream ended and reconnects with its last id. Over TCP the stream ends at the first keep-alive period after its session is signed out, revoked or expired, and the reconnect gets `auth_required`. */
         get: operations["stream_events"];
         put?: never;
         post?: never;
@@ -305,7 +356,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** A named human's feedback on a task, message in a request's clarification thread, or reply to a message. Feedback goes to the task's claim holder and a request message to the request's drafter unless `to` names recipients; a reply answers a question to humans, which clears the task's `question` attention. The message changes no task or request state. */
+        /** A named human's feedback on a task, message in a request's clarification thread, or reply to a message. Feedback goes only to the task's readers, as `GET /tasks/{id}/readers` lists them: to `to` when given, otherwise to the first reader. A request message goes to the request's drafter unless `to` names recipients; a reply answers a question to humans, which clears the task's `question` attention. The message changes no task or request state. */
         post: operations["send_feedback"];
         delete?: never;
         options?: never;
@@ -322,7 +373,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Collects the project's garbage: prunes checkpoints, removes closed workspace directories past their retention and deletes unreferenced objects. Socket only; used by `fld gc`. */
+        /** Collects the project's garbage: prunes checkpoints, removes the closed workspace directories that are still there and deletes unreferenced objects. Socket only; used by `fld gc`. */
         post: operations["run_gc"];
         delete?: never;
         options?: never;
@@ -531,6 +582,23 @@ export interface paths {
         put?: never;
         /** A named human integrates the current version onto main and approves it in the same action. A conflicting merge publishes nothing: the answer is `integration_conflicted` with each conflicting path and its kind in `details.files`, and the full report is on the proposal. */
         post: operations["integrate_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/proposals/{id}/questions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Asks the proposal's author about a run of lines of a version, or about the whole proposal: one message from the named human to the worker holding the task's implementation claim, else the proposal's author, linked to the task and the proposal and carrying the lines and their text when it names lines. It waits for the author's answer in its thread. It writes no review, verdict or comment and never changes whose turn it is, and it changes no task state. */
+        post: operations["ask_proposal_author"];
         delete?: never;
         options?: never;
         head?: never;
@@ -827,6 +895,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/reviews/batches/{id}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The merged change of a batch, calculated on request: before the batch's integration, main's head against every member merged onto it in merge order, by the merge a batch checkout is made with, built in memory without a checkout and without writing objects; after it, the change of main across the revisions the batch published together. The members are those in the batch, or, once it is submitted, those its review covered, at the version each joined at, while the proposal is open. A member that conflicts stops the merge: the change holds the members before it and `conflict` names it. */
+        get: operations["get_review_batch_diff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/reviews/batches/{id}/diff/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The hunks of one file of the batch's merged change, from the same sides as `get_review_batch_diff`. */
+        get: operations["get_review_batch_file_diff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/reviews/batches/{id}/integrate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human integrates the approved members of a submitted batch together, once every member has its final state: one run of the integration checks on their merge with main, then one revision per member in one transaction. A member that conflicts goes back alone; a failed run integrates the members one at a time. */
+        post: operations["integrate_review_batch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/reviews/checkouts": {
         parameters: {
             query?: never;
@@ -1106,6 +1225,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/tasks/{id}/readers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Who a human's feedback on the task can go to: the worker that holds the implementation claim, the lead of the task's area (none for a task of Main or in no area) and the main agent. Only they answer for the task. */
+        get: operations["task_readers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/tasks/{id}/send-back": {
         parameters: {
             query?: never;
@@ -1252,7 +1388,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** A named human stops a worker. Its turn is interrupted and its process ends; it keeps its session. */
+        /** A named human stops a worker. Its turn is interrupted and its process ends; it keeps its session. The supervised main stays stopped: fold starts it for no message, request, task or review until a human starts it again with a new session. */
         post: operations["stop_worker"];
         delete?: never;
         options?: never;
@@ -1335,13 +1471,47 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Reports who the request acts as. It is the only way the web application learns the name, because `fold_human` is HttpOnly. */
+        /** Reports who the request acts as. It is the only way the web application learns the name, because `fold_session` is HttpOnly. */
         get: operations["get_session"];
         put?: never;
-        /** Signs in. Off loopback the body is `{ token }` and a valid token opens a session whose id `fold_session` carries; on loopback it is `{ name }`, which registers the human on first use and sets `fold_human`. */
+        /** Signs in with `{ token }`, a web token from `fld token create`, or `{ link }`, the secret of a sign-in link from `fld web`, which opens one session and then stops working. Either opens a session whose id `fold_session` carries. */
         post: operations["create_session"];
-        /** Signs out: deletes the session that `fold_session` names, so the cookie stops working even where the browser keeps it, and expires `fold_session` and `fold_human`. */
+        /** Signs out: deletes the session that `fold_session` names, so the cookie stops working even where the browser keeps it, and expires `fold_session`. */
         delete: operations["delete_session"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sign-in-links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Creates a one-time sign-in link for `fld web`, for the human that `x-fold-human` names. Only over the socket, where the `Human` extractor refuses a process in the tree of a worker that fold started or of a check command that fold runs. The link opens one session, within a few minutes. */
+        post: operations["create_sign_in_link"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Creates a web token for `fld token create`. Only over the socket, and never for a process in the tree of a worker that fold started or of a check command that fold runs: a token signs in as the human it names. */
+        post: operations["create_token"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1460,6 +1630,20 @@ export interface components {
              */
             expected_version: number;
         };
+        AreaCost: {
+            /**
+             * @description Null for the review lead and the reviewers, who review the work of every area.
+             * @example web
+             */
+            area: string | null;
+            /** Format: int64 */
+            cost_micro_usd: number;
+            tokens: components["schemas"]["TokenCounts"];
+            /** Format: int64 */
+            turns: number;
+            /** Format: int64 */
+            workers: number;
+        };
         /** @description A part of the project that one area lead owns through one task label. */
         AreaEntry: {
             /**
@@ -1490,6 +1674,32 @@ export interface components {
             /** @example web */
             name: string;
         };
+        /** @description A human's question to a proposal's author: about a run of lines of one file of a version when `path`, `side`, `start_line` and `end_line` are all given, about the whole proposal when none is. */
+        AskAuthorBody: {
+            /** @description The question, plain text with some visible character. In message text `#` names a fold item and `@` names a file; the daemon parses nothing. */
+            body: string;
+            /**
+             * Format: int32
+             * @description Inclusive.
+             */
+            end_line?: number | null;
+            /**
+             * @description The file the lines belong to, relative to the project root.
+             * @example web/src/board.ts
+             */
+            path?: string | null;
+            side?: components["schemas"]["CommentSide"] | null;
+            /**
+             * Format: int32
+             * @description From 1.
+             */
+            start_line?: number | null;
+            /**
+             * Format: int32
+             * @description The version the question is about; any version of the proposal.
+             */
+            version: number;
+        };
         AttentionItem: {
             /** @description For a `question`: one of the task's open asks is closable, so a human can mark it answered with the asks route, because it is no worker's `AskUserQuestion`, which only a reply in its thread ends. False for every other kind. */
             closable: boolean;
@@ -1508,6 +1718,35 @@ export interface components {
             task: string;
             title: string;
         };
+        BatchIntegrationResult: {
+            /** @example rb-3 */
+            batch: string;
+            /** @description Each member's integration in the order it ran. */
+            members: components["schemas"]["BatchMemberResult"][];
+            result: components["schemas"]["BatchIntegrationResultKind"];
+            /**
+             * @description The failed check run of the members together, for `one_at_a_time`.
+             * @example cr-9
+             */
+            run: string | null;
+        };
+        /** @enum {string} */
+        BatchIntegrationResultKind: "together" | "one_at_a_time" | "nothing" | "queued";
+        /** @description What one member's integration did. */
+        BatchMemberResult: {
+            /** @example P-3 */
+            proposal: string;
+            result: components["schemas"]["BatchMemberResultKind"];
+            /** @example r18 */
+            revision: string | null;
+            /**
+             * @description The member's own failed check run.
+             * @example cr-9
+             */
+            run: string | null;
+        };
+        /** @enum {string} */
+        BatchMemberResultKind: "succeeded" | "conflicted" | "checks_failed";
         /**
          * @description A human's answer to a worker's permission question.
          * @enum {string}
@@ -1579,7 +1818,7 @@ export interface components {
             /** @example T-12 */
             task: string;
             title: string;
-            /** @description The worker holding the implementation claim, `agent` or `agent/worker`. */
+            /** @description The worker holding the implementation claim, named as its agent. */
             worker: string | null;
             /**
              * @description The live task workspace.
@@ -1615,6 +1854,7 @@ export interface components {
             checks_failed: boolean;
             /** @example P-3 */
             id: string;
+            review_plan: components["schemas"]["ReviewPlanWait"] | null;
             /**
              * @description The revision an integrated proposal became; null before integration.
              * @example r8
@@ -1690,6 +1930,11 @@ export interface components {
              * @example r17
              */
             base: string;
+            /**
+             * @description The review batch whose members an integration run checked together; the run shows on each member's page.
+             * @example rb-2
+             */
+            batch: string | null;
             /**
              * Format: int64
              * @description UTC milliseconds.
@@ -1974,6 +2219,43 @@ export interface components {
             main: string;
             version: string;
         };
+        /** @description A sum of turns. */
+        CostAmount: {
+            /**
+             * Format: int64
+             * @description Millionths of a US dollar, as Claude Code reported them.
+             */
+            cost_micro_usd: number;
+            tokens: components["schemas"]["TokenCounts"];
+            /** Format: int64 */
+            turns: number;
+            /**
+             * Format: int64
+             * @description How many workers ran the turns.
+             */
+            workers: number;
+        };
+        /**
+         * @description Which part of a task's cost a worker's turns are: `build` for a task worker's, `review` for a reviewer's.
+         * @enum {string}
+         */
+        CostPartKind: "build" | "review";
+        /** @description The cost of one role's turns in one slot of `slot_minutes`. */
+        CostSlot: {
+            /** Format: int64 */
+            cost_micro_usd: number;
+            role: components["schemas"]["WorkerRole"];
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the start of the slot.
+             */
+            start: number;
+            /**
+             * Format: int64
+             * @description Every token of the slot's turns.
+             */
+            tokens: number;
+        };
         CreateLabelBody: {
             /**
              * @description One of sage, slate, teal, ink, gold, moss, plum, stone.
@@ -2001,6 +2283,32 @@ export interface components {
             parent?: string | null;
             /** @description One line, not empty. */
             title: string;
+        };
+        /** @description The human a new web token signs in. */
+        CreateToken: {
+            /** @description The human the token signs in; created when absent. */
+            human: string;
+            /** @description A note that tells this token apart from the human's other tokens. */
+            label?: string | null;
+        };
+        /** @description A new one-time sign-in link. */
+        CreatedLink: {
+            /**
+             * Format: int64
+             * @description UTC milliseconds after which the link no longer signs in.
+             */
+            expires_at: number;
+            /**
+             * Format: int64
+             * @description Seconds from now until `expires_at`, by the daemon's clock, so a client tells the person how long the link lasts without comparing clocks.
+             */
+            expires_in_secs: number;
+            /** @description The link to open in a browser on this machine. Its secret is in the fragment. */
+            url: string;
+        };
+        /** @description A new web token. The plaintext is in this answer only: the registry keeps its hash. */
+        CreatedToken: {
+            token: string;
         };
         /**
          * @description What started the daemon process.
@@ -2122,7 +2430,7 @@ export interface components {
         };
         /** @description A stored event. The related ids are public ids. */
         DurableEvent: {
-            /** @description A worker (`frontend`, `frontend/ui`), a human (`human:ana`) or `fold`. */
+            /** @description A worker (`frontend`), a human (`human:ana`) or `fold`. */
             actor: string;
             /**
              * Format: int64
@@ -2149,7 +2457,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable" | "message.ask_closed";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable" | "message.ask_closed" | "review.plan_created" | "review.plan_changed" | "review.plan_joined" | "review.plan_left" | "review.plan_wait_ended" | "review.plan_started" | "review.plan_ended" | "review.batch_integrated" | "review.batch_waiting" | "review.batch_wait_ended" | "review.batch_ready";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -2258,7 +2566,7 @@ export interface components {
             request?: string | null;
             /** @description The task the feedback is about, such as `T-12`. Needed when neither `request` nor `reply_to` is given. */
             task?: string | null;
-            /** @description The recipients, as an agent, `agent/worker`, `tag:<tag>`, `all`, `human:<name>` or `humans`. Left out, feedback goes to the task's claim holder, a request message to the request's drafter and a reply to the parent's sender. */
+            /** @description The recipients, as an agent, `tag:<tag>`, `all`, `human:<name>` or `humans`. Feedback on a task takes only the task's readers, and left out it goes to the first of them; left out, a request message to the request's drafter and a reply to the parent's sender. */
             to?: string[] | null;
         };
         /** @enum {string} */
@@ -2315,7 +2623,7 @@ export interface components {
             bytes_freed: number;
             /**
              * Format: int64
-             * @description Automatic checkpoints beyond the kept number, and every checkpoint of a removed workspace.
+             * @description Automatic checkpoints beyond the kept number, and every checkpoint of a workspace closed for longer than `closed_workspace_days`.
              */
             checkpoints_pruned: number;
             /**
@@ -2342,7 +2650,7 @@ export interface components {
             tmp_removed: number;
             /**
              * Format: int64
-             * @description Directories of archived or abandoned workspaces past their retention.
+             * @description Directories of archived or abandoned workspaces that the run removed.
              */
             workspaces_removed: number;
         };
@@ -2513,6 +2821,10 @@ export interface components {
              */
             task_worker: number;
         };
+        /** @description The secret of a one-time sign-in link from `fld web`, which the sign-in screen reads from the link. */
+        LinkSignIn: {
+            link: string;
+        };
         /** @description What an active workspace holds right now. These are working changes, never history. */
         LiveWorkspace: {
             /**
@@ -2541,8 +2853,8 @@ export interface components {
              */
             task: string | null;
             /**
-             * @description The worker label, `agent` or `agent/worker`.
-             * @example frontend/ui
+             * @description The worker label, which is its agent's name.
+             * @example frontend
              */
             worker: string;
             /** @example ws-9 */
@@ -2575,6 +2887,32 @@ export interface components {
             /** @example Recharts */
             label: string;
         };
+        /** @description A run of lines of one file of a proposal version, with their text. */
+        MessageLines: {
+            /**
+             * Format: int32
+             * @description Inclusive.
+             */
+            end_line: number;
+            /** @description The lines joined by newlines, without their line endings. */
+            excerpt: string;
+            /** @description The excerpt holds only the first lines of the run: at most 100 lines and 20000 characters. */
+            excerpt_cut: boolean;
+            /** @example web/src/board.ts */
+            path: string;
+            /** @description `old` reads the version's base, `new` the version. */
+            side: components["schemas"]["CommentSide"];
+            /**
+             * Format: int32
+             * @description From 1.
+             */
+            start_line: number;
+            /**
+             * Format: int32
+             * @description The version of the message's proposal.
+             */
+            version: number;
+        };
         /** @description A notice about a message got through to a session or the worker process of a recipient agent for the first time, so the message's thread shows that the message waits there. It is the `data` of the live `message.pushed` event; the recipients' `pushed_at` is committed before it is sent. */
         MessagePushed: {
             /**
@@ -2605,6 +2943,7 @@ export interface components {
             header: string | null;
             /** @example m-31 */
             id: string;
+            lines: components["schemas"]["MessageLines"] | null;
             /** @example P-3 */
             proposal: string | null;
             recipients: components["schemas"]["RecipientView"][];
@@ -2617,7 +2956,7 @@ export interface components {
             request: string | null;
             /**
              * @description A worker, `human:<name>` or `fold`.
-             * @example frontend/ui
+             * @example frontend
              */
             sender: string;
             /**
@@ -2633,9 +2972,19 @@ export interface components {
              */
             thread: string;
         };
-        /** @description On loopback, the name the person works under. */
-        NameSignIn: {
-            name: string;
+        ModelCost: {
+            /** Format: int64 */
+            cost_micro_usd: number;
+            /**
+             * @description Null for turns that ended before Claude Code named a model.
+             * @example claude-sonnet-5
+             */
+            model: string | null;
+            tokens: components["schemas"]["TokenCounts"];
+            /** Format: int64 */
+            turns: number;
+            /** Format: int64 */
+            workers: number;
         };
         /** @description One item that waits for a human. Only the ids its kind has are set. */
         NeedsYouEntry: {
@@ -2789,6 +3138,57 @@ export interface components {
          * @enum {string}
          */
         ProjectAttentionKind: "uncommitted_changes" | "head_moved";
+        /** @description What the project's supervised workers cost, in millionths of a US dollar, from the values Claude Code reported. The main agent is the user's own Claude Code session, which fold does not supervise, so its cost is in none of them. */
+        ProjectCostTotals: {
+            /** Format: int64 */
+            all_time_micro_usd: number;
+            /**
+             * Format: int64
+             * @description Every token of every turn, each turn's own from the usage Claude Code reported.
+             */
+            all_time_tokens: number;
+            /**
+             * Format: int64
+             * @description The turns that ended since the start of the day the list was asked for with `today`, else since midnight UTC.
+             */
+            today_micro_usd: number;
+            /**
+             * Format: int64
+             * @description The turns that ended since the start of the week the list was asked for with `week`, else since midnight UTC six days ago.
+             */
+            week_micro_usd: number;
+        };
+        /** @description What the project's supervised workers cost since `since`, from the values Claude Code reported for each turn; fold keeps no price table. The main agent is the user's own Claude Code session, which fold does not supervise, so its cost is not here. */
+        ProjectCostView: {
+            /** @description The most expensive first. */
+            by_area: components["schemas"]["AreaCost"][];
+            /** @description The most expensive first. */
+            by_model: components["schemas"]["ModelCost"][];
+            /** @description Every role, a role without a turn with 0. */
+            by_role: components["schemas"]["RoleCost"][];
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the end of the oldest turn in the range; null without a turn.
+             */
+            first_turn_at: number | null;
+            /**
+             * Format: int64
+             * @description The `since` of the request; null for all time.
+             */
+            since: number | null;
+            /**
+             * Format: int32
+             * @example 15
+             */
+            slot_minutes: number;
+            /** @description Oldest first; a slot without a turn is left out. A range of up to seven days has 15-minute slots, which add up to any viewer's own hours and days, because every time zone's offset is a whole number of them; a longer range has hour slots, which a viewer adds up into days. */
+            slots: components["schemas"]["CostSlot"][];
+            /** @description Every task a turn in the range counts for, the most expensive first. */
+            tasks: components["schemas"]["TaskCost"][];
+            total: components["schemas"]["CostAmount"];
+            /** @description The most expensive first. */
+            workers: components["schemas"]["WorkerCost"][];
+        };
         /**
          * @description What is at a project's folder. `present`: the folder holds `.fold/` with its database. `folder_missing`: the folder is gone, as on a disk that is not mounted; fold opens the project again when it is back. `fold_missing`: the folder is there without `.fold/`; only a removed project is listed so, since fold takes any other off by itself. `database_missing`: `.fold/` holds no database.
          * @enum {string}
@@ -2812,6 +3212,7 @@ export interface components {
             agents: components["schemas"]["ProjectAgent"][];
             /** @description What needs a person in the project as a whole, beside the attention items of its tasks; empty when nothing does. */
             attention: components["schemas"]["ProjectAttentionKind"][];
+            cost: components["schemas"]["ProjectCostTotals"];
             /** @description Unarchived tasks per board column. */
             counts: components["schemas"]["BoardCounts"];
             /**
@@ -2875,6 +3276,7 @@ export interface components {
             /** @description The direct prerequisites of the task. */
             prerequisites: components["schemas"]["ProposalTask"][];
             review_claim: components["schemas"]["ReviewClaim"] | null;
+            review_plan: components["schemas"]["ReviewPlanWait"] | null;
             /** @description Every version's reviews, oldest first. */
             reviews: components["schemas"]["ProposalReview"][];
             /** @description The version that was asked for, else the current one. */
@@ -2956,7 +3358,7 @@ export interface components {
          */
         ProposalStateView: "open" | "integrated" | "closed";
         ProposalSummary: {
-            /** @description The worker that opened the proposal, `agent` or `agent/worker`. */
+            /** @description The worker that opened the proposal, named as its agent. */
             author: string;
             /** @description The integration checks of the current version failed on its merge with main, so the proposal is with its author until a new version. */
             checks_failed: boolean;
@@ -3120,6 +3522,11 @@ export interface components {
             /** @description The human's note to the worker. */
             message: string | null;
         };
+        /**
+         * @description Why a reader is offered for a human's feedback on a task.
+         * @enum {string}
+         */
+        ReaderRole: "claim_holder" | "area_lead" | "main_agent";
         /** @description One recipient row. Names starting `human:` are humans. */
         RecipientView: {
             /**
@@ -3134,7 +3541,12 @@ export interface components {
              * @description UTC milliseconds; null until an inbox returned the row.
              */
             delivered_at: number | null;
-            /** @example frontend/ui */
+            /**
+             * @description The lead that fold sent the message on to because this recipient, a stopped worker, could not start to answer it; the sender itself when the sender is that lead. Null while fold has not sent it on.
+             * @example web-lead
+             */
+            forwarded_to: string | null;
+            /** @example frontend */
             name: string;
             /**
              * Format: int64
@@ -3353,6 +3765,7 @@ export interface components {
             holder: string;
             /** @example rb-3 */
             id: string;
+            integration: components["schemas"]["ReviewBatchIntegration"];
             /** @description Every member the batch has had, in merge order. */
             members: components["schemas"]["ReviewBatchMember"][];
             state: components["schemas"]["ReviewBatchState"];
@@ -3397,6 +3810,85 @@ export interface components {
              */
             number: number;
         };
+        /** @description The change a batch's members make on main together, without hunks. */
+        ReviewBatchDiff: {
+            /**
+             * @description The old side: main's head for `merged`, the revision before the batch's revisions for `integrated`; null otherwise.
+             * @example r17
+             */
+            base: string | null;
+            basis: components["schemas"]["ReviewBatchDiffBasis"];
+            /** @example rb-3 */
+            batch: string;
+            conflict: components["schemas"]["ReviewBatchDiffConflict"] | null;
+            /** @description In path order. */
+            files: components["schemas"]["ComparedFile"][];
+            /**
+             * @description The last member's revision for `integrated`; null otherwise, as a merged tree is built only in memory.
+             * @example r19
+             */
+            head: string | null;
+            /** @description The members the new side holds, in merge order. */
+            members: components["schemas"]["ReviewBatchDiffMember"][];
+            totals: components["schemas"]["ComparisonTotals"];
+        };
+        /** @enum {string} */
+        ReviewBatchDiffBasis: "merged" | "integrated" | "no_members" | "closed" | "not_together";
+        /** @description The first member that does not merge onto main with the members before it. The change holds only the members before it. */
+        ReviewBatchDiffConflict: {
+            /** @description The conflicted paths, in path order. */
+            paths: string[];
+            /** @example P-4 */
+            proposal: string;
+            /**
+             * Format: int32
+             * @description The member version that conflicts.
+             */
+            version: number;
+            /**
+             * @description The earlier member it conflicts with; null when it conflicts with main itself.
+             * @example P-3
+             */
+            with: string | null;
+        };
+        /** @description A member version the merged tree holds. */
+        ReviewBatchDiffMember: {
+            /** @example P-3 */
+            proposal: string;
+            /** Format: int32 */
+            version: number;
+        };
+        /** @description Whether the approved members of a submitted batch integrate together now, wait for the others, or did. */
+        ReviewBatchIntegration: {
+            /**
+             * @description While `ready`: the members that integrate together, in merge order.
+             * @example [
+             *       "P-3",
+             *       "P-5"
+             *     ]
+             */
+            members: string[];
+            outcome: components["schemas"]["ReviewBatchOutcome"] | null;
+            /**
+             * @description While `waiting`: the members without a final state.
+             * @example [
+             *       "P-4"
+             *     ]
+             */
+            pending: string[];
+            /** @description While `ready`: a request to integrate the batch waits in the integration queue. */
+            queued: boolean;
+            /** @description Once `ended`: the members published together, in revision order. */
+            revisions: components["schemas"]["ReviewBatchRevision"][];
+            /**
+             * @description Once `ended`: the one check run of the members together, when integration checks ran.
+             * @example cr-9
+             */
+            run: string | null;
+            state: components["schemas"]["ReviewBatchIntegrationState"];
+        };
+        /** @enum {string} */
+        ReviewBatchIntegrationState: "not_submitted" | "waiting" | "ready" | "ended";
         ReviewBatchList: {
             /** @description In number order. */
             batches: components["schemas"]["ReviewBatch"][];
@@ -3424,6 +3916,20 @@ export interface components {
             /**
              * Format: int32
              * @description The version the batch reviews: the one the proposal had when it joined.
+             */
+            version: number;
+        };
+        /** @enum {string} */
+        ReviewBatchOutcome: "together" | "one_at_a_time" | "none";
+        /** @description A member the batch published together with the others. */
+        ReviewBatchRevision: {
+            /** @example P-3 */
+            proposal: string;
+            /** @example r18 */
+            revision: string;
+            /**
+             * Format: int32
+             * @description The version that was integrated.
              */
             version: number;
         };
@@ -3515,7 +4021,7 @@ export interface components {
              * @description UTC milliseconds.
              */
             claimed_at: number;
-            /** @description The worker, `agent` or `agent/worker`. */
+            /** @description The worker, named as its agent. */
             holder: string;
             /**
              * Format: int64
@@ -3553,6 +4059,22 @@ export interface components {
             /** Format: int32 */
             version: number;
         };
+        /** @description The review plan an open proposal without a review waits in: the review lead gives it to one reviewer together with the plan's other proposals once the awaited tasks open theirs or the wait ends. */
+        ReviewPlanWait: {
+            /** @description The tasks whose proposals the plan still waits for, by task number. */
+            awaited: string[];
+            /**
+             * Format: int64
+             * @description When the wait ends at the latest, in UTC milliseconds.
+             */
+            deadline_at: number;
+            /** @example rp-2 */
+            plan: string;
+            /** @description The plan's open proposals, this one included. */
+            proposals: string[];
+            /** @description The wait ended, so the plan waits only for the review lead to start its reviewer. */
+            wait_ended: boolean;
+        };
         /**
          * @description How much of a revised version a review reads: the change since the earlier version with a verdict and the code it touches, or the whole version.
          * @enum {string}
@@ -3583,8 +4105,13 @@ export interface components {
             revisions: components["schemas"]["RevisionView"][];
         };
         RevisionView: {
-            /** @description The agent whose proposal was integrated, the human who pulled, or the main worker that made a direct change. */
+            /** @description The agent whose proposal was integrated, the human who pulled, or the main agent that made a direct change. */
             author: string | null;
+            /**
+             * @description The review batch whose approved members integrated together with this proposal, each as its own revision.
+             * @example rb-3
+             */
+            batch: string | null;
             /** @description The Git commit the revision became in the project folder's repository `.git`; null until it is written, just after the integration. */
             commit: string | null;
             /**
@@ -3607,6 +4134,16 @@ export interface components {
             title: string | null;
             /** @description The hash of the revision's root tree. */
             tree: string;
+        };
+        RoleCost: {
+            /** Format: int64 */
+            cost_micro_usd: number;
+            role: components["schemas"]["WorkerRole"];
+            tokens: components["schemas"]["TokenCounts"];
+            /** Format: int64 */
+            turns: number;
+            /** Format: int64 */
+            workers: number;
         };
         /** @description A worker role's settings from `.fold/config.toml`. */
         RoleEntry: {
@@ -3632,8 +4169,8 @@ export interface components {
          * @enum {string}
          */
         SessionEndReason: "handoff" | "lost" | "requested";
-        /** @description A token off loopback, a name on loopback. */
-        SessionRequest: components["schemas"]["TokenSignIn"] | components["schemas"]["NameSignIn"];
+        /** @description A token, or the secret of a sign-in link. */
+        SessionRequest: components["schemas"]["TokenSignIn"] | components["schemas"]["LinkSignIn"];
         SessionStartContext: {
             /** @description The text for the session's context, at most 1500 characters. */
             context: string;
@@ -3651,9 +4188,9 @@ export interface components {
         };
         /** @description What the sign-in screen needs to know. */
         SessionStatus: {
-            /** @description False only off loopback without the cookie of a live session: the sign-in screen then asks for a token. True with a null `human` asks for a name. */
+            /** @description False without the cookie of a live session: the sign-in screen then asks for a token. Over the socket it is always true. */
             authenticated: boolean;
-            /** @description The name the request acts under; null before a name or a token gives one. */
+            /** @description The name the request acts under; null before a sign-in gives one. */
             human: string | null;
         };
         /** @description A change of the worker limits; a limit left out stays as it is. */
@@ -3751,16 +4288,35 @@ export interface components {
         StashState: "nothing" | "stashed";
         /** @enum {string} */
         StateKindView: "revision" | "changeset" | "checkpoint" | "workspace" | "tree";
+        StopDelivered: {
+            /** @description `FOLD_AGENT` of the session. */
+            agent: string;
+            /** @description The session's canonical working directory. */
+            cwd: string;
+            /** @description The messages of the reason the hook gave to its session. */
+            messages: string[];
+        };
         StopHook: {
             /** @description `FOLD_AGENT` of the session. */
             agent: string;
             /** @description The session's canonical working directory. */
             cwd: string;
         };
-        StopUnread: {
+        StopMarked: {
             /**
              * Format: int64
-             * @description The unacknowledged messages of every worker of the agent.
+             * @description The recipient rows this call marked delivered.
+             */
+            delivered: number;
+        };
+        StopUnread: {
+            /** @description The messages `reason` carries, such as `m-4`. They count as delivered once the hook reports them to `/api/v1/hooks/stop/delivered`. */
+            messages: string[];
+            /** @description The hook's reason to keep the turn going: the messages that no inbox, notice or wait has shown the agent yet, oldest first, up to 16 KB of text, then how many more there are. `null` when there is none. */
+            reason: string | null;
+            /**
+             * Format: int64
+             * @description The unacknowledged messages of the agent's worker.
              */
             unread: number;
         };
@@ -3794,7 +4350,7 @@ export interface components {
              * @description UTC milliseconds.
              */
             claimed_at: number;
-            /** @description The worker, `agent` or `agent/worker`. */
+            /** @description The worker, named as its agent. */
             holder: string;
             kind: components["schemas"]["ClaimKind"];
             /**
@@ -3804,6 +4360,39 @@ export interface components {
             renewed_at: number;
             /** @description True once the lease ran out without a renewal. */
             stale: boolean;
+        };
+        /** @description What one task cost in the range: `build` is its task workers' turns, `review` the turns of the reviewers of its proposals. */
+        TaskCost: {
+            /** @description The area of the task workers that built it; null while only reviewers worked on it. */
+            area: string | null;
+            /** Format: int64 */
+            build_micro_usd: number;
+            /** Format: int64 */
+            review_micro_usd: number;
+            /** @example T-12 */
+            task: string;
+            title: string;
+            tokens: components["schemas"]["TokenCounts"];
+            /** Format: int64 */
+            total_micro_usd: number;
+            /** Format: int64 */
+            turns: number;
+        };
+        /** @description What one task cost in all: its task workers' turns and the turns of the reviewers of its proposals, from the values Claude Code reported. */
+        TaskCostView: {
+            /** Format: int64 */
+            build_micro_usd: number;
+            /** Format: int64 */
+            review_micro_usd: number;
+            /** @example T-12 */
+            task: string;
+            tokens: components["schemas"]["TokenCounts"];
+            /** Format: int64 */
+            total_micro_usd: number;
+            /** Format: int64 */
+            turns: number;
+            /** @description The builders first, then the reviewers, each in the order they first worked on the task. */
+            workers: components["schemas"]["TaskWorkerCost"][];
         };
         TaskEdge: {
             direction: components["schemas"]["EdgeDirection"];
@@ -3878,6 +4467,18 @@ export interface components {
              * @description The current version.
              */
             version: number;
+        };
+        TaskReader: {
+            /**
+             * @description The worker, named as its agent; feedback addressed to it by name reaches it.
+             * @example web-t12
+             */
+            name: string;
+            role: components["schemas"]["ReaderRole"];
+        };
+        TaskReaders: {
+            /** @description The default reader first: the claim holder, else the area lead, else the main agent. Each worker once, under its first role. */
+            readers: components["schemas"]["TaskReader"][];
         };
         /** @description A task worker's report that the work of a `no_proposal` task is finished, with the lead check that answered it. */
         TaskReport: {
@@ -4003,6 +4604,22 @@ export interface components {
             workspace: string | null;
             workspace_info: components["schemas"]["TaskWorkspaceInfo"] | null;
         };
+        /** @description One worker's turns for the task. */
+        TaskWorkerCost: {
+            /** Format: int64 */
+            cost_micro_usd: number;
+            /** @description The model of the worker's newest turn for the task. */
+            model: string | null;
+            /** @example web-worker */
+            name: string;
+            part: components["schemas"]["CostPartKind"];
+            /** @description The proposals of the task a reviewer reviewed, such as `P-3`, in number order; empty for a build. */
+            proposals: string[];
+            role: components["schemas"]["WorkerRole"];
+            tokens: components["schemas"]["TokenCounts"];
+            /** Format: int64 */
+            turns: number;
+        };
         TaskWorkspaceInfo: {
             /**
              * @description The revision the workspace is based on.
@@ -4071,7 +4688,26 @@ export interface components {
              */
             task: string | null;
         };
-        /** @description Off loopback, a web token from `fld token create`. */
+        /** @description The tokens of turns, each turn's own from the usage Claude Code reported for it, so a resumed session counts none twice. A stop's interrupt adds none. */
+        TokenCounts: {
+            /** Format: int64 */
+            cache_read: number;
+            /** Format: int64 */
+            cache_write: number;
+            /**
+             * Format: int64
+             * @description Input tokens that the prompt cache did not hold.
+             */
+            input: number;
+            /** Format: int64 */
+            output: number;
+            /**
+             * Format: int64
+             * @description All four added up.
+             */
+            total: number;
+        };
+        /** @description A web token from `fld token create`. */
         TokenSignIn: {
             token: string;
         };
@@ -4151,6 +4787,22 @@ export interface components {
         };
         /** @enum {string} */
         WatchModeView: "watching" | "degraded";
+        /** @description One worker's turns in the range. A stopped, failed or restarted worker keeps its turns. */
+        WorkerCost: {
+            /** @description Null for the review lead and reviewers. */
+            area: string | null;
+            /** Format: int64 */
+            cost_micro_usd: number;
+            /** @description The model of the worker's newest turn in the range. */
+            model: string | null;
+            /** @example web-worker */
+            name: string;
+            role: components["schemas"]["WorkerRole"];
+            state: components["schemas"]["WorkerProcessState"];
+            tokens: components["schemas"]["TokenCounts"];
+            /** Format: int64 */
+            turns: number;
+        };
         WorkerEntry: {
             /** @description The last tool the worker called, followed by its task id when the call named one, such as `claim_task T-12`. */
             activity: string | null;
@@ -4160,10 +4812,8 @@ export interface components {
              * @description UTC milliseconds; null before the first call.
              */
             last_call_at: number | null;
-            /** @description `agent` or `agent/worker`. */
+            /** @description The worker's name, which is its agent's name. */
             name: string;
-            /** @description Null for the main worker. */
-            parent: string | null;
             /** @description Open proposals the worker wrote. */
             proposals: components["schemas"]["AuthoredProposal"][];
             /** @description Workspaces in state `active` or `missing`. */
@@ -4199,6 +4849,8 @@ export interface components {
              * @example main
              */
             main_label: string;
+            /** @description Whether `supervised = true` under `[main]` has fold run the main agent as the worker of role `main`; false when fold cannot read `.fold/config.toml`. With it off, the main agent is the user's own `fld claude` session, and a row of role `main` is left from a time it was on. */
+            main_supervised: boolean;
             pause: components["schemas"]["PauseEntry"];
             /** @description Each role with the cache time a new worker of the role gets; empty when fold cannot read `.fold/config.toml`. */
             roles: components["schemas"]["RoleEntry"][];
@@ -4363,7 +5015,7 @@ export interface components {
          * @description The kinds of worker fold runs.
          * @enum {string}
          */
-        WorkerRole: "area_lead" | "review_lead" | "task_worker" | "reviewer";
+        WorkerRole: "area_lead" | "review_lead" | "task_worker" | "reviewer" | "main";
         WorkerWorkspace: {
             /**
              * @description The revision the workspace is based on.
@@ -4444,7 +5096,7 @@ export interface components {
              */
             last_activity_at: number | null;
             live: components["schemas"]["LiveWorkspace"] | null;
-            /** @description The worker that owns the workspace, such as `frontend/ui`. */
+            /** @description The worker that owns the workspace, such as `frontend`. */
             owner: string | null;
             /** @description Relative to the project root. */
             path: string;
@@ -4507,7 +5159,7 @@ export interface operations {
                     "application/json": components["schemas"]["DaemonView"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4576,7 +5228,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4654,7 +5306,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4714,7 +5366,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The agent's unread count */
+            /** @description The agent's unread count and the messages */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4732,7 +5384,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4779,6 +5431,84 @@ export interface operations {
             };
         };
     };
+    hook_stop_delivered: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StopDelivered"];
+            };
+        };
+        responses: {
+            /** @description How many rows were marked delivered */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StopMarked"];
+                };
+            };
+            /** @description The body, the agent name or a message id is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or no registered project holds `cwd` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     list_humans: {
         parameters: {
             query?: never;
@@ -4797,7 +5527,7 @@ export interface operations {
                     "application/json": components["schemas"]["HumanList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4831,6 +5561,10 @@ export interface operations {
             query?: {
                 /** @description List the projects a person removed from fold too; they are left out without it. */
                 include_removed?: boolean;
+                /** @description UTC milliseconds of the start of the viewer's day, from which each project's cost of today counts; midnight UTC without it. */
+                today?: number;
+                /** @description UTC milliseconds of the start of the viewer's last seven days, from which each project's cost of the week counts; midnight UTC six days ago without it. */
+                week?: number;
             };
             header?: never;
             path?: never;
@@ -4847,7 +5581,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProjectList"];
                 };
             };
-            /** @description `invalid_request`: `include_removed` is not `true` or `false` */
+            /** @description `invalid_request`: `include_removed` is not `true` or `false`, or `today` or `week` is not a time */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -4856,7 +5590,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4916,7 +5650,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4965,7 +5699,12 @@ export interface operations {
     };
     show_project: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description UTC milliseconds of the start of the viewer's day, from which the project's cost of today counts; midnight UTC without it. */
+                today?: number;
+                /** @description UTC milliseconds of the start of the viewer's last seven days, from which the project's cost of the week counts; midnight UTC six days ago without it. */
+                week?: number;
+            };
             header?: never;
             path: {
                 /** @description The project slug */
@@ -4984,7 +5723,16 @@ export interface operations {
                     "application/json": components["schemas"]["ProjectSummary"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `invalid_request`: `today` or `week` is not a time */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5033,7 +5781,12 @@ export interface operations {
     };
     remove_project: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description UTC milliseconds of the start of the viewer's day, from which the project's cost of today counts; midnight UTC without it. */
+                today?: number;
+                /** @description UTC milliseconds of the start of the viewer's last seven days, from which the project's cost of the week counts; midnight UTC six days ago without it. */
+                week?: number;
+            };
             header?: never;
             path: {
                 /** @description The project slug */
@@ -5052,7 +5805,16 @@ export interface operations {
                     "application/json": components["schemas"]["ProjectSummary"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `invalid_request`: `today` or `week` is not a time */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5132,7 +5894,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5222,7 +5984,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5314,7 +6076,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5395,7 +6157,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5463,7 +6225,7 @@ export interface operations {
                     "application/json": components["schemas"]["BoardView"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5542,7 +6304,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5619,7 +6381,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5711,7 +6473,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5740,6 +6502,165 @@ export interface operations {
             };
             /** @description `task_closed`: the task is archived */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    project_cost: {
+        parameters: {
+            query?: {
+                /** @description UTC milliseconds: count only the turns that ended at or after it, such as the start of the viewer's day; every turn without it. */
+                since?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's cost */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectCostView"];
+                };
+            };
+            /** @description `invalid_request`: `since` is not a time */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    task_cost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task id, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The task's cost */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskCostView"];
+                };
+            };
+            /** @description `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found` or `project_not_found` */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5804,7 +6725,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5893,7 +6814,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5975,7 +6896,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6056,7 +6977,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6074,8 +6995,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `task_not_found`, `request_not_found`, `message_not_found`, `proposal_not_found`, `unknown_human`, `recipient_not_found` (also when the task has no claim holder, or the request no drafter, and `to` is left out) or `project_not_found` */
+            /** @description `task_not_found`, `request_not_found`, `message_not_found`, `proposal_not_found`, `unknown_human`, `recipient_not_found` (also when the task has no reader, or the request no drafter, and `to` is left out) or `project_not_found` */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `recipient_not_reader`: feedback on a task names a recipient that is not one of the task's readers */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6137,7 +7067,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6214,7 +7144,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProjectGit"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6295,7 +7225,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6372,7 +7302,7 @@ export interface operations {
                     "application/json": components["schemas"]["LabelList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6453,7 +7383,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6512,7 +7442,7 @@ export interface operations {
     list_messages: {
         parameters: {
             query?: {
-                /** @description Threads in which this agent (any of its workers) or this exact `agent/worker` sent or received a message. */
+                /** @description Threads in which this agent sent or received a message. */
                 agent?: string;
                 /** @description Threads with a message linked to this task, such as `T-12`. */
                 task?: string;
@@ -6554,7 +7484,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: `mine` is set and the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: `mine` is set and the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6622,7 +7552,7 @@ export interface operations {
                     "application/json": components["schemas"]["NeedsYouList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6690,7 +7620,7 @@ export interface operations {
                     "application/json": components["schemas"]["PauseEntry"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6772,7 +7702,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6854,7 +7784,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6945,7 +7875,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7028,7 +7958,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7132,7 +8062,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7215,7 +8145,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7317,7 +8247,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7400,7 +8330,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7456,6 +8386,98 @@ export interface operations {
             };
         };
     };
+    ask_proposal_author: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The proposal id, such as P-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskAuthorBody"];
+            };
+        };
+        responses: {
+            /** @description The stored question */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageView"];
+                };
+            };
+            /** @description `invalid_request`: an empty body, some but not all of the four line fields, or a malformed request; `invalid_path` or `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_found`: no such proposal or version, or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_comment_path` or `invalid_comment_range`: the lines are not in the file on that side */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     send_for_review_again: {
         parameters: {
             query?: never;
@@ -7492,7 +8514,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7584,7 +8606,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7682,7 +8704,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7780,7 +8802,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7875,7 +8897,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7961,7 +8983,7 @@ export interface operations {
                     "application/json": components["schemas"]["RepositoryView"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8045,7 +9067,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8126,7 +9148,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8212,7 +9234,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8295,7 +9317,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8385,7 +9407,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8468,7 +9490,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8560,7 +9582,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8652,7 +9674,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8710,7 +9732,12 @@ export interface operations {
     };
     restore_project: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description UTC milliseconds of the start of the viewer's day, from which the project's cost of today counts; midnight UTC without it. */
+                today?: number;
+                /** @description UTC milliseconds of the start of the viewer's last seven days, from which the project's cost of the week counts; midnight UTC six days ago without it. */
+                week?: number;
+            };
             header?: never;
             path: {
                 /** @description The project slug */
@@ -8729,7 +9756,16 @@ export interface operations {
                     "application/json": components["schemas"]["ProjectSummary"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `invalid_request`: `today` or `week` is not a time */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8797,7 +9833,7 @@ export interface operations {
                     "application/json": components["schemas"]["PauseEntry"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8877,7 +9913,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8956,7 +9992,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9003,6 +10039,255 @@ export interface operations {
             };
         };
     };
+    get_review_batch_diff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The review batch id, such as rb-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The merged change's files */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewBatchDiff"];
+                };
+            };
+            /** @description `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `review_batch_not_found`, `revision_not_found`: main has no revision, or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_review_batch_file_diff: {
+        parameters: {
+            query: {
+                /** @description A changed file of the merged change, such as `src/lib.rs`: its new path for a rename, its old path for a deletion. */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The review batch id, such as rb-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file's hunks */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileDiffView"];
+                };
+            };
+            /** @description `invalid_id`, `invalid_path`, or `invalid_request`: the query string is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `review_batch_not_found`, `path_not_in_comparison`, `revision_not_found`: main has no revision, or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    integrate_review_batch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The review batch id, such as rb-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Integrated together, one at a time, nothing to integrate, or queued behind other integrations when the project has integration checks */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BatchIntegrationResult"];
+                };
+            };
+            /** @description `invalid_request` (`details.reason` is `batch_not_submitted`, `batch_waiting` with `details.pending`, `batch_integrated`, or `integration_queued`), `invalid_id` or `invalid_name` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `review_batch_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A gate refusal for a member, with `details.batch` and `details.proposal`: `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`) or `proposal_not_open`; or `head_moved` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error, or `workspace_io` with `details.reason` `fold_failed` when fold itself could not run the integration checks */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable`, or `integration_failed` (`details.cause`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     list_review_checkouts: {
         parameters: {
             query?: never;
@@ -9024,7 +10309,7 @@ export interface operations {
                     "application/json": components["schemas"]["ReviewCheckoutList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9106,7 +10391,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9185,7 +10470,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9267,7 +10552,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9349,7 +10634,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9417,7 +10702,7 @@ export interface operations {
                     "application/json": components["schemas"]["StashList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9494,7 +10779,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9580,7 +10865,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9661,7 +10946,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9749,7 +11034,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9835,7 +11120,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9918,7 +11203,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10004,7 +11289,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10096,7 +11381,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10184,7 +11469,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10276,7 +11561,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10364,7 +11649,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10454,7 +11739,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10542,7 +11827,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10625,7 +11910,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10713,7 +11998,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10803,7 +12088,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10893,7 +12178,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10922,6 +12207,85 @@ export interface operations {
             };
             /** @description `task_closed`: the task is archived */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    task_readers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task id, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The readers, the default first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskReaders"];
+                };
+            };
+            /** @description `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found` or `project_not_found` */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10985,7 +12349,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11073,7 +12437,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11150,7 +12514,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11249,7 +12613,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11326,7 +12690,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkerQuestionList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11409,7 +12773,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11486,7 +12850,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkerList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11567,7 +12931,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11659,7 +13023,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11686,7 +13050,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `worker_exists`, `worker_busy` (a stop came first), `worker_limit_reached`, `project_paused` or `invalid_config` */
+            /** @description `worker_exists`, `worker_busy` (a stop came first), `worker_limit_reached`, `project_paused`, `invalid_config`, or for the supervised main `main_interactive` or `main_not_supervised` */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11747,7 +13111,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11815,7 +13179,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkspaceListView"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11894,7 +13258,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11973,7 +13337,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12064,7 +13428,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12174,13 +13538,13 @@ export interface operations {
             /** @description Signed in */
             204: {
                 headers: {
-                    /** @description `fold_session` off loopback, `fold_human` on loopback */
+                    /** @description `fold_session` */
                     "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description `invalid_request`: a name off loopback, a token on loopback, or a malformed body; `invalid_name`: the name breaks the name pattern */
+            /** @description `invalid_request`: a malformed body */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -12189,7 +13553,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `invalid_token`: the registry holds no such token, or it is revoked */
+            /** @description `invalid_token`: the registry holds no such token, or it is revoked; `invalid_sign_in_link`: the registry holds no such link, or it was used or has expired */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12230,7 +13594,7 @@ export interface operations {
             /** @description Signed out */
             204: {
                 headers: {
-                    /** @description `fold_session` and `fold_human` with `Max-Age=0` */
+                    /** @description `fold_session` with `Max-Age=0` */
                     "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
@@ -12238,6 +13602,131 @@ export interface operations {
             };
             /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    create_sign_in_link: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new link */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedLink"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    create_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateToken"];
+            };
+        };
+        responses: {
+            /** @description The new token */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedToken"];
+                };
+            };
+            /** @description `invalid_name`: the human's name breaks the name pattern */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `worker_peer_refused`: the request comes from the process tree of a worker that fold started or of a check command that fold runs; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12274,7 +13763,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkerEnvironmentView"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;

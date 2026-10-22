@@ -1,4 +1,4 @@
-use fold_core::{AgentName, FoldError, Tag, WorkerName};
+use fold_core::{AgentName, FoldError, Tag};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -9,11 +9,10 @@ use super::error::from_agent;
 use super::{FoldServer, agents, parse};
 
 pub const REGISTER_AGENT: &str = "register_agent";
-pub const REGISTER_WORKER: &str = "register_worker";
 
 /// The tools a session may call before it has an agent.
 pub fn is_identity_tool(name: &str) -> bool {
-    matches!(name, REGISTER_AGENT | REGISTER_WORKER | agents::LIST_AGENTS)
+    matches!(name, REGISTER_AGENT | agents::LIST_AGENTS)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -24,37 +23,14 @@ pub struct RegisterAgentInput {
     /// Role or capability tags to add to the agent, such as frontend or review. Tags are only added, never removed. The main tag is refused with main_tag_denied: only the session that fld claude starts gets it, from its handshake.
     #[serde(default)]
     pub tags: Vec<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-pub struct RegisterWorkerInput {
-    /// The last segment of the new worker's name: register_worker with name ui gives frontend/ui. A repeat call returns the existing worker.
-    pub name: String,
-    /// The full name of the parent worker, such as frontend/ui. Leave it out to register under your main worker.
-    #[serde(default)]
-    pub parent: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {
-    vec![
-        Tool::new(
-            REGISTER_AGENT,
-            "Register this session as an agent. Call it once at the start of every session; every tool except register_agent, register_worker and list_agents needs it.",
-            schema_for_type::<RegisterAgentInput>(),
-        ),
-        Tool::new(
-            REGISTER_WORKER,
-            "Register a child worker of your agent, for a subagent that works under your name.",
-            schema_for_type::<RegisterWorkerInput>(),
-        ),
-    ]
+    vec![Tool::new(
+        REGISTER_AGENT,
+        "Register this session as an agent. Call it once at the start of every session; every tool except register_agent and list_agents needs it.",
+        schema_for_type::<RegisterAgentInput>(),
+    )]
 }
 
 pub async fn register_agent(
@@ -68,15 +44,10 @@ pub async fn register_agent(
         .iter()
         .map(|tag| Tag::parse(tag))
         .collect::<Result<Vec<_>, _>>()?;
-    let as_worker = input
-        .as_worker
-        .as_deref()
-        .map(WorkerName::parse)
-        .transpose()?;
     let mut session = server.session.lock().await;
     let registered = server
         .agents
-        .register_agent_from_tool(&mut session, &name, &tags, as_worker.as_ref())
+        .register_agent_from_tool(&mut session, &name, &tags)
         .await
         .map_err(from_agent)?;
     Ok(json!({
@@ -84,24 +55,5 @@ pub async fn register_agent(
         "tags": registered.tags.iter().map(Tag::as_str).collect::<Vec<_>>(),
         "main_worker": registered.main_worker.as_str(),
         "created": registered.created,
-    }))
-}
-
-pub async fn register_worker(
-    server: &FoldServer,
-    arguments: &JsonObject,
-) -> Result<Value, FoldError> {
-    let input: RegisterWorkerInput = parse(arguments)?;
-    let parent = input.parent.as_deref().map(WorkerName::parse).transpose()?;
-    let session = server.session().await;
-    let registered = server
-        .agents
-        .register_worker(&session, &input.name, parent.as_ref())
-        .await
-        .map_err(from_agent)?;
-    let worker = registered.worker.name;
-    Ok(json!({
-        "worker": worker.as_str(),
-        "parent": worker.parent().as_ref().map(WorkerName::as_str),
     }))
 }

@@ -10,7 +10,8 @@ use super::super::error::from_review;
 use super::super::parse;
 use super::{ScopeChoiceInput, id, proposal_id, scope_choices, version};
 use crate::services::reviews::{
-    BatchComment, BatchLines, BatchVerdict, ReviewBatchView, ReviewService,
+    BatchComment, BatchIntegration, BatchIntegrationView, BatchLines, BatchVerdict,
+    IntegrationOutcome, MemberIntegration, ReviewBatchView, ReviewService,
 };
 
 pub const CREATE_REVIEW_BATCH: &str = "create_review_batch";
@@ -19,6 +20,7 @@ pub const GET_REVIEW_BATCH: &str = "get_review_batch";
 pub const REMOVE_FROM_BATCH: &str = "remove_from_batch";
 pub const CREATE_BATCH_CHECKOUT: &str = "create_batch_checkout";
 pub const SUBMIT_BATCH_REVIEW: &str = "submit_batch_review";
+pub const INTEGRATE_REVIEW_BATCH: &str = "integrate_review_batch";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -28,9 +30,6 @@ pub struct CreateReviewBatchInput {
     /// For revised versions: the scope of your review of some proposals, each with its reason, when you do not follow fold's suggested_scope from get_proposal_diff. The other proposals follow the suggestion.
     #[serde(default)]
     pub scopes: Vec<ScopeChoiceInput>,
-    /// The worker that makes this call, such as review/batch. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -39,9 +38,6 @@ pub struct ListReviewBatchesInput {
     /// Only the batches that are not submitted yet.
     #[serde(default)]
     pub open: bool,
-    /// The worker that makes this call, such as review/batch. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -49,9 +45,6 @@ pub struct ListReviewBatchesInput {
 pub struct ReviewBatchIdInput {
     /// The review batch, such as rb-3.
     pub id: String,
-    /// The worker that makes this call, such as review/batch. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -61,9 +54,6 @@ pub struct RemoveFromBatchInput {
     pub id: String,
     /// The member to take out, such as P-4. Its review claim is released.
     pub proposal: String,
-    /// The worker that makes this call, such as review/batch. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -71,7 +61,7 @@ pub struct RemoveFromBatchInput {
 pub struct BatchVerdictInput {
     /// The member, such as P-3.
     pub proposal: String,
-    /// comment, request_changes, approve or reject. Only the main agent, the review lead and the reviewers it starts can approve or reject; reject closes the proposal.
+    /// comment, request_changes, approve or reject. Only the main agent and the reviewers that the review lead starts can approve or reject; reject closes the proposal. The review lead gives no verdict (review_lead_delegates).
     pub verdict: String,
     /// The review text for this member. An approval may leave it out; request_changes and comment need it or a comment on the member; reject needs it. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
@@ -107,16 +97,13 @@ pub struct SubmitBatchReviewInput {
     /// Line comments on the batch checkout and comments on the batch.
     #[serde(default)]
     pub comments: Vec<BatchCommentInput>,
-    /// The worker that makes this call, such as review/batch. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             CREATE_REVIEW_BATCH,
-            "For a review of your own by the main agent or the review lead: review related open proposals together. fold takes the review claim of each and orders them by their task dependencies. A proposal whose task has the human review mark is refused with invalid_request: review it on its own. Then call create_batch_checkout and submit_batch_review. A reviewer gets its batch from the review lead's start_worker and gets worker_claim_denied here.",
+            "For a review of its own by the main agent, when the user tells it to: review related open proposals together. fold takes the review claim of each and orders them by their task dependencies. A proposal whose task has the human review mark is refused with invalid_request: review it on its own. Then call create_batch_checkout and submit_batch_review. A reviewer gets its batch from the review lead's start_worker and gets worker_claim_denied here; the review lead never reviews and gets review_lead_delegates.",
             schema_for_type::<CreateReviewBatchInput>(),
         ),
         Tool::new(
@@ -136,13 +123,18 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CREATE_BATCH_CHECKOUT,
-            "Get a read-only checkout of main with every member of your batch merged in order, to build and test them once. A conflict is batch_conflict naming both proposals and the paths.",
+            "Get a read-only checkout of main with every member of your batch merged in order, to build and test them once. A conflict is batch_conflict naming both proposals and the paths. The review lead never reviews and gets review_lead_delegates.",
             schema_for_type::<ReviewBatchIdInput>(),
         ),
         Tool::new(
             SUBMIT_BATCH_REVIEW,
             "Give every member of your batch its own verdict in one call, with line comments on the batch checkout and comments on the batch. A member that got a new version is left out.",
             schema_for_type::<SubmitBatchReviewInput>(),
+        ),
+        Tool::new(
+            INTEGRATE_REVIEW_BATCH,
+            "Integrate the approved members of a submitted batch together; only the main agent, the review lead, a reviewer that wrote none of them, or a human may. fold integrates a ready batch by itself when the project integrates automatically; call this when it does not. A batch is ready when every member has its final state: approved, or out (changes requested, rejected, closed, removed, or waiting for a human or for a member that is out). The ready members merge onto main in dependency order, the integration checks run once on the whole merge, and one transaction publishes one revision per member (result together). A member that conflicts goes back to its author alone; when the one check run fails, fold integrates the members one at a time, each with its own run, and sends back only the member whose run fails (result one_at_a_time). With integration checks the call is queued and fold sends each member's result as a message. Refusals: invalid_request with the reason batch_not_submitted, batch_waiting (details name the pending members), batch_integrated or integration_queued, and the caller gates of integrate_proposal. A member can still be integrated alone with integrate_proposal.",
+            schema_for_type::<ReviewBatchIdInput>(),
         ),
     ]
 }
@@ -161,6 +153,7 @@ pub async fn run(
         REMOVE_FROM_BATCH => remove_from_batch(reviews, actor, arguments).await?,
         CREATE_BATCH_CHECKOUT => create_batch_checkout(reviews, actor, arguments).await?,
         SUBMIT_BATCH_REVIEW => submit_batch_review(reviews, actor, arguments).await?,
+        INTEGRATE_REVIEW_BATCH => integrate_review_batch(reviews, actor, arguments).await?,
         _ => return Ok(None),
     };
     Ok(Some(value))
@@ -223,6 +216,88 @@ fn batch_json(batch: &ReviewBatchView) -> Value {
             "body": comment.body,
             "members": comment.members,
         })).collect::<Vec<Value>>(),
+        "integration": integration_json(&batch.integration),
+    })
+}
+
+fn integration_json(view: &BatchIntegrationView) -> Value {
+    match view {
+        BatchIntegrationView::NotSubmitted => json!({"state": "not_submitted"}),
+        BatchIntegrationView::Waiting { pending } => json!({
+            "state": "waiting",
+            "pending": pending,
+        }),
+        BatchIntegrationView::Ready { members, queued } => json!({
+            "state": "ready",
+            "members": members,
+            "queued": queued,
+        }),
+        BatchIntegrationView::Ended {
+            outcome,
+            run,
+            revisions,
+        } => json!({
+            "state": "ended",
+            "outcome": outcome.as_str(),
+            "run": run,
+            "revisions": revisions.iter().map(|row| json!({
+                "proposal": row.proposal,
+                "version": version(row.version),
+                "revision": row.revision,
+            })).collect::<Vec<Value>>(),
+        }),
+    }
+}
+
+fn member_json(member: &MemberIntegration) -> Value {
+    match &member.outcome {
+        IntegrationOutcome::Succeeded { revision } => json!({
+            "proposal": member.proposal,
+            "result": "succeeded",
+            "revision": revision,
+        }),
+        IntegrationOutcome::Conflicted(conflicts) => json!({
+            "proposal": member.proposal,
+            "result": "conflicted",
+            "files": conflicts.len(),
+        }),
+        IntegrationOutcome::ChecksFailed { run } => json!({
+            "proposal": member.proposal,
+            "result": "checks_failed",
+            "run": run,
+        }),
+        IntegrationOutcome::Queued => json!({
+            "proposal": member.proposal,
+            "result": "queued",
+        }),
+    }
+}
+
+async fn integrate_review_batch(
+    reviews: &ReviewService,
+    actor: &Actor,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: ReviewBatchIdInput = parse(arguments)?;
+    let batch = batch_id(&input.id)?;
+    let outcome = reviews
+        .integrate_review_batch(actor, batch)
+        .await
+        .map_err(from_review)?;
+    Ok(match outcome {
+        BatchIntegration::Together { members } => json!({
+            "id": batch,
+            "result": "together",
+            "members": members.iter().map(member_json).collect::<Vec<Value>>(),
+        }),
+        BatchIntegration::OneAtATime { run, members } => json!({
+            "id": batch,
+            "result": "one_at_a_time",
+            "run": run,
+            "members": members.iter().map(member_json).collect::<Vec<Value>>(),
+        }),
+        BatchIntegration::Nothing => json!({"id": batch, "result": "nothing"}),
+        BatchIntegration::Queued => json!({"id": batch, "result": "queued"}),
     })
 }
 

@@ -1,6 +1,9 @@
 use axum::Json;
 use axum::extract::{Path, State};
-use fold_core::{ProposalId, ReviewBatchId, TaskId, Timestamp, WorkspaceId};
+use fold_core::reviews::batches::BatchOutcome;
+use fold_core::{
+    CheckRunId, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkspaceId,
+};
 use fold_store::reviews::batches::BatchState;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -8,17 +11,25 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::super::Project;
+use super::super::actor::Human;
+use super::super::diff::{FileDiffView, file_view};
 use super::super::error::{ApiError, ApiQuery, ErrorEnvelope};
 use super::super::tasks::id;
-use super::super::workspaces::ComparisonTotals;
+use super::super::workspaces::{ChangeSource, ComparedFile, ComparisonTotals};
 use super::{ProposalStateView, ReviewVerdict, service};
 use crate::daemon::AppState;
-use crate::services::reviews::ReviewBatchView as Batch;
+use crate::services::reviews::{
+    BatchIntegration, BatchIntegrationView, BatchMergedChange, IntegrationOutcome,
+    MemberIntegration, MergedBasis, ReviewBatchView as Batch,
+};
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_review_batches))
         .routes(routes!(get_review_batch))
+        .routes(routes!(integrate_review_batch))
+        .routes(routes!(get_review_batch_diff))
+        .routes(routes!(get_review_batch_file_diff))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
@@ -114,6 +125,118 @@ pub struct ReviewBatch {
     pub verdicts: Vec<ReviewBatchVerdict>,
     /// The comments about members together, in number order.
     pub comments: Vec<ReviewBatchComment>,
+    pub integration: ReviewBatchIntegration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewBatchIntegrationState {
+    /// The batch is open or closed, so its members do not integrate together.
+    NotSubmitted,
+    /// Members without a final state hold the approved ones back; `pending` names them.
+    Waiting,
+    /// Every member has its final state; `members` integrate together, none when it is empty.
+    Ready,
+    /// The batch's integration ended; `outcome` says how.
+    Ended,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewBatchOutcome {
+    /// The ready members were published together after one check run.
+    Together,
+    /// The one check run failed, so each member integrated on its own.
+    OneAtATime,
+    /// No member was ready to integrate with the batch.
+    None,
+}
+
+impl From<BatchOutcome> for ReviewBatchOutcome {
+    fn from(outcome: BatchOutcome) -> Self {
+        match outcome {
+            BatchOutcome::Together => Self::Together,
+            BatchOutcome::OneAtATime => Self::OneAtATime,
+            BatchOutcome::Nothing => Self::None,
+        }
+    }
+}
+
+/// A member the batch published together with the others.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewBatchRevision {
+    #[schema(value_type = String, example = "P-3")]
+    pub proposal: ProposalId,
+    /// The version that was integrated.
+    pub version: u32,
+    #[schema(value_type = String, example = "r18")]
+    pub revision: RevisionId,
+}
+
+/// Whether the approved members of a submitted batch integrate together now, wait for the others, or did.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewBatchIntegration {
+    pub state: ReviewBatchIntegrationState,
+    /// While `waiting`: the members without a final state.
+    #[schema(value_type = Vec<String>, example = json!(["P-4"]))]
+    pub pending: Vec<ProposalId>,
+    /// While `ready`: the members that integrate together, in merge order.
+    #[schema(value_type = Vec<String>, example = json!(["P-3", "P-5"]))]
+    pub members: Vec<ProposalId>,
+    /// While `ready`: a request to integrate the batch waits in the integration queue.
+    pub queued: bool,
+    /// Once `ended`.
+    #[schema(required = true)]
+    pub outcome: Option<ReviewBatchOutcome>,
+    /// Once `ended`: the one check run of the members together, when integration checks ran.
+    #[schema(value_type = Option<String>, required = true, example = "cr-9")]
+    pub run: Option<CheckRunId>,
+    /// Once `ended`: the members published together, in revision order.
+    pub revisions: Vec<ReviewBatchRevision>,
+}
+
+impl From<BatchIntegrationView> for ReviewBatchIntegration {
+    fn from(view: BatchIntegrationView) -> Self {
+        let mut out = Self {
+            state: ReviewBatchIntegrationState::NotSubmitted,
+            pending: Vec::new(),
+            members: Vec::new(),
+            queued: false,
+            outcome: None,
+            run: None,
+            revisions: Vec::new(),
+        };
+        match view {
+            BatchIntegrationView::NotSubmitted => {}
+            BatchIntegrationView::Waiting { pending } => {
+                out.state = ReviewBatchIntegrationState::Waiting;
+                out.pending = pending;
+            }
+            BatchIntegrationView::Ready { members, queued } => {
+                out.state = ReviewBatchIntegrationState::Ready;
+                out.members = members;
+                out.queued = queued;
+            }
+            BatchIntegrationView::Ended {
+                outcome,
+                run,
+                revisions,
+            } => {
+                out.state = ReviewBatchIntegrationState::Ended;
+                out.outcome = Some(outcome.into());
+                out.run = run;
+                out.revisions = revisions
+                    .into_iter()
+                    .map(|row| ReviewBatchRevision {
+                        proposal: row.proposal,
+                        version: row.version,
+                        revision: row.revision,
+                    })
+                    .collect();
+            }
+        }
+        out
+    }
 }
 
 /// A comment of a batch review about members together. Each member it is on has a whole-version comment that links to it.
@@ -180,6 +303,7 @@ impl From<Batch> for ReviewBatch {
                     created_at: comment.created_at,
                 })
                 .collect(),
+            integration: batch.integration.into(),
         }
     }
 }
@@ -250,4 +374,279 @@ pub async fn get_review_batch(
     let batch: ReviewBatchId = id(&batch)?;
     let view = service(&state, &project).get_review_batch(batch).await?;
     Ok(Json(ReviewBatch::from(view)))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BatchIntegrationResultKind {
+    /// The ready members were published together after one check run; a member that conflicted went back alone after them.
+    Together,
+    /// The one check run failed, so fold integrated the members one at a time, each with its own run.
+    OneAtATime,
+    /// No member was ready to integrate with the batch.
+    Nothing,
+    /// The project has integration checks, so the batch waits its turn and runs in the background; its results come as events.
+    Queued,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BatchMemberResultKind {
+    Succeeded,
+    /// The member conflicted with main and went back to its author with the conflict report.
+    Conflicted,
+    /// The member's own integration checks failed and it went back to its author.
+    ChecksFailed,
+}
+
+/// What one member's integration did.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BatchMemberResult {
+    #[schema(value_type = String, example = "P-3")]
+    pub proposal: ProposalId,
+    pub result: BatchMemberResultKind,
+    #[schema(value_type = Option<String>, required = true, example = "r18")]
+    pub revision: Option<RevisionId>,
+    /// The member's own failed check run.
+    #[schema(value_type = Option<String>, required = true, example = "cr-9")]
+    pub run: Option<CheckRunId>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BatchIntegrationResult {
+    #[schema(value_type = String, example = "rb-3")]
+    pub batch: ReviewBatchId,
+    pub result: BatchIntegrationResultKind,
+    /// The failed check run of the members together, for `one_at_a_time`.
+    #[schema(value_type = Option<String>, required = true, example = "cr-9")]
+    pub run: Option<CheckRunId>,
+    /// Each member's integration in the order it ran.
+    pub members: Vec<BatchMemberResult>,
+}
+
+fn member_result(member: MemberIntegration) -> Option<BatchMemberResult> {
+    let (result, revision, run) = match member.outcome {
+        IntegrationOutcome::Succeeded { revision } => {
+            (BatchMemberResultKind::Succeeded, Some(revision), None)
+        }
+        IntegrationOutcome::Conflicted(_) => (BatchMemberResultKind::Conflicted, None, None),
+        IntegrationOutcome::ChecksFailed { run } => {
+            (BatchMemberResultKind::ChecksFailed, None, Some(run))
+        }
+        IntegrationOutcome::Queued => return None,
+    };
+    Some(BatchMemberResult {
+        proposal: member.proposal,
+        result,
+        revision,
+        run,
+    })
+}
+
+/// A named human integrates the approved members of a submitted batch together, once every member has its final state: one run of the integration checks on their merge with main, then one revision per member in one transaction. A member that conflicts goes back alone; a failed run integrates the members one at a time.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/reviews/batches/{id}/integrate",
+    operation_id = "integrate_review_batch",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The review batch id, such as rb-3"),
+    ),
+    responses(
+        (status = 200, description = "Integrated together, one at a time, nothing to integrate, or queued behind other integrations when the project has integration checks", body = BatchIntegrationResult),
+        (status = 400, description = "`invalid_request` (`details.reason` is `batch_not_submitted`, `batch_waiting` with `details.pending`, `batch_integrated`, or `integration_queued`), `invalid_id` or `invalid_name`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`review_batch_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "A gate refusal for a member, with `details.batch` and `details.proposal`: `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`) or `proposal_not_open`; or `head_moved`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`, or `integration_failed` (`details.cause`)", body = ErrorEnvelope),
+        (status = 500, description = "Internal error, or `workspace_io` with `details.reason` `fold_failed` when fold itself could not run the integration checks", body = ErrorEnvelope),
+    )
+)]
+pub async fn integrate_review_batch(
+    State(state): State<AppState>,
+    human: Human,
+    project: Project,
+    Path((_slug, batch)): Path<(String, String)>,
+) -> Result<Json<BatchIntegrationResult>, ApiError> {
+    let batch: ReviewBatchId = id(&batch)?;
+    let outcome = service(&state, &project)
+        .integrate_review_batch(&human.actor(), batch)
+        .await?;
+    let (result, run, members) = match outcome {
+        BatchIntegration::Together { members } => {
+            (BatchIntegrationResultKind::Together, None, members)
+        }
+        BatchIntegration::OneAtATime { run, members } => {
+            (BatchIntegrationResultKind::OneAtATime, Some(run), members)
+        }
+        BatchIntegration::Nothing => (BatchIntegrationResultKind::Nothing, None, Vec::new()),
+        BatchIntegration::Queued => (BatchIntegrationResultKind::Queued, None, Vec::new()),
+    };
+    Ok(Json(BatchIntegrationResult {
+        batch,
+        result,
+        run,
+        members: members.into_iter().filter_map(member_result).collect(),
+    }))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewBatchDiffBasis {
+    /// main's head `base` with the members merged onto it in merge order, built when the change is read: the tree a batch checkout made now holds.
+    Merged,
+    /// The change of main from `base`, the revision before the members the batch's integration published together, to `head`, the last of them.
+    Integrated,
+    /// No open member is left to merge.
+    NoMembers,
+    /// Every member left the batch without a batch review.
+    Closed,
+    /// The batch's integration ended without publishing members together, so each member's change is on its own page.
+    NotTogether,
+}
+
+/// A member version the merged tree holds.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewBatchDiffMember {
+    #[schema(value_type = String, example = "P-3")]
+    pub proposal: ProposalId,
+    pub version: u32,
+}
+
+/// The first member that does not merge onto main with the members before it. The change holds only the members before it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewBatchDiffConflict {
+    #[schema(value_type = String, example = "P-4")]
+    pub proposal: ProposalId,
+    /// The member version that conflicts.
+    pub version: u32,
+    /// The earlier member it conflicts with; null when it conflicts with main itself.
+    #[schema(value_type = Option<String>, required = true, example = "P-3")]
+    pub with: Option<ProposalId>,
+    /// The conflicted paths, in path order.
+    pub paths: Vec<String>,
+}
+
+/// The change a batch's members make on main together, without hunks.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewBatchDiff {
+    #[schema(value_type = String, example = "rb-3")]
+    pub batch: ReviewBatchId,
+    pub basis: ReviewBatchDiffBasis,
+    /// The old side: main's head for `merged`, the revision before the batch's revisions for `integrated`; null otherwise.
+    #[schema(value_type = Option<String>, required = true, example = "r17")]
+    pub base: Option<RevisionId>,
+    /// The last member's revision for `integrated`; null otherwise, as a merged tree is built only in memory.
+    #[schema(value_type = Option<String>, required = true, example = "r19")]
+    pub head: Option<RevisionId>,
+    /// The members the new side holds, in merge order.
+    pub members: Vec<ReviewBatchDiffMember>,
+    #[schema(required = true)]
+    pub conflict: Option<ReviewBatchDiffConflict>,
+    /// In path order.
+    pub files: Vec<ComparedFile>,
+    pub totals: ComparisonTotals,
+}
+
+impl From<BatchMergedChange> for ReviewBatchDiff {
+    fn from(change: BatchMergedChange) -> Self {
+        let (basis, base, head) = match change.basis {
+            MergedBasis::Merged { base } => (ReviewBatchDiffBasis::Merged, Some(base), None),
+            MergedBasis::Integrated { base, head } => {
+                (ReviewBatchDiffBasis::Integrated, Some(base), Some(head))
+            }
+            MergedBasis::NoMembers => (ReviewBatchDiffBasis::NoMembers, None, None),
+            MergedBasis::Closed => (ReviewBatchDiffBasis::Closed, None, None),
+            MergedBasis::NotTogether => (ReviewBatchDiffBasis::NotTogether, None, None),
+        };
+        Self {
+            batch: change.batch,
+            basis,
+            base,
+            head,
+            members: change
+                .members
+                .into_iter()
+                .map(|member| ReviewBatchDiffMember {
+                    proposal: member.proposal,
+                    version: member.version,
+                })
+                .collect(),
+            conflict: change.conflict.map(|conflict| ReviewBatchDiffConflict {
+                proposal: conflict.proposal,
+                version: conflict.version,
+                with: conflict.with,
+                paths: conflict.paths,
+            }),
+            files: change.files.into_iter().map(ComparedFile::from).collect(),
+            totals: change.totals.into(),
+        }
+    }
+}
+
+/// The merged change of a batch, calculated on request: before the batch's integration, main's head against every member merged onto it in merge order, by the merge a batch checkout is made with, built in memory without a checkout and without writing objects; after it, the change of main across the revisions the batch published together. The members are those in the batch, or, once it is submitted, those its review covered, at the version each joined at, while the proposal is open. A member that conflicts stops the merge: the change holds the members before it and `conflict` names it.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/reviews/batches/{id}/diff",
+    operation_id = "get_review_batch_diff",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The review batch id, such as rb-3"),
+    ),
+    responses(
+        (status = 200, description = "The merged change's files", body = ReviewBatchDiff),
+        (status = 400, description = "`invalid_id`", body = ErrorEnvelope),
+        (status = 404, description = "`review_batch_not_found`, `revision_not_found`: main has no revision, or `project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn get_review_batch_diff(
+    State(state): State<AppState>,
+    project: Project,
+    Path((_slug, batch)): Path<(String, String)>,
+) -> Result<Json<ReviewBatchDiff>, ApiError> {
+    let batch: ReviewBatchId = id(&batch)?;
+    let change = service(&state, &project)
+        .batch_merged_changes(batch)
+        .await?;
+    Ok(Json(change.into()))
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ReviewBatchFileQuery {
+    /// A changed file of the merged change, such as `src/lib.rs`: its new path for a rename, its old path for a deletion.
+    pub path: String,
+}
+
+/// The hunks of one file of the batch's merged change, from the same sides as `get_review_batch_diff`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/reviews/batches/{id}/diff/file",
+    operation_id = "get_review_batch_file_diff",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The review batch id, such as rb-3"),
+        ReviewBatchFileQuery,
+    ),
+    responses(
+        (status = 200, description = "The file's hunks", body = FileDiffView),
+        (status = 400, description = "`invalid_id`, `invalid_path`, or `invalid_request`: the query string is not valid", body = ErrorEnvelope),
+        (status = 404, description = "`review_batch_not_found`, `path_not_in_comparison`, `revision_not_found`: main has no revision, or `project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn get_review_batch_file_diff(
+    State(state): State<AppState>,
+    project: Project,
+    Path((_slug, batch)): Path<(String, String)>,
+    ApiQuery(query): ApiQuery<ReviewBatchFileQuery>,
+) -> Result<Json<FileDiffView>, ApiError> {
+    let batch: ReviewBatchId = id(&batch)?;
+    let diff = service(&state, &project)
+        .batch_merged_file_diff(batch, &query.path)
+        .await?;
+    Ok(Json(file_view(ChangeSource::Recorded, diff)))
 }

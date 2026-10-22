@@ -23,6 +23,7 @@ use crate::services::workspaces::WorkspaceLocks;
 /// Claude Code's headless stream-json protocol as fold reads and writes it, the oldest Claude Code fold drives, and the sign-in answer of `claude auth status`. It is public because `fld doctor` checks the installed Claude Code with the same version and sign-in types.
 pub mod claude;
 mod context;
+mod cost;
 /// The environment of the workers: which variables of the login shell they take, and what the daemon found about it at its start.
 pub mod environment;
 mod needs_you;
@@ -37,6 +38,7 @@ pub use context::{
     CONTEXT_READY_TASKS, ContextClaim, MAX_SESSION_CONTEXT, SessionFacts,
     render as render_session_context,
 };
+pub use cost::{ProjectCost, cost_totals};
 pub use needs_you::{NeedsYouItem, NeedsYouKind, Screen, needs_you, with_folder_attention};
 pub use overview::{
     AgentAttention, AgentOverview, ClaimSummary, MAX_OVERVIEW_EVENTS, OverviewFilter,
@@ -117,13 +119,6 @@ pub struct Registered {
     pub tags: Vec<Tag>,
     pub main_worker: WorkerName,
     /// True when this call created the agent.
-    pub created: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RegisteredWorker {
-    pub worker: WorkerRow,
-    /// True when this call created the worker.
     pub created: bool,
 }
 
@@ -267,41 +262,60 @@ impl AgentService {
             return Err(FoldError::from(denied).into());
         }
         let session_id = ctx.session_id;
+        let unsupervised = ctx.peer == SessionPeer::Unsupervised;
+        let role = if unsupervised {
+            let mut conn = self
+                .store
+                .read()
+                .acquire()
+                .await
+                .map_err(StoreError::from)?;
+            agents::find_worker_process(&mut conn, name)
+                .await?
+                .map(|row| row.role)
+        } else {
+            None
+        };
+        // A session from outside every worker's process tree is an interactive main agent when it asks for the tag in its handshake, as `fld claude`'s session does, or when it names the supervised main, whose agent holds the tag; the supervised main's own adapter runs inside its process tree. A worker of another role never holds the tag, and the tag rule refuses it in the registration.
+        let interactive_main = unsupervised
+            && match role {
+                None => origin == TagOrigin::Handshake && tags.iter().any(Tag::is_main),
+                Some(role) => role == fold_core::Role::Main,
+            };
+        let gate = self.workers.as_ref().filter(|_| interactive_main);
+        if let Some(supervisor) = gate {
+            supervisor.enter_interactive_main(session_id, name)?;
+        }
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
-        let (registered, started_at) = self
+        let written = self
             .store
             .write(async |tx| {
                 register_agent_in(tx, &mut buffer, session_id, name, tags, origin, now).await
             })
-            .await?;
+            .await;
+        let (registered, started_at) = match written {
+            Ok(written) => written,
+            Err(error) => {
+                if let Some(supervisor) = gate {
+                    supervisor.leave_interactive_main(session_id);
+                }
+                return Err(error);
+            }
+        };
         self.bus.publish(buffer);
         ctx.agent = Some(name.clone());
         self.push.restore(name, started_at).await;
         Ok(registered)
     }
 
-    /// [`AgentService::register_agent`] for the `register_agent` tool, whose tags the session names itself: it never gives the `main` tag to an agent that lacks it (`policy::can_take_main_tag`). A call that acts as `as_worker` names one of `name`'s workers that exists, or the agent's main worker, which the registration creates; anything else is `worker_not_found` before anything is written.
+    /// [`AgentService::register_agent`] for the `register_agent` tool, whose tags the session names itself: it never gives the `main` tag to an agent that lacks it (`policy::can_take_main_tag`).
     pub async fn register_agent_from_tool(
         &self,
         ctx: &mut SessionContext,
         name: &AgentName,
         tags: &[Tag],
-        as_worker: Option<&WorkerName>,
     ) -> Result<Registered, AgentError> {
-        if let Some(worker) = as_worker
-            && *worker != WorkerName::main(name)
-        {
-            let found = match agents::find_agent(self.store.read(), name).await? {
-                Some(agent) => agents::find_worker(self.store.read(), agent.id, worker)
-                    .await?
-                    .is_some(),
-                None => false,
-            };
-            if !found {
-                return Err(worker_not_found().into());
-            }
-        }
         self.register(ctx, name, tags, TagOrigin::RegisterTool)
             .await
     }
@@ -327,56 +341,6 @@ impl AgentService {
         Ok(())
     }
 
-    /// Creates the child worker `<parent>/<segment>` of the caller's agent. `parent` defaults to the main worker. A repeat call returns the existing worker.
-    pub async fn register_worker(
-        &self,
-        ctx: &SessionContext,
-        segment: &str,
-        parent: Option<&WorkerName>,
-    ) -> Result<RegisteredWorker, AgentError> {
-        let agent = self.require_agent(ctx).await?;
-        let now = self.clock.now();
-        let mut buffer = EventBuffer::new();
-        let registered = self
-            .store
-            .write(async |tx| {
-                let parent = match parent {
-                    Some(name) => agents::find_worker(tx.conn(), agent.id, name).await?,
-                    None => agents::main_worker(tx.conn(), agent.id).await?,
-                }
-                .ok_or_else(worker_not_found)?;
-                let name = parent.name.child(segment).map_err(FoldError::from)?;
-                if let Some(existing) = agents::find_worker(tx.conn(), agent.id, &name).await? {
-                    return Ok::<_, AgentError>(RegisteredWorker {
-                        worker: existing,
-                        created: false,
-                    });
-                }
-                let id = agents::insert_worker(tx, agent.id, &name, Some(parent.id), now).await?;
-                let event = NewEvent::new(types::WORKER_REGISTERED, main_actor(&agent.name))?
-                    .data(json!({
-                        "agent": agent.name.as_str(),
-                        "worker": name.as_str(),
-                        "parent": parent.name.as_str(),
-                    }))?;
-                buffer.append(tx, &event, now).await?;
-                Ok(RegisteredWorker {
-                    worker: WorkerRow {
-                        id,
-                        agent_id: agent.id,
-                        name,
-                        parent_id: Some(parent.id),
-                        last_call_at: None,
-                        activity: None,
-                    },
-                    created: true,
-                })
-            })
-            .await?;
-        self.bus.publish(buffer);
-        Ok(registered)
-    }
-
     /// The agent the session is bound to, or `agent_not_registered`.
     pub async fn require_agent(&self, ctx: &SessionContext) -> Result<AgentRow, AgentError> {
         let missing = || {
@@ -394,12 +358,8 @@ impl AgentService {
     }
 
     /// The acting agent of a call: the worker from `resolve_worker` and the agent's tags as they are now.
-    pub async fn actor(
-        &self,
-        ctx: &SessionContext,
-        as_worker: Option<&WorkerName>,
-    ) -> Result<Actor, AgentError> {
-        let worker = self.resolve_worker(ctx, as_worker).await?;
+    pub async fn actor(&self, ctx: &SessionContext) -> Result<Actor, AgentError> {
+        let worker = self.resolve_worker(ctx).await?;
         self.actor_of(&worker).await
     }
 
@@ -413,21 +373,41 @@ impl AgentService {
         }))
     }
 
-    /// The worker named by `as_worker`, or the agent's main worker when it is absent. A worker of another agent is reported as `worker_not_found`, so its existence is never revealed.
-    pub async fn resolve_worker(
+    /// The role whose steps the session's agent follows: the role fold started it in, or [`fold_core::Role::Main`] for an agent with the `main` tag that fold does not supervise, which is `fld claude`'s session. `None` for a session without an agent and for an agent with neither, such as a session opened by hand.
+    pub async fn session_role(
         &self,
         ctx: &SessionContext,
-        as_worker: Option<&WorkerName>,
-    ) -> Result<WorkerRow, AgentError> {
-        let agent = self.require_agent(ctx).await?;
-        let worker = match as_worker {
-            Some(name) => agents::find_worker(self.store.read(), agent.id, name).await?,
-            None => agents::main_worker(self.store.read(), agent.id).await?,
+    ) -> Result<Option<fold_core::Role>, AgentError> {
+        let Some(name) = &ctx.agent else {
+            return Ok(None);
         };
+        let mut conn = self
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        if let Some(process) = agents::find_worker_process(&mut conn, name).await? {
+            return Ok(Some(process.role));
+        }
+        let Some(agent) = agents::find_agent(&mut *conn, name).await? else {
+            return Ok(None);
+        };
+        let tags = agents::tags(&mut *conn, agent.id).await?;
+        Ok(tags
+            .iter()
+            .any(Tag::is_main)
+            .then_some(fold_core::Role::Main))
+    }
+
+    /// The worker of the session's agent. A Claude Code subagent of the session acts as this worker too: fold knows no worker below an agent.
+    pub async fn resolve_worker(&self, ctx: &SessionContext) -> Result<WorkerRow, AgentError> {
+        let agent = self.require_agent(ctx).await?;
+        let worker = agents::main_worker(self.store.read(), agent.id).await?;
         Ok(worker.ok_or_else(worker_not_found)?)
     }
 
-    /// Stamps the session and the worker with the time of a tool call and renews the claims of every worker of the agent in the same transaction. The worker's activity is the tool name, followed by the task id when there is one. After the commit it sends a live `agent.presence_changed` when the call made the agent active.
+    /// Stamps the session and the worker with the time of a tool call and renews the claims of that worker in the same transaction. The worker's activity is the tool name, followed by the task id when there is one. After the commit it sends a live `agent.presence_changed` when the call made the agent active.
     pub async fn record_call(
         &self,
         ctx: &SessionContext,
@@ -447,8 +427,7 @@ impl AgentService {
                 agents::touch_session(tx, ctx.session_id, now).await?;
                 agents::touch_worker(tx, worker.id, now, &activity).await?;
                 let after = agents::open_session_calls(tx.conn(), worker.agent_id).await?;
-                let workers = agents::worker_ids(tx.conn(), worker.agent_id).await?;
-                renew_leases(tx, &workers, now).await?;
+                renew_leases(tx, &[worker.id], now).await?;
                 Ok::<_, StoreError>((
                     presence_of(now, &presence::facts(&before)),
                     presence_of(now, &presence::facts(&after)),
@@ -488,6 +467,9 @@ impl AgentService {
             })
             .await?;
         self.bus.publish(buffer);
+        if let Some(supervisor) = &self.workers {
+            supervisor.leave_interactive_main(ctx.session_id);
+        }
         if let Some((agent, started_at)) = last {
             self.push.clear_registered_by(&agent, started_at).await;
         }
@@ -522,6 +504,9 @@ impl AgentService {
             .await?;
         self.bus.publish(buffer);
         self.push.clear_all();
+        if let Some(supervisor) = &self.workers {
+            supervisor.clear_interactive_main();
+        }
         Ok(ended)
     }
 }
@@ -558,7 +543,7 @@ async fn register_agent_in(
         None => {
             let id = agents::insert_agent(tx, name, now).await?;
             let main = WorkerName::main(name);
-            agents::insert_worker(tx, id, &main, None, now).await?;
+            agents::insert_worker(tx, id, &main, now).await?;
             let registered = NewEvent::new(types::AGENT_REGISTERED, actor.clone())?
                 .data(json!({"agent": name.as_str()}))?;
             buffer.append(tx, &registered, now).await?;
@@ -571,7 +556,7 @@ async fn register_agent_in(
     if tags.iter().any(Tag::is_main) {
         let supervised = agents::find_worker_process(tx.conn(), name)
             .await?
-            .is_some();
+            .is_some_and(|row| row.role != fold_core::Role::Main);
         let holders: Vec<i64> = agents::all_tags(tx.conn())
             .await?
             .into_iter()
@@ -609,7 +594,7 @@ fn main_actor(agent: &AgentName) -> EventActor {
 
 pub(crate) fn worker_not_found() -> FoldError {
     FoldError::new(codes::WORKER_NOT_FOUND, "the worker does not exist")
-        .with_hint("call register_worker")
+        .with_hint("call register_agent")
 }
 
 /// The worker row of `actor`, read on `conn`: a command's transaction, or the read pool for a check before one; `None` when its agent or the worker does not exist.

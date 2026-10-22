@@ -1,11 +1,8 @@
 import type { Session } from "../../api/session";
 
-/** `token` when the request carries no valid token, `name` when it is authenticated and the human has no name yet, `ready` otherwise. */
-export type SignInMode = "token" | "name" | "ready";
+/** `ready` when the request is signed in as a human, `token` otherwise: the sign-in screen then opens a link or asks for a token. */
+export type SignInMode = "token" | "ready";
 
 export function signInMode(session: Session): SignInMode {
-  if (!session.authenticated) {
-    return "token";
-  }
-  return session.human === null ? "name" : "ready";
+  return session.authenticated && session.human !== null ? "ready" : "token";
 }

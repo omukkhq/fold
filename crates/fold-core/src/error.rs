@@ -182,6 +182,19 @@ define_codes! {
     ASK_NOT_OPEN = "ask_not_open",
     ASK_CLOSE_DENIED = "ask_close_denied",
     PROJECT_WORKERS_RUNNING = "project_workers_running",
+    RECIPIENT_NOT_READER = "recipient_not_reader",
+    REVIEW_LEAD_DELEGATES = "review_lead_delegates",
+    REVIEW_PLAN_NOT_FOUND = "review_plan_not_found",
+    REVIEW_PLAN_NOT_OPEN = "review_plan_not_open",
+    REVIEW_PLAN_TOO_LARGE = "review_plan_too_large",
+    REVIEW_PLAN_DENIED = "review_plan_denied",
+    TASK_NOT_AWAITABLE = "task_not_awaitable",
+    PROPOSAL_NOT_PLANNABLE = "proposal_not_plannable",
+    ALREADY_IN_PLAN = "already_in_plan",
+    MAIN_SUPERVISED = "main_supervised",
+    MAIN_INTERACTIVE = "main_interactive",
+    MAIN_NOT_SUPERVISED = "main_not_supervised",
+    INVALID_SIGN_IN_LINK = "invalid_sign_in_link",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

@@ -10,7 +10,6 @@ use sqlx::{SqliteConnection, SqliteExecutor};
 
 use crate::columns::{optional_time, time};
 use crate::error::StoreError;
-use crate::events;
 use crate::store::WriteTx;
 use crate::workspaces::WorkspaceState;
 
@@ -19,6 +18,7 @@ mod handoffs;
 mod pause;
 mod previous_sessions;
 mod questions;
+mod turns;
 mod workers;
 
 pub use activity::agent_activity;
@@ -36,16 +36,20 @@ pub use questions::{
     find_question, insert_answer, insert_question, insert_question_message, open_ask_of_thread,
     open_questions, question_by_id, question_messages, questions_of_worker,
 };
+pub use turns::{CostSlot, CostTotals, cost_groups, cost_slots, cost_totals};
 pub use workers::{
     AreaRow, BoundWorker, NewWorkerProcess, ProcessEnd, TurnTotals, WorkerProcessRow,
     bind_proposal, bind_task, claims_held, clear_worker_pid, find_area, find_worker_process,
-    insert_area, insert_worker_process, label_id, list_areas, list_worker_processes,
-    mark_worker_working, proposals_without_verdict, record_exit, record_turn,
+    hold_worker, insert_area, insert_worker_process, label_id, list_areas, list_worker_processes,
+    mark_session_lost, mark_worker_working, proposals_without_verdict, record_exit, record_turn,
     restart_worker_process, review_lead, reviewers_of_proposal, running_counts, set_area_lead,
     set_area_profile, set_worker_context, set_worker_pid, set_worker_state, task_workers_of_task,
-    tasks_awaiting_proposal,
+    tasks_awaiting_proposal, worker_held,
 };
-pub use workers::{PendingResume, pending_resumes};
+pub use workers::{
+    OwedReview, PendingResume, pending_resumes, reviews_owed_to_ended_reviewers,
+    unreviewed_claims_of_ended_reviewer,
+};
 pub use workers::{clear_turn_error, forget_made_up_model, record_turn_error, set_exit_error};
 
 /// Row ids of these tables stay inside the daemon; the public handles are the names.
@@ -61,7 +65,6 @@ pub struct WorkerRow {
     pub id: i64,
     pub agent_id: i64,
     pub name: WorkerName,
-    pub parent_id: Option<i64>,
     pub last_call_at: Option<Timestamp>,
     pub activity: Option<String>,
 }
@@ -169,32 +172,24 @@ pub async fn tags(
         .collect()
 }
 
-/// A child worker starts at its parent's event cursor, so its first read is not the project's whole history.
+/// The worker of agent `agent_id`, which holds its claims, workspaces, cursor and messages.
 pub async fn insert_worker(
     tx: &mut WriteTx,
     agent_id: i64,
     name: &WorkerName,
-    parent_id: Option<i64>,
     now: Timestamp,
 ) -> Result<i64, StoreError> {
     let name = name.as_str();
     let created_at = now.as_millis();
     let id = sqlx::query_scalar!(
-        r#"INSERT INTO workers (agent_id, name, parent_worker_id, created_at)
-           VALUES (?, ?, ?, ?) RETURNING id AS "id!: i64""#,
+        r#"INSERT INTO workers (agent_id, name, created_at)
+           VALUES (?, ?, ?) RETURNING id AS "id!: i64""#,
         agent_id,
         name,
-        parent_id,
         created_at
     )
     .fetch_one(tx.conn())
     .await?;
-    if let Some(parent_id) = parent_id {
-        let start = events::cursor(tx.conn(), parent_id).await?;
-        if start > 0 {
-            events::advance_cursor(tx, id, start).await?;
-        }
-    }
     Ok(id)
 }
 
@@ -206,7 +201,7 @@ pub async fn find_worker(
 ) -> Result<Option<WorkerRow>, StoreError> {
     let name = name.as_str();
     let row = sqlx::query!(
-        r#"SELECT id AS "id!: i64", agent_id, name, parent_worker_id, last_call_at, activity
+        r#"SELECT id AS "id!: i64", agent_id, name, last_call_at, activity
            FROM workers WHERE agent_id = ? AND name = ?"#,
         agent_id,
         name
@@ -218,7 +213,6 @@ pub async fn find_worker(
             id: row.id,
             agent_id: row.agent_id,
             name: WorkerName::parse(&row.name).map_err(|_| StoreError::Corrupt("workers.name"))?,
-            parent_id: row.parent_worker_id,
             last_call_at: optional_time(row.last_call_at, "workers.last_call_at")?,
             activity: row.activity,
         })
@@ -226,25 +220,12 @@ pub async fn find_worker(
     .transpose()
 }
 
-/// The row ids of every worker of agent `agent_id`, in id order.
-pub async fn worker_ids(
-    executor: impl SqliteExecutor<'_>,
-    agent_id: i64,
-) -> Result<Vec<i64>, StoreError> {
-    Ok(sqlx::query_scalar!(
-        r#"SELECT id AS "id!: i64" FROM workers WHERE agent_id = ? ORDER BY id"#,
-        agent_id
-    )
-    .fetch_all(executor)
-    .await?)
-}
-
 pub async fn main_worker(
     executor: impl SqliteExecutor<'_>,
     agent_id: i64,
 ) -> Result<Option<WorkerRow>, StoreError> {
     let row = sqlx::query!(
-        r#"SELECT id AS "id!: i64", agent_id, name, parent_worker_id, last_call_at, activity
+        r#"SELECT id AS "id!: i64", agent_id, name, last_call_at, activity
            FROM workers WHERE agent_id = ? AND parent_worker_id IS NULL"#,
         agent_id
     )
@@ -255,7 +236,6 @@ pub async fn main_worker(
             id: row.id,
             agent_id: row.agent_id,
             name: WorkerName::parse(&row.name).map_err(|_| StoreError::Corrupt("workers.name"))?,
-            parent_id: row.parent_worker_id,
             last_call_at: optional_time(row.last_call_at, "workers.last_call_at")?,
             activity: row.activity,
         })
@@ -464,7 +444,7 @@ async fn standing(
 /// Every worker of every agent, ordered by name.
 pub async fn all_workers(executor: impl SqliteExecutor<'_>) -> Result<Vec<WorkerRow>, StoreError> {
     let rows = sqlx::query!(
-        r#"SELECT id AS "id!: i64", agent_id, name, parent_worker_id, last_call_at, activity
+        r#"SELECT id AS "id!: i64", agent_id, name, last_call_at, activity
            FROM workers ORDER BY name"#
     )
     .fetch_all(executor)
@@ -476,7 +456,6 @@ pub async fn all_workers(executor: impl SqliteExecutor<'_>) -> Result<Vec<Worker
                 agent_id: row.agent_id,
                 name: WorkerName::parse(&row.name)
                     .map_err(|_| StoreError::Corrupt("workers.name"))?,
-                parent_id: row.parent_worker_id,
                 last_call_at: optional_time(row.last_call_at, "workers.last_call_at")?,
                 activity: row.activity,
             })

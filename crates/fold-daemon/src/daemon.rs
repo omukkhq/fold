@@ -17,7 +17,7 @@ use crate::config::{DaemonConfig, LockOwner};
 use crate::http::{self, assets::AssetSource};
 use crate::jobs::{self, Job};
 use crate::mcp;
-use crate::projects::{Projects, resume_workers};
+use crate::projects::{FolderFiles, Projects, resume_workers};
 use crate::services::agents::Launcher;
 use crate::services::agents::environment::WorkerEnvironment;
 use crate::socket::SocketServer;
@@ -31,17 +31,10 @@ pub struct DaemonState {
     pub projects: Projects,
     pub clock: Arc<dyn Clock>,
     pub assets: AssetSource,
-    /// The address the HTTP listener is bound to, with the port it got. Its IP address fixes the auth mode at start and names the hosts the `/api` routes answer.
+    /// The address the HTTP listener is bound to, with the port it got. Its IP address names the hosts the `/api` routes answer and the address of a sign-in link.
     pub listen: SocketAddr,
     /// How long a session that `POST /api/v1/session` opens lasts.
     pub session_lifetime: Duration,
-}
-
-impl DaemonState {
-    /// True off loopback, where every guarded `/api` route needs the `fold_session` cookie of a live session. `0.0.0.0` and `::` are off loopback, so they need it even for a request from `127.0.0.1`.
-    pub fn auth_required(&self) -> bool {
-        !self.listen.ip().is_loopback()
-    }
 }
 
 impl std::fmt::Debug for DaemonState {
@@ -143,17 +136,19 @@ impl Daemon {
             launcher,
             WorkerEnvironment::default(),
             StartedBy::Hand,
+            FolderFiles::default(),
         )
         .await
     }
 
-    /// Takes the host lock, opens the registry, binds the HTTP listener, opens every registered project through its start-up sequence, binds the socket, starts the jobs and the HTTP server, and only then resumes the workers of the projects, so a resumed worker's adapter finds the socket. A failed bind leaves no socket file, no worker and no open project database behind. `clock` goes to every project handle; `launcher` names the programs every worker process runs, and `environment` what the caller found about the environment they run in, and `started_by` what started this process.
+    /// Takes the host lock, opens the registry, binds the HTTP listener, opens every registered project through its start-up sequence, binds the socket, starts the jobs and the HTTP server, and only then resumes the workers of the projects, so a resumed worker's adapter finds the socket. A failed bind leaves no socket file, no worker and no open project database behind. `clock` goes to every project handle; `launcher` names the programs every worker process runs, and `environment` what the caller found about the environment they run in, and `started_by` what started this process; `folder_files` writes the program's own files into each project folder as the project opens.
     pub async fn start_on_host(
         config: DaemonConfig,
         clock: Arc<dyn Clock>,
         launcher: Launcher,
         environment: WorkerEnvironment,
         started_by: StartedBy,
+        folder_files: FolderFiles,
     ) -> Result<RunningDaemon, DaemonError> {
         let start = DaemonStart {
             started_at: clock.now(),
@@ -194,7 +189,8 @@ impl Daemon {
                 .with_environment(environment)
                 .with_start(start)
                 .with_registry(registry.clone())
-                .with_push_files(config.push_dir()),
+                .with_push_files(config.push_dir())
+                .with_folder_files(folder_files),
             registry,
             clock: clock.clone(),
             assets: config
@@ -245,6 +241,8 @@ impl Daemon {
             jobs::spawn_auto_integrate(state.clone(), jobs::AUTO_INTEGRATE_TICK, stopped.clone());
         let worker_idle =
             jobs::spawn_worker_idle(state.clone(), jobs::WORKER_IDLE_TICK, stopped.clone());
+        let plan_deadlines =
+            jobs::spawn_plan_deadlines(state.clone(), jobs::PLAN_DEADLINE_TICK, stopped.clone());
         let http = tokio::spawn(serve_http(listener, http::router(state.clone()), stopped));
         for handle in &opened {
             resume_workers(handle).await;
@@ -264,6 +262,7 @@ impl Daemon {
             stalls,
             auto_integrate,
             worker_idle,
+            plan_deadlines,
             stop,
             _lock: lock,
         })
@@ -303,6 +302,7 @@ pub struct RunningDaemon {
     stalls: Job,
     auto_integrate: Job,
     worker_idle: Job,
+    plan_deadlines: Job,
     stop: watch::Sender<bool>,
     /// The advisory lock lives as long as this file is open.
     _lock: File,
@@ -336,6 +336,7 @@ impl RunningDaemon {
         self.stalls.stopped(DRAIN_TIMEOUT).await;
         self.auto_integrate.stopped(DRAIN_TIMEOUT).await;
         self.worker_idle.stopped(DRAIN_TIMEOUT).await;
+        self.plan_deadlines.stopped(DRAIN_TIMEOUT).await;
         let handles = self.state.projects.handles();
         // The projects end their workers at the same time, so the stop that systemd and `fld restart` wait for does not grow with the number of projects.
         let mut stops = tokio::task::JoinSet::new();

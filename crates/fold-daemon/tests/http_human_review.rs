@@ -6,7 +6,7 @@ use fold_core::{EventFilter, HumanName, TaskId, codes};
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::{openapi, router};
+use fold_daemon::http::{openapi, socket_router};
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::projects::{DEFAULT_SESSION_LIFETIME, ensure_human};
 use fold_daemon::services::tasks::TaskError;
@@ -18,9 +18,11 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use crate::common::signed_in_router;
+
 const BASE: &str = "/api/v1/projects/demo";
-const ANA: (&str, &str) = ("cookie", "fold_human=ana");
-const TANIM: (&str, &str) = ("cookie", "fold_human=tanim");
+const ANA: &str = "ana";
+const TANIM: &str = "tanim";
 const MARK: &str = "/tasks/T-1/human-review";
 
 #[cfg(test)]
@@ -67,7 +69,7 @@ impl Fixture {
                 Method::POST,
                 "/tasks",
                 Some(json!({"title": "auth"})),
-                &[ANA],
+                Some(ANA),
             )
             .await;
         assert_eq!(status, StatusCode::CREATED);
@@ -79,15 +81,12 @@ impl Fixture {
         method: Method,
         path: &str,
         body: Option<Value>,
-        headers: &[(&str, &str)],
+        human: Option<&str>,
     ) -> (StatusCode, Value) {
         let mut request = Request::builder()
             .header(CLIENT_HEADER, "test")
             .method(method)
             .uri(format!("{BASE}{path}"));
-        for (name, value) in headers {
-            request = request.header(*name, *value);
-        }
         let body = match body {
             Some(value) => {
                 request = request.header("content-type", "application/json");
@@ -95,10 +94,11 @@ impl Fixture {
             }
             None => Body::empty(),
         };
-        let response = router(self.state.clone())
-            .oneshot(request.body(body).unwrap())
-            .await
-            .unwrap();
+        let router = match human {
+            Some(human) => signed_in_router(&self.state, human).await,
+            None => socket_router(self.state.clone()),
+        };
+        let response = router.oneshot(request.body(body).unwrap()).await.unwrap();
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         let value = if bytes.is_empty() {
@@ -110,7 +110,7 @@ impl Fixture {
     }
 
     async fn task(&self) -> Value {
-        let (status, task) = self.send(Method::GET, "/tasks/T-1", None, &[]).await;
+        let (status, task) = self.send(Method::GET, "/tasks/T-1", None, None).await;
         assert_eq!(status, StatusCode::OK);
         task
     }
@@ -150,7 +150,7 @@ async fn put_sets_the_mark_as_the_named_human() {
             Method::PUT,
             MARK,
             Some(json!({"reviewer": "tanim", "reason": "touches auth"})),
-            &[ANA],
+            Some(ANA),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{mark}");
@@ -159,7 +159,7 @@ async fn put_sets_the_mark_as_the_named_human() {
     let task = fx.task().await;
     assert_eq!(task["human_review"], expected);
     assert_eq!(task["human_review_set_at"], fx.project.now().as_millis());
-    let (_, board) = fx.send(Method::GET, "/board", None, &[]).await;
+    let (_, board) = fx.send(Method::GET, "/board", None, None).await;
     let card = board["columns"]
         .as_array()
         .unwrap()
@@ -183,7 +183,7 @@ async fn put_sets_the_mark_as_the_named_human() {
             Method::PUT,
             "/tasks/T-1/human-review",
             Some(json!({"reviewer": null, "reason": "any human"})),
-            &[TANIM],
+            Some(TANIM),
         )
         .await;
     assert_eq!(status, StatusCode::OK);
@@ -197,7 +197,7 @@ async fn put_by_a_human_changes_an_existing_mark() {
         Method::PUT,
         MARK,
         Some(json!({"reviewer": "tanim", "reason": "touches auth"})),
-        &[ANA],
+        Some(ANA),
     )
     .await;
     let before = fx.head().await;
@@ -206,7 +206,7 @@ async fn put_by_a_human_changes_an_existing_mark() {
             Method::PUT,
             MARK,
             Some(json!({"reviewer": "tanim", "reason": "touches auth"})),
-            &[TANIM],
+            Some(TANIM),
         )
         .await;
     assert_eq!(status, StatusCode::OK);
@@ -221,7 +221,7 @@ async fn put_by_a_human_changes_an_existing_mark() {
             Method::PUT,
             MARK,
             Some(json!({"reviewer": "ana", "reason": "ana wrote the auth code"})),
-            &[TANIM],
+            Some(TANIM),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
@@ -240,11 +240,11 @@ async fn delete_clears_the_mark() {
         Method::PUT,
         MARK,
         Some(json!({"reviewer": "tanim", "reason": "touches auth"})),
-        &[ANA],
+        Some(ANA),
     )
     .await;
     let before = fx.head().await;
-    let (status, task) = fx.send(Method::DELETE, MARK, None, &[TANIM]).await;
+    let (status, task) = fx.send(Method::DELETE, MARK, None, Some(TANIM)).await;
     assert_eq!(status, StatusCode::OK, "{task}");
     assert_eq!(task["task"], "T-1");
     assert_eq!(task["human_review"], Value::Null);
@@ -259,7 +259,7 @@ async fn delete_clears_the_mark() {
             json!({"reviewer": "tanim", "reason": "touches auth"}),
         )]
     );
-    let (status, _) = fx.send(Method::DELETE, MARK, None, &[TANIM]).await;
+    let (status, _) = fx.send(Method::DELETE, MARK, None, Some(TANIM)).await;
     assert_eq!(status, StatusCode::OK, "clearing again changes nothing");
     assert_eq!(fx.events_after(before).await.len(), 1);
 }
@@ -270,7 +270,7 @@ async fn request_without_a_human_name_is_refused() {
     let before = fx.head().await;
     let body = json!({"reason": "touches auth"});
     for (method, body) in [(Method::PUT, Some(body)), (Method::DELETE, None)] {
-        let (status, error) = fx.send(method.clone(), MARK, body, &[]).await;
+        let (status, error) = fx.send(method.clone(), MARK, body, None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{method}");
         assert_eq!(error["error"]["code"], codes::HUMAN_NAME_REQUIRED);
         assert_declared(method.as_str(), status, &error);
@@ -314,13 +314,13 @@ async fn refusals_carry_their_declared_status() {
         ),
     ];
     for (path, body, status, code) in cases {
-        let (got, error) = fx.send(Method::PUT, path, Some(body), &[ANA]).await;
+        let (got, error) = fx.send(Method::PUT, path, Some(body), Some(ANA)).await;
         assert_eq!(got, status, "{path} {error}");
         assert_eq!(error["error"]["code"], code);
         assert_declared("PUT", got, &error);
     }
     let (status, error) = fx
-        .send(Method::DELETE, "/tasks/T-9/human-review", None, &[ANA])
+        .send(Method::DELETE, "/tasks/T-9/human-review", None, Some(ANA))
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(error["error"]["code"], codes::TASK_NOT_FOUND);
@@ -341,7 +341,7 @@ async fn refusals_carry_their_declared_status() {
         (Method::PUT, Some(json!({"reason": "late"}))),
         (Method::DELETE, None),
     ] {
-        let (status, error) = fx.send(method.clone(), MARK, body, &[ANA]).await;
+        let (status, error) = fx.send(method.clone(), MARK, body, Some(ANA)).await;
         assert_eq!(status, StatusCode::CONFLICT, "{method}");
         assert_eq!(error["error"]["code"], codes::TASK_CLOSED);
         assert_declared(method.as_str(), status, &error);

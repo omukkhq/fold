@@ -19,6 +19,7 @@ import {
   isLastSelected,
   isSelected,
   keyCommand,
+  marksAt,
   pointKey,
   pointOf,
   pointsOf,
@@ -43,11 +44,15 @@ export interface DiffRowsProps {
   threads?: readonly DiffThread[];
   renderThread?: (thread: DiffThread) => ReactNode;
   renderComposer?: (selection: DiffSelection) => ReactNode;
+  /** Ranges that carry a mark at each of their lines besides the review threads, such as questions to the author. */
+  marks?: readonly DiffThread[];
+  /** `first` is true on the first line of the mark's range. */
+  renderMark?: (mark: DiffThread, first: boolean) => ReactNode;
 }
 
 // A row spans the panel, so its focus ring sits inside the row instead of outside it.
 const ROW_FOCUS =
-  "cursor-pointer outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring";
+  "cursor-pointer focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring";
 
 /** A block under a line, indented past the number and sign columns. */
 function UnderLine({ children }: { children: ReactNode }) {
@@ -72,6 +77,8 @@ export function DiffRows({
   threads = [],
   renderThread,
   renderComposer,
+  marks = [],
+  renderMark,
 }: DiffRowsProps) {
   const [state, setState] = useState(EMPTY_STATE);
   const stateRef = useRef(state);
@@ -115,6 +122,7 @@ export function DiffRows({
     const drawn = threadPointsOf(row);
     const covering = drawn.flatMap((p) => threadsCovering(threads, path, p));
     const ending = drawn.flatMap((p) => threadsEndingAt(threads, path, p));
+    const marked = renderMark ? marksAt(marks, path, drawn) : [];
     const selected = isSelected(selection, path, point);
     const lineTokens = rowTokens(syntax, tokens, row.key);
     return (
@@ -136,12 +144,21 @@ export function DiffRows({
             selected={selected}
             className={ROW_FOCUS}
             marker={
-              covering.length > 0 ? (
-                <MessageSquare
-                  aria-hidden="true"
-                  size={13}
-                  className="text-diff-comment-marker"
-                />
+              covering.length > 0 || marked.length > 0 ? (
+                <span className="flex items-center gap-4">
+                  {covering.length > 0 ? (
+                    <MessageSquare
+                      aria-hidden="true"
+                      size={13}
+                      className="text-diff-comment-marker"
+                    />
+                  ) : null}
+                  {marked.map(({ mark, first }) => (
+                    <Fragment key={mark.id}>
+                      {renderMark?.(mark, first)}
+                    </Fragment>
+                  ))}
+                </span>
               ) : undefined
             }
             onMouseDown={(event) => {

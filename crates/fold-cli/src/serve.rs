@@ -6,9 +6,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Args;
+use fold_cli::claude_files;
 use fold_cli::daemon_client::{ClientConfig, ClientError};
 use fold_core::Clock;
 use fold_daemon::config::{LOCK_FILE, SOCKET_FILE};
+use fold_daemon::projects::FolderFiles;
 use fold_daemon::services::agents::Launcher;
 use fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME;
 use fold_daemon::{Daemon, DaemonConfig, DaemonError, SystemClock, shutdown_signal};
@@ -71,7 +73,7 @@ impl ServeError {
 pub(crate) struct FileConfig {
     pub(crate) listen: Option<SocketAddr>,
     pub(crate) socket: Option<PathBuf>,
-    /// How many days a web sign-in lasts off loopback.
+    /// How many days a web sign-in lasts.
     pub(crate) session_days: Option<NonZeroU16>,
 }
 
@@ -230,6 +232,17 @@ fn log_filter(from_env: Option<tracing_subscriber::EnvFilter>) -> tracing_subscr
     }
 }
 
+/// A project whose skills cannot be written still opens: its workers then find the skills a refresh or an earlier fold wrote.
+fn write_skills(root: &Path) {
+    if let Err(error) = claude_files::write_skills(root) {
+        tracing::warn!(
+            root = %root.display(),
+            code = error.code(),
+            "could not write fold's skills into the project folder"
+        );
+    }
+}
+
 pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
     tracing_subscriber::fmt()
         .json()
@@ -266,8 +279,15 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
         .map_err(ServeError::Runtime)?;
     runtime.block_on(async {
         let signals = shutdown_signal().map_err(ServeError::Signals)?;
-        let daemon =
-            Daemon::start_on_host(config, clock, launcher, chosen.environment, started_by).await?;
+        let daemon = Daemon::start_on_host(
+            config,
+            clock,
+            launcher,
+            chosen.environment,
+            started_by,
+            FolderFiles::new(write_skills),
+        )
+        .await?;
         signals.await;
         tracing::info!("shutting down");
         daemon.shutdown().await;

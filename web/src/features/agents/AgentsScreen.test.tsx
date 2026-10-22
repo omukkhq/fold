@@ -25,6 +25,8 @@ import type { AgentsSearch } from "@/features/workers/search";
 import { applyEvent } from "@/live/apply";
 import { agent } from "@/test/agents";
 import { byContent } from "@/test/content";
+import { projectCost, tokens } from "@/test/cost";
+import { localDayStart } from "@/format/days";
 import { errorReply, stubFetch, type StubReply } from "@/test/stubFetch";
 import {
   areaEntry,
@@ -513,5 +515,117 @@ describe("AgentsScreen", () => {
     await userEvent.click(within(panel).getByRole("button", { name: "Deny" }));
     const alert = await within(panel).findByRole("alert");
     expect(alert.textContent).toContain("code: permission_question_closed");
+  });
+
+  it("opens the Cost tab with its range, its totals, its tables and the main agent's note", async () => {
+    const calls = stubFetch(
+      routes({
+        [`GET ${BASE}/cost`]: { body: projectCost(localDayStart(Date.now())) },
+      }),
+    );
+    const searches: AgentsSearch[] = [];
+    await setup([], team, { tab: "cost", range: "week" }, (next) => {
+      searches.push(next);
+    });
+    const totals = await screen.findByRole("list", { name: "Totals" });
+    expect(within(totals).getByText("$10.00")).toBeTruthy();
+    expect(within(totals).getByText("60% · 2 workers")).toBeTruthy();
+    const since = calls.find((call) => call.path === `${BASE}/cost`)?.search;
+    expect(Number(since?.get("since"))).toBeLessThan(Date.now());
+    expect(within(totals).getByText("2.0M tokens")).toBeTruthy();
+    expect(within(totals).getByText("160.0k output")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Cost by day" })).toBeTruthy();
+    const tokens = screen.getByRole("region", { name: "Tokens" });
+    expect(within(tokens).getByText("Cache read")).toBeTruthy();
+    expect(
+      within(tokens).getByText("87% of the input came from the prompt cache"),
+    ).toBeTruthy();
+    const measure = screen.getByRole("group", { name: "Measure" });
+    await userEvent.click(
+      within(measure).getByRole("button", { name: "Tokens" }),
+    );
+    expect(
+      within(measure)
+        .getByRole("button", { name: "Tokens" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(screen.getByRole("region", { name: "Tokens by day" })).toBeTruthy();
+    const tasks = screen.getByRole("region", { name: "Tasks" });
+    expect(within(tasks).getByText("1.1M")).toBeTruthy();
+    expect(
+      within(tasks).getByRole("link", { name: /T-12/ }).getAttribute("href"),
+    ).toBe("/p/demo/t/T-12");
+    expect(within(tasks).getAllByText("—").length).toBeGreaterThan(0);
+    const workers = screen.getByRole("region", { name: "Workers" });
+    expect(within(workers).getByText("stopped")).toBeTruthy();
+    expect(within(workers).getByText("64.0k")).toBeTruthy();
+    expect(screen.getByText(/does not supervise/)).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: "Last 7 days" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    await userEvent.click(screen.getByRole("button", { name: "Today" }));
+    await userEvent.click(screen.getByRole("button", { name: "All time" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Team" }));
+    expect(searches.slice(0, 2)).toEqual([
+      { tab: "cost", range: "today" },
+      { tab: "cost" },
+    ]);
+    expect(searches.at(-1)).toEqual({});
+  });
+
+  it("leaves out the main agent's note when fold runs the main agent and counts its cost", async () => {
+    stubFetch(
+      routes({
+        [`GET ${BASE}/cost`]: { body: projectCost(localDayStart(Date.now())) },
+      }),
+    );
+    await setup([], { ...team, main_supervised: true }, { tab: "cost" });
+    await screen.findByRole("list", { name: "Totals" });
+    expect(screen.queryByText(/does not supervise/)).toBeNull();
+  });
+
+  it("shows the Tokens panel's empty state while no turn reported its tokens", async () => {
+    const view = projectCost(localDayStart(Date.now()));
+    stubFetch(
+      routes({
+        [`GET ${BASE}/cost`]: {
+          body: { ...view, total: { ...view.total, tokens: tokens(0) } },
+        },
+      }),
+    );
+    await setup([], team, { tab: "cost" });
+    const panel = await screen.findByRole("region", { name: "Tokens" });
+    expect(
+      within(panel).getByText("No turn in this range reported its tokens."),
+    ).toBeTruthy();
+    expect(within(panel).queryByText(/prompt cache/)).toBeNull();
+  });
+
+  it("says when the range has no cost and shows a failed read with its code", async () => {
+    stubFetch(
+      routes({
+        [`GET ${BASE}/cost`]: {
+          body: projectCost(0, {
+            total: {
+              cost_micro_usd: 0,
+              tokens: tokens(0),
+              turns: 0,
+              workers: 0,
+            },
+          }),
+        },
+      }),
+    );
+    await setup([], team, { tab: "cost" });
+    expect(await screen.findByText("No cost in this range")).toBeTruthy();
+    cleanup();
+    stubFetch(
+      routes({ [`GET ${BASE}/cost`]: errorReply(503, "project_unavailable") }),
+    );
+    await setup([], team, { tab: "cost" });
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("project_unavailable");
   });
 });

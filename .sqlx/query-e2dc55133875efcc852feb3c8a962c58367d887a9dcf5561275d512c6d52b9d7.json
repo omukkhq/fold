@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT p.number AS \"proposal!: i64\", v.version, r.number AS \"revision!: i64\"\n           FROM integrations i\n           JOIN review_batches b ON b.id = i.review_batch_id\n           JOIN proposals p ON p.id = i.proposal_id\n           JOIN proposal_versions v ON v.id = i.version_id\n           JOIN revisions r ON r.id = i.revision_id\n           WHERE b.number = ?\n           ORDER BY r.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "proposal!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposals",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "version",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "revision!: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e2dc55133875efcc852feb3c8a962c58367d887a9dcf5561275d512c6d52b9d7"
+}

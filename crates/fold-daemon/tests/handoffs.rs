@@ -17,7 +17,7 @@ use crate::workers_support::{FakeClaude, Run, fixture};
 const MAIN: &str = "frontend";
 const LEAD: &str = "web-lead";
 
-/// The recorded turn reports a context of 25310 tokens in a window of 1000000; the grown one reports 700192, past the default `handoff_at` of 60 percent.
+/// The recorded turn reports a context of 25310 tokens in a window of 1000000; the grown one reports 700192, past the default of 60 percent for that window.
 const SMALL: &str = "\"cache_read_input_tokens\":25118";
 const GROWN: &str = "\"cache_read_input_tokens\":700000";
 
@@ -261,6 +261,27 @@ async fn a_lead_past_its_threshold_hands_off_to_a_fresh_session() {
     assert!(!text.contains("plover"), "a log line holds the note");
     assert!(!events.contains("plover"), "a stored event holds the note");
     assert!(!live.contains("plover"), "a live event holds the note");
+}
+
+#[tokio::test]
+async fn a_project_handoff_at_wins_over_the_default() {
+    let turn = Turn::new();
+    let fake = turn.fake();
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.make_main(MAIN).await;
+    std::fs::write(
+        std::path::Path::new(harness.root()).join(".fold/config.toml"),
+        "[roles.area_lead]\nhandoff_at = 80\n",
+    )
+    .unwrap();
+    lead(&mut harness).await;
+    turn.grow();
+    harness.send(MAIN, &[LEAD], "Look at the page.").await;
+    assert_eq!(idle_after(&harness, 2).await.context_tokens, 700_192);
+    harness.send(MAIN, &[LEAD], "One more look.").await;
+    idle_after(&harness, 3).await;
+    let run = runs(&fake, 1, 4).await.remove(0);
+    assert_eq!(asks(&run), 0, "70 percent is below the project's 80");
 }
 
 #[tokio::test]

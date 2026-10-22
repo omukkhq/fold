@@ -49,6 +49,13 @@ beforeEach(() => {
 
 const hit = (key: readonly unknown[]) =>
   invalidated.includes(JSON.stringify(key));
+/** An invalidated key refreshes every key it is a prefix of. */
+const refreshes = (key: readonly unknown[]) =>
+  invalidated.some((made) => {
+    if (made === undefined) return false;
+    const prefix = JSON.parse(made) as unknown[];
+    return prefix.every((part, i) => part === key[i]);
+  });
 /** A stored event is always a new row of the activity list. */
 const onlyActivity = [JSON.stringify(keys.activity(slug))];
 
@@ -313,8 +320,10 @@ describe("patch rules", () => {
     client.setQueryData(keys.agentBar(slug), [
       { name: "frontend", presence: "active", working: 1, stalled: 0 },
     ]);
-    const targets = { agents: ["frontend"], tags: [] };
-    client.setQueryData(keys.messageTargets(slug), targets);
+    const readers = {
+      readers: [{ name: "frontend", role: "area_lead" }],
+    };
+    client.setQueryData(keys.taskReaders(slug, "T-2"), readers);
     applyEvent(
       client,
       slug,
@@ -331,7 +340,7 @@ describe("patch rules", () => {
     expect(client.getQueryData(keys.agentBar(slug))).toEqual([
       { name: "frontend", presence: "idle", working: 1, stalled: 0 },
     ]);
-    expect(client.getQueryData(keys.messageTargets(slug))).toBe(targets);
+    expect(client.getQueryData(keys.taskReaders(slug, "T-2"))).toBe(readers);
     expect(invalidated).toEqual([]);
   });
 
@@ -385,6 +394,8 @@ describe("patch rules", () => {
       expect(hit(keys.workers(slug)), step).toBe(true);
       expect(hit(keys.activity(slug)), step).toBe(false);
       expect(hit(keys.needsYou(slug)), step).toBe(step !== "init");
+      expect(hit(keys.cost(slug)), step).toBe(step !== "init");
+      expect(hit(keys.projects()), step).toBe(step !== "init");
     }
   });
 
@@ -517,6 +528,27 @@ describe("invalidation rules", () => {
     applyEvent(client, slug, ev("integration.queued", { proposal: "P-3" }));
     expect(hit(keys.needsYou(slug))).toBe(false);
     expect(hit(keys.proposal(slug, "P-3"))).toBe(true);
+  });
+
+  it("refreshes the review batches and their merged changes when main moves", () => {
+    invalidated = [];
+    applyEvent(client, slug, ev("main.advanced", { revision: "r9" }));
+    expect(hit(keys.reviewBatches(slug))).toBe(true);
+    expect(refreshes(keys.reviewBatchDiff(slug, "rb-3"))).toBe(true);
+    expect(refreshes(keys.reviewBatchFileDiff(slug, "rb-3", "a.ts"))).toBe(
+      true,
+    );
+  });
+
+  it("refreshes the review batches for a batch's queued integration and its members' integrations, and not for a single one", () => {
+    for (const type of ["integration.queued", "integration.succeeded"]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type, { data: { batch: "rb-3" } }));
+      expect(hit(keys.reviewBatches(slug)), type).toBe(true);
+    }
+    invalidated = [];
+    applyEvent(client, slug, ev("integration.queued", { proposal: "P-3" }));
+    expect(hit(keys.reviewBatches(slug))).toBe(false);
   });
 
   it("refreshes Needs you and the project for each step of a stash", () => {
@@ -706,6 +738,23 @@ describe("invalidation rules", () => {
     }
   });
 
+  it("refreshes a task's feedback readers when the task, its claim, a worker or the main tag changes", () => {
+    for (const [type, extra] of [
+      ["task.updated", { task: "T-3" }],
+      ["task.human_review_set", { task: "T-3" }],
+      ["claim.acquired", { task: "T-3" }],
+      ["worker.started", {}],
+      ["agent.tag_added", {}],
+    ] as const) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type, extra));
+      expect(refreshes(keys.taskReaders(slug, "T-3")), type).toBe(true);
+    }
+    invalidated = [];
+    applyEvent(client, slug, ev("task.updated", { task: "T-4" }));
+    expect(refreshes(keys.taskReaders(slug, "T-3"))).toBe(false);
+  });
+
   it("refreshes the workers for a new or changed area", () => {
     for (const type of ["area.defined", "area.updated"]) {
       invalidated = [];
@@ -765,6 +814,15 @@ describe("invalidation rules", () => {
       applyEvent(client, slug, ev(type));
       expect(hit(keys.reviewBatches(slug)), type).toBe(true);
     }
+  });
+
+  it("refreshes every proposal page and the board for a review plan event", () => {
+    invalidated = [];
+    applyEvent(client, slug, ev("review.plan_wait_ended", {}));
+    expect(hit(keys.proposalPages(slug))).toBe(true);
+    expect(hit(keys.proposals(slug))).toBe(true);
+    expect(hit(keys.board(slug))).toBe(true);
+    expect(hit(keys.reviewBatches(slug))).toBe(false);
   });
 
   it("covers the remaining domains", () => {
@@ -834,6 +892,49 @@ describe("invalidation rules", () => {
     expect(client.getQueryData(keys.workspaceLive(slug, "ws-5"))).toEqual(
       live("ws-5", "x"),
     );
+  });
+
+  it("refreshes only the current version for a proposal event, and an earlier version only for an event that names it", () => {
+    const v3 = keys.proposalVersion(slug, "P-4", 3);
+    for (const type of [
+      "proposal.opened",
+      "proposal.updated",
+      "review.submitted",
+      "checks.started",
+    ]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type, { proposal: "P-4" }));
+      expect(refreshes(keys.proposal(slug, "P-4")), type).toBe(true);
+      expect(refreshes(v3), type).toBe(false);
+    }
+    invalidated = [];
+    applyEvent(
+      client,
+      slug,
+      ev("checks.finished", {
+        proposal: "P-4",
+        data: { run: "cr-2", state: "failed", version: 3 },
+      }),
+    );
+    expect(refreshes(v3)).toBe(true);
+    expect(refreshes(keys.proposalVersion(slug, "P-4", 2))).toBe(false);
+    expect(refreshes(keys.proposal(slug, "P-4"))).toBe(true);
+    invalidated = [];
+    applyEvent(
+      client,
+      slug,
+      ev("review.submitted", { proposal: "P-4", data: { version: 3 } }),
+    );
+    expect(refreshes(v3)).toBe(true);
+    for (const extra of [
+      { data: { version: 3 } },
+      { proposal: "P-4", data: { version: "3" } },
+      { proposal: "P-4", data: { version: 0 } },
+    ]) {
+      invalidated = [];
+      applyEvent(client, slug, ev("checks.finished", extra));
+      expect(refreshes(v3), JSON.stringify(extra)).toBe(false);
+    }
   });
 });
 

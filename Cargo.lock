@@ -684,7 +684,7 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "fold-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -716,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "fold-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "blake3",
  "proptest",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "fold-daemon"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -767,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "fold-store"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "fold-core",
  "fold-store",
@@ -781,7 +781,7 @@ dependencies = [
 
 [[package]]
 name = "fold-vcs"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "blake3",
  "fail",

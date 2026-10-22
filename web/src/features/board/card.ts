@@ -1,4 +1,5 @@
 import type { BoardCard, BoardProposal, CardProposalState } from "@/api/board";
+import { planWait, planWaitLabel } from "@/features/proposals/planWait";
 import { projectPath } from "@/routes/paths";
 
 /**
@@ -69,12 +70,23 @@ const PROPOSAL_TEXT: Record<CardProposalState, string> = {
   integrated: "integrated",
 };
 
+/** An open proposal that waits in a review plan reads as waiting for its batch; the plan holds only open proposals. */
 export function proposalText(proposal: BoardProposal): string {
   const state =
-    proposal.state === "integrated" && proposal.revision !== null
-      ? `integrated as ${proposal.revision}`
-      : PROPOSAL_TEXT[proposal.state];
+    proposal.review_plan !== null && proposal.state === "open"
+      ? planWaitLabel(proposal.review_plan)
+      : proposal.state === "integrated" && proposal.revision !== null
+        ? `integrated as ${proposal.revision}`
+        : PROPOSAL_TEXT[proposal.state];
   return `${proposal.id} · ${state}`;
+}
+
+/** The line under the pill of a proposal that waits in a review plan: the awaited tasks and when the wait ends, or that the batch waits for its reviewer; null otherwise. */
+export function planWaitText(
+  proposal: BoardProposal,
+  now: number,
+): string | null {
+  return planWait(proposal.review_plan, proposal.id, now)?.detail ?? null;
 }
 
 export type ProposalLook = "attention" | "active" | "merged";

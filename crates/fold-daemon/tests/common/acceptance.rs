@@ -11,7 +11,7 @@ use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::{router, socket_router};
+use fold_daemon::http::socket_router;
 use fold_daemon::mcp::handshake::{self, Answer, PROTOCOL_VERSION};
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::Launcher;
@@ -63,7 +63,7 @@ pub struct Session {
     server: JoinHandle<()>,
 }
 
-/// Project `demo` open in daemon state, with `r1` holding `README.md` and the project folder holding it as `fld init` leaves it, and one adapter session for each of [`AGENTS`], connected over in-memory streams through the same handshake `fld mcp` performs with `FOLD_AGENT` set. `review` is the review lead and `frontend` and `backend` lead the areas of [`WORK`], as if fold had started them, and [`HUMAN`] is a known human.
+/// Project `demo` open in daemon state, with `r1` holding `README.md` and the project folder holding it as `fld init` leaves it, and one adapter session for each of [`AGENTS`], connected over in-memory streams through the same handshake `fld mcp` performs with `FOLD_AGENT` set. `review` is a reviewer that fold started and `frontend` and `backend` lead the areas of [`WORK`], as if fold had started them, and [`HUMAN`] is a known human.
 pub struct Harness {
     pub project: TestProject,
     /// Holds the fake inbox sockets.
@@ -89,7 +89,7 @@ impl Harness {
     /// [`Harness::start`] without the area leads: `frontend` and `backend` have no fold role, so neither claims a task, and either may become the main agent.
     pub async fn start_without_leads() -> Self {
         let harness = Self::start_without_roles().await;
-        crate::common::roles::give_role(&harness.handle.store, "review", Role::ReviewLead, None)
+        crate::common::roles::give_role(&harness.handle.store, "review", Role::Reviewer, None)
             .await;
         fold_daemon::services::projects::ensure_human(
             harness.project.registry(),
@@ -114,7 +114,7 @@ impl Harness {
     /// [`Harness::start`] in a plain project: no Git repository, and Git sync off.
     pub async fn start_plain() -> Self {
         let mut harness = Self::start_on(TestProject::plain().await, no_claude()).await;
-        crate::common::roles::give_role(&harness.handle.store, "review", Role::ReviewLead, None)
+        crate::common::roles::give_role(&harness.handle.store, "review", Role::Reviewer, None)
             .await;
         harness.lead_the_work_area().await;
         fold_daemon::services::projects::ensure_human(
@@ -259,17 +259,32 @@ impl Harness {
 
     /// [`Harness::connect`] with the tags of `FOLD_AGENT_TAGS` in the handshake line, as `fld claude` gives its session the `main` tag.
     pub async fn connect_tagged(&mut self, agent: &str, tags: &[&str]) {
+        self.connect_from(agent, tags, Default::default()).await;
+    }
+
+    /// [`Harness::connect`] from inside the process tree of the worker process `pid`, as the adapter that a supervised worker's Claude Code starts.
+    pub async fn connect_under(&mut self, agent: &str, pid: u32) {
+        self.connect_from(
+            agent,
+            &[],
+            fold_daemon::socket::SocketPeer { pid: Some(pid) },
+        )
+        .await;
+    }
+
+    async fn connect_from(
+        &mut self,
+        agent: &str,
+        tags: &[&str],
+        peer: fold_daemon::socket::SocketPeer,
+    ) {
         assert!(
             !self.sessions.contains_key(agent),
             "{agent} is already connected"
         );
         self.next_pid += 1;
         let (client_end, server_end) = tokio::io::duplex(256 * 1024);
-        let server = tokio::spawn(handshake::accept(
-            self.state.clone(),
-            server_end,
-            Default::default(),
-        ));
+        let server = tokio::spawn(handshake::accept(self.state.clone(), server_end, peer));
         let (read, mut write) = tokio::io::split(client_end);
         let hello = json!({"fold": PROTOCOL_VERSION, "cwd": self.root(), "pid": self.next_pid, "agent": agent, "tags": tags});
         write
@@ -408,6 +423,33 @@ impl Harness {
             .unwrap();
     }
 
+    /// Gives the reviewer `agent` the review claim on `proposal`, such as `P-1`, as the review lead's `start_worker` gives it to a reviewer that fold starts; a reviewer never claims itself.
+    pub async fn give_review(&self, agent: &str, proposal: &str) {
+        use fold_core::Clock as _;
+        crate::common::roles::give_review_claim(
+            &self.handle.store,
+            agent,
+            proposal.parse().unwrap(),
+            self.project.clock().now(),
+        )
+        .await;
+    }
+
+    /// Makes a review batch of `proposals` for the reviewer `agent`, as the review lead's `start_worker` makes it for a reviewer of two or more proposals; returns its id, such as `rb-1`.
+    pub async fn give_batch(&self, agent: &str, proposals: &[&str]) -> String {
+        use fold_core::Clock as _;
+        let proposals: Vec<fold_core::ProposalId> =
+            proposals.iter().map(|id| id.parse().unwrap()).collect();
+        crate::common::roles::give_batch(
+            &self.handle.store,
+            agent,
+            &proposals,
+            self.project.clock().now(),
+        )
+        .await
+        .to_string()
+    }
+
     /// The result body of a call that must succeed.
     pub async fn call(&self, agent: &str, tool: &str, arguments: Value) -> Value {
         let result = self.call_raw(agent, tool, arguments).await;
@@ -523,13 +565,13 @@ impl Harness {
             .unwrap()
     }
 
-    /// `POST /requests` with the multipart form of `parts`, as the human `human` when one is named, the way the web's New request dialog sends it.
+    /// `POST /requests` with the multipart form of `parts`, signed in as `human` the way the web's New request dialog sends it, or over the socket without a human when none is named.
     pub async fn create_request_form(
         &self,
         parts: &[FormPart<'_>],
         human: Option<&str>,
     ) -> (StatusCode, Value) {
-        let mut request = Request::builder()
+        let request = Request::builder()
             .header(CLIENT_HEADER, "test")
             .method(Method::POST)
             .uri(format!("/api/v1/projects/{SLUG}/requests"))
@@ -537,17 +579,18 @@ impl Harness {
                 "content-type",
                 format!("multipart/form-data; boundary={FORM_BOUNDARY}"),
             );
-        if let Some(human) = human {
-            request = request.header("cookie", format!("fold_human={human}"));
-        }
+        let router = match human {
+            Some(human) => crate::common::signed_in_router(&self.state, human).await,
+            None => socket_router(self.state.clone()),
+        };
         let request = request.body(Body::from(multipart_form(parts))).unwrap();
-        let response = router(self.state.clone()).oneshot(request).await.unwrap();
+        let response = router.oneshot(request).await.unwrap();
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&bytes).unwrap())
     }
 
-    /// A request through the HTTP router as the human `human`, named by the `fold_human` cookie the way the browser sends it.
+    /// A request through the HTTP router as the human `human`, signed in with the cookie of a session the way the browser sends it.
     pub async fn http(
         &self,
         method: Method,
@@ -558,8 +601,7 @@ impl Harness {
         let request = Request::builder()
             .header(CLIENT_HEADER, "test")
             .method(method)
-            .uri(path)
-            .header("cookie", format!("fold_human={human}"));
+            .uri(path);
         let request = match body {
             Some(body) => request
                 .header("content-type", "application/json")
@@ -567,7 +609,11 @@ impl Harness {
             None => request.body(Body::empty()),
         }
         .unwrap();
-        let response = router(self.state.clone()).oneshot(request).await.unwrap();
+        let response = crate::common::signed_in_router(&self.state, human)
+            .await
+            .oneshot(request)
+            .await
+            .unwrap();
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&bytes).unwrap())
@@ -887,14 +933,18 @@ pub fn multipart_form(parts: &[FormPart<'_>]) -> Vec<u8> {
 
 /// The bytes a session's inbox receives for one notice: the auth line, then the notice in fold's cross-session envelope.
 pub fn wire(token: &str, text: &str) -> String {
+    let content = serde_json::to_string(&format!(
+        "<cross-session-message from-name=\"fold\">\n{text}\n</cross-session-message>"
+    ))
+    .unwrap();
     format!(
-        "{{\"type\":\"auth\",\"token\":\"{token}\"}}\n{{\"type\":\"user\",\"priority\":\"next\",\"message\":{{\"role\":\"user\",\"content\":\"<cross-session-message from-name=\\\"fold\\\">\\n{text}\\n</cross-session-message>\"}}}}\n"
+        "{{\"type\":\"auth\",\"token\":\"{token}\"}}\n{{\"type\":\"user\",\"priority\":\"next\",\"message\":{{\"role\":\"user\",\"content\":{content}}}}}\n"
     )
 }
 
 /// The notice text for a newly opened proposal.
 pub fn proposal_notice(proposal: &str, task: &str) -> String {
-    format!("fold: {proposal} opened for {task}. Call claim_review.")
+    format!("fold: {proposal} opened for {task}. Call start_worker.")
 }
 
 /// The notice text a lead gets when a task of its area is ready and nobody holds it.
@@ -902,9 +952,9 @@ pub fn ready_notice(task: &str) -> String {
     format!("fold: {task} is ready in your area. Call start_worker.")
 }
 
-/// The notice text for a new message.
-pub fn message_notice(message: &str) -> String {
-    format!("fold: message {message} arrived. Call get_inbox.")
+/// The notice text for a new message that carries only that message: `from` is its sender with any reply and links, such as `frontend on RQ-1`.
+pub fn message_notice(message: &str, from: &str, body: &str) -> String {
+    format!("fold: message {message} arrived. [{message} from {from}] \"{body}\"")
 }
 
 /// Copies every file and folder of `from` into `to`, which it creates.

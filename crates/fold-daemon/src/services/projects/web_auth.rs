@@ -14,6 +14,9 @@ pub const WEB_TOUCH_INTERVAL: Duration = Duration::from_secs(60);
 /// The session lifetime when `daemon.toml` sets none.
 pub const DEFAULT_SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
+/// How long a sign-in link from `fld web` can be opened: long enough to open it in a browser, short enough that a copy found later is useless.
+pub const SIGN_IN_LINK_LIFETIME: Duration = Duration::from_secs(5 * 60);
+
 /// 32 bytes from the OS random source as URL-safe base64, which a cookie value takes unquoted.
 fn random_secret() -> Result<String, FoldError> {
     let mut secret = [0_u8; 32];
@@ -52,19 +55,6 @@ pub async fn create_web_token(
         })
         .await?;
     Ok(token)
-}
-
-/// [`create_web_token`] for `fld token create`, which writes the host registry without a running daemon.
-pub async fn create_web_token_on_host(
-    host: &HostPaths,
-    clock: &dyn Clock,
-    human: &HumanName,
-    label: Option<&str>,
-) -> Result<String, ProjectError> {
-    let registry = Store::open_registry(&host.registry_db()).await?;
-    let token = create_web_token(&registry, human, label, clock.now()).await;
-    registry.close().await?;
-    token
 }
 
 /// Every unrevoked token, oldest first. Never the token or its hash.
@@ -132,6 +122,15 @@ pub struct SignedIn {
     pub human: HumanName,
 }
 
+fn later(now: Timestamp, lifetime: Duration) -> Result<Timestamp, FoldError> {
+    now.checked_add(lifetime).ok_or_else(|| {
+        FoldError::new(
+            codes::INTERNAL_ERROR,
+            "the lifetime runs past the largest timestamp",
+        )
+    })
+}
+
 /// Opens a session for the human that `token` signs in, ending at `now + lifetime`, or `None` for a token the registry does not hold or has revoked. The write checks the token again, so a revocation that lands between the read and the write still refuses it.
 pub async fn create_web_session(
     registry: &Store,
@@ -151,12 +150,7 @@ pub async fn create_web_session(
     let session = random_secret()?;
     let session_hash = blake3::hash(session.as_bytes());
     let now = clock.now();
-    let expires_at = now.checked_add(lifetime).ok_or_else(|| {
-        FoldError::new(
-            codes::INTERNAL_ERROR,
-            "the session lifetime runs past the largest timestamp",
-        )
-    })?;
+    let expires_at = later(now, lifetime)?;
     let human = registry
         .write(async |tx| {
             let found = projects::find_web_token(tx.conn(), hash.as_bytes()).await?;
@@ -168,7 +162,7 @@ pub async fn create_web_session(
                 tx,
                 NewWebSession {
                     session_hash: session_hash.as_bytes(),
-                    token_id: row.id,
+                    token_id: Some(row.id),
                     human_id: row.human_id,
                     now,
                     expires_at,
@@ -177,6 +171,82 @@ pub async fn create_web_session(
             .await?;
             projects::touch_web_token(tx, row.id, now, now).await?;
             Ok::<_, StoreError>(Some(row.human))
+        })
+        .await?;
+    Ok(human.map(|human| SignedIn { session, human }))
+}
+
+/// A one-time sign-in link that [`create_sign_in_link`] made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignInLink {
+    /// The plaintext secret for the link. This is the only time it exists: the registry keeps its BLAKE3 hash.
+    pub secret: String,
+    pub expires_at: Timestamp,
+}
+
+/// Makes a sign-in link for `human`, creating the human when absent, that opens one session until [`SIGN_IN_LINK_LIFETIME`] has passed. Links that expired go in the same write.
+pub async fn create_sign_in_link(
+    registry: &Store,
+    clock: &dyn Clock,
+    human: &HumanName,
+) -> Result<SignInLink, ProjectError> {
+    let secret = random_secret()?;
+    let hash = blake3::hash(secret.as_bytes());
+    let now = clock.now();
+    let expires_at = later(now, SIGN_IN_LINK_LIFETIME)?;
+    registry
+        .write(async |tx| {
+            projects::delete_expired_sign_in_links(tx, now).await?;
+            let row = projects::ensure_human(tx, human, now).await?;
+            projects::insert_sign_in_link(tx, hash.as_bytes(), row.id, now, expires_at).await
+        })
+        .await?;
+    Ok(SignInLink { secret, expires_at })
+}
+
+/// Opens a session for the human of the sign-in link `secret`, ending at `now + lifetime`, and deletes the link in the same write, so it opens no second session. `None` for a link the registry does not hold, one already used, and one that has expired.
+pub async fn open_sign_in_link(
+    registry: &Store,
+    clock: &dyn Clock,
+    lifetime: Duration,
+    secret: &str,
+) -> Result<Option<SignedIn>, ProjectError> {
+    let hash = blake3::hash(secret.as_bytes());
+    if projects::find_sign_in_link(registry.read(), hash.as_bytes())
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let session = random_secret()?;
+    let session_hash = blake3::hash(session.as_bytes());
+    let now = clock.now();
+    let expires_at = later(now, lifetime)?;
+    let human = registry
+        .write(async |tx| {
+            let Some(link) = projects::find_sign_in_link(tx.conn(), hash.as_bytes()).await? else {
+                return Ok(None);
+            };
+            if !hash_matches(&link.link_hash, &hash, "sign_in_links.link_hash")? {
+                return Ok(None);
+            }
+            projects::delete_sign_in_link(tx, link.id).await?;
+            if link.expires_at <= now {
+                return Ok(None);
+            }
+            projects::delete_expired_web_sessions(tx, now).await?;
+            projects::insert_web_session(
+                tx,
+                NewWebSession {
+                    session_hash: session_hash.as_bytes(),
+                    token_id: None,
+                    human_id: link.human_id,
+                    now,
+                    expires_at,
+                },
+            )
+            .await?;
+            Ok::<_, StoreError>(Some(link.human))
         })
         .await?;
     Ok(human.map(|human| SignedIn { session, human }))
@@ -215,13 +285,17 @@ pub async fn check_web_session(
     Ok(Some(row.human))
 }
 
-/// Deletes every session that expired by `now`, for the daily job, so a session nobody signs in after still leaves the registry. Returns how many went.
+/// Deletes every session and every sign-in link that expired by `now`, for the daily job, so one that nobody uses again still leaves the registry. Returns how many went.
 pub async fn purge_expired_web_sessions(
     registry: &Store,
     now: Timestamp,
 ) -> Result<u64, StoreError> {
     registry
-        .write(async |tx| projects::delete_expired_web_sessions(tx, now).await)
+        .write(async |tx| {
+            let sessions = projects::delete_expired_web_sessions(tx, now).await?;
+            let links = projects::delete_expired_sign_in_links(tx, now).await?;
+            Ok(sessions + links)
+        })
         .await
 }
 

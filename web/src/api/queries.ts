@@ -3,8 +3,13 @@ import { getComparison, getFileDiff } from "./diff";
 import { RECENT_EVENTS, listAgents } from "./agents";
 import { getProjectGit } from "./git";
 import { keys } from "./keys";
-import { countAwaitingHuman, listThreads } from "./messages";
+import {
+  countAwaitingHuman,
+  listProposalThreads,
+  listThreads,
+} from "./messages";
 import { getProject, listProjects } from "./projects";
+import { localDayStart } from "../format/days";
 import {
   getProposal,
   getProposalChanges,
@@ -17,13 +22,24 @@ import {
   getCheckRun,
 } from "./proposals";
 import { getRequest, getThread, listRequests } from "./requests";
-import { getReviewBatch, listReviewBatches } from "./reviews";
+import {
+  getReviewBatch,
+  getReviewBatchDiff,
+  getReviewBatchFileDiff,
+  listReviewBatches,
+} from "./reviews";
 import { getSession } from "./session";
 import { listNeedsYou, listWorkerQuestions, listWorkers } from "./workers";
 import { getWorkspace } from "./workspaces";
 
-export const projectsQuery = () =>
-  queryOptions({ queryKey: keys.projects(), queryFn: listProjects });
+/** The list of the viewer's day at `now`: the next day reads it again, with the costs of that day. */
+export const projectsQuery = (now: number = Date.now()) => {
+  const today = localDayStart(now);
+  return queryOptions({
+    queryKey: keys.projectList(today),
+    queryFn: () => listProjects(today),
+  });
+};
 
 export const projectQuery = (slug: string) =>
   queryOptions({
@@ -87,6 +103,14 @@ export const threadQuery = (slug: string, thread: string) =>
     staleTime: Infinity,
   });
 
+/** The threads linked to a proposal, which hold the questions about its lines. */
+export const proposalThreadsQuery = (slug: string, proposal: string) =>
+  queryOptions({
+    queryKey: keys.proposalThreads(slug, proposal),
+    queryFn: () => listProposalThreads(slug, proposal),
+    staleTime: Infinity,
+  });
+
 export const awaitingHumanQuery = (slug: string) =>
   queryOptions({
     queryKey: keys.messagesAwaiting(slug),
@@ -116,6 +140,18 @@ export const proposalQuery = (slug: string, id: string) =>
   queryOptions({
     queryKey: keys.proposal(slug, id),
     queryFn: () => getProposal(slug, id),
+    staleTime: Infinity,
+  });
+
+/** The proposal as `version` shows it, which carries that version's check runs. */
+export const proposalVersionQuery = (
+  slug: string,
+  id: string,
+  version: number,
+) =>
+  queryOptions({
+    queryKey: keys.proposalVersion(slug, id, version),
+    queryFn: () => getProposal(slug, id, version),
     staleTime: Infinity,
   });
 
@@ -229,5 +265,23 @@ export const reviewBatchQuery = (slug: string, id: string) =>
   queryOptions({
     queryKey: keys.reviewBatch(slug, id),
     queryFn: () => getReviewBatch(slug, id),
+    staleTime: Infinity,
+  });
+
+export const reviewBatchDiffQuery = (slug: string, id: string) =>
+  queryOptions({
+    queryKey: keys.reviewBatchDiff(slug, id),
+    queryFn: () => getReviewBatchDiff(slug, id),
+    staleTime: Infinity,
+  });
+
+export const reviewBatchFileDiffQuery = (
+  slug: string,
+  id: string,
+  path: string,
+) =>
+  queryOptions({
+    queryKey: keys.reviewBatchFileDiff(slug, id, path),
+    queryFn: () => getReviewBatchFileDiff(slug, id, path),
     staleTime: Infinity,
   });

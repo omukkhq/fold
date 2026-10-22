@@ -1,7 +1,8 @@
 use fold_core::object::ObjectHash;
 use fold_core::reviews::Verdict;
+use fold_core::reviews::batches::{BatchMark, BatchOutcome};
 use fold_core::{
-    ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId,
+    CheckRunId, ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId,
 };
 use sqlx::SqliteExecutor;
 
@@ -736,6 +737,368 @@ pub async fn batch_reviews(
                 verdict: parse_verdict(&row.verdict)?,
                 created_at: time(row.created_at, "reviews.created_at")?,
             })
+        })
+        .collect()
+}
+
+/// The submitted batches whose integration turn has not ended, in number order.
+pub async fn undecided_batches(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<ReviewBatchId>, StoreError> {
+    let numbers = sqlx::query_scalar!(
+        r#"SELECT b.number AS "number!: i64"
+           FROM review_batches b
+           WHERE b.state = 'submitted'
+             AND NOT EXISTS (SELECT 1 FROM review_batch_integrations i WHERE i.batch_id = b.id)
+           ORDER BY b.number"#
+    )
+    .fetch_all(executor)
+    .await?;
+    numbers
+        .into_iter()
+        .map(|number| {
+            ReviewBatchId::try_from_db(number).ok_or(StoreError::Corrupt("review_batches.number"))
+        })
+        .collect()
+}
+
+/// How the integration turn of a submitted batch ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchIntegrationRow {
+    pub outcome: BatchOutcome,
+    /// The one check run of the members together, when integration checks ran.
+    pub run: Option<CheckRunId>,
+    pub created_at: Timestamp,
+}
+
+/// The end of the batch's integration turn, or `None` while it has not ended.
+pub async fn batch_integration(
+    executor: impl SqliteExecutor<'_>,
+    batch: ReviewBatchId,
+) -> Result<Option<BatchIntegrationRow>, StoreError> {
+    let number = batch.to_db();
+    let row = sqlx::query!(
+        r#"SELECT i.outcome, c.number AS "run?: i64", i.created_at
+           FROM review_batch_integrations i
+           JOIN review_batches b ON b.id = i.batch_id
+           LEFT JOIN check_runs c ON c.id = i.check_run_id
+           WHERE b.number = ?"#,
+        number
+    )
+    .fetch_optional(executor)
+    .await?;
+    row.map(|row| {
+        Ok(BatchIntegrationRow {
+            outcome: BatchOutcome::parse(&row.outcome)
+                .ok_or(StoreError::Corrupt("review_batch_integrations.outcome"))?,
+            run: row
+                .run
+                .map(|run| {
+                    CheckRunId::try_from_db(run).ok_or(StoreError::Corrupt("check_runs.number"))
+                })
+                .transpose()?,
+            created_at: time(row.created_at, "review_batch_integrations.created_at")?,
+        })
+    })
+    .transpose()
+}
+
+/// Ends the integration turn of a submitted batch with `outcome`, in the caller's write. False, with nothing written, when the turn had ended already.
+pub async fn end_batch_integration(
+    tx: &mut WriteTx,
+    batch: ReviewBatchId,
+    outcome: BatchOutcome,
+    run: Option<CheckRunId>,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let (number, outcome, now) = (batch.to_db(), outcome.as_str(), now.as_millis());
+    let run = run.map(CheckRunId::to_db);
+    let inserted = sqlx::query!(
+        "INSERT INTO review_batch_integrations (batch_id, outcome, check_run_id, created_at)
+         SELECT b.id, ?2, (SELECT id FROM check_runs WHERE number = ?3), ?4
+         FROM review_batches b WHERE b.number = ?1
+         ON CONFLICT (batch_id) DO NOTHING",
+        number,
+        outcome,
+        run,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(inserted == 1)
+}
+
+/// Whether a version of the proposal from `version` on got changes requested, by anyone.
+pub async fn changes_requested_since(
+    executor: impl SqliteExecutor<'_>,
+    proposal: ProposalId,
+    version: u32,
+) -> Result<bool, StoreError> {
+    let (number, version) = (proposal.to_db(), i64::from(version));
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM reviews r
+               JOIN proposal_versions v ON v.id = r.version_id
+               JOIN proposals p ON p.id = v.proposal_id
+               WHERE p.number = ?1 AND v.version >= ?2 AND r.verdict = 'request_changes'
+           ) AS "found!: bool""#,
+        number,
+        version
+    )
+    .fetch_one(executor)
+    .await?)
+}
+
+/// A member the batch's integration published, with its revision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchRevisionRow {
+    pub proposal: ProposalId,
+    pub version: u32,
+    pub revision: RevisionId,
+}
+
+/// The members the batch's integration published together, in revision order.
+pub async fn batch_revisions(
+    executor: impl SqliteExecutor<'_>,
+    batch: ReviewBatchId,
+) -> Result<Vec<BatchRevisionRow>, StoreError> {
+    let number = batch.to_db();
+    let rows = sqlx::query!(
+        r#"SELECT p.number AS "proposal!: i64", v.version, r.number AS "revision!: i64"
+           FROM integrations i
+           JOIN review_batches b ON b.id = i.review_batch_id
+           JOIN proposals p ON p.id = i.proposal_id
+           JOIN proposal_versions v ON v.id = i.version_id
+           JOIN revisions r ON r.id = i.revision_id
+           WHERE b.number = ?
+           ORDER BY r.number"#,
+        number
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(BatchRevisionRow {
+                proposal: ProposalId::try_from_db(row.proposal)
+                    .ok_or(StoreError::Corrupt("proposals.number"))?,
+                version: u32::try_from(row.version)
+                    .map_err(|_| StoreError::Corrupt("proposal_versions.version"))?,
+                revision: RevisionId::try_from_db(row.revision)
+                    .ok_or(StoreError::Corrupt("revisions.number"))?,
+            })
+        })
+        .collect()
+}
+
+/// The revision a succeeded integration made of the proposal and the batch it integrated with, or `None` while the proposal is not integrated.
+pub async fn integrated_as(
+    executor: impl SqliteExecutor<'_>,
+    proposal: ProposalId,
+) -> Result<Option<(RevisionId, Option<ReviewBatchId>)>, StoreError> {
+    let number = proposal.to_db();
+    let row = sqlx::query!(
+        r#"SELECT r.number AS "revision!: i64", b.number AS "batch?: i64"
+           FROM integrations i
+           JOIN proposals p ON p.id = i.proposal_id
+           JOIN revisions r ON r.id = i.revision_id
+           LEFT JOIN review_batches b ON b.id = i.review_batch_id
+           WHERE p.number = ? AND i.kind = 'proposal' AND i.result = 'succeeded'"#,
+        number
+    )
+    .fetch_optional(executor)
+    .await?;
+    row.map(|row| {
+        let revision =
+            RevisionId::try_from_db(row.revision).ok_or(StoreError::Corrupt("revisions.number"))?;
+        let batch = row
+            .batch
+            .map(|batch| {
+                ReviewBatchId::try_from_db(batch)
+                    .ok_or(StoreError::Corrupt("review_batches.number"))
+            })
+            .transpose()?;
+        Ok((revision, batch))
+    })
+    .transpose()
+}
+
+/// A request to integrate a batch that waits in the integration queue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchRequestRow {
+    /// The row id: requests of one table are served in this order.
+    pub id: i64,
+    pub batch: ReviewBatchId,
+    /// The event actor label of the caller.
+    pub actor: String,
+}
+
+/// Writes a queued integration of the batch in the caller's write and returns its row id. The unique index refuses a second waiting request for the same batch.
+pub async fn insert_batch_request(
+    tx: &mut WriteTx,
+    batch: ReviewBatchId,
+    actor: &str,
+    now: Timestamp,
+) -> Result<i64, StoreError> {
+    let (number, now) = (batch.to_db(), now.as_millis());
+    let id = sqlx::query_scalar!(
+        r#"INSERT INTO review_batch_requests (batch_id, actor, created_at)
+           SELECT b.id, ?2, ?3 FROM review_batches b WHERE b.number = ?1
+           RETURNING id AS "id!: i64""#,
+        number,
+        actor,
+        now
+    )
+    .fetch_optional(tx.conn())
+    .await?;
+    id.ok_or(StoreError::Invalid("the batch does not exist"))
+}
+
+/// Whether a request to integrate the batch waits in the queue.
+pub async fn batch_request_waiting(
+    executor: impl SqliteExecutor<'_>,
+    batch: ReviewBatchId,
+) -> Result<bool, StoreError> {
+    let number = batch.to_db();
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM review_batch_requests q JOIN review_batches b ON b.id = q.batch_id
+               WHERE b.number = ? AND q.ended_at IS NULL
+           ) AS "queued!: bool""#,
+        number
+    )
+    .fetch_one(executor)
+    .await?)
+}
+
+/// Ends a queued batch integration. False when it had ended already.
+pub async fn end_batch_request(
+    tx: &mut WriteTx,
+    id: i64,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let now = now.as_millis();
+    let updated = sqlx::query!(
+        "UPDATE review_batch_requests SET ended_at = ?2 WHERE id = ?1 AND ended_at IS NULL",
+        id,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(updated == 1)
+}
+
+/// Every queued batch integration without an end, in queue order.
+pub async fn waiting_batch_requests(
+    executor: impl SqliteExecutor<'_>,
+) -> Result<Vec<BatchRequestRow>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT q.id AS "id!: i64", b.number AS "batch!: i64", q.actor
+           FROM review_batch_requests q JOIN review_batches b ON b.id = q.batch_id
+           WHERE q.ended_at IS NULL
+           ORDER BY q.id"#
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(BatchRequestRow {
+                id: row.id,
+                batch: ReviewBatchId::try_from_db(row.batch)
+                    .ok_or(StoreError::Corrupt("review_batches.number"))?,
+                actor: row.actor,
+            })
+        })
+        .collect()
+}
+
+/// Records that fold told the review lead that the batch waits for a verdict on the version row `version_id`, in the caller's write. False, with nothing written, when it told it already.
+pub async fn note_batch_wait(
+    tx: &mut WriteTx,
+    batch: ReviewBatchId,
+    version_id: i64,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let (number, now) = (batch.to_db(), now.as_millis());
+    let inserted = sqlx::query!(
+        "INSERT INTO review_batch_waits (batch_id, version_id, created_at)
+         SELECT b.id, ?2, ?3 FROM review_batches b WHERE b.number = ?1
+         ON CONFLICT (batch_id, version_id) DO NOTHING",
+        number,
+        version_id,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(inserted == 1)
+}
+
+/// Whether fold recorded `mark` for the batch.
+pub async fn has_mark(
+    executor: impl SqliteExecutor<'_>,
+    batch: ReviewBatchId,
+    mark: BatchMark,
+) -> Result<bool, StoreError> {
+    let (number, kind) = (batch.to_db(), mark.as_str());
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM review_batch_marks m JOIN review_batches b ON b.id = m.batch_id
+               WHERE b.number = ?1 AND m.kind = ?2
+           ) AS "marked!: bool""#,
+        number,
+        kind
+    )
+    .fetch_one(executor)
+    .await?)
+}
+
+/// Records `mark` for the submitted batch in the caller's write. False, with nothing written, when it was recorded already.
+pub async fn add_mark(
+    tx: &mut WriteTx,
+    batch: ReviewBatchId,
+    mark: BatchMark,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let (number, kind, now) = (batch.to_db(), mark.as_str(), now.as_millis());
+    let inserted = sqlx::query!(
+        "INSERT INTO review_batch_marks (batch_id, kind, created_at)
+         SELECT b.id, ?2, ?3 FROM review_batches b WHERE b.number = ?1
+         ON CONFLICT (batch_id, kind) DO NOTHING",
+        number,
+        kind,
+        now
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(inserted == 1)
+}
+
+/// The submitted batches whose turn has not ended, whose wait has not ended, and whose review was submitted at or before `cutoff`, in number order.
+pub async fn due_batch_waits(
+    executor: impl SqliteExecutor<'_>,
+    cutoff: Timestamp,
+) -> Result<Vec<ReviewBatchId>, StoreError> {
+    let cutoff = cutoff.as_millis();
+    let numbers = sqlx::query_scalar!(
+        r#"SELECT b.number AS "number!: i64"
+           FROM review_batches b
+           WHERE b.state = 'submitted' AND b.submitted_at <= ?
+             AND NOT EXISTS (SELECT 1 FROM review_batch_integrations i WHERE i.batch_id = b.id)
+             AND NOT EXISTS (
+                 SELECT 1 FROM review_batch_marks m WHERE m.batch_id = b.id AND m.kind = 'wait_ended'
+             )
+           ORDER BY b.number"#,
+        cutoff
+    )
+    .fetch_all(executor)
+    .await?;
+    numbers
+        .into_iter()
+        .map(|number| {
+            ReviewBatchId::try_from_db(number).ok_or(StoreError::Corrupt("review_batches.number"))
         })
         .collect()
 }

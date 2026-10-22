@@ -3,22 +3,23 @@
 use crate::common::roles::give_role;
 use crate::proposal_tools_support::{Fixture, human, t};
 use axum::body::Body;
-use axum::http::{HeaderMap, Method, Request, StatusCode};
+use axum::http::{Method, Request, StatusCode};
 use fold_core::roles::Role;
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::{openapi, router};
+use fold_daemon::http::{openapi, socket_router};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use crate::common::signed_in_router;
+
 const BASE: &str = "/api/v1/projects/demo";
-const TANIM: (&str, &str) = ("cookie", "fold_human=tanim");
-const ANA: (&str, &str) = ("cookie", "fold_human=ana");
+const TANIM: &str = "tanim";
+const ANA: &str = "ana";
 
 #[cfg(test)]
 struct Answer {
     status: StatusCode,
-    headers: HeaderMap,
     body: Value,
 }
 
@@ -35,15 +36,12 @@ async fn send_to(
     method: Method,
     uri: &str,
     body: Option<Value>,
-    headers: &[(&str, &str)],
+    human: Option<&str>,
 ) -> Answer {
     let mut request = Request::builder()
         .header(CLIENT_HEADER, "test")
         .method(method)
         .uri(uri);
-    for (name, value) in headers {
-        request = request.header(*name, *value);
-    }
     let body = match body {
         Some(value) => {
             request = request.header("content-type", "application/json");
@@ -51,23 +49,19 @@ async fn send_to(
         }
         None => Body::empty(),
     };
-    let response = router(fx.state.clone())
-        .oneshot(request.body(body).unwrap())
-        .await
-        .unwrap();
+    let router = match human {
+        Some(human) => signed_in_router(&fx.state, human).await,
+        None => socket_router(fx.state.clone()),
+    };
+    let response = router.oneshot(request.body(body).unwrap()).await.unwrap();
     let status = response.status();
-    let headers = response.headers().clone();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body = if bytes.is_empty() {
         Value::Null
     } else {
         serde_json::from_slice(&bytes).unwrap()
     };
-    Answer {
-        status,
-        headers,
-        body,
-    }
+    Answer { status, body }
 }
 
 #[cfg(test)]
@@ -76,9 +70,9 @@ async fn send(
     method: Method,
     path: &str,
     body: Option<Value>,
-    headers: &[(&str, &str)],
+    human: Option<&str>,
 ) -> Answer {
-    send_to(fx, method, &format!("{BASE}{path}"), body, headers).await
+    send_to(fx, method, &format!("{BASE}{path}"), body, human).await
 }
 
 /// `frontend` opens P-1 on T-1, changing `src/lib.rs`.
@@ -97,7 +91,7 @@ async fn list_proposals_returns_summaries_with_the_mark() {
         .require_human_review(&fx.agent("planner").await, t(1), None, "touches auth")
         .await
         .unwrap();
-    let answer = send(&fx, Method::GET, "/proposals?state=open", None, &[]).await;
+    let answer = send(&fx, Method::GET, "/proposals?state=open", None, None).await;
     assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
     let row = &answer.body["proposals"][0];
     assert_eq!(row["id"], "P-1");
@@ -111,9 +105,9 @@ async fn list_proposals_returns_summaries_with_the_mark() {
         row["human_review"],
         json!({"reviewer": null, "reason": "touches auth", "set_by": "planner"})
     );
-    let answer = send(&fx, Method::GET, "/proposals?unclaimed=true", None, &[]).await;
+    let answer = send(&fx, Method::GET, "/proposals?unclaimed=true", None, None).await;
     assert_eq!(answer.body["proposals"].as_array().unwrap().len(), 1);
-    let answer = send(&fx, Method::GET, "/proposals?state=merged", None, &[]).await;
+    let answer = send(&fx, Method::GET, "/proposals?state=merged", None, None).await;
     assert_eq!(
         (answer.status, answer.code()),
         (StatusCode::BAD_REQUEST, "invalid_request")
@@ -125,9 +119,9 @@ async fn an_agent_approval_waits_for_the_human_the_mark_names() {
     let fx = with_p1().await;
     let p1 = fold_core::ProposalId::from_number(1).unwrap();
     let review = fx.agent("review").await;
-    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
     // A human is known once a request named them.
-    send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
     fx.reviews()
         .require_human_review(
             &fx.agent("planner").await,
@@ -138,7 +132,7 @@ async fn an_agent_approval_waits_for_the_human_the_mark_names() {
         .await
         .unwrap();
     let row = |answer: &Answer| answer.body["proposals"][0].clone();
-    let answer = send(&fx, Method::GET, "/proposals", None, &[]).await;
+    let answer = send(&fx, Method::GET, "/proposals", None, None).await;
     assert_eq!(row(&answer)["latest_verdict"], Value::Null);
     assert_eq!(row(&answer)["human_approved"], false);
     fx.reviews()
@@ -152,14 +146,20 @@ async fn an_agent_approval_waits_for_the_human_the_mark_names() {
         )
         .await
         .unwrap();
-    let answer = send(&fx, Method::GET, "/proposals", None, &[]).await;
+    let answer = send(&fx, Method::GET, "/proposals", None, None).await;
     assert_eq!(row(&answer)["latest_verdict"], "approve");
     assert_eq!(row(&answer)["human_approved"], false);
     assert_eq!(answer.body["waiting_for_you"], json!([]), "no human named");
-    let waiting = async |human: (&'static str, &'static str)| {
-        send(&fx, Method::GET, "/proposals?state=closed", None, &[human])
-            .await
-            .body["waiting_for_you"]
+    let waiting = async |human: &'static str| {
+        send(
+            &fx,
+            Method::GET,
+            "/proposals?state=closed",
+            None,
+            Some(human),
+        )
+        .await
+        .body["waiting_for_you"]
             .clone()
     };
     assert_eq!(
@@ -173,7 +173,7 @@ async fn an_agent_approval_waits_for_the_human_the_mark_names() {
         Method::POST,
         "/proposals/P-1/reviews",
         Some(json!({"version": 1, "verdict": "approve", "body": "seen"})),
-        &[ANA],
+        Some(ANA),
     )
     .await;
     assert_eq!(answer.status, StatusCode::CREATED, "{}", answer.body);
@@ -183,12 +183,12 @@ async fn an_agent_approval_waits_for_the_human_the_mark_names() {
         Method::POST,
         "/proposals/P-1/reviews",
         Some(json!({"version": 1, "verdict": "approve", "body": "seen"})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(answer.body["summary"]["human_approved"], true);
     assert_eq!(waiting(TANIM).await, json!([]), "tanim's approval stands");
-    let detail = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    let detail = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
     assert_eq!(detail.body["summary"]["latest_verdict"], "approve");
     assert_eq!(detail.body["summary"]["human_approved"], true);
     fx.reviews()
@@ -202,7 +202,7 @@ async fn an_agent_approval_waits_for_the_human_the_mark_names() {
         )
         .await
         .unwrap();
-    let answer = send(&fx, Method::GET, "/proposals", None, &[]).await;
+    let answer = send(&fx, Method::GET, "/proposals", None, None).await;
     assert_eq!(row(&answer)["latest_verdict"], "request_changes");
     assert_eq!(row(&answer)["human_approved"], false);
 }
@@ -210,7 +210,7 @@ async fn an_agent_approval_waits_for_the_human_the_mark_names() {
 #[tokio::test]
 async fn a_proposal_without_a_mark_counts_as_human_approved() {
     let fx = with_p1().await;
-    let answer = send(&fx, Method::GET, "/proposals", None, &[]).await;
+    let answer = send(&fx, Method::GET, "/proposals", None, None).await;
     assert_eq!(answer.body["proposals"][0]["human_approved"], true);
 }
 
@@ -242,7 +242,7 @@ async fn the_proposal_diff_reads_the_change_since_an_earlier_version() {
         Method::POST,
         "/proposals/P-1/comments",
         Some(json!({"version": 1, "body": "on what I read"})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(
@@ -254,7 +254,7 @@ async fn the_proposal_diff_reads_the_change_since_an_earlier_version() {
         Method::POST,
         "/proposals/P-1/reviews",
         Some(json!({"version": 1, "verdict": "approve", "body": "fine"})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(
@@ -262,9 +262,9 @@ async fn the_proposal_diff_reads_the_change_since_an_earlier_version() {
         (StatusCode::CONFLICT, "stale_version")
     );
 
-    let answer = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    let answer = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
     assert_eq!(answer.body["last_reviewed_version"], 1, "{}", answer.body);
-    let answer = send(&fx, Method::GET, "/proposals/P-1?version=1", None, &[]).await;
+    let answer = send(&fx, Method::GET, "/proposals/P-1?version=1", None, None).await;
     assert_eq!(
         answer.body["last_reviewed_version"],
         Value::Null,
@@ -272,7 +272,7 @@ async fn the_proposal_diff_reads_the_change_since_an_earlier_version() {
         answer.body
     );
 
-    let answer = send(&fx, Method::GET, "/proposals/P-1/diff?since=1", None, &[]).await;
+    let answer = send(&fx, Method::GET, "/proposals/P-1/diff?since=1", None, None).await;
     assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
     let since = &answer.body;
     assert_eq!(since["view"], "files");
@@ -290,7 +290,14 @@ async fn the_proposal_diff_reads_the_change_since_an_earlier_version() {
         (&json!(1), &json!(0))
     );
 
-    let answer = send(&fx, Method::GET, "/proposals/P-1/diff?version=2", None, &[]).await;
+    let answer = send(
+        &fx,
+        Method::GET,
+        "/proposals/P-1/diff?version=2",
+        None,
+        None,
+    )
+    .await;
     assert_eq!(
         answer.body["from"],
         json!({"kind": "revision", "id": "r1", "base": null, "task": null, "worker": null})
@@ -305,7 +312,7 @@ async fn the_proposal_diff_reads_the_change_since_an_earlier_version() {
         Method::GET,
         "/proposals/P-1/diff?since=1&path=src/lib.rs",
         None,
-        &[],
+        None,
     )
     .await;
     assert_eq!(answer.body["view"], "file", "{}", answer.body);
@@ -338,12 +345,12 @@ async fn the_proposal_diff_reads_the_change_since_an_earlier_version() {
             Method::GET,
             &format!("/proposals/P-1/diff?{query}"),
             None,
-            &[],
+            None,
         )
         .await;
         assert_eq!((answer.status, answer.code()), (status, code), "{query}");
     }
-    let answer = send(&fx, Method::GET, "/proposals/P-4/diff", None, &[]).await;
+    let answer = send(&fx, Method::GET, "/proposals/P-4/diff", None, None).await;
     assert_eq!(
         (answer.status, answer.code()),
         (StatusCode::NOT_FOUND, "proposal_not_found")
@@ -382,7 +389,7 @@ async fn the_proposal_diff_since_an_earlier_version_leaves_out_what_main_gained(
         .detail()
         .unwrap();
     let review = fx.agent("review").await;
-    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
     fx.reviews()
         .submit_review(
             &review,
@@ -413,7 +420,7 @@ async fn the_proposal_diff_since_an_earlier_version_leaves_out_what_main_gained(
         .detail()
         .unwrap();
 
-    let answer = send(&fx, Method::GET, "/proposals/P-1/diff?since=1", None, &[]).await;
+    let answer = send(&fx, Method::GET, "/proposals/P-1/diff?since=1", None, None).await;
     assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
     let paths: Vec<&Value> = answer.body["files"]
         .as_array()
@@ -431,7 +438,7 @@ async fn the_proposal_diff_since_an_earlier_version_leaves_out_what_main_gained(
         Method::GET,
         "/proposals/P-1/diff?since=1&path=src/lib.rs",
         None,
-        &[],
+        None,
     )
     .await;
     assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
@@ -446,7 +453,7 @@ async fn the_proposal_diff_since_an_earlier_version_leaves_out_what_main_gained(
         Method::GET,
         "/proposals/P-1/diff?since=1&path=docs/guide.md",
         None,
-        &[],
+        None,
     )
     .await;
     assert_eq!(
@@ -456,7 +463,14 @@ async fn the_proposal_diff_since_an_earlier_version_leaves_out_what_main_gained(
     assert_eq!(fx.handle.carries.misses(), 1);
     assert_eq!(fx.handle.carries.hits(), 2);
 
-    let answer = send(&fx, Method::GET, "/proposals/P-1/diff?version=2", None, &[]).await;
+    let answer = send(
+        &fx,
+        Method::GET,
+        "/proposals/P-1/diff?version=2",
+        None,
+        None,
+    )
+    .await;
     assert_eq!(answer.body["from"]["id"], "r2");
     assert_eq!(
         answer.body["totals"],
@@ -467,7 +481,7 @@ async fn the_proposal_diff_since_an_earlier_version_leaves_out_what_main_gained(
 #[tokio::test]
 async fn get_proposal_reports_the_gates_for_the_requesting_human() {
     let fx = with_p1().await;
-    let answer = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    let answer = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
     assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
     let detail = &answer.body;
     assert_eq!(detail["summary"]["id"], "P-1");
@@ -507,22 +521,29 @@ async fn get_proposal_reports_the_gates_for_the_requesting_human() {
     .collect();
     assert_eq!(gates, expected);
 
-    let answer = send(&fx, Method::GET, "/proposals/P-1", None, &[]).await;
+    let answer = send(&fx, Method::GET, "/proposals/P-1", None, None).await;
     assert_eq!(
         (answer.status, answer.code()),
         (StatusCode::UNAUTHORIZED, "human_name_required")
     );
-    let answer = send(&fx, Method::GET, "/proposals/P-9", None, &[TANIM]).await;
+    let answer = send(&fx, Method::GET, "/proposals/P-9", None, Some(TANIM)).await;
     assert_eq!(
         (answer.status, answer.code()),
         (StatusCode::NOT_FOUND, "proposal_not_found")
     );
-    let answer = send(&fx, Method::GET, "/proposals/P-1?version=4", None, &[TANIM]).await;
+    let answer = send(
+        &fx,
+        Method::GET,
+        "/proposals/P-1?version=4",
+        None,
+        Some(TANIM),
+    )
+    .await;
     assert_eq!(
         (answer.status, answer.code()),
         (StatusCode::NOT_FOUND, "proposal_not_found")
     );
-    let answer = send(&fx, Method::GET, "/proposals/nine", None, &[TANIM]).await;
+    let answer = send(&fx, Method::GET, "/proposals/nine", None, Some(TANIM)).await;
     assert_eq!(
         (answer.status, answer.code()),
         (StatusCode::BAD_REQUEST, "invalid_id")
@@ -537,7 +558,7 @@ async fn a_human_comment_is_added_and_listed() {
         Method::POST,
         "/proposals/P-1/comments",
         Some(json!({"version": 1, "path": "src/lib.rs", "side": "new", "start_line": 1, "end_line": 1, "body": "why y"})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(answer.status, StatusCode::CREATED, "{}", answer.body);
@@ -564,14 +585,14 @@ async fn a_human_comment_is_added_and_listed() {
         Method::POST,
         "/proposals/P-1/comments",
         Some(json!({"version": 1, "reply_to": "rc-1", "body": "because"})),
-        &[ANA],
+        Some(ANA),
     )
     .await;
     assert_eq!(answer.status, StatusCode::CREATED, "{}", answer.body);
     assert_eq!(answer.body["reply_to"], "rc-1");
     assert_eq!(answer.body["path"], Value::Null);
 
-    let answer = send(&fx, Method::GET, "/proposals/P-1/comments", None, &[]).await;
+    let answer = send(&fx, Method::GET, "/proposals/P-1/comments", None, None).await;
     assert_eq!(answer.status, StatusCode::OK);
     assert_eq!(answer.body["comments"].as_array().unwrap().len(), 2);
     let answer = send(
@@ -579,7 +600,7 @@ async fn a_human_comment_is_added_and_listed() {
         Method::GET,
         "/proposals/P-1/comments?version=1",
         None,
-        &[],
+        None,
     )
     .await;
     assert_eq!(answer.body["comments"].as_array().unwrap().len(), 2);
@@ -588,7 +609,7 @@ async fn a_human_comment_is_added_and_listed() {
         Method::GET,
         "/proposals/P-1/comments?version=3",
         None,
-        &[],
+        None,
     )
     .await;
     assert_eq!(
@@ -601,7 +622,7 @@ async fn a_human_comment_is_added_and_listed() {
         Method::POST,
         "/proposals/P-1/comments",
         Some(json!({"version": 1, "path": "src/lib.rs", "side": "new", "start_line": 5, "end_line": 6, "body": "far"})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(
@@ -613,7 +634,7 @@ async fn a_human_comment_is_added_and_listed() {
         Method::POST,
         "/proposals/P-1/comments",
         Some(json!({"version": 1, "path": "src/lib.rs", "body": "no lines"})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(
@@ -625,7 +646,7 @@ async fn a_human_comment_is_added_and_listed() {
         Method::POST,
         "/proposals/P-1/comments",
         Some(json!({"version": 1, "body": "anonymous"})),
-        &[],
+        None,
     )
     .await;
     assert_eq!(
@@ -642,7 +663,7 @@ async fn a_human_verdict_moves_the_turn() {
         Method::POST,
         "/proposals/P-1/reviews",
         Some(json!({"version": 1, "verdict": "comment", "body": ""})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(
@@ -656,7 +677,7 @@ async fn a_human_verdict_moves_the_turn() {
         Some(json!({"version": 1, "verdict": "request_changes", "body": "rename back", "comments": [
             {"path": "src/lib.rs", "side": "old", "start_line": 1, "end_line": 1, "body": "keep x"},
         ]})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(answer.status, StatusCode::CREATED, "{}", answer.body);
@@ -670,12 +691,12 @@ async fn a_human_verdict_moves_the_turn() {
         Method::POST,
         "/proposals/P-1/reviews",
         Some(json!({"version": 1, "verdict": "approve", "body": "fine after all"})),
-        &[ANA],
+        Some(ANA),
     )
     .await;
     assert_eq!(answer.status, StatusCode::CREATED, "{}", answer.body);
     assert_eq!(answer.body["summary"]["turn"], "with_reviewer");
-    let detail = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    let detail = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
     assert_eq!(detail.body["reviews"].as_array().unwrap().len(), 2);
     assert_eq!(detail.body["reviews"][0]["reviewer"], "human:tanim");
     assert_eq!(detail.body["reviews"][0]["comments"], 1);
@@ -685,7 +706,7 @@ async fn a_human_verdict_moves_the_turn() {
         Method::POST,
         "/proposals/P-1/reviews",
         Some(json!({"version": 1, "verdict": "reject", "body": "not this way"})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(answer.status, StatusCode::CREATED);
@@ -696,7 +717,7 @@ async fn a_human_verdict_moves_the_turn() {
         Method::POST,
         "/proposals/P-1/reviews",
         Some(json!({"version": 1, "verdict": "approve", "body": "late"})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(
@@ -706,14 +727,14 @@ async fn a_human_verdict_moves_the_turn() {
 }
 
 #[tokio::test]
-async fn human_integrates_through_the_route_with_the_fold_human_cookie() {
+async fn human_integrates_through_the_route_with_a_session_cookie() {
     let fx = with_p1().await;
     let answer = send(
         &fx,
         Method::POST,
         "/proposals/P-1/integrate",
         Some(json!({"expected_version": 1})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
@@ -721,7 +742,7 @@ async fn human_integrates_through_the_route_with_the_fold_human_cookie() {
         answer.body,
         json!({"proposal": "P-1", "result": "succeeded", "revision": "r2", "run": null})
     );
-    let detail = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    let detail = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
     assert_eq!(detail.body["summary"]["state"], "integrated");
     assert_eq!(detail.body["task_status"], "done");
     assert_eq!(detail.body["reviews"][0]["verdict"], "approve");
@@ -736,14 +757,14 @@ async fn human_integrate_without_the_cookie_is_refused() {
         Method::POST,
         "/proposals/P-1/integrate",
         Some(json!({"expected_version": 1})),
-        &[],
+        None,
     )
     .await;
     assert_eq!(
         (answer.status, answer.code()),
         (StatusCode::UNAUTHORIZED, "human_name_required")
     );
-    let answer = send(&fx, Method::GET, "/proposals?state=integrated", None, &[]).await;
+    let answer = send(&fx, Method::GET, "/proposals?state=integrated", None, None).await;
     assert_eq!(answer.body["proposals"], json!([]));
 }
 
@@ -755,7 +776,7 @@ async fn integrate_with_a_stale_expected_version_gives_stale_version() {
         Method::POST,
         "/proposals/P-1/integrate",
         Some(json!({"expected_version": 2})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(
@@ -769,7 +790,7 @@ async fn integrate_with_a_stale_expected_version_gives_stale_version() {
         Method::POST,
         "/proposals/P-1/integrate",
         Some(json!({})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(
@@ -795,7 +816,7 @@ async fn integrate_refusals_answer_with_their_gate_codes() {
         Method::POST,
         "/proposals/P-1/integrate",
         Some(json!({"expected_version": 1})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(
@@ -804,7 +825,7 @@ async fn integrate_refusals_answer_with_their_gate_codes() {
         "a human integrates a marked task only after a reviewer agent approved it"
     );
     let review = fx.agent("review").await;
-    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
     fx.reviews()
         .submit_review(
             &review,
@@ -821,7 +842,7 @@ async fn integrate_refusals_answer_with_their_gate_codes() {
         Method::POST,
         "/proposals/P-1/integrate",
         Some(json!({"expected_version": 1})),
-        &[ANA],
+        Some(ANA),
     )
     .await;
     assert_eq!(
@@ -839,7 +860,7 @@ async fn integrate_refusals_answer_with_their_gate_codes() {
         Method::POST,
         "/proposals/P-1/integrate",
         Some(json!({"expected_version": 1})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(
@@ -862,7 +883,7 @@ async fn a_conflicting_integration_answers_integration_conflicted() {
         Method::POST,
         "/proposals/P-2/integrate",
         Some(json!({"expected_version": 1})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
@@ -871,7 +892,7 @@ async fn a_conflicting_integration_answers_integration_conflicted() {
         Method::POST,
         "/proposals/P-1/integrate",
         Some(json!({"expected_version": 1})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(
@@ -885,7 +906,7 @@ async fn a_conflicting_integration_answers_integration_conflicted() {
         json!([{"path": "src/lib.rs", "kind": "text"}])
     );
     assert!(details["hint"].as_str().unwrap().contains("get_proposal"));
-    let detail = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    let detail = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
     let report = &detail.body["conflict"];
     assert_eq!(report["proposal"], "P-1");
     assert_eq!(report["version"], 1);
@@ -904,30 +925,6 @@ async fn a_conflicting_integration_answers_integration_conflicted() {
     assert_eq!(hunk["version"]["lines"], json!(["pub fn y() {}\n"]));
     assert_eq!(detail.body["summary"]["conflicted"], true);
     assert_eq!(detail.body["summary"]["turn"], "with_author");
-}
-
-#[tokio::test]
-async fn fold_human_cookie_is_http_only_strict_and_one_year() {
-    let fx = Fixture::new().await;
-    let answer = send_to(
-        &fx,
-        Method::POST,
-        "/api/v1/session",
-        Some(json!({"name": "ana"})),
-        &[],
-    )
-    .await;
-    assert_eq!(answer.status, StatusCode::NO_CONTENT);
-    let cookies: Vec<&str> = answer
-        .headers
-        .get_all("set-cookie")
-        .iter()
-        .map(|value| value.to_str().unwrap())
-        .collect();
-    assert_eq!(
-        cookies,
-        ["fold_human=ana; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000"]
-    );
 }
 
 #[test]
@@ -1035,7 +1032,7 @@ async fn a_check_run_is_read_with_its_logs_and_listed_on_its_proposal() {
         panic!("expected a run");
     };
     let answer = fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
-        let answer = send(&fx, Method::GET, &format!("/check-runs/{run}"), None, &[]).await;
+        let answer = send(&fx, Method::GET, &format!("/check-runs/{run}"), None, None).await;
         if answer.body["state"] == "running" {
             Err(answer.body)
         } else {
@@ -1053,7 +1050,7 @@ async fn a_check_run_is_read_with_its_logs_and_listed_on_its_proposal() {
     assert_eq!(result["outcome"], "passed");
     assert_eq!(result["log"], "fine\n");
     assert_eq!(result["truncated"], false);
-    let missing = send(&fx, Method::GET, "/check-runs/cr-7", None, &[]).await;
+    let missing = send(&fx, Method::GET, "/check-runs/cr-7", None, None).await;
     assert_eq!(
         (missing.status, missing.code()),
         (StatusCode::NOT_FOUND, "check_run_not_found")
@@ -1065,7 +1062,7 @@ async fn a_check_run_is_read_with_its_logs_and_listed_on_its_proposal() {
         .unwrap()
         .detail()
         .unwrap();
-    let proposal = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    let proposal = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
     let checks = &proposal.body["checks"];
     assert_eq!(checks.as_array().unwrap().len(), 1, "{checks}");
     assert_eq!(checks[0]["id"], "cr-1");

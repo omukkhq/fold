@@ -93,7 +93,7 @@ pub struct RevisionView {
     /// The title of the integrated proposal, or the first line of a direct change's commit message.
     #[schema(required = true)]
     pub title: Option<String>,
-    /// The agent whose proposal was integrated, the human who pulled, or the main worker that made a direct change.
+    /// The agent whose proposal was integrated, the human who pulled, or the main agent that made a direct change.
     #[schema(required = true)]
     pub author: Option<String>,
     /// The remote commit a pull brought in.
@@ -102,6 +102,9 @@ pub struct RevisionView {
     /// The Git commit the revision became in the project folder's repository `.git`; null until it is written, just after the integration.
     #[schema(required = true)]
     pub commit: Option<String>,
+    /// The review batch whose approved members integrated together with this proposal, each as its own revision.
+    #[schema(value_type = Option<String>, required = true, example = "rb-3")]
+    pub batch: Option<fold_core::ReviewBatchId>,
 }
 
 impl From<RevisionSummary> for RevisionView {
@@ -124,6 +127,7 @@ impl From<RevisionSummary> for RevisionView {
             author: summary.author,
             pull: summary.pull,
             commit: summary.commit,
+            batch: summary.batch,
         }
     }
 }
@@ -434,7 +438,7 @@ pub struct WorkspaceEntryView {
     /// The title of the task; null for the main workspace.
     #[schema(required = true)]
     pub task_title: Option<String>,
-    /// The worker that owns the workspace, such as `frontend/ui`.
+    /// The worker that owns the workspace, such as `frontend`.
     #[schema(required = true)]
     pub owner: Option<String>,
     pub kind: WorkspaceKindView,

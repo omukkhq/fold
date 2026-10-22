@@ -37,10 +37,10 @@ function ProposalDetailRoute() {
       id={id}
       search={search}
       human={session.data?.human ?? null}
-      onSearch={(next) => {
+      onSearch={(next, history = "replace") => {
         void navigate({
           search: parseDetailSearch({ ...next }),
-          replace: true,
+          replace: history === "replace",
         });
       }}
     />

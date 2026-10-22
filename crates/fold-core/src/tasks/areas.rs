@@ -2,9 +2,10 @@ use std::collections::BTreeSet;
 
 use serde_json::json;
 
-use crate::agents::AreaName;
+use crate::agents::{AgentName, AreaName, WorkerName};
 use crate::error::{FoldError, codes};
 use crate::ids::TaskId;
+use crate::messages::Address;
 use crate::tasks::LabelName;
 
 /// The areas whose label is among `labels`, in the order of `areas`. Each area is given as its name and the label that puts a task in it.
@@ -139,6 +140,101 @@ pub fn check_new_area(
     ))
 }
 
+/// Why a reader is offered for a human's feedback on a task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReaderRole {
+    ClaimHolder,
+    AreaLead,
+    MainAgent,
+}
+
+/// A reader of a human's feedback on a task, as a worker name: an agent reads it through its main worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeedbackReader {
+    pub name: WorkerName,
+    pub role: ReaderRole,
+}
+
+/// The readers a human's feedback on a task goes to, the default first: the worker that holds the implementation claim, the lead of the task's area and the main agents. Only they answer for the task, so no other agent is offered. A task of Main has no lead but the main agent, and a task in no area has none. Each worker is listed once, under its first role. `areas` gives each area's name, label and lead.
+pub fn feedback_readers(
+    holder: Option<&WorkerName>,
+    labels: &[LabelName],
+    areas: &[(AreaName, LabelName, Option<AgentName>)],
+    main_agents: &[AgentName],
+) -> Vec<FeedbackReader> {
+    let main = in_main_area(labels);
+    let leads = areas
+        .iter()
+        .filter(|(area, label, _)| !main && !area.is_main() && labels.contains(label))
+        .filter_map(|(_, _, lead)| lead.as_ref());
+    let mut readers: Vec<FeedbackReader> = Vec::new();
+    let candidates = holder
+        .map(|holder| (holder.clone(), ReaderRole::ClaimHolder))
+        .into_iter()
+        .chain(leads.map(|lead| (WorkerName::main(lead), ReaderRole::AreaLead)))
+        .chain(
+            main_agents
+                .iter()
+                .map(|agent| (WorkerName::main(agent), ReaderRole::MainAgent)),
+        );
+    for (name, role) in candidates {
+        if readers.iter().all(|reader| reader.name != name) {
+            readers.push(FeedbackReader { name, role });
+        }
+    }
+    readers
+}
+
+/// The addresses a human's feedback on `task` goes to: `to` when every entry names one of the `readers`, as [`feedback_readers`] lists them, otherwise the first reader. A tag, a human or any other agent is refused with `recipient_not_reader`, and a task without readers with `recipient_not_found` when `to` is left out.
+pub fn feedback_to(
+    task: TaskId,
+    to: Option<Vec<Address>>,
+    readers: &[FeedbackReader],
+) -> Result<Vec<Address>, FoldError> {
+    let Some(to) = to else {
+        return readers
+            .first()
+            .map(|reader| vec![Address::of_worker(&reader.name)])
+            .ok_or_else(|| {
+                FoldError::new(
+                    codes::RECIPIENT_NOT_FOUND,
+                    format!("{task} has no reader to receive the feedback"),
+                )
+                .with_details([("task", json!(task.to_string()))])
+                .with_hint("give the task an area whose lead runs, or give an agent the main tag")
+            });
+    };
+    let reads = |address: &Address| match address {
+        Address::Agent(agent) => {
+            let name = WorkerName::main(agent);
+            readers.iter().any(|reader| reader.name == name)
+        }
+        Address::Tag(_) | Address::All | Address::Human(_) | Address::Humans => false,
+    };
+    let refused: Vec<String> = to
+        .iter()
+        .filter(|address| !reads(address))
+        .map(ToString::to_string)
+        .collect();
+    if refused.is_empty() {
+        return Ok(to);
+    }
+    let offered: Vec<String> = readers
+        .iter()
+        .map(|reader| reader.name.to_string())
+        .collect();
+    Err(FoldError::new(
+        codes::RECIPIENT_NOT_READER,
+        format!("feedback on {task} goes only to its claim holder, its area lead or the main agent"),
+    )
+    .with_details([
+        ("task", json!(task.to_string())),
+        ("to", json!(refused)),
+        ("readers", json!(offered)),
+    ])
+    .with_hint(format!("send it to a reader that GET /tasks/{task}/readers lists, or leave out `to` for the default reader")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +330,190 @@ mod tests {
         assert!(check_new_area(&docs, &label("guide"), &tasks[1..2], &areas).is_ok());
         assert!(check_new_area(&docs, &label("chore"), &tasks, &areas).is_ok());
         assert!(check_new_area(&docs, &label("guide"), &tasks, &[]).is_ok());
+    }
+
+    fn worker(name: &str) -> WorkerName {
+        WorkerName::parse(name).unwrap()
+    }
+
+    fn agents(names: &[&str]) -> Vec<AgentName> {
+        names
+            .iter()
+            .map(|name| AgentName::parse(name).unwrap())
+            .collect()
+    }
+
+    fn led() -> Vec<(AreaName, LabelName, Option<AgentName>)> {
+        vec![
+            (
+                AreaName::parse("web").unwrap(),
+                label("ui"),
+                AgentName::parse("web-lead").ok(),
+            ),
+            (AreaName::parse("api").unwrap(), label("server"), None),
+            (AreaName::main(), LabelName::main(), None),
+        ]
+    }
+
+    fn readers(
+        holder: Option<&str>,
+        set: &[&str],
+        main_agents: &[&str],
+    ) -> Vec<(String, ReaderRole)> {
+        let holder = holder.map(worker);
+        feedback_readers(holder.as_ref(), &labels(set), &led(), &agents(main_agents))
+            .into_iter()
+            .map(|reader| (reader.name.to_string(), reader.role))
+            .collect()
+    }
+
+    #[test]
+    fn feedback_goes_to_the_claim_holder_first_then_the_area_lead_and_the_main_agent() {
+        assert_eq!(
+            readers(Some("web-t12"), &["ui", "bug"], &["main"]),
+            [
+                ("web-t12".to_owned(), ReaderRole::ClaimHolder),
+                ("web-lead".to_owned(), ReaderRole::AreaLead),
+                ("main".to_owned(), ReaderRole::MainAgent),
+            ]
+        );
+    }
+
+    #[test]
+    fn without_a_claim_the_area_lead_is_the_default() {
+        assert_eq!(
+            readers(None, &["ui"], &["main"]),
+            [
+                ("web-lead".to_owned(), ReaderRole::AreaLead),
+                ("main".to_owned(), ReaderRole::MainAgent),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_task_in_no_area_or_in_an_area_without_a_lead_goes_to_the_main_agent() {
+        for set in [&["bug"][..], &[], &["server"]] {
+            assert_eq!(
+                readers(None, set, &["main"]),
+                [("main".to_owned(), ReaderRole::MainAgent)],
+                "{set:?}"
+            );
+        }
+        assert!(readers(None, &["bug"], &[]).is_empty());
+    }
+
+    #[test]
+    fn a_task_of_main_has_the_main_agent_alone_beside_its_holder() {
+        assert_eq!(
+            readers(None, &["main", "ui"], &["main"]),
+            [("main".to_owned(), ReaderRole::MainAgent)]
+        );
+        assert_eq!(
+            readers(Some("main"), &["main"], &["main"]),
+            [("main".to_owned(), ReaderRole::ClaimHolder)],
+            "the main agent that holds the claim is listed once"
+        );
+    }
+
+    #[test]
+    fn a_lead_that_holds_the_claim_is_listed_once_and_its_child_worker_apart() {
+        assert_eq!(
+            readers(Some("web-lead"), &["ui"], &["main"]),
+            [
+                ("web-lead".to_owned(), ReaderRole::ClaimHolder),
+                ("main".to_owned(), ReaderRole::MainAgent),
+            ]
+        );
+        assert_eq!(
+            readers(Some("web-worker"), &["ui"], &["web-lead"]),
+            [
+                ("web-worker".to_owned(), ReaderRole::ClaimHolder),
+                ("web-lead".to_owned(), ReaderRole::AreaLead),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_task_with_the_labels_of_two_led_areas_offers_both_leads() {
+        let areas = vec![
+            (
+                AreaName::parse("web").unwrap(),
+                label("ui"),
+                AgentName::parse("web-lead").ok(),
+            ),
+            (
+                AreaName::parse("api").unwrap(),
+                label("server"),
+                AgentName::parse("api-lead").ok(),
+            ),
+        ];
+        let names: Vec<(String, ReaderRole)> =
+            feedback_readers(None, &labels(&["server", "ui"]), &areas, &agents(&["main"]))
+                .into_iter()
+                .map(|reader| (reader.name.to_string(), reader.role))
+                .collect();
+        assert_eq!(
+            names,
+            [
+                ("web-lead".to_owned(), ReaderRole::AreaLead),
+                ("api-lead".to_owned(), ReaderRole::AreaLead),
+                ("main".to_owned(), ReaderRole::MainAgent),
+            ]
+        );
+    }
+
+    fn t12() -> TaskId {
+        "T-12".parse().unwrap()
+    }
+
+    fn addresses(entries: &[&str]) -> Vec<Address> {
+        Address::parse_all(entries).unwrap()
+    }
+
+    fn offered(holder: Option<&str>) -> Vec<FeedbackReader> {
+        let holder = holder.map(worker);
+        feedback_readers(
+            holder.as_ref(),
+            &labels(&["ui"]),
+            &led(),
+            &agents(&["main"]),
+        )
+    }
+
+    #[test]
+    fn feedback_without_recipients_goes_to_the_first_reader() {
+        assert_eq!(
+            feedback_to(t12(), None, &offered(Some("web-worker"))).unwrap(),
+            addresses(&["web-worker"])
+        );
+        assert_eq!(
+            feedback_to(t12(), None, &offered(None)).unwrap(),
+            addresses(&["web-lead"]),
+            "without a claim the area lead"
+        );
+        let none = feedback_to(t12(), None, &[]).unwrap_err();
+        assert_eq!(none.code(), codes::RECIPIENT_NOT_FOUND);
+    }
+
+    #[test]
+    fn feedback_takes_recipients_that_are_readers() {
+        let readers = offered(Some("web-worker"));
+        let to = addresses(&["web-worker", "web-lead", "main"]);
+        assert_eq!(feedback_to(t12(), Some(to.clone()), &readers).unwrap(), to);
+    }
+
+    #[test]
+    fn feedback_to_anyone_but_a_reader_is_refused() {
+        let readers = offered(Some("web-worker"));
+        for entry in ["backend", "tag:ui", "all", "humans", "human:ana"] {
+            let refused =
+                feedback_to(t12(), Some(addresses(&["main", entry])), &readers).unwrap_err();
+            assert_eq!(refused.code(), codes::RECIPIENT_NOT_READER, "{entry}");
+            assert_eq!(
+                refused.details().and_then(|details| details.get("to")),
+                Some(&json!([entry])),
+                "{entry}"
+            );
+        }
     }
 }

@@ -1,10 +1,11 @@
 use fold_core::roles::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, WorkerLimits, WorkerLimitsChange,
+    WorkerState,
 };
 use fold_core::text::shorten;
 use fold_core::turn_errors;
 use fold_core::{
-    AgentName, AreaName, FoldError, LabelName, ProposalId, Role, Tag, TaskId, WorkerName, codes,
+    AgentName, AreaName, FoldError, LabelName, ProposalId, ReviewPlanId, Role, Tag, TaskId, codes,
 };
 use fold_store::agents::{AreaRow, HandoffRow, PreviousSessionRow, WorkerProcessRow};
 use rmcp::handler::server::common::schema_for_type;
@@ -36,11 +37,7 @@ pub const RESTART_WORKER: &str = "restart_worker";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
-pub struct PauseProjectInput {
-    /// The worker that makes this call. Leave it out: only the main agent's main worker pauses or resumes.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
-}
+pub struct PauseProjectInput {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -58,9 +55,6 @@ pub struct DefineAreaInput {
     /// The MCP servers the area's lead and task workers load, by name: fold and servers of the project's .mcp.json, such as ["fold", "pencil"]. Leave it out for the role's servers.
     #[serde(default)]
     pub mcp: Option<Vec<String>>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -86,9 +80,6 @@ pub struct UpdateAreaInput {
     /// True removes the area's MCP server list, so its workers get the role's servers again. Do not combine it with mcp.
     #[serde(default)]
     pub clear_mcp: bool,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -108,6 +99,9 @@ pub struct StartWorkerInput {
     /// The proposals a reviewer reviews, such as P-3: one proposal, or two or more related proposals, which fold makes into a review batch of the reviewer's.
     #[serde(default)]
     pub proposals: Vec<String>,
+    /// For a reviewer, in place of proposals: the review plan whose open proposals it reviews, such as rp-2. Two or more become one batch; the tasks the plan still waits for leave it.
+    #[serde(default)]
+    pub plan: Option<String>,
     /// For a reviewer's revised proposals: the scope of the review you choose for some of them, each with its reason, when fold's suggested_scope from get_proposal_diff does not fit. The other proposals follow the suggestion, and the reviewer follows the scope it gets.
     #[serde(default)]
     pub scopes: Vec<super::reviews::ScopeChoiceInput>,
@@ -117,9 +111,6 @@ pub struct StartWorkerInput {
     /// What the worker should know beyond its role and its tasks; fold adds it to the worker's first turn.
     #[serde(default)]
     pub instructions: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -127,9 +118,6 @@ pub struct StartWorkerInput {
 pub struct StopWorkerInput {
     /// The worker's agent name, such as web-worker.
     pub name: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -140,17 +128,17 @@ pub struct RestartWorkerInput {
     /// What the user wants the worker to know in its new session; fold adds it to the first turn and never stores it.
     #[serde(default)]
     pub instructions: Option<String>,
-    /// The worker that makes this call. Leave it out: only the main agent's main worker restarts a worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct ListWorkersInput {
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
+    /// True lists the stopped workers too. Leave it out to list only the workers that run or failed, with stopped_count, the number of stopped workers.
+    #[serde(default)]
+    pub include_stopped: bool,
+    /// True gives each area's instructions. Leave it out to give only instructions_chars, their length.
+    #[serde(default)]
+    pub include_instructions: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -168,18 +156,11 @@ pub struct SetWorkerLimitsInput {
     /// True removes the limit of one area, so an area has no limit of its own. Do not combine it with max_per_area.
     #[serde(default)]
     pub clear_max_per_area: bool,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
-pub struct ListAgentsInput {
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
-}
+pub struct ListAgentsInput {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -187,9 +168,6 @@ pub struct GetActivityInput {
     /// Only the workers of this agent, such as backend. Leave it out for the workers of every agent.
     #[serde(default)]
     pub agent: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -197,9 +175,6 @@ pub struct GetActivityInput {
 pub struct WriteHandoffInput {
     /// The hand-off note for your next session, at most 8000 characters: what you are doing, your open decisions and what comes next. Tasks, proposals, reviews and messages stay in fold, so leave them out.
     pub text: String,
-    /// The worker that makes this call. Leave it out: only a lead's main worker writes its note.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {
@@ -236,7 +211,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_WORKERS,
-            "List the areas with their leads and every worker fold runs, with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human.",
+            "List the areas with their leads, models and MCP servers, and the workers that run or failed, each with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human. stopped_count counts the stopped workers; pass include_stopped true to list them, such as to read a finished worker's sessions, and include_instructions true for each area's instructions.",
             schema_for_type::<ListWorkersInput>(),
         ),
         Tool::new(
@@ -256,7 +231,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             WRITE_HANDOFF,
-            "As an area lead or the review lead, store your hand-off note when fold asks for it; fold then starts you again with a fresh context whose first turn holds the note and the current fold state.",
+            "As an area lead, the review lead or the supervised main, store your hand-off note when fold asks for it; fold then starts you again with a fresh context whose first turn holds the note and the current fold state.",
             schema_for_type::<WriteHandoffInput>(),
         ),
         Tool::new(
@@ -318,16 +293,12 @@ fn ids<T: std::str::FromStr>(texts: &[String], what: &str) -> Result<Vec<T>, Fol
         .collect()
 }
 
-pub async fn define_area(
-    server: &FoldServer,
-    as_worker: Option<&WorkerName>,
-    arguments: &JsonObject,
-) -> Result<Value, FoldError> {
+pub async fn define_area(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let input: DefineAreaInput = parse(arguments)?;
     let name = AreaName::parse(&input.name)?;
     let label = LabelName::parse(&input.label)?;
     let profile = AreaProfile::from_request(input.instructions, input.model, input.mcp)?;
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let area = server
         .agents
         .define_area(&actor, &name, &label, &profile)
@@ -336,11 +307,7 @@ pub async fn define_area(
     Ok(json!({ "area": area_json(&area) }))
 }
 
-pub async fn update_area(
-    server: &FoldServer,
-    as_worker: Option<&WorkerName>,
-    arguments: &JsonObject,
-) -> Result<Value, FoldError> {
+pub async fn update_area(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let input: UpdateAreaInput = parse(arguments)?;
     let name = AreaName::parse(&input.name)?;
     let change = AreaProfileChange::from_request(AreaProfileRequest {
@@ -351,7 +318,7 @@ pub async fn update_area(
         clear_model: input.clear_model,
         clear_mcp: input.clear_mcp,
     })?;
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let area = server
         .agents
         .update_area(&actor, &name, &change)
@@ -363,11 +330,7 @@ pub async fn update_area(
     }))
 }
 
-pub async fn start_worker(
-    server: &FoldServer,
-    as_worker: Option<&WorkerName>,
-    arguments: &JsonObject,
-) -> Result<Value, FoldError> {
+pub async fn start_worker(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let input: StartWorkerInput = parse(arguments)?;
     let role = Role::parse(&input.role).ok_or_else(|| {
         FoldError::new(codes::INVALID_REQUEST, "role is not a worker role")
@@ -379,11 +342,14 @@ pub async fn start_worker(
         area: input.area.as_deref().map(AreaName::parse).transpose()?,
         tasks: ids::<TaskId>(&input.tasks, "task")?,
         proposals: ids::<ProposalId>(&input.proposals, "proposal")?,
+        plan: ids::<ReviewPlanId>(input.plan.as_slice(), "review plan")?
+            .first()
+            .copied(),
         scopes: super::reviews::scope_choices(&input.scopes)?,
         model: input.model,
         instructions: input.instructions,
     };
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let started = server
         .agents
         .start_worker(&actor, request)
@@ -416,12 +382,11 @@ fn started_json(started: &StartedWorker) -> Value {
 
 pub async fn restart_worker(
     server: &FoldServer,
-    as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let input: RestartWorkerInput = parse(arguments)?;
     let name = AgentName::parse(&input.name)?;
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let worker = server
         .agents
         .restart_worker(&actor, &name, input.instructions.as_deref())
@@ -439,14 +404,10 @@ pub async fn restart_worker(
     Ok(json!({ "worker": value }))
 }
 
-pub async fn stop_worker(
-    server: &FoldServer,
-    as_worker: Option<&WorkerName>,
-    arguments: &JsonObject,
-) -> Result<Value, FoldError> {
+pub async fn stop_worker(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let input: StopWorkerInput = parse(arguments)?;
     let name = AgentName::parse(&input.name)?;
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let worker = server
         .agents
         .stop_worker(&actor, &name)
@@ -465,7 +426,6 @@ fn limits_json(limits: WorkerLimits) -> Value {
 
 pub async fn set_worker_limits(
     server: &FoldServer,
-    as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let input: SetWorkerLimitsInput = parse(arguments)?;
@@ -475,7 +435,7 @@ pub async fn set_worker_limits(
         input.max_per_area,
         input.clear_max_per_area,
     )?;
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let changed = server
         .agents
         .set_worker_limits(&actor, change)
@@ -494,11 +454,10 @@ fn pause_json(state: &PauseState) -> Value {
 
 pub async fn pause_project(
     server: &FoldServer,
-    as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let _: PauseProjectInput = parse(arguments)?;
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let state = server
         .agents
         .pause_project(&actor)
@@ -509,11 +468,10 @@ pub async fn pause_project(
 
 pub async fn resume_project(
     server: &FoldServer,
-    as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let _: PauseProjectInput = parse(arguments)?;
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let state = server
         .agents
         .resume_project(&actor)
@@ -523,7 +481,7 @@ pub async fn resume_project(
 }
 
 pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
-    let _: ListWorkersInput = parse(arguments)?;
+    let input: ListWorkersInput = parse(arguments)?;
     let areas = server.agents.list_areas().await.map_err(from_agent)?;
     let workers = server.agents.list_workers().await.map_err(from_agent)?;
     let mut notes = server.agents.latest_handoffs().await.map_err(from_agent)?;
@@ -535,7 +493,14 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
     let config = server.agents.worker_config().await;
     let pause = server.agents.pause_state().await.map_err(from_agent)?;
     let mut listed = Vec::with_capacity(workers.len());
+    let mut stopped_count = 0;
     for worker in &workers {
+        if worker.state == WorkerState::Stopped {
+            stopped_count += 1;
+            if !input.include_stopped {
+                continue;
+            }
+        }
         let mut value = worker_process_json(worker);
         value["cache_ttl"] = config.as_ref().map_or(Value::Null, |config| {
             json!(config.role(worker.role).cache_ttl.as_str())
@@ -549,8 +514,18 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
         listed.push(value);
     }
     Ok(json!({
-        "areas": areas.iter().map(area_json).collect::<Vec<_>>(),
+        "areas": areas.iter().map(|area| {
+            let mut value = area_json(area);
+            if !input.include_instructions {
+                value["instructions_chars"] = json!(area.profile.instructions.as_deref().map_or(0, |text| text.chars().count()));
+                if let Some(fields) = value.as_object_mut() {
+                    fields.remove("instructions");
+                }
+            }
+            value
+        }).collect::<Vec<_>>(),
         "workers": listed,
+        "stopped_count": stopped_count,
         "limits": config.as_ref().map_or(Value::Null, |config| limits_json(config.workers.limits())),
         "pause": pause_json(&pause),
     }))
@@ -621,7 +596,6 @@ fn proposal_json(proposal: &ProposalSummary) -> Value {
 fn worker_json(worker: &WorkerOverview) -> Value {
     json!({
         "name": worker.name.as_str(),
-        "parent": worker.parent.as_ref().map(WorkerName::as_str),
         "last_call_at": worker.last_call_at,
         "activity": worker.activity,
         "claims": worker.claims.iter().map(claim_json).collect::<Vec<_>>(),
@@ -674,11 +648,10 @@ pub async fn get_activity(server: &FoldServer, arguments: &JsonObject) -> Result
 
 pub async fn write_handoff(
     server: &FoldServer,
-    as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let input: WriteHandoffInput = parse(arguments)?;
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     server
         .agents
         .write_handoff(&actor, &input.text)

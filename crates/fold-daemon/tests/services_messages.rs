@@ -113,7 +113,7 @@ struct Fixture {
 
 #[cfg(test)]
 impl Fixture {
-    /// Agents `backend` (tag review), `frontend` (tag ui) with child worker `frontend/ui`, and `review` (tag review); humans `ana` and `tanim`; tasks `T-1` and `T-2`.
+    /// Agents `backend` (tag review), `frontend` (tag ui) and `review` (tag review); humans `ana` and `tanim`; tasks `T-1` and `T-2`.
     async fn new() -> Self {
         let project = TestProject::new().await;
         let bus = EventBus::new();
@@ -127,7 +127,6 @@ impl Fixture {
             clock,
         );
         let frontend = register(&agents, "frontend", &["ui"]).await;
-        agents.register_worker(&frontend, "ui", None).await.unwrap();
         register(&agents, "backend", &["review"]).await;
         register(&agents, "review", &["review"]).await;
         for name in ["tanim", "ana"] {
@@ -223,9 +222,8 @@ type Expected = &'static [(&'static str, AddressedAs)];
 async fn every_address_form_writes_its_recipient_rows() {
     let fixture = Fixture::new().await;
     let sender = agent("frontend");
-    let table: [(&[&str], Expected); 6] = [
+    let table: [(&[&str], Expected); 5] = [
         (&["backend"], &[("backend", AddressedAs::Agent)]),
-        (&["frontend/ui"], &[("frontend/ui", AddressedAs::Worker)]),
         (
             &["tag:review"],
             &[("backend", AddressedAs::Tag), ("review", AddressedAs::Tag)],
@@ -427,7 +425,7 @@ async fn unknown_references_are_refused_before_anything_is_written() {
 #[tokio::test]
 async fn recipient_not_found_names_the_unknown_entry_or_every_entry() {
     let fixture = Fixture::new().await;
-    for entry in ["ghost", "frontend/ghost"] {
+    for entry in ["ghost"] {
         let error = refusal(
             fixture
                 .messages
@@ -509,8 +507,11 @@ async fn feedback_goes_to_the_claim_holder_by_default() {
     let fixture = Fixture::new().await;
     // `T-1` is in the area that `frontend` leads, so `backend` claims it as the main agent.
     crate::common::roles::give_main_tag(fixture.project.store(), "backend").await;
-    let ui = agent("frontend/ui");
-    fixture.tasks.claim_task(&ui, t(1)).await.unwrap();
+    fixture
+        .tasks
+        .claim_task(&agent("backend"), t(1))
+        .await
+        .unwrap();
     let view = fixture
         .messages
         .send_feedback(&human("tanim"), t(1), body("please add tests"), None)
@@ -522,10 +523,7 @@ async fn feedback_goes_to_the_claim_holder_by_default() {
         view.sender,
         Sender::Human(HumanName::parse("tanim").unwrap())
     );
-    assert_eq!(
-        recipients(&view),
-        pairs(&[("frontend/ui", AddressedAs::Worker)])
-    );
+    assert_eq!(recipients(&view), pairs(&[("backend", AddressedAs::Agent)]));
     assert_eq!(
         fixture
             .count("SELECT COUNT(*) FROM messages m JOIN tasks t ON t.id = m.task_id WHERE t.number = 1 AND m.sender_kind = 'human' AND m.sender_human = 'tanim'")
@@ -537,7 +535,21 @@ async fn feedback_goes_to_the_claim_holder_by_default() {
     assert_eq!(events[0].task, Some(t(1)));
     assert_eq!(events[0].actor.as_str(), "human:tanim");
 
-    fixture.tasks.release_task(&ui, t(1)).await.unwrap();
+    fixture
+        .tasks
+        .release_task(&agent("backend"), t(1))
+        .await
+        .unwrap();
+    let view = fixture
+        .messages
+        .send_feedback(&human("ana"), t(1), body("ping"), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        recipients(&view),
+        pairs(&[("frontend", AddressedAs::Agent)]),
+        "after the release the area lead reads it"
+    );
     fixture
         .tasks
         .claim_task(&agent("backend"), t(1))
@@ -552,31 +564,65 @@ async fn feedback_goes_to_the_claim_holder_by_default() {
 }
 
 #[tokio::test]
-async fn feedback_takes_a_chosen_recipient_and_needs_one() {
+async fn feedback_takes_a_chosen_reader_and_needs_one() {
     let fixture = Fixture::new().await;
     let view = fixture
         .messages
         .send_feedback(
             &human("tanim"),
             t(2),
-            body("for reviewers"),
-            Some(to(&["tag:review"])),
+            body("for the lead"),
+            Some(to(&["frontend"])),
         )
         .await
         .unwrap();
     assert_eq!(
         recipients(&view),
-        pairs(&[("backend", AddressedAs::Tag), ("review", AddressedAs::Tag)])
+        pairs(&[("frontend", AddressedAs::Agent)])
     );
     let error = refusal(
         fixture
             .messages
-            .send_feedback(&human("tanim"), t(1), body("anyone?"), None)
+            .send_feedback(
+                &human("tanim"),
+                t(2),
+                body("for reviewers"),
+                Some(to(&["frontend", "tag:review"])),
+            )
             .await
             .unwrap_err(),
     );
-    assert_eq!(error.code(), codes::RECIPIENT_NOT_FOUND);
-    assert_eq!(details(&error), json!({"task": "T-1"}));
+    assert_eq!(error.code(), codes::RECIPIENT_NOT_READER);
+    assert_eq!(
+        details(&error),
+        json!({"task": "T-2", "to": ["tag:review"], "readers": ["frontend"]})
+    );
+    assert!(error.hint().is_some());
+    fixture
+        .tasks
+        .create_task(
+            &agent("frontend"),
+            CreateTask {
+                title: TaskTitle::parse("no area").unwrap(),
+                description: TaskDescription::new(""),
+                labels: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let error = refusal(
+        fixture
+            .messages
+            .send_feedback(&human("tanim"), t(3), body("anyone?"), None)
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(
+        error.code(),
+        codes::RECIPIENT_NOT_FOUND,
+        "a task in no area of a project without a main agent has no reader"
+    );
+    assert_eq!(details(&error), json!({"task": "T-3"}));
     let error = fixture
         .messages
         .send_feedback(&human("tanim"), t(9), body("x"), None)
@@ -599,7 +645,7 @@ async fn awaiting_human_drops_an_ask_once_a_human_replies() {
     let question = fixture
         .messages
         .send_marked(
-            &agent("frontend/ui"),
+            &agent("frontend"),
             SendMessage {
                 task: Some(t(1)),
                 ..message(&["human:tanim", "backend"], "which colour?")
@@ -647,7 +693,7 @@ async fn awaiting_human_drops_an_ask_once_a_human_replies() {
             &agent("backend"),
             SendMessage {
                 reply_to: Some(question.id),
-                ..message(&["frontend/ui"], "blue, I think")
+                ..message(&["frontend"], "blue, I think")
             },
         )
         .await
@@ -670,7 +716,7 @@ async fn awaiting_human_drops_an_ask_once_a_human_replies() {
             &human("tanim"),
             SendMessage {
                 reply_to: Some(follow_up.id),
-                ..message(&["frontend/ui"], "green")
+                ..message(&["frontend"], "green")
             },
         )
         .await
@@ -690,7 +736,7 @@ async fn the_sent_event_names_recipients_and_never_holds_the_body() {
     let first = fixture
         .messages
         .send(
-            &agent("frontend/ui"),
+            &agent("frontend"),
             SendMessage {
                 task: Some(t(2)),
                 ..message(&["backend", "human:ana"], "SECRET-BODY-TEXT")
@@ -704,14 +750,14 @@ async fn the_sent_event_names_recipients_and_never_holds_the_body() {
             &agent("backend"),
             SendMessage {
                 reply_to: Some(first.id),
-                ..message(&["frontend/ui"], "SECRET-REPLY-TEXT")
+                ..message(&["frontend"], "SECRET-REPLY-TEXT")
             },
         )
         .await
         .unwrap();
     let stored = fixture.message_events().await;
     assert_eq!(stored.len(), 2);
-    assert_eq!(stored[0].actor.as_str(), "frontend/ui");
+    assert_eq!(stored[0].actor.as_str(), "frontend");
     assert_eq!(stored[0].task, Some(t(2)));
     assert_eq!(stored[0].created_at, fixture.project.now());
     assert_eq!(
@@ -721,7 +767,7 @@ async fn the_sent_event_names_recipients_and_never_holds_the_body() {
     assert_eq!(stored[1].task, Some(t(2)), "the reply inherits the task");
     assert_eq!(
         stored[1].data,
-        json!({"message": reply.id.to_string(), "thread": "m-1", "reply_to": "m-1", "recipients": ["frontend/ui"]})
+        json!({"message": reply.id.to_string(), "thread": "m-1", "reply_to": "m-1", "recipients": ["frontend"]})
     );
     for event in &stored {
         let text = serde_json::to_string(event).unwrap();
@@ -736,6 +782,15 @@ async fn the_sent_event_names_recipients_and_never_holds_the_body() {
             BusMessage::Durable(event) => assert_eq!(&*event, expected),
             BusMessage::Live(event) => panic!("unexpected live event {event:?}"),
         }
+    }
+    // The reply also acknowledged the message it answered.
+    match tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+        .await
+        .unwrap()
+        .unwrap()
+    {
+        BusMessage::Durable(event) => assert_eq!(event.event_type, types::MESSAGE_ACKNOWLEDGED),
+        BusMessage::Live(event) => panic!("unexpected live event {event:?}"),
     }
     fixture
         .messages
@@ -756,7 +811,7 @@ async fn a_message_to_an_offline_agent_waits_undelivered() {
         .messages
         .send(
             &agent("backend"),
-            message(&["frontend", "frontend/ui"], "while you were out"),
+            message(&["frontend", "review"], "while you were out"),
         )
         .await
         .unwrap();
@@ -856,10 +911,7 @@ async fn the_event_names_its_message_in_a_column_that_decides_recipients() {
     let fixture = Fixture::new().await;
     let view = fixture
         .messages
-        .send(
-            &agent("frontend"),
-            message(&["backend", "frontend/ui"], "x"),
-        )
+        .send(&agent("frontend"), message(&["backend", "frontend"], "x"))
         .await
         .unwrap();
     let stored = fixture.message_events().await;

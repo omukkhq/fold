@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM sign_in_links WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "0abc1ba0f40f29f2dac12d7ad98b88e5132db370ef60a83391e7c5ea241131f3"
+}

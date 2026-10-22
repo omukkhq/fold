@@ -10,6 +10,7 @@ use utoipa_axum::routes;
 use super::Project;
 use super::actor::Human;
 use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
+use super::reviews::CommentSide;
 use crate::daemon::AppState;
 use crate::services::messages::{self as service, DismissScope, Feedback, ThreadQuery};
 
@@ -24,7 +25,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
 /// One recipient row. Names starting `human:` are humans.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RecipientView {
-    #[schema(example = "frontend/ui")]
+    #[schema(example = "frontend")]
     pub name: String,
     /// How the sender reached this recipient: `agent`, `worker`, `tag`, `all`, `human` or `humans`.
     pub addressed_as: String,
@@ -40,6 +41,9 @@ pub struct RecipientView {
     /// For an agent recipient, whether fold can post a notice into one of the agent's sessions now; false means the agent learns of the message only when it reads its inbox. Null for a human and for an agent without a connected session.
     #[schema(required = true)]
     pub reachable: Option<bool>,
+    /// The lead that fold sent the message on to because this recipient, a stopped worker, could not start to answer it; the sender itself when the sender is that lead. Null while fold has not sent it on.
+    #[schema(required = true, example = "web-lead")]
+    pub forwarded_to: Option<String>,
 }
 
 /// A stored message with public ids only.
@@ -53,7 +57,7 @@ pub struct MessageView {
     #[schema(required = true, example = "m-30")]
     pub reply_to: Option<String>,
     /// A worker, `human:<name>` or `fold`.
-    #[schema(example = "frontend/ui")]
+    #[schema(example = "frontend")]
     pub sender: String,
     #[schema(required = true, example = "T-12")]
     pub task: Option<String>,
@@ -74,6 +78,42 @@ pub struct MessageView {
     pub header: Option<String>,
     /// The sending agent marked the message as asking a human for an answer. A question with choices and a worker's `AskUserQuestion` message ask without the mark.
     pub asks_human: bool,
+    /// The lines of a version of the message's proposal that a human's question to its author is about; null for any other message.
+    #[schema(required = true)]
+    pub lines: Option<MessageLines>,
+}
+
+/// A run of lines of one file of a proposal version, with their text.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MessageLines {
+    /// The version of the message's proposal.
+    pub version: u32,
+    #[schema(example = "web/src/board.ts")]
+    pub path: String,
+    /// `old` reads the version's base, `new` the version.
+    pub side: CommentSide,
+    /// From 1.
+    pub start_line: u32,
+    /// Inclusive.
+    pub end_line: u32,
+    /// The lines joined by newlines, without their line endings.
+    pub excerpt: String,
+    /// The excerpt holds only the first lines of the run: at most 100 lines and 20000 characters.
+    pub excerpt_cut: bool,
+}
+
+impl From<fold_store::messages::MessageLines> for MessageLines {
+    fn from(lines: fold_store::messages::MessageLines) -> Self {
+        Self {
+            version: lines.version,
+            path: lines.path,
+            side: lines.side.into(),
+            start_line: lines.start_line,
+            end_line: lines.end_line,
+            excerpt: lines.excerpt,
+            excerpt_cut: lines.excerpt_cut,
+        }
+    }
 }
 
 /// One option of a multiple-choice question.
@@ -117,6 +157,7 @@ impl From<service::MessageView> for MessageView {
                     acknowledged_at: recipient.acknowledged_at.map(|time| time.as_millis()),
                     pushed_at: recipient.pushed_at.map(|time| time.as_millis()),
                     reachable: recipient.reachable,
+                    forwarded_to: recipient.forwarded_to.map(|worker| worker.to_string()),
                 })
                 .collect(),
             choices: message
@@ -126,6 +167,7 @@ impl From<service::MessageView> for MessageView {
                 .collect(),
             header: message.header,
             asks_human: message.asks_human,
+            lines: message.lines.map(Into::into),
         }
     }
 }
@@ -186,7 +228,7 @@ pub struct ThreadList {
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ListMessagesParams {
-    /// Threads in which this agent (any of its workers) or this exact `agent/worker` sent or received a message.
+    /// Threads in which this agent sent or received a message.
     pub agent: Option<String>,
     /// Threads with a message linked to this task, such as `T-12`.
     pub task: Option<String>,
@@ -216,7 +258,7 @@ pub struct FeedbackRequest {
     /// The message to answer, such as `m-31`. The reply joins its thread and takes its task and request.
     #[serde(default)]
     pub reply_to: Option<String>,
-    /// The recipients, as an agent, `agent/worker`, `tag:<tag>`, `all`, `human:<name>` or `humans`. Left out, feedback goes to the task's claim holder, a request message to the request's drafter and a reply to the parent's sender.
+    /// The recipients, as an agent, `tag:<tag>`, `all`, `human:<name>` or `humans`. Feedback on a task takes only the task's readers, and left out it goes to the first of them; left out, a request message to the request's drafter and a reply to the parent's sender.
     #[serde(default)]
     pub to: Option<Vec<String>>,
 }
@@ -253,7 +295,7 @@ pub async fn list_messages(
                 codes::HUMAN_NAME_REQUIRED,
                 "`mine` needs a signed-in human",
             )
-            .with_hint("sign in to the web interface, or set FOLD_HUMAN for the CLI")
+            .with_hint("set FOLD_HUMAN to your name, then run the command again")
             .into());
         }
     };
@@ -304,7 +346,7 @@ pub async fn show_thread(
     Ok(Json(thread.into()))
 }
 
-/// A named human's feedback on a task, message in a request's clarification thread, or reply to a message. Feedback goes to the task's claim holder and a request message to the request's drafter unless `to` names recipients; a reply answers a question to humans, which clears the task's `question` attention. The message changes no task or request state.
+/// A named human's feedback on a task, message in a request's clarification thread, or reply to a message. Feedback goes only to the task's readers, as `GET /tasks/{id}/readers` lists them: to `to` when given, otherwise to the first reader. A request message goes to the request's drafter unless `to` names recipients; a reply answers a question to humans, which clears the task's `question` attention. The message changes no task or request state.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/feedback",
@@ -317,7 +359,8 @@ pub async fn show_thread(
         (status = 201, description = "The stored message", body = MessageView),
         (status = 400, description = "`invalid_request`: no `task`, `request` or `reply_to`, a `request` other than the parent's (`details.reason` `request_thread`), an empty body or a malformed request; `invalid_id` or `invalid_name`: an id or recipient is malformed", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
-        (status = 404, description = "`task_not_found`, `request_not_found`, `message_not_found`, `proposal_not_found`, `unknown_human`, `recipient_not_found` (also when the task has no claim holder, or the request no drafter, and `to` is left out) or `project_not_found`", body = ErrorEnvelope),
+        (status = 404, description = "`task_not_found`, `request_not_found`, `message_not_found`, `proposal_not_found`, `unknown_human`, `recipient_not_found` (also when the task has no reader, or the request no drafter, and `to` is left out) or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`recipient_not_reader`: feedback on a task names a recipient that is not one of the task's readers", body = ErrorEnvelope),
         (status = 503, description = "The project failed to open", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )

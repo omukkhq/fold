@@ -19,6 +19,7 @@ use super::Project;
 use super::actor::Human;
 use super::diff::{DiffView, comparison_view, file_view};
 use super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
+use super::messages::MessageView;
 use super::tasks::{HumanReviewMark, TaskStatus, TaskView, id, task_view};
 use super::workspaces::{
     ChangeSource, ComparedFile, ComparisonTotals, FileContentView, file_view as content_view,
@@ -42,6 +43,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(get_proposal))
         .routes(routes!(get_proposal_diff))
         .routes(routes!(list_review_comments, add_review_comment))
+        .routes(routes!(ask_proposal_author))
         .routes(routes!(submit_review))
         .routes(routes!(integrate_proposal))
         .routes(routes!(read_proposal_file))
@@ -248,7 +250,7 @@ pub struct ProposalSummary {
     #[schema(example = "T-12")]
     pub task: String,
     pub title: String,
-    /// The worker that opened the proposal, `agent` or `agent/worker`.
+    /// The worker that opened the proposal, named as its agent.
     pub author: String,
     pub state: ProposalStateView,
     /// The latest integration of the current version conflicted with main.
@@ -541,7 +543,7 @@ impl From<GateState> for ProposalGate {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct ReviewClaim {
-    /// The worker, `agent` or `agent/worker`.
+    /// The worker, named as its agent.
     pub holder: String,
     /// UTC milliseconds.
     pub claimed_at: i64,
@@ -721,6 +723,33 @@ impl From<ConflictReport> for ConflictReportView {
     }
 }
 
+/// The review plan an open proposal without a review waits in: the review lead gives it to one reviewer together with the plan's other proposals once the awaited tasks open theirs or the wait ends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ReviewPlanWait {
+    #[schema(example = "rp-2")]
+    pub plan: String,
+    /// When the wait ends at the latest, in UTC milliseconds.
+    pub deadline_at: i64,
+    /// The wait ended, so the plan waits only for the review lead to start its reviewer.
+    pub wait_ended: bool,
+    /// The tasks whose proposals the plan still waits for, by task number.
+    pub awaited: Vec<String>,
+    /// The plan's open proposals, this one included.
+    pub proposals: Vec<String>,
+}
+
+impl From<crate::services::reviews::ProposalPlan> for ReviewPlanWait {
+    fn from(plan: crate::services::reviews::ProposalPlan) -> Self {
+        Self {
+            plan: plan.plan.to_string(),
+            deadline_at: plan.deadline_at.as_millis(),
+            wait_ended: plan.wait_ended,
+            awaited: plan.awaited.iter().map(ToString::to_string).collect(),
+            proposals: plan.proposals.iter().map(ToString::to_string).collect(),
+        }
+    }
+}
+
 /// A proposal as the requesting human sees it.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ProposalDetail {
@@ -756,6 +785,9 @@ pub struct ProposalDetail {
     pub totals: ComparisonTotals,
     /// The check runs of the selected version, newest first, without their logs: the proposal-stage runs of exactly its files, then its integration runs.
     pub checks: Vec<checks::CheckRun>,
+    /// The review plan the open proposal waits in; null when it waits in none.
+    #[schema(required = true)]
+    pub review_plan: Option<ReviewPlanWait>,
 }
 
 impl From<service::ProposalView> for ProposalDetail {
@@ -810,6 +842,7 @@ impl From<service::ProposalView> for ProposalDetail {
                 .into_iter()
                 .map(checks::CheckRun::from)
                 .collect(),
+            review_plan: view.review_plan.map(ReviewPlanWait::from),
         }
     }
 }
@@ -1253,6 +1286,73 @@ pub async fn add_review_comment(
         .add_comment(&human.actor(), proposal, body.version, input)
         .await?;
     Ok((StatusCode::CREATED, Json(comment.into())))
+}
+
+/// A human's question to a proposal's author: about a run of lines of one file of a version when `path`, `side`, `start_line` and `end_line` are all given, about the whole proposal when none is.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct AskAuthorBody {
+    /// The version the question is about; any version of the proposal.
+    pub version: u32,
+    /// The file the lines belong to, relative to the project root.
+    #[serde(default)]
+    #[schema(example = "web/src/board.ts")]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub side: Option<CommentSide>,
+    /// From 1.
+    #[serde(default)]
+    pub start_line: Option<u32>,
+    /// Inclusive.
+    #[serde(default)]
+    pub end_line: Option<u32>,
+    /// The question, plain text with some visible character. In message text `#` names a fold item and `@` names a file; the daemon parses nothing.
+    pub body: String,
+}
+
+/// Asks the proposal's author about a run of lines of a version, or about the whole proposal: one message from the named human to the worker holding the task's implementation claim, else the proposal's author, linked to the task and the proposal and carrying the lines and their text when it names lines. It waits for the author's answer in its thread. It writes no review, verdict or comment and never changes whose turn it is, and it changes no task state.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/proposals/{id}/questions",
+    operation_id = "ask_proposal_author",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The proposal id, such as P-3"),
+    ),
+    request_body = AskAuthorBody,
+    responses(
+        (status = 201, description = "The stored question", body = MessageView),
+        (status = 400, description = "`invalid_request`: an empty body, some but not all of the four line fields, or a malformed request; `invalid_path` or `invalid_id`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`proposal_not_found`: no such proposal or version, or `project_not_found`", body = ErrorEnvelope),
+        (status = 422, description = "`unknown_comment_path` or `invalid_comment_range`: the lines are not in the file on that side", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn ask_proposal_author(
+    State(state): State<AppState>,
+    human: Human,
+    project: Project,
+    Path((_slug, id)): Path<(String, String)>,
+    ApiJson(body): ApiJson<AskAuthorBody>,
+) -> Result<(StatusCode, Json<MessageView>), ApiError> {
+    let proposal = proposal(&id)?;
+    let location = CommentLocation::question_parts(
+        body.path,
+        body.side.map(Side::from),
+        body.start_line,
+        body.end_line,
+    )?;
+    let question = service(&state, &project)
+        .ask_author(
+            &human.actor(),
+            proposal,
+            body.version,
+            location,
+            fold_core::MessageBody::parse(body.body)?,
+        )
+        .await?;
+    Ok((StatusCode::CREATED, Json(question.into())))
 }
 
 /// A human verdict on the version the human read, with line comments. `request_changes` gives the turn to the author, `approve` counts for integration and `reject` closes the proposal.

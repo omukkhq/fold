@@ -25,8 +25,8 @@ pub use commits::{
 };
 pub use conflicts::{ConflictRow, clear_conflict, list_conflicts, set_conflicts};
 pub use gc::{
-    ClosedWorkspace, closed_workspaces_due, gc_roots, mark_directory_removed,
-    workspaces_over_auto_limit,
+    ClosedWorkspace, closed_checkpoints_due, closed_directories_due, gc_roots,
+    mark_directory_removed, start_directory_removal, tree_recorded, workspaces_over_auto_limit,
 };
 pub use human_changes::{
     HumanChangeRow, HumanChangeState, NewHumanChange, conflicted_human_change,

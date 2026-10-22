@@ -61,6 +61,8 @@
   --space-40: 40px;
 
   --height-bar: 52px;
+  --height-chart: 140px;
+  --height-review-dialog: 480px;
   --width-skeleton-s: 70px;
   --width-skeleton-l: 120px;
   --width-diff-number: 44px;
@@ -68,6 +70,7 @@
   --width-file-list: 280px;
   --width-side-panel: 300px;
   --width-content: 1120px;
+  --width-page: 1280px;
   --width-history: 440px;
   --width-sign-in: 400px;
   --width-thread-list: 420px;
@@ -84,6 +87,8 @@
   --width-needs-you: 400px;
   --width-transcript: 280px;
   --width-column: 224px;
+  --width-fact-label: 70px;
+  --width-filter-column: 260px;
 }
 
 :root {

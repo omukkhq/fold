@@ -3,9 +3,9 @@ use std::sync::atomic::Ordering;
 use fold_core::events::types;
 use fold_core::roles::{
     HANDOFF_REQUEST, RefreshFacts, SUMMARY_ITEMS, SummaryProposal, SummaryTask, handoff_due,
-    handoff_overdue, refresh_turn,
+    handoff_overdue, handoff_reask_due, refresh_turn,
 };
-use fold_core::{AgentName, AreaName, EventActor, NewEvent, WorkerState};
+use fold_core::{AgentName, AreaName, EventActor, NewEvent, Role, WorkerState};
 use fold_store::agents::{self, ProcessEnd, SessionEnd, WorkerProcessRow};
 use fold_store::{StoreError, messages};
 use serde_json::json;
@@ -33,11 +33,12 @@ fn context_window(windows: &[(String, u64)], model: Option<&str>) -> u64 {
 }
 
 impl Supervisor {
-    /// After each turn of a long-lived worker: a note of its session starts it fresh; otherwise a context past its role's `handoff_at` asks once for a note, and a lead that let [`fold_core::roles::HANDOFF_TURNS`] turns pass since the ask without one starts fresh with the fold summary alone.
+    /// After each turn of a long-lived worker: a note of its session starts it fresh; otherwise a context past its role's `handoff_at` asks once for a note, and a lead that let [`fold_core::roles::HANDOFF_TURNS`] turns pass since the ask without one starts fresh with the fold summary alone. A worker that fold started to answer a message stops once it has answered.
     pub(super) async fn after_turn(&self, agent: &AgentName, windows: &[(String, u64)]) {
         if let Err(error) = self.check_handoff(agent, windows).await {
             tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not check a worker's context size");
         }
+        self.stop_if_answered(agent).await;
     }
 
     async fn check_handoff(
@@ -58,6 +59,12 @@ impl Supervisor {
         if !row.role.is_long_lived() || row.state == WorkerState::Stopping {
             return Ok(());
         }
+        if row.role == Role::Main && row.state == WorkerState::Idle {
+            let due = lock(&self.inner.cleanup_due).clone();
+            if let Some(due) = due {
+                due.notify_one();
+            }
+        }
         if agents::session_handoff(&mut *conn, &row.session_id)
             .await?
             .is_some()
@@ -66,18 +73,22 @@ impl Supervisor {
             return Ok(());
         }
         if let Some(asked) = agents::handoff_asked(&mut *conn, row.id).await? {
-            if handoff_overdue(asked, row.turns) {
+            if row.role == Role::Main {
+                if handoff_reask_due(asked, row.turns) {
+                    self.send_turn(agent, HANDOFF_REQUEST);
+                }
+            } else if handoff_overdue(asked, row.turns) {
                 self.refresh_soon(agent);
             }
             return Ok(());
         }
         drop(conn);
         let config = load_config(&self.inner.paths).await?;
-        let Some(percent) = config.role(row.role).handoff_at else {
+        let Some(at) = config.role(row.role).handoff_at else {
             return Ok(());
         };
         let window = context_window(windows, row.model.as_deref());
-        if !handoff_due(row.context_tokens, window, percent) {
+        if !handoff_due(row.context_tokens, window, at) {
             return Ok(());
         }
         let now = self.inner.clock.now();
@@ -87,14 +98,19 @@ impl Supervisor {
             .write(async |tx| agents::set_handoff_asked(tx, row.id, row.turns, now).await)
             .await?;
         if asked {
-            let input = lock(&self.inner.running)
-                .get(agent)
-                .map(|run| run.input.clone());
-            if let Some(input) = input {
-                let _ = input.send(Input::Turn(HANDOFF_REQUEST.to_owned()));
-            }
+            self.send_turn(agent, HANDOFF_REQUEST);
         }
         Ok(())
+    }
+
+    /// Sends `text` as the next user turn of the agent's running process, if it has one.
+    pub(super) fn send_turn(&self, agent: &AgentName, text: &str) {
+        let input = lock(&self.inner.running)
+            .get(agent)
+            .map(|run| run.input.clone());
+        if let Some(input) = input {
+            let _ = input.send(Input::Turn(text.to_owned()));
+        }
     }
 
     /// Starts the lead again in a new session on a task of its own, once at a time per lead. The task never runs inside the reader of the lead's output, because the refresh waits for that reader to see the process exit.
@@ -247,6 +263,7 @@ impl Supervisor {
 mod tests {
     use super::*;
     use crate::services::agents::claude::ClaudeMessage;
+    use fold_core::roles::HandoffAt;
 
     #[test]
     fn the_window_is_the_one_of_the_workers_model() {
@@ -259,6 +276,20 @@ mod tests {
         assert_eq!(context_window(&windows, None), 200_000);
         assert_eq!(context_window(&[], Some("claude-opus-5-5")), 0);
         assert_eq!(context_window(&[("x".to_owned(), 0)], None), 0);
+    }
+
+    #[test]
+    fn an_unknown_model_hands_off_at_the_default_of_the_smallest_window() {
+        let windows = vec![
+            ("claude-haiku-5-5".to_owned(), 200_000),
+            ("claude-opus-5-5".to_owned(), 1_000_000),
+        ];
+        let unknown = context_window(&windows, None);
+        assert!(!handoff_due(169_999, unknown, HandoffAt::Default));
+        assert!(handoff_due(170_000, unknown, HandoffAt::Default));
+        let opus = context_window(&windows, Some("claude-opus-5-5"));
+        assert!(!handoff_due(599_999, opus, HandoffAt::Default));
+        assert!(handoff_due(600_000, opus, HandoffAt::Default));
     }
 
     #[test]

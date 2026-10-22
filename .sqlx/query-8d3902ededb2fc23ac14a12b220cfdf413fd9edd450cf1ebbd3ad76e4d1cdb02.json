@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT v.id AS \"id!: i64\", v.version, r.tree_hash AS base_tree, v.tree_hash\n           FROM proposal_versions v\n           JOIN proposals p ON p.id = v.proposal_id\n           JOIN revisions r ON r.id = v.base_revision_id\n           WHERE p.number = ?1 AND v.version = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "version",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "base_tree",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "tree_hash"
+          }
+        }
+      },
+      {
+        "name": "tree_hash",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proposal_versions",
+            "name": "tree_hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8d3902ededb2fc23ac14a12b220cfdf413fd9edd450cf1ebbd3ad76e4d1cdb02"
+}

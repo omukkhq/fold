@@ -249,7 +249,7 @@ impl TaskService {
         Ok((Some(guard), hashes))
     }
 
-    /// Makes the actor's main worker the drafter, sorts the request as `kind` and names it `title`; an `open` request becomes `drafting`. Only the main agent or an area lead claims (`orchestrator_required`); an area lead judges for itself whether the request concerns its area. A request whose drafter's agent has had no open session for `lease_minutes` is taken over (`taken_over: true`); any other held request is `already_claimed`. A repeat claim by the drafter changes nothing.
+    /// Makes the actor's worker the drafter, sorts the request as `kind` and names it `title`; an `open` request becomes `drafting`. Only the main agent or an area lead claims (`orchestrator_required`); an area lead judges for itself whether the request concerns its area. A request whose drafter's agent has had no open session for `lease_minutes` is taken over (`taken_over: true`); any other held request is `already_claimed`. A repeat claim by the drafter changes nothing.
     pub async fn claim_request(
         &self,
         actor: &Actor,

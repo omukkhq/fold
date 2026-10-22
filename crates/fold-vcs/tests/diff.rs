@@ -260,3 +260,30 @@ proptest! {
         prop_assert_eq!(hunks.is_empty(), old == new);
     }
 }
+
+proptest! {
+    /// A question about lines of a version quotes them by the numbers the diff shows.
+    #[test]
+    fn the_diff_numbers_lines_as_a_question_excerpt_splits_them(text in "[ab\r\n]{0,24}") {
+        let shown: Vec<(u32, String)> = diff_text("", &text, 0)
+            .iter()
+            .flat_map(|hunk| &hunk.lines)
+            .map(|line| {
+                let text = line.text.as_str();
+                let text = text
+                    .strip_suffix("\r\n")
+                    .or_else(|| text.strip_suffix('\n'))
+                    .or_else(|| text.strip_suffix('\r'))
+                    .unwrap_or(text);
+                (line.new_no.unwrap_or(0), text.to_owned())
+            })
+            .collect();
+        let split: Vec<(u32, String)> = fold_core::messages::text_lines(&text)
+            .into_iter()
+            .zip(1..)
+            .map(|(line, number)| (number, line.to_owned()))
+            .collect();
+        prop_assert_eq!(line_count(&text) as usize, split.len());
+        prop_assert_eq!(shown, split);
+    }
+}

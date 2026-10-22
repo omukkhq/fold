@@ -1,52 +1,63 @@
 import { describe, expect, it } from "vitest";
-import { recipientOptions } from "./recipients";
+import type { TaskReader } from "@/api/tasks";
+import {
+  keptChoice,
+  readerLabel,
+  readerRecipient,
+  recipientOptions,
+} from "./recipients";
 
-const labels = (options: { label: string }[]) => options.map((o) => o.label);
+const holder: TaskReader = { name: "web-t12", role: "claim_holder" };
+const lead: TaskReader = { name: "web-lead", role: "area_lead" };
+const main: TaskReader = { name: "main", role: "main_agent" };
 
 describe("recipientOptions", () => {
-  it("lists the main agent once when it holds the claim", () => {
-    const options = recipientOptions("main", {
-      agents: ["main", "backend"],
-      tags: ["main", "review"],
-    });
-    expect(labels(options)).toEqual([
-      "main (claim holder)",
-      "backend",
-      "tag review",
+  it("keeps the daemon's order, the claim holder first", () => {
+    const options = recipientOptions([holder, lead, main]);
+    expect(options.map((o) => o.label)).toEqual([
+      "web-t12 (claim holder)",
+      "web-lead (area lead)",
+      "main (main agent)",
     ]);
     expect(options.map((o) => o.value)).toEqual([
       "holder",
-      "agent:backend",
-      "tag:review",
+      "agent:web-lead",
+      "agent:main",
     ]);
   });
 
-  it("lists another holder first and leaves it out of the agents", () => {
-    expect(
-      labels(
-        recipientOptions("backend", {
-          agents: ["main", "backend"],
-          tags: ["main"],
-        }),
-      ),
-    ).toEqual(["backend (claim holder)", "main"]);
+  it("is empty before the readers are read", () => {
+    expect(recipientOptions(undefined)).toEqual([]);
+    expect(recipientOptions([])).toEqual([]);
+  });
+});
+
+describe("readerRecipient", () => {
+  it("addresses the claim holder as the holder and the others by name", () => {
+    expect(readerRecipient(holder)).toEqual({ kind: "holder" });
+    expect(readerRecipient(lead)).toEqual({ kind: "agent", name: "web-lead" });
+  });
+});
+
+describe("readerLabel", () => {
+  it("names the reader and its role", () => {
+    expect(readerLabel(lead)).toBe("web-lead (area lead)");
+  });
+});
+
+describe("keptChoice", () => {
+  const options = recipientOptions([lead, main]);
+
+  it("keeps a choice the daemon still offers", () => {
+    expect(keptChoice("agent:main", options)).toBe("agent:main");
   });
 
-  it("offers no holder entry without a claim, and no main tag", () => {
-    expect(
-      labels(recipientOptions(null, { agents: ["main"], tags: ["main"] })),
-    ).toEqual(["main"]);
+  it("falls back to the default when the choice is gone or not made", () => {
+    expect(keptChoice("holder", options)).toBe("agent:web-lead");
+    expect(keptChoice("", options)).toBe("agent:web-lead");
   });
 
-  it("keeps a tag that reaches several agents", () => {
-    expect(
-      labels(
-        recipientOptions(null, { agents: ["a", "b"], tags: ["ui", "review"] }),
-      ),
-    ).toEqual(["a", "b", "tag ui", "tag review"]);
-  });
-
-  it("is empty before the targets are read", () => {
-    expect(recipientOptions(null, undefined)).toEqual([]);
+  it("chooses no reader when the daemon offers none", () => {
+    expect(keptChoice("agent:main", [])).toBe("");
   });
 });

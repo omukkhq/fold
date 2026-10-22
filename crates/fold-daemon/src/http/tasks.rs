@@ -16,7 +16,7 @@ use super::Project;
 use super::actor::Human;
 use super::error::{ApiError, ApiJson, ErrorEnvelope, fold};
 use super::events::{CheckpointSummary, DurableEventType};
-use super::reviews::ReviewVerdict;
+use super::reviews::{ReviewPlanWait, ReviewVerdict};
 use crate::daemon::AppState;
 use crate::services::tasks::{self as service, ItemContent};
 
@@ -28,6 +28,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(board))
         .routes(routes!(list_tasks, create_task))
         .routes(routes!(get_task, update_task, delete_task))
+        .routes(routes!(task_readers))
         .routes(routes!(attach_label, detach_label))
         .routes(routes!(archive_task))
         .routes(routes!(complete_task))
@@ -242,7 +243,7 @@ pub struct BoardCard {
     pub blocked_by: Vec<String>,
     /// How many open tasks wait directly for this one; 0 once it is Done.
     pub blocks: u32,
-    /// The worker holding the implementation claim, `agent` or `agent/worker`.
+    /// The worker holding the implementation claim, named as its agent.
     #[schema(required = true)]
     pub worker: Option<String>,
     /// The live task workspace.
@@ -306,6 +307,9 @@ pub struct BoardProposal {
     /// The revision an integrated proposal became; null before integration.
     #[schema(required = true, example = "r8")]
     pub revision: Option<String>,
+    /// The review plan the open proposal waits in, to be reviewed with related proposals as one batch; null when it waits in none.
+    #[schema(required = true)]
+    pub review_plan: Option<ReviewPlanWait>,
 }
 
 impl From<service::CardProposal> for BoardProposal {
@@ -316,6 +320,7 @@ impl From<service::CardProposal> for BoardProposal {
             version: proposal.version,
             checks_failed: proposal.checks_failed,
             revision: proposal.revision.map(|revision| revision.to_string()),
+            review_plan: proposal.review_plan.map(ReviewPlanWait::from),
         }
     }
 }
@@ -465,7 +470,7 @@ pub enum ClaimKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct TaskClaim {
     pub kind: ClaimKind,
-    /// The worker, `agent` or `agent/worker`.
+    /// The worker, named as its agent.
     pub holder: String,
     /// UTC milliseconds.
     pub claimed_at: i64,
@@ -1123,6 +1128,72 @@ pub async fn get_task(
 ) -> Result<Json<TaskView>, ApiError> {
     let view = project.0.tasks.get_view(id(&task)?).await?;
     Ok(Json(task_view(view, human.ok().as_ref())))
+}
+
+/// Why a reader is offered for a human's feedback on a task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReaderRole {
+    ClaimHolder,
+    AreaLead,
+    MainAgent,
+}
+
+impl From<fold_core::tasks::areas::ReaderRole> for ReaderRole {
+    fn from(role: fold_core::tasks::areas::ReaderRole) -> Self {
+        match role {
+            fold_core::tasks::areas::ReaderRole::ClaimHolder => Self::ClaimHolder,
+            fold_core::tasks::areas::ReaderRole::AreaLead => Self::AreaLead,
+            fold_core::tasks::areas::ReaderRole::MainAgent => Self::MainAgent,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct TaskReader {
+    /// The worker, named as its agent; feedback addressed to it by name reaches it.
+    #[schema(example = "web-t12")]
+    pub name: String,
+    pub role: ReaderRole,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct TaskReaders {
+    /// The default reader first: the claim holder, else the area lead, else the main agent. Each worker once, under its first role.
+    pub readers: Vec<TaskReader>,
+}
+
+/// Who a human's feedback on the task can go to: the worker that holds the implementation claim, the lead of the task's area (none for a task of Main or in no area) and the main agent. Only they answer for the task.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/tasks/{id}/readers",
+    operation_id = "task_readers",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The task id, such as T-12"),
+    ),
+    responses(
+        (status = 200, description = "The readers, the default first", body = TaskReaders),
+        (status = 400, description = "`invalid_id`", body = ErrorEnvelope),
+        (status = 404, description = "`task_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn task_readers(
+    project: Project,
+    Path((_slug, task)): Path<(String, String)>,
+) -> Result<Json<TaskReaders>, ApiError> {
+    let readers = project.0.tasks.readers(id(&task)?).await?;
+    Ok(Json(TaskReaders {
+        readers: readers
+            .into_iter()
+            .map(|reader| TaskReader {
+                name: reader.name.to_string(),
+                role: reader.role.into(),
+            })
+            .collect(),
+    }))
 }
 
 /// Changes the title, the description or the label set.

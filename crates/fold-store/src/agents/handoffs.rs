@@ -154,7 +154,7 @@ pub async fn set_handoff_asked(
     Ok(result.rows_affected() == 1)
 }
 
-/// Starts the row again in the new session `session_id` with an empty context and no ask, for a fresh process of the same worker.
+/// Starts the row again in the new session `session_id` with an empty context, no ask and a session total of 0, for a fresh process of the same worker.
 pub async fn refresh_session(
     tx: &mut WriteTx,
     worker_process_id: i64,
@@ -166,7 +166,7 @@ pub async fn refresh_session(
         "UPDATE worker_processes
          SET session_id = ?2, state = 'starting', started_at = ?3, stopped_at = NULL, idle_since = NULL,
              pid = NULL, exit_code = NULL, context_tokens = 0, handoff_asked_at = NULL,
-             handoff_asked_turns = NULL, failed_reason = NULL
+             handoff_asked_turns = NULL, failed_reason = NULL, session_cost_micro_usd = 0, held_at = NULL
          WHERE id = ?1",
         worker_process_id,
         session_id,

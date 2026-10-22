@@ -18,7 +18,6 @@ use fold_core::{
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::events::LiveWorkspace;
-use fold_daemon::http::router;
 use fold_daemon::jobs::{JobProgress, spawn_lease_sweeper, spawn_stalls};
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::{AgentService, SessionContext};
@@ -120,7 +119,7 @@ impl Fixture {
         let agents = handle.agents();
         let frontend = register(&agents, "frontend").await;
         let backend = register(&agents, "backend").await;
-        // `frontend` leads the area of the tasks; `backend` stays free to be the review lead.
+        // `frontend` leads the area of the tasks; `backend` stays free to be a reviewer.
         let (lead, area) = crate::common::roles::WORK_AREAS[0];
         give_role(&handle.store, lead, Role::AreaLead, Some(area)).await;
         for _ in 0..2 {
@@ -235,7 +234,11 @@ impl Fixture {
             .uri("/api/v1/projects/demo/agents")
             .body(Body::empty())
             .unwrap();
-        let response = router(self.state.clone()).oneshot(request).await.unwrap();
+        let response = crate::common::signed_in_router(&self.state, "ana")
+            .await
+            .oneshot(request)
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         let body: Value = serde_json::from_slice(&bytes).unwrap();
@@ -287,7 +290,11 @@ impl Fixture {
             .uri(uri)
             .body(Body::empty())
             .unwrap();
-        let response = router(self.state.clone()).oneshot(request).await.unwrap();
+        let response = crate::common::signed_in_router(&self.state, "ana")
+            .await
+            .oneshot(request)
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         serde_json::from_slice(&bytes).unwrap()
@@ -305,7 +312,7 @@ impl Fixture {
         (status, column.status.as_str().to_owned())
     }
 
-    /// Opens a proposal of `T-1` from its workspace and lets `backend`, as the review lead, claim its review.
+    /// Opens a proposal of `T-1` from its workspace and gives `backend`, as a reviewer, its review claim.
     async fn review_claim(&self, dir: &std::path::Path) -> ProposalId {
         let reviews = ReviewService::new(
             self.handle.store.clone(),
@@ -323,11 +330,14 @@ impl Fixture {
             .unwrap()
             .summary
             .id;
-        give_role(&self.handle.store, "backend", Role::ReviewLead, None).await;
-        reviews
-            .claim_review(&by(&self.backend.worker), proposal)
-            .await
-            .unwrap();
+        give_role(&self.handle.store, "backend", Role::Reviewer, None).await;
+        crate::common::roles::give_review_claim(
+            &self.handle.store,
+            "backend",
+            proposal,
+            self.project.now(),
+        )
+        .await;
         proposal
     }
 }
@@ -339,7 +349,7 @@ async fn register(agents: &AgentService, name: &str) -> Agent {
         .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &[])
         .await
         .unwrap();
-    let worker = agents.resolve_worker(&ctx, None).await.unwrap();
+    let worker = agents.resolve_worker(&ctx).await.unwrap();
     Agent { ctx, worker }
 }
 

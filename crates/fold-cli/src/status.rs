@@ -1,10 +1,11 @@
 use std::io::{self, Write};
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use fold_cli::daemon_client::{self, Response};
 use fold_core::{Timestamp, codes};
+use fold_daemon::http::host::web_origin;
 use fold_daemon::services::projects::row_for_dir_on_host;
 
 use crate::doctor::run_briefly;
@@ -239,23 +240,11 @@ pub(crate) fn service_name(manager: Manager) -> String {
     }
 }
 
-/// The address a browser on this machine opens for a listener bound to `listen`: a listener on every address, `0.0.0.0` or `::`, answers on loopback too, while a browser cannot open the unspecified address itself.
+/// The address a browser on this machine opens for the listener the daemon reports.
 fn web_url(listen: &str) -> String {
-    match listen.parse::<SocketAddr>() {
-        Ok(SocketAddr::V4(addr)) if addr.ip().is_unspecified() => {
-            format!(
-                "http://{}",
-                SocketAddr::from((Ipv4Addr::LOCALHOST, addr.port()))
-            )
-        }
-        Ok(SocketAddr::V6(addr)) if addr.ip().is_unspecified() => {
-            format!(
-                "http://{}",
-                SocketAddr::from((Ipv6Addr::LOCALHOST, addr.port()))
-            )
-        }
-        _ => format!("http://{listen}"),
-    }
+    listen
+        .parse::<SocketAddr>()
+        .map_or_else(|_| format!("http://{listen}"), web_origin)
 }
 
 /// The lines after the version line; `fld` is the version of this fld.
@@ -283,7 +272,7 @@ pub(crate) fn lines(status: &Status, fld: &str) -> Vec<String> {
             ..
         } => {
             lines.push(format!(
-                "daemon: running fold {version}, web interface {}",
+                "daemon: running fold {version}, web interface {}; fld web prints a sign-in link",
                 web_url(listen)
             ));
             if version != fld {
@@ -424,7 +413,7 @@ mod tests {
         assert_eq!(
             lines(&status(running("0.3.0"), Some(systemd), app()), "0.3.0"),
             [
-                "daemon: running fold 0.3.0, web interface http://127.0.0.1:7420",
+                "daemon: running fold 0.3.0, web interface http://127.0.0.1:7420; fld web prints a sign-in link",
                 "socket: /run/user/1000/fold/fold.sock",
                 "service: the daemon runs through the systemd user service fold.service",
                 "project: App (app) in /home/ana/app",
@@ -439,7 +428,7 @@ mod tests {
         assert_eq!(
             shown[..4],
             [
-                "daemon: running fold 0.2.0, web interface http://127.0.0.1:7420",
+                "daemon: running fold 0.2.0, web interface http://127.0.0.1:7420; fld web prints a sign-in link",
                 "hint: the daemon runs fold 0.2.0 and this fld is 0.3.0: run fld restart",
                 "socket: /run/user/1000/fold/fold.sock",
                 "service: started by hand; fld setup installs a service that starts the daemon at login",
@@ -620,7 +609,7 @@ mod tests {
         };
         assert_eq!(
             lines(&status(everywhere, None, None), "0.3.0")[0],
-            "daemon: running fold 0.3.0, web interface http://127.0.0.1:7420"
+            "daemon: running fold 0.3.0, web interface http://127.0.0.1:7420; fld web prints a sign-in link"
         );
     }
 

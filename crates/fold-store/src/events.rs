@@ -171,58 +171,44 @@ pub struct Reach<'a> {
     pub wake: Option<MessageWake>,
 }
 
-/// An event of `event_type` is selected past the filter when the worker row `worker_id` receives the message it names, or with `every_worker` when any worker of the agent does, on a row that no inbox read or acknowledgement has reached yet, and only when that worker did not send it: a wait wakes for a new message, never for one the agent has seen or its own.
+/// An event of `event_type` is selected past the filter when the worker row `worker_id` receives the message it names, on a row that no acknowledgement has reached and that nothing delivered before `since`, and only when that worker did not send it: a wait wakes for a new message, never for one the agent has seen or its own. A row delivered at or after `since` still wakes the wait that started then, because a notice that carried it waits in the session until the wait returns; times are milliseconds, so a notice in the wait's first millisecond counts too.
 #[derive(Debug, Clone, Copy)]
 pub struct MessageWake {
     pub event_type: EventType,
     pub worker_id: i64,
-    pub every_worker: bool,
-}
-
-/// A message of a wait's page that waits for the waking worker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WaitingMessage {
-    pub id: MessageId,
-    /// The waking worker has a row of it; otherwise only another worker of its agent has.
-    pub own: bool,
+    pub since: Timestamp,
 }
 
 /// The messages that the events `seqs` name and that select an event past the filter by the rule of [`MessageWake`] now, in seq order.
 pub async fn waiting_messages(
     executor: impl SqliteExecutor<'_>,
     seqs: &[u64],
-    agent_id: i64,
     wake: MessageWake,
-) -> Result<Vec<WaitingMessage>, StoreError> {
+) -> Result<Vec<MessageId>, StoreError> {
     let seqs = json_list(seqs.iter(), |seq| (*seq).into());
     let wake_type = wake.event_type.as_str();
+    let since = wake.since.as_millis();
     let rows = sqlx::query!(
-        r#"SELECT m.number AS "number!: i64", MAX(r.worker_id = ?2) AS "own!: bool"
+        r#"SELECT m.number AS "number!: i64"
            FROM events e
            JOIN messages m ON m.number = e.message_id
            JOIN message_recipients r ON r.message_id = m.id
-           JOIN workers w ON w.id = r.worker_id
            WHERE e.seq IN (SELECT value FROM json_each(?1))
-             AND e.type = ?5
+             AND e.type = ?3
              AND e.actor <> (SELECT s.name FROM workers s WHERE s.id = ?2)
-             AND r.delivered_at IS NULL AND r.acked_at IS NULL
-             AND (r.worker_id = ?2 OR (?3 AND w.agent_id = ?4))
+             AND (r.delivered_at IS NULL OR r.delivered_at >= ?4) AND r.acked_at IS NULL
+             AND r.worker_id = ?2
            GROUP BY m.number
            ORDER BY MIN(e.seq)"#,
         seqs,
         wake.worker_id,
-        wake.every_worker,
-        agent_id,
-        wake_type
+        wake_type,
+        since
     )
     .fetch_all(executor)
     .await?;
     rows.into_iter()
-        .map(|row| {
-            let id =
-                MessageId::try_from_db(row.number).ok_or(StoreError::Corrupt("messages.number"))?;
-            Ok(WaitingMessage { id, own: row.own })
-        })
+        .map(|row| MessageId::try_from_db(row.number).ok_or(StoreError::Corrupt("messages.number")))
         .collect()
 }
 
@@ -245,7 +231,7 @@ pub async fn read_reaching(
     let own_types = json_list(reach.own_types.iter(), |t| t.as_str().into());
     let wake_type = reach.wake.map(|wake| wake.event_type.as_str());
     let wake_worker = reach.wake.map(|wake| wake.worker_id);
-    let wake_every = reach.wake.is_some_and(|wake| wake.every_worker);
+    let wake_since = reach.wake.map(|wake| wake.since.as_millis());
     let rows = sqlx::query_as!(
         EventRecord,
         r#"SELECT e.seq AS "seq!: i64", e.type AS event_type, e.actor, e.task_id, e.proposal_id,
@@ -260,10 +246,10 @@ pub async fn read_reaching(
                       AND EXISTS (
                           SELECT 1 FROM messages m
                           JOIN message_recipients r ON r.message_id = m.id
-                          JOIN workers w ON w.id = r.worker_id
                           WHERE m.number = e.message_id
-                            AND r.delivered_at IS NULL AND r.acked_at IS NULL
-                            AND (r.worker_id = ?10 OR (?11 AND w.agent_id = ?5)))))
+                            AND (r.delivered_at IS NULL OR r.delivered_at >= ?11)
+                            AND r.acked_at IS NULL
+                            AND r.worker_id = ?10)))
              AND (e.type NOT IN (SELECT value FROM json_each(?6))
                   OR EXISTS (
                       SELECT 1 FROM messages m
@@ -287,7 +273,7 @@ pub async fn read_reaching(
         own_types,
         wake_type,
         wake_worker,
-        wake_every
+        wake_since
     )
     .fetch_all(executor)
     .await?;
@@ -509,7 +495,7 @@ pub async fn recipient_agents(
         .collect()
 }
 
-/// The claims, prerequisites and proposals of every worker of the agent. The caller passes one read transaction, so its three queries see one state.
+/// The claims, prerequisites and proposals of the agent, read through every worker row it has, so a row named `agent/name` that a project still holds counts for its agent. The caller passes one read transaction, so its three queries see one state.
 pub async fn agent_facts(
     conn: &mut SqliteConnection,
     agent_id: i64,

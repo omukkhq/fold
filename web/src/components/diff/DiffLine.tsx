@@ -47,7 +47,7 @@ export function DiffLine({
     >
       <span className="sr-only">{style.description}</span>
       {style.header ? (
-        <code className="min-w-0 flex-1 px-14 py-4 font-mono text-label leading-snug whitespace-pre-wrap text-text-muted">
+        <code className="min-w-0 flex-1 px-14 py-4 font-mono text-label leading-snug whitespace-pre-wrap wrap-anywhere text-text-muted">
           {children}
         </code>
       ) : (
@@ -73,7 +73,7 @@ export function DiffLine({
           >
             {style.sign}
           </span>
-          <code className="min-w-0 flex-1 font-mono text-code leading-loose whitespace-pre-wrap text-text">
+          <code className="min-w-0 flex-1 font-mono text-code leading-loose whitespace-pre-wrap wrap-anywhere text-text">
             {children}
           </code>
         </>

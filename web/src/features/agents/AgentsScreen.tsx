@@ -1,3 +1,4 @@
+import * as RadixTabs from "@radix-ui/react-tabs";
 import { skipToken, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Bot, Terminal, UserPlus } from "lucide-react";
 import { useState } from "react";
@@ -13,7 +14,14 @@ import {
 } from "@/api/queries";
 import { labelsQuery } from "@/api/tasks";
 import { Button } from "@/components/button/Button";
+import { TAB_BY_STATE, TAB_LIST } from "@/components/overlay/tabStyles";
+import {
+  SEGMENT_LIST,
+  segmentClasses,
+} from "@/components/segments/segmentStyles";
 import { Skeleton } from "@/components/states/Skeleton";
+import { CostTab } from "@/features/cost/CostTab";
+import { COST_RANGES } from "@/features/cost/cost";
 import { PermissionPanel } from "@/features/workers/PermissionPanel";
 import { StartLeadDialog } from "@/features/workers/StartLeadDialog";
 import { TeamTable } from "@/features/workers/TeamTable";
@@ -25,6 +33,8 @@ import {
   teamGroups,
 } from "@/features/workers/team";
 import type { AgentsSearch } from "@/features/workers/search";
+import { cn } from "@/lib/cn";
+import { focusRing } from "@/lib/focus";
 import type { WorkerSteps } from "@/live/apply";
 import { useNow } from "@/live/useNow";
 
@@ -66,6 +76,8 @@ export function AgentsScreen({
     human,
   });
   const asking = search.question;
+  const tab = search.tab ?? "team";
+  const range = search.range ?? "all";
   // Only a named human starts a lead, so the controls wait for a name.
   const startLead =
     human === null
@@ -98,34 +110,89 @@ export function AgentsScreen({
             </Button>
           )}
         </div>
-        {isEmptyTeam(groups) ? (
-          <EmptyTeam onStartLead={startLead} />
-        ) : (
-          <div className="flex items-start gap-16">
-            <TeamTable
-              slug={slug}
-              groups={groups}
-              human={human}
-              noLeads={hasNoLeads(groups)}
-              mainName={mainAgentName(groups)}
-              onStartLead={startLead}
-            />
-            {asking === undefined ? null : (
-              <PermissionPanel
-                key={asking}
-                slug={slug}
-                id={asking}
-                open={open}
-                row={askingRow(groups, open, asking)}
-                human={human}
-                now={now}
-                onClose={() => {
-                  onSearch({});
-                }}
-              />
-            )}
+        <RadixTabs.Root
+          value={tab}
+          onValueChange={(value) => {
+            onSearch(
+              value === "cost" ? { tab: "cost", range: search.range } : {},
+            );
+          }}
+          className="flex flex-col gap-16"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-12">
+            <RadixTabs.List aria-label="Agents view" className={TAB_LIST}>
+              <RadixTabs.Trigger
+                value="team"
+                className={cn(TAB_BY_STATE, focusRing)}
+              >
+                Team
+              </RadixTabs.Trigger>
+              <RadixTabs.Trigger
+                value="cost"
+                className={cn(TAB_BY_STATE, focusRing)}
+              >
+                Cost
+              </RadixTabs.Trigger>
+            </RadixTabs.List>
+            {tab === "cost" ? (
+              <div role="group" aria-label="Range" className={SEGMENT_LIST}>
+                {COST_RANGES.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={range === option.value}
+                    onClick={() => {
+                      onSearch(
+                        option.value === "all"
+                          ? { tab: "cost" }
+                          : { tab: "cost", range: option.value },
+                      );
+                    }}
+                    className={cn(
+                      segmentClasses(range === option.value),
+                      focusRing,
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
-        )}
+          <RadixTabs.Content value="team" className={focusRing}>
+            {isEmptyTeam(groups) ? (
+              <EmptyTeam onStartLead={startLead} />
+            ) : (
+              <div className="flex items-start gap-16">
+                <TeamTable
+                  slug={slug}
+                  groups={groups}
+                  human={human}
+                  noLeads={hasNoLeads(groups)}
+                  mainName={mainAgentName(groups)}
+                  onStartLead={startLead}
+                />
+                {asking === undefined ? null : (
+                  <PermissionPanel
+                    key={asking}
+                    slug={slug}
+                    id={asking}
+                    open={open}
+                    row={askingRow(groups, open, asking)}
+                    human={human}
+                    now={now}
+                    onClose={() => {
+                      onSearch({});
+                    }}
+                  />
+                )}
+              </div>
+            )}
+          </RadixTabs.Content>
+          <RadixTabs.Content value="cost" className={focusRing}>
+            {tab === "cost" ? <CostTab slug={slug} range={range} /> : null}
+          </RadixTabs.Content>
+        </RadixTabs.Root>
         <StartLeadDialog
           slug={slug}
           open={starting}

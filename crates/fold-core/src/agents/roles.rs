@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentName, AreaName};
 use crate::error::{FoldError, codes};
-use crate::ids::{ProposalId, ReviewBatchId, TaskId};
+use crate::ids::{ProposalId, RequestId, ReviewBatchId, ReviewPlanId, TaskId};
 use crate::tasks::{LabelName, define_names};
 
 mod answers;
@@ -11,8 +11,10 @@ mod profile;
 
 pub use answers::{PermissionBehavior, ask_answer_turn, permission_answer_turn};
 pub use handoff::{
-    HANDOFF_REQUEST, HANDOFF_TURNS, MAX_HANDOFF_CHARS, RefreshFacts, SUMMARY_ITEMS,
-    SummaryProposal, SummaryTask, check_handoff, handoff_due, handoff_overdue, refresh_turn,
+    DEFAULT_HANDOFF_LARGE_PERCENT, DEFAULT_HANDOFF_LARGE_WINDOW, DEFAULT_HANDOFF_SMALL_PERCENT,
+    HANDOFF_REQUEST, HANDOFF_TURNS, HandoffAt, MAX_HANDOFF_CHARS, RefreshFacts, SUMMARY_ITEMS,
+    SummaryProposal, SummaryTask, check_handoff, default_handoff_percent, handoff_due,
+    handoff_overdue, handoff_reask_due, refresh_turn,
 };
 pub use profile::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, FieldChange, MAX_AREA_INSTRUCTIONS_CHARS,
@@ -20,7 +22,7 @@ pub use profile::{
 };
 
 define_names!(
-    /// The kinds of worker agent fold starts and supervises. The main agent is the user's own interactive session and has no role.
+    /// The kinds of worker agent fold starts and supervises. The main agent is usually the user's own interactive session, which has no role; a project whose `[main] supervised` setting is on has fold run it as the worker of role `main` instead, so it works with nobody at a terminal.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum Role {
@@ -28,20 +30,21 @@ define_names!(
         ReviewLead = "review_lead",
         TaskWorker = "task_worker",
         Reviewer = "reviewer",
+        Main = "main",
     }
 );
 
 impl Role {
-    /// A lead lives until someone stops it; a task worker or reviewer is bound to its work and stops when it is done or idle.
+    /// A lead or the supervised main lives until someone stops it; a task worker or reviewer is bound to its work and stops when it is done or idle.
     pub fn is_long_lived(self) -> bool {
-        matches!(self, Role::AreaLead | Role::ReviewLead)
+        matches!(self, Role::AreaLead | Role::ReviewLead | Role::Main)
     }
 
-    /// Leads and reviewers keep long gaps between turns (a reviewer runs long tests), so their prompt cache lives an hour; a task worker works in short bursts.
+    /// Leads keep long gaps between turns, so their prompt cache lives an hour. A task worker and a reviewer each work in one short burst with no gap of five minutes, so the hour would cost more than it saves; a project whose checks run long can set `cache_ttl = "1h"` for its reviewers.
     pub fn default_cache_ttl(self) -> CacheTtl {
         match self {
-            Role::TaskWorker => CacheTtl::FiveMinutes,
-            Role::AreaLead | Role::ReviewLead | Role::Reviewer => CacheTtl::OneHour,
+            Role::TaskWorker | Role::Reviewer => CacheTtl::FiveMinutes,
+            Role::AreaLead | Role::ReviewLead | Role::Main => CacheTtl::OneHour,
         }
     }
 
@@ -76,6 +79,33 @@ impl Role {
                 "\n",
                 include_str!("roles/practices.md")
             ),
+            Role::Main => concat!(
+                include_str!("roles/main.md"),
+                "\n",
+                include_str!("roles/main_supervised.md"),
+                "\n",
+                include_str!("roles/shared.md"),
+                "\n",
+                include_str!("roles/practices.md")
+            ),
+        }
+    }
+
+    /// The role text of a project's `.fold/roles/<role>.md` with what fold adds to it: the shared rules and the practices, and for the supervised main first the rules of a main agent without a terminal, which the project's `main.md` was written for an interactive session without.
+    pub fn with_own_text(self, role_text: &str) -> String {
+        match self {
+            Role::Main => {
+                let mut text = role_text.to_owned();
+                if !text.ends_with('\n') {
+                    text.push('\n');
+                }
+                text.push('\n');
+                text.push_str(include_str!("roles/main_supervised.md"));
+                with_shared_rules(&text)
+            }
+            Role::AreaLead | Role::ReviewLead | Role::TaskWorker | Role::Reviewer => {
+                with_shared_rules(role_text)
+            }
         }
     }
 }
@@ -100,7 +130,7 @@ pub fn with_shared_rules(role_text: &str) -> String {
     prompt
 }
 
-/// The prompt that ships with fold for the main agent, which `fld claude` appends to the system prompt of the user's session; a project replaces the role text with `.fold/roles/main.md`, and the shared rules and the practices follow it either way. It stands apart from [`Role`] because fold neither starts nor supervises the main agent.
+/// The prompt that ships with fold for the main agent, which `fld claude` appends to the system prompt of the user's session; a project replaces the role text with `.fold/roles/main.md`, and the shared rules and the practices follow it either way. It stands apart from [`Role`] because fold neither starts nor supervises the interactive main agent; [`Role::Main`] is the supervised one.
 pub fn main_prompt() -> &'static str {
     concat!(
         include_str!("roles/main.md"),
@@ -201,12 +231,12 @@ pub struct WorkerLimits {
 }
 
 impl WorkerLimits {
-    /// The limit of `role`, `None` for a long-lived role.
+    /// The limit of `role`, `None` for a long-lived role: the leads and the supervised main.
     pub fn of(self, role: Role) -> Option<u64> {
         match role {
             Role::TaskWorker => Some(self.task_worker),
             Role::Reviewer => Some(self.reviewer),
-            Role::AreaLead | Role::ReviewLead => None,
+            Role::AreaLead | Role::ReviewLead | Role::Main => None,
         }
     }
 }
@@ -369,6 +399,7 @@ pub fn default_worker_name(role: Role, area: Option<&AreaName>, attempt: u32) ->
         (Role::TaskWorker, None) => (None, "task-worker"),
         (Role::ReviewLead, _) => (None, "review-lead"),
         (Role::Reviewer, _) => (None, "reviewer"),
+        (Role::Main, _) => (None, crate::agents::MAIN_TAG),
     };
     let tail = format!("{base}{suffix}");
     let name = match prefix {
@@ -421,13 +452,17 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
         ),
         (Role::AreaLead, None) => format!("fold started you as {}, an area lead.", facts.name),
         (Role::ReviewLead, _) => format!(
-            "fold started you as {}, the review lead. Review the open proposals yourself, or give one proposal or a group of related proposals to a reviewer with start_worker.",
+            "fold started you as {}, the review lead. Give each open proposal, or a group of related proposals, to a reviewer with start_worker; you never review a proposal yourself.",
             facts.name
         ),
         (Role::TaskWorker, _) => format!(
             "fold started you as {}, a task worker for {}, and gave you the claim on each of them. Read each task with get_task and reuse its workspace when present. For a proposal task, work only in its task workspace and send create_proposal or update_proposal. For a no_proposal task, create no workspace and send report_task with verifiable evidence.",
             facts.name,
             ids(facts.tasks.iter().map(ToString::to_string).collect())
+        ),
+        (Role::Main, _) => format!(
+            "fold started you as {}, the main agent of this project, as a supervised worker without a terminal. Read the project first, then handle what waits for you, one item per turn.",
+            facts.name
         ),
         (Role::Reviewer, _) => {
             let proposals = ids(facts.proposals.iter().map(ToString::to_string).collect());
@@ -453,30 +488,19 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
     }
 }
 
-/// What waits for a lead whose process starts again in its own session: for an area lead the ready tasks of its area in the ready order, for the review lead the open proposals that have no verdict on their current version. A claim hides a task or proposal only while its worker runs or the same start runs it again, because a start moves the claim of a worker that has ended.
+/// What waits for a lead whose process starts again in its own session: for an area lead the ready tasks of its area in the ready order, for the review lead the open proposals that have no verdict on their current version and that no reviewer works on. A claim hides its task or proposal only while its worker runs or the same start runs it again, because a start moves the claim of a worker that has ended; a review claim also hides its proposal while fold owes its ended reviewer a resume for the newest version, since that reviewer gets the version.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatchUpFacts<'a> {
     pub role: Role,
     pub area: Option<&'a AreaName>,
     pub tasks: &'a [TaskId],
     pub proposals: &'a [ProposalId],
+    /// The open review plans of the review lead; their proposals are not in `proposals`.
+    pub plans: &'a [ReviewPlanId],
 }
 
 /// The part of a restarted lead's turn that names the work waiting for it, at most [`SUMMARY_ITEMS`] ids. fold stores no push notice, so the lead may never have heard of this work. `None` for the other roles and when nothing waits, so a lead with nothing to do stays idle.
 pub fn catch_up_turn(facts: &CatchUpFacts<'_>) -> Option<String> {
-    fn listed(ids: Vec<String>) -> String {
-        let more = ids.len().saturating_sub(SUMMARY_ITEMS);
-        let named = ids
-            .into_iter()
-            .take(SUMMARY_ITEMS)
-            .collect::<Vec<_>>()
-            .join(", ");
-        if more == 0 {
-            named
-        } else {
-            format!("{named} and {more} more")
-        }
-    }
     match facts.role {
         Role::AreaLead if !facts.tasks.is_empty() => {
             let area = facts
@@ -488,11 +512,76 @@ pub fn catch_up_turn(facts: &CatchUpFacts<'_>) -> Option<String> {
                 listed(facts.tasks.iter().map(ToString::to_string).collect())
             ))
         }
-        Role::ReviewLead if !facts.proposals.is_empty() => Some(format!(
-            "These open proposals wait for a review: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, then review them yourself or give them to reviewers with start_worker, which also moves the claim of a reviewer that has ended.",
-            listed(facts.proposals.iter().map(ToString::to_string).collect())
-        )),
-        Role::AreaLead | Role::ReviewLead | Role::TaskWorker | Role::Reviewer => None,
+        Role::ReviewLead if !facts.proposals.is_empty() || !facts.plans.is_empty() => {
+            let mut parts = Vec::new();
+            if !facts.proposals.is_empty() {
+                parts.push(format!(
+                    "These open proposals wait for a review and no reviewer works on them: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, and give them to reviewers with start_worker, which also moves the claim of a reviewer that has ended. Leave a proposal to a reviewer that runs or that fold resumes for a new version.",
+                    listed(facts.proposals.iter().map(ToString::to_string).collect())
+                ));
+            }
+            if !facts.plans.is_empty() {
+                parts.push(format!(
+                    "These review plans of yours are open: {}. Read each with get_review_plan; when it waits for no task, or its wait ended, start one reviewer for it with start_worker and plan.",
+                    listed(facts.plans.iter().map(ToString::to_string).collect())
+                ));
+            }
+            Some(parts.join(" "))
+        }
+        Role::AreaLead | Role::ReviewLead | Role::TaskWorker | Role::Reviewer | Role::Main => None,
+    }
+}
+
+/// What waits for the supervised main when fold starts it for its own reasons, such as the start of the daemon or the resume of a pause, at which it may have missed the notices of that work: the ready tasks of the area Main that no running worker holds, the open requests that nobody drafts, and how many messages to it are unread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MainCatchUp<'a> {
+    pub tasks: &'a [TaskId],
+    pub requests: &'a [RequestId],
+    pub unread: u64,
+}
+
+/// The turn that names the work waiting for the supervised main, at most [`SUMMARY_ITEMS`] ids of each kind; `None` when nothing waits.
+pub fn main_catch_up_turn(facts: &MainCatchUp<'_>) -> Option<String> {
+    let mut parts = Vec::new();
+    if !facts.tasks.is_empty() {
+        parts.push(format!(
+            "These tasks of main are ready for you: {}. Read each with get_task.",
+            listed(facts.tasks.iter().map(ToString::to_string).collect())
+        ));
+    }
+    if !facts.requests.is_empty() {
+        parts.push(format!(
+            "These open requests wait for a drafter: {}. Read each with get_request.",
+            listed(facts.requests.iter().map(ToString::to_string).collect())
+        ));
+    }
+    if facts.unread > 0 {
+        parts.push(format!(
+            "Unread messages to you: {}. Call get_inbox.",
+            facts.unread
+        ));
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "fold may not have told you of all the work that waits for you. {} Handle one item per turn.",
+        parts.join(" ")
+    ))
+}
+
+/// At most [`SUMMARY_ITEMS`] of `ids`, then how many more there are.
+fn listed(ids: Vec<String>) -> String {
+    let more = ids.len().saturating_sub(SUMMARY_ITEMS);
+    let named = ids
+        .into_iter()
+        .take(SUMMARY_ITEMS)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if more == 0 {
+        named
+    } else {
+        format!("{named} and {more} more")
     }
 }
 
@@ -618,7 +707,8 @@ mod tests {
             assert_eq!(role.to_string(), role.as_str());
             assert!(!role.prompt().is_empty());
         }
-        assert_eq!(Role::parse("main"), None);
+        assert_eq!(Role::parse("main"), Some(Role::Main));
+        assert_eq!(Role::parse("boss"), None);
         for state in WorkerState::ALL {
             assert_eq!(WorkerState::parse(state.as_str()), Some(state));
             assert_eq!(state.to_string(), state.as_str());
@@ -642,10 +732,10 @@ mod tests {
     }
 
     #[test]
-    fn leads_and_reviewers_cache_for_an_hour_and_task_workers_for_five_minutes() {
+    fn leads_cache_for_an_hour_and_task_workers_and_reviewers_for_five_minutes() {
         assert_eq!(Role::AreaLead.default_cache_ttl(), CacheTtl::OneHour);
         assert_eq!(Role::ReviewLead.default_cache_ttl(), CacheTtl::OneHour);
-        assert_eq!(Role::Reviewer.default_cache_ttl(), CacheTtl::OneHour);
+        assert_eq!(Role::Reviewer.default_cache_ttl(), CacheTtl::FiveMinutes);
         assert_eq!(Role::TaskWorker.default_cache_ttl(), CacheTtl::FiveMinutes);
         assert!(Role::AreaLead.is_long_lived() && Role::ReviewLead.is_long_lived());
         assert!(!Role::TaskWorker.is_long_lived() && !Role::Reviewer.is_long_lived());
@@ -653,7 +743,7 @@ mod tests {
 
     #[test]
     fn every_role_prompt_says_that_only_the_main_agent_pauses() {
-        for role in Role::ALL {
+        for role in Role::ALL.into_iter().filter(|role| *role != Role::Main) {
             let prompt = role.prompt();
             assert!(prompt.contains("resumed you after a pause"), "{role}");
             assert!(prompt.contains("only the main agent does"), "{role}");
@@ -662,7 +752,7 @@ mod tests {
 
     #[test]
     fn every_role_prompt_keeps_the_worker_in_its_workspace() {
-        for role in Role::ALL {
+        for role in Role::ALL.into_iter().filter(|role| *role != Role::Main) {
             let prompt = role.prompt();
             assert!(prompt.contains("own workspace"), "{role}");
             assert!(
@@ -709,16 +799,201 @@ mod tests {
     }
 
     #[test]
+    fn the_supervised_main_keeps_the_main_rules_and_talks_only_through_fold() {
+        let prompt = Role::Main.prompt();
+        let supervised = include_str!("roles/main_supervised.md");
+        assert!(prompt.starts_with(include_str!("roles/main.md")));
+        assert_eq!(prompt.matches(supervised).count(), 1);
+        assert!(!main_prompt().contains(supervised));
+        for wanted in [
+            "No person reads your terminal",
+            "`AskUserQuestion`",
+            "`asks_human` true",
+            "the plan (section 5), a revised plan (section 8) and a main-change diff",
+            "A human's explicit OK in that thread to the version you sent is the user's OK",
+            "Handle one item per turn",
+            "Call `write_handoff`",
+            "fold starts your next session only with that note",
+            "resumed you after a pause",
+        ] {
+            assert!(prompt.contains(wanted), "{wanted}");
+        }
+        let own = Role::Main.with_own_text("Our main.");
+        assert!(own.starts_with("Our main.\n\n## Supervised main"));
+        assert!(own.ends_with(shared_prompt()));
+        assert_eq!(
+            Role::AreaLead.with_own_text("Our lead."),
+            with_shared_rules("Our lead.")
+        );
+        assert_eq!(Role::Main.default_cache_ttl(), CacheTtl::OneHour);
+        assert!(Role::Main.is_long_lived());
+        let limits = WorkerLimits {
+            task_worker: 0,
+            reviewer: 0,
+            max_per_area: Some(0),
+        };
+        assert_eq!(limits.of(Role::Main), None);
+        assert!(check_limits(limits, Role::Main, 9, None).is_ok());
+        assert_eq!(
+            default_worker_name(Role::Main, None, 1).unwrap().as_str(),
+            "main"
+        );
+    }
+
+    #[test]
+    fn the_supervised_main_hears_of_the_work_that_waits_for_it() {
+        let main = AgentName::parse("main").unwrap();
+        let first = first_turn(&StartFacts {
+            role: Role::Main,
+            name: &main,
+            area: None,
+            tasks: &[],
+            proposals: &[],
+            batch: None,
+            instructions: None,
+        });
+        assert!(
+            first.starts_with("fold started you as main, the main agent"),
+            "{first}"
+        );
+        assert!(first.contains("without a terminal"), "{first}");
+        let none = MainCatchUp {
+            tasks: &[],
+            requests: &[],
+            unread: 0,
+        };
+        assert_eq!(main_catch_up_turn(&none), None);
+        let tasks: Vec<TaskId> = (1..=22).filter_map(TaskId::from_number).collect();
+        let requests = [RequestId::from_number(3).unwrap()];
+        let turn = main_catch_up_turn(&MainCatchUp {
+            tasks: &tasks,
+            requests: &requests,
+            unread: 2,
+        })
+        .unwrap();
+        assert!(turn.contains("T-20 and 2 more."), "{turn}");
+        assert!(turn.contains("wait for a drafter: RQ-3."), "{turn}");
+        assert!(
+            turn.contains("Unread messages to you: 2. Call get_inbox."),
+            "{turn}"
+        );
+        assert!(turn.ends_with("Handle one item per turn."), "{turn}");
+        let only = main_catch_up_turn(&MainCatchUp { unread: 1, ..none }).unwrap();
+        assert!(!only.contains("get_task"), "{only}");
+        assert_eq!(
+            catch_up_turn(&CatchUpFacts {
+                role: Role::Main,
+                area: None,
+                tasks: &tasks,
+                proposals: &[],
+                plans: &[],
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn workers_ask_the_humans_directly_and_main_gets_only_plan_boundaries() {
+        for role in Role::ALL {
+            let prompt = role.prompt();
+            assert!(
+                prompt.to_lowercase().contains("ask the humans directly"),
+                "{role}"
+            );
+            assert!(prompt.contains("`asks_human` true"), "{role}");
+            assert!(
+                prompt.contains("the answer comes to you in the same thread"),
+                "{role}"
+            );
+            assert!(!prompt.contains("bring it to the main agent"), "{role}");
+        }
+        for role in [Role::AreaLead, Role::ReviewLead] {
+            assert!(
+                role.prompt().contains(
+                    "When you ask, send the main agent one short line with the thread id, without the question"
+                ),
+                "{role}"
+            );
+        }
+        for role in [Role::ReviewLead, Role::Reviewer] {
+            assert!(
+                role.prompt().contains(
+                    "work that this task still misses, such as an unticked checklist step or an acceptance criterion with no work, back with `request_changes`"
+                ),
+                "{role}"
+            );
+            assert!(
+                role.prompt().contains(
+                    "new work outside the task, such as a feature the task did not ask for, with `create_request`; the proposal can still be approved. Ask the humans"
+                ),
+                "{role}"
+            );
+        }
+        assert!(
+            Role::AreaLead
+                .prompt()
+                .contains("call `mark_answered` on that ask when the task is Done")
+        );
+        assert!(
+            Role::AreaLead
+                .prompt()
+                .contains("Ask the main agent only about a change to those boundaries")
+        );
+        assert!(
+            !Role::ReviewLead
+                .prompt()
+                .contains("ask the main agent with")
+        );
+        assert!(!Role::Reviewer.prompt().contains("ask the review lead with"));
+        let main = main_prompt();
+        assert!(main.contains(
+            "about changes to the approved plan's boundaries (section 8), repeated failures, worker limits, blockers, human tasks and requests"
+        ));
+        assert!(main.contains("never relay their questions"));
+        assert!(main.contains(
+            "Ask the user yourself about your own responsibilities: the plan and its boundaries, project-wide settings, and project checks"
+        ));
+        assert!(main.contains(
+            "Bring pending tool permissions, human reviews, request drafts, ready human tasks and blockers to the user, with each item id"
+        ));
+        assert!(shared_prompt().contains(
+            "Ask the humans directly about your own work; the main agent asks the user about the plan"
+        ));
+        assert!(main.contains(
+            "When the user answers a lead's ask here, reply to the asker in its thread, then call `mark_answered`"
+        ));
+        assert!(main.contains("the leads' short lines name"));
+        assert!(!main.contains("Bring human questions"));
+    }
+
+    #[test]
     fn the_main_agent_and_the_leads_are_pointed_to_the_reference() {
         assert!(main_prompt().contains(
-            "Read the skill's `REFERENCE.md` before you plan checks, config or areas, or tell the user a command."
+            "Read the `fold` skill's `REFERENCE.md` before you plan checks, config or areas, or tell the user a command."
         ));
         for role in [Role::ReviewLead, Role::AreaLead] {
             assert!(
                 role.prompt()
-                    .contains("Checks section of the skill's `REFERENCE.md`"),
+                    .contains("Checks section of the `fold` skill's `REFERENCE.md`"),
                 "{role}"
             );
+        }
+    }
+
+    #[test]
+    fn every_prompt_loads_the_skill_of_its_role_once() {
+        for (prompt, skill) in [
+            (Role::Main.prompt(), "fold-main"),
+            (main_prompt(), "fold-main"),
+            (Role::AreaLead.prompt(), "fold-area-lead"),
+            (Role::ReviewLead.prompt(), "fold-review-lead"),
+            (Role::TaskWorker.prompt(), "fold-task-worker"),
+            (Role::Reviewer.prompt(), "fold-reviewer"),
+        ] {
+            let load = format!("Load the `{skill}` skill, the steps of your role.");
+            assert_eq!(prompt.matches(&load).count(), 1, "{skill}");
+            assert!(!prompt.contains("Load the `fold` skill"), "{skill}");
+            assert!(!prompt.contains("Orchestrating section"), "{skill}");
         }
     }
 
@@ -777,8 +1052,8 @@ mod tests {
 
     #[test]
     fn reviewer_prompts_require_current_evidence_and_handle_omitted_verdicts() {
-        for role in [Role::ReviewLead, Role::Reviewer] {
-            let prompt = role.prompt();
+        {
+            let prompt = Role::Reviewer.prompt();
             assert!(prompt.contains("acceptance criteria"));
             assert!(prompt.contains("`submit_review_fix`"));
             assert!(prompt.contains("The kind of fix decides, not its size."));
@@ -795,15 +1070,23 @@ mod tests {
                 prompt
                     .contains("public API, a schema, a migration, or security or permission code")
             );
-            assert!(!prompt.contains("Change review:"), "{role:?}");
-            assert!(!prompt.contains("Full review:"), "{role:?}");
+            assert!(!prompt.contains("Change review:"));
+            assert!(!prompt.contains("Full review:"));
         }
         let worker = Role::TaskWorker.prompt();
         assert!(worker.contains("call `run_checks` for the task before `create_proposal`"));
         assert!(worker.contains("Wait for `checks.finished` with `wait_for_events`"));
+        assert!(worker.contains("fold ends a `wait_for_events` after at most 270 s"));
+        assert!(
+            Role::Reviewer
+                .prompt()
+                .contains("fold ends a `wait_for_events` after at most 270 s")
+        );
         let lead = Role::ReviewLead.prompt();
-        assert!(lead.contains("before taking claims or creating a batch"));
         assert!(lead.contains("You decide the scope when you assign the review"));
+        assert!(lead.contains("never resolve it yourself"));
+        assert!(lead.contains("`base_conflicts`"));
+        assert!(lead.contains("public API, a schema, a migration, or security or permission code"));
         assert!(lead.contains("`set_review_scope`"));
         assert!(
             Role::Reviewer
@@ -811,6 +1094,40 @@ mod tests {
                 .contains("Follow the scope you get.")
         );
         assert!(lead.contains("makes a batch of the group for it, in the same step"));
+    }
+
+    #[test]
+    fn the_review_lead_gives_every_review_to_a_reviewer() {
+        let lead = Role::ReviewLead.prompt();
+        assert!(lead.contains("`review_lead_delegates`"));
+        assert!(lead.contains("You never review a proposal yourself"));
+        assert!(lead.contains("start a new reviewer for them"));
+        assert!(lead.contains("fold resumes the reviewer that holds its review claim"));
+        for tool in ["`create_batch_checkout`", "`submit_review_fix`"] {
+            assert!(lead.contains(tool), "{tool}");
+        }
+        for self_review in [
+            "self-review",
+            "Approve only",
+            "Never edit a batch checkout.",
+        ] {
+            assert!(!lead.contains(self_review), "{self_review}");
+        }
+        assert!(
+            Role::Reviewer
+                .prompt()
+                .contains("fold resumes you in the same session for that version")
+        );
+        let turn = first_turn(&StartFacts {
+            role: Role::ReviewLead,
+            name: &AgentName::parse("review").unwrap(),
+            area: None,
+            tasks: &[],
+            proposals: &[],
+            batch: None,
+            instructions: None,
+        });
+        assert!(turn.contains("you never review a proposal yourself"));
     }
 
     #[test]
@@ -1013,6 +1330,7 @@ mod tests {
             area: Some(&web),
             tasks,
             proposals,
+            plans: &[],
         };
         let lead = catch_up_turn(&facts(Role::AreaLead, &tasks, &[])).unwrap();
         assert!(
@@ -1030,10 +1348,27 @@ mod tests {
             ..facts(Role::ReviewLead, &[], &proposals)
         })
         .unwrap();
-        assert!(review.contains("wait for a review: P-4."), "{review}");
+        assert!(
+            review.contains("no reviewer works on them: P-4."),
+            "{review}"
+        );
+        assert!(!review.contains("yourself"), "{review}");
         assert!(
             review.contains("list_proposals") && review.contains("start_worker"),
             "{review}"
+        );
+        let plans = [ReviewPlanId::from_number(2).unwrap()];
+        let planned = catch_up_turn(&CatchUpFacts {
+            area: None,
+            plans: &plans,
+            ..facts(Role::ReviewLead, &[], &[])
+        })
+        .unwrap();
+        assert!(
+            planned.starts_with("These review plans of yours are open: rp-2.")
+                && planned.contains("get_review_plan")
+                && planned.contains("start_worker"),
+            "{planned}"
         );
         assert_eq!(catch_up_turn(&facts(Role::AreaLead, &[], &proposals)), None);
         assert_eq!(catch_up_turn(&facts(Role::ReviewLead, &tasks, &[])), None);

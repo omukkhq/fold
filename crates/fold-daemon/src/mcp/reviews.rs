@@ -4,6 +4,7 @@ use fold_core::policy::{Gate, GateState, GateStatus};
 use fold_core::reviews::{
     HumanReviewMark, ReviewScope, ReviewScopeRecord, ScopeChoice, Side, Verdict,
 };
+use fold_core::text::shorten;
 use fold_core::{
     Actor, ChangesetId, CommentId, FoldError, HumanName, IdParseError, ProposalId, TaskId,
     WorkerName, codes,
@@ -30,6 +31,7 @@ use crate::services::workspaces::StateComparison;
 
 pub mod batches;
 pub mod checks;
+pub mod plans;
 
 pub const CREATE_PROPOSAL: &str = "create_proposal";
 pub const LIST_PROPOSALS: &str = "list_proposals";
@@ -58,9 +60,6 @@ pub struct CreateProposalInput {
     /// What shows the work is done, such as the tests you ran and their result. Leave it out for none. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub evidence: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -75,9 +74,6 @@ pub struct ListProposalsInput {
     /// The most proposals to return, the newest ones, in number order: 1 to 200, 50 when left out.
     #[serde(default)]
     pub limit: Option<u32>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -88,9 +84,19 @@ pub struct ProposalVersionInput {
     /// A version number, such as 2 for v2. Leave it out for the current version.
     #[serde(default)]
     pub version: Option<u32>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct GetProposalInput {
+    /// The proposal, such as P-3.
+    pub id: String,
+    /// A version number, such as 2 for v2. Leave it out for the current version.
+    #[serde(default)]
+    pub version: Option<u32>,
+    /// full adds the evidence text, the task description and the whole body of each review of an earlier version. Leave it out for the short form, which gives evidence_chars and the first 200 characters of those bodies with body_chars.
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -107,9 +113,6 @@ pub struct GetProposalDiffInput {
     /// One changed file, such as src/lib.rs. With it the result holds that file's hunks; without it, the list of changed files.
     #[serde(default)]
     pub path: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -120,9 +123,6 @@ pub struct UpdateProposalInput {
     /// New evidence for the new version. Leave it out to keep the current evidence. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub evidence: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -132,9 +132,6 @@ pub struct CloseProposalInput {
     pub id: String,
     /// Why the proposal closes: 1 to 500 characters.
     pub reason: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -142,9 +139,6 @@ pub struct CloseProposalInput {
 pub struct ProposalIdInput {
     /// The proposal, such as P-3.
     pub id: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -158,9 +152,6 @@ pub struct ClaimReviewInput {
     /// Why the chosen scope fits, in one line, such as "the change renames a public API" or "only strings changed". Needed with scope.
     #[serde(default)]
     pub reason: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 /// One review scope that the review lead chooses when it assigns a review.
@@ -209,9 +200,6 @@ pub struct SetReviewScopeInput {
     pub scope: String,
     /// Why this scope fits, in one line, such as "the fix only adds a test".
     pub reason: String,
-    /// The worker that makes this call, such as review/scope. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -222,9 +210,6 @@ pub struct ReleaseReviewInput {
     /// Why you give the review up, at most 500 characters. Leave it out for none.
     #[serde(default)]
     pub reason: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -256,16 +241,13 @@ pub struct SubmitReviewInput {
     pub id: String,
     /// The version you reviewed, such as 2 for v2: the version of your review checkout. When the current version is another one, nothing is written and the error is stale_version.
     pub version: u32,
-    /// comment, request_changes, approve or reject. Only the main agent, the review lead and the reviewers it starts can approve or reject; reject closes the proposal.
+    /// comment, request_changes, approve or reject. Only the main agent and the reviewers that the review lead starts can approve or reject; reject closes the proposal. The review lead gives no verdict (review_lead_delegates).
     pub verdict: String,
     /// The review text. It may be empty only when the review carries a comment; a reject needs it. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     pub body: String,
     /// Line comments that come with the review.
     #[serde(default)]
     pub comments: Vec<ReviewCommentInput>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -276,9 +258,6 @@ pub struct IntegrateProposalInput {
     /// The version you reviewed, such as 2 for v2. When the current version is another one, nothing integrates and the error is stale_version.
     #[serde(default)]
     pub expected_version: Option<u32>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -291,9 +270,6 @@ pub struct RequireHumanReviewInput {
     pub reviewer: Option<String>,
     /// Why a human must look: 1 to 500 characters.
     pub reason: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -303,9 +279,6 @@ pub struct SubmitMainChangeInput {
     pub changeset: String,
     /// The Git commit message of the change, 1 to 5000 characters: a subject line, then a blank line and a body when one helps. Show it to the user with the diff.
     pub message: String,
-    /// The worker that makes this call. Only the main agent's main worker submits a direct change, so leave it out.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -328,9 +301,6 @@ pub struct SubmitReviewFixInput {
     pub fixes: Vec<ReviewFixInput>,
     /// The commands you ran on the fixed files, such as the narrow tests of each fix, the build and the required checks, with their results.
     pub checks: String,
-    /// The worker that makes this call, such as review/r1. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {
@@ -347,12 +317,12 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_PROPOSAL,
-            "Read one proposal: versions, evidence, the task and its prerequisites, the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again) and the changed files.",
-            schema_for_type::<ProposalVersionInput>(),
+            "Read one proposal: versions, the evidence size, the task and its prerequisites, the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again) and the changed files. The short form gives evidence_chars for the evidence, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the task description and every whole body, such as before a review or when the task description matters.",
+            schema_for_type::<GetProposalInput>(),
         ),
         Tool::new(
             GET_PROPOSAL_DIFF,
-            "Read the change of a proposal version: against its base, or with since only what changed after an earlier version, such as last_reviewed, the newest earlier version that has a verdict. Lists the changed files with line counts, or one file's hunks when you pass path. A since change leaves out what main gained when the worker synced, and its file list adds earlier (the earlier version's own change size), new_files (files the earlier version did not change), base_moved and base_conflicts (files where the worker merged main by hand), with fold's suggested_scope, change or full, and scope_rules, the rules behind a suggested full review: new_files, large_delta, base_conflicts or v3_or_later. On a since change, comment with side new and the new line numbers: they are the version's own lines.",
+            "Read the change of a proposal version: against its base, or with since only what changed after an earlier version, such as last_reviewed, the newest earlier version that has a verdict. Lists the changed files with line counts, or one file's hunks when you pass path. A since change leaves out what main gained when the worker synced, and its file list adds earlier (the earlier version's own change size), new_files (files the earlier version did not change), base_moved and base_conflicts (files where the worker merged main by hand), with fold's suggested_scope, change or full, and scope_rules, the rules behind a suggested full review: new_files, large_delta, base_conflicts or v3_or_later. On a since change, comment with side new and the new line numbers: they are the version's own lines. Each hunk has a header \"@@ -old_start,old_lines +new_start,new_lines @@\" and lines, each one string: a mark (space for context, - removed, + added), the line's number, a space, then the line's text, such as \"+14 let x = 1;\", \" 15 }\" or \"-9 old\"; a \"\\ No newline at end of file\" line follows a last line without a terminator. Use the number on the line for a comment: a removed line has its old number (side old), a context or added line its new number (side new). The new numbers are the line numbers of the file in your review checkout.",
             schema_for_type::<GetProposalDiffInput>(),
         ),
         Tool::new(
@@ -367,7 +337,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CLAIM_REVIEW,
-            "For a review of your own: the main agent and the review lead claim the review of an open proposal before they review it. A reviewer gets its claims from the review lead's start_worker and gets worker_claim_denied here; any other agent gets integrator_required and messages the review lead. The author's agent cannot claim it. Nobody claims the review of a task of the area main (main_area): a human approves it. A repeat call renews the claim.",
+            "For a review of its own, when the user tells it to: the main agent claims the review of an open proposal before it reviews it. The review lead never reviews and gets review_lead_delegates: it gives the review to a reviewer with start_worker. A reviewer gets its claims from the review lead's start_worker and gets worker_claim_denied here; any other agent gets integrator_required and messages the review lead. The author's agent cannot claim it. Nobody claims the review of a task of the area main (main_area): a human approves it. A repeat call renews the claim.",
             schema_for_type::<ClaimReviewInput>(),
         ),
         Tool::new(
@@ -377,12 +347,12 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             CREATE_REVIEW_CHECKOUT,
-            "Get a copy of the current version of a proposal you hold the review claim of, to read, build and test it, and to fix what you find in the task's scope; submit_review_fix makes the fix the next version.",
+            "Get a copy of the current version of a proposal you hold the review claim of, to read, build and test it, and to fix what you find in the task's scope; submit_review_fix makes the fix the next version. The review lead never reviews and gets review_lead_delegates.",
             schema_for_type::<ProposalIdInput>(),
         ),
         Tool::new(
             SUBMIT_REVIEW,
-            "Review the version of a proposal you read, the version of your review checkout, with a verdict, a text and line comments. request_changes gives the turn to the author; reject closes the proposal. A version that is no longer current is refused with stale_version; an approve of a version whose integration checks failed is refused with invalid_request and the reason checks_failed until the author sends a new version. On a task of the area main only a human approves or rejects, or the main agent while the task has no human review mark, its own proposal included; any other agent gets main_area.",
+            "Review the version of a proposal you read, the version of your review checkout, with a verdict, a text and line comments. request_changes gives the turn to the author; reject closes the proposal. A version that is no longer current is refused with stale_version; an approve of a version whose integration checks failed is refused with invalid_request and the reason checks_failed until the author sends a new version. On a task of the area main only a human approves or rejects, or the main agent while the task has no human review mark, its own proposal included; any other agent gets main_area. The review lead gives no verdict and gets review_lead_delegates.",
             schema_for_type::<SubmitReviewInput>(),
         ),
         Tool::new(
@@ -402,6 +372,7 @@ pub fn tools() -> Vec<Tool> {
         ),
     ];
     tools.extend(batches::tools());
+    tools.extend(plans::tools());
     tools.push(Tool::new(
         SUBMIT_MAIN_CHANGE,
         "Main agent only, and only after the user's explicit OK to the diff and summary you showed. Integrate the newest changeset of your main workspace onto main as one revision and one Git commit with your message, with no task, proposal or review; the main workspace then closes. integration_conflicted means main moved: details list the files; call sync_workspace, resolve them, call record_changes, show the user the new diff and submit again.",
@@ -409,7 +380,7 @@ pub fn tools() -> Vec<Tool> {
     ));
     tools.push(Tool::new(
         SUBMIT_REVIEW_FIX,
-        "Reviewer only: send the fixes you made in your review checkout as the next version of the proposal, under your name, with each changed file and its reason and the checks you ran. Fix only what the task's agreed scope settles; request changes for a product question or feature-size work. When fold-checks.toml has proposal checks for the fixed files, it returns at once with checks running and a run id: fold runs them in your checkout and makes the version only when they pass; the result comes as a message from fold. The version starts without approvals and your checkout then holds it: build it, run the required checks, then approve it with submit_review. The author's agent gets a push to sync its workspace. A batch checkout never becomes a version: fix a member in its own create_review_checkout. Refusals: review_claim_required, author_cannot_review, stale_version, version_unchanged, worker_busy, workspace_not_found (no checkout of that version) and invalid_request with reason fixes_mismatch (details list the unlisted and unchanged files).",
+        "Reviewer only: send the fixes you made in your review checkout as the next version of the proposal, under your name, with each changed file and its reason and the checks you ran. Fix only what the task's agreed scope settles. Send work that the task still misses back with request_changes, describe new work outside the task with create_request (the proposal can still be approved), and ask the humans with asks_human for a product decision or a conflict with a settled decision. When fold-checks.toml has proposal checks for the fixed files, it returns at once with checks running and a run id: fold runs them in your checkout and makes the version only when they pass; the result comes as a message from fold. The version starts without approvals and your checkout then holds it: build it, run the required checks, then approve it with submit_review. The author's agent gets a push to sync its workspace. A batch checkout never becomes a version: fix a member in its own create_review_checkout. Refusals: review_claim_required, author_cannot_review, review_lead_delegates (the review lead never reviews), stale_version, version_unchanged, worker_busy, workspace_not_found (no checkout of that version) and invalid_request with reason fixes_mismatch (details list the unlisted and unchanged files).",
         schema_for_type::<SubmitReviewFixInput>(),
     ));
     tools.extend(checks::tools());
@@ -421,17 +392,16 @@ pub fn tools() -> Vec<Tool> {
     tools
 }
 
-/// Runs a proposal tool acting as `as_worker`. `None` when `tool` is not a proposal tool or the server has no review service.
+/// Runs a proposal tool as the session's worker. `None` when `tool` is not a proposal tool or the server has no review service.
 pub async fn call(
     server: &FoldServer,
     tool: &str,
-    as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Option<Value>, FoldError> {
     let Some(reviews) = &server.reviews else {
         return Ok(None);
     };
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let value = match tool {
         CREATE_PROPOSAL => create_proposal(reviews, &actor, arguments).await?,
         LIST_PROPOSALS => list_proposals(reviews, arguments).await?,
@@ -451,9 +421,12 @@ pub async fn call(
         SUBMIT_REVIEW_FIX => submit_review_fix(reviews, &actor, arguments).await?,
         _ => match batches::run(reviews, tool, &actor, arguments).await? {
             Some(value) => value,
-            None => match checks::run(reviews, tool, &actor, arguments).await? {
+            None => match plans::run(reviews, tool, &actor, arguments).await? {
                 Some(value) => value,
-                None => return Ok(None),
+                None => match checks::run(reviews, tool, &actor, arguments).await? {
+                    Some(value) => value,
+                    None => return Ok(None),
+                },
             },
         },
     };
@@ -570,7 +543,11 @@ fn scope_record_json(scope: &ReviewScopeRecord) -> Value {
     })
 }
 
-fn view_json(view: &ProposalView) -> Value {
+/// How much of a review body of an earlier version the short form of `get_proposal` shows: enough to see what the review was about. The reviews of the selected version keep their whole body, which is what its author acts on.
+const EARLIER_REVIEW_HEAD_CHARS: usize = 200;
+
+/// The answer of `get_proposal`. Without `full` it leaves out the evidence text, the task description and most of each earlier version's review bodies, the largest parts of a proposal that a caller rarely needs on every read.
+fn view_json(view: &ProposalView, full: bool) -> Value {
     let detail = &view.detail;
     let summary = &detail.summary;
     let selected = &detail.selected;
@@ -603,6 +580,10 @@ fn view_json(view: &ProposalView) -> Value {
                 "body": review.body,
                 "comments": review.comments,
             });
+            if !full && review.version < selected.version {
+                line["body"] = json!(shorten(&review.body, EARLIER_REVIEW_HEAD_CHARS));
+                line["body_chars"] = json!(review.body.chars().count());
+            }
             // A human edit keeps the agent approvals of the version it was made from.
             if let Some(kept) = review.kept_from {
                 line["kept_from"] = json!(version(kept));
@@ -613,7 +594,7 @@ fn view_json(view: &ProposalView) -> Value {
             line
         })
         .collect();
-    json!({
+    let mut value = json!({
         "id": summary.id,
         "title": summary.title,
         "author": summary.author.as_str(),
@@ -625,12 +606,10 @@ fn view_json(view: &ProposalView) -> Value {
         "versions": versions,
         "base": selected.base,
         "changeset": selected.changeset,
-        "evidence": selected.evidence,
         "task": {
             "id": view.task.id,
             "title": view.task.title.as_str(),
             "status": view.task.status.as_str(),
-            "description": view.task.description.as_str(),
         },
         "needs": view.prerequisites.iter().map(|task| json!({
             "id": task.id,
@@ -663,13 +642,30 @@ fn view_json(view: &ProposalView) -> Value {
         "checks": view.checks.iter().map(checks::run_json).collect::<Vec<_>>(),
         "checks_failed": summary.checks_failed,
         "integration_queued": summary.integration_queued,
+        "review_plan": view.review_plan.as_ref().map(plans::proposal_plan_json),
+        "integrated": view.integrated.map(|(revision, batch)| json!({
+            "revision": revision,
+            "batch": batch,
+        })),
         "files": view.files.iter().map(file_line).collect::<Vec<_>>(),
         "totals": {
             "files": view.totals.files,
             "added": view.totals.added_lines,
             "removed": view.totals.removed_lines,
         },
-    })
+    });
+    if full {
+        value["evidence"] = json!(selected.evidence);
+        value["task"]["description"] = json!(view.task.description.as_str());
+    } else {
+        value["evidence_chars"] = json!(
+            selected
+                .evidence
+                .as_deref()
+                .map_or(0, |text| text.chars().count())
+        );
+    }
+    value
 }
 
 fn comment_json(comment: &CommentView) -> Value {
@@ -783,12 +779,13 @@ async fn get_proposal(
     actor: &Actor,
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
-    let input: ProposalVersionInput = parse(arguments)?;
+    let input: GetProposalInput = parse(arguments)?;
+    let full = full_detail(input.detail.as_deref())?;
     let view = reviews
         .view_proposal(actor, proposal_id(&input.id)?, input.version)
         .await
         .map_err(from_review)?;
-    Ok(view_json(&view))
+    Ok(view_json(&view, full))
 }
 
 async fn get_proposal_diff(
@@ -850,6 +847,21 @@ async fn get_proposal_diff(
     value["since"] = json!(since.map(version));
     value["last_reviewed"] = json!(last.map(version));
     Ok(value)
+}
+
+/// Whether `detail` asks for the full form of `get_proposal`.
+fn full_detail(detail: Option<&str>) -> Result<bool, FoldError> {
+    match detail {
+        None => Ok(false),
+        Some("full") => Ok(true),
+        Some(_) => Err(
+            FoldError::new(codes::INVALID_REQUEST, "detail is full or left out")
+                .with_details([("field", json!("detail"))])
+                .with_hint(
+                    "call get_proposal with detail full, or leave detail out for the short form",
+                ),
+        ),
+    }
 }
 
 fn comparison_value(proposal: ProposalId, comparison: &StateComparison) -> Value {

@@ -240,7 +240,7 @@ impl Project {
             .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &[])
             .await
             .unwrap();
-        agents.actor(&ctx, None).await.unwrap()
+        agents.actor(&ctx).await.unwrap()
     }
 
     /// `frontend` creates a task, writes `files` into its workspace and opens a proposal, which `ana` integrates.
@@ -687,7 +687,7 @@ async fn a_conflict_becomes_a_sync_task_that_reaches_the_remote() {
         )
         .await
         .unwrap();
-    let agent = agents.actor(&ctx, None).await.unwrap();
+    let agent = agents.actor(&ctx).await.unwrap();
     let claimed = project.handle.tasks.claim_task(&agent, task).await.unwrap();
     assert!(claimed.adopted);
     let id = workspace.unwrap();
@@ -863,7 +863,11 @@ async fn the_socket_route_pulls_for_the_named_human() {
             (status, serde_json::from_slice::<Value>(&bytes).unwrap())
         }
     };
-    let (status, body) = call(fold_daemon::http::router(state.clone()), Some("ana")).await;
+    let (status, body) = call(
+        crate::common::signed_in_router(&state, "ana").await,
+        Some("ana"),
+    )
+    .await;
     assert_eq!(
         (status, &body["error"]["code"]),
         (StatusCode::NOT_FOUND, &Value::from("not_found"))

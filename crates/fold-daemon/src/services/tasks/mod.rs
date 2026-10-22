@@ -58,6 +58,7 @@ pub use requests::{
     RequestAttachment, RequestComment, RequestDetail, RequestDraft, RequestFilter, RequestThread,
     RequestView, SubmitDraft,
 };
+pub(crate) use views::readers_in;
 /// Whether `actor` may clear the human review mark, read for a task view. Any agent or human may turn the mark on, but only an actor that may clear it may also change what it says, so this one rule decides whether the view offers the human-review controls.
 pub fn can_change_human_review(actor: &Actor) -> bool {
     fold_core::policy::can_clear_human_review(actor).is_ok()
@@ -66,7 +67,7 @@ pub fn can_change_human_review(actor: &Actor) -> bool {
 pub use views::{
     Activity, BOARD_DONE_LIMIT, Board, BoardCard, BoardColumn, CardProposal, ChangesetSummary,
     ChecklistCounts, DetailChecklist, DetailEdge, DetailItem, GraphTask, HISTORY_LIMIT, TaskDetail,
-    TaskIntegration, TaskProposal, TaskRef, WorkspaceInfo,
+    TaskGraph, TaskIntegration, TaskProposal, TaskRef, WorkspaceInfo,
 };
 
 /// Refusals carry a stable code; anything else is a database failure.
@@ -647,6 +648,7 @@ async fn update_in_tx(
     buffer.append(tx, &event, now).await?;
     mark_main_task(tx, buffer, id, entering_main, now).await?;
     unmark_main_task(tx, buffer, id, leaving_main, now).await?;
+    crate::services::reviews::settle_plans(tx, buffer, now).await?;
     Ok(())
 }
 

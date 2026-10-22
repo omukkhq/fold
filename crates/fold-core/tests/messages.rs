@@ -23,7 +23,7 @@ fn addresses(entries: &[&str]) -> Vec<Address> {
     Address::parse_all(entries).unwrap()
 }
 
-/// Agents `backend` (tag api), `frontend` (tags ui, review) with child `frontend/ui`, and `review` (tag review); humans `ana` and `tanim`.
+/// Agents `backend` (tag api), `frontend` (tags ui, review) and `review` (tag review); humans `ana` and `tanim`.
 #[cfg(test)]
 fn directory() -> Directory {
     let agent = |name: &str, tags: &[&str]| DirectoryAgent {
@@ -35,12 +35,6 @@ fn directory() -> Directory {
             agent("backend", &["api"]),
             agent("frontend", &["ui", "review"]),
             agent("review", &["review"]),
-        ],
-        workers: vec![
-            worker("backend"),
-            worker("frontend"),
-            worker("frontend/ui"),
-            worker("review"),
         ],
         humans: vec![human("ana"), human("tanim")],
     }
@@ -69,16 +63,6 @@ fn every_address_form_parses_and_prints_back() {
             "frontend",
             Address::Agent(AgentName::parse("frontend").unwrap()),
             AddressedAs::Agent,
-        ),
-        (
-            "frontend/ui",
-            Address::Worker(worker("frontend/ui")),
-            AddressedAs::Worker,
-        ),
-        (
-            "frontend/ui/forms",
-            Address::Worker(worker("frontend/ui/forms")),
-            AddressedAs::Worker,
         ),
         (
             "tag:review",
@@ -117,6 +101,7 @@ fn a_malformed_entry_is_invalid_name_naming_the_entry() {
         "human:A B",
         "frontend/",
         "/ui",
+        "frontend/ui",
         "a b",
     ] {
         let error = Address::parse(entry).unwrap_err();
@@ -133,21 +118,21 @@ fn a_malformed_entry_is_invalid_name_naming_the_entry() {
 }
 
 #[test]
-fn of_worker_uses_the_agent_form_for_a_main_worker() {
+fn of_worker_reaches_the_workers_agent() {
     assert_eq!(
         Address::of_worker(&worker("frontend")).to_string(),
         "frontend"
     );
     assert_eq!(
         Address::of_worker(&worker("frontend/ui")),
-        Address::Worker(worker("frontend/ui"))
+        Address::Agent(AgentName::parse("frontend").unwrap())
     );
 }
 
 #[test]
-fn agent_and_worker_addresses_reach_exactly_that_worker() {
+fn agent_and_human_addresses_reach_exactly_that_worker_and_human() {
     let rows = resolve(
-        &addresses(&["frontend", "frontend/ui", "human:tanim"]),
+        &addresses(&["frontend", "human:tanim"]),
         &directory(),
         &Sender::Fold,
     )
@@ -156,7 +141,6 @@ fn agent_and_worker_addresses_reach_exactly_that_worker() {
         rows,
         vec![
             to_worker("frontend", AddressedAs::Agent),
-            to_worker("frontend/ui", AddressedAs::Worker),
             to_human("tanim", AddressedAs::Human),
         ]
     );
@@ -189,14 +173,6 @@ fn a_name_the_sender_gives_explicitly_is_kept() {
             to_worker("review", AddressedAs::All),
         ]
     );
-}
-
-#[test]
-fn a_child_worker_sender_leaves_its_main_worker_in_all() {
-    let sender = Sender::Worker(worker("frontend/ui"));
-    let rows = resolve(&addresses(&["all"]), &directory(), &sender).unwrap();
-    let targets: Vec<String> = rows.iter().map(|row| row.target.to_string()).collect();
-    assert_eq!(targets, ["backend", "frontend", "review"]);
 }
 
 #[test]
@@ -244,24 +220,22 @@ fn humans_reaches_every_registry_human_except_the_sender() {
 }
 
 #[test]
-fn an_unknown_agent_or_worker_is_recipient_not_found() {
-    for entry in ["ghost", "frontend/ghost"] {
-        let error =
-            resolve(&addresses(&["review", entry]), &directory(), &Sender::Fold).unwrap_err();
-        assert_eq!(
-            error,
-            ResolveError::UnknownRecipient {
-                to: entry.to_owned()
-            }
-        );
-        let error = FoldError::from(error);
-        assert_eq!(error.code(), codes::RECIPIENT_NOT_FOUND);
-        assert_eq!(
-            error.details().cloned().map(serde_json::Value::Object),
-            Some(json!({"to": [entry]}))
-        );
-        assert!(error.hint().unwrap().contains("list_agents"));
-    }
+fn an_unknown_agent_is_recipient_not_found() {
+    let entry = "ghost";
+    let error = resolve(&addresses(&["review", entry]), &directory(), &Sender::Fold).unwrap_err();
+    assert_eq!(
+        error,
+        ResolveError::UnknownRecipient {
+            to: entry.to_owned()
+        }
+    );
+    let error = FoldError::from(error);
+    assert_eq!(error.code(), codes::RECIPIENT_NOT_FOUND);
+    assert_eq!(
+        error.details().cloned().map(serde_json::Value::Object),
+        Some(json!({"to": [entry]}))
+    );
+    assert!(error.hint().unwrap().contains("list_agents"));
 }
 
 #[test]
@@ -288,7 +262,6 @@ fn an_empty_expansion_is_recipient_not_found_listing_every_entry() {
             name: AgentName::parse("frontend").unwrap(),
             tags: Vec::new(),
         }],
-        workers: vec![worker("frontend")],
         humans: vec![human("tanim")],
     };
     let sender = Sender::Worker(worker("frontend"));
@@ -320,11 +293,11 @@ fn an_empty_expansion_is_recipient_not_found_listing_every_entry() {
 fn the_sender_follows_the_actor() {
     let agent = Actor::Agent(AgentActor {
         agent: AgentName::parse("frontend").unwrap(),
-        worker: worker("frontend/ui"),
+        worker: worker("frontend"),
         tags: Vec::new(),
     });
     let table = [
-        (agent, "worker", "frontend/ui"),
+        (agent, "worker", "frontend"),
         (Actor::human(human("tanim")), "human", "human:tanim"),
         (Actor::System, "fold", "fold"),
     ];
@@ -371,7 +344,6 @@ fn entry() -> impl Strategy<Value = String> {
         Just("tag:none".to_owned()),
         Just("backend".to_owned()),
         Just("frontend".to_owned()),
-        Just("frontend/ui".to_owned()),
         Just("review".to_owned()),
     ]
 }
@@ -381,7 +353,6 @@ fn sender() -> impl Strategy<Value = Sender> {
     prop_oneof![
         Just(Sender::Fold),
         Just(Sender::Worker(worker("frontend"))),
-        Just(Sender::Worker(worker("frontend/ui"))),
         Just(Sender::Worker(worker("review"))),
         Just(Sender::Human(human("tanim"))),
     ]
@@ -428,7 +399,8 @@ fn a_reply_goes_to_the_parent_sender() {
     );
     assert_eq!(
         reply_addresses(&Sender::Worker(worker("frontend/ui")), &recipients, &tanim),
-        addresses(&["frontend/ui"])
+        addresses(&["frontend"]),
+        "a stored worker row below an agent is answered through its agent"
     );
     assert_eq!(
         reply_addresses(&Sender::Human(human("ana")), &recipients, &tanim),
@@ -443,11 +415,11 @@ fn a_reply_to_your_own_message_or_to_fold_goes_to_the_other_recipients() {
     let recipients = [
         Target::Worker(worker("backend")),
         Target::Human(human("tanim")),
-        Target::Worker(worker("frontend/ui")),
+        Target::Worker(worker("frontend")),
     ];
     assert_eq!(
         reply_addresses(&tanim, &recipients, &tanim),
-        addresses(&["backend", "frontend/ui"])
+        addresses(&["backend", "frontend"])
     );
     assert_eq!(
         reply_addresses(
@@ -455,7 +427,7 @@ fn a_reply_to_your_own_message_or_to_fold_goes_to_the_other_recipients() {
             &recipients,
             &Sender::Worker(worker("backend"))
         ),
-        addresses(&["human:tanim", "frontend/ui"])
+        addresses(&["human:tanim", "frontend"])
     );
     assert!(reply_addresses(&tanim, &[Target::Human(human("tanim"))], &tanim).is_empty());
 }
@@ -559,4 +531,54 @@ fn choices_keep_one_line_descriptions_and_a_short_header() {
     assert_eq!(short_line("Fold probe header", 12), None);
     assert_eq!(short_line("a\nb", 12), None);
     assert_eq!(short_line(" ", 12), None);
+}
+
+#[test]
+fn a_line_excerpt_holds_the_run_without_line_endings() {
+    use fold_core::messages::line_excerpt;
+    let text = "one\r\ntwo\nthree\n";
+    assert_eq!(line_excerpt(text, 1, 1), Some(("one".to_owned(), false)));
+    assert_eq!(
+        line_excerpt(text, 2, 3),
+        Some(("two\nthree".to_owned(), false))
+    );
+    assert_eq!(line_excerpt("a\n\nb", 2, 2), Some((String::new(), false)));
+    assert_eq!(line_excerpt(text, 3, 4), None);
+    assert_eq!(line_excerpt(text, 0, 1), None);
+    assert_eq!(line_excerpt(text, 2, 1), None);
+}
+
+#[test]
+fn a_long_line_excerpt_keeps_its_first_lines() {
+    use fold_core::messages::{MAX_EXCERPT_CHARS, MAX_EXCERPT_LINES, line_excerpt};
+    let many: String = (1..=150).map(|n| format!("line {n}\n")).collect();
+    let (excerpt, cut) = line_excerpt(&many, 1, 150).unwrap();
+    assert!(cut);
+    assert_eq!(excerpt.lines().count(), MAX_EXCERPT_LINES);
+    assert!(excerpt.ends_with("line 100"));
+
+    let wide = format!("{}\n{}\n", "x".repeat(MAX_EXCERPT_CHARS - 2), "yy");
+    let (excerpt, cut) = line_excerpt(&wide, 1, 2).unwrap();
+    assert!(cut);
+    assert_eq!(excerpt.chars().count(), MAX_EXCERPT_CHARS - 2);
+
+    let huge = "z".repeat(MAX_EXCERPT_CHARS + 5);
+    let (excerpt, cut) = line_excerpt(&huge, 1, 1).unwrap();
+    assert!(cut);
+    assert_eq!(excerpt.chars().count(), MAX_EXCERPT_CHARS);
+}
+
+#[test]
+fn a_lone_carriage_return_ends_a_line_of_an_excerpt() {
+    use fold_core::messages::{line_excerpt, text_lines};
+    let text = "one\rtwo\r\nthree\nfour";
+    assert_eq!(text_lines(text), ["one", "two", "three", "four"]);
+    assert_eq!(text_lines("a\n\r\n"), ["a", ""]);
+    assert!(text_lines("").is_empty());
+    assert_eq!(
+        line_excerpt(text, 2, 3),
+        Some(("two\nthree".to_owned(), false))
+    );
+    assert_eq!(line_excerpt(text, 4, 4), Some(("four".to_owned(), false)));
+    assert_eq!(line_excerpt(text, 4, 5), None);
 }

@@ -5,7 +5,7 @@ use fold_core::{
     Address, Choice, FoldError, MessageBody, MessageChoices, MessageId, ProposalId, RequestId,
     TaskId, Timestamp, codes,
 };
-use fold_store::agents::WorkerRow;
+use fold_store::messages::MessageLines;
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -27,7 +27,7 @@ pub const MARK_ANSWERED: &str = "mark_answered";
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct SendMessageInput {
-    /// The recipients: an agent (its main worker), an agent/worker path, tag:<tag>, all, human:<name> or humans.
+    /// The recipients: an agent, tag:<tag>, all, human:<name> or humans.
     pub to: Vec<String>,
     /// The message text. It is stored as plain text and never logged. In message text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     pub body: String,
@@ -37,7 +37,7 @@ pub struct SendMessageInput {
     /// Link the message to this proposal, such as P-3. A reply takes its parent's proposal when left out.
     #[serde(default)]
     pub proposal: Option<String>,
-    /// Reply to this message, such as m-31; the reply joins its thread.
+    /// Reply to this message, such as m-31; the reply joins its thread and acknowledges the message for you when it was sent to you.
     #[serde(default)]
     pub reply_to: Option<String>,
     /// Link the message to this request, such as RQ-4, to ask or answer about it: the message joins the request's clarification thread. A reply takes its parent's request when left out.
@@ -49,9 +49,6 @@ pub struct SendMessageInput {
     /// Mark the message as asking a human for an answer, so it waits for the human on the board, in Needs you and in the Messages count until a human replies in its thread or someone calls mark_answered. Set it only when you need the human's answer; a report or a thank-you waits for no one. Needs a human recipient; a question with choices asks without it.
     #[serde(default)]
     pub asks_human: bool,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -59,9 +56,6 @@ pub struct SendMessageInput {
 pub struct MarkAnsweredInput {
     /// The ask that the user answered outside its thread, such as m-31: a message your agent sent to a human with asks_human or choices, or, for the main agent, any agent's ask.
     pub message: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 /// One option of a question: a plain label, or a label with a one-line description that the human sees under it.
@@ -105,14 +99,7 @@ fn choices_json(choices: &[Choice]) -> Value {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
-pub struct GetInboxInput {
-    /// Also return the unacknowledged messages of every other worker of your agent. Each message names its worker in `to`.
-    #[serde(default)]
-    pub include_workers: bool,
-    /// The worker whose inbox to read, such as frontend/ui. Leave it out to read the main worker's inbox.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
-}
+pub struct GetInboxInput {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -123,22 +110,17 @@ pub struct GetThreadInput {
     /// A request, such as RQ-4, to read its clarification thread; it has no messages before anyone wrote about it.
     #[serde(default)]
     pub request: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct AcknowledgeMessageInput {
-    /// The message you handled, such as m-31.
-    pub id: String,
-    /// Also acknowledge every earlier unacknowledged message of the same worker.
+    /// The messages you handled, such as ["m-31", "m-32"]; give at least one. Each must be a message to you.
+    #[schemars(length(min = 1))]
+    pub ids: Vec<String>,
+    /// Also acknowledge every earlier unacknowledged message of yours, for each id.
     #[serde(default)]
     pub up_to: bool,
-    /// The worker whose message to acknowledge, such as frontend/ui. Leave it out for the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {
@@ -150,7 +132,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_INBOX,
-            "Read your unacknowledged messages in id order. Reading does not acknowledge: a message comes back on every call until acknowledge_message.",
+            "Read your unacknowledged messages in id order. Reading does not acknowledge: a message comes back on every call until acknowledge_message. A message with `lines` is a human's question about those lines of your proposal; answer it with send_message and reply_to.",
             schema_for_type::<GetInboxInput>(),
         ),
         Tool::new(
@@ -160,7 +142,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             ACKNOWLEDGE_MESSAGE,
-            "Mark a message as handled, so it leaves your inbox and the unread count. With up_to, also every earlier message of the same worker.",
+            "Mark messages as handled, so they leave your inbox and the unread count. Give every message you handled in one call. A reply with send_message reply_to already acknowledges the message it answers when it was sent to you. With up_to, also every earlier message of the same worker.",
             schema_for_type::<AcknowledgeMessageInput>(),
         ),
         Tool::new(
@@ -224,6 +206,9 @@ fn inbox_json(item: &InboxItem) -> Value {
     if item.asks_human {
         object.insert("asks_human".into(), json!(true));
     }
+    if let Some(lines) = &item.lines {
+        object.insert("lines".into(), lines_json(lines));
+    }
     object.insert("sent_at".into(), json!(millis(item.sent_at)));
     Value::Object(object)
 }
@@ -259,19 +244,34 @@ fn thread_json(message: &MessageView) -> Value {
     if message.asks_human {
         object.insert("asks_human".into(), json!(true));
     }
+    if let Some(lines) = &message.lines {
+        object.insert("lines".into(), lines_json(lines));
+    }
     object.insert("sent_at".into(), json!(millis(message.sent_at)));
     Value::Object(object)
+}
+
+/// The lines of the message's proposal a human asks its author about, with their text; `excerpt_cut` appears only when the text holds just the first lines.
+fn lines_json(lines: &MessageLines) -> Value {
+    let mut object = json!({
+        "version": lines.version,
+        "path": lines.path,
+        "side": lines.side.as_str(),
+        "start_line": lines.start_line,
+        "end_line": lines.end_line,
+        "excerpt": lines.excerpt,
+    });
+    if lines.excerpt_cut {
+        object["excerpt_cut"] = json!(true);
+    }
+    object
 }
 
 fn millis(time: Timestamp) -> i64 {
     time.as_millis()
 }
 
-pub async fn send_message(
-    server: &FoldServer,
-    worker: &WorkerRow,
-    arguments: &JsonObject,
-) -> Result<Value, FoldError> {
+pub async fn send_message(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let input: SendMessageInput = parse(arguments)?;
     let message = SendMessage {
         to: Address::parse_all(&input.to)?,
@@ -292,7 +292,7 @@ pub async fn send_message(
             MessageChoices::parse(&options, None)
         })
         .transpose()?;
-    let actor = server.actor(Some(&worker.name)).await?;
+    let actor = server.actor().await?;
     let sent = server
         .messages
         .send_marked(&actor, message, request, choices, input.asks_human)
@@ -309,18 +309,10 @@ pub async fn send_message(
     }))
 }
 
-pub async fn get_inbox(
-    server: &FoldServer,
-    worker: &WorkerRow,
-    arguments: &JsonObject,
-) -> Result<Value, FoldError> {
-    let input: GetInboxInput = parse(arguments)?;
-    let actor = server.actor(Some(&worker.name)).await?;
-    let items = server
-        .messages
-        .inbox(&actor, input.include_workers)
-        .await
-        .map_err(from_message)?;
+pub async fn get_inbox(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
+    let _: GetInboxInput = parse(arguments)?;
+    let actor = server.actor().await?;
+    let items = server.messages.inbox(&actor).await.map_err(from_message)?;
     Ok(json!({ "messages": items.iter().map(inbox_json).collect::<Vec<_>>() }))
 }
 
@@ -353,15 +345,24 @@ pub async fn get_thread(server: &FoldServer, arguments: &JsonObject) -> Result<V
 
 pub async fn acknowledge_message(
     server: &FoldServer,
-    worker: &WorkerRow,
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let input: AcknowledgeMessageInput = parse(arguments)?;
-    let id = message_id(&input.id)?;
-    let actor = server.actor(Some(&worker.name)).await?;
+    let targets = input
+        .ids
+        .iter()
+        .map(|id| message_id(id))
+        .collect::<Result<Vec<_>, _>>()?;
+    if targets.is_empty() {
+        return Err(
+            FoldError::new(codes::INVALID_REQUEST, "give at least one id")
+                .with_hint("call acknowledge_message with ids such as [\"m-31\"]"),
+        );
+    }
+    let actor = server.actor().await?;
     let acknowledged = server
         .messages
-        .acknowledge(&actor, id, input.up_to)
+        .acknowledge_all(&actor, &targets, input.up_to)
         .await
         .map_err(from_message)?;
     Ok(json!({ "acknowledged": ids(&acknowledged) }))
@@ -369,12 +370,11 @@ pub async fn acknowledge_message(
 
 pub async fn mark_answered(
     server: &FoldServer,
-    worker: &WorkerRow,
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let input: MarkAnsweredInput = parse(arguments)?;
     let id = message_id(&input.message)?;
-    let actor = server.actor(Some(&worker.name)).await?;
+    let actor = server.actor().await?;
     let closed = server
         .messages
         .mark_answered(&actor, id)
@@ -383,7 +383,7 @@ pub async fn mark_answered(
     Ok(json!({ "answered": closed.to_string() }))
 }
 
-/// The `unread` part of the footer: the unacknowledged messages of every worker of the calling agent.
+/// The `unread` part of the footer: the unacknowledged messages of the calling agent's worker.
 pub struct UnreadFooter {
     agents: AgentService,
     messages: MessageService,

@@ -239,7 +239,7 @@ async fn change_visibility(
     directory: &Path,
     sizes: Sizes,
 ) -> BenchResult<Vec<f64>> {
-    let mut stream = EventStream::open(host.port, "big").await?;
+    let mut stream = EventStream::open(host, "big").await?;
     stream
         .wait_for(VISIBILITY_TIMEOUT, |name, _| name == "snapshot")
         .await?;

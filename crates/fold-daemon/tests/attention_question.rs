@@ -10,7 +10,7 @@ use fold_core::{
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::router;
+use fold_daemon::http::socket_router;
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::{AgentService, NeedsYouKind, needs_you};
 use fold_daemon::services::messages::{MessageError, MessageService, SendMessage};
@@ -20,6 +20,8 @@ use fold_store::testing::TestProject;
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
+
+use crate::common::signed_in_router;
 
 #[cfg(test)]
 fn t(number: u32) -> TaskId {
@@ -191,11 +193,14 @@ impl Fixture {
             .header(CLIENT_HEADER, "test")
             .method(method)
             .uri(uri)
-            .header("cookie", format!("fold_human={human}"))
             .header("content-type", "application/json")
             .body(body.map_or_else(Body::empty, |body| Body::from(body.to_string())))
             .unwrap();
-        let response = router(self.state.clone()).oneshot(request).await.unwrap();
+        let response = signed_in_router(&self.state, human)
+            .await
+            .oneshot(request)
+            .await
+            .unwrap();
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&bytes).unwrap())
@@ -274,7 +279,10 @@ impl Fixture {
             .uri("/api/v1/projects/demo/board")
             .body(Body::empty())
             .unwrap();
-        let response = router(self.state.clone()).oneshot(request).await.unwrap();
+        let response = socket_router(self.state.clone())
+            .oneshot(request)
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         let board: Value = serde_json::from_slice(&bytes).unwrap();
@@ -310,13 +318,16 @@ impl Fixture {
             .header(CLIENT_HEADER, "test")
             .method(Method::POST)
             .uri("/api/v1/projects/demo/feedback")
-            .header("cookie", "fold_human=tanim")
             .header("content-type", "application/json")
             .body(Body::from(
                 json!({"body": "the first", "reply_to": to}).to_string(),
             ))
             .unwrap();
-        let response = router(self.state.clone()).oneshot(request).await.unwrap();
+        let response = signed_in_router(&self.state, "tanim")
+            .await
+            .oneshot(request)
+            .await
+            .unwrap();
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&bytes).unwrap())
@@ -387,7 +398,7 @@ async fn a_report_a_thank_you_and_an_answer_to_the_humans_own_message_wait_for_n
         .call(
             Method::POST,
             "/api/v1/projects/demo/feedback",
-            Some(json!({"body": "All good now?", "task": "T-1", "to": ["frontend"]})),
+            Some(json!({"body": "All good now?", "task": "T-1", "to": ["main"]})),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED);

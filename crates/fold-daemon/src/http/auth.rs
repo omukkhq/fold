@@ -5,23 +5,25 @@ use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{AppendHeaders, IntoResponse, Response};
-use fold_core::{FoldError, HumanName, codes};
+use fold_core::{FoldError, HumanName, Timestamp, codes};
 use fold_store::StoreError;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use super::Transport;
-use super::actor::{HUMAN_COOKIE, HUMAN_HEADER, cookie};
+use super::actor::{HUMAN_HEADER, Human, cookie, refuse_worker_peer};
 use super::error::{ApiError, ApiJson, ErrorEnvelope};
+use super::host::web_origin;
+use super::{SocketOnly, Transport};
 use crate::daemon::AppState;
-use crate::services::projects;
+use crate::services::projects::{self, SignedIn};
 
-/// The cookie that carries a session id off loopback. The id is random, the registry holds only its hash, and the token that opened the session never goes into a cookie.
+/// The cookie that carries a session id. The id is random, the registry holds only its hash, and neither the token nor the sign-in link that opened the session ever goes into a cookie.
 pub const SESSION_COOKIE: &str = "fold_session";
 const SESSION_PATH: &str = "/api/v1/session";
-const HUMAN_MAX_AGE_SECS: u64 = 365 * 24 * 60 * 60;
+/// The web route that opens a sign-in link. The secret goes in the fragment, which a browser never sends to a server, so it reaches no log and no `Referer`.
+const SIGN_IN_ROUTE: &str = "/sign-in#link=";
 
 /// The human a live `fold_session` cookie signs in. [`require_session`] adds it to the request, and the `Human` extractor takes the name from it before anything else.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,13 +34,20 @@ pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(get_session, create_session, delete_session))
 }
 
-/// The layer on every guarded `/api` route. A request over the Unix socket comes from the host's user and passes; so does every request on loopback. Off loopback the request needs the `fold_session` cookie of a live session: a missing cookie and an unknown, ended, expired or revoked session are all `auth_required`.
+/// The routes that make a way to sign in: a web token and a one-time sign-in link. They are guarded like every other route and answer only over the socket, so only the host's user, outside every worker's process tree, gets one.
+pub fn sign_in_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(create_token))
+        .routes(routes!(create_link))
+}
+
+/// The layer on every guarded `/api` route. A request over the Unix socket comes from the host's user and passes. Every other request, on loopback too, needs the `fold_session` cookie of a live session: a missing cookie and an unknown, ended, expired or revoked session are all `auth_required`.
 pub async fn require_session(
     State(state): State<AppState>,
     mut request: Request,
     next: Next,
 ) -> Response {
-    if open(&state, request.extensions().get::<Transport>()) {
+    if request.extensions().get::<Transport>() == Some(&Transport::Socket) {
         return next.run(request).await;
     }
     match signed_in(&state, request.headers()).await {
@@ -51,16 +60,13 @@ pub async fn require_session(
                 codes::AUTH_REQUIRED,
                 "this route needs the cookie of a live session",
             )
-            .with_hint("sign in with a token from `fld token create`"),
+            .with_hint(
+                "open the sign-in link that `fld web` prints, or sign in with a token from `fld token create`",
+            ),
         )
         .into_response(),
         Err(error) => ApiError::from(error).into_response(),
     }
-}
-
-/// True when the request needs no token: it came over the socket, or the daemon listens on loopback.
-fn open(state: &AppState, transport: Option<&Transport>) -> bool {
-    transport == Some(&Transport::Socket) || !state.auth_required()
 }
 
 /// The human the live session in the `fold_session` cookie signs in.
@@ -78,39 +84,49 @@ fn invalid_token() -> ApiError {
     )
 }
 
+fn invalid_link() -> ApiError {
+    ApiError(
+        FoldError::new(
+            codes::INVALID_SIGN_IN_LINK,
+            "the sign-in link is unknown, already used or expired",
+        )
+        .with_hint("run `fld web` for a new link"),
+    )
+}
+
 /// What the sign-in screen needs to know.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SessionStatus {
-    /// The name the request acts under; null before a name or a token gives one.
+    /// The name the request acts under; null before a sign-in gives one.
     #[schema(required = true)]
     pub human: Option<String>,
-    /// False only off loopback without the cookie of a live session: the sign-in screen then asks for a token. True with a null `human` asks for a name.
+    /// False without the cookie of a live session: the sign-in screen then asks for a token. Over the socket it is always true.
     pub authenticated: bool,
 }
 
-/// Off loopback, a web token from `fld token create`.
+/// A web token from `fld token create`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TokenSignIn {
     pub token: String,
 }
 
-/// On loopback, the name the person works under.
+/// The secret of a one-time sign-in link from `fld web`, which the sign-in screen reads from the link.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct NameSignIn {
-    pub name: String,
+pub struct LinkSignIn {
+    pub link: String,
 }
 
-/// A token off loopback, a name on loopback.
+/// A token, or the secret of a sign-in link.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(untagged)]
 pub enum SessionRequest {
     Token(TokenSignIn),
-    Name(NameSignIn),
+    Link(LinkSignIn),
 }
 
-/// Reports who the request acts as. It is the only way the web application learns the name, because `fold_human` is HttpOnly.
+/// Reports who the request acts as. It is the only way the web application learns the name, because `fold_session` is HttpOnly.
 #[utoipa::path(
     get,
     path = "/api/v1/session",
@@ -125,116 +141,91 @@ pub async fn get_session(
     parts: Parts,
 ) -> Result<Json<SessionStatus>, ApiError> {
     let status = match parts.extensions.get::<Transport>() {
-        Some(Transport::Socket) => opened(
-            parts
+        Some(Transport::Socket) => SessionStatus {
+            human: parts
                 .headers
                 .get(HUMAN_HEADER)
-                .and_then(|value| value.to_str().ok()),
-        ),
-        None if !state.auth_required() => opened(cookie(&parts.headers, HUMAN_COOKIE).as_deref()),
-        None => match signed_in(&state, &parts.headers).await? {
-            Some(name) => SessionStatus {
-                human: Some(name.to_string()),
-                authenticated: true,
-            },
-            None => SessionStatus {
-                human: None,
-                authenticated: false,
-            },
+                .and_then(|value| value.to_str().ok())
+                .and_then(|raw| HumanName::parse(raw).ok())
+                .map(|name| name.to_string()),
+            authenticated: true,
         },
+        None => {
+            let human = signed_in(&state, &parts.headers).await?;
+            SessionStatus {
+                authenticated: human.is_some(),
+                human: human.map(|name| name.to_string()),
+            }
+        }
     };
     Ok(Json(status))
 }
 
-/// An authenticated session, named by `raw` when that is a valid name.
-fn opened(raw: Option<&str>) -> SessionStatus {
-    SessionStatus {
-        human: raw
-            .and_then(|raw| HumanName::parse(raw).ok())
-            .map(|name| name.to_string()),
-        authenticated: true,
-    }
-}
-
-/// Signs in. Off loopback the body is `{ token }` and a valid token opens a session whose id `fold_session` carries; on loopback it is `{ name }`, which registers the human on first use and sets `fold_human`.
+/// Signs in with `{ token }`, a web token from `fld token create`, or `{ link }`, the secret of a sign-in link from `fld web`, which opens one session and then stops working. Either opens a session whose id `fold_session` carries.
 #[utoipa::path(
     post,
     path = "/api/v1/session",
     operation_id = "create_session",
     request_body = SessionRequest,
     responses(
-        (status = 204, description = "Signed in", headers(("Set-Cookie" = String, description = "`fold_session` off loopback, `fold_human` on loopback"))),
-        (status = 400, description = "`invalid_request`: a name off loopback, a token on loopback, or a malformed body; `invalid_name`: the name breaks the name pattern", body = ErrorEnvelope),
-        (status = 401, description = "`invalid_token`: the registry holds no such token, or it is revoked", body = ErrorEnvelope),
+        (status = 204, description = "Signed in", headers(("Set-Cookie" = String, description = "`fold_session`"))),
+        (status = 400, description = "`invalid_request`: a malformed body", body = ErrorEnvelope),
+        (status = 401, description = "`invalid_token`: the registry holds no such token, or it is revoked; `invalid_sign_in_link`: the registry holds no such link, or it was used or has expired", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
 pub async fn create_session(
     State(state): State<AppState>,
-    parts: Parts,
     ApiJson(request): ApiJson<SessionRequest>,
 ) -> Result<Response, ApiError> {
-    let open = open(&state, parts.extensions.get::<Transport>());
-    match (request, open) {
-        (SessionRequest::Name(NameSignIn { name }), true) => {
-            let name = HumanName::parse(&name).map_err(FoldError::from)?;
-            projects::ensure_human(&state.registry, state.clock.as_ref(), &name).await?;
-            Ok(signed_in_response(set_cookie(
-                HUMAN_COOKIE,
-                name.as_str(),
-                HUMAN_MAX_AGE_SECS,
-            )))
-        }
-        (SessionRequest::Token(TokenSignIn { token }), false) => {
-            match projects::create_web_session(
+    let (opened, refused): (_, fn() -> ApiError) = match request {
+        SessionRequest::Token(TokenSignIn { token }) => (
+            projects::create_web_session(
                 &state.registry,
                 state.clock.as_ref(),
                 state.session_lifetime,
                 &token,
             )
-            .await?
-            {
-                Some(signed_in) => Ok(signed_in_response(set_cookie(
-                    SESSION_COOKIE,
-                    &signed_in.session,
-                    state.session_lifetime.as_secs(),
-                ))),
-                None => {
-                    tracing::warn!(
-                        route = SESSION_PATH,
-                        result = codes::INVALID_TOKEN,
-                        "sign-in refused"
-                    );
-                    Err(invalid_token())
-                }
-            }
-        }
-        (SessionRequest::Token(_), true) => Err(ApiError(
-            FoldError::new(
-                codes::INVALID_REQUEST,
-                "this daemon listens on loopback and takes a name, not a token",
+            .await?,
+            invalid_token,
+        ),
+        SessionRequest::Link(LinkSignIn { link }) => (
+            projects::open_sign_in_link(
+                &state.registry,
+                state.clock.as_ref(),
+                state.session_lifetime,
+                &link,
             )
-            .with_hint("post { \"name\": \"...\" }"),
-        )),
-        (SessionRequest::Name(_), false) => Err(ApiError(
-            FoldError::new(
-                codes::INVALID_REQUEST,
-                "this daemon listens off loopback and takes a token, not a name",
-            )
-            .with_hint(
-                "create a token with `fld token create <human>` and post { \"token\": \"...\" }",
-            ),
-        )),
-    }
+            .await?,
+            invalid_link,
+        ),
+    };
+    let Some(SignedIn { session, .. }) = opened else {
+        let error = refused();
+        tracing::warn!(
+            route = SESSION_PATH,
+            result = error.0.code(),
+            "sign-in refused"
+        );
+        return Err(error);
+    };
+    Ok((
+        StatusCode::NO_CONTENT,
+        AppendHeaders([(
+            SET_COOKIE,
+            set_cookie(SESSION_COOKIE, &session, state.session_lifetime.as_secs()),
+        )]),
+    )
+        .into_response())
 }
 
-/// Signs out: deletes the session that `fold_session` names, so the cookie stops working even where the browser keeps it, and expires `fold_session` and `fold_human`.
+/// Signs out: deletes the session that `fold_session` names, so the cookie stops working even where the browser keeps it, and expires `fold_session`.
 #[utoipa::path(
     delete,
     path = "/api/v1/session",
     operation_id = "delete_session",
     responses(
-        (status = 204, description = "Signed out", headers(("Set-Cookie" = String, description = "`fold_session` and `fold_human` with `Max-Age=0`"))),
+        (status = 204, description = "Signed out", headers(("Set-Cookie" = String, description = "`fold_session` with `Max-Age=0`"))),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
@@ -247,23 +238,102 @@ pub async fn delete_session(
     }
     Ok((
         StatusCode::NO_CONTENT,
-        AppendHeaders([
-            (SET_COOKIE, set_cookie(SESSION_COOKIE, "", 0)),
-            (SET_COOKIE, set_cookie(HUMAN_COOKIE, "", 0)),
-        ]),
+        AppendHeaders([(SET_COOKIE, set_cookie(SESSION_COOKIE, "", 0))]),
     )
         .into_response())
 }
 
-fn signed_in_response(cookie: String) -> Response {
-    (
-        StatusCode::NO_CONTENT,
-        AppendHeaders([(SET_COOKIE, cookie)]),
-    )
-        .into_response()
-}
-
-/// No `Secure` flag: off loopback the daemon serves plain HTTP. Session id and name are URL-safe base64 and name characters, which a cookie value takes unquoted.
+/// No `Secure` flag: the daemon serves plain HTTP. A session id is URL-safe base64, which a cookie value takes unquoted.
 fn set_cookie(name: &str, value: &str, max_age_secs: u64) -> String {
     format!("{name}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age_secs}")
+}
+
+/// The human a new web token signs in.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateToken {
+    /// The human the token signs in; created when absent.
+    pub human: String,
+    /// A note that tells this token apart from the human's other tokens.
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+/// A new web token. The plaintext is in this answer only: the registry keeps its hash.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CreatedToken {
+    pub token: String,
+}
+
+/// Creates a web token for `fld token create`. Only over the socket, and never for a process in the tree of a worker that fold started or of a check command that fold runs: a token signs in as the human it names.
+#[utoipa::path(
+    post,
+    path = "/api/v1/tokens",
+    operation_id = "create_token",
+    request_body = CreateToken,
+    responses(
+        (status = 201, description = "The new token", body = CreatedToken),
+        (status = 400, description = "`invalid_name`: the human's name breaks the name pattern", body = ErrorEnvelope),
+        (status = 403, description = "`worker_peer_refused`: the request comes from the process tree of a worker that fold started or of a check command that fold runs", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn create_token(
+    _socket: SocketOnly,
+    State(state): State<AppState>,
+    parts: Parts,
+    ApiJson(request): ApiJson<CreateToken>,
+) -> Result<(StatusCode, Json<CreatedToken>), ApiError> {
+    refuse_worker_peer(&parts, &state).await?;
+    let human = HumanName::parse(&request.human).map_err(FoldError::from)?;
+    let token = projects::create_web_token(
+        &state.registry,
+        &human,
+        request.label.as_deref(),
+        state.clock.now(),
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(CreatedToken { token })))
+}
+
+/// A new one-time sign-in link.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CreatedLink {
+    /// The link to open in a browser on this machine. Its secret is in the fragment.
+    pub url: String,
+    /// UTC milliseconds after which the link no longer signs in.
+    #[schema(value_type = i64)]
+    pub expires_at: Timestamp,
+    /// Seconds from now until `expires_at`, by the daemon's clock, so a client tells the person how long the link lasts without comparing clocks.
+    pub expires_in_secs: u64,
+}
+
+/// Creates a one-time sign-in link for `fld web`, for the human that `x-fold-human` names. Only over the socket, where the `Human` extractor refuses a process in the tree of a worker that fold started or of a check command that fold runs. The link opens one session, within a few minutes.
+#[utoipa::path(
+    post,
+    path = "/api/v1/sign-in-links",
+    operation_id = "create_sign_in_link",
+    responses(
+        (status = 201, description = "The new link", body = CreatedLink),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn create_link(
+    _socket: SocketOnly,
+    State(state): State<AppState>,
+    human: Human,
+) -> Result<(StatusCode, Json<CreatedLink>), ApiError> {
+    let link =
+        projects::create_sign_in_link(&state.registry, state.clock.as_ref(), &human.0).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(CreatedLink {
+            url: format!("{}{SIGN_IN_ROUTE}{}", web_origin(state.listen), link.secret),
+            expires_at: link.expires_at,
+            expires_in_secs: projects::SIGN_IN_LINK_LIFETIME.as_secs(),
+        }),
+    ))
 }

@@ -1,0 +1,134 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.number AS \"number!: i64\", lead.name AS lead, r.state, r.created_at, r.deadline_at,\n                  r.wait_ended_at, r.started_at, reviewer.name AS \"reviewer?: String\",\n                  b.number AS \"batch?: i64\", r.ended_at\n           FROM review_plans r\n           JOIN agents lead ON lead.id = r.lead_agent_id\n           LEFT JOIN agents reviewer ON reviewer.id = r.started_agent_id\n           LEFT JOIN review_batches b ON b.id = r.review_batch_id\n           WHERE (?1 IS NULL OR r.number = ?1) AND (NOT ?2 OR r.state = 'open')\n           ORDER BY r.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_plans",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "lead",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_plans",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_plans",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "deadline_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_plans",
+            "name": "deadline_at"
+          }
+        }
+      },
+      {
+        "name": "wait_ended_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_plans",
+            "name": "wait_ended_at"
+          }
+        }
+      },
+      {
+        "name": "started_at",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_plans",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "name": "reviewer?: String",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "batch?: i64",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batches",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "ended_at",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_plans",
+            "name": "ended_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "264653da8c4104fdf33fe6eb8fe82329d205795499541d7f9813effc6529e13a"
+}

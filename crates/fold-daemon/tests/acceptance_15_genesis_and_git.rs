@@ -40,7 +40,7 @@ async fn acceptance_15_a_plain_folder_starts_from_the_genesis_and_turns_git_on()
     crate::common::roles::give_role(
         &h.handle.store,
         "review",
-        fold_core::roles::Role::ReviewLead,
+        fold_core::roles::Role::Reviewer,
         None,
     )
     .await;

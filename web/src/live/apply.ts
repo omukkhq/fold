@@ -325,6 +325,17 @@ function createdTasks(event: StoredEvent): string[] {
   return isTaskIds(tasks) ? tasks : [];
 }
 
+/** The version of a proposal that an event names in `data.version`, such as the version a check run checked or a review reviewed. */
+function versionKeys(slug: string, event: StoredEvent): QueryKey[] {
+  const version = event.data.version;
+  return event.proposal !== null &&
+    typeof version === "number" &&
+    Number.isInteger(version) &&
+    version >= 1
+    ? [keys.proposalVersion(slug, event.proposal, version)]
+    : [];
+}
+
 function invalidationKeys(
   slug: string,
   type: string,
@@ -357,12 +368,20 @@ function invalidationKeys(
       return [keys.workers(slug)];
     case "label":
       return [board, keys.labels(slug), ...taskKey];
-    case "task":
-      // Needs you lists human tasks in Todo and tasks with a blocker, which any task event can add or remove; the human review mark also decides which proposals wait for the human.
+    case "task": {
+      // Needs you lists human tasks in Todo and tasks with a blocker, which any task event can add or remove; the human review mark also decides which proposals wait for the human. A change of the labels can move the task to another area, whose lead reads its feedback.
+      const readers = task === null ? [] : [keys.taskReaders(slug, task)];
       return type === "task.human_review_set" ||
         type === "task.human_review_cleared"
-        ? [board, ...taskKey, keys.needsYou(slug), keys.proposals(slug)]
-        : [board, ...taskKey, keys.needsYou(slug)];
+        ? [
+            board,
+            ...taskKey,
+            ...readers,
+            keys.needsYou(slug),
+            keys.proposals(slug),
+          ]
+        : [board, ...taskKey, ...readers, keys.needsYou(slug)];
+    }
     case "dependency":
     case "checklist":
       return [board, ...taskKey];
@@ -391,6 +410,15 @@ function invalidationKeys(
         ...(type === "proposal.integrated" ? [repository] : []),
       ];
     case "review":
+      // A review plan changes the waiting state of each of its proposals and of their board cards; its events name only one of them, or none.
+      if (type.startsWith("review.plan_")) {
+        return [
+          keys.proposals(slug),
+          keys.proposalPages(slug),
+          board,
+          ...taskKey,
+        ];
+      }
       return type.startsWith("review.batch_")
         ? [keys.reviewBatches(slug), keys.workers(slug), ...proposalKey]
         : [
@@ -417,12 +445,16 @@ function invalidationKeys(
         ...taskKey,
         repository,
         board,
+        // A batch's queued integration and each member's integration change what the batch screen says about its integration.
+        ...(typeof event.data.batch === "string"
+          ? [keys.reviewBatches(slug)]
+          : []),
         // Needs you lists main's invalid checks file from the first integration it holds.
         ...(event.type === "integration.held" ? [keys.needsYou(slug)] : []),
       ];
     case "main":
-      // Needs you lists main's invalid checks file only while main stays on the revision that holds the integrations.
-      return [repository, board, keys.needsYou(slug)];
+      // Needs you lists main's invalid checks file only while main stays on the revision that holds the integrations. A batch's merged change is built on main's head.
+      return [repository, board, keys.needsYou(slug), keys.reviewBatches(slug)];
     case "remote":
       return [repository, keys.git(slug)];
     case "human_change":
@@ -496,7 +528,7 @@ export function patchPresence(
   );
 }
 
-/** The agent lists under the agents prefix take the new presence in place; a list that cannot take it, such as one that does not hold the agent yet, is refetched. Caches without presence records, such as the message targets, are left alone. */
+/** The agent lists under the agents prefix take the new presence in place; a list that cannot take it, such as one that does not hold the agent yet, is refetched. Caches without presence records, such as a task's feedback readers, are left alone. */
 function applyPresence(
   queryClient: QueryClient,
   slug: string,
@@ -559,9 +591,11 @@ function applyWorkerOutput(
     void queryClient.invalidateQueries({ queryKey: keys.agents(slug) });
     void queryClient.invalidateQueries({ queryKey: keys.workers(slug) });
   }
-  // A turn's end changes the item of a worker that could not reach the model without a stored event: a turn that reaches the model ends it, and a failed one changes its error.
+  // A turn's end changes the item of a worker that could not reach the model without a stored event: a turn that reaches the model ends it, and a failed one changes its error. The daemon stores the turn's cost before it sends the frame, so the costs are read again too.
   if (frame.step === "result" || frame.step === "result_error") {
     void queryClient.invalidateQueries({ queryKey: keys.needsYou(slug) });
+    void queryClient.invalidateQueries({ queryKey: keys.cost(slug) });
+    void queryClient.invalidateQueries({ queryKey: keys.projects() });
   }
 }
 
@@ -607,7 +641,10 @@ function applyStored(
     });
     markEnded(queryClient, slug, event.workspace);
   }
-  for (const queryKey of invalidationKeys(slug, event.type, domain, event)) {
+  for (const queryKey of [
+    ...invalidationKeys(slug, event.type, domain, event),
+    ...versionKeys(slug, event),
+  ]) {
     void queryClient.invalidateQueries({ queryKey });
   }
 }

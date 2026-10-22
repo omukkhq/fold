@@ -10,7 +10,7 @@ use fold_core::{
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::{router, socket_router};
+use fold_daemon::http::socket_router;
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::AgentService;
 use fold_daemon::services::messages::{MessageService, SendMessage};
@@ -22,8 +22,9 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use crate::common::signed_in_router;
+
 const BASE: &str = "/api/v1/projects/demo";
-const COOKIE: (&str, &str) = ("cookie", "fold_human=tanim");
 
 #[cfg(test)]
 fn agent(name: &str) -> Actor {
@@ -46,7 +47,7 @@ struct Fixture {
 
 #[cfg(test)]
 impl Fixture {
-    /// Humans `tanim` and `ana`; agents `frontend` with child worker `frontend/ui`, `backend` and `review`; tasks `T-1` and `T-2`; proposal `P-1` on `T-1`.
+    /// Humans `tanim` and `ana`; agents `frontend`, `design`, `backend` and `review`; tasks `T-1` and `T-2`; proposal `P-1` on `T-1`.
     async fn new() -> Self {
         let project = TestProject::new().await;
         let clock = Arc::new(project.clock().clone());
@@ -78,15 +79,12 @@ impl Fixture {
             handle.bus.clone(),
             handle.clock.clone(),
         );
-        for name in ["frontend", "backend", "review"] {
+        for name in ["frontend", "design", "backend", "review"] {
             let mut ctx = agents.start_session(1).await.unwrap();
             agents
                 .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &[])
                 .await
                 .unwrap();
-            if name == "frontend" {
-                agents.register_worker(&ctx, "ui", None).await.unwrap();
-            }
         }
         let tasks = TaskService::new(
             handle.store.clone(),
@@ -137,8 +135,9 @@ impl Fixture {
         }
     }
 
-    fn http(&self) -> Router {
-        router(self.state.clone())
+    /// The TCP router, signed in as `tanim`.
+    async fn http(&self) -> Router {
+        signed_in_router(&self.state, "tanim").await
     }
 
     /// A message to a human is marked as asking for an answer.
@@ -175,9 +174,10 @@ impl Fixture {
             .unwrap();
     }
 
+    /// A read over the socket that names no human.
     async fn get(&self, path: &str) -> (StatusCode, Value) {
         call(
-            self.http(),
+            socket_router(self.state.clone()),
             Method::GET,
             &format!("{BASE}{path}"),
             &[],
@@ -186,12 +186,18 @@ impl Fixture {
         .await
     }
 
-    async fn feedback(&self, headers: &[(&str, &str)], body: Value) -> (StatusCode, Value) {
+    /// Feedback as `tanim` when `signed_in`, else over the socket without a human.
+    async fn feedback(&self, signed_in: bool, body: Value) -> (StatusCode, Value) {
+        let router = if signed_in {
+            self.http().await
+        } else {
+            socket_router(self.state.clone())
+        };
         call(
-            self.http(),
+            router,
             Method::POST,
             &format!("{BASE}/feedback"),
-            headers,
+            &[],
             Some(body),
         )
         .await
@@ -256,9 +262,7 @@ async fn the_list_filters_by_agent_task_proposal_and_awaiting_human() {
     let fixture = Fixture::new().await;
     fixture.send("frontend", &["humans"], Some(1), None).await;
     fixture.send("backend", &["review"], None, Some(1)).await;
-    fixture
-        .send("review", &["frontend/ui"], Some(2), None)
-        .await;
+    fixture.send("review", &["design"], Some(2), None).await;
     let (status, all) = fixture.get("/messages").await;
     assert_eq!(status, StatusCode::OK, "{all}");
     assert_eq!(thread_ids(&all), ["m-3", "m-2", "m-1"]);
@@ -284,6 +288,7 @@ async fn the_list_filters_by_agent_task_proposal_and_awaiting_human() {
             "choices",
             "header",
             "id",
+            "lines",
             "proposal",
             "recipients",
             "reply_to",
@@ -296,8 +301,8 @@ async fn the_list_filters_by_agent_task_proposal_and_awaiting_human() {
     );
     assert_eq!(recipients(message), ["human:ana", "human:tanim"]);
     for (query, expected) in [
-        ("?agent=frontend", vec!["m-3", "m-1"]),
-        ("?agent=frontend/ui", vec!["m-3"]),
+        ("?agent=frontend", vec!["m-1"]),
+        ("?agent=design", vec!["m-3"]),
         ("?agent=review", vec!["m-3", "m-2"]),
         ("?task=T-2", vec!["m-3"]),
         ("?proposal=P-1", vec!["m-2"]),
@@ -338,9 +343,10 @@ async fn mine_lists_only_the_threads_that_concern_the_signed_in_human() {
     fixture.send("review", &["humans"], None, None).await;
     fixture.send("frontend", &["human:ana"], None, None).await;
     fixture.send("backend", &["frontend"], Some(2), None).await;
+    crate::common::roles::give_main_tag(&fixture.handle.store, "backend").await;
     let (status, sent) = fixture
         .feedback(
-            &[COOKIE],
+            true,
             json!({"body": "about T-2", "task": "T-2", "to": ["backend"]}),
         )
         .await;
@@ -359,10 +365,10 @@ async fn mine_lists_only_the_threads_that_concern_the_signed_in_human() {
         .await;
     let mine = async |query: &str| {
         call(
-            fixture.http(),
+            fixture.http().await,
             Method::GET,
             &format!("{BASE}/messages?mine=true{query}"),
-            &[COOKIE],
+            &[],
             None,
         )
         .await
@@ -443,7 +449,7 @@ async fn a_thread_is_read_by_any_of_its_messages() {
         assert_eq!(messages[1]["body"], "reply");
         assert_eq!(
             messages[1]["recipients"],
-            json!([{"name": "frontend", "addressed_as": "agent", "delivered_at": null, "acknowledged_at": null, "pushed_at": null, "reachable": false}])
+            json!([{"name": "frontend", "addressed_as": "agent", "delivered_at": null, "acknowledged_at": null, "pushed_at": null, "reachable": false, "forwarded_to": null}])
         );
     }
     let (status, body) = fixture.get("/threads/m-9").await;
@@ -455,48 +461,76 @@ async fn a_thread_is_read_by_any_of_its_messages() {
 }
 
 #[tokio::test]
-async fn feedback_goes_to_the_claim_holder() {
+async fn feedback_goes_to_the_first_reader_and_only_to_the_readers() {
     let fixture = Fixture::new().await;
-    let (status, body) = fixture
-        .feedback(
-            &[COOKIE],
-            json!({"body": "use the short copy", "task": "T-1"}),
-        )
+    let (status, lead) = fixture
+        .feedback(true, json!({"body": "use the short copy", "task": "T-1"}))
         .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
-    assert_eq!(code(&body), "recipient_not_found");
-    fixture
-        .tasks
-        .claim_task(&agent("frontend/ui"), "T-1".parse().unwrap())
-        .await
-        .unwrap();
+    assert_eq!(status, StatusCode::CREATED, "{lead}");
+    assert_eq!(
+        recipients(&lead),
+        ["frontend"],
+        "without a claim the area lead reads it"
+    );
+    crate::common::roles::give_claim(
+        &fixture.handle.store,
+        "design",
+        "T-1".parse().unwrap(),
+        fixture.handle.clock.now(),
+    )
+    .await;
     let (status, sent) = fixture
-        .feedback(
-            &[COOKIE],
-            json!({"body": "use the short copy", "task": "T-1"}),
-        )
+        .feedback(true, json!({"body": "use the short copy", "task": "T-1"}))
         .await;
     assert_eq!(status, StatusCode::CREATED, "{sent}");
-    assert_eq!(sent["id"], "m-1");
+    assert_eq!(sent["id"], "m-2");
     assert_eq!(sent["sender"], "human:tanim");
     assert_eq!(sent["task"], "T-1");
-    assert_eq!(recipients(&sent), ["frontend/ui"]);
-    let inbox = fixture
-        .messages
-        .inbox(&agent("frontend/ui"), false)
-        .await
-        .unwrap();
-    assert_eq!(inbox[0].id.to_string(), "m-1");
+    assert_eq!(recipients(&sent), ["design"]);
+    let inbox = fixture.messages.inbox(&agent("design")).await.unwrap();
+    assert_eq!(inbox[0].id.to_string(), "m-2");
     let (status, named) = fixture
         .feedback(
-            &[COOKIE],
-            json!({"body": "fyi", "task": "T-1", "to": ["backend", "human:tanim"]}),
+            true,
+            json!({"body": "fyi", "task": "T-1", "to": ["frontend", "design"]}),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{named}");
-    assert_eq!(recipients(&named), ["backend", "human:tanim"]);
+    assert_eq!(recipients(&named), ["frontend", "design"]);
+    for to in [
+        json!(["backend"]),
+        json!(["frontend", "tag:ui"]),
+        json!(["human:tanim"]),
+    ] {
+        let (status, body) = fixture
+            .feedback(true, json!({"body": "fyi", "task": "T-1", "to": to}))
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{to}: {body}");
+        assert_eq!(code(&body), "recipient_not_reader", "{to}");
+    }
+    fixture
+        .tasks
+        .create_task(
+            &agent("review"),
+            CreateTask {
+                title: TaskTitle::parse("no area").unwrap(),
+                description: TaskDescription::new(""),
+                labels: vec![],
+            },
+        )
+        .await
+        .unwrap();
     let (status, body) = fixture
-        .feedback(&[COOKIE], json!({"body": "x", "task": "T-9"}))
+        .feedback(true, json!({"body": "x", "task": "T-3"}))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(
+        code(&body),
+        "recipient_not_found",
+        "a task in no area of a project without a main agent has no reader"
+    );
+    let (status, body) = fixture
+        .feedback(true, json!({"body": "x", "task": "T-9"}))
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(code(&body), "task_not_found");
@@ -505,9 +539,7 @@ async fn feedback_goes_to_the_claim_holder() {
 #[tokio::test]
 async fn a_human_reply_joins_the_thread_and_goes_to_the_asking_worker() {
     let fixture = Fixture::new().await;
-    fixture
-        .send("frontend/ui", &["humans"], Some(2), None)
-        .await;
+    fixture.send("design", &["humans"], Some(2), None).await;
     let (status, reply) = call(
         socket_router(fixture.state.clone()),
         Method::POST,
@@ -521,11 +553,11 @@ async fn a_human_reply_joins_the_thread_and_goes_to_the_asking_worker() {
     assert_eq!(reply["reply_to"], "m-1");
     assert_eq!(reply["task"], "T-2");
     assert_eq!(reply["sender"], "human:ana");
-    assert_eq!(recipients(&reply), ["frontend/ui"]);
+    assert_eq!(recipients(&reply), ["design"]);
     let (_, thread) = fixture.get("/threads/m-1").await;
     assert_eq!(thread["messages"].as_array().unwrap().len(), 2);
     let (status, body) = fixture
-        .feedback(&[COOKIE], json!({"body": "x", "reply_to": "m-7"}))
+        .feedback(true, json!({"body": "x", "reply_to": "m-7"}))
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(code(&body), "message_not_found");
@@ -535,7 +567,7 @@ async fn a_human_reply_joins_the_thread_and_goes_to_the_asking_worker() {
 async fn feedback_needs_a_named_human_and_a_task_or_reply() {
     let fixture = Fixture::new().await;
     let (status, body) = fixture
-        .feedback(&[], json!({"body": "x", "task": "T-1"}))
+        .feedback(false, json!({"body": "x", "task": "T-1"}))
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(code(&body), "human_name_required");
@@ -543,7 +575,7 @@ async fn feedback_needs_a_named_human_and_a_task_or_reply() {
         socket_router(fixture.state.clone()),
         Method::POST,
         &format!("{BASE}/feedback"),
-        &[COOKIE],
+        &[("cookie", "fold_human=tanim")],
         Some(json!({"body": "x", "task": "T-1"})),
     )
     .await;
@@ -563,7 +595,7 @@ async fn feedback_needs_a_named_human_and_a_task_or_reply() {
             "invalid_name",
         ),
     ] {
-        let (status, body) = fixture.feedback(&[COOKIE], request.clone()).await;
+        let (status, body) = fixture.feedback(true, request.clone()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{request}");
         assert_eq!(code(&body), expected, "{request}");
     }
@@ -572,4 +604,168 @@ async fn feedback_needs_a_named_human_and_a_task_or_reply() {
         .await
         .unwrap();
     assert_eq!(messages, 0);
+}
+
+#[tokio::test]
+async fn a_task_s_mine_listing_holds_the_human_s_threads_with_the_agents_replies() {
+    let fixture = Fixture::new().await;
+    fixture.send("frontend", &["backend"], Some(1), None).await;
+    crate::common::roles::give_main_tag(&fixture.handle.store, "backend").await;
+    let (status, sent) = fixture
+        .feedback(
+            true,
+            json!({"body": "shorter copy", "task": "T-1", "to": ["backend"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    fixture
+        .send_reply("backend", &["frontend"], None, None, Some("m-2"))
+        .await;
+    fixture
+        .send("frontend", &["human:ana"], Some(1), None)
+        .await;
+    fixture.send("frontend", &["humans"], Some(1), None).await;
+    fixture.send("frontend", &["humans"], Some(2), None).await;
+    let (status, body) = call(
+        fixture.http().await,
+        Method::GET,
+        &format!("{BASE}/messages?mine=true&task=T-1"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        thread_ids(&body),
+        ["m-5", "m-2"],
+        "an ask to humans and the human's own feedback; the agents' thread, ana's thread and T-2's ask are left out"
+    );
+    let feedback = &body["items"][1];
+    let ids: Vec<&str> = feedback["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|message| message["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        ["m-2", "m-3"],
+        "the agent's reply is part of the thread"
+    );
+    assert_eq!(body["items"][0]["awaiting_human"], true);
+    assert_eq!(feedback["awaiting_human"], false);
+}
+
+#[cfg(test)]
+async fn readers(fixture: &Fixture, task: &str) -> Vec<(String, String)> {
+    let (status, body) = fixture.get(&format!("/tasks/{task}/readers")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body["readers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|reader| {
+            (
+                reader["name"].as_str().unwrap().to_owned(),
+                reader["role"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn reader(name: &str, role: &str) -> (String, String) {
+    (name.to_owned(), role.to_owned())
+}
+
+#[tokio::test]
+async fn a_task_offers_its_claim_holder_its_area_lead_and_the_main_agent_as_readers() {
+    use fold_core::LabelName;
+    let fixture = Fixture::new().await;
+    let store = &fixture.handle.store;
+    assert_eq!(
+        readers(&fixture, "T-1").await,
+        [reader("frontend", "area_lead")],
+        "the project has no main agent yet"
+    );
+    crate::common::roles::give_main_tag(store, "review").await;
+    assert_eq!(
+        readers(&fixture, "T-1").await,
+        [
+            reader("frontend", "area_lead"),
+            reader("review", "main_agent"),
+        ],
+        "without a claim the area lead is the default"
+    );
+    crate::common::roles::give_claim(
+        &fixture.handle.store,
+        "design",
+        "T-1".parse().unwrap(),
+        fixture.handle.clock.now(),
+    )
+    .await;
+    assert_eq!(
+        readers(&fixture, "T-1").await,
+        [
+            reader("design", "claim_holder"),
+            reader("frontend", "area_lead"),
+            reader("review", "main_agent"),
+        ],
+        "the claim holder comes first"
+    );
+    fixture
+        .tasks
+        .release_task(&agent("design"), "T-1".parse().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        readers(&fixture, "T-1").await,
+        [
+            reader("frontend", "area_lead"),
+            reader("review", "main_agent"),
+        ],
+        "a released claim has no holder"
+    );
+    for (labels, title) in [(vec![], "no area"), (vec![LabelName::main()], "main")] {
+        fixture
+            .tasks
+            .create_task(
+                &agent("review"),
+                CreateTask {
+                    title: TaskTitle::parse(title).unwrap(),
+                    description: TaskDescription::new(""),
+                    labels,
+                },
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        readers(&fixture, "T-3").await,
+        [reader("review", "main_agent")],
+        "a task in no area has no lead"
+    );
+    assert_eq!(
+        readers(&fixture, "T-4").await,
+        [reader("review", "main_agent")],
+        "a task of Main has the main agent alone"
+    );
+    crate::common::roles::give_claim(
+        store,
+        "review",
+        "T-4".parse().unwrap(),
+        fixture.handle.clock.now(),
+    )
+    .await;
+    assert_eq!(
+        readers(&fixture, "T-4").await,
+        [reader("review", "claim_holder")],
+        "the main agent that builds a task of Main is listed once"
+    );
+    let (status, body) = fixture.get("/tasks/T-9/readers").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(code(&body), "task_not_found");
+    let (status, body) = fixture.get("/tasks/m-1/readers").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(code(&body), "invalid_id");
 }

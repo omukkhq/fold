@@ -4,7 +4,6 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use fold_daemon::daemon::AppState;
 use fold_daemon::http::events::{EventEnvelope, LiveWorkspace};
-use fold_daemon::http::router;
 use http_body_util::BodyExt;
 use tower::ServiceExt as _;
 
@@ -56,7 +55,8 @@ impl Sse {
         if let Some(id) = last_event_id {
             request = request.header("last-event-id", id);
         }
-        let response = router(state.clone())
+        let response = crate::common::signed_in_router(state, "ana")
+            .await
             .oneshot(request.body(Body::empty()).unwrap())
             .await
             .unwrap();

@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup build fmt dev dev-daemon dev-web seed-dev fmt-check-rust fmt-check-web fmt-check web-install web-build check-web-sources check-inner-allow clippy test test-fast test-default-features test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api gen-languages release release-tools bench bench-smoke
+.PHONY: help setup build fmt dev dev-daemon dev-web seed-dev dev-sign-in fmt-check-rust fmt-check-web fmt-check web-install web-build check-web-sources check-inner-allow clippy test test-fast test-default-features test-web coverage check-rust check-web check acceptance clean clean-keep-cargo gen-api check-api gen-languages release release-tools bench bench-smoke
 
 help: ## List the targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-18s %s\n", $$1, $$2}'
@@ -41,6 +41,10 @@ dev-daemon: ## Run the daemon on 127.0.0.1:7420, rebuilt on every change; its da
 seed-dev: ## Development only: build a throwaway demo project in .dev/projects/demo through the running dev daemon
 	XDG_DATA_HOME=$(DEV_DIR)/data XDG_CONFIG_HOME=$(DEV_DIR)/config XDG_RUNTIME_DIR=$(DEV_DIR)/runtime FOLD_HUMAN=dev \
 		cargo run -p fold-cli --features dev-seed -- dev seed --socket $(DEV_DIR)/runtime/fold/fold.sock
+
+dev-sign-in: ## Development only: print a one-time link that signs the human dev in to the running dev daemon; change its port to 5173 to sign in on the Vite dev server
+	XDG_DATA_HOME=$(DEV_DIR)/data XDG_CONFIG_HOME=$(DEV_DIR)/config XDG_RUNTIME_DIR=$(DEV_DIR)/runtime FOLD_HUMAN=dev \
+		cargo run -p fold-cli --features dev-seed -- web --socket $(DEV_DIR)/runtime/fold/fold.sock
 
 # `make check` installs once and tells the second make so through WEB_INSTALLED.
 web-install:

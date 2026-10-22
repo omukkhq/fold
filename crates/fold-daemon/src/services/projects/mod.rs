@@ -78,10 +78,10 @@ pub use stash::{
     StashEntry, StashOutcome, UnstashConflict, UnstashOutcome, stash, stash_list, unstash,
 };
 pub use web_auth::{
-    DEFAULT_SESSION_LIFETIME, SignedIn, WEB_TOUCH_INTERVAL, check_web_session, create_web_session,
-    create_web_token, create_web_token_on_host, end_web_session, list_humans, list_web_tokens,
-    list_web_tokens_on_host, purge_expired_web_sessions, revoke_web_token,
-    revoke_web_token_on_host,
+    DEFAULT_SESSION_LIFETIME, SIGN_IN_LINK_LIFETIME, SignInLink, SignedIn, WEB_TOUCH_INTERVAL,
+    check_web_session, create_sign_in_link, create_web_session, create_web_token, end_web_session,
+    list_humans, list_web_tokens, list_web_tokens_on_host, open_sign_in_link,
+    purge_expired_web_sessions, revoke_web_token, revoke_web_token_on_host,
 };
 
 #[derive(Debug, Error)]
@@ -1531,6 +1531,15 @@ pub struct ProjectOverview {
     pub paused_since: Option<Timestamp>,
     /// The event actor label of whoever paused them, while they are paused.
     pub paused_by: Option<String>,
+    /// What the project's supervised workers cost: in all, since the start of the day and since the start of the week of [`CostDays`].
+    pub cost: fold_store::agents::CostTotals,
+}
+
+/// Where the viewer's day and week start, so the project list sums the cost of the viewer's own today and last seven days. Either left out starts at midnight UTC.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CostDays {
+    pub today: Option<Timestamp>,
+    pub week: Option<Timestamp>,
 }
 
 /// Why the project, rather than one of its tasks, needs a person. The daemon decides every kind.
@@ -1638,7 +1647,10 @@ impl GitAttention {
 }
 
 /// Reads the overview of an open project from its store.
-pub async fn overview(handle: &ProjectHandle) -> Result<ProjectOverview, ProjectError> {
+pub async fn overview(
+    handle: &ProjectHandle,
+    days: CostDays,
+) -> Result<ProjectOverview, ProjectError> {
     let pool = handle.store.read();
     let stored = fold_store::tasks::status_counts(pool).await?;
     let counts = TaskStatus::ALL
@@ -1680,20 +1692,31 @@ pub async fn overview(handle: &ProjectHandle) -> Result<ProjectOverview, Project
         attention: handle.git_attention.kinds(),
         paused_since: pause.paused_at,
         paused_by: pause.paused_by,
+        cost: crate::services::agents::cost_totals(&handle.store, days.today, days.week, now)
+            .await?,
     })
 }
 
-/// Every project in fold, ordered by slug, with the overview of each open one, and with `include_removed` the projects a person removed too. A project whose overview cannot be read is listed without it, so one damaged store does not hide the others. A project in fold whose folder is there without `.fold/` is removed from fold first and is not listed.
+/// [`list_for`] with the cost of today and the week from midnight UTC.
 pub async fn list(
     state: &DaemonState,
     include_removed: bool,
+) -> Result<Vec<ProjectEntry>, ProjectError> {
+    list_for(state, include_removed, CostDays::default()).await
+}
+
+/// Every project in fold, ordered by slug, with the overview of each open one, and with `include_removed` the projects a person removed too. A project whose overview cannot be read is listed without it, so one damaged store does not hide the others. A project in fold whose folder is there without `.fold/` is removed from fold first and is not listed.
+pub async fn list_for(
+    state: &DaemonState,
+    include_removed: bool,
+    days: CostDays,
 ) -> Result<Vec<ProjectEntry>, ProjectError> {
     let registrations = projects::list_registrations(state.registry.read()).await?;
     let mut entries = Vec::with_capacity(registrations.len());
     for registration in registrations {
         if registration.removed_at.is_some() {
             if include_removed {
-                entries.push(entry_of(state, registration).await);
+                entries.push(entry_of(state, registration, days).await);
             }
             continue;
         }
@@ -1702,13 +1725,17 @@ pub async fn list(
         {
             continue;
         }
-        entries.push(entry_of(state, registration).await);
+        entries.push(entry_of(state, registration, days).await);
     }
     Ok(entries)
 }
 
 /// What the list shows of one registration: the overview of an open project, and what is at the folder of any other.
-async fn entry_of(state: &DaemonState, registration: projects::Registration) -> ProjectEntry {
+async fn entry_of(
+    state: &DaemonState,
+    registration: projects::Registration,
+    days: CostDays,
+) -> ProjectEntry {
     let projects::Registration {
         row,
         last_used_at,
@@ -1720,7 +1747,7 @@ async fn entry_of(state: &DaemonState, registration: projects::Registration) -> 
         _ => None,
     };
     let (available, overview, folder) = match open {
-        Some(handle) => match self::overview(&handle).await {
+        Some(handle) => match self::overview(&handle, days).await {
             Ok(overview) => (true, Some(overview), ProjectFolder::Present),
             Err(error) => {
                 tracing::warn!(project = %row.slug, code = error.log_code(), "project overview could not be read");
@@ -1748,8 +1775,9 @@ const USE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 pub async fn show(
     state: &DaemonState,
     handle: &ProjectHandle,
+    days: CostDays,
 ) -> Result<ProjectEntry, ProjectError> {
-    let overview = overview(handle).await?;
+    let overview = overview(handle, days).await?;
     let used = match note_use(state, &handle.slug).await {
         Ok(used) => used,
         Err(error) => {
@@ -1774,6 +1802,7 @@ pub async fn remove(
     state: &DaemonState,
     actor: &Actor,
     slug: &str,
+    days: CostDays,
 ) -> Result<ProjectEntry, ProjectError> {
     policy::can_remove_project(actor).map_err(FoldError::from)?;
     let found = registration(state, slug).await?;
@@ -1783,7 +1812,7 @@ pub async fn remove(
             .remove_for_person(&state.registry, slug, state.clock.now())
             .await?;
     }
-    Ok(entry_of(state, registration(state, slug).await?).await)
+    Ok(entry_of(state, registration(state, slug).await?, days).await)
 }
 
 /// A named human brings back the project `slug` that a person removed, while its folder holds the project's `.fold/`: the removed mark goes and the daemon opens the project, and the answer is the project as the list shows it. A project in fold stays as it is. A removed project whose folder is missing or whose `.fold/` holds no database keeps its mark and is refused with `project_unavailable`, and so is one whose `.fold/` is gone, where `fld init` makes a new project.
@@ -1791,6 +1820,7 @@ pub async fn restore(
     state: &DaemonState,
     actor: &Actor,
     slug: &str,
+    days: CostDays,
 ) -> Result<ProjectEntry, ProjectError> {
     policy::can_remove_project(actor).map_err(FoldError::from)?;
     let found = registration(state, slug).await?;
@@ -1804,7 +1834,7 @@ pub async fn restore(
             tracing::warn!(project = %slug, code = error.log_code(), "the use of the project could not be noted");
         }
     }
-    Ok(entry_of(state, registration(state, slug).await?).await)
+    Ok(entry_of(state, registration(state, slug).await?, days).await)
 }
 
 /// Refuses to bring back the removed project `slug` unless its folder at `root` holds the project's `.fold/` with its database, so the mark stays on a project that cannot open: a missing folder or database is `project_unavailable` with its reason, and a missing `.fold/` is `project_unavailable` with `fold_missing`, where `fld init` makes a new project.

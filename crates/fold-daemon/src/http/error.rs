@@ -75,9 +75,10 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::INVALID_PUSH_TARGET
         | codes::INVALID_EVENT_FILTER
         | codes::INVALID_DRAFT => Some(StatusCode::BAD_REQUEST),
-        codes::HUMAN_NAME_REQUIRED | codes::AUTH_REQUIRED | codes::INVALID_TOKEN => {
-            Some(StatusCode::UNAUTHORIZED)
-        }
+        codes::HUMAN_NAME_REQUIRED
+        | codes::AUTH_REQUIRED
+        | codes::INVALID_TOKEN
+        | codes::INVALID_SIGN_IN_LINK => Some(StatusCode::UNAUTHORIZED),
         codes::HUMAN_REQUIRED
         | codes::ACTOR_CANNOT_CLAIM
         | codes::HOST_NOT_ALLOWED
@@ -159,6 +160,10 @@ fn status_of(code: &str) -> Option<StatusCode> {
         codes::CHECKS_RUNNING | codes::PROJECT_WORKERS_RUNNING => Some(StatusCode::CONFLICT),
         codes::ASK_NOT_OPEN => Some(StatusCode::CONFLICT),
         codes::ASK_CLOSE_DENIED => Some(StatusCode::FORBIDDEN),
+        codes::RECIPIENT_NOT_READER => Some(StatusCode::CONFLICT),
+        codes::MAIN_SUPERVISED | codes::MAIN_INTERACTIVE | codes::MAIN_NOT_SUPERVISED => {
+            Some(StatusCode::CONFLICT)
+        }
         _ => None,
     }
 }
@@ -324,6 +329,7 @@ mod tests {
             (codes::HUMAN_NAME_REQUIRED, StatusCode::UNAUTHORIZED),
             (codes::AUTH_REQUIRED, StatusCode::UNAUTHORIZED),
             (codes::INVALID_TOKEN, StatusCode::UNAUTHORIZED),
+            (codes::INVALID_SIGN_IN_LINK, StatusCode::UNAUTHORIZED),
             (codes::HOST_NOT_ALLOWED, StatusCode::FORBIDDEN),
             (codes::CLIENT_HEADER_REQUIRED, StatusCode::FORBIDDEN),
             (codes::WORKER_PEER_REFUSED, StatusCode::FORBIDDEN),
@@ -344,6 +350,7 @@ mod tests {
             (codes::ALREADY_CLAIMED, StatusCode::CONFLICT),
             (codes::MESSAGE_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::RECIPIENT_NOT_FOUND, StatusCode::NOT_FOUND),
+            (codes::RECIPIENT_NOT_READER, StatusCode::CONFLICT),
             (codes::PROPOSAL_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::UNKNOWN_HUMAN, StatusCode::NOT_FOUND),
             (codes::HUMAN_REVIEW_ALREADY_SET, StatusCode::CONFLICT),
@@ -403,6 +410,9 @@ mod tests {
             (codes::FILE_NOT_EDITABLE, StatusCode::UNPROCESSABLE_ENTITY),
             (codes::TASK_ON_HOLD, StatusCode::CONFLICT),
             (codes::TASK_NEEDS_HUMAN, StatusCode::CONFLICT),
+            (codes::MAIN_SUPERVISED, StatusCode::CONFLICT),
+            (codes::MAIN_INTERACTIVE, StatusCode::CONFLICT),
+            (codes::MAIN_NOT_SUPERVISED, StatusCode::CONFLICT),
         ] {
             assert_eq!(status_of(code), Some(status));
         }

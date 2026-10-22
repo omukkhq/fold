@@ -50,11 +50,11 @@ pub fn start_watched_job(fx: &Fixture, git: Git) -> (AutoCommit, RemoteContext) 
     (auto_commit(context.clone(), git), context)
 }
 
-/// `P-1` approved by `review`, the review lead, which acts with the returned actor.
+/// `P-1` approved by `review`, a reviewer, which acts with the returned actor.
 pub async fn approved(fx: &Fixture) -> Actor {
     fx.proposal().await;
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
-    let review = fx.agents.actor(&fx.review.ctx, None).await.unwrap();
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
+    let review = fx.agents.actor(&fx.review.ctx).await.unwrap();
     fx.reviews
         .submit_review(
             &review,

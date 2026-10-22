@@ -11,6 +11,7 @@ export function recipient(
     acknowledged_at: null,
     pushed_at: null,
     reachable: null,
+    forwarded_to: null,
     ...fields,
   };
 }
@@ -33,6 +34,7 @@ export function message(
     choices: [],
     header: null,
     asks_human: false,
+    lines: null,
     ...fields,
   };
 }

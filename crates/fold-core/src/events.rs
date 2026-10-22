@@ -156,6 +156,17 @@ define_event_types! {
     WORKER_MODEL_UNREACHABLE = "worker.model_unreachable",
     MESSAGE_PUSHED = "message.pushed",
     MESSAGE_ASK_CLOSED = "message.ask_closed",
+    REVIEW_PLAN_CREATED = "review.plan_created",
+    REVIEW_PLAN_CHANGED = "review.plan_changed",
+    REVIEW_PLAN_JOINED = "review.plan_joined",
+    REVIEW_PLAN_LEFT = "review.plan_left",
+    REVIEW_PLAN_WAIT_ENDED = "review.plan_wait_ended",
+    REVIEW_PLAN_STARTED = "review.plan_started",
+    REVIEW_PLAN_ENDED = "review.plan_ended",
+    REVIEW_BATCH_INTEGRATED = "review.batch_integrated",
+    REVIEW_BATCH_WAITING = "review.batch_waiting",
+    REVIEW_BATCH_WAIT_ENDED = "review.batch_wait_ended",
+    REVIEW_BATCH_READY = "review.batch_ready",
 }
 
 impl EventType {
@@ -441,7 +452,7 @@ impl EventFilter {
     }
 }
 
-/// What decides whether an event concerns one agent. It is loaded once per call from the claims, dependencies and proposals of every worker of the agent.
+/// What decides whether an event concerns one agent. It is loaded once per call from the claims, dependencies and proposals of the agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentEventFacts {
     pub agent: AgentName,

@@ -5,10 +5,11 @@ use fold_core::claims::is_stale;
 use fold_core::events::types;
 use fold_core::reviews::ProposalStanding;
 use fold_core::status::status_reason;
-use fold_core::tasks::areas::areas_conflict;
+use fold_core::tasks::areas::{FeedbackReader, areas_conflict, feedback_readers};
 use fold_core::{
-    AreaName, ChangesetId, ChecklistName, DependencyOrigin, Event, HoldMark, LabelName, ProposalId,
-    RevisionId, TaskId, TaskKind, TaskStatus, TaskTitle, Timestamp, WorkerName, WorkspaceId,
+    AgentName, AreaName, ChangesetId, ChecklistName, DependencyOrigin, Event, HoldMark, LabelName,
+    ProposalId, RevisionId, TaskId, TaskKind, TaskStatus, TaskTitle, Timestamp, WorkerName,
+    WorkspaceId,
 };
 use fold_store::reviews::{self, ProposalSummary, ReviewEntry};
 use fold_store::tasks::checklists::{self, ItemContent};
@@ -16,7 +17,7 @@ use fold_store::tasks::claims;
 use fold_store::tasks::reports;
 use fold_store::tasks::{self, BoardSnapshot};
 use fold_store::workspaces::{self, Checkpoint};
-use fold_store::{StoreError, events};
+use fold_store::{SqliteConnection, StoreError, agents, events};
 
 pub use fold_store::tasks::{ChecklistCounts, TaskRef};
 
@@ -25,6 +26,7 @@ use super::{
     ChecklistItemView, ClaimView, HumanReviewMark, LabelView, REPORT_LIMIT, ReportView, TaskError,
     TaskService, TaskView, area_labels, label_view, task_not_found, view,
 };
+use crate::services::reviews::{ProposalPlan, proposal_plans};
 
 /// How many Done cards the board returns: the most recently completed ones. The Done column's `total` counts them all.
 pub const BOARD_DONE_LIMIT: usize = 20;
@@ -98,6 +100,8 @@ pub struct CardProposal {
     pub checks_failed: bool,
     /// The revision an integrated proposal became.
     pub revision: Option<RevisionId>,
+    /// The review plan the open proposal waits in.
+    pub review_plan: Option<ProposalPlan>,
 }
 
 /// A checklist item with the title and status of the task it links.
@@ -153,6 +157,14 @@ pub struct TaskDetail {
     pub history: Vec<Event>,
     /// The task can get a blocker or a new reason now: it is not archived and no agent has started it (`policy::can_hold_task`). Who may set it is decided by the command.
     pub blocker_allowed: bool,
+}
+
+/// The task graph as `graph` reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskGraph {
+    pub tasks: Vec<GraphTask>,
+    /// Every Done task that is not archived, also when `tasks` leaves them out.
+    pub done_count: usize,
 }
 
 /// One node of the task graph.
@@ -473,11 +485,27 @@ impl TaskService {
         live.view.edits_after_version
     }
 
-    /// The tasks that are not archived, in number order, with their direct prerequisites and claim holders. Done tasks only when `include_done`.
-    pub async fn graph(&self, include_done: bool) -> Result<Vec<GraphTask>, TaskError> {
+    /// The readers a human's feedback on the task goes to, the default first, as [`feedback_readers`] chooses them, read in one read transaction.
+    pub async fn readers(&self, id: TaskId) -> Result<Vec<FeedbackReader>, TaskError> {
+        let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
+        tasks::fetch(&mut tx, id)
+            .await?
+            .ok_or_else(|| task_not_found(id))?;
+        let readers = readers_in(&mut tx, id).await?;
+        tx.commit().await.map_err(StoreError::from)?;
+        Ok(readers)
+    }
+
+    /// The tasks that are not archived, in number order, with their direct prerequisites and claim holders. Done tasks only when `include_done`; `done_count` counts them either way.
+    pub async fn graph(&self, include_done: bool) -> Result<TaskGraph, TaskError> {
         let mut snapshot = tasks::board_snapshot(self.store.read()).await?;
         let needs = needs_by_task(&snapshot);
-        Ok(std::mem::take(&mut snapshot.tasks)
+        let done_count = snapshot
+            .tasks
+            .iter()
+            .filter(|row| row.status == TaskStatus::Done)
+            .count();
+        let tasks = std::mem::take(&mut snapshot.tasks)
             .into_iter()
             .filter(|row| include_done || row.status != TaskStatus::Done)
             .map(|row| GraphTask {
@@ -491,7 +519,8 @@ impl TaskService {
                 kind: row.kind,
                 hold: row.hold,
             })
-            .collect())
+            .collect();
+        Ok(TaskGraph { tasks, done_count })
     }
 
     /// The five columns in board order. Backlog to Review hold every task in number order; Done holds the [`BOARD_DONE_LIMIT`] most recently completed tasks, newest first, and counts the rest in `total`.
@@ -504,6 +533,7 @@ impl TaskService {
             .await
             .map_err(StoreError::from)?;
         let areas = area_labels(&mut conn).await?;
+        let mut plans = proposal_plans(&mut conn).await?;
         drop(conn);
         let ids: Vec<TaskId> = snapshot.tasks.iter().map(|row| row.id).collect();
         let stalled = stalled_tasks(self.live.as_ref());
@@ -538,6 +568,7 @@ impl TaskService {
                 version: summary.version,
                 checks_failed: summary.checks_failed,
                 revision: summary.integration.as_ref().map(|record| record.revision),
+                review_plan: plans.remove(&summary.id),
             });
             let edits_after_version = self.edits_after_version(
                 snapshot.workspaces.get(&row.id).copied(),
@@ -622,4 +653,42 @@ fn labels_of(snapshot: &mut BoardSnapshot, task: TaskId) -> Vec<LabelView> {
         .into_iter()
         .map(label_view)
         .collect()
+}
+
+/// The readers of a human's feedback on `task`, read on `conn`: the task listing and the feedback send choose them from the same rows.
+pub(crate) async fn readers_in(
+    conn: &mut SqliteConnection,
+    task: TaskId,
+) -> Result<Vec<FeedbackReader>, StoreError> {
+    let labels: Vec<LabelName> = tasks::labels_for_conn(conn, task)
+        .await?
+        .into_iter()
+        .map(|label| label.name)
+        .collect();
+    let areas: Vec<_> = agents::list_areas(&mut *conn)
+        .await?
+        .into_iter()
+        .map(|area| (area.name, area.label, area.lead))
+        .collect();
+    let holder = claims::unreleased_for_task(&mut *conn, task)
+        .await?
+        .map(|claim| claim.worker);
+    let main: BTreeSet<i64> = agents::all_tags(&mut *conn)
+        .await?
+        .into_iter()
+        .filter(|(_, tag)| tag.is_main())
+        .map(|(agent, _)| agent)
+        .collect();
+    let main_agents: Vec<AgentName> = agents::list_agents(&mut *conn)
+        .await?
+        .into_iter()
+        .filter(|agent| main.contains(&agent.id))
+        .map(|agent| agent.name)
+        .collect();
+    Ok(feedback_readers(
+        holder.as_ref(),
+        &labels,
+        &areas,
+        &main_agents,
+    ))
 }

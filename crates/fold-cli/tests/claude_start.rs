@@ -4,6 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
+use fold_cli::claude_files::{SETTINGS_FILE, SKILL_FILES, SKILL_TEXTS};
 use fold_cli::claude_user::{self, UserFiles};
 use fold_core::{AgentName, ProjectPaths};
 
@@ -174,10 +175,21 @@ async fn fld_claude_starts_the_daemon_and_runs_claude_as_the_main_agent_in_the_p
         fold_core::main_prompt()
     );
     assert_eq!(guard.0.len(), 1, "fld claude started the daemon");
-    assert!(
-        !host.root.join(".claude").exists(),
-        "fld claude writes no Claude Code settings"
-    );
+    // fld claude writes fold's skills and no Claude Code settings: every file below `.claude` is a skill file with the binary's text.
+    let mut written = files_below(&host.root, Path::new(".claude"));
+    written.sort();
+    let mut skills: Vec<PathBuf> = SKILL_FILES.into_iter().map(PathBuf::from).collect();
+    skills.sort();
+    assert_eq!(written, skills, "fld claude writes no Claude Code settings");
+    for (file, skill) in SKILL_FILES.into_iter().zip(SKILL_TEXTS) {
+        assert_eq!(
+            std::fs::read_to_string(host.root.join(file)).unwrap(),
+            skill,
+            "{file}"
+        );
+    }
+    assert!(!host.root.join(SETTINGS_FILE).exists());
+    assert!(!host.root.join(".claude/settings.local.json").exists());
 
     // The session's adapter inherits both variables and registers the main agent.
     let mut command = host.fold(&["mcp"], &host.root);
@@ -523,4 +535,48 @@ async fn fld_claude_notes_that_a_person_uses_the_project() {
     assert_eq!(found.removed_at, None);
     registry.close().await.unwrap();
     guard.stop().await;
+}
+
+#[tokio::test]
+async fn fld_claude_refuses_a_second_main_agent_where_fold_runs_the_supervised_one() {
+    let host = Host::new().await;
+    let config = ProjectPaths::new(&host.root).config();
+    std::fs::write(&config, "[main]\nsupervised = true\n").unwrap();
+
+    let output = fld_claude(&host, &[], &host.root).await;
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "claude did not run");
+    let stderr = text(&output.stderr);
+    assert!(
+        stderr.contains(
+            "main_supervised: fold runs the main agent of this project as a supervised worker"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("hint: talk to the main agent in the fold web app"),
+        "{stderr}"
+    );
+    assert!(
+        daemons(&host.default_socket()).is_empty(),
+        "the refusal starts no daemon"
+    );
+}
+
+/// The files below `relative` in `root`, each as a path relative to `root`.
+#[cfg(test)]
+fn files_below(root: &Path, relative: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root.join(relative)) else {
+        return found;
+    };
+    for entry in entries {
+        let path = relative.join(entry.unwrap().file_name());
+        if root.join(&path).is_dir() {
+            found.extend(files_below(root, &path));
+        } else {
+            found.push(path);
+        }
+    }
+    found
 }

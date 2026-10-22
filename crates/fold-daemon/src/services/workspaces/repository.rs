@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use fold_core::object::ObjectHash;
 use fold_core::tree::{EntryKind, FlatTree};
-use fold_core::{ProposalId, RevisionId, TaskId, Timestamp, WorkspaceId};
+use fold_core::{ProposalId, ReviewBatchId, RevisionId, TaskId, Timestamp, WorkspaceId};
 use fold_store::workspaces::{self, IntegrationKind, RevisionRow};
 use fold_vcs::browse::{self, DirEntry, FileContent, FlatDirEntry};
 use fold_vcs::compare::{self as vcs, FileChange, State, Totals};
@@ -54,12 +54,14 @@ pub struct RevisionSummary {
     pub proposal: Option<ProposalId>,
     /// The title of the integrated proposal, or the first line of a direct change's commit message.
     pub title: Option<String>,
-    /// The agent whose proposal was integrated, the human who pulled, or the main worker that made a direct change.
+    /// The agent whose proposal was integrated, the human who pulled, or the main agent that made a direct change.
     pub author: Option<String>,
     /// The remote commit a pull brought in.
     pub pull: Option<String>,
     /// The Git commit the revision became in the project folder's repository `.git`; `None` until it is written.
     pub commit: Option<String>,
+    /// The review batch whose members integrated together with this proposal.
+    pub batch: Option<ReviewBatchId>,
 }
 
 impl From<RevisionRow> for RevisionSummary {
@@ -105,6 +107,7 @@ impl From<RevisionRow> for RevisionSummary {
                     .map(str::to_owned),
             },
             author,
+            batch: integration.as_ref().and_then(|info| info.batch),
             pull: integration
                 .filter(|info| info.kind != IntegrationKind::Record)
                 .and_then(|info| info.remote_commit),
@@ -274,6 +277,27 @@ impl WorkspaceService {
                     },
                 )
                 .collect()
+        })
+        .await
+    }
+
+    /// The text of the file at `path` in `tree`, `None` when the tree holds no text file there: no entry, a directory, a symlink, a binary file or one too large to show.
+    pub(crate) async fn text_file(
+        &self,
+        tree: ObjectHash,
+        path: RepoPath,
+    ) -> Result<Option<String>, WorkspaceError> {
+        let paths = self.paths.clone();
+        blocking(move || {
+            let objects = open_objects(&paths)?;
+            match browse::read_file(&objects, &tree, &path) {
+                Ok(file) if file.kind == EntryKind::File && !file.binary && !file.too_large => {
+                    Ok(Some(String::from_utf8_lossy(&file.bytes).into_owned()))
+                }
+                Ok(_) => Ok(None),
+                Err(error) if error.code() == fold_core::codes::NOT_FOUND => Ok(None),
+                Err(error) => Err(error),
+            }
         })
         .await
     }

@@ -5,6 +5,8 @@
  */
 export const keys = {
   projects: () => ["@projects"] as const,
+  /** The list read on the viewer's day that starts at `day`, under the projects prefix: its cost of today and of the last seven days moves at midnight. */
+  projectList: (day: number) => ["@projects", day] as const,
   session: () => ["@session"] as const,
   humans: () => ["@humans"] as const,
   project: (slug: string) => [slug, "project"] as const,
@@ -25,6 +27,11 @@ export const keys = {
   checkRun: (slug: string, run: string) => [slug, "check-run", run] as const,
   proposal: (slug: string, proposal: string) =>
     [slug, "proposal", proposal] as const,
+  /** The prefix of every proposal page, for an event that changes several proposals at once. */
+  proposalPages: (slug: string) => [slug, "proposal"] as const,
+  /** An earlier version of the proposal, for its check runs. It is outside the proposal prefix, so only an event that names the version refreshes it, not every event of the proposal. */
+  proposalVersion: (slug: string, proposal: string, version: number) =>
+    [slug, "proposalVersion", proposal, version] as const,
   /** Under the proposal prefix, so every event and write that refreshes the proposal also refreshes its comments. */
   proposalComments: (slug: string, proposal: string) =>
     [slug, "proposal", proposal, "comments"] as const,
@@ -59,12 +66,16 @@ export const keys = {
   agents: (slug: string) => [slug, "agents"] as const,
   /** Under the agents prefix, so every event that invalidates the agents also refreshes the agent chips of the top bar. */
   agentBar: (slug: string) => [slug, "agents", "bar"] as const,
-  /** Under the agents prefix, so the feedback box learns a new agent or tag with the agent list. */
-  messageTargets: (slug: string) => [slug, "agents", "targets"] as const,
+  /** Under the agents prefix, so the feedback box's readers refresh with the agents and workers. */
+  taskReaders: (slug: string, task: string) =>
+    [slug, "agents", "readers", task] as const,
   labels: (slug: string) => [slug, "labels"] as const,
   messages: (slug: string) => [slug, "messages"] as const,
   taskMessages: (slug: string, task: string) =>
     [slug, "messages", "task", task] as const,
+  /** Under the messages prefix, so every message event refreshes the questions a proposal's diff marks. */
+  proposalThreads: (slug: string, proposal: string) =>
+    [slug, "messages", "proposal", proposal] as const,
   /** Under the messages prefix, so a thread read on its own refreshes with the list. */
   messagesThread: (slug: string, thread: string) =>
     [slug, "messages", "thread", thread] as const,
@@ -97,10 +108,22 @@ export const keys = {
   /** Each worker's latest step, written only by the event stream. */
   workerSteps: (slug: string) => [slug, "worker-steps"] as const,
   needsYou: (slug: string) => [slug, "needs-you"] as const,
+  /** Every cost read of the project, under one prefix, which the end of a worker's turn refreshes. */
+  cost: (slug: string) => [slug, "cost"] as const,
+  /** `since` is the range's start, so a range that starts at the viewer's midnight is read again once the day changes. */
+  projectCost: (slug: string, range: string, since: number | null) =>
+    [slug, "cost", "project", range, since] as const,
+  taskCost: (slug: string, task: string) =>
+    [slug, "cost", "task", task] as const,
   reviewBatches: (slug: string) => [slug, "review-batches"] as const,
   /** Under the batches prefix, so every event that refreshes the batches also refreshes the open batch. */
   reviewBatch: (slug: string, batch: string) =>
     [slug, "review-batches", batch] as const,
+  /** Under the batch, so every event that refreshes the batch also builds its merged change again. */
+  reviewBatchDiff: (slug: string, batch: string) =>
+    [slug, "review-batches", batch, "diff"] as const,
+  reviewBatchFileDiff: (slug: string, batch: string, path: string) =>
+    [slug, "review-batches", batch, "diff", path] as const,
   /** The workspaces a stored event ended since the last snapshot, written only by the event stream. */
   endedWorkspaces: (slug: string) => [slug, "ended-workspaces"] as const,
 };

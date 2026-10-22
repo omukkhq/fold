@@ -1,4 +1,7 @@
-use fold_core::Timestamp;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+
+use fold_core::{HumanName, Timestamp};
 use fold_store::Store;
 use fold_store::projects::{self, ProjectRow};
 use tempfile::TempDir;
@@ -190,4 +193,42 @@ async fn a_removed_project_keeps_its_row_and_slug_but_leaves_the_lists_of_projec
         projects::find_project(store.read(), "alpha").await.unwrap(),
         Some(row("alpha", "/a"))
     );
+}
+
+#[cfg(test)]
+fn mode(path: &Path) -> u32 {
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+#[tokio::test]
+async fn the_registry_is_private_to_its_user_when_created_and_when_opened_again() {
+    let dir = TempDir::new().unwrap();
+    let folder = dir.path().join("data").join("fold");
+    let path = folder.join("registry.db");
+    let store = Store::open_registry(&path).await.unwrap();
+    store
+        .write(async |tx| {
+            projects::ensure_human(tx, &HumanName::parse("ana").unwrap(), Timestamp::EPOCH).await
+        })
+        .await
+        .unwrap();
+    assert_eq!(mode(&folder), 0o700);
+    for name in ["registry.db", "registry.db-wal", "registry.db-shm"] {
+        assert_eq!(mode(&folder.join(name)), 0o600, "{name}");
+    }
+    store.close().await.unwrap();
+
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for name in ["registry.db", "registry.db-wal", "registry.db-shm"] {
+        let file = folder.join(name);
+        if file.exists() {
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+    }
+    let store = Store::open_registry(&path).await.unwrap();
+    assert_eq!(mode(&folder), 0o700);
+    for name in ["registry.db", "registry.db-wal", "registry.db-shm"] {
+        assert_eq!(mode(&folder.join(name)), 0o600, "{name}");
+    }
+    store.close().await.unwrap();
 }

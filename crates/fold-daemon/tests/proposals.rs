@@ -125,8 +125,8 @@ impl Fixture {
         let frontend = register(&agents, "frontend").await;
         let backend = register(&agents, "backend").await;
         register(&agents, "review").await;
-        // `backend` leads its area and may not decide on a proposal; `review` does as the review lead.
-        give_role(project.store(), "review", Role::ReviewLead, None).await;
+        // `backend` leads its area and may not decide on a proposal; `review` does as a reviewer.
+        give_role(project.store(), "review", Role::Reviewer, None).await;
         Self {
             project,
             bus,
@@ -273,9 +273,9 @@ fn agent(name: &str) -> Actor {
     })
 }
 
-/// A worker of the agent `name`, which the fixture makes the review lead when it is `review`.
+/// A worker of the agent `name`, which the fixture makes a reviewer when it is `review`.
 #[cfg(test)]
-fn review_lead(name: &str) -> Actor {
+fn reviewer(name: &str) -> Actor {
     let worker = WorkerName::parse(name).unwrap();
     Actor::Agent(AgentActor {
         agent: worker.agent(),
@@ -296,7 +296,7 @@ async fn register(agents: &AgentService, name: &str) -> WorkerRow {
         .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &[])
         .await
         .unwrap();
-    agents.resolve_worker(&ctx, None).await.unwrap()
+    agents.resolve_worker(&ctx).await.unwrap()
 }
 
 #[cfg(test)]
@@ -776,7 +776,7 @@ async fn update_proposal_refuses_others_and_proposals_that_are_not_open() {
     let fx = Fixture::new().await;
     fx.workspace(&fx.frontend, 1).await;
     fx.create(&fx.frontend).await.unwrap();
-    for actor in [by(&fx.backend), human(), review_lead("review")] {
+    for actor in [by(&fx.backend), human(), reviewer("review")] {
         let error = refusal(fx.reviews.update_proposal(&actor, p(1), Some("x")).await);
         assert_eq!(error.code(), codes::NOT_PROPOSAL_AUTHOR);
         assert_eq!(
@@ -930,7 +930,7 @@ async fn close_proposal_is_for_the_author_agent_a_deciding_agent_or_a_human() {
     }
     let detail = fx
         .reviews
-        .close_proposal(&review_lead("review"), p(1), "superseded")
+        .close_proposal(&reviewer("review"), p(1), "superseded")
         .await
         .unwrap();
     assert_eq!(detail.summary.state, ProposalState::Closed);

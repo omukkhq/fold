@@ -103,6 +103,11 @@ impl Supervisor {
             .await?
             .ok_or_else(|| not_supervised(agent))?;
         drop(conn);
+        if row.role == Role::Main
+            && let Some(refusal) = self.main_refusal(&load_config(&self.inner.paths).await?)
+        {
+            return Err(refusal);
+        }
         let run = lock(&self.inner.running).get(agent).cloned();
         let kept = match run {
             Some(run) if row.state.is_running() && row.state != WorkerState::Stopping => {
@@ -237,7 +242,7 @@ impl Supervisor {
             Role::Reviewer => {
                 let _ = write!(text, " {FRESH_REVIEWER}");
             }
-            Role::AreaLead | Role::ReviewLead => {
+            Role::AreaLead | Role::ReviewLead | Role::Main => {
                 let _ = write!(text, " {FRESH_LEAD}");
                 if let Some(note) =
                     agents::latest_handoff(self.inner.store.read(), row.agent_id).await?

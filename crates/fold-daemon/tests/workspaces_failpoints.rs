@@ -102,7 +102,7 @@ async fn seed(project: &TestProject) -> Actor {
         .register_agent(&mut ctx, &AgentName::parse("frontend").unwrap(), &[])
         .await
         .unwrap();
-    by(&agents.resolve_worker(&ctx, None).await.unwrap())
+    by(&agents.resolve_worker(&ctx).await.unwrap())
 }
 
 #[cfg(test)]

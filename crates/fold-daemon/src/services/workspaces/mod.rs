@@ -25,6 +25,7 @@ mod changes;
 mod changesets;
 mod checkpoints;
 mod checks;
+mod cleanup;
 mod compare;
 mod direct;
 mod exclude;
@@ -49,10 +50,11 @@ pub use changes::{WorkspaceChanges, WorkspaceEntry};
 pub(crate) use changesets::ProposalSnapshot;
 pub use changesets::RecordedChanges;
 pub use checkpoints::{CheckpointView, Restored};
+pub use cleanup::{DirectoryRemoval, follow_closed_workspaces};
 pub(crate) use compare::CARRY_CACHE_ENTRIES;
 pub use compare::{
-    CarriedComparison, Carry, CarryCache, ResolvedState, StateComparison, StateKind, StateRef,
-    StateSummary,
+    BatchMergeCache, BatchMergeComparison, BatchMergeKey, BatchMergeView, CarriedComparison, Carry,
+    CarryCache, MergeCache, ResolvedState, StateComparison, StateKind, StateRef, StateSummary,
 };
 pub use direct::OpenedMainWorkspace;
 pub(crate) use direct::{main_agent, main_agent_in_tx};
@@ -129,6 +131,8 @@ pub struct WorkspaceService {
     live: Option<LiveState>,
     /// The project's carried states (`ProjectHandle::carries`), so every request's reads of one revised proposal share one merge.
     carries: Arc<CarryCache>,
+    /// The project's merged batches (`ProjectHandle::batch_merges`), so a batch's file list and each of its file reads share one merge.
+    batch_merges: Arc<BatchMergeCache>,
 }
 
 impl std::fmt::Debug for WorkspaceService {
@@ -159,6 +163,7 @@ impl WorkspaceService {
             ops: Arc::new(WorkspaceLocks::default()),
             live: None,
             carries: Arc::new(CarryCache::default()),
+            batch_merges: Arc::new(BatchMergeCache::default()),
         }
     }
 
@@ -176,6 +181,7 @@ impl WorkspaceService {
         .with_capabilities(handle.capabilities.clone())
         .with_live(handle.live.clone())
         .with_carries(handle.carries.clone())
+        .with_batch_merges(handle.batch_merges.clone())
     }
 
     /// Reads the claim lease from the service's project `config.toml` on every command that takes a claim; an invalid file fails that command with `invalid_config`.
@@ -201,6 +207,13 @@ impl WorkspaceService {
     #[must_use]
     pub fn with_carries(mut self, carries: Arc<CarryCache>) -> Self {
         self.carries = carries;
+        self
+    }
+
+    /// Shares one cache of merged batches with every other service of the project.
+    #[must_use]
+    pub fn with_batch_merges(mut self, batch_merges: Arc<BatchMergeCache>) -> Self {
+        self.batch_merges = batch_merges;
         self
     }
 

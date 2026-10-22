@@ -134,10 +134,10 @@ fn pull(fx: &Fixture, readme: &str) -> PullIntegration {
     }
 }
 
-/// `review` is the review lead and acts with it.
-async fn review_lead(fx: &Fixture) -> Actor {
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
-    fx.agents.actor(&fx.review.ctx, None).await.unwrap()
+/// `review` is a reviewer and acts with it.
+async fn reviewer(fx: &Fixture) -> Actor {
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
+    fx.agents.actor(&fx.review.ctx).await.unwrap()
 }
 
 async fn approve(fx: &Fixture, actor: &Actor, proposal: u32) {
@@ -155,10 +155,10 @@ async fn approve(fx: &Fixture, actor: &Actor, proposal: u32) {
         .unwrap();
 }
 
-/// `P-1` approved by the review lead `review`, which acts with the returned actor.
+/// `P-1` approved by the reviewer `review`, which acts with the returned actor.
 async fn approved(fx: &Fixture) -> Actor {
     fx.proposal().await;
-    let review = review_lead(fx).await;
+    let review = reviewer(fx).await;
     approve(fx, &review, 1).await;
     review
 }
@@ -267,7 +267,8 @@ async fn integrate_moves_main_and_completes_the_task_in_one_transaction() {
 async fn integrate_archives_the_workspace_and_releases_claims() {
     let fx = Fixture::new().await;
     let review = approved(&fx).await;
-    fx.reviews.claim_review(&review, p(1)).await.unwrap();
+    crate::common::roles::give_review_claim(fx.project.store(), "review", p(1), fx.project.now())
+        .await;
     let checkout = fx
         .reviews
         .create_review_checkout(&review, p(1))
@@ -358,7 +359,7 @@ async fn human_integrates_without_a_tag_and_the_approval_is_recorded() {
 async fn human_integrates_over_an_earlier_request_changes() {
     let fx = Fixture::new().await;
     fx.proposal().await;
-    let review = review_lead(&fx).await;
+    let review = reviewer(&fx).await;
     fx.reviews
         .submit_review(
             &review,
@@ -422,7 +423,7 @@ async fn human_integration_is_refused_by_a_stale_expected_version() {
 async fn agent_cannot_integrate_its_own_proposal() {
     let fx = Fixture::new().await;
     fx.proposal().await;
-    let author = fx.agents.actor(&fx.frontend.ctx, None).await.unwrap();
+    let author = fx.agents.actor(&fx.frontend.ctx).await.unwrap();
     let before = untouched(&fx).await;
 
     let error = refusal(fx.reviews.integrate_proposal(&author, p(1), None).await);
@@ -533,7 +534,7 @@ struct GateCase {
 
 async fn gate_case(fx: &Fixture, code: &str) -> (Actor, Option<u32>) {
     fx.proposal().await;
-    let review = review_lead(fx).await;
+    let review = reviewer(fx).await;
     match code {
         codes::NOT_APPROVED => (review, None),
         codes::CHANGES_REQUESTED => {
@@ -846,7 +847,7 @@ async fn pull_integration_records_kind_pull_the_remote_commit_and_remote_pulled(
 #[tokio::test]
 async fn pull_integration_is_refused_for_an_agent_with_human_required() {
     let fx = Fixture::new().await;
-    let review = review_lead(&fx).await;
+    let review = reviewer(&fx).await;
     let request = pull(&fx, "# pulled\n");
 
     let error = refusal(fx.reviews.integrate_pull(&review, request).await);

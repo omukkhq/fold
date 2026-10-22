@@ -9,7 +9,7 @@ use super::PolicyDenied;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Starter {
     Human,
-    /// The main worker of the agent with the `main` tag: the user's own interactive session, which `fld claude` starts. Without that agent there is no main agent.
+    /// The main worker of the agent with the `main` tag: the user's own interactive session, which `fld claude` starts, or the supervised worker of role `main` that fold runs in its place. Without that agent there is no main agent.
     MainAgent,
     /// The main worker of an agent that fold does not supervise and that lacks the `main` tag, such as a session opened by hand.
     Unsupervised,
@@ -17,8 +17,6 @@ pub enum Starter {
     ReviewLead,
     /// A task worker or a reviewer.
     ShortLived,
-    /// A child worker of any agent.
-    Subagent,
     System,
 }
 
@@ -28,12 +26,12 @@ impl Starter {
         match actor {
             Actor::Human { .. } => Starter::Human,
             Actor::System => Starter::System,
-            Actor::Agent(agent) if !agent.worker.is_main() => Starter::Subagent,
             Actor::Agent(agent) => match supervised {
                 None if agent.tags.iter().any(Tag::is_main) => Starter::MainAgent,
                 None => Starter::Unsupervised,
                 Some((Role::AreaLead, Some(area))) => Starter::AreaLead(area),
                 Some((Role::ReviewLead, _)) => Starter::ReviewLead,
+                Some((Role::Main, _)) => Starter::MainAgent,
                 Some((Role::AreaLead, None) | (Role::TaskWorker | Role::Reviewer, _)) => {
                     Starter::ShortLived
                 }
@@ -98,7 +96,7 @@ pub fn can_set_worker_limits(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
-/// The main agent or a named human starts the leads; an area lead starts the task workers of its own area; the review lead starts the reviewers. A subagent worker, a short-lived worker and a lead of another kind start nothing.
+/// The main agent or a named human starts the leads; an area lead starts the task workers of its own area; the review lead starts the reviewers. A short-lived worker and a lead of another kind start nothing, and nobody starts the supervised main: fold runs it when the project's setting says so.
 pub fn can_start_worker(starter: &Starter, role: Role) -> Result<(), PolicyDenied> {
     match (role, starter) {
         (Role::AreaLead | Role::ReviewLead, Starter::Human | Starter::MainAgent)
@@ -122,6 +120,11 @@ pub fn can_start_worker(starter: &Starter, role: Role) -> Result<(), PolicyDenie
             message: "only the review lead can start a reviewer",
             hint: "ask the review lead to call start_worker",
         }),
+        (Role::Main, _) => Err(PolicyDenied {
+            code: codes::WORKER_START_DENIED,
+            message: "fold starts the supervised main agent itself",
+            hint: "set supervised = true under [main] in .fold/config.toml; fold then runs the main agent and starts it for its work",
+        }),
     }
 }
 
@@ -135,7 +138,7 @@ pub fn can_stop_worker(
         Starter::Human | Starter::MainAgent | Starter::System => true,
         Starter::AreaLead(own) => role == Role::TaskWorker && area == Some(own),
         Starter::ReviewLead => role == Role::Reviewer,
-        Starter::Unsupervised | Starter::ShortLived | Starter::Subagent => false,
+        Starter::Unsupervised | Starter::ShortLived => false,
     };
     if allowed {
         Ok(())
@@ -268,7 +271,7 @@ pub fn can_complete_human_task(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
-/// A direct change reaches main without a task, a proposal or a review: the user's word in the conversation is its approval. Only the main agent talks with the user, so it alone opens the main workspace and submits a direct change. A lead, a worker, a subagent and the daemon are refused, and so is a human, who changes the files of the project folder and records them with `fld record`.
+/// A direct change reaches main without a task, a proposal or a review: the user's word in the conversation is its approval. Only the main agent talks with the user, so it alone opens the main workspace and submits a direct change. A lead, a worker and the daemon are refused, and so is a human, who changes the files of the project folder and records them with `fld record`.
 pub fn can_change_main_directly(starter: &Starter) -> Result<(), PolicyDenied> {
     match starter {
         Starter::MainAgent => Ok(()),
@@ -297,10 +300,11 @@ fn not_the_main_agent(hint: &'static str) -> PolicyDenied {
     }
 }
 
-/// Only a long-lived worker gets a fresh context: a short-lived one stops when its work is done, and the main agent is the user's own session, which clears its context itself.
-pub fn can_write_handoff(starter: &Starter) -> Result<(), PolicyDenied> {
+/// Only a long-lived worker gets a fresh context: a short-lived one stops when its work is done, and the interactive main agent is the user's own session, which clears its context itself. The supervised main, the worker of role `main` (`role`) that fold runs as the main agent, is long-lived and has no terminal to clear its context, so fold refreshes it from its note like a lead.
+pub fn can_write_handoff(starter: &Starter, role: Option<Role>) -> Result<(), PolicyDenied> {
     match starter {
         Starter::AreaLead(_) | Starter::ReviewLead => Ok(()),
+        Starter::MainAgent if role == Some(Role::Main) => Ok(()),
         Starter::MainAgent => Err(PolicyDenied {
             code: codes::HANDOFF_DENIED,
             message: "fold does not refresh the main agent's session",
@@ -334,6 +338,27 @@ mod tests {
     }
 
     #[test]
+    fn the_supervised_main_acts_as_the_main_agent_and_nobody_starts_it() {
+        assert_eq!(
+            Starter::of(&agent("main"), Some((Role::Main, None))),
+            Starter::MainAgent
+        );
+        for starter in [
+            Starter::Human,
+            Starter::MainAgent,
+            Starter::AreaLead(area("web")),
+            Starter::ReviewLead,
+            Starter::System,
+        ] {
+            let refused = can_start_worker(&starter, Role::Main).unwrap_err();
+            assert_eq!(refused.code(), codes::WORKER_START_DENIED);
+            assert!(refused.hint().contains("[main]"));
+        }
+        assert!(can_stop_worker(&Starter::Human, Role::Main, None).is_ok());
+        assert!(can_stop_worker(&Starter::ReviewLead, Role::Main, None).is_err());
+    }
+
+    #[test]
     fn publishing_a_plan_requires_the_main_agent_or_the_owning_area_lead() {
         let web = area("web");
         for starter in [
@@ -355,12 +380,7 @@ mod tests {
                 .code(),
             codes::ORCHESTRATOR_REQUIRED
         );
-        for starter in [
-            Starter::ReviewLead,
-            Starter::ShortLived,
-            Starter::Subagent,
-            Starter::System,
-        ] {
+        for starter in [Starter::ReviewLead, Starter::ShortLived, Starter::System] {
             assert_eq!(
                 can_publish_task_plan(&starter, &[]).unwrap_err().code(),
                 codes::MAIN_AGENT_REQUIRED
@@ -383,7 +403,6 @@ mod tests {
             Starter::AreaLead(area("web")),
             Starter::ReviewLead,
             Starter::ShortLived,
-            Starter::Subagent,
             Starter::System,
         ] {
             assert_eq!(
@@ -409,7 +428,6 @@ mod tests {
             Starter::AreaLead(area("web")),
             Starter::ReviewLead,
             Starter::ShortLived,
-            Starter::Subagent,
             Starter::System,
         ] {
             let denied = can_change_main_directly(&starter).unwrap_err();
@@ -433,20 +451,12 @@ mod tests {
         assert_eq!(of(&human, None), Starter::Human);
         assert_eq!(of(&Actor::System, None), Starter::System);
         assert_eq!(of(&tagged("main", "main"), None), Starter::MainAgent);
-        assert_eq!(of(&tagged("main/ui", "main"), None), Starter::Subagent);
         assert_eq!(
             of(
                 &agent("web-lead"),
                 Some((Role::AreaLead, Some(area("web"))))
             ),
             Starter::AreaLead(area("web"))
-        );
-        assert_eq!(
-            of(
-                &agent("web-lead/x"),
-                Some((Role::AreaLead, Some(area("web"))))
-            ),
-            Starter::Subagent
         );
         assert_eq!(
             of(&agent("review-lead"), Some((Role::ReviewLead, None))),
@@ -470,10 +480,6 @@ mod tests {
         for untagged in [agent("frontend"), tagged("frontend", "review")] {
             assert_eq!(Starter::of(&untagged, None), Starter::Unsupervised);
         }
-        assert_eq!(
-            Starter::of(&tagged("lead/sub", "main"), None),
-            Starter::Subagent
-        );
         assert_eq!(
             Starter::of(&agent("web-lead"), Some((Role::ReviewLead, None))),
             Starter::ReviewLead
@@ -518,7 +524,7 @@ mod tests {
         );
         assert!(can_stop_worker(&Starter::Unsupervised, Role::TaskWorker, None).is_err());
         assert_eq!(
-            can_write_handoff(&Starter::Unsupervised)
+            can_write_handoff(&Starter::Unsupervised, None)
                 .unwrap_err()
                 .code(),
             codes::HANDOFF_DENIED
@@ -540,7 +546,6 @@ mod tests {
             Starter::AreaLead(area("web")),
             Starter::ReviewLead,
             Starter::ShortLived,
-            Starter::Subagent,
             Starter::System,
         ] {
             assert_eq!(
@@ -572,7 +577,7 @@ mod tests {
     fn task_workers_come_from_area_leads_and_reviewers_from_the_review_lead() {
         assert!(can_start_worker(&Starter::AreaLead(area("web")), Role::TaskWorker).is_ok());
         assert!(can_start_worker(&Starter::ReviewLead, Role::Reviewer).is_ok());
-        for starter in [Starter::ReviewLead, Starter::ShortLived, Starter::Subagent] {
+        for starter in [Starter::ReviewLead, Starter::ShortLived] {
             assert_eq!(
                 can_start_worker(&starter, Role::TaskWorker)
                     .unwrap_err()
@@ -607,7 +612,6 @@ mod tests {
                 .code(),
             codes::WORKER_STOP_DENIED
         );
-        assert!(can_stop_worker(&Starter::Subagent, Role::TaskWorker, None).is_err());
     }
 
     #[test]
@@ -626,7 +630,6 @@ mod tests {
             Starter::AreaLead(area("api")),
             Starter::ReviewLead,
             Starter::ShortLived,
-            Starter::Subagent,
             Starter::System,
         ] {
             assert_eq!(
@@ -669,7 +672,6 @@ mod tests {
             Starter::AreaLead(area("api")),
             Starter::ReviewLead,
             Starter::ShortLived,
-            Starter::Subagent,
             Starter::System,
         ] {
             let denied = can_set_hold(&starter, &areas).unwrap_err();
@@ -694,7 +696,6 @@ mod tests {
             Starter::AreaLead(area("web")),
             Starter::ReviewLead,
             Starter::ShortLived,
-            Starter::Subagent,
             Starter::System,
         ] {
             let clear = can_clear_hold(&starter).unwrap_err();
@@ -714,18 +715,20 @@ mod tests {
     }
 
     #[test]
-    fn only_a_lead_writes_a_hand_off_note() {
-        assert!(can_write_handoff(&Starter::AreaLead(area("web"))).is_ok());
-        assert!(can_write_handoff(&Starter::ReviewLead).is_ok());
-        for starter in [
-            Starter::MainAgent,
-            Starter::Human,
-            Starter::ShortLived,
-            Starter::Subagent,
-            Starter::System,
+    fn only_a_lead_or_the_supervised_main_writes_a_hand_off_note() {
+        assert!(can_write_handoff(&Starter::AreaLead(area("web")), Some(Role::AreaLead)).is_ok());
+        assert!(can_write_handoff(&Starter::ReviewLead, Some(Role::ReviewLead)).is_ok());
+        assert!(can_write_handoff(&Starter::MainAgent, Some(Role::Main)).is_ok());
+        let interactive = can_write_handoff(&Starter::MainAgent, None).unwrap_err();
+        assert_eq!(interactive.code(), codes::HANDOFF_DENIED);
+        assert!(interactive.hint().contains("/clear"));
+        for (starter, role) in [
+            (Starter::Human, None),
+            (Starter::ShortLived, Some(Role::TaskWorker)),
+            (Starter::System, None),
         ] {
             assert_eq!(
-                can_write_handoff(&starter).unwrap_err().code(),
+                can_write_handoff(&starter, role).unwrap_err().code(),
                 codes::HANDOFF_DENIED
             );
         }

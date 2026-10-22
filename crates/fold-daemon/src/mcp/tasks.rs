@@ -5,7 +5,7 @@ use std::str::FromStr;
 use fold_core::tasks::{PlanRef, PlannedChecklistItem, PlannedReview, PlannedTask};
 use fold_core::{
     Actor, ChecklistItemId, ChecklistName, FoldError, HumanName, IdParseError, LabelColor,
-    LabelName, StepText, TaskDescription, TaskId, TaskKind, TaskTitle, WorkerName,
+    LabelName, StepText, TaskDescription, TaskId, TaskKind, TaskTitle, WorkerName, codes,
 };
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
@@ -51,30 +51,33 @@ pub const CLEAR_BLOCKER: &str = "clear_blocker";
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct GetTaskGraphInput {
-    /// Include Done tasks. Leave it out to see only the open work.
+    /// True includes the Done tasks. Leave it out to see only the open work: a Done task then shows only as an id in the needs of the tasks that need it, and done_count counts the Done tasks.
     #[serde(default)]
     pub include_done: bool,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
+    /// full gives every field on each task, also a null holder and empty labels and needs. Leave it out for the short form, which leaves those empty fields out.
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
-pub struct AsOnlyInput {
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
-}
+pub struct NoInput {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct TaskIdInput {
     /// The task, such as T-12.
     pub id: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct GetTaskInput {
+    /// The task, such as T-12.
+    pub id: String,
+    /// all gives the newest 50 history entries. Leave it out for the newest 5, with history_count, the number of entries all would give.
+    #[serde(default)]
+    pub history: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -97,9 +100,6 @@ pub struct CreateTaskInput {
     /// proposal (the default), no_proposal or human. A no_proposal task is for work that changes no project file, such as designs made through an MCP server: its task worker claims it, does the work without a workspace and calls report_task, and a lead check completes it. A human task is work only a person can do outside every agent, such as verifying an app with a provider: no agent claims it, and a human, or the main agent when the user says so, marks it Done with complete_task. Only the main agent, a human or the lead of the task's area creates a no_proposal or human task.
     #[serde(default)]
     pub kind: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -109,9 +109,6 @@ pub struct SetBlockerInput {
     pub id: String,
     /// Why the task waits for a person, such as "Wait until the Meta app review passes": plain text, not empty, at most 500 characters.
     pub reason: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -121,9 +118,6 @@ pub struct TaskNoteInput {
     pub id: String,
     /// What was done, or what to change: plain text, not empty.
     pub note: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -198,9 +192,6 @@ pub struct PlannedTaskInput {
 pub struct CreateTaskPlanInput {
     /// Between 1 and 100 tasks to publish together with their dependencies, parent links, human review marks and blockers. Only the main agent, a human or the lead of each task's area may publish them. Any refusal leaves the entire plan uncreated.
     pub tasks: Vec<PlannedTaskInput>,
-    /// The worker that makes this call. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -217,9 +208,6 @@ pub struct UpdateTaskInput {
     /// The whole new label set, by name. Leave it out to keep the labels; pass an empty list to remove them all. At most one may be the label of an area (two_areas); on a task that get_task marks with areas_conflict, a new label set must keep at most one.
     #[serde(default)]
     pub labels: Option<Vec<String>>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -229,9 +217,6 @@ pub struct DependencyInput {
     pub task: String,
     /// The task it needs, such as T-3.
     pub needs: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -248,9 +233,6 @@ pub struct AddChecklistItemInput {
     /// The checklist name. Leave it out for a plain step to use the task's only checklist, or Subtasks when it has none; with two or more checklists the call is refused with `checklist_ambiguous`, so name one. A name the task does not have creates that checklist.
     #[serde(default)]
     pub checklist: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -264,9 +246,6 @@ pub struct UpdateChecklistItemInput {
     /// Tick (true) or untick (false) a plain step. Linked items tick themselves.
     #[serde(default)]
     pub done: Option<bool>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -279,9 +258,6 @@ pub struct MoveChecklistItemInput {
     /// Another checklist of the same task to move the item into. Leave it out to stay in the item's checklist.
     #[serde(default)]
     pub checklist: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -289,9 +265,6 @@ pub struct MoveChecklistItemInput {
 pub struct ChecklistItemIdInput {
     /// The checklist item, such as ci-4.
     pub id: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -301,27 +274,24 @@ pub struct CreateLabelInput {
     pub name: String,
     /// One of sage, slate, teal, ink, gold, moss, plum, stone.
     pub color: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             GET_TASK_GRAPH,
-            "Read the task graph: every task that is not archived with its status, blocked flag, kind, labels, the tasks it needs and its claim holder, and the reason of its blocker when it has one. No agent takes a human task or a task with a blocker.",
+            "Read the task graph: every task that is not archived and not Done, or with include_done the Done tasks too, with its status, blocked flag, kind, labels, the tasks it needs and its claim holder, and the reason of its blocker when it has one, and done_count, the number of Done tasks. A task without labels, needs or holder leaves that field out; pass detail full for every field on each task. No agent takes a human task or a task with a blocker.",
             schema_for_type::<GetTaskGraphInput>(),
         ),
         Tool::new(
             GET_READY_TASKS,
             "List the Todo tasks nobody has claimed, the one that unblocks the most tasks first. Human tasks and tasks with a blocker are left out: no agent takes them.",
-            schema_for_type::<AsOnlyInput>(),
+            schema_for_type::<NoInput>(),
         ),
         Tool::new(
             GET_TASK,
-            "Read one task: description, labels, checklists with progress, dependencies, dependents, claim, workspace, its blocker with the reason, and for a no_proposal task its reports and lead checks.",
-            schema_for_type::<TaskIdInput>(),
+            "Read one task: description, labels, checklists with progress, dependencies, dependents, claim, workspace, its blocker with the reason, and for a no_proposal task its reports and lead checks. history holds the newest 5 events of the task, newest first, and history_count the number that history all gives (at most 50); pass history all to read them, such as to see who changed the task and when.",
+            schema_for_type::<GetTaskInput>(),
         ),
         Tool::new(
             CREATE_TASK,
@@ -464,7 +434,11 @@ fn edge_json(edge: &DetailEdge) -> Value {
     })
 }
 
-fn detail_json(detail: &TaskDetail) -> Value {
+/// How many history entries `get_task` shows without `history: "all"`. The newest events tell what happened last; the rest is seldom needed on each read.
+const HISTORY_SHOWN: usize = 5;
+
+/// The answer of `get_task`, with the newest [`HISTORY_SHOWN`] history entries, or each entry the read holds when `all_history`.
+fn detail_json(detail: &TaskDetail, all_history: bool) -> Value {
     let task = &detail.task;
     let checklists: Vec<Value> = detail
         .checklists
@@ -547,7 +521,8 @@ fn detail_json(detail: &TaskDetail) -> Value {
             "proposal": integration.proposal,
             "by": integration.by,
         })),
-        "history": detail.history.iter().map(|event| json!({
+        "history_count": detail.history.len(),
+        "history": detail.history.iter().take(if all_history { usize::MAX } else { HISTORY_SHOWN }).map(|event| json!({
             "seq": event.seq,
             "type": event.event_type.as_str(),
             "actor": event.actor.to_string(),
@@ -574,14 +549,13 @@ fn detail_json(detail: &TaskDetail) -> Value {
     value
 }
 
-/// Runs a task or request tool acting as `as_worker`. `None` when `tool` is neither.
+/// Runs a task or request tool as the session's worker. `None` when `tool` is neither.
 pub async fn call(
     server: &FoldServer,
     tool: &str,
-    as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Option<Value>, FoldError> {
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     if let Some(value) = requests::run(server, tool, &actor, arguments).await? {
         return Ok(Some(value));
     }
@@ -626,8 +600,22 @@ async fn run(
 async fn get_task_graph(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let tasks = &server.tasks;
     let input: GetTaskGraphInput = parse(arguments)?;
+    let full = match input.detail.as_deref() {
+        None => false,
+        Some("full") => true,
+        Some(_) => {
+            return Err(
+                FoldError::new(codes::INVALID_REQUEST, "detail is full or left out")
+                    .with_details([("field", json!("detail"))])
+                    .with_hint(
+                        "call get_task_graph with detail full, or leave detail out for the short form",
+                    ),
+            );
+        }
+    };
     let graph = tasks.graph(input.include_done).await.map_err(from_task)?;
     let tasks: Vec<Value> = graph
+        .tasks
         .iter()
         .map(|task| {
             let mut node = json!({
@@ -643,15 +631,18 @@ async fn get_task_graph(server: &FoldServer, arguments: &JsonObject) -> Result<V
             if let Some(hold) = &task.hold {
                 node["blocker"] = json!({"reason": hold.reason.as_str()});
             }
+            if !full && let Some(fields) = node.as_object_mut() {
+                fields.retain(|_, value| !is_empty(value));
+            }
             node
         })
         .collect();
-    Ok(json!({"tasks": tasks}))
+    Ok(json!({"tasks": tasks, "done_count": graph.done_count}))
 }
 
 async fn get_ready_tasks(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let tasks = &server.tasks;
-    let _: AsOnlyInput = parse(arguments)?;
+    let _: NoInput = parse(arguments)?;
     let ready = tasks.ready().await.map_err(from_task)?;
     let tasks: Vec<Value> = ready
         .iter()
@@ -669,9 +660,20 @@ async fn get_ready_tasks(server: &FoldServer, arguments: &JsonObject) -> Result<
 
 async fn get_task(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let tasks = &server.tasks;
-    let input: TaskIdInput = parse(arguments)?;
+    let input: GetTaskInput = parse(arguments)?;
+    let all_history = match input.history.as_deref() {
+        None => false,
+        Some("all") => true,
+        Some(_) => {
+            return Err(
+                FoldError::new(codes::INVALID_REQUEST, "history is all or left out")
+                    .with_details([("field", json!("history"))])
+                    .with_hint("call get_task with history all, or leave history out for the newest entries"),
+            );
+        }
+    };
     let detail = tasks.get_view(id(&input.id)?).await.map_err(from_task)?;
-    Ok(detail_json(&detail))
+    Ok(detail_json(&detail, all_history))
 }
 
 async fn create_task(
@@ -974,7 +976,7 @@ async fn takeover_claim(
     Ok(claimed_json(&claimed))
 }
 
-/// The `claims near stale` part of the footer: the unreleased claims of every worker of the calling agent that are near the end of their lease. Every recorded call renews those claims, so the count is taken as the call arrives: it tells an agent that it went quiet long enough for its claims to near stale, even though the call itself renews them.
+/// The `claims near stale` part of the footer: the unreleased claims of the calling agent's worker that are near the end of their lease. Every recorded call renews those claims, so the count is taken as the call arrives: it tells an agent that it went quiet long enough for its claims to near stale, even though the call itself renews them.
 pub struct ClaimsNearStaleFooter {
     agents: AgentService,
     tasks: TaskService,
@@ -1095,4 +1097,9 @@ async fn send_back_task(
         .await
         .map_err(from_task)?;
     Ok(json!({"id": view.id, "status": view.status.as_str()}))
+}
+
+/// A null or an empty list, which the short form of `get_task_graph` leaves out of a task.
+fn is_empty(value: &Value) -> bool {
+    value.is_null() || value.as_array().is_some_and(Vec::is_empty)
 }

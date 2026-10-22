@@ -50,14 +50,44 @@ export interface DiffViewerProps {
   renderThread?: (thread: DiffThread) => ReactNode;
   /** Shown under the last selected line. */
   renderComposer?: (selection: DiffSelection) => ReactNode;
+  /** Ranges marked at each of their lines, such as questions to the author. */
+  marks?: readonly DiffThread[];
+  renderMark?: (mark: DiffThread, first: boolean) => ReactNode;
   /** The rows a file shows before "Show more". */
   rowLimit?: number;
+  /** Drawn in place of the flat file list, such as the proposal's folder tree; the list and the diff then stack on a narrow screen. */
+  fileNav?: ReactNode;
+  /** Drawn at the end of the file's head, such as a viewed mark. */
+  headExtra?: (path: string) => ReactNode;
 }
 
 type BodyProps = Omit<
   DiffViewerProps,
-  "comparison" | "selectedPath" | "onSelectFile" | "filesTitle"
+  | "comparison"
+  | "selectedPath"
+  | "onSelectFile"
+  | "filesTitle"
+  | "fileNav"
+  | "headExtra"
 > & { file: ComparedFile };
+
+/** The head's path: with a nav beside it the folder part is dimmed before the name, as the tree already names the folders. */
+function HeadPath({ path, split }: { path: string; split: boolean }) {
+  if (!split) {
+    return (
+      <h2 className="min-w-0 flex-1 truncate font-mono text-code font-semibold text-text">
+        {path}
+      </h2>
+    );
+  }
+  const cut = path.lastIndexOf("/") + 1;
+  return (
+    <h2 className="min-w-0 flex-1 font-mono text-code break-all text-text">
+      <span className="font-normal text-text-faint">{path.slice(0, cut)}</span>
+      <span className="font-semibold">{path.slice(cut)}</span>
+    </h2>
+  );
+}
 
 function Hash({ side, hash }: { side: string; hash: string | null }) {
   return (
@@ -183,12 +213,18 @@ export function DiffViewer({
   selectedPath,
   onSelectFile,
   filesTitle,
+  fileNav,
+  headExtra,
   ...body
 }: DiffViewerProps) {
   const files = listedFiles(comparison.files);
   const shown = shownEntry(files, comparison.warnings, selectedPath);
   if (!shown) return null;
-  const list = (
+  const split = fileNav !== undefined;
+  const frame = split
+    ? "flex min-w-0 flex-1 flex-col gap-16 lg:flex-row lg:items-start lg:gap-20"
+    : "flex min-w-0 flex-1 items-start gap-20";
+  const list = fileNav ?? (
     <FileList
       files={files}
       warnings={comparison.warnings}
@@ -201,7 +237,7 @@ export function DiffViewer({
   );
   if (shown.kind === "warning") {
     return (
-      <div className="flex min-w-0 flex-1 items-start gap-20">
+      <div className={frame}>
         {list}
         <section
           aria-label={shown.warning.path}
@@ -228,7 +264,7 @@ export function DiffViewer({
   const counts = lineCounts(file);
   const note = changeNote(file);
   return (
-    <div className="flex min-w-0 flex-1 items-start gap-20">
+    <div className={frame}>
       {list}
       <section
         aria-label={file.path}
@@ -236,9 +272,7 @@ export function DiffViewer({
       >
         {/* The rows' fills would cover an inset ring, so the panel has a real border; the head's padding gives up a pixel to each border, so the borders do not change the head's height. */}
         <header className="flex items-center gap-10 border-b border-border-subtle bg-bg px-14 py-9">
-          <h2 className="min-w-0 flex-1 truncate font-mono text-code font-semibold text-text">
-            {file.path}
-          </h2>
+          <HeadPath path={file.path} split={split} />
           {counts.added ? (
             <span className="font-mono text-meta text-primary-text">
               {counts.added}
@@ -252,6 +286,7 @@ export function DiffViewer({
           {note ? (
             <span className="text-meta text-text-muted">{note}</span>
           ) : null}
+          {headExtra?.(file.path)}
         </header>
         <FileBody key={file.path} file={file} {...body} />
       </section>

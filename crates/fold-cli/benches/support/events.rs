@@ -1,13 +1,41 @@
 use std::time::Duration;
 
-use http_body_util::{BodyExt, Empty};
+use http_body_util::{BodyExt, Empty, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use serde_json::Value;
 use tokio::net::TcpStream;
 
+use super::host::Host;
 use super::{BenchResult, fail};
+
+/// The `fold_session` pair of a new session of the human `bench`, from a token that `fld token create` makes, as a browser holds it after a sign-in.
+async fn session_cookie(host: &Host) -> BenchResult<String> {
+    let token = host
+        .run(&["token", "create", "bench"], host.path(), &[])
+        .await?;
+    let stream = TcpStream::connect(("127.0.0.1", host.port)).await?;
+    let (mut sender, connection) =
+        hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
+    tokio::spawn(connection);
+    let body = serde_json::json!({ "token": token.trim_end() }).to_string();
+    let request = Request::post("/api/v1/session")
+        .header("host", format!("127.0.0.1:{}", host.port))
+        .header("content-type", "application/json")
+        .header("x-fold-client", "bench")
+        .body(Full::new(Bytes::from(body)))?;
+    let response = sender.send_request(request).await?;
+    let Some(cookie) = response
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+    else {
+        return fail(format!("the sign-in answered {}", response.status()));
+    };
+    Ok(cookie.to_owned())
+}
 
 /// The server-sent event stream of a project, read over HTTP.
 pub struct EventStream {
@@ -16,7 +44,10 @@ pub struct EventStream {
 }
 
 impl EventStream {
-    pub async fn open(port: u16, slug: &str) -> BenchResult<Self> {
+    /// Signs in first, because every `/api` route over TCP needs a session.
+    pub async fn open(host: &Host, slug: &str) -> BenchResult<Self> {
+        let cookie = session_cookie(host).await?;
+        let port = host.port;
         let stream = TcpStream::connect(("127.0.0.1", port)).await?;
         let (mut sender, connection) =
             hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
@@ -24,6 +55,7 @@ impl EventStream {
         let request = Request::get(format!("/api/v1/projects/{slug}/events"))
             .header("host", format!("127.0.0.1:{port}"))
             .header("accept", "text/event-stream")
+            .header("cookie", cookie)
             .body(Empty::<Bytes>::new())?;
         let response = sender.send_request(request).await?;
         if !response.status().is_success() {

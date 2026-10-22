@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT l.id AS \"id!: i64\", l.link_hash, l.human_id, h.name, l.expires_at\n           FROM sign_in_links l JOIN humans h ON h.id = l.human_id\n           WHERE l.link_hash = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sign_in_links",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "link_hash",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "sign_in_links",
+            "name": "link_hash"
+          }
+        }
+      },
+      {
+        "name": "human_id",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sign_in_links",
+            "name": "human_id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "humans",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "expires_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sign_in_links",
+            "name": "expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a8d23807c281d46d9bc51b9c8e44bdb512bbab27e9fd6f1bf81bda351689989f"
+}

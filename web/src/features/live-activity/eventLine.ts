@@ -18,6 +18,7 @@ import {
   Milestone,
   Pause,
   Pencil,
+  Hourglass,
   Play,
   RotateCcw,
   Tag,
@@ -113,6 +114,69 @@ function batchOf(event: DurableEvent): string {
   return text(event.data.batch) ?? "a review batch";
 }
 
+/** A queued integration is of one proposal or of a review batch. */
+function queuedOf(event: DurableEvent): string {
+  return text(event.data.batch) ?? proposalOf(event);
+}
+
+/** How a batch's integration ended, with each member it published as `P-3 as r18`. */
+function batchIntegratedText(event: DurableEvent): string {
+  const batch = batchOf(event);
+  const list: unknown[] = Array.isArray(event.data.members)
+    ? event.data.members
+    : [];
+  const members = list.flatMap((member) => {
+    if (typeof member !== "object" || member === null) return [];
+    const record = member as Record<string, unknown>;
+    const proposal = text(record.proposal);
+    const revision = text(record.revision);
+    if (proposal === null) return [];
+    return [revision === null ? proposal : `${proposal} as ${revision}`];
+  });
+  const published = members.join(", ");
+  switch (text(event.data.outcome)) {
+    case "together":
+      return members.length === 0
+        ? `integrated ${batch}`
+        : `integrated ${batch} together: ${published}`;
+    case "one_at_a_time":
+      return members.length === 0
+        ? `the checks of ${batch} failed together, and no member integrated on its own`
+        : `the checks of ${batch} failed together, so its members integrated one at a time: ${published}`;
+    default:
+      return `${batch} had no member to integrate together`;
+  }
+}
+
+function planOf(event: DurableEvent): string {
+  return text(event.data.plan) ?? "a review plan";
+}
+
+function idsOf(value: unknown): string[] {
+  const list: unknown[] = Array.isArray(value) ? value : [];
+  return list.flatMap((item) => text(item) ?? []);
+}
+
+function planCreatedText(event: DurableEvent): string {
+  const awaited = idsOf(event.data.awaited);
+  return awaited.length === 0
+    ? `made ${planOf(event)}`
+    : `made ${planOf(event)}, waiting for ${awaited.join(", ")}`;
+}
+
+function planLeftText(event: DurableEvent): string {
+  const reason = text(event.data.reason);
+  const left = `${taskOf(event)} left ${planOf(event)}`;
+  return reason === null ? left : `${left}: ${reason.replaceAll("_", " ")}`;
+}
+
+function planStartedText(event: DurableEvent): string {
+  const batch = text(event.data.batch);
+  return batch === null
+    ? `started ${planOf(event)} for one reviewer`
+    : `started ${planOf(event)} as ${batch}`;
+}
+
 function batchCreatedText(event: DurableEvent): string {
   const members: unknown[] = Array.isArray(event.data.members)
     ? event.data.members
@@ -133,12 +197,18 @@ function approvedText(event: DurableEvent): string {
     : `approved ${request} as ${tasks.join(", ")}`;
 }
 
+/** ` with batch rb-3` for an integration that a review batch's members made together, else nothing. */
+function withBatch(event: DurableEvent): string {
+  const batch = text(event.data.batch);
+  return batch === null ? "" : ` with batch ${batch}`;
+}
+
 /** A direct change of the main agent says so, because the user's word in the conversation approved it instead of a review. */
 function integrationText(event: DurableEvent): string {
   const done =
     event.revision === null
-      ? "integration succeeded"
-      : `integration succeeded as ${event.revision}`;
+      ? `integration succeeded${withBatch(event)}`
+      : `integration succeeded${withBatch(event)} as ${event.revision}`;
   if (text(event.data.kind) !== "direct") {
     return done;
   }
@@ -186,11 +256,21 @@ function startedText(event: DurableEvent): string {
     : `started ${worker} as ${roleText(role)}`;
 }
 
-/** A task worker handed its proposal again: `resumed` is false when its session was gone and it started in a new one. */
+/** A task worker handed its proposal again, or a reviewer a new version of a proposal it reviews: `resumed` is false when its session was gone and it started in a new one. */
 function resumedText(event: DurableEvent): string {
   const worker = workerOf(event);
   if (event.data.reason === "session_lost") {
     return `restarted ${worker} in a new session`;
+  }
+  if (event.data.reason === "new_version") {
+    const version = count(event.data.version);
+    const which =
+      version === null
+        ? `a new version of ${proposalOf(event)}`
+        : `v${String(version)} of ${proposalOf(event)}`;
+    return event.data.resumed === false
+      ? `restarted ${worker} in a new session to review ${which}`
+      : `resumed ${worker} to review ${which}`;
   }
   if (event.data.reason === "sent_back") {
     return `resumed ${worker} for the send-back of ${taskOf(event)}`;
@@ -525,8 +605,8 @@ const SPECS: Record<EventType, Spec> = {
     icon: GitMerge,
     text: (e) =>
       e.revision === null
-        ? `integrated ${proposalOf(e)} into main`
-        : `integrated ${proposalOf(e)} into main as ${e.revision}`,
+        ? `integrated ${proposalOf(e)} into main${withBatch(e)}`
+        : `integrated ${proposalOf(e)} into main${withBatch(e)} as ${e.revision}`,
     emphasis: true,
   },
   "review.submitted": { icon: Check, text: verdictText, look: verdictLook },
@@ -823,11 +903,11 @@ const SPECS: Record<EventType, Spec> = {
   },
   "integration.queued": {
     icon: ListChecks,
-    text: (e) => `queued the integration of ${proposalOf(e)}`,
+    text: (e) => `queued the integration of ${queuedOf(e)}`,
   },
   "integration.unqueued": {
     icon: ListChecks,
-    text: (e) => `took the integration of ${proposalOf(e)} out of the queue`,
+    text: (e) => `took the integration of ${queuedOf(e)} out of the queue`,
   },
   "integration.held": {
     icon: TriangleAlert,
@@ -839,6 +919,49 @@ const SPECS: Record<EventType, Spec> = {
   "worker.model_unreachable": {
     icon: TriangleAlert,
     text: (e) => `${workerOf(e)} cannot reach the model`,
+  },
+  "review.plan_created": { icon: Hourglass, text: planCreatedText },
+  "review.plan_changed": {
+    icon: Hourglass,
+    text: (e) => `changed ${planOf(e)}`,
+  },
+  "review.plan_joined": {
+    icon: ListChecks,
+    text: (e) => `${proposalOf(e)} joined ${planOf(e)}`,
+  },
+  "review.plan_left": { icon: X, text: planLeftText },
+  "review.plan_wait_ended": {
+    icon: Hourglass,
+    text: (e) => `the wait of ${planOf(e)} ended`,
+  },
+  "review.plan_started": { icon: Play, text: planStartedText },
+  "review.plan_ended": { icon: X, text: (e) => `ended ${planOf(e)}` },
+  "review.batch_integrated": {
+    icon: GitMerge,
+    text: batchIntegratedText,
+    emphasis: true,
+  },
+  "review.batch_waiting": {
+    icon: Hourglass,
+    text: (e) => `${batchOf(e)} waits for a verdict on ${proposalOf(e)}`,
+  },
+  "review.batch_wait_ended": {
+    icon: Hourglass,
+    text: (e) => {
+      const left = idsOf(e.data.left);
+      return left.length === 0
+        ? `the wait of ${batchOf(e)} ended`
+        : `the wait of ${batchOf(e)} ended; ${left.join(", ")} left its turn`;
+    },
+  },
+  "review.batch_ready": {
+    icon: GitMerge,
+    text: (e) => {
+      const members = idsOf(e.data.members);
+      return members.length === 0
+        ? `${batchOf(e)} is ready to integrate`
+        : `${batchOf(e)} is ready: ${members.join(", ")} integrate together`;
+    },
   },
 };
 

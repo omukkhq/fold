@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::common::roles::give_role;
+use crate::common::roles::{give_main_tag, give_review_claim, give_role};
 use crate::reviews_support;
 use fold_core::roles::Role;
 
@@ -119,8 +119,13 @@ impl Notified {
         give_role(self.fx.project.store(), agent, Role::ReviewLead, None).await;
     }
 
+    /// Gives `agent` the review claim of `P-1` as a stored row, whatever its role, so a test can make the review lead hold one.
+    async fn give_claim(&self, agent: &str) {
+        give_review_claim(self.fx.project.store(), agent, p(1), self.fx.project.now()).await;
+    }
+
     async fn actor(&self, agent: &reviews_support::Agent) -> Actor {
-        self.fx.agents.actor(&agent.ctx, None).await.unwrap()
+        self.fx.agents.actor(&agent.ctx).await.unwrap()
     }
 
     fn register(&self, agent: &str, socket: PathBuf) {
@@ -255,8 +260,9 @@ async fn integration_messages_go_to_author_reviewer_and_owners_of_newly_todo_tas
     let ready = n.dependent_task(&by(&n.fx.backend.worker)).await;
     n.fx.proposal().await;
     let review = n.actor(&n.fx.review).await;
-    n.fx.reviews.claim_review(&review, p(1)).await.unwrap();
-    n.approve(&review).await;
+    // The review lead gives no verdict, so a human approves; `review` holds the claim and integrates.
+    n.give_claim("review").await;
+    n.approve(&human()).await;
     let mut frontend = n.inbox("frontend");
 
     assert_eq!(n.integrate(&review).await, r(2));
@@ -282,27 +288,29 @@ async fn integration_messages_go_to_author_reviewer_and_owners_of_newly_todo_tas
             .await,
         1
     );
-    // The integration notice comes first, then the message's own notice.
+    // The integration notice carries the message, so the message's own notice has nothing new and is skipped.
     assert_eq!(
         frontend.next().await,
-        "fold: P-1 integrated as r2. Call get_inbox."
+        format!("fold: P-1 integrated as r2. [m-{number} from fold on T-1, P-1] \"{body}\"")
     );
+    n.send(&agent("backend"), &["frontend"]).await;
+    let sentinel = number + 1;
     assert_eq!(
         frontend.next().await,
-        format!("fold: message m-{number} arrived. Call get_inbox.")
+        format!("fold: message m-{sentinel} arrived. [m-{sentinel} from backend] \"sentinel\"")
     );
 }
 
 #[tokio::test]
 async fn an_agent_with_several_roles_gets_one_message() {
     let n = Notified::new().await;
-    let ui = n.fx.subagent(&n.fx.frontend, "ui").await;
-    n.dependent_task(&by(&ui)).await;
+    n.dependent_task(&by(&n.fx.frontend.worker)).await;
     n.fx.proposal().await;
-    let review = n.actor(&n.fx.review).await;
+    give_main_tag(n.fx.project.store(), "backend").await;
+    let backend = n.actor(&n.fx.backend).await;
     // Nobody holds the review claim, so the reviewer is the agent whose approval stands.
-    n.approve(&review).await;
-    let mut reviewer = n.inbox("review");
+    n.approve(&backend).await;
+    let mut reviewer = n.inbox("backend");
     let mut author = n.inbox("frontend");
 
     n.integrate(&human()).await;
@@ -311,13 +319,14 @@ async fn an_agent_with_several_roles_gets_one_message() {
     assert_eq!(messages.len(), 1);
     assert_eq!(
         n.recipients(messages[0].0).await,
-        pairs(&[("frontend", "agent"), ("review", "agent")])
+        pairs(&[("backend", "agent"), ("frontend", "agent")])
     );
     // The released claim is gone, so the push finds the reviewer through the approval; the integrating human's own approval reaches nobody once the proposal is integrated.
-    let integrated = "fold: P-1 integrated as r2. Call get_inbox.";
-    let arrived = format!("fold: message m-{} arrived. Call get_inbox.", messages[0].0);
+    let integrated = format!(
+        "fold: P-1 integrated as r2. [m-{} from fold on T-1, P-1] \"{}\"",
+        messages[0].0, messages[0].3
+    );
     assert_eq!(reviewer.next().await, integrated);
-    assert_eq!(reviewer.next().await, arrived);
     assert_eq!(author.next().await, integrated);
 }
 
@@ -329,11 +338,10 @@ async fn push_goes_to_the_review_lead_on_proposal_opened() {
 
     n.fx.proposal().await;
 
-    let opened = "fold: P-1 opened for T-1. Call claim_review.";
+    let opened = "fold: P-1 opened for T-1. Call start_worker.";
     assert_eq!(review.next().await, opened);
 
-    let reviewer = n.actor(&n.fx.review).await;
-    n.fx.reviews.claim_review(&reviewer, p(1)).await.unwrap();
+    n.give_claim("review").await;
     n.fx.write("src/more.rs", "pub fn more() {}\n");
     n.fx.reviews
         .update_proposal(&by(&n.fx.frontend.worker), p(1), None)
@@ -341,13 +349,14 @@ async fn push_goes_to_the_review_lead_on_proposal_opened() {
         .unwrap()
         .detail()
         .unwrap();
-    let version = "fold: P-1 has version 2. Call create_review_checkout.";
+    // The review lead holds the claim but never checks a version out, so it gives the claim up.
+    let version = "fold: P-1 has version 2; release your review claim with release_review, then give it to a reviewer. Call start_worker.";
     assert_eq!(review.next().await, version);
     // `backend` leads no review, so the first notice it gets is the sentinel.
     n.send(&agent("frontend"), &["backend"]).await;
     assert_eq!(
         backend.next().await,
-        "fold: message m-1 arrived. Call get_inbox."
+        "fold: message m-1 arrived. [m-1 from frontend] \"sentinel\""
     );
 }
 
@@ -376,7 +385,7 @@ async fn push_failure_is_dropped_and_the_event_stays() {
     n.send(&agent("backend"), &["review"]).await;
     assert_eq!(
         review.next().await,
-        "fold: message m-1 arrived. Call get_inbox."
+        "fold: message m-1 arrived. [m-1 from backend] \"sentinel\""
     );
 }
 
@@ -392,18 +401,17 @@ async fn human_approval_pushes_only_the_review_claim_holder() {
     // Without a claim holder nobody is told, the review lead and the author's agent included.
     n.approve(&human()).await;
     n.send(&agent("backend"), &["review", "frontend"]).await;
-    let arrived = "fold: message m-1 arrived. Call get_inbox.";
+    let arrived = "fold: message m-1 arrived. [m-1 from backend] \"sentinel\"";
     assert_eq!(review.next().await, arrived);
     assert_eq!(author.next().await, arrived);
 
-    let reviewer = n.actor(&n.fx.review).await;
-    n.fx.reviews.claim_review(&reviewer, p(1)).await.unwrap();
+    n.give_claim("review").await;
     n.approve(&human()).await;
     assert_eq!(review.next().await, approved);
     n.send(&agent("frontend"), &["backend"]).await;
     assert_eq!(
         backend.next().await,
-        "fold: message m-2 arrived. Call get_inbox."
+        "fold: message m-2 arrived. [m-2 from frontend] \"sentinel\""
     );
 }
 
@@ -448,9 +456,11 @@ async fn pull_integration_sends_no_message_or_push() {
     // Push keeps event order, so a later message's notice arriving first means the pull sent none.
     n.send(&human(), &["frontend", "backend", "review"]).await;
     for inbox in &mut inboxes {
-        assert_eq!(
-            inbox.next().await,
-            "fold: message m-1 arrived. Call get_inbox."
+        assert!(
+            inbox
+                .next()
+                .await
+                .starts_with("fold: message m-1 arrived. [m-1 from human:")
         );
     }
 }

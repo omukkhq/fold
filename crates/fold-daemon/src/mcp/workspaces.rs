@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use fold_core::{CheckpointId, FoldError, RevisionId, TaskId, WorkerName, WorkspaceId, codes};
 use fold_vcs::compare::{FileChange, FileDiff};
-use fold_vcs::diff::{DiffLine, Hunk, LineKind};
+use fold_vcs::diff::{Hunk, LineKind};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
 use rmcp::schemars::JsonSchema;
@@ -33,20 +33,13 @@ pub const ADD_EXCLUDE_PATTERNS: &str = "add_exclude_patterns";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
-pub struct GetRepositoryStateInput {
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
-}
+pub struct GetRepositoryStateInput {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct GetRevisionInput {
     /// The revision, such as r17.
     pub r: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -59,9 +52,6 @@ pub struct CompareRevisionsInput {
     /// One changed file, such as src/lib.rs. With it the result holds that file's hunks; without it, the list of changed files.
     #[serde(default)]
     pub path: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -69,9 +59,6 @@ pub struct CompareRevisionsInput {
 pub struct CreateWorkspaceInput {
     /// The task to work on, such as T-12. The create claims it for your worker when nobody holds it.
     pub task: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -83,9 +70,6 @@ pub struct GetWorkspaceInput {
     /// A task such as T-12, to read its live workspace, or its newest one when none is live.
     #[serde(default)]
     pub task: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -93,9 +77,6 @@ pub struct GetWorkspaceInput {
 pub struct GetWorkspaceChangesInput {
     /// The workspace, such as ws-9.
     pub ws: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -106,9 +87,6 @@ pub struct RecordCheckpointInput {
     /// A short note to find the checkpoint again, at most 200 characters.
     #[serde(default)]
     pub label: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -116,9 +94,6 @@ pub struct RecordCheckpointInput {
 pub struct ListCheckpointsInput {
     /// The workspace, such as ws-9.
     pub ws: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -126,9 +101,6 @@ pub struct ListCheckpointsInput {
 pub struct RestoreCheckpointInput {
     /// The checkpoint to put back, such as ck-88. Its workspace gets its files and its base revision.
     pub ck: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -138,9 +110,6 @@ pub struct RecordChangesInput {
     pub ws: String,
     /// What the changes do and why, 1 to 2000 characters.
     pub message: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -148,9 +117,6 @@ pub struct RecordChangesInput {
 pub struct SyncWorkspaceInput {
     /// Your workspace, such as ws-9.
     pub ws: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -160,27 +126,17 @@ pub struct AbandonWorkspaceInput {
     pub ws: String,
     /// Why you stop, 1 to 500 characters. Other agents read it in the workspace.abandoned event.
     pub reason: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
-pub struct OpenMainWorkspaceInput {
-    /// The worker that makes this call. Only the main agent's main worker opens the main workspace, so leave it out.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
-}
+pub struct OpenMainWorkspaceInput {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct AddExcludePatternsInput {
     /// The patterns to add to .fold/exclude, each one line of .gitignore syntax, such as build/ or *.log. A pattern the file lists already is left out.
     pub patterns: Vec<String>,
-    /// The worker that makes this call. Only the main agent's main worker adds patterns, so leave it out.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {
@@ -197,7 +153,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             COMPARE_REVISIONS,
-            "Compare two states: revisions, changesets, checkpoints or the working files of a workspace. Lists the changed files with line counts, or one file's hunks when you pass path.",
+            "Compare two states: revisions, changesets, checkpoints or the working files of a workspace. Lists the changed files with line counts, or one file's hunks when you pass path, in the form get_proposal_diff describes: a header \"@@ -old_start,old_lines +new_start,new_lines @@\" and one string per line: a mark (space, - or +), the line's number, a space and the text. Use the number on the line: a removed line has its old number, a context or added line its new number.",
             schema_for_type::<CompareRevisionsInput>(),
         ),
         Tool::new(
@@ -360,32 +316,31 @@ pub(super) fn file_diff_value(diff: &FileDiff) -> Value {
     value
 }
 
-fn hunk_value(hunk: &Hunk) -> Value {
-    json!({
-        "old_start": hunk.old_start,
-        "old_lines": hunk.old_lines,
-        "new_start": hunk.new_start,
-        "new_lines": hunk.new_lines,
-        "lines": hunk.lines.iter().map(line_value).collect::<Vec<_>>(),
-    })
-}
+/// The line after a hunk line whose file ends without a line terminator, as unified diffs write it.
+const NO_NEWLINE: &str = "\\ No newline at end of file";
 
-fn line_value(line: &DiffLine) -> Value {
-    let kind = match line.kind {
-        LineKind::Context => "context",
-        LineKind::Added => "added",
-        LineKind::Removed => "removed",
-    };
-    let mut value = json!({
-        "kind": kind,
-        "old_no": line.old_no,
-        "new_no": line.new_no,
-        "text": line.text,
-    });
-    if line.no_newline {
-        value["no_newline"] = json!(true);
+/// A hunk in the unified diff form: a header with the first line number and the line count of each side, and each line as one string: its mark (` ` context, `-` removed, `+` added), its line number, a space and its text with its terminator. A removed line carries its old-side number and the other lines their new-side number, so a reviewer places a comment without counting lines.
+fn hunk_value(hunk: &Hunk) -> Value {
+    let mut lines = Vec::with_capacity(hunk.lines.len());
+    for line in &hunk.lines {
+        let (mark, number) = match line.kind {
+            LineKind::Context => (' ', line.new_no),
+            LineKind::Added => ('+', line.new_no),
+            LineKind::Removed => ('-', line.old_no),
+        };
+        let number = number.unwrap_or_default();
+        lines.push(format!("{mark}{number} {}", line.text));
+        if line.no_newline {
+            lines.push(NO_NEWLINE.to_owned());
+        }
     }
-    value
+    json!({
+        "header": format!(
+            "@@ -{},{} +{},{} @@",
+            hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines
+        ),
+        "lines": lines,
+    })
 }
 
 pub async fn get_repository_state(
@@ -463,18 +418,17 @@ pub async fn compare_revisions(
     }))
 }
 
-/// Runs one workspace tool for the session's agent, acting as `as_worker` or the main worker. `None` when `tool` is not a workspace tool.
+/// Runs one workspace tool for the session's agent, as its worker. `None` when `tool` is not a workspace tool.
 pub async fn call(
     server: &FoldServer,
     tool: &str,
-    as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Option<Value>, FoldError> {
     let value = match tool {
         CREATE_WORKSPACE => {
             let input: CreateWorkspaceInput = parse(arguments)?;
             let task = id::<TaskId>(&input.task, "task", "T-12")?;
-            let actor = server.actor(as_worker).await?;
+            let actor = server.actor().await?;
             let created = server
                 .workspaces
                 .create_workspace(&actor, task)
@@ -535,7 +489,7 @@ pub async fn call(
         RECORD_CHECKPOINT => {
             let input: RecordCheckpointInput = parse(arguments)?;
             let workspace = id::<WorkspaceId>(&input.ws, "ws", "ws-9")?;
-            let actor = server.actor(as_worker).await?;
+            let actor = server.actor().await?;
             let checkpoint = server
                 .workspaces
                 .record_checkpoint(&actor, workspace, input.label.as_deref())
@@ -568,7 +522,7 @@ pub async fn call(
         RESTORE_CHECKPOINT => {
             let input: RestoreCheckpointInput = parse(arguments)?;
             let checkpoint = id::<CheckpointId>(&input.ck, "ck", "ck-88")?;
-            let actor = server.actor(as_worker).await?;
+            let actor = server.actor().await?;
             let restored = server
                 .workspaces
                 .restore_checkpoint(&actor, checkpoint)
@@ -583,7 +537,7 @@ pub async fn call(
         RECORD_CHANGES => {
             let input: RecordChangesInput = parse(arguments)?;
             let workspace = id::<WorkspaceId>(&input.ws, "ws", "ws-9")?;
-            let actor = server.actor(as_worker).await?;
+            let actor = server.actor().await?;
             let recorded = server
                 .workspaces
                 .record_changes(&actor, workspace, &input.message)
@@ -597,7 +551,7 @@ pub async fn call(
         SYNC_WORKSPACE => {
             let input: SyncWorkspaceInput = parse(arguments)?;
             let workspace = id::<WorkspaceId>(&input.ws, "ws", "ws-9")?;
-            let actor = server.actor(as_worker).await?;
+            let actor = server.actor().await?;
             let synced = server
                 .workspaces
                 .sync_workspace(&actor, workspace)
@@ -612,7 +566,7 @@ pub async fn call(
         ABANDON_WORKSPACE => {
             let input: AbandonWorkspaceInput = parse(arguments)?;
             let workspace = id::<WorkspaceId>(&input.ws, "ws", "ws-9")?;
-            let actor = server.actor(as_worker).await?;
+            let actor = server.actor().await?;
             let abandoned = server
                 .workspaces
                 .abandon_workspace(&actor, workspace, &input.reason)
@@ -625,7 +579,7 @@ pub async fn call(
         }
         OPEN_MAIN_WORKSPACE => {
             let _: OpenMainWorkspaceInput = parse(arguments)?;
-            let actor = server.actor(as_worker).await?;
+            let actor = server.actor().await?;
             let opened = server
                 .workspaces
                 .open_main_workspace(&actor)
@@ -650,7 +604,7 @@ pub async fn call(
         }
         ADD_EXCLUDE_PATTERNS => {
             let input: AddExcludePatternsInput = parse(arguments)?;
-            let actor = server.actor(as_worker).await?;
+            let actor = server.actor().await?;
             let added = server
                 .workspaces
                 .add_exclude_patterns(&actor, input.patterns)
@@ -671,4 +625,116 @@ fn id<T: FromStr>(text: &str, field: &'static str, example: &str) -> Result<T, F
         )
         .with_details([("field", json!(field))])
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use fold_vcs::diff::{DiffLine, diff_text};
+
+    use super::*;
+
+    /// Reads a hunk of [`hunk_value`] back into its lines, numbering them from the header, and checks that the number on each line is that number.
+    fn decode(value: &Value) -> (u32, u32, u32, u32, Vec<DiffLine>) {
+        let header = value["header"].as_str().unwrap();
+        let numbers: Vec<u32> = header
+            .trim_start_matches("@@ -")
+            .trim_end_matches(" @@")
+            .split([',', ' ', '+'])
+            .filter(|part| !part.is_empty())
+            .map(|part| part.parse().unwrap())
+            .collect();
+        let [old_start, old_lines, new_start, new_lines] = numbers[..] else {
+            panic!("{header}");
+        };
+        // A side with no lines in the hunk names the line before it.
+        let mut old = if old_lines == 0 {
+            old_start + 1
+        } else {
+            old_start
+        };
+        let mut new = if new_lines == 0 {
+            new_start + 1
+        } else {
+            new_start
+        };
+        let mut lines: Vec<DiffLine> = Vec::new();
+        for text in value["lines"].as_array().unwrap() {
+            let text = text.as_str().unwrap();
+            if text == NO_NEWLINE {
+                lines.last_mut().unwrap().no_newline = true;
+                continue;
+            }
+            let (mark, rest) = text.split_at(1);
+            let (number, rest) = rest.split_once(' ').unwrap();
+            let number: u32 = number.parse().unwrap();
+            let (kind, old_no, new_no) = match mark {
+                " " => (LineKind::Context, Some(old), Some(new)),
+                "-" => (LineKind::Removed, Some(old), None),
+                "+" => (LineKind::Added, None, Some(new)),
+                _ => panic!("{text}"),
+            };
+            assert_eq!(
+                Some(number),
+                if kind == LineKind::Removed {
+                    old_no
+                } else {
+                    new_no
+                },
+                "the number on {text:?} is the one counted from the header"
+            );
+            old += u32::from(old_no.is_some());
+            new += u32::from(new_no.is_some());
+            lines.push(DiffLine {
+                kind,
+                old_no,
+                new_no,
+                text: rest.to_owned(),
+                no_newline: false,
+            });
+        }
+        (old_start, old_lines, new_start, new_lines, lines)
+    }
+
+    #[test]
+    fn a_compact_hunk_gives_back_every_line_with_its_mark_and_numbers() {
+        let old = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nlast";
+        let new = "a\nB\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nadded\r\nlast\n";
+        let hunks = diff_text(old, new, 3);
+        assert_eq!(
+            hunks.len(),
+            2,
+            "two hunks, so the second starts past line 1"
+        );
+        let kinds: Vec<LineKind> = hunks
+            .iter()
+            .flat_map(|hunk| hunk.lines.iter().map(|line| line.kind))
+            .collect();
+        assert!(kinds.contains(&LineKind::Context));
+        assert!(kinds.contains(&LineKind::Added));
+        assert!(kinds.contains(&LineKind::Removed));
+        assert!(hunks[1].lines.iter().any(|line| line.no_newline));
+        for hunk in &hunks {
+            let value = hunk_value(hunk);
+            let (old_start, old_lines, new_start, new_lines, lines) = decode(&value);
+            assert_eq!(
+                (old_start, old_lines, new_start, new_lines),
+                (
+                    hunk.old_start,
+                    hunk.old_lines,
+                    hunk.new_start,
+                    hunk.new_lines
+                )
+            );
+            assert_eq!(lines, hunk.lines, "{value}");
+        }
+    }
+
+    #[test]
+    fn a_hunk_of_a_new_file_starts_its_empty_old_side_at_zero() {
+        let hunks = diff_text("", "one\ntwo\n", 3);
+        let value = hunk_value(&hunks[0]);
+        assert_eq!(value["header"], "@@ -0,0 +1,2 @@");
+        assert_eq!(value["lines"], json!(["+1 one\n", "+2 two\n"]));
+        assert_eq!(decode(&value).4, hunks[0].lines);
+    }
 }

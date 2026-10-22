@@ -50,7 +50,7 @@ async fn recorded(
     (dir, changes.changeset)
 }
 
-/// The author proposes `T-1` from its workspace, and the review lead approves and integrates it, so main moves under the main workspace.
+/// The author proposes `T-1` from its workspace, and a reviewer approves and integrates it, so main moves under the main workspace.
 async fn integrate_task(fx: &Fixture, author: &Actor) {
     fx.reviews
         .create_proposal(author, t(1), "Readme", Some("tests pass"))
@@ -58,8 +58,8 @@ async fn integrate_task(fx: &Fixture, author: &Actor) {
         .unwrap()
         .detail()
         .unwrap();
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
-    let review = fx.agents.actor(&fx.review.ctx, None).await.unwrap();
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
+    let review = fx.agents.actor(&fx.review.ctx).await.unwrap();
     fx.reviews
         .submit_review(&review, p(1), 1, Verdict::Approve, "ok", Vec::new())
         .await
@@ -187,15 +187,13 @@ async fn only_the_main_agent_opens_the_main_workspace_or_submits_to_it() {
     let main = main_actor(&fx.frontend.worker);
     let (_, changeset) = recorded(&fx, &main, &[("AGENTS.md", "rules\n")]).await;
 
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     let lead = main_actor(&fx.backend.worker);
     let review = main_actor(&fx.review.worker);
-    let subagent = main_actor(&fx.subagent(&fx.frontend, "plan").await);
     let unsupervised = by(&fx.frontend.worker);
     for (actor, code) in [
         (&lead, codes::MAIN_AGENT_REQUIRED),
         (&review, codes::MAIN_AGENT_REQUIRED),
-        (&subagent, codes::MAIN_AGENT_REQUIRED),
         (&human(), codes::MAIN_AGENT_REQUIRED),
         (&Actor::System, codes::MAIN_AGENT_REQUIRED),
         (&unsupervised, codes::ORCHESTRATOR_REQUIRED),

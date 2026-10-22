@@ -65,15 +65,19 @@ pub struct NewWorkerProcess<'a> {
     pub now: Timestamp,
 }
 
-/// The totals one stdout line of a worker adds. `cost_micro_usd` is the new total of the row, because Claude Code reports a running total per process.
+/// The totals one stdout line of a worker adds. `reported_micro_usd` is the running total of the row's session that Claude Code reported; the token counts are the turn's own.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TurnTotals {
-    pub cost_micro_usd: u64,
+    pub reported_micro_usd: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
+    /// The turn ended in Claude Code's error.
+    pub failed: bool,
 }
 
-fn db_count(value: u64) -> i64 {
+pub(super) fn db_count(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
@@ -554,6 +558,30 @@ pub async fn set_worker_pid(tx: &mut WriteTx, id: i64, pid: Option<u32>) -> Resu
     Ok(())
 }
 
+/// Records that a human stopped the supervised main of row `id`, which must be stopping or ended: fold then starts it for no work of its own until a start of the row clears the mark.
+pub async fn hold_worker(tx: &mut WriteTx, id: i64, now: Timestamp) -> Result<(), StoreError> {
+    let now = now.as_millis();
+    sqlx::query!(
+        "UPDATE worker_processes SET held_at = ?2 WHERE id = ?1",
+        id,
+        now
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
+/// Whether a human stopped row `id` and nothing started it since.
+pub async fn worker_held<'e>(db: impl SqliteExecutor<'e>, id: i64) -> Result<bool, StoreError> {
+    let held = sqlx::query_scalar!(
+        r#"SELECT held_at IS NOT NULL AS "held!: bool" FROM worker_processes WHERE id = ?"#,
+        id
+    )
+    .fetch_optional(db)
+    .await?;
+    Ok(held.unwrap_or(false))
+}
+
 /// Forgets the pid of the row's ended process `pid`. A row that records another pid keeps it: a new start of the row can run while the process it let go of is still ending.
 pub async fn clear_worker_pid(tx: &mut WriteTx, id: i64, pid: u32) -> Result<(), StoreError> {
     let pid = i64::from(pid);
@@ -598,26 +626,45 @@ pub async fn forget_made_up_model(tx: &mut WriteTx, id: i64) -> Result<(), Store
     Ok(())
 }
 
-/// Counts one finished turn and makes the worker idle.
+/// Counts one finished turn, appends its `worker_turns` row with the cost [`fold_core::cost::session_turn`] finds in the reported total, adds that cost to the row and makes the worker idle.
 pub async fn record_turn(
     tx: &mut WriteTx,
     id: i64,
     totals: TurnTotals,
     now: Timestamp,
 ) -> Result<(), StoreError> {
-    let cost = db_count(totals.cost_micro_usd);
+    let before = sqlx::query!(
+        r#"SELECT cost_micro_usd AS "cost!: i64", session_cost_micro_usd AS "session!: i64"
+           FROM worker_processes WHERE id = ?"#,
+        id
+    )
+    .fetch_optional(tx.conn())
+    .await?;
+    let Some(before) = before else {
+        return Ok(());
+    };
+    let (added, session) = fold_core::cost::session_turn(
+        totals.reported_micro_usd,
+        count(before.session, "worker_processes.session_cost_micro_usd")?,
+    );
+    super::turns::insert_turn(tx, id, added, &totals, now).await?;
+    let cost = db_count(
+        count::<u64>(before.cost, "worker_processes.cost_micro_usd")?.saturating_add(added),
+    );
+    let session = db_count(session);
     let read = db_count(totals.cache_read_tokens);
     let write = db_count(totals.cache_write_tokens);
     let now = now.as_millis();
     sqlx::query!(
         "UPDATE worker_processes
-         SET turns = turns + 1, cost_micro_usd = ?2,
-             cache_read_tokens = cache_read_tokens + ?3, cache_write_tokens = cache_write_tokens + ?4,
+         SET turns = turns + 1, cost_micro_usd = ?2, session_cost_micro_usd = ?3,
+             cache_read_tokens = cache_read_tokens + ?4, cache_write_tokens = cache_write_tokens + ?5,
              state = CASE WHEN state IN ('starting', 'working') THEN 'idle' ELSE state END,
-             idle_since = CASE WHEN state IN ('starting', 'working') THEN ?5 ELSE idle_since END
+             idle_since = CASE WHEN state IN ('starting', 'working') THEN ?6 ELSE idle_since END
          WHERE id = ?1",
         id,
         cost,
+        session,
         read,
         write,
         now
@@ -730,10 +777,22 @@ pub async fn restart_worker_process(
     sqlx::query!(
         "UPDATE worker_processes
          SET state = 'starting', started_at = ?2, stopped_at = NULL, idle_since = NULL, pid = NULL, exit_code = NULL,
-             failed_reason = NULL
+             failed_reason = NULL, held_at = NULL
          WHERE id = ?1",
         id,
         now
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
+/// Records on the failed row `id` that its Claude Code session is gone, as the failure reason `reason`, so a message to it goes on to a lead without another `--resume`. The next start of the row clears it.
+pub async fn mark_session_lost(tx: &mut WriteTx, id: i64, reason: &str) -> Result<(), StoreError> {
+    sqlx::query!(
+        "UPDATE worker_processes SET failed_reason = ?2 WHERE id = ?1 AND state = 'failed'",
+        id,
+        reason
     )
     .execute(tx.conn())
     .await?;
@@ -932,6 +991,82 @@ pub async fn pending_resumes(
                 conflict: row.conflict,
                 checks: row.checks,
             })
+        })
+        .collect()
+}
+
+/// The newest version of an open proposal that waits on a reviewer that has ended: the reviewer is bound to the proposal and its agent still holds the unreleased review claim, the version has no verdict, and the version came, or a human sent it for review again, after the reviewer last started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwedReview {
+    pub agent: AgentName,
+    pub proposal: ProposalId,
+    pub version: u32,
+}
+
+/// The reviews owed to stopped or failed reviewers, by reviewer and proposal. Each start moves the row's `started_at`, so a version that a resumed reviewer did not review before it stopped again is not owed a second time; a resume that the worker limits or a pause refused leaves the row as it was, so the review stays owed until a start succeeds. With `proposal`, only that proposal, whose new version an event just announced, whatever the times: the event itself says the version came after the reviewer's verdict.
+pub async fn reviews_owed_to_ended_reviewers(
+    executor: impl SqliteExecutor<'_>,
+    proposal: Option<ProposalId>,
+) -> Result<Vec<OwedReview>, StoreError> {
+    let number = proposal.map(ProposalId::to_db);
+    let rows = sqlx::query!(
+        r#"SELECT g.name AS "agent!: String", p.number AS "proposal!: i64", v.version AS "version!: i64"
+           FROM worker_processes w
+           JOIN agents g ON g.id = w.agent_id
+           JOIN worker_proposals b ON b.worker_process_id = w.id
+           JOIN proposals p ON p.id = b.proposal_id AND p.state = 'open'
+           JOIN proposal_versions v ON v.proposal_id = p.id
+           JOIN claims c ON c.proposal_id = p.id AND c.kind = 'review' AND c.released_at IS NULL
+           JOIN workers k ON k.id = c.worker_id AND k.agent_id = w.agent_id
+           WHERE w.role = 'reviewer' AND w.state IN ('stopped', 'failed')
+             AND v.version = (SELECT MAX(x.version) FROM proposal_versions x WHERE x.proposal_id = p.id)
+             AND (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) IS NULL
+             AND CASE WHEN ?1 IS NULL
+                      THEN v.created_at > w.started_at
+                           OR EXISTS (SELECT 1 FROM review_again_requests q
+                                      WHERE q.version_id = v.id AND q.created_at > w.started_at)
+                      ELSE p.number = ?1 END
+           ORDER BY w.id, p.number"#,
+        number
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(OwedReview {
+                agent: AgentName::parse(&row.agent)
+                    .map_err(|_| StoreError::Corrupt("agents.name"))?,
+                proposal: ProposalId::try_from_db(row.proposal)
+                    .ok_or(StoreError::Corrupt("proposals.number"))?,
+                version: count(row.version, "proposal_versions.version")?,
+            })
+        })
+        .collect()
+}
+
+/// The open proposals, in number order, whose unreleased review claim a worker of `agent` holds while its reviewer process has ended, and whose newest version has no verdict. A comment is not a verdict.
+pub async fn unreviewed_claims_of_ended_reviewer(
+    executor: impl SqliteExecutor<'_>,
+    agent: &AgentName,
+) -> Result<Vec<ProposalId>, StoreError> {
+    let name = agent.as_str();
+    let rows = sqlx::query_scalar!(
+        r#"SELECT p.number AS "proposal!: i64"
+           FROM worker_processes w
+           JOIN agents g ON g.id = w.agent_id
+           JOIN workers k ON k.agent_id = w.agent_id
+           JOIN claims c ON c.worker_id = k.id AND c.kind = 'review' AND c.released_at IS NULL
+           JOIN proposals p ON p.id = c.proposal_id AND p.state = 'open'
+           WHERE g.name = ?1 AND w.role = 'reviewer' AND w.state IN ('stopped', 'failed')
+             AND (SELECT pv.verdict FROM proposal_verdicts pv WHERE pv.proposal_id = p.id) IS NULL
+           ORDER BY p.number"#,
+        name
+    )
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter()
+        .map(|number| {
+            ProposalId::try_from_db(number).ok_or(StoreError::Corrupt("proposals.number"))
         })
         .collect()
 }

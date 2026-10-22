@@ -5,7 +5,7 @@ use fold_core::{
     Actor, AgentName, AreaName, EventFilter, LabelColor, LabelName, ProposalId, Tag,
     TaskDescription, TaskTitle, codes,
 };
-use fold_daemon::services::reviews::{BatchVerdict, ReviewError};
+use fold_daemon::services::reviews::{BatchVerdict, ReviewError, ReviewFix};
 use fold_daemon::services::tasks::{CreateTask, TaskError, TaskPatch};
 use fold_store::{StoreError, events};
 
@@ -62,11 +62,14 @@ impl Who {
         }
     }
 
+    /// Approves and rejects: the review lead never reviews.
     fn decides(self) -> bool {
-        matches!(
-            self,
-            Who::MainAgent | Who::ReviewLead | Who::Reviewer | Who::Human
-        )
+        matches!(self, Who::MainAgent | Who::Reviewer | Who::Human)
+    }
+
+    /// Integrates and closes: the review lead acts on its reviewers' verdicts.
+    fn integrates(self) -> bool {
+        self.decides() || self == Who::ReviewLead
     }
 }
 
@@ -80,7 +83,7 @@ async fn register(fx: &Fixture, name: &str, tags: &[&str]) -> Actor {
         .register_agent(&mut session, &AgentName::parse(name).unwrap(), &tags)
         .await
         .unwrap();
-    agents.actor(&session, None).await.unwrap()
+    agents.actor(&session).await.unwrap()
 }
 
 #[cfg(test)]
@@ -152,7 +155,7 @@ async fn agent_actor(fx: &Fixture, name: &str) -> Actor {
         .register_agent(&mut session, &AgentName::parse(name).unwrap(), &[])
         .await
         .unwrap();
-    agents.actor(&session, None).await.unwrap()
+    agents.actor(&session).await.unwrap()
 }
 
 #[cfg(test)]
@@ -193,6 +196,14 @@ async fn a_verdict_that_decides_follows_the_role() {
                 _ if who.decides() => {
                     assert_eq!(result.unwrap().verdict, verdict, "{who:?} {verdict}");
                 }
+                Who::ReviewLead => {
+                    assert_eq!(
+                        review_code(result.unwrap_err()),
+                        codes::REVIEW_LEAD_DELEGATES,
+                        "{verdict}"
+                    );
+                    assert_eq!(reviews_of_p1(&fx).await, 0);
+                }
                 Who::Author => {
                     assert_eq!(
                         review_code(result.unwrap_err()),
@@ -215,12 +226,25 @@ async fn a_verdict_that_decides_follows_the_role() {
 #[tokio::test]
 async fn any_reviewer_but_the_author_comments_and_asks_for_changes() {
     let fx = scene().await;
-    for who in [Who::AreaLead, Who::TaskWorker, Who::ReviewLead, Who::Human] {
+    for who in [Who::AreaLead, Who::TaskWorker, Who::Reviewer, Who::Human] {
         let acting = actor(&fx, who).await;
         fx.reviews()
             .submit_review(&acting, p(1), 1, Verdict::Comment, "a note", Vec::new())
             .await
             .unwrap();
+    }
+    let lead = actor(&fx, Who::ReviewLead).await;
+    for verdict in [Verdict::Comment, Verdict::RequestChanges] {
+        let error = fx
+            .reviews()
+            .submit_review(&lead, p(1), 1, verdict, "a note", Vec::new())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            review_code(error),
+            codes::REVIEW_LEAD_DELEGATES,
+            "{verdict}"
+        );
     }
     let author = actor(&fx, Who::Author).await;
     let error = fx
@@ -260,6 +284,43 @@ async fn a_batch_verdict_that_decides_follows_the_role() {
                 }
                 Who::Author => {
                     assert_eq!(review_code(batch.unwrap_err()), codes::AUTHOR_CANNOT_REVIEW);
+                    continue;
+                }
+                Who::ReviewLead => {
+                    assert_eq!(
+                        review_code(batch.unwrap_err()),
+                        codes::REVIEW_LEAD_DELEGATES,
+                        "the review lead gives the group to a reviewer"
+                    );
+                    // A batch the review lead holds still never lets it check out or submit.
+                    let batch = give_batch(
+                        &fx.handle.store,
+                        "review-lead",
+                        &[p(1), p(2)],
+                        fx.handle.clock.now(),
+                    )
+                    .await;
+                    let checkout = fx.reviews().create_batch_checkout(&acting, batch).await;
+                    assert_eq!(
+                        review_code(checkout.unwrap_err()),
+                        codes::REVIEW_LEAD_DELEGATES
+                    );
+                    let verdicts = [p(1), p(2)]
+                        .map(|proposal| BatchVerdict {
+                            proposal,
+                            verdict,
+                            body: "decided".to_owned(),
+                        })
+                        .to_vec();
+                    let submitted = fx
+                        .reviews()
+                        .submit_batch_review(&acting, batch, verdicts, Vec::new())
+                        .await;
+                    assert_eq!(
+                        review_code(submitted.unwrap_err()),
+                        codes::REVIEW_LEAD_DELEGATES
+                    );
+                    assert_eq!(reviews_of_p1(&fx).await, 0);
                     continue;
                 }
                 Who::AreaLead | Who::TaskWorker => {
@@ -303,13 +364,40 @@ async fn a_batch_verdict_that_decides_follows_the_role() {
 }
 
 #[tokio::test]
-async fn only_the_main_agent_or_the_review_lead_claims_a_review_and_the_author_is_refused_first() {
+async fn only_the_main_agent_claims_a_review_and_the_author_is_refused_first() {
     for who in EVERYONE {
         let fx = scene().await;
         let acting = actor(&fx, who).await;
         let claimed = fx.reviews().claim_review(&acting, p(1)).await;
         match who {
-            Who::MainAgent | Who::ReviewLead => {
+            Who::ReviewLead => {
+                let ReviewError::Fold(error) = claimed.unwrap_err() else {
+                    panic!("expected a refusal");
+                };
+                assert_eq!(error.code(), codes::REVIEW_LEAD_DELEGATES);
+                assert!(error.hint().unwrap().contains("start_worker"));
+                // A claim the review lead holds still never lets it check out or fix.
+                give_review_claim(&fx.handle.store, "review-lead", p(1), fx.handle.clock.now())
+                    .await;
+                let checkout = fx.reviews().create_review_checkout(&acting, p(1)).await;
+                assert_eq!(
+                    review_code(checkout.unwrap_err()),
+                    codes::REVIEW_LEAD_DELEGATES
+                );
+                let fixes = [ReviewFix {
+                    path: "src/lib.rs".to_owned(),
+                    reason: "a fix".to_owned(),
+                }];
+                let fixed = fx
+                    .reviews()
+                    .submit_review_fix(&acting, p(1), 1, &fixes, "cargo test: ok")
+                    .await;
+                assert_eq!(
+                    review_code(fixed.unwrap_err()),
+                    codes::REVIEW_LEAD_DELEGATES
+                );
+            }
+            Who::MainAgent => {
                 assert_eq!(
                     claimed.unwrap().holder.as_str(),
                     who.agent().unwrap(),
@@ -383,15 +471,15 @@ async fn second_proposal(fx: &Fixture) {
 async fn integration_follows_the_role() {
     for who in EVERYONE {
         let fx = scene().await;
-        let lead = actor(&fx, Who::ReviewLead).await;
+        let reviewer = actor(&fx, Who::Reviewer).await;
         fx.reviews()
-            .submit_review(&lead, p(1), 1, Verdict::Approve, "good", Vec::new())
+            .submit_review(&reviewer, p(1), 1, Verdict::Approve, "good", Vec::new())
             .await
             .unwrap();
         let acting = actor(&fx, who).await;
         let result = fx.reviews().integrate_proposal(&acting, p(1), None).await;
         match who {
-            _ if who.decides() => {
+            _ if who.integrates() => {
                 result.unwrap();
             }
             Who::Author => {
@@ -411,9 +499,47 @@ async fn integration_follows_the_role() {
     }
 }
 
+/// fold refuses every verdict of the review lead, but an approval that a project stored for it earlier still counts: the main agent integrates on it.
+#[tokio::test]
+async fn a_stored_approval_of_the_review_lead_still_counts() {
+    let fx = scene().await;
+    let now = fx.handle.clock.now();
+    fx.handle
+        .store
+        .write(async |tx| {
+            let version: i64 = sqlx::query_scalar(
+                "SELECT v.id FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id
+                 WHERE p.number = 1 AND v.version = 1",
+            )
+            .fetch_one(tx.conn())
+            .await?;
+            let worker: i64 =
+                sqlx::query_scalar("SELECT id FROM workers WHERE name = 'review-lead'")
+                    .fetch_one(tx.conn())
+                    .await?;
+            fold_store::reviews::insert_review(
+                tx,
+                version,
+                fold_store::reviews::ReviewerRef::Worker(worker),
+                Verdict::Approve,
+                "approved before the review lead only assigned reviews",
+                now,
+            )
+            .await?;
+            Ok::<_, StoreError>(())
+        })
+        .await
+        .unwrap();
+    let main = actor(&fx, Who::MainAgent).await;
+    fx.reviews()
+        .integrate_proposal(&main, p(1), None)
+        .await
+        .unwrap();
+}
+
 #[cfg(test)]
-/// Who removes `T-2` while `web-worker` holds it: the holder's agent through any of its workers, its area lead and a human.
-const REMOVERS: [(&str, bool); 9] = [
+/// Who removes `T-2` while `web-worker` holds it: the holder's agent, its area lead and a human.
+const REMOVERS: [(&str, bool); 8] = [
     ("web-worker", true),
     ("web-lead", true),
     ("human", true),
@@ -422,32 +548,12 @@ const REMOVERS: [(&str, bool); 9] = [
     ("reviewer-1", false),
     ("web-worker-2", false),
     ("backend", false),
-    ("web-worker/tests", true),
 ];
 
 #[cfg(test)]
 async fn remover(fx: &Fixture, name: &str) -> Actor {
     match name {
         "human" => human("tanim"),
-        "web-worker/tests" => {
-            let agents = fx.agents();
-            let mut session = agents.start_session(1).await.unwrap();
-            agents
-                .register_agent(&mut session, &AgentName::parse("web-worker").unwrap(), &[])
-                .await
-                .unwrap();
-            agents
-                .register_worker(&session, "tests", None)
-                .await
-                .unwrap();
-            agents
-                .actor(
-                    &session,
-                    Some(&fold_core::WorkerName::parse("web-worker/tests").unwrap()),
-                )
-                .await
-                .unwrap()
-        }
         name => agent_actor(fx, name).await,
     }
 }

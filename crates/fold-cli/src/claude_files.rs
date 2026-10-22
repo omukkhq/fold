@@ -2,6 +2,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use fold_core::layout::{HOOKS, hook_group};
+use fold_core::roles::Role;
 use fold_core::{FoldError, codes};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
@@ -12,8 +13,17 @@ pub use fold_core::layout::{
     AGENT_ENV, AGENT_TAGS_ENV, ALLOW_FOLD_TOOLS, MCP_SERVER_NAME, MCP_SERVERS_KEY,
 };
 
-/// The folders of Claude Code files that fold's files sit in, each one inside the one before.
-pub const FOLDERS: [&str; 3] = [".claude", ".claude/skills", ".claude/skills/fold"];
+/// The folders of Claude Code files that fold's files sit in. Each folder after `.claude/skills` is the folder of one skill: the `fold` skill and the skill of each role.
+pub const FOLDERS: [&str; 8] = [
+    ".claude",
+    ".claude/skills",
+    ".claude/skills/fold",
+    ".claude/skills/fold-main",
+    ".claude/skills/fold-area-lead",
+    ".claude/skills/fold-review-lead",
+    ".claude/skills/fold-task-worker",
+    ".claude/skills/fold-reviewer",
+];
 
 /// The project's Claude Code settings. A folder whose settings allow tools makes Claude Code warn when the folder is first trusted, so fold keeps its permission and hooks in the user's settings and a refresh removes the ones an earlier fold wrote here.
 pub const SETTINGS_FILE: &str = ".claude/settings.json";
@@ -29,16 +39,89 @@ pub const CLAUDE_FILE: &str = "CLAUDE.md";
 pub const AGENTS_BEGIN: &str = "<!-- fold:begin -->";
 pub const AGENTS_END: &str = "<!-- fold:end -->";
 
+/// The `fold` skill: the index of the role skills, and the skill of a session opened by hand, which has no role.
 pub const SKILL_FILE: &str = ".claude/skills/fold/SKILL.md";
 /// The reference beside the skill: fold's file formats, the human's commands and the web app's screens, which a session reads when its task needs them instead of holding them in every context.
 pub const REFERENCE_FILE: &str = ".claude/skills/fold/REFERENCE.md";
-/// The files of the fold skill, which fold owns whole.
-pub const SKILL_FILES: [&str; 2] = [SKILL_FILE, REFERENCE_FILE];
+/// Each role has a skill of its own, so that one Skill call loads the steps of the role and nothing else.
+pub const MAIN_SKILL_FILE: &str = ".claude/skills/fold-main/SKILL.md";
+/// See [`MAIN_SKILL_FILE`].
+pub const AREA_LEAD_SKILL_FILE: &str = ".claude/skills/fold-area-lead/SKILL.md";
+/// See [`MAIN_SKILL_FILE`].
+pub const REVIEW_LEAD_SKILL_FILE: &str = ".claude/skills/fold-review-lead/SKILL.md";
+/// See [`MAIN_SKILL_FILE`].
+pub const TASK_WORKER_SKILL_FILE: &str = ".claude/skills/fold-task-worker/SKILL.md";
+/// See [`MAIN_SKILL_FILE`].
+pub const REVIEWER_SKILL_FILE: &str = ".claude/skills/fold-reviewer/SKILL.md";
+/// Every error code with what to do, which an agent reads only when a refusal's hint does not settle its next step.
+pub const ERRORS_FILE: &str = ".claude/skills/fold/ERRORS.md";
+/// The files of fold's skills, which fold owns whole.
+pub const SKILL_FILES: [&str; 8] = [
+    SKILL_FILE,
+    REFERENCE_FILE,
+    MAIN_SKILL_FILE,
+    AREA_LEAD_SKILL_FILE,
+    REVIEW_LEAD_SKILL_FILE,
+    TASK_WORKER_SKILL_FILE,
+    REVIEWER_SKILL_FILE,
+    ERRORS_FILE,
+];
 
 /// Not named `AGENTS.md`, so an agent working in the fold repository never loads it as rules.
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
-const SKILL: &str = include_str!("../templates/SKILL.md");
 const REFERENCE: &str = include_str!("../templates/REFERENCE.md");
+const ERRORS: &str = include_str!("../templates/ERRORS.md");
+
+/// Joins the sections of one skill, so that an agent loads one skill for its role while each section has one source that several skills share. The first section holds the skill's frontmatter, and the shared rules always come last.
+macro_rules! skill {
+    ($($section:literal),+) => {
+        concat!(
+            $(include_str!(concat!("../templates/parts/", $section, ".md")), "\n",)+
+            include_str!("../templates/parts/shared.md")
+        )
+    };
+}
+
+const SKILL: &str = skill!("index", "identity");
+/// The skill of each role: every step of that role and the shared rules, so that a worker loads only what its role needs.
+const MAIN_SKILL: &str = skill!(
+    "main",
+    "identity",
+    "planning",
+    "kinds",
+    "workers",
+    "building",
+    "reviewing",
+    "batch",
+    "scope"
+);
+const AREA_LEAD_SKILL: &str = skill!("area_lead", "planning", "kinds", "workers");
+const REVIEW_LEAD_SKILL: &str = skill!("review_lead", "scope", "workers");
+const TASK_WORKER_SKILL: &str = skill!("task_worker", "building", "kinds");
+const REVIEWER_SKILL: &str = skill!("reviewer", "batch", "reviewing", "scope");
+
+/// The text fold writes into each of [`SKILL_FILES`], in the same order.
+pub const SKILL_TEXTS: [&str; 8] = [
+    SKILL,
+    REFERENCE,
+    MAIN_SKILL,
+    AREA_LEAD_SKILL,
+    REVIEW_LEAD_SKILL,
+    TASK_WORKER_SKILL,
+    REVIEWER_SKILL,
+    ERRORS,
+];
+
+/// The skill file that holds the steps of `role`. The supervised main loads the interactive main agent's skill.
+pub fn role_skill_file(role: Role) -> &'static str {
+    match role {
+        Role::Main => MAIN_SKILL_FILE,
+        Role::AreaLead => AREA_LEAD_SKILL_FILE,
+        Role::ReviewLead => REVIEW_LEAD_SKILL_FILE,
+        Role::TaskWorker => TASK_WORKER_SKILL_FILE,
+        Role::Reviewer => REVIEWER_SKILL_FILE,
+    }
+}
 
 /// `details.reason` of a Claude Code file that fold cannot merge into.
 pub const MALFORMED_REASON: &str = "malformed_claude_file";
@@ -115,7 +198,7 @@ pub fn stale_section(root: &Path) -> Option<&'static str> {
     }
 }
 
-/// Writes or refreshes fold's Claude Code files in the project root, keeping everything in them that fold does not own: the marked section in [`instructions_file`], the fold skill and its reference. The other root instructions file loses a section an earlier write left there, so the project holds one, and [`MCP_FILE`] and [`SETTINGS_FILE`] lose the entries an earlier fold wrote; a file that held nothing else goes. Every file is checked and every symbolic link followed before the first file changes, so a refusal leaves all of them untouched. A file whose content would not change is not written, so its modification time stays.
+/// Writes or refreshes fold's Claude Code files in the project root, keeping everything in them that fold does not own: the marked section in [`instructions_file`], the fold skill with its reference and the skill of each role. The other root instructions file loses a section an earlier write left there, so the project holds one, and [`MCP_FILE`] and [`SETTINGS_FILE`] lose the entries an earlier fold wrote; a file that held nothing else goes. Every file is checked and every symbolic link followed before the first file changes, so a refusal leaves all of them untouched. A file whose content would not change is not written, so its modification time stays.
 pub fn write(root: &Path) -> Result<(), ClaudeFileError> {
     let project = std::fs::canonicalize(root).map_err(|source| ClaudeFileError::Io {
         path: root.to_owned(),
@@ -134,16 +217,33 @@ pub fn write(root: &Path) -> Result<(), ClaudeFileError> {
     if let Some((end, text)) = without_stale_section(&project, root, name)? {
         changes.push(Change::Write(end, text));
     }
-    for (relative, text) in SKILL_FILES.into_iter().zip([SKILL, REFERENCE]) {
-        changes.push(Change::Write(
-            link_end_of(&root.join(relative))?,
-            text.as_bytes().to_vec(),
-        ));
-    }
+    changes.extend(skill_changes(root)?);
     for change in &changes {
         change.apply()?;
     }
     Ok(())
+}
+
+/// Writes the files of fold's skills, which fold owns whole, and nothing else: `fld claude` and the daemon call it on every start, so a project that an older fold set up gets the skills its prompts name without a refresh, while the files that hold the user's text change only through [`write`]. A file whose content would not change is not written, and a file the user added next to the skills stays.
+pub fn write_skills(root: &Path) -> Result<(), ClaudeFileError> {
+    for change in skill_changes(root)? {
+        change.apply()?;
+    }
+    Ok(())
+}
+
+/// The writes of [`SKILL_FILES`], each to the end of any link at its path.
+fn skill_changes(root: &Path) -> Result<Vec<Change>, ClaudeFileError> {
+    SKILL_FILES
+        .into_iter()
+        .zip(SKILL_TEXTS)
+        .map(|(relative, text)| {
+            Ok(Change::Write(
+                link_end_of(&root.join(relative))?,
+                text.as_bytes().to_vec(),
+            ))
+        })
+        .collect()
 }
 
 /// One file change of [`write`], decided before any file changes.
@@ -737,9 +837,13 @@ mod tests {
     fn the_files_sit_in_the_folders() {
         let parent = |file: &str| Path::new(file).parent().map(Path::to_owned);
         assert_eq!(parent(SETTINGS_FILE), Some(PathBuf::from(FOLDERS[0])));
-        assert_eq!(parent(SKILL_FILE), Some(PathBuf::from(FOLDERS[2])));
-        assert_eq!(parent(REFERENCE_FILE), Some(PathBuf::from(FOLDERS[2])));
-        assert_eq!(parent(FOLDERS[2]), Some(PathBuf::from(FOLDERS[1])));
+        for file in SKILL_FILES {
+            let folder = parent(file).unwrap();
+            assert!(FOLDERS[2..].contains(&folder.to_str().unwrap()), "{file}");
+        }
+        for folder in &FOLDERS[2..] {
+            assert_eq!(parent(folder), Some(PathBuf::from(FOLDERS[1])), "{folder}");
+        }
         assert_eq!(parent(FOLDERS[1]), Some(PathBuf::from(FOLDERS[0])));
     }
 

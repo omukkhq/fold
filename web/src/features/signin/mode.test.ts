@@ -4,13 +4,10 @@ import { signInErrorMessage } from "./messages";
 import { signInMode } from "./mode";
 
 describe("signInMode", () => {
-  it("asks for a token when the request is not authenticated", () => {
+  it("asks to sign in when the request is not signed in as a human", () => {
     expect(signInMode({ authenticated: false, human: null })).toBe("token");
     expect(signInMode({ authenticated: false, human: "tanim" })).toBe("token");
-  });
-
-  it("asks for a name when authenticated without one", () => {
-    expect(signInMode({ authenticated: true, human: null })).toBe("name");
+    expect(signInMode({ authenticated: true, human: null })).toBe("token");
   });
 
   it("is ready with a name", () => {
@@ -29,10 +26,15 @@ describe("signInErrorMessage", () => {
     }
   });
 
-  it("words the other cases", () => {
-    expect(signInErrorMessage(new ApiError("invalid_name", ""))).toContain(
-      "name",
+  it("words a used or expired link", () => {
+    const message = signInErrorMessage(
+      new ApiError("invalid_sign_in_link", ""),
     );
+    expect(message).toContain("link");
+    expect(message).toContain("fld web");
+  });
+
+  it("words the other cases", () => {
     expect(signInErrorMessage(new TypeError("fetch failed"))).toContain(
       "did not answer",
     );

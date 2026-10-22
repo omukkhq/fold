@@ -127,6 +127,17 @@ fn all_equals_the_plans_event_types() {
         "worker.model_unreachable",
         "message.pushed",
         "message.ask_closed",
+        "review.plan_created",
+        "review.plan_changed",
+        "review.plan_joined",
+        "review.plan_left",
+        "review.plan_wait_ended",
+        "review.plan_started",
+        "review.plan_ended",
+        "review.batch_integrated",
+        "review.batch_waiting",
+        "review.batch_wait_ended",
+        "review.batch_ready",
     ]);
     assert_eq!(declared, expected);
 }

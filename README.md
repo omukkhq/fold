@@ -18,10 +18,10 @@ We use fold to build and maintain our own projects.
 ## Why fold
 
 - **Build in parallel.** Agents work in separate task workspaces. Task dependencies keep related work in order, and worker limits let you control concurrency.
-- **Review the work as it happens.** Reviewers inspect proposals, run checks, fix what the task's scope settles as a new version of their own, and request changes for the rest. Review related proposals together, with diffs and inline comments. Each approval belongs to the version reviewed.
-- **Bring approved changes together.** fold integrates ready proposals in dependency order. Changes that conflict return to their author for resolution.
+- **Review the work as it happens.** Reviewers inspect proposals, run checks, fix what the task's scope settles as a new version of their own, and send back the work that the task still misses. New work outside the task becomes a request. The review lead can wait for related tasks and give them to one reviewer as a batch. Review proposals with diffs and inline comments, and ask an author about the lines you select. Each approval belongs to the version reviewed.
+- **Bring approved changes together.** fold integrates ready proposals in dependency order. The approved proposals of a review batch integrate together, with one run of the integration checks. Changes that conflict return to their author for resolution.
 - **Keep decisions with people.** Approve the plan before work starts, require human review where needed, and answer questions and tool permission requests in **Needs you**.
-- **See the actual state.** The live board calculates task status from the work. Inspect running agents, their output, proposals, and activity from the same application.
+- **See the actual state.** The live board calculates task status from the work. Inspect running agents, their output, what they cost, proposals, and activity from the same application.
 - **Keep a lasting project history.** Workspaces, checkpoints, reviews, and agent messages stay on your machine. Git integration connects the result to your existing repository and remotes.
 
 ## Get started
@@ -36,7 +36,7 @@ Install fold on **Linux AMD64 (x86_64)**, **Linux ARM64 (aarch64)**, or **macOS 
 curl -fsSL https://omukk.dev/fold/install.sh | sh
 ```
 
-The script installs `fld` into `~/.local/bin`. Run it again to update fold, then run `fld restart` so a running daemon uses the new version. To choose another folder or a specific release, set `FOLD_INSTALL_DIR` or `FOLD_VERSION`, for example `FOLD_VERSION=v0.3.0`.
+The script installs `fld` into `~/.local/bin`. Run it again to update fold, then run `fld restart` so a running daemon uses the new version. To choose another folder or a specific release, set `FOLD_INSTALL_DIR` or `FOLD_VERSION`, for example `FOLD_VERSION=v0.5.0`.
 
 To uninstall fold, run:
 
@@ -69,7 +69,7 @@ fld claude
 
 The first time you use fld on a device, it asks for the name that fold shows for you, and keeps it for every project. Set `FOLD_HUMAN` to use another name.
 
-`fld init` adds fold's section to the project's agent instructions and the fold skill to the project. The first `fld claude` or `fld setup` asks once to add the fold connection and hooks to your Claude Code user configuration. `fld claude` starts the daemon when needed and opens your main agent session. To start the daemon at login instead, run `fld setup` once: it installs a systemd user service on Linux and a launchd agent on macOS. Run `fld` alone to see the daemon's state, its version and web address, and the project of the current folder.
+`fld init` adds fold's section to the project's agent instructions and fold's skills to the project: the `fold` skill and one skill for each agent role. `fld claude` and the daemon write those skills again whenever they differ from the ones of the installed fld; `fld init --refresh` also updates the section. The first `fld claude` or `fld setup` asks once to add the fold connection and hooks to your Claude Code user configuration. `fld claude` starts the daemon when needed and opens your main agent session. To start the daemon at login instead, run `fld setup` once: it installs a systemd user service on Linux and a launchd agent on macOS. Run `fld` alone to see the daemon's state, its version and web address, and the project of the current folder.
 
 The **Projects** page lists the projects in fold, and a search by name, slug, or folder also finds the removed ones. **Remove** takes a project off fold while no worker of the project runs, and leaves its data in its folder; `fld claude`, `fld new`, or `fld init` in that folder, or **Add back** in the search, brings it back.
 
@@ -81,7 +81,13 @@ Tell the main agent what you want to build, the constraints, and how you will ch
 
 The main agent presents a plan for your approval, then starts the agents that build and review it.
 
-Open **[127.0.0.1:7420](http://127.0.0.1:7420)** in your browser to follow the project. The board shows tasks across **Backlog**, **Todo**, **In Progress**, **Review**, and **Done**. **Needs you** brings together questions, permissions, reviews, and other items that need your decision. **Messages** shows the threads with you, and **Mark answered** closes an agent's question that you answered somewhere else, for example to the main agent, unless the agent waits for your reply. The **Messages** and **Proposals** tabs count the threads and proposals that wait for you.
+To run a project on a server where nobody runs `fld claude`, set `supervised = true` under `[main]` in `.fold/config.toml`. fold then runs the main agent itself: it starts it with the daemon, and again for a message, a request, a ready main task, or a review that waits for it. The plan, the main agent's questions, and its changes to main come to you as messages in the web app, and fold refuses a main agent session in a terminal while the setting is on. The **Agents** screen stops it and starts it in a new session.
+
+Run `fld web` and open the link it prints in your browser to follow the project at **127.0.0.1:7420**. The link signs you in once and works for a few minutes. Every browser needs a sign-in, also on your own machine, so a program cannot act as you by only naming you in a request. This keeps out the agents that fold starts. The main agent that you run with `fld claude` in your own terminal runs as you and can sign in as you. The browser sends the sign-in cookie to every port of the same address, so a local development server that you open in the same browser can receive it. The board shows tasks across **Backlog**, **Todo**, **In Progress**, **Review**, and **Done**. **Needs you** brings together questions, permissions, reviews, and other items that need your decision. Every agent can ask you about its own work, and your reply in the web app goes back to it in the same thread; an agent that stopped meanwhile starts again for your reply. **Messages** shows the threads with you, and **Mark answered** closes an agent's question that you answered somewhere else, for example to the main agent, unless the agent waits for your reply. The **Messages** and **Proposals** tabs count the threads and proposals that wait for you.
+
+A proposal's page has four tabs. **Overview** shows where its integration stands and the history of each version with its check runs and reviews. **Changes** shows the diff beside a folder tree of the changed files. **Checks** shows every check run with the full log of each step. **Conversation** lists the proposal's threads. Select lines in the diff to write a review comment or to ask the author about them, and use **Ask the author** in **Conversation** for a question about the whole proposal. A review batch has its own page: **Merged changes** shows the change of all its members merged onto main, and **Integrate the batch** integrates its approved members when they are ready.
+
+The **Cost** tab of the **Agents** screen shows what the project's agents cost today, in the last 7 days, and of all time, with their tokens, by role, area, model, task, and worker. A task's page shows its own cost, and the **Projects** page shows the cost of each project. The main agent session that you run with `fld claude` is not counted.
 
 ## How it works
 
@@ -96,8 +102,8 @@ flowchart LR
 
 1. **Plan.** Your main agent turns the goal into tasks, dependencies, and review requirements. You approve the scope before execution.
 2. **Build.** Lead agents coordinate workers, each with a task and its own workspace. Workers submit their changes as proposals.
-3. **Review.** Reviewer agents inspect and test the proposals and fix what the task's scope settles themselves. Product questions and larger changes go back to the author. Tasks marked for human review also need your approval.
-4. **Integrate.** By default, fold integrates approved proposals when their prerequisites are complete. The project folder follows integrated main. When Git is on, each integration also creates a Git commit.
+3. **Review.** The review lead gives each proposal to a reviewer agent, and can wait for related tasks so that one reviewer reviews them together as a batch. Reviewers inspect and test the proposals and fix what the task's scope settles themselves. Work that the task still misses goes back to the author, new work outside the task becomes a request, and product questions come to you. Tasks marked for human review also need your approval.
+4. **Integrate.** By default, fold integrates approved proposals when their prerequisites are complete. The checks in the project's `fold-checks.toml` run on each proposal, at integration, or in both stages. The approved members of a review batch integrate together, with one run of the integration checks; when that run fails, fold integrates them one at a time. The project folder follows integrated main. When Git is on, each integration also creates a Git commit.
 
 fold keeps its project data in `.fold/`. Agents build in workspaces under `.fold/ws/`; the project folder holds the integrated result. Checkpoints and persistent messages help agents continue work across sessions.
 
@@ -150,10 +156,12 @@ Run these commands inside your project:
 | `fld restart` | Restart the daemon after an update, so the new version takes over. Workers continue in their sessions. |
 | `fld` | Show fold's status: the version, whether the daemon runs and where, the service, and the current project. |
 | `fld log` | List main's revisions, newest first: `fld log -n 50` shows more, and `fld log --oneline` shows one line each. |
+| `fld cost` | See what the project's agents cost and the tokens they used: the total of all time, today, and the last 7 days, by role, by area, and the top tasks. `--since`, `--by`, and `--task` narrow it, and `--json` prints the daemon's answer. |
 | `fld doctor` | Check the installation, daemon, and projects, with suggested fixes. It names the running daemon and its version, says why workers cannot sign in, and repeats every problem with its fix at the end. |
 | `fld transcript` | Find an agent's Claude Code transcript: `fld transcript <agent>` prints the path of the file of its current session, and `fld transcript <agent> --tail N` prints the file's last N lines. |
-| `fld gc` | Delete objects that nothing refers to, prune old automatic checkpoints, and remove the folders of workspaces closed for longer than `closed_workspace_days` (14 days by default). The daemon also runs it every day; `fld gc` needs a running daemon. `fld gc --dry-run` counts what a run would remove and changes nothing. |
-| `fld token` | Manage the tokens that sign a person in to the web interface off localhost: `fld token create`, `fld token list`, and `fld token revoke`. |
+| `fld gc` | Delete objects that nothing refers to, prune old automatic checkpoints, remove the folder of a closed workspace that is still there, and prune the checkpoints of workspaces closed for longer than `closed_workspace_days` (14 days by default). fold removes a workspace's folder as soon as the workspace closes and its agent has no running worker and no open session, after a final checkpoint of the tracked files it had not recorded. That checkpoint is a record, not a restore point. `fld gc` retries a removal that failed. The daemon also runs it every day; `fld gc` needs a running daemon. `fld gc --dry-run` counts what a run would remove and changes nothing. |
+| `fld web` | Print a one-time link that signs you in to the web interface. It works once, for a few minutes, and starts the daemon when needed. |
+| `fld token` | Manage the tokens that sign a person in to the web interface from a browser that cannot open a link from `fld web`, such as one on another machine: `fld token create`, `fld token list`, and `fld token revoke`. |
 | `fld --help` | See the command reference. |
 
 A project pause stops workers; approved proposals can still integrate.

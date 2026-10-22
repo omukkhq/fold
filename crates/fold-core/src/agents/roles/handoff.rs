@@ -23,8 +23,39 @@ const SUMMARY_TITLE: usize = 100;
 /// The turn fold sends a lead whose context passed its role's `handoff_at`.
 pub const HANDOFF_REQUEST: &str = "fold: your context is large, so fold will start you again with a fresh context. Call write_handoff now with a short hand-off note for your next session: what you are doing, your open decisions and what comes next. Tasks, proposals, reviews and messages stay in fold, so do not copy them. Then end your turn.";
 
-/// Whether a context of `context_tokens` has reached `percent` of a window of `context_window` tokens. An unknown window of 0 never does.
-pub fn handoff_due(context_tokens: u64, context_window: u64, percent: u64) -> bool {
+/// The smallest window, in tokens, for which a lead hands off by default at [`DEFAULT_HANDOFF_LARGE_PERCENT`] instead of [`DEFAULT_HANDOFF_SMALL_PERCENT`].
+pub const DEFAULT_HANDOFF_LARGE_WINDOW: u64 = 220_000;
+
+/// The default hand-off share, in percent, of a window below [`DEFAULT_HANDOFF_LARGE_WINDOW`].
+pub const DEFAULT_HANDOFF_SMALL_PERCENT: u64 = 85;
+
+/// The default hand-off share, in percent, of a window of [`DEFAULT_HANDOFF_LARGE_WINDOW`] or more.
+pub const DEFAULT_HANDOFF_LARGE_PERCENT: u64 = 60;
+
+/// When fold asks a long-lived worker for its hand-off note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandoffAt {
+    /// The role's own `handoff_at`: this percent of every window.
+    Percent(u64),
+    /// No `handoff_at`: the percent of [`default_handoff_percent`], which depends on the window.
+    Default,
+}
+
+/// The default hand-off share of a window of `context_window` tokens: 85% of the window below 220k tokens and 60% from 220k, so a 200k window hands off at 170k tokens and a 1M window at 600k.
+pub fn default_handoff_percent(context_window: u64) -> u64 {
+    if context_window < DEFAULT_HANDOFF_LARGE_WINDOW {
+        DEFAULT_HANDOFF_SMALL_PERCENT
+    } else {
+        DEFAULT_HANDOFF_LARGE_PERCENT
+    }
+}
+
+/// Whether a context of `context_tokens` has reached the hand-off share `at` of a window of `context_window` tokens. An unknown window of 0 never does.
+pub fn handoff_due(context_tokens: u64, context_window: u64, at: HandoffAt) -> bool {
+    let percent = match at {
+        HandoffAt::Percent(percent) => percent,
+        HandoffAt::Default => default_handoff_percent(context_window),
+    };
     context_window > 0
         && u128::from(context_tokens) * 100 >= u128::from(context_window) * u128::from(percent)
 }
@@ -32,6 +63,12 @@ pub fn handoff_due(context_tokens: u64, context_window: u64, percent: u64) -> bo
 /// Whether a lead that fold asked for a note after its `asked_turns`-th turn has used up its turns at `turns`, without a note.
 pub fn handoff_overdue(asked_turns: u64, turns: u64) -> bool {
     turns.saturating_sub(asked_turns) >= HANDOFF_TURNS
+}
+
+/// Whether fold asks the supervised main for its hand-off note again at `turns`, after it asked at its `asked_turns`-th turn and got none: every [`HANDOFF_TURNS`] turns. The main agent's next session starts only from its own note, so a large context never starts it fresh without one.
+pub fn handoff_reask_due(asked_turns: u64, turns: u64) -> bool {
+    let since = turns.saturating_sub(asked_turns);
+    since > 0 && since.is_multiple_of(HANDOFF_TURNS)
 }
 
 /// The note without its surrounding white space. An empty note or one longer than [`MAX_HANDOFF_CHARS`] is refused with `invalid_request`; the error names the length, never the text.
@@ -98,6 +135,7 @@ pub fn refresh_turn(facts: &RefreshFacts<'_>) -> String {
             format!("the area lead of area {area}, which owns the tasks labelled {label}")
         }
         (Role::ReviewLead, _) => "the review lead".to_owned(),
+        (Role::Main, _) => "the main agent of this project, supervised by fold".to_owned(),
         (role, _) => format!("a worker of role {role}"),
     };
     let _ = writeln!(
@@ -179,12 +217,36 @@ mod tests {
 
     #[test]
     fn a_hand_off_is_due_at_the_share_of_the_window() {
-        assert!(!handoff_due(599_999, 1_000_000, 60));
-        assert!(handoff_due(600_000, 1_000_000, 60));
-        assert!(handoff_due(700_000, 1_000_000, 60));
-        assert!(!handoff_due(25_310, 1_000_000, 60));
-        assert!(!handoff_due(u64::MAX, 0, 60));
-        assert!(handoff_due(u64::MAX, u64::MAX, 99));
+        let at = HandoffAt::Percent(60);
+        assert!(!handoff_due(599_999, 1_000_000, at));
+        assert!(handoff_due(600_000, 1_000_000, at));
+        assert!(handoff_due(700_000, 1_000_000, at));
+        assert!(!handoff_due(25_310, 1_000_000, at));
+        assert!(!handoff_due(u64::MAX, 0, at));
+        assert!(handoff_due(u64::MAX, u64::MAX, HandoffAt::Percent(99)));
+    }
+
+    #[test]
+    fn by_default_a_hand_off_is_due_at_85_percent_below_220k_and_60_percent_from_220k() {
+        let at = HandoffAt::Default;
+        assert!(!handoff_due(169_999, 200_000, at));
+        assert!(handoff_due(170_000, 200_000, at));
+        assert!(!handoff_due(599_999, 1_000_000, at));
+        assert!(handoff_due(600_000, 1_000_000, at));
+        assert_eq!(default_handoff_percent(219_999), 85);
+        assert_eq!(default_handoff_percent(220_000), 60);
+        assert!(!handoff_due(131_999, 220_000, at));
+        assert!(handoff_due(132_000, 220_000, at));
+        assert!(!handoff_due(u64::MAX, 0, at));
+    }
+
+    #[test]
+    fn a_role_percent_wins_over_the_default_for_every_window() {
+        let at = HandoffAt::Percent(50);
+        assert!(handoff_due(100_000, 200_000, at));
+        assert!(!handoff_due(169_999, 400_000, at));
+        assert!(handoff_due(500_000, 1_000_000, at));
+        assert!(!handoff_due(700_000, 1_000_000, HandoffAt::Percent(80)));
     }
 
     #[test]
@@ -280,5 +342,26 @@ mod tests {
         });
         assert!(other.contains("a worker of role area_lead"));
         assert!(other.contains("wrote no hand-off note"));
+        assert!(!handoff_reask_due(4, 4));
+        assert!(!handoff_reask_due(4, 6));
+        assert!(handoff_reask_due(4, 7));
+        assert!(!handoff_reask_due(4, 8));
+        assert!(handoff_reask_due(4, 10));
+        let main = AgentName::parse("main").unwrap();
+        let supervised = refresh_turn(&RefreshFacts {
+            role: Role::Main,
+            name: &main,
+            area: None,
+            note: Some("Waiting for the OK to the plan in m-4."),
+            tasks: &[],
+            task_count: 0,
+            proposals: &[],
+            proposal_count: 0,
+            unread: 1,
+        });
+        assert!(
+            supervised.contains("as main, the main agent of this project, supervised by fold,")
+        );
+        assert!(supervised.contains("Waiting for the OK to the plan in m-4."));
     }
 }

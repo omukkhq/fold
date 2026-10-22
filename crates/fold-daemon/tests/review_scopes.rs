@@ -5,7 +5,6 @@ use axum::http::{Method, Request};
 use fold_core::roles::Role;
 use fold_core::{WorkerState, codes};
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::router;
 use fold_daemon::mcp::FoldServer;
 use fold_daemon::services::events::EventService;
 use fold_daemon::services::messages::MessageService;
@@ -90,7 +89,7 @@ async fn verdict(review: &Client, proposal: &str, version: u32, verdict: &str) {
     .await;
 }
 
-/// `frontend` proposes `src/lib.rs` for T-1 as P-1 v1, the review lead asks for changes, and `frontend` sends each of `contents` as the next version, each but the last reviewed with request_changes again.
+/// `frontend` proposes `src/lib.rs` for T-1 as P-1 v1, `review` asks for changes, and `frontend` sends each of `contents` as the next version, each but the last reviewed with request_changes again.
 async fn revised(fx: &Fixture, frontend: &Client, review: &Client, contents: &[&str]) {
     ok(frontend, "create_workspace", json!({"task": "T-1"})).await;
     let first = (1..=40)
@@ -111,20 +110,35 @@ async fn revised(fx: &Fixture, frontend: &Client, review: &Client, contents: &[&
     }
 }
 
+/// The human of the harness asks for changes on v1 of `proposal`: the review lead never reviews, so a human gives the first verdict.
+async fn human_asks_for_changes(h: &Harness, proposal: &str) {
+    let path = format!("/api/v1/projects/demo/proposals/{proposal}/reviews");
+    let body = json!({"version": 1, "verdict": "request_changes", "body": "add d"});
+    let (status, answer) = h
+        .http(
+            Method::POST,
+            &path,
+            Some(&body),
+            crate::common::acceptance::HUMAN,
+        )
+        .await;
+    assert!(status.is_success(), "{status}: {answer}");
+}
+
 /// The JSON answer of the project route `path` for the human `tanim`, which must succeed.
 async fn http(fx: &Fixture, method: Method, path: &str, body: Option<Value>) -> Value {
     let request = Request::builder()
         .method(method)
         .uri(format!("/api/v1/projects/demo{path}"))
-        .header(CLIENT_HEADER, "test")
-        .header("cookie", "fold_human=tanim");
+        .header(CLIENT_HEADER, "test");
     let request = match body {
         Some(value) => request
             .header("content-type", "application/json")
             .body(Body::from(value.to_string())),
         None => request.body(Body::empty()),
     };
-    let response = router(fx.state.clone())
+    let response = crate::common::signed_in_router(&fx.state, "tanim")
+        .await
         .oneshot(request.unwrap())
         .await
         .unwrap();
@@ -146,7 +160,7 @@ async fn a_small_v2_gets_a_change_review_and_a_review_follows_the_suggestion() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
     let review = connect(&fx, "review").await;
-    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
     revised(&fx, &frontend, &review, &["pub fn g() {}\n"]).await;
     assert_eq!(
         last_scope(&review, "P-1").await,
@@ -172,11 +186,11 @@ async fn a_small_v2_gets_a_change_review_and_a_review_follows_the_suggestion() {
 }
 
 #[tokio::test]
-async fn a_v3_suggests_a_full_review_that_the_review_lead_overrides_with_a_reason() {
+async fn a_v3_suggests_a_full_review_that_the_main_agent_overrides_with_a_reason() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
     let review = connect(&fx, "review").await;
-    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    crate::common::roles::give_main_tag(&fx.handle.store, "review").await;
     revised(
         &fx,
         &frontend,
@@ -261,7 +275,7 @@ async fn a_first_version_takes_no_scope_and_a_scope_names_a_proposal_of_the_call
     let frontend = connect(&fx, "frontend").await;
     let backend = connect(&fx, "backend").await;
     let review = connect(&fx, "review").await;
-    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    crate::common::roles::give_main_tag(&fx.handle.store, "review").await;
     revised(&fx, &frontend, &review, &["pub fn g() {}\n"]).await;
     ok(&backend, "create_workspace", json!({"task": "T-2"})).await;
     fx.write(2, "README.md", "# export\n");
@@ -356,12 +370,7 @@ async fn a_reviewer_follows_the_scope_its_review_lead_chose_at_the_start() {
     h.call("frontend", "start_worker", json!({"role": "review_lead"}))
         .await;
     h.connect("review-lead").await;
-    h.call(
-        "review-lead",
-        "submit_review",
-        json!({"id": proposal, "version": 1, "verdict": "request_changes", "body": "add d"}),
-    )
-    .await;
+    human_asks_for_changes(&h, &proposal).await;
     work.write(&[(
         "src/lib.rs",
         "pub fn a() {}\npub fn b() {}\npub fn c() {}\npub fn d() {}\n",
@@ -487,7 +496,7 @@ async fn the_review_lead_sets_the_scope_of_a_later_version_and_the_newest_choice
     give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
     give_role(&fx.handle.store, "reviewer", Role::Reviewer, None).await;
     give_role(&fx.handle.store, "web-lead", Role::AreaLead, None).await;
-    revised(&fx, &frontend, &review, &["pub fn g() {}\n"]).await;
+    revised(&fx, &frontend, &reviewer, &["pub fn g() {}\n"]).await;
 
     for (arguments, code) in [
         (
@@ -534,7 +543,7 @@ async fn the_review_lead_sets_the_scope_of_a_later_version_and_the_newest_choice
         view["review_scope"],
         json!({"since": "v1", "chosen": {"scope": "change", "reason": "the move kept every line", "by": "review"}})
     );
-    verdict(&review, "P-1", 2, "approve").await;
+    verdict(&reviewer, "P-1", 2, "approve").await;
     assert_eq!(
         last_scope(&review, "P-1").await,
         json!({"scope": "change", "since": "v1", "suggested": "change", "rules": [], "reason": "the move kept every line"})
@@ -583,12 +592,7 @@ async fn a_reviewer_batch_takes_the_chosen_scopes_and_a_refused_scope_starts_not
         proposals.push((proposal, work, path));
     }
     for (proposal, work, path) in &proposals[..2] {
-        h.call(
-            "review-lead",
-            "submit_review",
-            json!({"id": proposal, "version": 1, "verdict": "request_changes", "body": "add d"}),
-        )
-        .await;
+        human_asks_for_changes(&h, proposal).await;
         work.write(&[(
             path,
             "pub fn a() {}\npub fn b() {}\npub fn c() {}\npub fn d() {}\n",
@@ -681,15 +685,17 @@ async fn a_human_review_of_a_revised_version_has_no_scope() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
     let review = connect(&fx, "review").await;
+    let reviewer = connect(&fx, "reviewer").await;
     give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
-    revised(&fx, &frontend, &review, &["pub fn g() {}\n"]).await;
+    give_role(&fx.handle.store, "reviewer", Role::Reviewer, None).await;
+    revised(&fx, &frontend, &reviewer, &["pub fn g() {}\n"]).await;
     ok(
         &review,
         "set_review_scope",
         json!({"id": "P-1", "version": 2, "scope": "full", "reason": "the parser moved"}),
     )
     .await;
-    verdict(&review, "P-1", 2, "approve").await;
+    verdict(&reviewer, "P-1", 2, "approve").await;
     http(
         &fx,
         Method::POST,
@@ -708,8 +714,8 @@ async fn a_human_review_of_a_revised_version_has_no_scope() {
     assert_eq!(
         scopes,
         [
-            json!(["review", null]),
-            json!(["review", {"scope": "full", "since": "v1", "suggested": "change", "rules": [], "reason": "the parser moved"}]),
+            json!(["reviewer", null]),
+            json!(["reviewer", {"scope": "full", "since": "v1", "suggested": "change", "rules": [], "reason": "the parser moved"}]),
             json!(["human:tanim", null]),
         ]
     );

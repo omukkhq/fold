@@ -61,7 +61,8 @@ impl Site {
         if let Some(etag) = etag {
             request = request.header(header::IF_NONE_MATCH, etag);
         }
-        router(self.daemon.state().clone())
+        crate::common::signed_in_router(self.daemon.state(), "ana")
+            .await
             .oneshot(request.body(Body::empty()).unwrap())
             .await
             .unwrap()

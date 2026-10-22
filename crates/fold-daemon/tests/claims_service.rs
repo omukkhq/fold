@@ -51,13 +51,12 @@ struct Fixture {
     agents: AgentService,
     tasks: TaskService,
     frontend: Agent,
-    ui: WorkerRow,
     backend: Agent,
 }
 
 #[cfg(test)]
 impl Fixture {
-    /// Three tasks in the area that `frontend` leads, the agent `frontend` with its child worker `frontend/ui`, and the main agent `backend`, the second claimant of a task of that area: a task has one area. Claims use a lease of `lease_minutes`.
+    /// Three tasks in the area that `frontend` leads, the agent `frontend`, and the main agent `backend`, the second claimant of a task of that area: a task has one area. Claims use a lease of `lease_minutes`.
     async fn new(lease_minutes: u64) -> Self {
         let project = TestProject::new().await;
         let bus = EventBus::new();
@@ -85,11 +84,6 @@ impl Fixture {
                 .unwrap();
         }
         let frontend = register(&agents, "frontend", &[]).await;
-        let ui = agents
-            .register_worker(&frontend.ctx, "ui", None)
-            .await
-            .unwrap()
-            .worker;
         let backend = register(&agents, "backend", &["main"]).await;
         Self {
             project,
@@ -97,7 +91,6 @@ impl Fixture {
             agents,
             tasks,
             frontend,
-            ui,
             backend,
         }
     }
@@ -140,7 +133,7 @@ async fn register(agents: &AgentService, name: &str, tags: &[&str]) -> Agent {
         .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &tags)
         .await
         .unwrap();
-    let main = agents.resolve_worker(&ctx, None).await.unwrap();
+    let main = agents.resolve_worker(&ctx).await.unwrap();
     Agent { ctx, main }
 }
 
@@ -274,7 +267,7 @@ async fn only_the_holder_releases_and_the_claim_frees_the_task() {
         .claim_task(&by(&fixture.frontend.main), t(1))
         .await
         .unwrap();
-    for intruder in [&fixture.backend.main, &fixture.ui] {
+    for intruder in [&fixture.backend.main] {
         let error = fixture
             .tasks
             .release_task(&by(intruder), t(1))
@@ -338,7 +331,7 @@ async fn a_call_from_any_tool_renews_every_claim_of_the_agent_with_last_call_at(
         .unwrap();
     fixture
         .tasks
-        .claim_task(&by(&fixture.ui), t(2))
+        .claim_task(&by(&fixture.frontend.main), t(2))
         .await
         .unwrap();
     fixture
@@ -351,7 +344,12 @@ async fn a_call_from_any_tool_renews_every_claim_of_the_agent_with_last_call_at(
     let now = fixture.advance(minutes(LEASE_MINUTES + 2));
     fixture
         .agents
-        .record_call(&fixture.frontend.ctx, &fixture.ui, "get_task_graph", None)
+        .record_call(
+            &fixture.frontend.ctx,
+            &fixture.frontend.main,
+            "get_task_graph",
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(fixture.renewed_at(t(1)).await, now);
@@ -385,11 +383,7 @@ async fn renewal_and_last_call_at_commit_together() {
         .await
         .unwrap();
     let start = fixture.project.now();
-    // A worker row that does not belong to the session's agent makes the renewal fail inside the write; the session stamp must roll back with it.
-    let broken = WorkerRow {
-        agent_id: -1,
-        ..fixture.frontend.main.clone()
-    };
+    // A trigger makes the renewal fail inside the write; the session stamp must roll back with it.
     fixture
         .project
         .store()
@@ -421,7 +415,6 @@ async fn renewal_and_last_call_at_commit_together() {
     .unwrap();
     assert_eq!(session.last_call_at, Some(start));
     assert_eq!(fixture.renewed_at(t(1)).await, start);
-    // A worker of another agent renews nothing and still stamps the session.
     fixture
         .project
         .store()
@@ -436,10 +429,15 @@ async fn renewal_and_last_call_at_commit_together() {
     let now = fixture.project.now();
     fixture
         .agents
-        .record_call(&fixture.frontend.ctx, &broken, "get_task", None)
+        .record_call(
+            &fixture.frontend.ctx,
+            &fixture.frontend.main,
+            "get_task",
+            None,
+        )
         .await
         .unwrap();
-    assert_eq!(fixture.renewed_at(t(1)).await, start);
+    assert_eq!(fixture.renewed_at(t(1)).await, now);
     let session = agents::find_session(
         fixture.project.store().read(),
         fixture.frontend.ctx.session_id,
@@ -640,34 +638,4 @@ async fn an_unregistered_worker_is_worker_not_found() {
         assert_eq!(refusal(release).code(), "worker_not_found", "{name}");
     }
     assert!(fixture.claim_events().await.is_empty());
-}
-
-#[tokio::test]
-async fn a_three_level_worker_claims_and_releases() {
-    let fixture = Fixture::new(LEASE_MINUTES).await;
-    let deep = fixture
-        .agents
-        .register_worker(
-            &fixture.frontend.ctx,
-            "deep",
-            Some(&WorkerName::parse("frontend/ui").unwrap()),
-        )
-        .await
-        .unwrap()
-        .worker;
-    let actor = fixture
-        .agents
-        .actor(&fixture.frontend.ctx, Some(&deep.name))
-        .await
-        .unwrap();
-    let view = fixture.tasks.claim_task(&actor, t(2)).await.unwrap().claim;
-    assert_eq!(view.holder.as_str(), "frontend/ui/deep");
-    fixture.tasks.release_task(&actor, t(2)).await.unwrap();
-    let actors: Vec<String> = fixture
-        .claim_events()
-        .await
-        .into_iter()
-        .map(|event| event.actor.to_string())
-        .collect();
-    assert_eq!(actors, ["frontend/ui/deep", "frontend/ui/deep"]);
 }

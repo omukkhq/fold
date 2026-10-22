@@ -166,7 +166,9 @@ impl Session {
     async fn worker_when(&self, name: &str, ready: impl Fn(&Value) -> bool) -> Value {
         let started = Instant::now();
         loop {
-            let listed = self.ok("list_workers", json!({})).await;
+            let listed = self
+                .ok("list_workers", json!({"include_stopped": true}))
+                .await;
             let found = listed["workers"]
                 .as_array()
                 .into_iter()

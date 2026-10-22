@@ -157,6 +157,7 @@ describe("activityLine", () => {
         version: 2,
         checks_failed: false,
         revision: null,
+        review_plan: null,
       },
       edits_after_version: false,
     };
@@ -194,6 +195,7 @@ describe("activityLine", () => {
         version: 1,
         checks_failed: false,
         revision: null,
+        review_plan: null,
       },
       edits_after_version: false,
     };

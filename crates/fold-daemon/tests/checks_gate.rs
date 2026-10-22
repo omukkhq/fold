@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use fold_core::policy::CHECKS_FILE_REASON;
 use fold_core::reviews::Verdict;
-use fold_core::reviews::checks::{RunReason, RunState};
+use fold_core::reviews::checks::{RunReason, RunState, Stage};
 use fold_core::roles::Role;
 use fold_core::{CheckRunId, TaskDescription, TaskStatus, TaskTitle, codes};
 use fold_daemon::services::reviews::Proposed;
@@ -86,6 +86,78 @@ async fn create_proposal_waits_for_green_checks_and_then_opens_the_proposal() {
         .unwrap();
     assert_eq!(view.checks.len(), 1);
     assert_eq!(view.checks[0].run.id, run);
+}
+
+#[tokio::test]
+async fn a_check_of_both_stages_runs_under_one_name_on_the_proposal_and_at_integration() {
+    let fx = Fixture::new().await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
+    workspace_with_checks(
+        &fx,
+        "[[check]]\nname = \"build\"\nrun = \"true\"\nstage = [\"proposal\", \"integration\"]\n",
+    )
+    .await;
+    let author = by(&fx.frontend.worker);
+    let run = checking(
+        fx.reviews
+            .create_proposal(&author, t(1), "Add checks", None)
+            .await
+            .unwrap(),
+    );
+    ended(&fx.reviews, run).await;
+    eventually(WAIT, async || {
+        fx.reviews
+            .get_proposal(p(1), None)
+            .await
+            .map(|_| ())
+            .map_err(|_| "no proposal")
+    })
+    .await;
+    assert_eq!(
+        mark(&fx, 1).await,
+        Some((CHECKS_FILE_REASON.to_owned(), "fold".to_owned())),
+        "a proposal that adds the checks file waits for a human"
+    );
+    fx.reviews
+        .submit_review(
+            &by(&fx.review.worker),
+            p(1),
+            1,
+            Verdict::Approve,
+            "ok",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    fx.reviews
+        .integrate_proposal(&human(), p(1), Some(1))
+        .await
+        .unwrap();
+    let stages = eventually(WAIT, async || {
+        let view = fx
+            .reviews
+            .view_proposal(&human(), p(1), None)
+            .await
+            .map_err(|_| "no view")?;
+        let finished: Vec<_> = view
+            .checks
+            .iter()
+            .filter(|run| run.run.state == RunState::Passed)
+            .map(|run| (run.run.stage, run.results[0].check.clone()))
+            .collect();
+        if finished.len() == 2 {
+            Ok(finished)
+        } else {
+            Err("the integration run has not ended")
+        }
+    })
+    .await;
+    for stage in [Stage::Proposal, Stage::Integration] {
+        assert!(
+            stages.contains(&(stage, Some("build".to_owned()))),
+            "{stage:?} run missing: {stages:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -283,10 +355,10 @@ async fn an_invalid_checks_file_refuses_the_proposal_at_once() {
     assert_eq!(proposals(&fx).await, 0);
 }
 
-/// `T-1` adds `fold-checks.toml` through a green proposal that a review lead approves and a human integrates, so main holds the file.
+/// `T-1` adds `fold-checks.toml` through a green proposal that a reviewer approves and a human integrates, so main holds the file.
 #[cfg(test)]
 async fn main_with_checks(fx: &Fixture) {
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     workspace_with_checks(fx, PASSING).await;
     let author = by(&fx.frontend.worker);
     let run = checking(

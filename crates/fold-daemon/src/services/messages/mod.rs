@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use fold_core::events::types;
 use fold_core::messages::resolve;
+use fold_core::tasks::areas::feedback_to;
 use fold_core::{
     Actor, Address, AddressedAs, AgentActor, AgentName, Choice, Clock, EventError, FoldError,
     HumanName, IdKind, MessageBody, MessageChoices, MessageId, NewEvent, ProposalId, Recipient,
     RequestId, Sender, Target, TaskId, Timestamp, WorkerName, codes, policy,
 };
-use fold_store::messages::{self, MessageHead, MessageRow, NewMessage, RecipientRow};
-use fold_store::tasks::claims;
+use fold_store::messages::{self, MessageHead, MessageLines, MessageRow, NewMessage, RecipientRow};
 use fold_store::{Store, StoreError, WriteTx, agents, counters, projects, reviews, tasks};
 use serde_json::json;
 use thiserror::Error;
@@ -21,12 +21,14 @@ use crate::services::events::{EventBuffer, EventBus};
 use crate::services::fired;
 
 mod asks;
+mod forward;
 mod inbox;
 mod threads;
 
 pub use asks::DismissScope;
-pub(crate) use inbox::record_pushed;
-pub use inbox::{InboxItem, unread_count};
+pub(crate) use forward::{forward_in_tx, tell_lead_in_tx};
+pub use inbox::{InboxItem, StopCarry, unread_count};
+pub(crate) use inbox::{carry_for_push, record_pushed};
 pub use threads::{
     DEFAULT_THREAD_LIMIT, Feedback, MAX_THREAD_LIMIT, ThreadPage, ThreadQuery, ThreadView,
 };
@@ -79,6 +81,8 @@ pub struct RecipientView {
     pub pushed_at: Option<Timestamp>,
     /// Whether a notice to the recipient's agent would reach one of its sessions now; `None` for a human, for an agent without a connected session, and for every recipient of a service without the project's push targets.
     pub reachable: Option<bool>,
+    /// The lead fold sent the message on to because the recipient, a stopped worker, could not start to answer it; the sender itself when the sender is that lead.
+    pub forwarded_to: Option<WorkerName>,
 }
 
 /// A message with public ids only.
@@ -102,6 +106,8 @@ pub struct MessageView {
     pub header: Option<String>,
     /// The sender marked the message as asking a human for an answer.
     pub asks_human: bool,
+    /// The lines of a version of the message's proposal that the message asks about.
+    pub lines: Option<MessageLines>,
 }
 
 fn recipient_view(row: RecipientRow) -> RecipientView {
@@ -112,6 +118,7 @@ fn recipient_view(row: RecipientRow) -> RecipientView {
         acknowledged_at: row.acked_at,
         pushed_at: row.pushed_at,
         reachable: None,
+        forwarded_to: row.forwarded_to,
     }
 }
 
@@ -130,6 +137,7 @@ fn message_view(row: MessageRow) -> MessageView {
         choices: row.choices,
         header: row.header,
         asks_human: row.asks_human,
+        lines: row.lines,
     }
 }
 
@@ -263,7 +271,7 @@ impl MessageService {
         let view = self
             .store
             .write(async |tx| {
-                require_sender(tx, actor).await?;
+                let sender_worker = require_sender(tx, actor).await?;
                 let parent = match input.reply_to {
                     Some(parent) => Some(
                         messages::find(tx.conn(), parent)
@@ -316,10 +324,19 @@ impl MessageService {
                     body: &input.body,
                     choices: choices.as_ref(),
                     asks_human: send.asks_human,
+                    lines: None,
                     recipients,
                     now,
                 };
                 let view = write_message(tx, &mut buffer, draft).await?;
+                // A reply also acknowledges the message it answers for a sender that received it.
+                if let (Some(worker), Some(parent)) = (&sender_worker, parent) {
+                    let changed =
+                        fold_store::messages::acknowledge(tx, worker.id, parent.id, false, now)
+                            .await?
+                            .unwrap_or_default();
+                    inbox::append_acknowledged(tx, &mut buffer, actor, &changed, now).await?;
+                }
                 #[cfg(feature = "failpoints")]
                 fail::fail_point!("send_message_in_transaction", |_| Err(fired(
                     "send_message_in_transaction"
@@ -337,7 +354,7 @@ impl MessageService {
         Ok(view)
     }
 
-    /// A human's feedback on `task`, linked to it. It goes to `to` when given, otherwise to the worker holding the task's implementation claim.
+    /// A human's feedback on `task`, linked to it. It goes to the task's readers only: to `to` when every entry names one, otherwise to the first reader, the claim holder when there is one.
     pub async fn send_feedback(
         &self,
         actor: &Actor,
@@ -354,15 +371,8 @@ impl MessageService {
             .store
             .write(async |tx| {
                 require_task(tx, task).await?;
-                let to = match to {
-                    Some(to) => to,
-                    None => {
-                        let holder = claims::unreleased_for_task(tx.conn(), task)
-                            .await?
-                            .ok_or_else(|| no_claim_holder(task))?;
-                        vec![Address::of_worker(&holder.worker)]
-                    }
-                };
+                let readers = crate::services::tasks::readers_in(tx.conn(), task).await?;
+                let to = feedback_to(task, to, &readers)?;
                 let directory = messages::directory(tx.conn(), humans).await?;
                 let recipients = resolve(&to, &directory, &sender).map_err(FoldError::from)?;
                 let draft = Draft {
@@ -376,6 +386,7 @@ impl MessageService {
                     body: &body,
                     choices: None,
                     asks_human: false,
+                    lines: None,
                     recipients,
                     now,
                 };
@@ -410,6 +421,8 @@ struct Draft<'a> {
     body: &'a MessageBody,
     choices: Option<&'a MessageChoices>,
     asks_human: bool,
+    /// The lines of a version of `proposal` the message asks about.
+    lines: Option<MessageLines>,
     recipients: Vec<Recipient>,
     now: Timestamp,
 }
@@ -479,6 +492,9 @@ async fn write_message(
         .and_then(MessageChoices::header)
         .map(str::to_owned);
     messages::insert_choices(tx, id, &choices, header.as_deref()).await?;
+    if let (Some(lines), Some(proposal)) = (&draft.lines, draft.proposal) {
+        messages::insert_lines(tx, id, proposal, lines).await?;
+    }
     let names: Vec<String> = draft
         .recipients
         .iter()
@@ -523,11 +539,13 @@ async fn write_message(
                 acknowledged_at: None,
                 pushed_at: None,
                 reachable: None,
+                forwarded_to: None,
             })
             .collect(),
         choices,
         header,
         asks_human: draft.asks_human,
+        lines: draft.lines,
     })
 }
 
@@ -551,8 +569,48 @@ pub(crate) async fn send_from_fold_in_tx(
         body,
         choices: None,
         asks_human: false,
+        lines: None,
         recipients,
         now,
+    };
+    write_message(tx, buffer, draft).await
+}
+
+/// A human's question to the worker `to` about `lines` of a version of `links.1`, or about the whole proposal, linked to the proposal and its task `links.0`.
+pub(crate) struct AuthorQuestion<'a> {
+    pub actor: &'a Actor,
+    pub to: WorkerName,
+    pub links: (TaskId, ProposalId),
+    pub body: &'a MessageBody,
+    /// `None` for a question about the whole proposal.
+    pub lines: Option<MessageLines>,
+    pub now: Timestamp,
+}
+
+/// Sends a question about lines of a proposal version, or about the whole proposal, inside the caller's transaction, as one message that starts its own thread. The worker is resolved as any other send resolves it. The caller publishes the buffer after the commit.
+pub(crate) async fn ask_author_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    question: AuthorQuestion<'_>,
+) -> Result<MessageView, MessageError> {
+    let sender = Sender::of(question.actor);
+    let directory = messages::directory(tx.conn(), Vec::new()).await?;
+    let recipients = resolve(&[Address::of_worker(&question.to)], &directory, &sender)
+        .map_err(FoldError::from)?;
+    let draft = Draft {
+        actor: question.actor,
+        sender: &sender,
+        task: Some(question.links.0),
+        proposal: Some(question.links.1),
+        request: None,
+        join: None,
+        parent: None,
+        body: question.body,
+        choices: None,
+        asks_human: false,
+        lines: question.lines,
+        recipients,
+        now: question.now,
     };
     write_message(tx, buffer, draft).await
 }
@@ -592,21 +650,25 @@ pub(crate) async fn ask_humans_in_tx(
         body: question.body,
         choices: question.choices,
         asks_human: false,
+        lines: None,
         recipients,
         now: question.now,
     };
     write_message(tx, buffer, draft).await
 }
 
-/// An agent sends through a registered worker; a human or the system needs no row.
-async fn require_sender(tx: &mut WriteTx, actor: &Actor) -> Result<(), MessageError> {
+/// The registered worker an agent sends through; a human or the system needs no row and gets `None`.
+async fn require_sender(
+    tx: &mut WriteTx,
+    actor: &Actor,
+) -> Result<Option<agents::WorkerRow>, MessageError> {
     let Actor::Agent(agent) = actor else {
-        return Ok(());
+        return Ok(None);
     };
-    if actor_worker(tx.conn(), agent).await?.is_none() {
-        return Err(worker_not_found().into());
+    match actor_worker(tx.conn(), agent).await? {
+        Some(worker) => Ok(Some(worker)),
+        None => Err(worker_not_found().into()),
     }
-    Ok(())
 }
 
 async fn require_task(tx: &mut WriteTx, task: TaskId) -> Result<(), MessageError> {
@@ -649,13 +711,4 @@ fn message_not_found(message: MessageId) -> FoldError {
         format!("{message} does not exist"),
     )
     .with_hint("call get_inbox to see your messages")
-}
-
-fn no_claim_holder(task: TaskId) -> FoldError {
-    FoldError::new(
-        codes::RECIPIENT_NOT_FOUND,
-        format!("{task} has no claim holder to receive the feedback"),
-    )
-    .with_details([("task", json!(task.to_string()))])
-    .with_hint("choose a recipient for the feedback")
 }

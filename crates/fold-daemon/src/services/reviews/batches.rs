@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fold_core::dag::Dag;
 use fold_core::events::types;
+use fold_core::policy::AgentStanding;
 use fold_core::reviews::{ScopeChoice, Side, Verdict, last_verdict_version};
 use fold_core::{
     Actor, AgentActor, CommentId, EventActor, FoldError, IdKind, NewEvent, ProposalId,
@@ -18,6 +19,7 @@ use fold_vcs::browse;
 use fold_vcs::compare::Totals;
 use serde_json::{Value, json};
 
+use super::batch_integration::{BatchIntegrationView, mark_ready_at_submission};
 use super::changes::ChangeRange;
 use super::checkouts::remove_unnamed_dir;
 use super::claims::{TAKEN_OVER, already_claimed, take_review_claim};
@@ -291,6 +293,8 @@ pub struct ReviewBatchView {
     pub verdicts: Vec<BatchVerdictView>,
     /// The comments about members together, each with the members it is on.
     pub comments: Vec<BatchCommentView>,
+    /// Whether the approved members integrate together now, wait for the others, or did.
+    pub integration: BatchIntegrationView,
 }
 
 /// A comment of a batch review about members together. Each member in `members` has a whole-version comment that points to it.
@@ -386,7 +390,7 @@ enum Inserted {
 
 /// Review batches: related open proposals one reviewer reviews together, with one checkout of all of them merged onto main and one verdict per member.
 impl ReviewService {
-    /// Makes a batch of two or more open proposals for the actor's worker and takes the review claim of each, all in one transaction, by the rules of `claim_review`: the author's agent and every agent that does not decide reviews are refused, a claim another worker holds refuses the whole batch, and a stale one is taken over. Members are placed in dependency order of their tasks, ties by task number. A proposal in another open batch is `already_in_batch`; the partial unique index on open members decides a race.
+    /// Makes a batch of two or more open proposals for the actor's worker and takes the review claim of each, all in one transaction, by the rules of `claim_review`: the author's agent and every agent that does not decide reviews are refused, a claim another worker holds refuses the whole batch, and a stale one is taken over. Members are placed in dependency order of their tasks, ties by task number. A proposal in another open batch is `already_in_batch`, and one that waits in a review plan `already_in_plan`; the partial unique index on open members decides a race.
     pub async fn create_review_batch(
         &self,
         actor: &Actor,
@@ -417,6 +421,7 @@ impl ReviewService {
                 for &proposal in &proposals {
                     let row =
                         require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
+                    super::refuse_planned(tx, proposal).await?;
                     let main_task = task_in_main_area(tx.conn(), row.task).await?;
                     let agent = policy::can_claim_review(actor, standing, &row.author, main_task)
                         .map_err(|denied| {
@@ -510,7 +515,8 @@ impl ReviewService {
     ) -> Result<BatchCheckout, ReviewError> {
         let read = self.store.read();
         let row = open_batch(batches::get_batch(read, batch).await?, batch)?;
-        batch_gate(actor, &row)?;
+        let standing = agents::standing_of(read, actor).await?;
+        review_gate(actor, standing, &row)?;
         let members = open_members(batches::members(read, batch).await?);
         let merged_members = member_versions(&members);
         if let Some(existing) = batches::active_batch_checkout(read, batch).await? {
@@ -532,13 +538,7 @@ impl ReviewService {
             FoldError::new(codes::REVISION_NOT_FOUND, "main has no revision")
                 .with_hint("run `fld init` to create the first revision")
         })?;
-        let inputs = members
-            .iter()
-            .map(|member| BatchMember {
-                base: member.base_tree,
-                tree: member.tree,
-            })
-            .collect();
+        let inputs = merge_inputs(&members);
         let locks = self.workspaces.lock_for_integration(None).await;
         let merged = self
             .workspaces
@@ -645,12 +645,12 @@ impl ReviewService {
         check_verdict_shapes(&verdicts)?;
         let read = self.store.read();
         let row = open_batch(batches::get_batch(read, batch).await?, batch)?;
-        batch_gate(actor, &row)?;
+        let standing = agents::standing_of(read, actor).await?;
+        review_gate(actor, standing, &row)?;
         let members = open_members(batches::members(read, batch).await?);
         for verdict in &verdicts {
             member_of(&members, batch, verdict.proposal)?;
         }
-        let standing = agents::standing_of(read, actor).await?;
         let mut conn = read.acquire().await.map_err(StoreError::from)?;
         for verdict in &verdicts {
             if let Some(proposal) = reviews::get_proposal(&mut *conn, verdict.proposal).await? {
@@ -826,6 +826,7 @@ impl ReviewService {
                         })).collect::<Vec<Value>>(),
                     }))?;
                 buffer.append(tx, &event, now).await?;
+                mark_ready_at_submission(tx, batch, now).await?;
                 Ok::<_, ReviewError>(SubmittedBatch {
                     batch,
                     reviewed,
@@ -930,6 +931,7 @@ impl ReviewService {
                 created_at: comment.created_at,
             })
             .collect();
+        let integration = self.batch_integration_view(row.id).await?;
         Ok(ReviewBatchView {
             id: row.id,
             holder: row.holder,
@@ -941,6 +943,7 @@ impl ReviewService {
             checkout,
             verdicts,
             comments,
+            integration,
         })
     }
 
@@ -1087,6 +1090,17 @@ fn member_versions(members: &[MemberRow]) -> Vec<(ProposalId, u32)> {
     members
         .iter()
         .map(|member| (member.proposal, member.version))
+        .collect()
+}
+
+/// The merge inputs of `members` in their order: each member's batched version against its own base. A batch checkout and the batch's merged change both merge these, so they hold the same tree.
+pub(super) fn merge_inputs(members: &[MemberRow]) -> Vec<BatchMember> {
+    members
+        .iter()
+        .map(|member| BatchMember {
+            base: member.base_tree,
+            tree: member.tree,
+        })
         .collect()
 }
 
@@ -1243,14 +1257,26 @@ fn check_verdict_body(verdict: &BatchVerdict, comments: usize) -> Result<(), Rev
 }
 
 fn batch_gate<'a>(actor: &'a Actor, row: &BatchRow) -> Result<&'a AgentActor, ReviewError> {
-    policy::can_review_batch(actor, &row.holder).map_err(|denied| {
-        FoldError::from(denied)
-            .with_details([
-                ("batch", json!(row.id.to_string())),
-                ("holder", json!(row.holder.as_str())),
-            ])
-            .into()
-    })
+    policy::can_change_batch(actor, &row.holder).map_err(|denied| batch_denied(denied, row))
+}
+
+/// The gate of a checkout or a submit of the batch, which review it: the holder's agent, and never the review lead.
+fn review_gate<'a>(
+    actor: &'a Actor,
+    standing: AgentStanding,
+    row: &BatchRow,
+) -> Result<&'a AgentActor, ReviewError> {
+    policy::can_review_batch(actor, standing, &row.holder)
+        .map_err(|denied| batch_denied(denied, row))
+}
+
+fn batch_denied(denied: policy::PolicyDenied, row: &BatchRow) -> ReviewError {
+    FoldError::from(denied)
+        .with_details([
+            ("batch", json!(row.id.to_string())),
+            ("holder", json!(row.holder.as_str())),
+        ])
+        .into()
 }
 
 fn open_batch(row: Option<BatchRow>, batch: ReviewBatchId) -> Result<BatchRow, ReviewError> {
@@ -1269,7 +1295,7 @@ fn open_batch(row: Option<BatchRow>, batch: ReviewBatchId) -> Result<BatchRow, R
     .into())
 }
 
-fn batch_not_found(batch: ReviewBatchId) -> ReviewError {
+pub(super) fn batch_not_found(batch: ReviewBatchId) -> ReviewError {
     FoldError::new(
         codes::REVIEW_BATCH_NOT_FOUND,
         format!("{batch} does not exist"),

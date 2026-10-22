@@ -2,10 +2,10 @@ use crate::actor::{Actor, AgentActor};
 use crate::agents::WorkerName;
 use crate::error::codes;
 
-use super::PolicyDenied;
+use super::{AgentStanding, PolicyDenied, Starter, can_review};
 
-/// A review batch holds the review claims of its members for the worker that created it, so only that worker's agent changes, checks out or submits it, through any of its workers, as with a single review claim. `holder` is the batch's worker.
-pub fn can_review_batch<'a>(
+/// A review batch holds the review claims of its members for the worker that created it, so only that worker's agent changes it, as with a single review claim. `holder` is the batch's worker.
+pub fn can_change_batch<'a>(
     actor: &'a Actor,
     holder: &WorkerName,
 ) -> Result<&'a AgentActor, PolicyDenied> {
@@ -19,10 +19,46 @@ pub fn can_review_batch<'a>(
     }
 }
 
+/// Checking out and submitting a batch review it, so besides [`can_change_batch`] the review lead is refused, which never reviews ([`can_review`]). `standing` is the acting agent's.
+pub fn can_review_batch<'a>(
+    actor: &'a Actor,
+    standing: AgentStanding,
+    holder: &WorkerName,
+) -> Result<&'a AgentActor, PolicyDenied> {
+    can_review(standing)?;
+    can_change_batch(actor, holder)
+}
+
+/// The review lead groups related proposals, so only it makes, changes and starts a review plan; it starts the plan's reviewer as it starts every reviewer. `starter` is the acting agent's standing as a starter of workers.
+pub fn can_plan_reviews(starter: &Starter) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::ReviewLead => Ok(()),
+        _ => Err(PolicyDenied {
+            code: codes::REVIEW_PLAN_DENIED,
+            message: "only the review lead plans which related proposals one reviewer reviews together",
+            hint: "tell the review lead with send_message which proposals belong together",
+        }),
+    }
+}
+
+/// The review lead changes its review plans in every way. The main agent, only on the user's word as with its other review powers, may take members out of an open plan or close it, so a plan never holds its proposals back while no review lead starts it; adding is the review lead's grouping. `adds` is whether the change adds proposals or tasks.
+pub fn can_change_plan(starter: &Starter, adds: bool) -> Result<(), PolicyDenied> {
+    match starter {
+        Starter::MainAgent if adds => Err(PolicyDenied {
+            code: codes::REVIEW_PLAN_DENIED,
+            message: "the main agent only takes members out of a review plan or closes it; the review lead groups proposals",
+            hint: "call change_review_plan with remove or close only, or tell the review lead with send_message",
+        }),
+        Starter::MainAgent => Ok(()),
+        _ => can_plan_reviews(starter),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agents::HumanName;
+    use crate::agents::roles::Role;
 
     fn agent(worker: &str) -> Actor {
         let worker = WorkerName::parse(worker).unwrap();
@@ -33,18 +69,75 @@ mod tests {
         })
     }
 
+    const REVIEWER: AgentStanding = AgentStanding {
+        holds_main: false,
+        role: Some(Role::Reviewer),
+    };
+
     #[test]
     fn only_the_holder_agent_acts_on_a_batch() {
-        let holder = WorkerName::parse("review/batch").unwrap();
-        assert!(can_review_batch(&agent("review/batch"), &holder).is_ok());
-        assert!(can_review_batch(&agent("review"), &holder).is_ok());
+        let holder = WorkerName::parse("reviewer-1/batch").unwrap();
+        assert!(can_change_batch(&agent("reviewer-1/batch"), &holder).is_ok());
+        assert!(can_review_batch(&agent("reviewer-1"), REVIEWER, &holder).is_ok());
         for actor in [
             agent("frontend"),
             Actor::human(HumanName::parse("tanim").unwrap()),
             Actor::System,
         ] {
-            let denied = can_review_batch(&actor, &holder).unwrap_err();
+            let denied = can_change_batch(&actor, &holder).unwrap_err();
+            assert_eq!(denied.code(), codes::NOT_CLAIM_HOLDER);
+            let denied = can_review_batch(&actor, AgentStanding::NO_RIGHTS, &holder).unwrap_err();
             assert_eq!(denied.code(), codes::NOT_CLAIM_HOLDER);
         }
+    }
+
+    #[test]
+    fn only_the_review_lead_plans_reviews() {
+        assert!(can_plan_reviews(&Starter::ReviewLead).is_ok());
+        for starter in [
+            Starter::MainAgent,
+            Starter::Human,
+            Starter::System,
+            Starter::Unsupervised,
+            Starter::ShortLived,
+        ] {
+            let denied = can_plan_reviews(&starter).unwrap_err();
+            assert_eq!(denied.code(), codes::REVIEW_PLAN_DENIED);
+            assert!(denied.hint().contains("review lead"));
+        }
+    }
+
+    #[test]
+    fn the_main_agent_only_takes_members_out_of_a_plan_or_closes_it() {
+        assert!(can_change_plan(&Starter::ReviewLead, true).is_ok());
+        assert!(can_change_plan(&Starter::ReviewLead, false).is_ok());
+        assert!(can_change_plan(&Starter::MainAgent, false).is_ok());
+        let denied = can_change_plan(&Starter::MainAgent, true).unwrap_err();
+        assert_eq!(denied.code(), codes::REVIEW_PLAN_DENIED);
+        assert!(denied.hint().contains("remove or close"));
+        for starter in [
+            Starter::Human,
+            Starter::System,
+            Starter::Unsupervised,
+            Starter::ShortLived,
+        ] {
+            for adds in [true, false] {
+                let denied = can_change_plan(&starter, adds).unwrap_err();
+                assert_eq!(denied.code(), codes::REVIEW_PLAN_DENIED);
+            }
+        }
+    }
+
+    #[test]
+    fn the_review_lead_changes_its_own_batch_but_never_reviews_one() {
+        let holder = WorkerName::parse("review").unwrap();
+        let lead = AgentStanding {
+            holds_main: false,
+            role: Some(Role::ReviewLead),
+        };
+        assert!(can_change_batch(&agent("review"), &holder).is_ok());
+        let denied = can_review_batch(&agent("review"), lead, &holder).unwrap_err();
+        assert_eq!(denied.code(), codes::REVIEW_LEAD_DELEGATES);
+        assert!(denied.hint().contains("start_worker"));
     }
 }

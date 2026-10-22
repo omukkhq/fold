@@ -22,6 +22,8 @@ mod fresh;
 mod gate;
 mod launch;
 mod lines;
+mod main;
+mod message;
 mod questions;
 mod refresh;
 mod restart;
@@ -140,6 +142,8 @@ struct Running {
     detached: Arc<AtomicBool>,
     /// Set once the process is reaped, after which its pid may belong to another process and is never signalled.
     reaped: Arc<AtomicBool>,
+    /// The user turns written to the process's stdin that no result has ended yet. Claude Code queues a turn written during another one, and a worker whose next turn waits in that queue has not answered it.
+    open_turns: Arc<AtomicU64>,
 }
 
 /// The worker processes of one project, in memory, with the task that stops a short-lived worker once its work is done. Every process is spawned with `kill_on_drop`, so none outlives the handle.
@@ -180,6 +184,16 @@ struct Inner {
     held_lost: Mutex<HashMap<AgentName, Option<String>>>,
     /// Set when the daemon started while the project was paused, so the resume of the pause resumes the workers that could not reach fold, as the daemon start would have.
     unreachable_owed: AtomicBool,
+    /// The workers that fold started again to answer a message, which stop once they have answered.
+    answering: Mutex<HashSet<AgentName>>,
+    /// The workers whose start for a message is under way, so two events start one.
+    message_starts: Mutex<HashSet<AgentName>>,
+    /// Who runs the main agent now: the interactive main sessions and a start of the supervised main.
+    main_gate: Mutex<main::MainGate>,
+    /// While a start of the supervised main is under way, the turns that came meanwhile, for its process.
+    main_waking: Mutex<Option<Vec<String>>>,
+    /// Wakes the project's removal of closed workspace directories, which follows only stored events: the supervised main's turn ends with none, and its closed workspaces become due once it is idle.
+    cleanup_due: Mutex<Option<Arc<tokio::sync::Notify>>>,
 }
 
 impl Drop for Inner {
@@ -195,8 +209,6 @@ impl Drop for Inner {
 struct Process {
     id: i64,
     agent: AgentName,
-    /// The row's cost before this process, to which the process's running total adds.
-    base_cost: u64,
     generation: u64,
     /// The process id that the row records while this process runs.
     pid: Option<u32>,
@@ -207,6 +219,8 @@ struct Process {
     /// The worker row's Claude Code session id.
     session_id: String,
     stderr: stderr::StderrTail,
+    /// Shared with [`Running::open_turns`].
+    open_turns: Arc<AtomicU64>,
 }
 
 impl Supervisor {
@@ -239,6 +253,11 @@ impl Supervisor {
                 registry: Mutex::new(None),
                 held_lost: Mutex::new(HashMap::new()),
                 unreachable_owed: AtomicBool::new(false),
+                answering: Mutex::new(HashSet::new()),
+                message_starts: Mutex::new(HashSet::new()),
+                main_gate: Mutex::new(main::MainGate::default()),
+                main_waking: Mutex::new(None),
+                cleanup_due: Mutex::new(None),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();
@@ -249,6 +268,11 @@ impl Supervisor {
 
     pub fn set_launcher(&self, launcher: Launcher) {
         *lock(&self.inner.launcher) = launcher;
+    }
+
+    /// The notifier of the project's removal of closed workspace directories, which the end of each turn of the supervised main wakes.
+    pub fn set_cleanup_due(&self, due: Arc<tokio::sync::Notify>) {
+        *lock(&self.inner.cleanup_due) = Some(due);
     }
 
     /// Where the workers' Claude Code keeps the transcript of each session of `ids`, in the order of `ids`: the folder of the launcher's environment, a relative one in the project folder, where every worker runs, which is followed to its real path as Claude Code names it. Each is `None` when fold cannot tell; see [`transcript_path`].

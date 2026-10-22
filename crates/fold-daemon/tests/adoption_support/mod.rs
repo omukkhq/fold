@@ -277,7 +277,7 @@ async fn register(agents: &AgentService, name: &str, tags: &[&str]) -> WorkerRow
         .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &tags)
         .await
         .unwrap();
-    agents.resolve_worker(&ctx, None).await.unwrap()
+    agents.resolve_worker(&ctx).await.unwrap()
 }
 
 /// `README.md` and `src/lib.rs` holding `lib`, with the blobs stored.

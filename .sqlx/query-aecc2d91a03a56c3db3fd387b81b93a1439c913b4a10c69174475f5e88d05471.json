@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT number AS \"number!: i64\" FROM review_plans\n           WHERE state = 'open' AND wait_ended_at IS NULL AND deadline_at <= ?\n           ORDER BY number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_plans",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "aecc2d91a03a56c3db3fd387b81b93a1439c913b4a10c69174475f5e88d05471"
+}

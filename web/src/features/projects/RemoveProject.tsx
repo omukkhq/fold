@@ -38,6 +38,7 @@ export function RemoveProject({ project }: { project: ProjectSummary }) {
         <Button
           variant="ghost"
           size="sm"
+          className="text-danger hover:bg-danger-soft"
           icon={<FolderMinus aria-hidden="true" size={13} />}
           aria-label={`Remove ${project.name} from fold`}
         >

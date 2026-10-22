@@ -19,7 +19,6 @@ use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::events::{ChangeKind, LiveWorkspace};
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::router;
 use fold_daemon::jobs::{JobProgress, spawn_live};
 use fold_daemon::live::{LiveConfig, LiveState, WatchMode, WorkspaceLive};
 use fold_daemon::projects::{ProjectHandle, Projects};
@@ -320,7 +319,7 @@ async fn register(agents: &AgentService, name: &str) -> WorkerRow {
         .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &[])
         .await
         .unwrap();
-    agents.resolve_worker(&ctx, None).await.unwrap()
+    agents.resolve_worker(&ctx).await.unwrap()
 }
 
 type FileRow = (String, Option<String>, ChangeKind, u32, u32);
@@ -962,10 +961,13 @@ async fn archiving_a_task_through_the_routes_detaches_its_workspace() {
         .header(CLIENT_HEADER, "test")
         .method(Method::POST)
         .uri("/api/v1/projects/demo/tasks/T-1/archive")
-        .header("cookie", "fold_human=ana")
         .body(Body::empty())
         .unwrap();
-    let response = router(state).oneshot(request).await.unwrap();
+    let response = crate::common::signed_in_router(&state, "ana")
+        .await
+        .oneshot(request)
+        .await
+        .unwrap();
     assert!(response.status().is_success(), "{}", response.status());
     assert!(handle.live.get(view.id).is_none());
     let WorkspaceError::Fold(error) = handle.live.rescan(view.id).await.unwrap_err() else {

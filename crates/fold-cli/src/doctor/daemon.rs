@@ -79,7 +79,7 @@ pub(crate) fn header_lines(
     } = daemon
     {
         lines.push(format!(
-            "daemon web interface: http://{}",
+            "daemon web interface: http://{}; fld web prints a sign-in link",
             output::escape_control(listen)
         ));
     }
@@ -338,7 +338,7 @@ mod tests {
                 "fld 0.3.1 at /home/ana/.local/bin/fld",
                 "daemon: fold 0.3.0, pid 4242, started 2026-09-21T14:13:20.000Z by the systemd user service fold.service",
                 "daemon socket: /run/user/1000/fold/fold.sock",
-                "daemon web interface: http://127.0.0.1:7420",
+                "daemon web interface: http://127.0.0.1:7420; fld web prints a sign-in link",
             ]
         );
         assert!(

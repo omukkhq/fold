@@ -256,6 +256,22 @@ export function threadsCovering(
   return threads.filter((t) => isSelected(t.range, path, point));
 }
 
+/** The marks whose range holds one of a row's lines, each once, and whether the row holds the first line of its range. */
+export function marksAt(
+  marks: readonly DiffThread[],
+  path: string,
+  points: readonly LinePoint[],
+): { mark: DiffThread; first: boolean }[] {
+  return marks
+    .filter((m) => points.some((p) => isSelected(m.range, path, p)))
+    .map((mark) => ({
+      mark,
+      first: points.some(
+        (p) => p.side === mark.range.side && p.line === mark.range.start_line,
+      ),
+    }));
+}
+
 /** The threads that end on the line; they show under it. */
 export function threadsEndingAt(
   threads: readonly DiffThread[],

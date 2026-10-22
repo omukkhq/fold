@@ -8,7 +8,7 @@ use fold_core::{Actor, AgentActor, AgentName, EventFilter, FoldError, TaskId, Wo
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::{openapi, router};
+use fold_daemon::http::{openapi, socket_router};
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::AgentService;
 use fold_daemon::services::tasks::{self, TaskError};
@@ -20,8 +20,9 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use crate::common::signed_in_router;
+
 const BASE: &str = "/api/v1/projects/demo";
-const ANA: (&str, &str) = ("cookie", "fold_human=ana");
 
 #[cfg(test)]
 struct Fixture {
@@ -64,28 +65,22 @@ impl Fixture {
         })
     }
 
-    fn http(&self) -> Router {
-        router(self.state.clone())
-    }
-
     async fn send(&self, method: Method, path: &str, body: Option<Value>) -> (StatusCode, Value) {
-        self.send_as(method, path, body, &[ANA]).await
+        self.send_as(method, path, body, Some("ana")).await
     }
 
+    /// Sends the request through the TCP router signed in as `human`, or over the socket without a human, the only transport where a request names none.
     async fn send_as(
         &self,
         method: Method,
         path: &str,
         body: Option<Value>,
-        headers: &[(&str, &str)],
+        human: Option<&str>,
     ) -> (StatusCode, Value) {
         let mut request = Request::builder()
             .header(CLIENT_HEADER, "test")
             .method(method)
             .uri(format!("{BASE}{path}"));
-        for (name, value) in headers {
-            request = request.header(*name, *value);
-        }
         let body = match body {
             Some(value) => {
                 request = request.header("content-type", "application/json");
@@ -93,11 +88,11 @@ impl Fixture {
             }
             None => Body::empty(),
         };
-        let response = self
-            .http()
-            .oneshot(request.body(body).unwrap())
-            .await
-            .unwrap();
+        let router: Router = match human {
+            Some(human) => signed_in_router(&self.state, human).await,
+            None => socket_router(self.state.clone()),
+        };
+        let response = router.oneshot(request.body(body).unwrap()).await.unwrap();
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         let value = if bytes.is_empty() {
@@ -562,7 +557,7 @@ async fn reads_and_writes_return_the_declared_shapes() {
             .any(|e| e["type"] == "task.created" && e["actor"] == "human:ana")
     );
     assert!(history[0]["seq"].as_u64() > history[1]["seq"].as_u64());
-    let (_, anonymous) = fx.send_as(Method::GET, "/tasks/T-1", None, &[]).await;
+    let (_, anonymous) = fx.send_as(Method::GET, "/tasks/T-1", None, None).await;
     assert_eq!(anonymous["can_change_human_review"], false);
     let board = fx.ok(Method::GET, "/board", None).await;
     let card = &board["columns"][1]["cards"][0];
@@ -829,13 +824,13 @@ async fn errors_use_the_envelope_and_a_declared_status() {
     assert_eq!(history["error"]["details"]["reason"], "task_has_history");
 
     let (status, value) = fx
-        .send_as(Method::POST, "/tasks", Some(json!({"title": "x"})), &[])
+        .send_as(Method::POST, "/tasks", Some(json!({"title": "x"})), None)
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_declared("post", "/tasks", status, &value);
-    let (status, value) = fx.send_as(Method::GET, "/board", None, &[]).await;
+    let (status, value) = fx.send_as(Method::GET, "/board", None, None).await;
     assert_eq!(status, StatusCode::OK, "reads need no human: {value}");
-    let (status, missing) = fx.send_as(Method::GET, "/nope/board", None, &[]).await;
+    let (status, missing) = fx.send_as(Method::GET, "/nope/board", None, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
 }
 

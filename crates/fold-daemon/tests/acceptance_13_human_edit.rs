@@ -36,7 +36,7 @@ fn proposal_path(proposal: &str, rest: &str) -> String {
     format!("/api/v1/projects/{SLUG}/proposals/{proposal}{rest}")
 }
 
-/// Acceptance 13: on a task with the human review mark, backend proposes and the review lead approves. The marked human changes one file over HTTP; the change is a new version under the human's name that keeps the review lead's approval, never a human's, and backend gets a push to sync. Backend cannot record until its sync writes the edit into its files. The human sends the edit for review again, which withdraws the kept approval and wakes the review lead; the review lead and the human approve the edited version, and it integrates with the human's change.
+/// Acceptance 13: on a task with the human review mark, backend proposes and the reviewer `review` approves. The marked human changes one file over HTTP; the change is a new version under the human's name that keeps the reviewer's approval, never a human's, and backend gets a push to sync. Backend cannot record until its sync writes the edit into its files. The human sends the edit for review again, which withdraws the kept approval and wakes the reviewer, which holds the review claim; the reviewer and the human approve the edited version, and it integrates with the human's change.
 #[tokio::test]
 async fn acceptance_13_a_human_edit_in_a_human_review_keeps_the_approval_until_it_is_sent_for_review_again()
  {
@@ -59,6 +59,7 @@ async fn acceptance_13_a_human_edit_in_a_human_review_keeps_the_approval_until_i
         .propose("backend", &work, "Add the login endpoint")
         .await;
     wait_for_edits(&harness, &task, false).await;
+    harness.give_review("review", &proposal).await;
     harness.approve(&proposal).await;
 
     let (code, refused) = harness
@@ -98,7 +99,7 @@ async fn acceptance_13_a_human_edit_in_a_human_review_keeps_the_approval_until_i
     assert_eq!(made["created_by"], format!("human:{HUMAN}"));
     assert_eq!(made["human_edit"], true);
 
-    // The worker hears about the edit, and the edit keeps the review lead's approval.
+    // The worker hears about the edit, and the edit keeps the reviewer's approval.
     let notice = notice_with(&mut backend_inbox, "a human edited").await;
     assert!(notice.contains(&format!("a human edited {proposal} as version 2")));
     assert!(notice.contains("sync_workspace"), "{notice}");
@@ -138,7 +139,7 @@ async fn acceptance_13_a_human_edit_in_a_human_review_keeps_the_approval_until_i
     assert_eq!(std::fs::read_to_string(&on_disk).unwrap(), EDITED);
     wait_for_edits(&harness, &task, false).await;
 
-    // Sent for review again, the kept approval stops counting and the review lead gets the turn.
+    // Sent for review again, the kept approval stops counting and the reviewer gets the turn.
     let (code, summary) = harness
         .http(
             Method::POST,

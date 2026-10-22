@@ -1,0 +1,5 @@
+## Task kinds
+
+A task of kind `no_proposal` has no workspace or proposal. Its task worker holds its claim from the start; use only the external resources and tools within its scope, then call `report_task(id, note)` with the result's location or id, checks and verification steps. `create_workspace` and `create_proposal` refuse it with `task_kind_mismatch`. Its lead, the main agent or a human reads `get_task`, inspects the result and verifies acceptance before `complete_task(id)` or `send_back_task(id, note)`. Only a human completes a marked task; an agent gets `human_approval_missing`. The task worker corrects the same result after a send-back and reports again.
+
+A task of kind `human` is work a person does outside fold. No agent claims it or works on it: `claim_task`, `create_workspace`, `create_proposal` and `start_worker` refuse it with `task_needs_human`. A human, or the main agent when the user says the work is done, marks it Done with `complete_task(id)`, and the tasks that need it unblock. A task with a blocker is refused with `task_on_hold` until a human or the main agent clears the blocker.

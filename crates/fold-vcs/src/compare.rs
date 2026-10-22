@@ -90,6 +90,15 @@ impl State {
         }
     }
 
+    /// Recorded entries some of whose content, by hash, lives only in `blobs`.
+    pub(crate) fn with_blobs(entries: FlatTree, blobs: BTreeMap<ObjectHash, Vec<u8>>) -> Self {
+        Self {
+            entries,
+            working: None,
+            blobs,
+        }
+    }
+
     pub fn entries(&self) -> &FlatTree {
         &self.entries
     }

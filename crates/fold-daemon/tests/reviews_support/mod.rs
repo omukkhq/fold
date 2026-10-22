@@ -149,7 +149,7 @@ impl Fixture {
             crate::common::roles::give_role(
                 project.store(),
                 "review",
-                fold_core::roles::Role::ReviewLead,
+                fold_core::roles::Role::Reviewer,
                 None,
             )
             .await;
@@ -185,7 +185,7 @@ impl Fixture {
         }
     }
 
-    /// [`Fixture::new`] with `review` as the review lead and `backend` as the main agent, since only they claim a review.
+    /// [`Fixture::new`] with `review` as a reviewer and `backend` as the main agent: the main agent claims a review itself, and a reviewer gets its claim as the review lead's `start_worker` gives it.
     pub async fn with_reviewers() -> Self {
         Self::build(Cast::Reviewers).await
     }
@@ -335,15 +335,6 @@ impl Fixture {
             .advance(Duration::from_secs(minutes * 60))
             .unwrap();
     }
-
-    /// A subagent worker `<agent>/<segment>` of a registered agent.
-    pub async fn subagent(&self, agent: &Agent, segment: &str) -> WorkerRow {
-        self.agents
-            .register_worker(&agent.ctx, segment, None)
-            .await
-            .unwrap()
-            .worker
-    }
 }
 
 /// A workspace service over the project that shares `objects` and `locks`, as `WorkspaceService::for_project` shares the project's.
@@ -373,7 +364,7 @@ async fn register(agents: &AgentService, name: &str, tags: &[&str]) -> Agent {
         .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &tags)
         .await
         .unwrap();
-    let worker = agents.resolve_worker(&ctx, None).await.unwrap();
+    let worker = agents.resolve_worker(&ctx).await.unwrap();
     Agent { ctx, worker }
 }
 

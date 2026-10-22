@@ -59,7 +59,7 @@ async fn last_from_fold(harness: &Harness, agent: &str) -> String {
     .unwrap()
 }
 
-/// Acceptance 18: backend adds a project's checks with its work. `run_checks` fails on the first try and its message names the check and the log; the fixed work's `create_proposal` waits for green proposal checks and fold opens the proposal. Because the proposal adds `fold-checks.toml`, it gets the human review mark, so the review lead's approval alone does not integrate it. Review reads the stored results instead of running the checks, the human integrates, the integration waits in the queue for the integration checks on the merge with main, and main moves only after they pass.
+/// Acceptance 18: backend adds a project's checks with its work. `run_checks` fails on the first try and its message names the check and the log; the fixed work's `create_proposal` waits for green proposal checks and fold opens the proposal. Because the proposal adds `fold-checks.toml`, it gets the human review mark, so the reviewer's approval alone does not integrate it. Review reads the stored results instead of running the checks, the human integrates, the integration waits in the queue for the integration checks on the merge with main, and main moves only after they pass.
 #[tokio::test]
 async fn acceptance_18_checks_gate_the_proposal_and_the_integration() {
     let harness = Harness::start().await;

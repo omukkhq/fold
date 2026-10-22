@@ -3,7 +3,9 @@ use crate::agents::{AgentName, HumanName};
 use crate::events::EventActor;
 use crate::tasks::define_names;
 
+pub mod batches;
 pub mod checks;
+pub mod plans;
 
 /// The longest reason a review command takes, in characters: why a proposal closes, why a reviewer gives a review claim up, or why a human must look.
 pub const MAX_REASON_CHARS: usize = 500;
@@ -70,7 +72,7 @@ impl Side {
 /// The weight of a review's author, read from the agent's tag and role when the review is read rather than when it was written, so an agent that hands the `main` tag on withdraws the weight of its approvals.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Approver {
-    /// An agent that [decides reviews](crate::policy::AgentStanding::decides_reviews).
+    /// An agent that [acts on reviews](crate::policy::AgentStanding::acts_on_reviews), whose approval counts.
     DecidingAgent,
     OtherAgent,
     Human(HumanName),

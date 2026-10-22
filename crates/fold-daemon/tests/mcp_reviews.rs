@@ -4,7 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::common::roles::give_role;
+use crate::common::roles::{give_main_tag, give_review_claim, give_role};
 use crate::proposal_tools_support::Fixture;
 use fold_core::roles::Role;
 use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource};
@@ -164,11 +164,26 @@ async fn grant_role(fx: &Fixture, name: &str, role: Role) {
     give_role(&fx.handle.store, name, role, None).await;
 }
 
-/// `review` is the review lead; its client reads its standing on every call.
+/// `review` is a reviewer; its client reads its standing on every call.
 #[cfg(test)]
-async fn review_lead(fx: &Fixture) -> Client {
+async fn reviewer(fx: &Fixture) -> Client {
     let review = connect(fx, "review").await;
-    grant_role(fx, "review", Role::ReviewLead).await;
+    grant_role(fx, "review", Role::Reviewer).await;
+    review
+}
+
+/// Gives the reviewer `review` the review claim of `P-1`, as the review lead's `start_worker` gives it.
+#[cfg(test)]
+async fn give_p1(fx: &Fixture) {
+    let p1 = "P-1".parse().unwrap();
+    give_review_claim(&fx.handle.store, "review", p1, fx.handle.clock.now()).await;
+}
+
+/// `review` is the main agent, which claims a review itself when the user tells it to.
+#[cfg(test)]
+async fn main_reviewer(fx: &Fixture) -> Client {
+    let review = connect(fx, "review").await;
+    give_main_tag(&fx.handle.store, "review").await;
     review
 }
 
@@ -194,9 +209,9 @@ async fn create_proposal_opens_v1_and_moves_the_task_to_review() {
 async fn list_proposals_shows_turn_claim_and_mark() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = review_lead(&fx).await;
+    let review = reviewer(&fx).await;
     open_p1(&fx, &frontend).await;
-    ok(&review, "claim_review", json!({"id": "P-1"})).await;
+    give_p1(&fx).await;
     ok(
         &review,
         "require_human_review",
@@ -228,7 +243,7 @@ async fn list_proposals_shows_turn_claim_and_mark() {
 async fn get_proposal_shows_versions_gates_and_files() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = review_lead(&fx).await;
+    let review = reviewer(&fx).await;
     open_p1(&fx, &frontend).await;
     let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
     assert_eq!(view["id"], "P-1");
@@ -237,12 +252,29 @@ async fn get_proposal_shows_versions_gates_and_files() {
     assert_eq!(view["version"], "v1");
     assert_eq!(view["current_version"], "v1");
     assert_eq!(view["base"], "r1");
-    assert_eq!(view["evidence"], "tests pass");
+    assert_eq!(view.get("evidence"), None);
+    assert_eq!(view["evidence_chars"], "tests pass".len());
     assert_eq!(view["versions"].as_array().unwrap().len(), 1);
     assert_eq!(
         view["task"],
-        json!({"id": "T-1", "title": "report", "status": "review", "description": "what to build"})
+        json!({"id": "T-1", "title": "report", "status": "review"})
     );
+    let full = ok(
+        &review,
+        "get_proposal",
+        json!({"id": "P-1", "detail": "full"}),
+    )
+    .await;
+    assert_eq!(full["evidence"], "tests pass");
+    assert_eq!(full.get("evidence_chars"), None);
+    assert_eq!(full["task"]["description"], "what to build");
+    let error = err(
+        &review,
+        "get_proposal",
+        json!({"id": "P-1", "detail": "all"}),
+    )
+    .await;
+    assert_eq!(error["code"], "invalid_request");
     assert_eq!(view["needs"], json!([]));
     assert_eq!(view["claim"], Value::Null);
     assert_eq!(view["human_review"], Value::Null);
@@ -327,6 +359,18 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
 
     let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
     assert_eq!(view["last_reviewed"], "v1");
+    assert_eq!(view["reviews"][0]["body"], "add z");
+    assert_eq!(
+        view["reviews"][0]["body_chars"], 5,
+        "a review of an earlier version"
+    );
+    let full = ok(
+        &review,
+        "get_proposal",
+        json!({"id": "P-1", "detail": "full"}),
+    )
+    .await;
+    assert_eq!(full["reviews"][0].get("body_chars"), None);
     let since = ok(
         &review,
         "get_proposal_diff",
@@ -367,10 +411,7 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
     .await;
     assert_eq!(
         hunks["hunks"],
-        json!([{"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 2, "lines": [
-            {"kind": "context", "old_no": 1, "new_no": 1, "text": "pub fn y() {}\n"},
-            {"kind": "added", "old_no": null, "new_no": 2, "text": "pub fn z() {}\n"},
-        ]}])
+        json!([{"header": "@@ -1,1 +1,2 @@", "lines": [" 1 pub fn y() {}\n", "+2 pub fn z() {}\n"]}])
     );
     ok(
         &review,
@@ -472,7 +513,7 @@ async fn a_change_since_an_earlier_version_leaves_out_what_main_gained() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
     let backend = connect(&fx, "backend").await;
-    let review = review_lead(&fx).await;
+    let review = reviewer(&fx).await;
     open_p1(&fx, &frontend).await;
     ok(
         &review,
@@ -533,10 +574,7 @@ async fn a_change_since_an_earlier_version_leaves_out_what_main_gained() {
     .await;
     assert_eq!(
         hunks["hunks"],
-        json!([{"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 2, "lines": [
-            {"kind": "context", "old_no": 1, "new_no": 1, "text": "pub fn y() {}\n"},
-            {"kind": "added", "old_no": null, "new_no": 2, "text": "pub fn z() {}\n"},
-        ]}])
+        json!([{"header": "@@ -1,1 +1,2 @@", "lines": [" 1 pub fn y() {}\n", "+2 pub fn z() {}\n"]}])
     );
     let error = err(
         &review,
@@ -559,7 +597,7 @@ async fn a_change_since_an_earlier_version_names_the_files_merged_by_hand() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
     let backend = connect(&fx, "backend").await;
-    let review = review_lead(&fx).await;
+    let review = reviewer(&fx).await;
     open_p1(&fx, &frontend).await;
     ok(
         &review,
@@ -649,7 +687,7 @@ async fn close_proposal_closes_it() {
 async fn claim_review_names_the_holder_and_release_review_gives_it_up() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = review_lead(&fx).await;
+    let review = main_reviewer(&fx).await;
     open_p1(&fx, &frontend).await;
     let error = err(&frontend, "claim_review", json!({"id": "P-1"})).await;
     assert_eq!(error["code"], "author_cannot_review");
@@ -674,11 +712,11 @@ async fn claim_review_names_the_holder_and_release_review_gives_it_up() {
 async fn create_review_checkout_gives_the_path_and_version() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = review_lead(&fx).await;
+    let review = reviewer(&fx).await;
     open_p1(&fx, &frontend).await;
     let error = err(&review, "create_review_checkout", json!({"id": "P-1"})).await;
     assert_eq!(error["code"], "review_claim_required");
-    ok(&review, "claim_review", json!({"id": "P-1"})).await;
+    give_p1(&fx).await;
     let checkout = ok(&review, "create_review_checkout", json!({"id": "P-1"})).await;
     assert_eq!(checkout["version"], "v1");
     assert_eq!(checkout["path"], ".fold/ws/review-p-1");
@@ -695,9 +733,9 @@ async fn create_review_checkout_gives_the_path_and_version() {
 async fn submit_review_fix_makes_the_reviewers_version_and_the_reviewer_approves_it() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = review_lead(&fx).await;
+    let review = reviewer(&fx).await;
     open_p1(&fx, &frontend).await;
-    ok(&review, "claim_review", json!({"id": "P-1"})).await;
+    give_p1(&fx).await;
     ok(&review, "create_review_checkout", json!({"id": "P-1"})).await;
     let file = fx
         .project
@@ -722,7 +760,12 @@ async fn submit_review_fix_makes_the_reviewers_version_and_the_reviewer_approves
     assert_eq!(fixed["checkout"], "ws-2");
     assert_eq!(fixed["status"], "review");
     assert!(fixed["changeset"].as_str().unwrap().starts_with("C-"));
-    let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
+    let view = ok(
+        &review,
+        "get_proposal",
+        json!({"id": "P-1", "detail": "full"}),
+    )
+    .await;
     assert_eq!(view["versions"][1]["created_by"], "review");
     assert_eq!(view["versions"][1]["reviewer_fix"], true);
     assert_eq!(view["versions"][0].get("reviewer_fix"), None);
@@ -855,7 +898,7 @@ async fn get_review_comments_marks_outdated_comments() {
 async fn integrate_proposal_publishes_the_next_revision() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = review_lead(&fx).await;
+    let review = reviewer(&fx).await;
     open_p1(&fx, &frontend).await;
     let error = err(&review, "integrate_proposal", json!({"id": "P-1"})).await;
     assert_eq!(error["code"], "not_approved");
@@ -897,7 +940,7 @@ async fn integrate_proposal_publishes_the_next_revision() {
 async fn integration_conflicted_lists_files_and_kinds() {
     let fx = Fixture::new().await;
     let frontend = connect(&fx, "frontend").await;
-    let review = review_lead(&fx).await;
+    let review = reviewer(&fx).await;
     open_p1(&fx, &frontend).await;
     let backend = fx.agent("backend").await;
     fx.proposal(&backend, 2, "pub fn w() {}\n").await;
@@ -1026,29 +1069,6 @@ async fn errors_carry_code_message_and_hint() {
             "{tool}: {error}"
         );
     }
-}
-
-#[tokio::test]
-async fn as_acts_for_a_subagent_worker() {
-    let fx = Fixture::new().await;
-    let frontend = connect(&fx, "frontend").await;
-    let review = review_lead(&fx).await;
-    open_p1(&fx, &frontend).await;
-    ok(&review, "register_worker", json!({"name": "checker"})).await;
-    let claim = ok(
-        &review,
-        "claim_review",
-        json!({"id": "P-1", "as": "review/checker"}),
-    )
-    .await;
-    assert_eq!(claim["holder"], "review/checker");
-    let checkout = ok(
-        &review,
-        "create_review_checkout",
-        json!({"id": "P-1", "as": "review/checker"}),
-    )
-    .await;
-    assert_eq!(checkout["version"], "v1");
 }
 
 #[tokio::test]
