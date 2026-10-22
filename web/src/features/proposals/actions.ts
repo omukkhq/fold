@@ -1,7 +1,9 @@
 import type { NewReview, ProposalDetail } from "@/api/proposals";
+import { reviewerActor } from "@/people/names";
 import { reviewerSegment, seg, segmentsText } from "@/people/segments";
 import { canSendForReviewAgain } from "./edit";
 import { gateText, shownGates } from "./gates";
+import { approvers } from "./present";
 import type { DetailView } from "./view";
 
 export type HumanAction =
@@ -66,17 +68,50 @@ export function showsApproveLine(
 /** The line under a disabled Approve on a task with the human review mark: the human reviews after a reviewer agent. */
 export const AGENT_APPROVES_FIRST = "A reviewer agent approves first.";
 
-/**
- * Why Approve cannot work for the signed-in human; null when it can.
- * On a task with the human review mark the daemon takes a human's approval only after an agent with review rights approved the current version, which it reports as `agent_approved`. A task of the main agent's own area (`main_task`) has no reviewer agent, so the human approves it first.
- */
-export function approveBlock(proposal: ProposalDetail): string | null {
-  if (proposal.summary.checks_failed) return CHECKS_FAILED;
-  return proposal.summary.human_review !== null &&
+/** The line under a disabled Approve once the signed-in human's latest verdict on the current version is an approval. */
+export function ownApprovalLine(version: number): string {
+  return `You approved v${String(version)}.`;
+}
+
+/** The line under a disabled Approve while a check run of the current version runs. */
+export function checkRunsLine(version: number): string {
+  return `A check runs on v${String(version)}. Approve when it ends.`;
+}
+
+/** The check runs of the current version, or none when the proposal read selected an earlier version. */
+function currentRuns(proposal: ProposalDetail) {
+  return proposal.selected.version === proposal.summary.current_version
+    ? proposal.checks
+    : [];
+}
+
+function agentApprovesFirst(proposal: ProposalDetail): boolean {
+  return (
+    proposal.summary.human_review !== null &&
     !proposal.agent_approved &&
     !proposal.main_task
-    ? AGENT_APPROVES_FIRST
-    : null;
+  );
+}
+
+/**
+ * Why Approve cannot work for the signed-in human; null when it can.
+ * An approval the human already holds on the current version would add nothing, and an approval given while a check run of that version runs, of either stage, would come before its result; a new version clears both.
+ * On a task with the human review mark the daemon takes a human's approval only after an agent with review rights approved the current version, which it reports as `agent_approved`. A task of the main agent's own area (`main_task`) has no reviewer agent, so the human approves it first.
+ */
+export function approveBlock(
+  proposal: ProposalDetail,
+  human: string | null,
+): string | null {
+  const version = proposal.summary.current_version;
+  if (proposal.summary.checks_failed) return CHECKS_FAILED;
+  const actor = reviewerActor(human);
+  if (actor !== null && approvers(version, proposal.reviews).includes(actor)) {
+    return ownApprovalLine(version);
+  }
+  if (currentRuns(proposal).some((run) => run.state === "running")) {
+    return checkRunsLine(version);
+  }
+  return agentApprovesFirst(proposal) ? AGENT_APPROVES_FIRST : null;
 }
 
 /**
@@ -87,8 +122,8 @@ export function integrateBlock(
   proposal: ProposalDetail,
   main: string | null,
 ): string | null {
-  const agentFirst = approveBlock(proposal);
-  if (agentFirst !== null) return agentFirst;
+  if (proposal.summary.checks_failed) return CHECKS_FAILED;
+  if (agentApprovesFirst(proposal)) return AGENT_APPROVES_FIRST;
   const gate = shownGates(proposal.gates).find((g) => g.status === "unmet");
   if (!gate) return null;
   if (gate.gate === "human_review") {
