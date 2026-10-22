@@ -360,3 +360,60 @@ async fn acceptance_22_a_message_to_a_reviewer_owed_a_new_version_resumes_it_for
         "{turn}"
     );
 }
+
+/// Acceptance 22: a reviewer whose session is gone at a daemon start and whose new session the reviewer limit refuses leaves its version to nobody, so fold tells the review lead which version waits for a review.
+#[tokio::test]
+async fn acceptance_22_a_reviewer_that_cannot_start_in_a_new_session_leaves_its_version_to_the_review_lead()
+ {
+    let fake = FakeClaude::new("result").lost_sessions();
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.lead_area("backend").await;
+    harness.make_main(MAIN).await;
+    let task = harness
+        .create_task("backend", "Add the login endpoint")
+        .await;
+    let work = harness.start_work("backend", &task).await;
+    work.write(&[("login.txt", "POST /login\n")]);
+    harness
+        .propose("backend", &work, "Add the login endpoint")
+        .await;
+    start_the_reviewer(&mut harness).await;
+    // The reviewer is in a turn when the daemon stops, so the next start resumes it with a turn, which finds its session gone.
+    harness
+        .handle
+        .store
+        .write(async |tx| {
+            sqlx::query(
+                "UPDATE worker_processes SET state = 'working', idle_since = NULL WHERE agent_id = (SELECT id FROM agents WHERE name = 'reviewer')",
+            )
+            .execute(tx.conn())
+            .await?;
+            Ok::<_, fold_store::StoreError>(())
+        })
+        .await
+        .unwrap();
+
+    harness.stop().await;
+    let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
+    std::fs::write(&config, "[workers]\nreviewer = 0\n").unwrap();
+    harness.start_again().await;
+    until_runs(&fake, REVIEWER, 2).await;
+    until_state(&harness, REVIEWER, WorkerState::Failed).await;
+    harness.connect(LEAD).await;
+    let note = eventually(WAIT, async || {
+        let inbox = harness.call(LEAD, "get_inbox", json!({})).await;
+        inbox["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["from"] == "fold")
+            .cloned()
+            .ok_or(inbox)
+    })
+    .await;
+    assert_eq!(
+        note["body"],
+        "@reviewer lost its session and the reviewer limit refuses it a new one now, so P-1 v1 waits for a review. Give it to a reviewer with start_worker when a place is free; the start takes over the claim."
+    );
+    assert_eq!(fake.runs_of(REVIEWER).len(), 2, "no new session");
+}

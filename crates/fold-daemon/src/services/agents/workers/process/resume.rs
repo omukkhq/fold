@@ -24,6 +24,7 @@ use crate::services::agents::workers::{
     is_paused_refusal, new_session, not_supervised, refuse_while_paused,
 };
 use crate::services::events::EventBuffer;
+use crate::services::messages::tell_lead_in_tx;
 use crate::services::projects::load_config;
 
 /// Why fold resumes a task worker: a review asked for changes, the proposal conflicts with main at integration, or its integration checks failed.
@@ -632,7 +633,13 @@ impl Supervisor {
                     .iter()
                     .map(|found| resumed_event(agent, found, false))
                     .collect::<Result<Vec<_>, _>>()?;
-                self.start_fresh(agent, &resumed, &instructions).await
+                match self.start_fresh(agent, &resumed, &instructions).await {
+                    Err(error) if is_limit_refusal(&error) => {
+                        self.tell_lead_of_refused_start(agent).await;
+                        Ok(())
+                    }
+                    started => started,
+                }
             }
             SessionStart::Ended => Ok(()),
         }
@@ -679,10 +686,86 @@ impl Supervisor {
             Err(error) if is_paused_refusal(&error) => {
                 lock(&self.inner.held_lost).insert(agent, instructions);
             }
+            Err(error) if is_limit_refusal(&error) => {
+                tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not start a worker whose session is gone");
+                self.tell_lead_of_refused_start(&agent).await;
+            }
             Err(error) => {
                 tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not start a worker whose session is gone");
             }
         }
+    }
+
+    /// A worker whose session is gone and whose new session the worker limits refuse leaves its work to nobody: the start before moved its start time, so no resume is owed any more. Its lead, the one a message to it goes on to, hears from fold what waits: a reviewer's versions without a verdict, a task worker's tasks. A lead is outside the limits, so it never gets here.
+    async fn tell_lead_of_refused_start(&self, agent: &AgentName) {
+        if let Err(error) = self.try_tell_lead_of_refused_start(agent).await {
+            tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not tell the lead of a worker that cannot start");
+        }
+    }
+
+    async fn try_tell_lead_of_refused_start(&self, agent: &AgentName) -> Result<(), AgentError> {
+        let read = self.inner.store.read();
+        let mut conn = read.acquire().await.map_err(StoreError::from)?;
+        let Some(row) = agents::find_worker_process(&mut conn, agent).await? else {
+            return Ok(());
+        };
+        drop(conn);
+        let (task, proposal, text) = match row.role {
+            Role::Reviewer => {
+                let mut waiting = Vec::new();
+                for proposal in agents::unreviewed_claims_of_ended_reviewer(read, agent).await? {
+                    if let Some(found) = reviews::get_proposal(read, proposal).await? {
+                        waiting.push(found);
+                    }
+                }
+                let Some(first) = waiting.first() else {
+                    return Ok(());
+                };
+                let listed = waiting
+                    .iter()
+                    .map(|row| format!("{} v{}", row.id, row.current_version))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (
+                    Some(first.task),
+                    Some(first.id),
+                    format!(
+                        "@{agent} lost its session and the reviewer limit refuses it a new one now, so {listed} waits for a review. Give it to a reviewer with start_worker when a place is free; the start takes over the claim."
+                    ),
+                )
+            }
+            Role::TaskWorker => {
+                let Some(first) = row.tasks.first() else {
+                    return Ok(());
+                };
+                let listed = row
+                    .tasks
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (
+                    Some(*first),
+                    None,
+                    format!(
+                        "@{agent} lost its session and the worker limits refuse it a new one now, so its work on {listed} waits. Start a task worker for it with start_worker when a place is free; the start takes over the claims."
+                    ),
+                )
+            }
+            Role::AreaLead | Role::ReviewLead => return Ok(()),
+        };
+        let now = self.inner.clock.now();
+        let mut buffer = EventBuffer::new();
+        self.inner
+            .store
+            .write(async |tx| {
+                tell_lead_in_tx(tx, &mut buffer, &row, task, proposal, text, now)
+                    .await
+                    .map_err(AgentError::from)
+            })
+            .await?;
+        self.inner.bus.publish(buffer);
+        Ok(())
     }
 
     /// What a worker whose session is gone is told in its new session: a task worker to check its claims and proposals, a reviewer to check its verdicts, a lead to read its latest hand-off note, then the starter's instructions.
@@ -875,6 +958,11 @@ impl Supervisor {
         self.launch(&row, false, Some(turn)).await?;
         Ok(())
     }
+}
+
+/// A start that the worker limits refused.
+fn is_limit_refusal(error: &AgentError) -> bool {
+    matches!(error, AgentError::Fold(error) if error.code() == codes::WORKER_LIMIT_REACHED)
 }
 
 fn resumed_event(

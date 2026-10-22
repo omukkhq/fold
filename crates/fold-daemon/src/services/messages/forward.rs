@@ -101,6 +101,48 @@ pub(crate) async fn forward_in_tx(
     Ok(lead)
 }
 
+/// Tells the lead of the worker of `worker`, the one [`forward_in_tx`] sends its messages to, with `text` from fold about the work that waits because the worker cannot start, such as a lost session whose new one the worker limits refuse. `task` and `proposal` name the work. Returns the lead's agent; `None`, and nothing is sent, when no lead or main agent can take it. The caller publishes the buffer after the commit.
+pub(crate) async fn tell_lead_in_tx(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    worker: &WorkerProcessRow,
+    task: Option<TaskId>,
+    proposal: Option<fold_core::ProposalId>,
+    text: String,
+    now: Timestamp,
+) -> Result<Option<AgentName>, MessageError> {
+    let Some(lead) = lead_of(tx, task, worker)
+        .await?
+        .filter(|lead| *lead != worker.agent)
+    else {
+        return Ok(None);
+    };
+    let body = MessageBody::parse(text)?;
+    write_message(
+        tx,
+        buffer,
+        Draft {
+            actor: &Actor::System,
+            sender: &Sender::Fold,
+            task,
+            proposal,
+            request: None,
+            join: None,
+            parent: None,
+            body: &body,
+            choices: None,
+            asks_human: false,
+            recipients: vec![Recipient {
+                target: Target::Worker(WorkerName::main(&lead)),
+                addressed_as: AddressedAs::Agent,
+            }],
+            now,
+        },
+    )
+    .await?;
+    Ok(Some(lead))
+}
+
 /// The lead that takes a message to the stopped worker of `worker`; see [`forward_in_tx`].
 async fn lead_of(
     tx: &mut WriteTx,
