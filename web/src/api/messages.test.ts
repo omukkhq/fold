@@ -6,6 +6,7 @@ import {
   listProposalThreads,
   listThreads,
   markAnswered,
+  markThreadRead,
   sendMessage,
 } from "./messages";
 
@@ -123,6 +124,33 @@ describe("markAnswered", () => {
     });
     await expect(markAnswered("demo", { task: "T-9" })).rejects.toSatisfy(
       (e: unknown) => isApiError(e, "task_not_found"),
+    );
+  });
+});
+
+describe("markThreadRead", () => {
+  it("posts to the thread and answers with the ids it marked", async () => {
+    const calls = stubFetch({
+      "POST /api/v1/projects/demo/threads/m-4/read": {
+        body: { read: ["m-4", "m-6"] },
+      },
+    });
+    await expect(markThreadRead("demo", "m-4")).resolves.toEqual([
+      "m-4",
+      "m-6",
+    ]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("rejects with the daemon's code for an unknown thread", async () => {
+    stubFetch({
+      "POST /api/v1/projects/demo/threads/m-9/read": errorReply(
+        404,
+        "message_not_found",
+      ),
+    });
+    await expect(markThreadRead("demo", "m-9")).rejects.toSatisfy(
+      (e: unknown) => isApiError(e, "message_not_found"),
     );
   });
 });

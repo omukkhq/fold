@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { MAX_BODY, feedbackSchema, replySchema } from "./compose";
+import {
+  MAX_BODY,
+  feedbackSchema,
+  replySchema,
+  insertMention,
+} from "./compose";
 
 function messages(result: {
   success: boolean;
@@ -58,5 +63,18 @@ describe("feedbackSchema", () => {
     expect(
       messages(feedbackSchema.safeParse({ task: "x", body: "" })),
     ).toHaveLength(2);
+  });
+});
+
+describe("insertMention", () => {
+  it("writes @ at the caret, after a space when it follows a word", () => {
+    expect(insertMention("", 0)).toEqual({ text: "@", caret: 1 });
+    expect(insertMention("ask ", 4)).toEqual({ text: "ask @", caret: 5 });
+    expect(insertMention("ask", 3)).toEqual({ text: "ask @", caret: 5 });
+    expect(insertMention("ab cd", 2)).toEqual({ text: "ab @ cd", caret: 4 });
+  });
+  it("keeps the caret inside the text", () => {
+    expect(insertMention("hi", 9)).toEqual({ text: "hi @", caret: 4 });
+    expect(insertMention("hi", -1)).toEqual({ text: "@hi", caret: 1 });
   });
 });

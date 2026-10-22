@@ -124,7 +124,10 @@ describe("utility guard", () => {
     expect(keys.get("font-weight")?.has("semibold")).toBe(true);
   });
   it("checks a named min or max size against the namespace Tailwind reads for it", () => {
-    expect(keys.get("container")).toBeUndefined();
+    expect([...(keys.get("container") ?? [])]).toEqual([
+      "measure",
+      "thread-column",
+    ]);
     expect(keys.get("max-width")).toBeUndefined();
     expect(offToken('className="max-w-content"', keys)).toEqual([
       "max-w-content",

@@ -72,3 +72,9 @@ export function formatAsOf(now: number, at: number): string {
 export function formatAsOfMinute(now: number, at: number): string {
   return stamp(now, at, false);
 }
+
+/** The local time of `at` to the minute, `14:12`, for a list whose day dividers already name the day. */
+export function formatClock(at: number): string {
+  const when = new Date(at);
+  return `${pad(when.getHours())}:${pad(when.getMinutes())}`;
+}

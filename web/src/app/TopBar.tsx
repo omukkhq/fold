@@ -7,6 +7,7 @@ import { PauseControl } from "./PauseControl";
 import { Wordmark } from "@/components/Wordmark";
 import { NotificationBell } from "@/features/notifications/NotificationBell";
 import { ProjectSwitcher } from "./ProjectSwitcher";
+import { SignedInName } from "./SignedInName";
 import { StreamStatus } from "./StreamStatus";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -30,6 +31,7 @@ export function TopBar({ slug }: { slug: string }) {
         <NeedsYou slug={slug} />
         <AgentChips slug={slug} />
         <NotificationBell slug={slug} />
+        <SignedInName />
         <ThemeToggle />
       </div>
     </header>

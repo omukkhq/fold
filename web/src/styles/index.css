@@ -28,6 +28,7 @@
   --color-secondary-soft: var(--secondary-soft);
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
+  --color-success-text: var(--success-text);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
   --color-status-backlog: var(--status-backlog);
@@ -83,6 +84,7 @@
   --radius-m: var(--radius-m);
   --radius-l: var(--radius-l);
   --radius-chip: var(--radius-chip);
+  --radius-xl: var(--radius-xl);
 
   --text-*: initial;
   --text-page: var(--size-page);
@@ -139,8 +141,11 @@
   --spacing-28: var(--space-28);
   --spacing-32: var(--space-32);
   --spacing-40: var(--space-40);
+  --spacing-44: var(--space-44);
 
   --container-*: initial;
+  --container-measure: var(--width-measure);
+  --container-thread-column: var(--width-thread-column);
 
   --width-*: initial;
   --width-skeleton-s: var(--width-skeleton-s);
