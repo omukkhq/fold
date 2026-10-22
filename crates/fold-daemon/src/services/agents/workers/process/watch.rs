@@ -167,6 +167,12 @@ impl Supervisor {
                     cache_write_tokens: usage.cache_creation_input_tokens,
                     failed: error.is_some(),
                 };
+                let _ =
+                    process
+                        .open_turns
+                        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |open| {
+                            open.checked_sub(1)
+                        });
                 self.end_turn(process, totals, error.as_ref()).await
             }
         };

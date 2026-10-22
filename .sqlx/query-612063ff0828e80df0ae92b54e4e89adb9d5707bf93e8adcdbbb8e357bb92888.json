@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT m.number AS \"number!: i64\", MAX(r.worker_id = ?2) AS \"own!: bool\"\n           FROM events e\n           JOIN messages m ON m.number = e.message_id\n           JOIN message_recipients r ON r.message_id = m.id\n           JOIN workers w ON w.id = r.worker_id\n           WHERE e.seq IN (SELECT value FROM json_each(?1))\n             AND e.type = ?5\n             AND e.actor <> (SELECT s.name FROM workers s WHERE s.id = ?2)\n             AND (r.delivered_at IS NULL OR r.delivered_at > ?6) AND r.acked_at IS NULL\n             AND (r.worker_id = ?2 OR (?3 AND w.agent_id = ?4))\n           GROUP BY m.number\n           ORDER BY MIN(e.seq)",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "own!: bool",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "612063ff0828e80df0ae92b54e4e89adb9d5707bf93e8adcdbbb8e357bb92888"
+}

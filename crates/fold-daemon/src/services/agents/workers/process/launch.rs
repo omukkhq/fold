@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use fold_core::config::RoleSettings;
 use fold_core::events::types;
@@ -171,6 +171,7 @@ impl Supervisor {
         let (exit, exited) = watch::channel(false);
         let detached = Arc::new(AtomicBool::new(false));
         let reaped = Arc::new(AtomicBool::new(false));
+        let open_turns = Arc::new(AtomicU64::new(0));
         let (session, sessions) = watch::channel(None);
         let process = Process {
             id: row.id,
@@ -181,6 +182,7 @@ impl Supervisor {
             session_id: row.session_id.clone(),
             session: Arc::new(session),
             stderr: StderrTail::read(stderr),
+            open_turns: Arc::clone(&open_turns),
         };
         let start = StartWatch {
             session: sessions,
@@ -193,6 +195,7 @@ impl Supervisor {
             pid,
             detached: Arc::clone(&detached),
             reaped: Arc::clone(&reaped),
+            open_turns,
         };
         lock(&self.inner.running).insert(row.agent.clone(), run.clone());
         // A stop or a pause that came after the start committed but before the process was in `running` found no process to end. The row is read only now that the process is there, so either that stop or pause sees the process or this check sees it.
@@ -341,6 +344,7 @@ impl Supervisor {
                 break;
             }
             if turn {
+                process.open_turns.fetch_add(1, Ordering::SeqCst);
                 let marked = self
                     .inner
                     .store

@@ -262,6 +262,54 @@ async fn acceptance_23_a_human_message_resumes_the_stopped_task_worker_once_and_
 }
 
 #[tokio::test]
+async fn acceptance_23_a_message_carried_during_the_answering_turn_keeps_the_worker_for_its_next_turn()
+ {
+    let fake = FakeClaude::new("result")
+        .resuming_with("resumed")
+        .holding_resumed_turns();
+    let (mut harness, _work) = stopped_task_worker(&fake).await;
+    let first = feedback(&harness, "Why a page and not a dialog?").await;
+    until_runs(&fake, TASK_WORKER, 2).await;
+    let before = worker(&harness, TASK_WORKER).await.turns;
+    harness.connect(TASK_WORKER).await;
+
+    // While the answering turn runs, a second message reaches the worker's stdin with its body, which counts as delivered.
+    let second = feedback(&harness, "And the footer?").await;
+    until_recipient(&harness, &second, TASK_WORKER, |row| {
+        !row["delivered_at"].is_null()
+    })
+    .await;
+    harness
+        .send_with(
+            TASK_WORKER,
+            json!({"to": [format!("human:{HUMAN}")], "reply_to": first, "body": "A dialog hides the board."}),
+        )
+        .await;
+
+    // The answering turn ends with the second one still in the worker's stdin, so fold keeps the worker; a stopped worker never takes that turn. The second turn never ends, so the worker stays working in it.
+    fake.release(1, None);
+    fake.release(2, Some("init"));
+    eventually(WAIT, async || {
+        let row = worker(&harness, TASK_WORKER).await;
+        if row.state == WorkerState::Working && row.turns == before + 1 {
+            Ok(())
+        } else {
+            Err((row.state, row.turns))
+        }
+    })
+    .await;
+    let runs = fake.runs_of(TASK_WORKER);
+    assert_eq!(runs.len(), 2, "one start for the message");
+    assert!(
+        runs[1].stdin.iter().any(|line| line.contains(&format!(
+            "[{second} from human:{HUMAN} on T-1] \\\"And the footer?\\\""
+        ))),
+        "{:?}",
+        runs[1].stdin
+    );
+}
+
+#[tokio::test]
 async fn acceptance_23_a_message_from_any_sender_resumes_the_stopped_task_worker() {
     let fake = FakeClaude::new("result");
     let (harness, _work) = stopped_task_worker(&fake).await;

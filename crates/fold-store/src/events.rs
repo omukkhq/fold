@@ -171,12 +171,13 @@ pub struct Reach<'a> {
     pub wake: Option<MessageWake>,
 }
 
-/// An event of `event_type` is selected past the filter when the worker row `worker_id` receives the message it names, or with `every_worker` when any worker of the agent does, on a row that no inbox read or acknowledgement has reached yet, and only when that worker did not send it: a wait wakes for a new message, never for one the agent has seen or its own.
+/// An event of `event_type` is selected past the filter when the worker row `worker_id` receives the message it names, or with `every_worker` when any worker of the agent does, on a row that no acknowledgement has reached and that nothing delivered up to `since`, and only when that worker did not send it: a wait wakes for a new message, never for one the agent has seen or its own. A row delivered after `since` still wakes the wait that started then, because a notice that carried it waits in the session until the wait returns.
 #[derive(Debug, Clone, Copy)]
 pub struct MessageWake {
     pub event_type: EventType,
     pub worker_id: i64,
     pub every_worker: bool,
+    pub since: Timestamp,
 }
 
 /// A message of a wait's page that waits for the waking worker.
@@ -196,6 +197,7 @@ pub async fn waiting_messages(
 ) -> Result<Vec<WaitingMessage>, StoreError> {
     let seqs = json_list(seqs.iter(), |seq| (*seq).into());
     let wake_type = wake.event_type.as_str();
+    let since = wake.since.as_millis();
     let rows = sqlx::query!(
         r#"SELECT m.number AS "number!: i64", MAX(r.worker_id = ?2) AS "own!: bool"
            FROM events e
@@ -205,7 +207,7 @@ pub async fn waiting_messages(
            WHERE e.seq IN (SELECT value FROM json_each(?1))
              AND e.type = ?5
              AND e.actor <> (SELECT s.name FROM workers s WHERE s.id = ?2)
-             AND r.delivered_at IS NULL AND r.acked_at IS NULL
+             AND (r.delivered_at IS NULL OR r.delivered_at > ?6) AND r.acked_at IS NULL
              AND (r.worker_id = ?2 OR (?3 AND w.agent_id = ?4))
            GROUP BY m.number
            ORDER BY MIN(e.seq)"#,
@@ -213,7 +215,8 @@ pub async fn waiting_messages(
         wake.worker_id,
         wake.every_worker,
         agent_id,
-        wake_type
+        wake_type,
+        since
     )
     .fetch_all(executor)
     .await?;
@@ -246,6 +249,7 @@ pub async fn read_reaching(
     let wake_type = reach.wake.map(|wake| wake.event_type.as_str());
     let wake_worker = reach.wake.map(|wake| wake.worker_id);
     let wake_every = reach.wake.is_some_and(|wake| wake.every_worker);
+    let wake_since = reach.wake.map(|wake| wake.since.as_millis());
     let rows = sqlx::query_as!(
         EventRecord,
         r#"SELECT e.seq AS "seq!: i64", e.type AS event_type, e.actor, e.task_id, e.proposal_id,
@@ -262,7 +266,8 @@ pub async fn read_reaching(
                           JOIN message_recipients r ON r.message_id = m.id
                           JOIN workers w ON w.id = r.worker_id
                           WHERE m.number = e.message_id
-                            AND r.delivered_at IS NULL AND r.acked_at IS NULL
+                            AND (r.delivered_at IS NULL OR r.delivered_at > ?12)
+                            AND r.acked_at IS NULL
                             AND (r.worker_id = ?10 OR (?11 AND w.agent_id = ?5)))))
              AND (e.type NOT IN (SELECT value FROM json_each(?6))
                   OR EXISTS (
@@ -287,7 +292,8 @@ pub async fn read_reaching(
         own_types,
         wake_type,
         wake_worker,
-        wake_every
+        wake_every,
+        wake_since
     )
     .fetch_all(executor)
     .await?;

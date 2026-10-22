@@ -517,6 +517,7 @@ async fn a_failed_post_keeps_the_socket_and_the_next_notice_is_attempted() {
         vec![backend.path.clone()]
     );
     set_mode(&backend.path, 0o600);
+    let mut bus = fixture.bus.subscribe();
 
     fixture.send("frontend", &["backend"], "second").await;
 
@@ -527,6 +528,39 @@ async fn a_failed_post_keeps_the_socket_and_the_next_notice_is_attempted() {
             &carried(2, &[(1, "frontend", "first"), (2, "frontend", "second")])
         ),
         "a message whose notice failed stays undelivered and comes with the next one"
+    );
+    let times = pushed(
+        &fixture,
+        fold_core::MessageId::from_number(1).unwrap(),
+        |times| times.iter().all(|(_, at)| at.is_some()),
+    )
+    .await;
+    assert_eq!(
+        times
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["backend", "docs"],
+        "the notice that carried m-1 records its push time too"
+    );
+    let mut told = Vec::new();
+    while told.len() < 2 {
+        let message = tokio::time::timeout(WAIT, bus.recv())
+            .await
+            .expect("a message.pushed within the wait")
+            .unwrap();
+        if let BusMessage::Live(event) = message
+            && event.event_type == types::MESSAGE_PUSHED
+            && event.data["agent"] == json!("backend")
+        {
+            told.push((event.data["message"].clone(), event.data["thread"].clone()));
+        }
+    }
+    told.sort_by_key(|(message, _)| message.to_string());
+    assert_eq!(
+        told,
+        [(json!("m-1"), json!("m-1")), (json!("m-2"), json!("m-2"))],
+        "one message.pushed for each carried message, so each thread's delivery line refreshes"
     );
 }
 

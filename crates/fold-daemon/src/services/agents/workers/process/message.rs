@@ -195,8 +195,8 @@ impl Supervisor {
     /// A session got its turn about `owed`: the delivery line shows the message waiting for the worker, as for a running worker, until the worker reads its inbox.
     async fn record_told(&self, agent: &AgentName, owed: &OwedMessage) {
         let now = self.inner.clock.now();
-        match record_pushed(&self.inner.store, agent, Some(owed.message), &[], now).await {
-            Ok(0) => {}
+        match record_pushed(&self.inner.store, agent, &[owed.message], &[], now).await {
+            Ok(first) if first.is_empty() => {}
             Ok(_) => {
                 let event = LiveEvent::new(
                     types::MESSAGE_PUSHED,
@@ -264,8 +264,14 @@ impl Supervisor {
         }
     }
 
-    /// Whether the worker of `agent` is idle, has read its inbox, and has no bound task that waits for its proposal or report and no bound proposal that waits for its verdict.
+    /// Whether the worker of `agent` is idle, has read its inbox, has no user turn waiting in its stdin, and has no bound task that waits for its proposal or report and no bound proposal that waits for its verdict. A notice that carried a new message marks it delivered when it is queued on stdin, so the waiting turn is what holds the stop until the worker has seen the message.
     async fn answered(&self, agent: &AgentName) -> Result<bool, StoreError> {
+        let queued = lock(&self.inner.running)
+            .get(agent)
+            .is_some_and(|run| run.open_turns.load(Ordering::SeqCst) > 0);
+        if queued {
+            return Ok(false);
+        }
         let read = self.inner.store.read();
         let mut conn = read.acquire().await.map_err(StoreError::from)?;
         let Some(row) = agents::find_worker_process(&mut conn, agent).await? else {

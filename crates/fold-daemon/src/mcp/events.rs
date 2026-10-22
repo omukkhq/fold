@@ -173,9 +173,10 @@ pub async fn wait_for_events(
         proposal: input.proposal,
         timeout_s,
     };
+    let started = server.messages.now();
     let mut waiter = server
         .events
-        .wait_as(worker, &query)
+        .wait_as(worker, &query, started)
         .await
         .map_err(from_events)?;
     let progress = context.meta.get_progress_token();
@@ -188,7 +189,7 @@ pub async fn wait_for_events(
             WaitStep::Events(page) => {
                 let waiting = server
                     .events
-                    .waiting_messages(worker, &page)
+                    .waiting_messages(worker, &page, started)
                     .await
                     .map_err(from_events)?;
                 let inbox = if waiting.is_empty() {

@@ -168,6 +168,11 @@ impl MessageService {
             .await
     }
 
+    /// The time on this service's clock, which a wait records as its start.
+    pub fn now(&self) -> Timestamp {
+        self.clock.now()
+    }
+
     /// [`unread_count`] for this service's project.
     pub async fn unread_count(&self, agent_id: i64) -> Result<u64, MessageError> {
         unread_count(&self.store, agent_id).await
@@ -179,29 +184,33 @@ pub async fn unread_count(store: &Store, agent_id: i64) -> Result<u64, MessageEr
     Ok(messages::unread_count(store.read(), agent_id).await?)
 }
 
-/// Records that a notice reached a session or the worker process of `agent` at `now`: `pushed_at` on the agent's rows of `about`, the message the notice is about, where they have none, and `delivered_at` on the rows `carried` whose messages the notice held, as an inbox read marks them. Returns how many rows got `pushed_at`. It appends no stored event, as reading an inbox appends none; the caller sends the live `message.pushed` after the commit.
+/// Records that a notice reached a session or the worker process of `agent` at `now`: `pushed_at` on the agent's rows of each of `pushed`, the message the notice is about and the messages it carried, where they have none, and `delivered_at` on the rows `carried`, as an inbox read marks them. Returns the messages whose rows got `pushed_at` here. It appends no stored event, as reading an inbox appends none; the caller sends a live `message.pushed` for each after the commit.
 pub(crate) async fn record_pushed(
     store: &Store,
     agent: &AgentName,
-    about: Option<MessageId>,
+    pushed: &[MessageId],
     carried: &[i64],
     now: Timestamp,
-) -> Result<u64, MessageError> {
+) -> Result<Vec<MessageId>, MessageError> {
     Ok(store
         .write(async |tx| {
             messages::mark_delivered(tx, carried, now).await?;
-            match about {
-                Some(message) => messages::mark_pushed(tx, message, agent, now).await,
-                None => Ok(0),
+            let mut first = Vec::new();
+            for message in pushed {
+                if messages::mark_pushed(tx, *message, agent, now).await? > 0 {
+                    first.push(*message);
+                }
             }
+            Ok::<_, StoreError>(first)
         })
         .await?)
 }
 
-/// What a wake carries: its text and the recipient rows of the messages in it, which count as delivered once the text reaches the agent.
+/// What a wake carries: its text, the recipient rows of the messages in it, which count as delivered once the text reaches the agent, and each message with its thread.
 pub(crate) struct CarriedInbox {
     pub text: String,
     pub rows: Vec<i64>,
+    pub messages: Vec<(MessageId, MessageId)>,
 }
 
 /// The push notice `head` with the messages to every worker of `agent` that nothing has shown yet, as many as fit after it, read from the read pool. Nothing is marked: the push marks the rows once the notice gets through. An unknown agent has none.
@@ -300,11 +309,16 @@ fn carry_rows(head: &str, rows: &[InboxRow], reader: &WorkerName) -> CarriedInbo
         "get_inbox"
     };
     let carried = carry(head, &entries, tool);
+    let groups = &groups[..carried.count];
     CarriedInbox {
         text: carried.text,
-        rows: groups[..carried.count]
+        rows: groups
             .iter()
             .flat_map(|group| group.iter().map(|row| row.row))
+            .collect(),
+        messages: groups
+            .iter()
+            .map(|group| (group[0].message.id, group[0].message.thread))
             .collect(),
     }
 }

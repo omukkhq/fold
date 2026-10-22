@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use fold_core::EventFilter;
 use fold_core::events::types;
 use fold_core::roles::CacheTtl;
+use fold_core::{EventFilter, Timestamp};
 use fold_store::agents::WorkerRow;
 use fold_store::events::{self, MessageWake, WaitingMessage};
 use tokio::sync::broadcast::{self, error::RecvError};
@@ -85,15 +85,18 @@ impl EventService {
         &self,
         worker: &WorkerRow,
         query: &WaitQuery,
+        started: Timestamp,
     ) -> Result<Waiter, EventsError> {
-        self.start_wait(worker, Some(wake_of(worker)), query).await
+        self.start_wait(worker, Some(wake_of(worker, started)), query)
+            .await
     }
 
-    /// The messages of `page` that wait for `worker` by the rule that wakes its wait, so a page that the filter matched names no message the worker has read, acknowledged or sent.
+    /// The messages of `page` that wait for the wait of `worker` that started at `started`, by the rule that wakes it, so a page that the filter matched names no message the worker has read, acknowledged or sent.
     pub async fn waiting_messages(
         &self,
         worker: &WorkerRow,
         page: &EventPage,
+        started: Timestamp,
     ) -> Result<Vec<WaitingMessage>, EventsError> {
         let seqs: Vec<u64> = page
             .events
@@ -104,10 +107,13 @@ impl EventService {
         if seqs.is_empty() {
             return Ok(Vec::new());
         }
-        Ok(
-            events::waiting_messages(self.store().read(), &seqs, worker.agent_id, wake_of(worker))
-                .await?,
+        Ok(events::waiting_messages(
+            self.store().read(),
+            &seqs,
+            worker.agent_id,
+            wake_of(worker, started),
         )
+        .await?)
     }
 
     async fn start_wait(
@@ -164,11 +170,12 @@ impl EventService {
 }
 
 /// A main worker also wakes for the messages to its agent's other workers, because its session takes their notices and its inbox can read them.
-fn wake_of(worker: &WorkerRow) -> MessageWake {
+fn wake_of(worker: &WorkerRow, since: Timestamp) -> MessageWake {
     MessageWake {
         event_type: types::MESSAGE_SENT,
         worker_id: worker.id,
         every_worker: worker.name.is_main(),
+        since,
     }
 }
 

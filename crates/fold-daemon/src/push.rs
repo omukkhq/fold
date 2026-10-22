@@ -387,16 +387,16 @@ impl PushTargets {
         let agent = agent.clone();
         tokio::spawn(async move {
             while let Some(notice) = queue.next().await {
-                let Some((text, carried)) = prepare(&targets, &agent, &notice).await else {
+                let Some(prepared) = prepare(&targets, &agent, &notice).await else {
                     continue;
                 };
-                if !sink(&text) {
+                if !sink(&prepared.text) {
                     if let Some(inner) = targets.upgrade() {
                         PushTargets { inner }.clear_stdin_queue(&agent, &queue);
                     }
                     return;
                 }
-                record(&targets, &agent, &notice, &carried).await;
+                record(&targets, &agent, &notice, &prepared).await;
             }
         });
     }
@@ -527,13 +527,29 @@ impl PushTargets {
     }
 }
 
-/// The text to post for `notice` and the recipient rows of the messages it carries. A notice whose next tool is `get_inbox` carries the messages that nothing has shown the agent yet, read just before the post, so a notice posted after an earlier one has got through never carries the same message again. `None` skips a notice about a message that nothing new is left to carry for. Without a store, or when the messages cannot be read, the notice keeps its call to `get_inbox`.
-async fn prepare(
-    targets: &Weak<Inner>,
-    agent: &AgentName,
-    notice: &Queued,
-) -> Option<(Arc<str>, Vec<i64>)> {
-    let plain = || Some((Arc::clone(&notice.text), Vec::new()));
+/// What one notice posts, and what its post records once it gets through.
+struct Prepared {
+    text: Arc<str>,
+    /// The recipient rows of the messages the text carries.
+    rows: Vec<i64>,
+    /// The messages the notice is about or carries, each with its thread.
+    messages: Vec<(MessageId, MessageId)>,
+}
+
+/// The text to post for `notice`. A notice whose next tool is `get_inbox` carries the messages that nothing has shown the agent's main worker yet, read just before the post, so a notice posted after an earlier one has got through never carries the same message again. `None` skips a notice about a message that nothing new is left to carry for. Without a store, or when the messages cannot be read, the notice keeps its call to `get_inbox`.
+async fn prepare(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued) -> Option<Prepared> {
+    let about: Vec<(MessageId, MessageId)> = notice
+        .about
+        .iter()
+        .map(|about| (about.message, about.thread))
+        .collect();
+    let plain = || {
+        Some(Prepared {
+            text: Arc::clone(&notice.text),
+            rows: Vec::new(),
+            messages: about.clone(),
+        })
+    };
     let Some(head) = &notice.head else {
         return plain();
     };
@@ -546,7 +562,17 @@ async fn prepare(
     match crate::services::messages::carry_for_push(&recorder.store, agent, head).await {
         Ok(carried) if carried.rows.is_empty() && notice.about.is_some() => None,
         Ok(carried) if postable(&carried.text, MAX_CARRIED_LEN) => {
-            Some((Arc::from(carried.text), carried.rows))
+            let mut messages = carried.messages;
+            for pair in about {
+                if !messages.contains(&pair) {
+                    messages.push(pair);
+                }
+            }
+            Some(Prepared {
+                text: Arc::from(carried.text),
+                rows: carried.rows,
+                messages,
+            })
         }
         Ok(_) => {
             tracing::error!(agent = %agent, seq = notice.seq, "session push built a malformed notice");
@@ -559,9 +585,9 @@ async fn prepare(
     }
 }
 
-/// Marks the messages `carried` of a notice that just got through as delivered, and sets `pushed_at` for a notice about a message, sending `message.pushed` after the commit when that set a first time; a failure is logged with the agent and the event's seq alone and leaves the rows undelivered.
-async fn record(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued, carried: &[i64]) {
-    if notice.about.is_none() && carried.is_empty() {
+/// Records a notice that just got through: its carried rows become delivered, and the messages it is about or carries get `pushed_at`, each followed by a live `message.pushed` when that set it a first time, so the web's delivery line of its thread refreshes. A failure is logged with the agent and the event's seq alone and leaves the rows undelivered.
+async fn record(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued, prepared: &Prepared) {
+    if prepared.messages.is_empty() && prepared.rows.is_empty() {
         return;
     }
     let Some(recorder) = targets
@@ -571,27 +597,34 @@ async fn record(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued, carri
         return;
     };
     let now = recorder.clock.now();
-    let message = notice.about.map(|about| about.message);
-    match crate::services::messages::record_pushed(&recorder.store, agent, message, carried, now)
-        .await
+    let ids: Vec<MessageId> = prepared.messages.iter().map(|(id, _)| *id).collect();
+    match crate::services::messages::record_pushed(
+        &recorder.store,
+        agent,
+        &ids,
+        &prepared.rows,
+        now,
+    )
+    .await
     {
-        Ok(0) => {}
-        Ok(_) => {
-            let Some(about) = notice.about else {
-                return;
-            };
-            match LiveEvent::new(
-                types::MESSAGE_PUSHED,
-                None,
-                json!({
-                    "message": about.message.to_string(),
-                    "thread": about.thread.to_string(),
-                    "agent": agent.as_str(),
-                }),
-            ) {
-                Ok(event) => recorder.bus.publish_live(event),
-                Err(error) => {
-                    tracing::error!(agent = %agent, seq = notice.seq, %error, "session push could not build message.pushed");
+        Ok(first) => {
+            for (message, thread) in &prepared.messages {
+                if !first.contains(message) {
+                    continue;
+                }
+                match LiveEvent::new(
+                    types::MESSAGE_PUSHED,
+                    None,
+                    json!({
+                        "message": message.to_string(),
+                        "thread": thread.to_string(),
+                        "agent": agent.as_str(),
+                    }),
+                ) {
+                    Ok(event) => recorder.bus.publish_live(event),
+                    Err(error) => {
+                        tracing::error!(agent = %agent, seq = notice.seq, %error, "session push could not build message.pushed");
+                    }
                 }
             }
         }
@@ -738,12 +771,12 @@ impl Sender {
     /// Posts one notice at a time until the target is dropped. Every failure drops only the notice and marks the target failing until a post succeeds, except a missing socket or one with no listener: the session has ended, so the socket and its kept file are dropped too.
     async fn run(self) {
         while let Some(notice) = self.queue.next().await {
-            let Some((text, carried)) = prepare(&self.targets, &self.agent, &notice).await else {
+            let Some(prepared) = prepare(&self.targets, &self.agent, &notice).await else {
                 continue;
             };
-            let Err(error) = self.post(&text).await else {
+            let Err(error) = self.post(&prepared.text).await else {
                 self.queue.failing.store(false, Ordering::Relaxed);
-                record(&self.targets, &self.agent, &notice, &carried).await;
+                record(&self.targets, &self.agent, &notice, &prepared).await;
                 continue;
             };
             if matches!(
