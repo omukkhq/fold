@@ -1,4 +1,4 @@
--- A review plan: open first versions that wait for related tasks to open their proposals, so one reviewer reviews them all as one batch. The review lead `lead_agent_id` makes it; its wait ends at `deadline_at`, an hour after `created_at`, and `wait_ended_at` records when fold ended it. Starting the plan gives its open proposals to one reviewer, `started_agent_id`, and records the batch they became in `review_batch_id` (empty when one proposal was left, which the reviewer reviews alone). The members of that batch are the plan's members released with the reason `started`.
+-- A review plan: open proposals that nobody reviewed yet and that wait for related tasks to open their proposals, so one reviewer reviews them all as one batch. The review lead `lead_agent_id` makes it; its wait ends at `deadline_at`, an hour after `created_at`, and `wait_ended_at` records when fold ended it. Starting the plan gives its open proposals to one reviewer, `started_agent_id`, and records the batch they became in `review_batch_id` (empty when one proposal was left, which the reviewer reviews alone). The members of that batch are the plan's members released with the reason `started`.
 CREATE TABLE review_plans (
     id INTEGER PRIMARY KEY,
     number INTEGER NOT NULL UNIQUE,
@@ -49,7 +49,7 @@ CREATE TABLE review_plan_members (
     joined_at INTEGER,
     released_at INTEGER,
     release_reason TEXT CONSTRAINT review_plan_members_release_reason_values CHECK (release_reason IN (
-        'started', 'not_opened', 'deadline', 'removed', 'closed', 'archived', 'not_proposal_kind',
+        'started', 'not_opened', 'deadline', 'removed', 'closed', 'reviewed', 'claimed', 'archived', 'not_proposal_kind',
         'main_area', 'human_review', 'blocker', 'depends_on_member', 'backlog', 'in_review', 'done'
     )),
     CONSTRAINT review_plan_members_version_with_proposal CHECK ((proposal_id IS NULL) = (version_id IS NULL)),

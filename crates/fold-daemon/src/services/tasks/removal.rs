@@ -20,7 +20,7 @@ use crate::services::events::EventBuffer;
 use crate::services::workspaces::{self as workspace_service, ArchiveReason};
 
 impl TaskService {
-    /// Removes a task that never had a workspace, a proposal, a completion, a report or a message naming it, with its edges, the linked checklist items pointing at it, its labels, its own checklists and its claim rows; a live implementation claim it removes appends `claim.released`. A held task is deleted only by the holder's agent, its lead or a human (`policy::can_delete_task`). A task that a Done task's checklist links is refused with `task_closed`, because a Done task's checklists are locked. Its earlier events stay, and its number is never reused. Dependents recompute in the same transaction.
+    /// Removes a task that never had a workspace, a proposal, a completion, a report, a message naming it, a worker's turn counted for it or a place in a review plan, with its edges, the linked checklist items pointing at it, its labels, its own checklists and its claim rows; a live implementation claim it removes appends `claim.released`. A held task is deleted only by the holder's agent, its lead or a human (`policy::can_delete_task`). A task that a Done task's checklist links is refused with `task_closed`, because a Done task's checklists are locked. Its earlier events stay, and its number is never reused. Dependents recompute in the same transaction.
     pub async fn delete_task(&self, actor: &Actor, id: TaskId) -> Result<(), TaskError> {
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();

@@ -44,7 +44,7 @@ pub struct PushContext {
     pub main_task: bool,
     /// For `worker.stopped` and `worker.failed` of a reviewer, the open proposals whose review claim it still holds, whose newest version has no verdict and for which fold owes it no resume; empty while the project is paused, because the resume of the pause runs the reviewer again.
     pub unreviewed: Vec<ProposalId>,
-    /// The event's proposal waits in a review plan, whose own notices tell the review lead when to start its reviewer.
+    /// For `proposal.opened`, `proposal.version_added` and `proposal.review_again_requested`, the event's proposal waits in a review plan, whose own notices tell the review lead when to start its reviewer.
     pub planned: bool,
 }
 
@@ -87,6 +87,7 @@ pub fn is_pushed(event: &Event) -> bool {
         types::WORKER_STOPPED,
         types::WORKER_FAILED,
         types::WORKER_MODEL_UNREACHABLE,
+        types::REVIEW_PLAN_CHANGED,
         types::REVIEW_PLAN_JOINED,
         types::REVIEW_PLAN_LEFT,
         types::REVIEW_PLAN_WAIT_ENDED,
@@ -693,7 +694,7 @@ fn approved_text(request: RequestId, tasks: &[TaskId]) -> String {
     }
 }
 
-/// A proposal that needs a review reaches the review lead, which gives the review to a reviewer with `start_worker`, and the holder of its review claim, which checks out the version to review. A new version, or one a human sent for review again, reaches the review lead only while nobody holds the claim: fold resumes a holder that has ended for that version. A review lead that holds the claim cannot check the version out, so it is told to release the claim and give the review to a reviewer. No review lead hears of a proposal of a task of Main or of its own proposal.
+/// A proposal that needs a review reaches the review lead, which gives the review to a reviewer with `start_worker`, and the holder of its review claim, which checks out the version to review. A new version, or one a human sent for review again, reaches the review lead only while nobody holds the claim and the proposal waits in no review plan: fold resumes a holder that has ended for that version, and the plan's start gives the proposal to a reviewer. A review lead that holds the claim cannot check the version out, so it is told to release the claim and give the review to a reviewer. No review lead hears of a proposal of a task of Main or of its own proposal.
 fn review_rules(
     event: &Event,
     ctx: &PushContext,
@@ -715,11 +716,11 @@ fn review_rules(
             Some(version) => format!("{proposal} has version {version}"),
             None => format!("{proposal} has a new version"),
         };
-        (text, ctx.review_claim.is_none())
+        (text, ctx.review_claim.is_none() && !ctx.planned)
     } else if kind == types::PROPOSAL_REVIEW_AGAIN_REQUESTED {
         let version = event.data.get("version")?.as_u64()?;
         let text = format!("a human sent {proposal} version {version} for review again");
-        (text, ctx.review_claim.is_none())
+        (text, ctx.review_claim.is_none() && !ctx.planned)
     } else {
         return None;
     };
@@ -749,13 +750,14 @@ fn review_rules(
     Some(vec![(leads, text, "start_worker"), held])
 }
 
-/// A review plan reaches the review lead when it changes without the lead: an awaited task opened its proposal and joined, or stopped being eligible and left; the wait ended at the deadline; or fold ended the plan because no member is left. Once no task is awaited, the notice names the proposals to give one reviewer with the plan. The daemon writes the plan's open proposals and awaited tasks after the change into the event.
+/// A review plan reaches the review lead when it changes without the lead: an awaited task opened its proposal and joined, or stopped being eligible and left; the main agent took members out or closed it; the wait ended at the deadline; or the plan ended because no member is left. Once no task is awaited, the notice names the proposals to give one reviewer with the plan. The daemon writes the plan's open proposals and awaited tasks after the change into the event.
 fn plan_rules(
     event: &Event,
     ctx: &PushContext,
 ) -> Option<Vec<(Vec<AgentName>, String, &'static str)>> {
     let kind = event.event_type;
     if ![
+        types::REVIEW_PLAN_CHANGED,
         types::REVIEW_PLAN_JOINED,
         types::REVIEW_PLAN_LEFT,
         types::REVIEW_PLAN_WAIT_ENDED,
@@ -802,9 +804,29 @@ fn plan_rules(
             "start_worker",
         )
     } else if kind == types::REVIEW_PLAN_ENDED {
+        let body = if text("reason") == Some("closed") {
+            format!("{plan} was closed: give its open proposals to reviewers")
+        } else {
+            format!("{plan} ended: no member is left to review")
+        };
+        (body, "list_proposals")
+    } else if kind == types::REVIEW_PLAN_CHANGED {
+        let removed = strings("removed");
+        let closed = event
+            .data
+            .get("closed")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if closed || removed.is_empty() {
+            // A closed plan ends in the same write, and its own notice follows.
+            return Some(Vec::new());
+        }
         (
-            format!("{plan} ended: no member is left to review"),
-            "list_proposals",
+            format!(
+                "{} left {plan}: give their open proposals to reviewers",
+                removed.join(", ")
+            ),
+            "get_review_plan",
         )
     } else {
         let task = text("task")?;
@@ -933,7 +955,7 @@ mod tests {
 
     #[test]
     fn a_proposal_that_joins_a_plan_reaches_the_review_lead_only_through_the_plan() {
-        // A first version that waits in a plan has no review claim yet.
+        // A proposal that waits in a plan has no review claim.
         let planned = PushContext {
             planned: true,
             review_claim: None,
@@ -945,6 +967,34 @@ mod tests {
                 .iter()
                 .all(|(_, _, tool)| *tool != "start_worker")
         );
+        let version = with_data(
+            event(types::PROPOSAL_VERSION_ADDED, "frontend/ui"),
+            json!({"version": 2}),
+        );
+        let again = with_data(
+            event(types::PROPOSAL_REVIEW_AGAIN_REQUESTED, "frontend/ui"),
+            json!({"version": 3}),
+        );
+        for event in [&version, &again] {
+            assert!(
+                sent(&notice_for(event, &planned)).is_empty(),
+                "{:?}",
+                event.event_type
+            );
+            assert!(
+                sent(&notice_for(
+                    event,
+                    &PushContext {
+                        review_claim: None,
+                        ..ctx()
+                    }
+                ))
+                .iter()
+                .any(|(_, _, tool)| *tool == "start_worker"),
+                "{:?}",
+                event.event_type
+            );
+        }
         let joined = with_data(
             event(types::REVIEW_PLAN_JOINED, "fold"),
             json!({"plan": "rp-1", "task": "T-12", "proposal": "P-3", "proposals": ["P-2", "P-3"], "awaited": ["T-14"]}),
@@ -1017,6 +1067,27 @@ mod tests {
             sent(&notice_for(&gone, &ctx()))[0].1,
             "fold: rp-1 ended: no member is left to review. Call list_proposals."
         );
+        let closed = with_data(
+            event(types::REVIEW_PLAN_ENDED, "frontend"),
+            json!({"plan": "rp-1", "reason": "closed"}),
+        );
+        assert_eq!(
+            sent(&notice_for(&closed, &ctx()))[0].1,
+            "fold: rp-1 was closed: give its open proposals to reviewers. Call list_proposals."
+        );
+        let removed = with_data(
+            event(types::REVIEW_PLAN_CHANGED, "frontend"),
+            json!({"plan": "rp-1", "added_proposals": [], "added_tasks": [], "removed": ["T-14"], "closed": false}),
+        );
+        assert_eq!(
+            sent(&notice_for(&removed, &ctx()))[0].1,
+            "fold: T-14 left rp-1: give their open proposals to reviewers. Call get_review_plan."
+        );
+        let closing = with_data(
+            event(types::REVIEW_PLAN_CHANGED, "frontend"),
+            json!({"plan": "rp-1", "removed": ["T-14"], "closed": true}),
+        );
+        assert!(notice_for(&closing, &ctx()).is_empty());
         let by_lead = with_data(
             event(types::REVIEW_PLAN_ENDED, "review"),
             json!({"plan": "rp-1", "reason": "removed"}),
@@ -1040,7 +1111,7 @@ mod tests {
             assert!(notice_for(&event, &main_task).is_empty(), "{kind}");
         }
         let again = with_data(
-            event(types::PROPOSAL_REVIEW_AGAIN_REQUESTED, "human:ana"),
+            event(types::PROPOSAL_REVIEW_AGAIN_REQUESTED, "frontend/ui"),
             json!({"version": 2}),
         );
         assert!(notice_for(&again, &main_task).is_empty());

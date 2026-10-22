@@ -17,7 +17,7 @@ mod sessions;
 mod tasks;
 mod workers;
 
-pub use batches::{can_change_batch, can_plan_reviews, can_review_batch};
+pub use batches::{can_change_batch, can_change_plan, can_plan_reviews, can_review_batch};
 pub use human_review::{
     CHECKS_FILE_REASON, MAIN_AREA_REASON, MarkChange, can_clear_human_review, can_edit_as_human,
     can_human_approve, can_set_human_review, checks_file_mark, main_area_mark, main_area_unmark,

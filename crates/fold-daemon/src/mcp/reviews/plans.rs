@@ -9,7 +9,9 @@ use serde_json::{Value, json};
 use super::super::error::from_review;
 use super::super::parse;
 use super::{id, proposal_id, version};
-use crate::services::reviews::{ProposalPlan, ReviewPlanView, ReviewService};
+use crate::services::reviews::{
+    DEFAULT_PLAN_LIST, PlanChange, ProposalPlan, ReviewPlanView, ReviewService,
+};
 
 pub const CREATE_REVIEW_PLAN: &str = "create_review_plan";
 pub const CHANGE_REVIEW_PLAN: &str = "change_review_plan";
@@ -19,7 +21,7 @@ pub const LIST_REVIEW_PLANS: &str = "list_review_plans";
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct CreateReviewPlanInput {
-    /// The open first versions that wait, such as ["P-3"]: the new proposal, and any open first version of a related task that nobody reviews yet.
+    /// The open proposals that wait, such as ["P-3"]: the new proposal, and any open proposal of a related task that nobody reviewed or claimed yet.
     pub proposals: Vec<String>,
     /// The related tasks to wait for, such as ["T-7", "T-8"]: To do or In progress tasks whose proposals belong in the same batch. Together with the proposals' tasks at most 5.
     pub tasks: Vec<String>,
@@ -33,7 +35,7 @@ pub struct CreateReviewPlanInput {
 pub struct ChangeReviewPlanInput {
     /// The review plan, such as rp-2.
     pub id: String,
-    /// Open first versions to add, such as ["P-9"].
+    /// Open proposals without a review to add, such as ["P-9"].
     #[serde(default)]
     pub add_proposals: Vec<String>,
     /// Related tasks to wait for too, such as ["T-9"]; only before the plan's wait ended.
@@ -42,6 +44,9 @@ pub struct ChangeReviewPlanInput {
     /// Tasks to take out of the plan, awaited or with their proposal, such as ["T-8"]. A removed proposal is reviewed on its own.
     #[serde(default)]
     pub remove: Vec<String>,
+    /// Take every member out and end the plan, so its proposals are reviewed on their own. Not with add_proposals or add_tasks.
+    #[serde(default)]
+    pub close: bool,
     /// The worker that makes this call, such as review/plan. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -60,9 +65,12 @@ pub struct ReviewPlanIdInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct ListReviewPlansInput {
-    /// Only the plans that are open: waiting for tasks or for their start.
+    /// Only the plans that are open, waiting for tasks or for their start: true when left out; false lists the started and ended plans too.
     #[serde(default)]
-    pub open: bool,
+    pub open: Option<bool>,
+    /// The most plans to return, the newest ones, in number order: 1 to 100, 20 when left out.
+    #[serde(default)]
+    pub limit: Option<u32>,
     /// The worker that makes this call, such as review/plan. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -72,12 +80,12 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             CREATE_REVIEW_PLAN,
-            "Review lead only: when a first version (v1) opens and related To do or In progress tasks will open proposals that belong in the same review, make a plan that waits for them, so one reviewer reviews all of them as one batch. At most 5 tasks, the proposals' tasks included. The wait ends an hour after the plan is made. fold adds each awaited task's proposal when it opens and tells you when it joins, when every awaited task opened one, when a task stops being eligible and leaves, and when the wait ends; then call start_worker with role reviewer and plan. Refusals: review_plan_too_large, proposal_not_plannable (a later version, a reviewed, claimed or batched proposal, or the human review mark: review it alone), task_not_awaitable (details.reason, such as blocker, backlog or depends_on_member: a task that needs a member's task would wait for the plan itself), main_area, already_in_plan and review_plan_denied.",
+            "Review lead only: when a proposal opens and related To do or In progress tasks will open proposals that belong in the same review, make a plan that waits for them, so one reviewer reviews all of them as one batch. At most 5 tasks, the proposals' tasks included. The wait ends an hour after the plan is made. fold adds each awaited task's proposal when it opens and tells you when it joins, when a member leaves (such as at a verdict or a review claim), when every awaited task opened one, when a task stops being eligible and leaves, and when the wait ends; then call start_worker with role reviewer and plan. Refusals: review_plan_too_large, proposal_not_plannable (a verdict on any version, a review claim, a batch or the human review mark: review it alone), task_not_awaitable (details.reason, such as blocker, backlog or depends_on_member: a task that needs a member's task would wait for the plan itself), main_area, already_in_plan and review_plan_denied.",
             schema_for_type::<CreateReviewPlanInput>(),
         ),
         Tool::new(
             CHANGE_REVIEW_PLAN,
-            "Review lead only: add open first versions or awaited tasks to an open plan, or take tasks out of it. The deadline stays. A plan left without members ends. Refusals as for create_review_plan, and review_plan_not_open.",
+            "Review lead: add open proposals without a review or awaited tasks to an open plan, take tasks out of it, or close it. The main agent, only when the user tells it to, may take tasks out or close a plan that no review lead starts, never add. The deadline stays. A plan left without members ends. Refusals as for create_review_plan, and review_plan_not_open.",
             schema_for_type::<ChangeReviewPlanInput>(),
         ),
         Tool::new(
@@ -87,7 +95,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_REVIEW_PLANS,
-            "List review plans with their state, proposals and awaited tasks.",
+            "List review plans with their state, proposals and awaited tasks: the open ones unless open is false, the newest 20 unless limit says otherwise.",
             schema_for_type::<ListReviewPlansInput>(),
         ),
     ]
@@ -114,7 +122,10 @@ pub async fn run(
         LIST_REVIEW_PLANS => {
             let input: ListReviewPlansInput = parse(arguments)?;
             let plans = reviews
-                .list_review_plans(input.open)
+                .list_review_plans(
+                    input.open.unwrap_or(true),
+                    Some(input.limit.unwrap_or(DEFAULT_PLAN_LIST)),
+                )
                 .await
                 .map_err(from_review)?;
             json!({"plans": plans.iter().map(plan_json).collect::<Vec<_>>()})
@@ -167,14 +178,14 @@ async fn change_review_plan(
         .iter()
         .map(|text| proposal_id(text))
         .collect::<Result<Vec<_>, _>>()?;
+    let change = PlanChange {
+        add_proposals,
+        add_tasks: task_ids(&input.add_tasks)?,
+        remove: task_ids(&input.remove)?,
+        close: input.close,
+    };
     let plan = reviews
-        .change_review_plan(
-            actor,
-            plan_id(&input.id)?,
-            add_proposals,
-            task_ids(&input.add_tasks)?,
-            task_ids(&input.remove)?,
-        )
+        .change_review_plan(actor, plan_id(&input.id)?, change)
         .await
         .map_err(from_review)?;
     Ok(plan_json(&plan))
