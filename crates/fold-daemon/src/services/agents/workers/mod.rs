@@ -472,7 +472,7 @@ impl AgentService {
                             .into());
                         }
                     }
-                    Role::Reviewer => {}
+                    Role::Reviewer | Role::Main => {}
                 }
                 limits::check_running(
                     tx,
@@ -679,7 +679,7 @@ impl AgentService {
         }
     }
 
-    /// Stops a running worker on request: see [`Supervisor`] for the steps. Whoever may start a worker of its role may stop it. A worker that is not running is returned as it is.
+    /// Stops a running worker on request: see [`Supervisor`] for the steps. Whoever may start a worker of its role may stop it. A worker that is not running is returned as it is. A human's stop of the supervised main holds it: fold starts it for no work of its own until a human starts it again.
     pub async fn stop_worker(
         &self,
         actor: &Actor,
@@ -689,7 +689,11 @@ impl AgentService {
         let row = self.get_worker(agent).await?;
         let starter = self.starter(actor).await?;
         policy::can_stop_worker(&starter, row.role, row.area.as_ref()).map_err(FoldError::from)?;
-        supervisor.stop(agent).await?;
+        if row.role == Role::Main && matches!(actor, Actor::Human { .. }) {
+            supervisor.stop_and_hold(agent).await?;
+        } else {
+            supervisor.stop(agent).await?;
+        }
         self.get_worker(agent).await
     }
 
@@ -787,6 +791,11 @@ fn binding_area(
             }
             Ok(Some(own.clone()))
         }
+        // `can_start_worker` refuses every start of the supervised main before its binding is read.
+        Role::Main => Err(invalid(
+            "fold starts the supervised main agent itself",
+            "set supervised = true under [main] in .fold/config.toml",
+        )),
         Role::Reviewer => {
             if no_proposals || !no_tasks || request.area.is_some() {
                 return Err(invalid(

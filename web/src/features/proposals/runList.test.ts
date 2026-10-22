@@ -58,6 +58,24 @@ describe("allRuns", () => {
   });
 });
 
+describe("runTitle", () => {
+  it("titles the run of a batch by the batch, whichever member's page shows it", () => {
+    const run = checkRun(90, {
+      stage: "integration",
+      purpose: "integrate",
+      version: 3,
+      base: "r9",
+      batch: "rb-2",
+    });
+    expect(runTitle({ run, version: 2 })).toBe(
+      "batch rb-2 integration checks on r9",
+    );
+    expect(runTitle({ run: { ...run, batch: null }, version: 3 })).toBe(
+      "v3 integration checks on r9",
+    );
+  });
+});
+
 describe("chosenStep", () => {
   const items = allRuns(
     new Map([

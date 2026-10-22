@@ -563,6 +563,22 @@ describe("Proposals list", () => {
     });
   });
 
+  it("names the review batch a proposal integrated with and links it", async () => {
+    revisions = [{ ...revision(8, "P-5"), batch: "rb-2" }, revision(1)];
+    renderAt("/p/demo/proposals/P-5");
+    expect(
+      await screen.findByText("Integrated with batch rb-2 as r8"),
+    ).toBeTruthy();
+    const panel = await integration();
+    expect(
+      await within(panel).findByText(
+        byContent(/^v1 integrated with batch rb-2 as r8/),
+      ),
+    ).toBeTruthy();
+    const link = within(panel).getByRole("link", { name: "rb-2" });
+    expect(link.getAttribute("href")).toBe("/p/demo/batches/rb-2");
+  });
+
   it("filters by claim and by conflict, and the address carries the filters", async () => {
     const user = userEvent.setup();
     const { router } = renderAt("/p/demo/proposals");
@@ -1850,6 +1866,7 @@ describe("Checks", () => {
       reason: null,
       created_at: 1,
       finished_at: 2,
+      batch: null,
       results: [passed],
       ...fields,
     };

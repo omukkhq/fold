@@ -2,7 +2,8 @@ use fold_core::merge::ConflictReport;
 use fold_core::reviews::{HumanReviewMark, ReviewFact};
 use fold_core::revision::StoredRevision;
 use fold_core::{
-    ChangesetId, IntegrationId, ProposalId, TaskId, TaskStatus, Timestamp, WorkspaceId,
+    ChangesetId, IntegrationId, ProposalId, ReviewBatchId, TaskId, TaskStatus, Timestamp,
+    WorkspaceId,
 };
 use sqlx::{SqliteConnection, SqliteExecutor};
 
@@ -69,6 +70,8 @@ pub enum IntegrationSubject<'a> {
         proposal: ProposalId,
         version: u32,
         remote_commit: Option<&'a str>,
+        /// The submitted review batch whose members this integration publishes together.
+        batch: Option<ReviewBatchId>,
     },
     Pull {
         remote_commit: &'a str,
@@ -212,20 +215,24 @@ async fn insert(
     report: &str,
 ) -> Result<(), StoreError> {
     let number = new.number.to_db();
-    let (kind, proposal, version, remote_commit) = match new.subject {
+    let (kind, proposal, version, remote_commit, batch) = match new.subject {
         IntegrationSubject::Proposal {
             proposal,
             version,
             remote_commit,
+            batch,
         } => (
             "proposal",
             Some(proposal.to_db()),
             Some(i64::from(version)),
             remote_commit,
+            batch.map(ReviewBatchId::to_db),
         ),
-        IntegrationSubject::Pull { remote_commit } => ("pull", None, None, Some(remote_commit)),
-        IntegrationSubject::Direct { .. } => ("direct", None, None, None),
-        IntegrationSubject::Record { remote_commit } => ("record", None, None, remote_commit),
+        IntegrationSubject::Pull { remote_commit } => {
+            ("pull", None, None, Some(remote_commit), None)
+        }
+        IntegrationSubject::Direct { .. } => ("direct", None, None, None, None),
+        IntegrationSubject::Record { remote_commit } => ("record", None, None, remote_commit, None),
     };
     let (changeset, message) = match new.subject {
         IntegrationSubject::Direct { changeset, message } => {
@@ -240,7 +247,7 @@ async fn insert(
     sqlx::query!(
         "INSERT INTO integrations
              (number, kind, proposal_id, version_id, remote_commit, result, revision_id, report, actor, created_at,
-              changeset_id, message)
+              changeset_id, message, review_batch_id)
          VALUES (
              ?1, ?2,
              (SELECT id FROM proposals WHERE number = ?3),
@@ -250,7 +257,8 @@ async fn insert(
              CASE WHEN ?7 THEN (SELECT COALESCE(MAX(id), 0) + 1 FROM revisions) END,
              ?8, ?9, ?10,
              (SELECT id FROM changesets WHERE number = ?11),
-             ?12
+             ?12,
+             (SELECT id FROM review_batches WHERE number = ?13)
          )",
         number,
         kind,
@@ -263,7 +271,8 @@ async fn insert(
         new.actor,
         created_at,
         changeset,
-        message
+        message,
+        batch
     )
     .execute(tx.conn())
     .await?;

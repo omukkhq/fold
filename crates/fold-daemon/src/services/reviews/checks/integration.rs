@@ -6,7 +6,7 @@ use fold_core::reviews::checks::{
 };
 use fold_core::{
     Actor, AddressedAs, CheckRunId, EventActor, FoldError, IdKind, MessageBody, NewEvent,
-    ProposalId, Recipient, RevisionId, Target, TaskId, WorkerName, codes,
+    ProposalId, Recipient, ReviewBatchId, RevisionId, Target, TaskId, WorkerName, codes,
 };
 use fold_store::reviews::checks::{self, CheckRunRow, NewCheckRun};
 use fold_store::reviews::{self};
@@ -49,7 +49,7 @@ pub(crate) enum IntegrationChecks {
 
 /// The proposal version an attempt integrates, as the checks need it.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Integrating {
+pub(crate) struct Integrating<'a> {
     pub proposal: ProposalId,
     pub task: TaskId,
     pub version: u32,
@@ -57,6 +57,10 @@ pub(crate) struct Integrating {
     pub head: RevisionId,
     pub head_tree: ObjectHash,
     pub merged: ObjectHash,
+    /// The submitted batch whose members merge together into `merged`; the run is stored on `proposal`, the last of them, and names the batch. A failed run of a batch sends nobody back: the caller integrates the members one at a time.
+    pub batch: Option<ReviewBatchId>,
+    /// The version row ids of the batch's members in `merged`, which the run names so each member's page lists it; empty for one proposal.
+    pub members: &'a [i64],
 }
 
 impl ReviewService {
@@ -64,7 +68,7 @@ impl ReviewService {
     pub(crate) async fn integration_checks(
         &self,
         actor: &Actor,
-        at: Integrating,
+        at: Integrating<'_>,
         carried: &mut Option<PassedRun>,
     ) -> Result<IntegrationChecks, ReviewError> {
         let input = self
@@ -96,8 +100,12 @@ impl ReviewService {
                     fault: false,
                 };
                 let verdict = Verdict::failed(RunReason::ChecksFileInvalid);
-                self.send_back_for_checks(actor, at, &run, &[invalid], verdict)
-                    .await?;
+                if at.batch.is_some() {
+                    self.end_run_alone(&run, &[invalid], verdict).await?;
+                } else {
+                    self.send_back_for_checks(actor, at, &run, &[invalid], verdict)
+                        .await?;
+                }
                 return Ok(IntegrationChecks::Failed(run.id));
             }
         };
@@ -153,15 +161,19 @@ impl ReviewService {
         drop(permit);
         drop(held);
         if verdict == fault {
-            self.end_fold_failed(&run, &results, verdict).await?;
+            self.end_run_alone(&run, &results, verdict).await?;
             return Ok(IntegrationChecks::FoldFailed(run.id));
         }
         if verdict.state == RunState::Passed {
             *carried = Some(PassedRun { run, results });
             return Ok(IntegrationChecks::Passed);
         }
-        self.send_back_for_checks(actor, at, &run, &results, verdict)
-            .await?;
+        if at.batch.is_some() {
+            self.end_run_alone(&run, &results, verdict).await?;
+        } else {
+            self.send_back_for_checks(actor, at, &run, &results, verdict)
+                .await?;
+        }
         Ok(IntegrationChecks::Failed(run.id))
     }
 
@@ -204,8 +216,8 @@ impl ReviewService {
         Ok(())
     }
 
-    /// Ends a run that fold itself could not complete as `stopped` with `fold_failed`, in a write of its own. The proposal is not flagged and nobody is sent back: the caller tells whoever asked for the integration, who asks again once the fault is fixed.
-    async fn end_fold_failed(
+    /// Ends a run in a write of its own, with nobody sent back: a run that fold itself could not complete, stopped as `fold_failed`, whose caller tells whoever asked for the integration, who asks again once the fault is fixed, or the failed run of a batch, whose caller integrates the members one at a time.
+    async fn end_run_alone(
         &self,
         run: &CheckRunRow,
         results: &[CommandResult],
@@ -252,7 +264,7 @@ impl ReviewService {
     async fn start_integration_run(
         &self,
         actor: &Actor,
-        at: Integrating,
+        at: Integrating<'_>,
     ) -> Result<CheckRunRow, ReviewError> {
         let now = self.clock.now();
         let label = actor.event_actor();
@@ -277,18 +289,26 @@ impl ReviewService {
                     actor: label.as_str(),
                     title: None,
                     evidence: None,
+                    batch: at.batch,
                 };
                 checks::insert_run(tx, &new, now).await?;
+                if at.batch.is_some() {
+                    checks::insert_run_members(tx, id, at.members).await?;
+                }
+                let mut data = json!({
+                    "run": id.to_string(),
+                    "stage": Stage::Integration.as_str(),
+                    "purpose": Purpose::Integrate.as_str(),
+                    "version": at.version,
+                });
+                if let Some(batch) = at.batch {
+                    data["batch"] = json!(batch.to_string());
+                }
                 let event = NewEvent::new(fold_core::events::types::CHECKS_STARTED, label.clone())?
                     .task(at.task)
                     .proposal(at.proposal)
                     .revision(at.head)
-                    .data(json!({
-                        "run": id.to_string(),
-                        "stage": Stage::Integration.as_str(),
-                        "purpose": Purpose::Integrate.as_str(),
-                        "version": at.version,
-                    }))?;
+                    .data(data)?;
                 buffer.append(tx, &event, now).await?;
                 checks::get_run(tx.conn(), id)
                     .await?
@@ -305,7 +325,7 @@ impl ReviewService {
     async fn send_back_for_checks(
         &self,
         actor: &Actor,
-        at: Integrating,
+        at: Integrating<'_>,
         run: &CheckRunRow,
         results: &[CommandResult],
         verdict: Verdict,
@@ -393,7 +413,7 @@ impl ReviewService {
 }
 
 /// The answer to an integration whose checks fold itself could not run: nothing was published and the version keeps its place, so the caller asks again once the fault is fixed.
-pub(crate) fn fold_failed_refusal(at: Integrating, run: CheckRunId) -> FoldError {
+pub(crate) fn fold_failed_refusal(at: Integrating<'_>, run: CheckRunId) -> FoldError {
     FoldError::new(
         codes::WORKSPACE_IO,
         format!(
@@ -415,7 +435,7 @@ async fn tell(
     tx: &mut WriteTx,
     buffer: &mut EventBuffer,
     to: &BTreeSet<WorkerName>,
-    at: Integrating,
+    at: Integrating<'_>,
     body: &str,
     now: fold_core::Timestamp,
 ) -> Result<(), ReviewError> {
@@ -441,7 +461,7 @@ async fn tell(
 
 /// The message of failed integration checks: what failed on which merge, and the end of the first failed log.
 fn send_back_message(
-    at: Integrating,
+    at: Integrating<'_>,
     run: &CheckRunRow,
     results: &[CommandResult],
     verdict: Verdict,
@@ -504,6 +524,8 @@ mod tests {
             head: RevisionId::from_number(5).unwrap(),
             head_tree: ObjectHash::from_bytes([1; 32]),
             merged: ObjectHash::from_bytes([2; 32]),
+            batch: None,
+            members: &[],
         };
         let run = CheckRunRow {
             id: CheckRunId::from_number(9).unwrap(),
@@ -523,6 +545,7 @@ mod tests {
             reason: None,
             created_at: Timestamp::from_millis(0).unwrap(),
             finished_at: None,
+            batch: None,
         };
         let results = [CommandResult {
             check: Some("e2e".to_owned()),

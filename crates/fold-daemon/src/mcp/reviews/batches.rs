@@ -10,7 +10,8 @@ use super::super::error::from_review;
 use super::super::parse;
 use super::{ScopeChoiceInput, id, proposal_id, scope_choices, version};
 use crate::services::reviews::{
-    BatchComment, BatchLines, BatchVerdict, ReviewBatchView, ReviewService,
+    BatchComment, BatchIntegration, BatchIntegrationView, BatchLines, BatchVerdict,
+    IntegrationOutcome, MemberIntegration, ReviewBatchView, ReviewService,
 };
 
 pub const CREATE_REVIEW_BATCH: &str = "create_review_batch";
@@ -19,6 +20,7 @@ pub const GET_REVIEW_BATCH: &str = "get_review_batch";
 pub const REMOVE_FROM_BATCH: &str = "remove_from_batch";
 pub const CREATE_BATCH_CHECKOUT: &str = "create_batch_checkout";
 pub const SUBMIT_BATCH_REVIEW: &str = "submit_batch_review";
+pub const INTEGRATE_REVIEW_BATCH: &str = "integrate_review_batch";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -144,6 +146,11 @@ pub fn tools() -> Vec<Tool> {
             "Give every member of your batch its own verdict in one call, with line comments on the batch checkout and comments on the batch. A member that got a new version is left out.",
             schema_for_type::<SubmitBatchReviewInput>(),
         ),
+        Tool::new(
+            INTEGRATE_REVIEW_BATCH,
+            "Integrate the approved members of a submitted batch together; only the main agent, the review lead, a reviewer that wrote none of them, or a human may. fold integrates a ready batch by itself when the project integrates automatically; call this when it does not. A batch is ready when every member has its final state: approved, or out (changes requested, rejected, closed, removed, or waiting for a human or for a member that is out). The ready members merge onto main in dependency order, the integration checks run once on the whole merge, and one transaction publishes one revision per member (result together). A member that conflicts goes back to its author alone; when the one check run fails, fold integrates the members one at a time, each with its own run, and sends back only the member whose run fails (result one_at_a_time). With integration checks the call is queued and fold sends each member's result as a message. Refusals: invalid_request with the reason batch_not_submitted, batch_waiting (details name the pending members), batch_integrated or integration_queued, and the caller gates of integrate_proposal. A member can still be integrated alone with integrate_proposal.",
+            schema_for_type::<ReviewBatchIdInput>(),
+        ),
     ]
 }
 
@@ -161,6 +168,7 @@ pub async fn run(
         REMOVE_FROM_BATCH => remove_from_batch(reviews, actor, arguments).await?,
         CREATE_BATCH_CHECKOUT => create_batch_checkout(reviews, actor, arguments).await?,
         SUBMIT_BATCH_REVIEW => submit_batch_review(reviews, actor, arguments).await?,
+        INTEGRATE_REVIEW_BATCH => integrate_review_batch(reviews, actor, arguments).await?,
         _ => return Ok(None),
     };
     Ok(Some(value))
@@ -223,6 +231,88 @@ fn batch_json(batch: &ReviewBatchView) -> Value {
             "body": comment.body,
             "members": comment.members,
         })).collect::<Vec<Value>>(),
+        "integration": integration_json(&batch.integration),
+    })
+}
+
+fn integration_json(view: &BatchIntegrationView) -> Value {
+    match view {
+        BatchIntegrationView::NotSubmitted => json!({"state": "not_submitted"}),
+        BatchIntegrationView::Waiting { pending } => json!({
+            "state": "waiting",
+            "pending": pending,
+        }),
+        BatchIntegrationView::Ready { members, queued } => json!({
+            "state": "ready",
+            "members": members,
+            "queued": queued,
+        }),
+        BatchIntegrationView::Ended {
+            outcome,
+            run,
+            revisions,
+        } => json!({
+            "state": "ended",
+            "outcome": outcome.as_str(),
+            "run": run,
+            "revisions": revisions.iter().map(|row| json!({
+                "proposal": row.proposal,
+                "version": version(row.version),
+                "revision": row.revision,
+            })).collect::<Vec<Value>>(),
+        }),
+    }
+}
+
+fn member_json(member: &MemberIntegration) -> Value {
+    match &member.outcome {
+        IntegrationOutcome::Succeeded { revision } => json!({
+            "proposal": member.proposal,
+            "result": "succeeded",
+            "revision": revision,
+        }),
+        IntegrationOutcome::Conflicted(conflicts) => json!({
+            "proposal": member.proposal,
+            "result": "conflicted",
+            "files": conflicts.len(),
+        }),
+        IntegrationOutcome::ChecksFailed { run } => json!({
+            "proposal": member.proposal,
+            "result": "checks_failed",
+            "run": run,
+        }),
+        IntegrationOutcome::Queued => json!({
+            "proposal": member.proposal,
+            "result": "queued",
+        }),
+    }
+}
+
+async fn integrate_review_batch(
+    reviews: &ReviewService,
+    actor: &Actor,
+    arguments: &JsonObject,
+) -> Result<Value, FoldError> {
+    let input: ReviewBatchIdInput = parse(arguments)?;
+    let batch = batch_id(&input.id)?;
+    let outcome = reviews
+        .integrate_review_batch(actor, batch)
+        .await
+        .map_err(from_review)?;
+    Ok(match outcome {
+        BatchIntegration::Together { members } => json!({
+            "id": batch,
+            "result": "together",
+            "members": members.iter().map(member_json).collect::<Vec<Value>>(),
+        }),
+        BatchIntegration::OneAtATime { run, members } => json!({
+            "id": batch,
+            "result": "one_at_a_time",
+            "run": run,
+            "members": members.iter().map(member_json).collect::<Vec<Value>>(),
+        }),
+        BatchIntegration::Nothing => json!({"id": batch, "result": "nothing"}),
+        BatchIntegration::Queued => json!({"id": batch, "result": "queued"}),
     })
 }
 

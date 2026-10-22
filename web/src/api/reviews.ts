@@ -37,3 +37,18 @@ export function getReviewBatch(slug: string, id: string): Promise<ReviewBatch> {
     }),
   );
 }
+
+export type BatchIntegrationResult =
+  components["schemas"]["BatchIntegrationResult"];
+
+/** The signed-in human integrates the approved members of a submitted batch together. Rejects with `invalid_request` and `details.reason` `batch_waiting` while a member has no final state, `batch_integrated` once the batch's integration ended, `batch_not_submitted` or `integration_queued`. */
+export function integrateReviewBatch(
+  slug: string,
+  id: string,
+): Promise<BatchIntegrationResult> {
+  return unwrap(
+    api.POST("/api/v1/projects/{slug}/reviews/batches/{id}/integrate", {
+      params: { path: { slug, id } },
+    }),
+  );
+}

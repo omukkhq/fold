@@ -3,8 +3,8 @@ use fold_core::merge::{Conflict, ReportFile};
 use fold_core::policy::{GateState, IntegrateInput, ProposalFacts, gate_report};
 use fold_core::reviews::{deciding_approval, last_verdict_version};
 use fold_core::{
-    Actor, ChangesetId, FoldError, ProposalId, TaskDescription, TaskId, TaskStatus, TaskTitle,
-    codes,
+    Actor, ChangesetId, FoldError, ProposalId, ReviewBatchId, RevisionId, TaskDescription, TaskId,
+    TaskStatus, TaskTitle, codes,
 };
 use fold_store::reviews::{self, ProposalState, ScopeChoiceRow};
 use fold_store::tasks::{self, TaskRef};
@@ -69,6 +69,8 @@ pub struct ProposalView {
     pub checks: Vec<CheckRunView>,
     /// The review plan the open proposal waits in for related tasks, to be reviewed with them as one batch.
     pub review_plan: Option<ProposalPlan>,
+    /// The revision an integrated proposal became, and the review batch it integrated with, if any.
+    pub integrated: Option<(RevisionId, Option<ReviewBatchId>)>,
 }
 
 impl ReviewService {
@@ -104,6 +106,7 @@ impl ReviewService {
         let scope_choice =
             reviews::latest_scope_choice(&mut *read, proposal, detail.selected.version).await?;
         let review_plan = proposal_plan(&mut read, proposal).await?;
+        let integrated = reviews::batches::integrated_as(&mut *read, proposal).await?;
         read.commit().await.map_err(StoreError::from)?;
         let claim = match holder {
             Some(row) => Some(ReviewClaimView {
@@ -173,6 +176,7 @@ impl ReviewService {
             totals: comparison.totals,
             checks,
             review_plan,
+            integrated,
         })
     }
 }

@@ -27,7 +27,9 @@ pub use agents::roles::{
 };
 pub use agents::{AgentName, AreaName, HumanName, MAIN_AREA, MAIN_TAG, NameError, Tag, WorkerName};
 pub use clock::{Clock, ManualClock};
-pub use config::{CONFIG_TEMPLATE, GitConfig, IntegrationConfig, ProjectConfig, RemoteConfig};
+pub use config::{
+    CONFIG_TEMPLATE, GitConfig, IntegrationConfig, MainConfig, ProjectConfig, RemoteConfig,
+};
 pub use error::{FoldError, codes};
 pub use events::{
     AgentEventFacts, Event, EventActor, EventError, EventFilter, EventType, LiveEvent, NewEvent,

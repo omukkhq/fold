@@ -102,6 +102,9 @@ pub struct RevisionView {
     /// The Git commit the revision became in the project folder's repository `.git`; null until it is written, just after the integration.
     #[schema(required = true)]
     pub commit: Option<String>,
+    /// The review batch whose approved members integrated together with this proposal, each as its own revision.
+    #[schema(value_type = Option<String>, required = true, example = "rb-3")]
+    pub batch: Option<fold_core::ReviewBatchId>,
 }
 
 impl From<RevisionSummary> for RevisionView {
@@ -124,6 +127,7 @@ impl From<RevisionSummary> for RevisionView {
             author: summary.author,
             pull: summary.pull,
             commit: summary.commit,
+            batch: summary.batch,
         }
     }
 }

@@ -69,6 +69,11 @@ impl Supervisor {
         if !ENDED.contains(&row.state) {
             return Ok(());
         }
+        // The supervised main has no lead to take its messages; its own start tells them with the other work that waits, and a human's stop holds them for the session a human starts.
+        if row.role == Role::Main {
+            drop(resuming);
+            return self.ensure_main(None).await;
+        }
         let owed = messages::owed_to_stopped(read, Some(agent)).await?;
         if owed.is_empty() {
             return Ok(());
@@ -193,7 +198,7 @@ impl Supervisor {
     }
 
     /// A session got its turn about `owed`: the delivery line shows the message waiting for the worker, as for a running worker, until the worker reads its inbox.
-    async fn record_told(&self, agent: &AgentName, owed: &OwedMessage) {
+    pub(super) async fn record_told(&self, agent: &AgentName, owed: &OwedMessage) {
         let now = self.inner.clock.now();
         match record_pushed(&self.inner.store, agent, owed.message, now).await {
             Ok(0) => {}
@@ -247,7 +252,7 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Stops a worker that fold started to answer a message once it is idle, has read every message sent to it and nothing bound to it waits for its work. It is checked when a turn ends and when the worker sends or acknowledges a message.
+    /// Stops a worker that fold started to answer a message once it is idle, has read every message sent to it and nothing bound to it waits for its work. It is checked when a turn ends and when the worker sends or acknowledges a message. Work for the supervised main can arrive while it answers, as a notice to its process, so fold's stop of the main is followed by a catch-up (see [`Supervisor::catch_up_after_stop`]).
     pub(super) async fn stop_if_answered(&self, agent: &AgentName) {
         if !lock(&self.inner.answering).contains(agent) {
             return;
@@ -278,7 +283,7 @@ impl Supervisor {
         let waiting = match row.role {
             Role::TaskWorker => agents::tasks_awaiting_proposal(read, &[row.id]).await?,
             Role::Reviewer => agents::proposals_without_verdict(read, &[row.id]).await?,
-            Role::AreaLead | Role::ReviewLead => return Ok(true),
+            Role::AreaLead | Role::ReviewLead | Role::Main => return Ok(true),
         };
         Ok(waiting.get(&row.id) == Some(&0))
     }
@@ -306,7 +311,7 @@ async fn still_owed(tx: &mut WriteTx, owed: &OwedMessage) -> Result<bool, StoreE
 }
 
 /// The turn of a worker that fold started again for `owed`. A worker can have stopped while its work waited for the answer, such as one that asked a human, so it goes on with that work.
-fn message_turn(owed: &[OwedMessage]) -> String {
+pub(super) fn message_turn(owed: &[OwedMessage]) -> String {
     let mut text =
         String::from("fold started you again for a message sent to you while you were stopped:");
     for owed in owed {

@@ -23,6 +23,7 @@ function revision(fields: Partial<Revision>): Revision {
     proposal: null,
     pull: null,
     commit: null,
+    batch: null,
     task: null,
     title: null,
     tree: "abc",

@@ -7,6 +7,7 @@ pub mod revisions_support;
 pub mod seed;
 
 mod agents_schema;
+mod batch_integration_schema;
 mod changesets;
 mod check_runs_schema;
 mod checklists;

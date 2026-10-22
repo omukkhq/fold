@@ -41,11 +41,11 @@ pub use turns::{CostSlot, CostTotals, cost_groups, cost_slots, cost_totals};
 pub use workers::{
     AreaRow, BoundWorker, NewWorkerProcess, ProcessEnd, TurnTotals, WorkerProcessRow,
     bind_proposal, bind_task, claims_held, clear_worker_pid, find_area, find_worker_process,
-    insert_area, insert_worker_process, label_id, list_areas, list_worker_processes,
+    hold_worker, insert_area, insert_worker_process, label_id, list_areas, list_worker_processes,
     mark_session_lost, mark_worker_working, proposals_without_verdict, record_exit, record_turn,
     restart_worker_process, review_lead, reviewers_of_proposal, running_counts, set_area_lead,
     set_area_profile, set_worker_context, set_worker_pid, set_worker_state, task_workers_of_task,
-    tasks_awaiting_proposal,
+    tasks_awaiting_proposal, worker_held,
 };
 pub use workers::{
     OwedReview, PendingResume, pending_resumes, reviews_owed_to_ended_reviewers,

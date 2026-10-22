@@ -1113,3 +1113,112 @@ async fn an_area_of_the_project_that_holds_the_name_or_label_main_stops_the_migr
     assert_eq!(main.label, fold_core::LabelName::main());
     assert_eq!(count(&store, "SELECT COUNT(*) FROM areas").await, 1);
 }
+
+/// A failed lead with every column the table gained after the reviewer role, with a turn and an earlier session.
+const BEFORE_MAIN: &str = "
+INSERT INTO agents (id, name, created_at) VALUES (1, 'review-lead', 0), (2, 'main', 0), (3, 'other', 0);
+INSERT INTO worker_processes (id, agent_id, role, area_id, session_id, state, started_by, started_at, stopped_at, turns, failed_reason, last_error, last_error_at, failed_turns, session_cost_micro_usd) VALUES (1, 1, 'review_lead', NULL, 's1', 'failed', 'main', 10, 20, 2, 'exited', 'boom', 15, 1, 700);
+INSERT INTO worker_turns (worker_process_id, role, area_id, cost_micro_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, failed, interrupted, created_at) VALUES (1, 'review_lead', NULL, 700, 1, 2, 3, 4, 0, 0, 12);
+INSERT INTO worker_previous_sessions (worker_process_id, session_id, reason, ended_at) VALUES (1, 's0', 'handoff', 9);
+";
+
+#[tokio::test]
+async fn the_supervised_main_has_no_area_and_a_project_has_one_and_old_rows_stay() {
+    use sqlx::Connection;
+    let dir = tempfile::TempDir::new().unwrap();
+    let paths = fold_core::ProjectPaths::new(dir.path().join("project"));
+    std::fs::create_dir_all(paths.db().parent().unwrap()).unwrap();
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(paths.db())
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let mut conn = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .unwrap();
+    let mut before: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/project");
+    let main = before
+        .migrations
+        .iter()
+        .position(|migration| migration.description == "supervised main")
+        .unwrap();
+    before.migrations = std::borrow::Cow::Owned(before.migrations[..main].to_vec());
+    before.run(&mut conn).await.unwrap();
+    sqlx::raw_sql(BEFORE_MAIN).execute(&mut conn).await.unwrap();
+    conn.close().await.unwrap();
+
+    let store = Store::open_project(&paths).await.unwrap();
+    let mut read = store.read().acquire().await.unwrap();
+    let lead = agents::find_worker_process(&mut read, &AgentName::parse("review-lead").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (
+            lead.role,
+            lead.state,
+            lead.turns,
+            lead.failed_reason.as_deref()
+        ),
+        (Role::ReviewLead, WorkerState::Failed, 2, Some("exited"))
+    );
+    assert_eq!(lead.last_error.as_deref(), Some("boom"));
+    assert_eq!(lead.failed_turns, 1);
+    drop(read);
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM worker_previous_sessions").await,
+        1
+    );
+    assert_eq!(
+        count(
+            &store,
+            "SELECT session_cost_micro_usd FROM worker_processes WHERE id = 1"
+        )
+        .await,
+        700
+    );
+    let broken = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(store.read())
+        .await
+        .unwrap();
+    assert!(broken.is_empty());
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM worker_turns").await, 1);
+
+    let in_area = exec(
+        &store,
+        "INSERT INTO worker_processes (agent_id, role, area_id, session_id, state, started_by, started_at) VALUES (2, 'main', 1, 's2', 'starting', 'fold', 30)",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        in_area
+            .to_string()
+            .contains("worker_processes_area_of_role"),
+        "{in_area}"
+    );
+    process(&store, 2, Role::Main, None, "s2").await;
+    let mut read = store.read().acquire().await.unwrap();
+    let main = agents::find_worker_process(&mut read, &AgentName::parse("main").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((main.role, main.area), (Role::Main, None));
+    drop(read);
+    let second = exec(
+        &store,
+        "INSERT INTO worker_processes (agent_id, role, session_id, state, started_by, started_at) VALUES (3, 'main', 's3', 'starting', 'fold', 30)",
+    )
+    .await
+    .unwrap_err();
+    assert!(second.to_string().contains("UNIQUE"), "{second}");
+    let deleted = exec(&store, "DELETE FROM worker_processes WHERE id = 1")
+        .await
+        .unwrap_err();
+    assert!(deleted.to_string().contains("keeps every worker"));
+    let moved = exec(
+        &store,
+        "UPDATE worker_processes SET role = 'main' WHERE id = 1",
+    )
+    .await
+    .unwrap_err();
+    assert!(moved.to_string().contains("worker_processes_fixed"));
+}

@@ -22,6 +22,7 @@ export function ProposalHeader({
   proposal,
   main,
   revision,
+  batch,
   now,
 }: {
   slug: string;
@@ -31,6 +32,8 @@ export function ProposalHeader({
   main: string | null;
   /** The revision an integrated proposal became; null until it is known. */
   revision: string | null;
+  /** The review batch the proposal integrated with; null for one integrated on its own. */
+  batch: string | null;
 }) {
   const summary = proposal.summary;
   const current = currentVersion(proposal);
@@ -82,6 +85,7 @@ export function ProposalHeader({
           pill={reviewPill(summary, {
             long: true,
             revision,
+            batch,
             conflictMain: proposal.conflict?.main_revision ?? null,
           })}
           large

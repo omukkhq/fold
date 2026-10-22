@@ -4,7 +4,7 @@ const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 const REFERENCE: &str = include_str!("../templates/REFERENCE.md");
 
-const FOLD_TOOLS: [&str; 96] = [
+const FOLD_TOOLS: [&str; 97] = [
     "register_agent",
     "register_worker",
     "list_agents",
@@ -101,13 +101,14 @@ const FOLD_TOOLS: [&str; 96] = [
     "change_review_plan",
     "get_review_plan",
     "list_review_plans",
+    "integrate_review_batch",
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 169] = [
+const FOLD_ERROR_CODES: [&str; 172] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -277,13 +278,16 @@ const FOLD_ERROR_CODES: [&str; 169] = [
     "task_not_awaitable",
     "proposal_not_plannable",
     "already_in_plan",
+    "main_supervised",
+    "main_interactive",
+    "main_not_supervised",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
 const PENDING_ERROR_CODES: [&str; 1] = ["too_large"];
 
 /// The `invalid_request` reasons that have a name.
-const INVALID_REQUEST_REASONS: [&str; 14] = [
+const INVALID_REQUEST_REASONS: [&str; 15] = [
     "self_dependency",
     "checklist_origin",
     "linked_item",
@@ -298,6 +302,7 @@ const INVALID_REQUEST_REASONS: [&str; 14] = [
     "integration_queued",
     "two_areas",
     "main_approves",
+    "batch_waiting",
 ];
 
 const NON_TOOL_NAMES: [&str; 43] = [

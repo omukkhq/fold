@@ -11,6 +11,7 @@ use super::tasks::TaskError;
 use super::workspaces::{WorkspaceError, WorkspaceService};
 use checks::CheckRunner;
 
+mod batch_integration;
 mod batches;
 mod changes;
 mod checkouts;
@@ -30,6 +31,9 @@ mod scopes;
 mod verdicts;
 mod views;
 
+pub use batch_integration::{
+    BatchIntegration, BatchIntegrationView, BatchStanding, MemberIntegration,
+};
 pub use batches::{
     BatchCheckout, BatchComment, BatchCommentView, BatchLines, BatchMemberView, BatchReviewed,
     BatchVerdict, BatchVerdictView, LeftOut, LeftOutReason, MemberSince, ReviewBatchView,

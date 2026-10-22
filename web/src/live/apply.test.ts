@@ -530,6 +530,17 @@ describe("invalidation rules", () => {
     expect(hit(keys.proposal(slug, "P-3"))).toBe(true);
   });
 
+  it("refreshes the review batches for a batch's queued integration and its members' integrations, and not for a single one", () => {
+    for (const type of ["integration.queued", "integration.succeeded"]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type, { data: { batch: "rb-3" } }));
+      expect(hit(keys.reviewBatches(slug)), type).toBe(true);
+    }
+    invalidated = [];
+    applyEvent(client, slug, ev("integration.queued", { proposal: "P-3" }));
+    expect(hit(keys.reviewBatches(slug))).toBe(false);
+  });
+
   it("refreshes Needs you and the project for each step of a stash", () => {
     for (const type of [
       "stash.pushed",

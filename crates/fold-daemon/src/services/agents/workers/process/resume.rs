@@ -221,6 +221,20 @@ impl Supervisor {
     ) -> Result<Option<StartWatch>, AgentError> {
         self.until_let_go_exited(agent, "resume_worker").await?;
         let config = load_config(&self.inner.paths).await?;
+        let mut conn = self
+            .inner
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        let main = agents::find_worker_process(&mut conn, agent)
+            .await?
+            .is_some_and(|row| row.role == Role::Main);
+        drop(conn);
+        if main && let Some(refusal) = self.main_refusal(&config) {
+            return Err(refusal);
+        }
         let limits = config.workers.limits();
         let now = self.inner.clock.now();
         let mut buffer = EventBuffer::new();
@@ -752,7 +766,7 @@ impl Supervisor {
                     ),
                 )
             }
-            Role::AreaLead | Role::ReviewLead => return Ok(()),
+            Role::AreaLead | Role::ReviewLead | Role::Main => return Ok(()),
         };
         let now = self.inner.clock.now();
         let mut buffer = EventBuffer::new();
@@ -787,7 +801,7 @@ impl Supervisor {
         let mut text = match row.role {
             Role::TaskWorker => RESTART_LOST.to_owned(),
             Role::Reviewer => REVIEWER_LOST.to_owned(),
-            Role::AreaLead | Role::ReviewLead => {
+            Role::AreaLead | Role::ReviewLead | Role::Main => {
                 match agents::latest_handoff(&mut *conn, row.agent_id).await? {
                     Some(note) => format!(
                         "{LEAD_LOST} Your latest hand-off note:\n\n{}",

@@ -30,12 +30,16 @@ export function allRuns(
   );
 }
 
-/** `v4 proposal checks`, `v4 integration checks on r52`. */
+/** `v4 proposal checks`, `v4 integration checks on r52`, or `batch rb-2 integration checks on r52`. A batch's run checked every member together and is stored on the last of them, so on another member's page its version would name the wrong proposal. */
 export function runTitle(item: RunItem): string {
-  const v = `v${String(item.version)}`;
-  return item.run.stage === "integration"
-    ? `${v} integration checks on ${item.run.base}`
-    : `${v} proposal checks`;
+  if (item.run.stage !== "integration") {
+    return `v${String(item.version)} proposal checks`;
+  }
+  const who =
+    item.run.batch === null
+      ? `v${String(item.version)}`
+      : `batch ${item.run.batch}`;
+  return `${who} integration checks on ${item.run.base}`;
 }
 
 export interface StepRef {

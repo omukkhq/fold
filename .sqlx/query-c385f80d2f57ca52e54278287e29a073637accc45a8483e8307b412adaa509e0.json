@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM review_batch_requests q JOIN review_batches b ON b.id = q.batch_id\n               WHERE b.number = ? AND q.ended_at IS NULL\n           ) AS \"queued!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "queued!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c385f80d2f57ca52e54278287e29a073637accc45a8483e8307b412adaa509e0"
+}

@@ -59,6 +59,7 @@ fn workspace_run(number: u32) -> NewCheckRun<'static> {
         actor: "backend",
         title: None,
         evidence: None,
+        batch: None,
     }
 }
 

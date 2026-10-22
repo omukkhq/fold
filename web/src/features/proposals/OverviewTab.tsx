@@ -142,7 +142,20 @@ function IntegrationCard({
         {integration ? (
           <p className="ml-auto flex flex-wrap items-center gap-x-6 text-code text-text-muted">
             <GitMerge aria-hidden="true" size={14} />v{integration.version}{" "}
-            integrated as{" "}
+            {integration.batch === null ? (
+              "integrated as "
+            ) : (
+              <>
+                integrated with batch{" "}
+                <HrefLink
+                  href={projectPath(slug, "batches", integration.batch)}
+                  className={cn("font-mono", LINK)}
+                >
+                  {integration.batch}
+                </HrefLink>{" "}
+                as{" "}
+              </>
+            )}
             <HrefLink
               href={idHref(slug, "revision", integration.revision)}
               className={cn("font-mono", LINK)}

@@ -36,6 +36,7 @@ function run(fields: Partial<CheckRun> = {}): CheckRun {
     reason: null,
     created_at: 1,
     finished_at: 2,
+    batch: null,
     results: [result()],
     ...fields,
   };

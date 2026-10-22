@@ -669,6 +669,10 @@ fn view_json(view: &ProposalView) -> Value {
         "checks_failed": summary.checks_failed,
         "integration_queued": summary.integration_queued,
         "review_plan": view.review_plan.as_ref().map(plans::proposal_plan_json),
+        "integrated": view.integrated.map(|(revision, batch)| json!({
+            "revision": revision,
+            "batch": batch,
+        })),
         "files": view.files.iter().map(file_line).collect::<Vec<_>>(),
         "totals": {
             "files": view.totals.files,

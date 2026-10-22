@@ -3,6 +3,7 @@ use crate::agents::{AgentName, HumanName};
 use crate::events::EventActor;
 use crate::tasks::define_names;
 
+pub mod batches;
 pub mod checks;
 pub mod plans;
 

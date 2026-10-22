@@ -191,6 +191,9 @@ define_codes! {
     TASK_NOT_AWAITABLE = "task_not_awaitable",
     PROPOSAL_NOT_PLANNABLE = "proposal_not_plannable",
     ALREADY_IN_PLAN = "already_in_plan",
+    MAIN_SUPERVISED = "main_supervised",
+    MAIN_INTERACTIVE = "main_interactive",
+    MAIN_NOT_SUPERVISED = "main_not_supervised",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

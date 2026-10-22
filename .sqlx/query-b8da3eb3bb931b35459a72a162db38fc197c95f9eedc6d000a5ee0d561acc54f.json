@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO review_batch_marks (batch_id, kind, created_at)\n         SELECT b.id, ?2, ?3 FROM review_batches b WHERE b.number = ?1\n         ON CONFLICT (batch_id, kind) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "b8da3eb3bb931b35459a72a162db38fc197c95f9eedc6d000a5ee0d561acc54f"
+}

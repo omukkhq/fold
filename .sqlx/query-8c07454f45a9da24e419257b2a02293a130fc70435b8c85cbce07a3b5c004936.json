@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT m.version_id AS \"version!: i64\" FROM check_run_members m\n           JOIN check_runs r ON r.id = m.run_id\n           WHERE r.number = ?\n           ORDER BY m.version_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "version!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "check_run_members",
+            "name": "version_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8c07454f45a9da24e419257b2a02293a130fc70435b8c85cbce07a3b5c004936"
+}

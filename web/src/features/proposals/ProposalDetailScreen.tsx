@@ -281,6 +281,7 @@ export function ProposalDetailScreen({
         proposal={data}
         main={main}
         revision={integration?.revision ?? null}
+        batch={integration?.batch ?? null}
         now={now}
       />
       {shown?.place === "banner" ? (

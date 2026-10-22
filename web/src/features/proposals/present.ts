@@ -60,10 +60,23 @@ export function approvers(
 export interface PillContext {
   /** The main revision an integrated proposal became, when the screen knows it. */
   revision?: string | null;
+  /** The review batch an integrated proposal integrated with, when the screen knows it. */
+  batch?: string | null;
   /** The main revision the conflict report merged onto, which the long wording names. */
   conflictMain?: string | null;
   /** The detail header's wording; the list's otherwise. */
   long?: boolean;
+}
+
+/** `Integrated with batch rb-3 as r8`, with each part the screen knows. */
+export function integratedText(
+  revision: string | null,
+  batch: string | null,
+): string {
+  const together = batch ? ` with batch ${batch}` : "";
+  return revision
+    ? `Integrated${together} as ${revision}`
+    : `Integrated${together}`;
 }
 
 /** The review state as the summary states it: the latest verdict on the current version and whether the human review mark is met. */
@@ -71,13 +84,13 @@ export function reviewPill(
   p: ProposalSummary,
   context: PillContext = {},
 ): Pill {
-  const { revision = null, conflictMain = null } = context;
+  const { revision = null, batch = null, conflictMain = null } = context;
   const long = context.long === true;
   if (p.state === "integrated") {
     return {
       tone: "done",
       icon: "integrated",
-      text: revision ? `Integrated as ${revision}` : "Integrated",
+      text: integratedText(revision, batch),
     };
   }
   if (p.state === "closed") {
