@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   agentNames,
   bareName,
+  humanActor,
   isHumanName,
+  isYou,
   personKind,
   personOf,
   reviewerActor,
@@ -61,5 +63,18 @@ describe("reviewerActor", () => {
   it("turns a bare reviewer name into a human actor", () => {
     expect(reviewerActor("tanim")).toBe("human:tanim");
     expect(reviewerActor(null)).toBeNull();
+  });
+});
+
+describe("isYou", () => {
+  it("matches only the signed-in human", () => {
+    expect(isYou("human:tanim", "tanim")).toBe(true);
+    expect(isYou("human:rafeed", "tanim")).toBe(false);
+    expect(isYou("tanim", "tanim")).toBe(false);
+    expect(isYou("human:tanim", null)).toBe(false);
+  });
+
+  it("builds the signed-in human's actor", () => {
+    expect(humanActor("tanim")).toBe("human:tanim");
   });
 });

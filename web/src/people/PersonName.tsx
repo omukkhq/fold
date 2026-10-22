@@ -1,5 +1,5 @@
 import { cn } from "@/lib/cn";
-import { bareName, isHumanName } from "./names";
+import { bareName, isHumanName, isYou } from "./names";
 import { type PersonSlot, slotSize } from "./sizes";
 
 /**
@@ -10,11 +10,14 @@ export function PersonName({
   name,
   className,
   slot,
+  you = null,
 }: {
   /** `human:<name>` or an agent or worker name. */
   name: string;
   className?: string;
   slot?: PersonSlot;
+  /** The signed-in human's bare name: their own name gets `(you)` after it. */
+  you?: string | null;
 }) {
   const human = isHumanName(name);
   return (
@@ -28,6 +31,9 @@ export function PersonName({
       )}
     >
       @{bareName(name)}
+      {isYou(name, you) ? (
+        <span className="font-normal text-text-muted"> (you)</span>
+      ) : null}
     </span>
   );
 }
@@ -38,18 +44,25 @@ export function PersonList({
   className,
   nameClassName,
   slot,
+  you,
 }: {
   names: readonly string[];
   className?: string;
   nameClassName?: string;
   slot?: PersonSlot;
+  you?: string | null;
 }) {
   return (
     <span className={className}>
       {names.map((name, index) => (
         <span key={name}>
           {index > 0 ? ", " : ""}
-          <PersonName name={name} className={nameClassName} slot={slot} />
+          <PersonName
+            name={name}
+            className={nameClassName}
+            slot={slot}
+            you={you}
+          />
         </span>
       ))}
     </span>

@@ -130,6 +130,32 @@ describe("ThreadPanel", () => {
     ).toBe("/p/demo/t/T-12");
   });
 
+  it("says a message to humans was sent to them and marks the signed-in human", async () => {
+    daemon.on("GET /api/v1/session", {
+      status: 200,
+      body: { human: "tanim", authenticated: true },
+    });
+    await setup(() => Promise.resolve(), {
+      ...thread,
+      messages: [
+        message(MESSAGE, {
+          sender: "web-worker",
+          recipients: [recipient("human:tanim"), recipient("human:rafeed")],
+          body: "Which one?",
+          sent_at: NOW,
+        }),
+      ],
+    });
+    const lines = await screen.findAllByText("sent to", { exact: false });
+    await waitFor(() => {
+      expect(lines.map((line) => line.textContent)).toEqual([
+        "sent to@tanim (you)",
+        "sent to@rafeed",
+      ]);
+    });
+    expect(screen.queryByText("not delivered to", { exact: false })).toBeNull();
+  });
+
   it("refuses an empty reply", async () => {
     const onReply = vi.fn(() => Promise.resolve());
     await setup(onReply);

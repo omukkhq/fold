@@ -1,10 +1,12 @@
 import { PersonList, PersonName } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { ArrowRight, Send, SquareKanban } from "lucide-react";
 import { HrefLink } from "@/app/HrefLink";
 import type { ThreadView } from "@/api/messages";
+import { sessionQuery } from "@/api/queries";
 import { Button } from "@/components/button/Button";
 import {
   buttonClasses,
@@ -49,6 +51,7 @@ interface ThreadPanelProps {
 export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
   const last = thread.messages.at(-1);
   const chosen = chosenAnswers(thread);
+  const you = useQuery(sessionQuery()).data?.human ?? null;
   const {
     control,
     handleSubmit,
@@ -111,7 +114,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
             thread {thread.id}
             {thread.task ? ` · linked to ${thread.task}` : ""}
             {thread.proposal ? ` · ${thread.proposal}` : ""} ·{" "}
-            <PersonList names={thread.participants} />
+            <PersonList names={thread.participants} you={you} />
           </p>
         </div>
         {threadCanMarkAnswered(thread) ? (
@@ -151,7 +154,11 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
               ) : null}
               <article className="flex flex-col gap-4 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
                 <p className="flex items-center gap-8 font-mono text-caption text-text-muted">
-                  <PersonName name={message.sender} slot="messageHead" />
+                  <PersonName
+                    name={message.sender}
+                    slot="messageHead"
+                    you={you}
+                  />
                   <ArrowRight
                     aria-label="to"
                     role="img"
@@ -161,6 +168,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
                   <PersonList
                     names={recipientActors(message)}
                     nameClassName="text-bar"
+                    you={you}
                   />
                   <span className="ml-auto font-ui text-meta text-text-faint">
                     {formatAsOf(now, message.sent_at)}
@@ -201,7 +209,11 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
                     className="flex items-center gap-6 text-meta text-text-faint"
                   >
                     {line.lead}
-                    <PersonName name={line.actor} className="text-bar" />
+                    <PersonName
+                      name={line.actor}
+                      className="text-bar"
+                      you={you}
+                    />
                     {line.at === null ? null : ` · ${line.at}`}
                     {line.note === null ? null : ` · ${line.note}`}
                   </li>

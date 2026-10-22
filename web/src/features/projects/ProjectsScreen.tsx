@@ -6,6 +6,7 @@ import { CodeText } from "@/components/code/CodeText";
 import { useNow } from "@/live/useNow";
 import { projectsQuery } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
+import { SignedInName } from "@/app/SignedInName";
 import { ThemeToggle } from "@/app/ThemeToggle";
 import { Mono } from "@/components/mono/Mono";
 import { Wordmark } from "@/components/Wordmark";
@@ -46,7 +47,10 @@ export function ProjectsScreen() {
     <div className="flex min-h-screen flex-col bg-bg">
       <header className="flex h-bar items-center justify-between border-b border-border-subtle bg-surface px-16 md:px-24">
         <Wordmark />
-        <ThemeToggle />
+        <div className="flex items-center gap-8">
+          <SignedInName />
+          <ThemeToggle />
+        </div>
       </header>
       <main className="flex flex-col px-16 py-24 md:px-40 md:py-40">
         <div className="mx-auto flex w-content max-w-full flex-col gap-20">
