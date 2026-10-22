@@ -40,7 +40,7 @@ pub struct AgentOverview {
     pub open_sessions: Vec<SessionSummary>,
     /// The `stalled` and `stale_claim` items of the tasks the agent's workers hold claims on, in worker and claim order.
     pub attention: Vec<AgentAttention>,
-    /// The main worker first, then the children by name.
+    /// The agent's worker, which holds its claims, workspaces and proposals.
     pub workers: Vec<WorkerOverview>,
     /// The newest events the agent's workers performed, newest first; empty unless the filter asks for events.
     pub events: Vec<Event>,
@@ -78,7 +78,6 @@ pub struct AgentAttention {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerOverview {
     pub name: WorkerName,
-    pub parent: Option<WorkerName>,
     pub last_call_at: Option<Timestamp>,
     /// The worker's last tool, followed by its task id when the call named one.
     pub activity: Option<String>,
@@ -221,14 +220,13 @@ impl AgentService {
                     conflicted: proposal.conflicted,
                 });
         }
-        workers.sort_by(|a, b| (!a.name.is_main(), &a.name).cmp(&(!b.name.is_main(), &b.name)));
+        workers.retain(|worker| worker.name.is_main());
         let mut workers_of: HashMap<i64, Vec<WorkerOverview>> = HashMap::new();
         for worker in workers {
             workers_of
                 .entry(worker.agent_id)
                 .or_default()
                 .push(WorkerOverview {
-                    parent: worker.name.parent(),
                     last_call_at: worker.last_call_at,
                     activity: worker.activity,
                     claims: claims_of.remove(&worker.id).unwrap_or_default(),

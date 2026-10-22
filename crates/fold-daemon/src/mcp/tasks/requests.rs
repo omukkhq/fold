@@ -38,9 +38,6 @@ pub struct CreateRequestInput {
     /// Your workspace, such as ws-9, that holds the attachments. Needed only with attachments.
     #[serde(default)]
     pub ws: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -58,9 +55,6 @@ pub struct ListRequestsInput {
     /// The most requests to return, newest first: 1 to 200, 50 when left out.
     #[serde(default)]
     pub limit: Option<u32>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -71,9 +65,6 @@ pub struct GetRequestInput {
     /// The draft version to read. Leave it out for the latest.
     #[serde(default)]
     pub version: Option<u32>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -85,9 +76,6 @@ pub struct ClaimRequestInput {
     pub kind: String,
     /// A title you write for the request: one line, at most 200 characters.
     pub title: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -95,9 +83,6 @@ pub struct ClaimRequestInput {
 pub struct RequestIdInput {
     /// The request, such as RQ-4.
     pub id: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 /// One card of a draft.
@@ -144,9 +129,6 @@ pub struct SubmitRequestDraftInput {
     /// A new title for the request. Leave it out to keep the title.
     #[serde(default)]
     pub title: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -158,9 +140,6 @@ pub struct RequestDraftChangesInput {
     pub version: u32,
     /// What the drafter must change. In message text `#` names a fold item and `@` names a file; the daemon parses nothing.
     pub comment: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -176,9 +155,6 @@ pub struct EditRequestDraftInput {
     /// A note about this version. In message text `#` names a fold item and `@` names a file; the daemon parses nothing.
     #[serde(default)]
     pub note: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -188,9 +164,6 @@ pub struct ApproveRequestDraftInput {
     pub id: String,
     /// The draft version you read and approve; an older one is refused with stale_version.
     pub expected_version: u32,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -200,9 +173,6 @@ pub struct CloseRequestInput {
     pub id: String,
     /// Why you close it. In message text `#` names a fold item and `@` names a file; the daemon parses nothing.
     pub reason: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {

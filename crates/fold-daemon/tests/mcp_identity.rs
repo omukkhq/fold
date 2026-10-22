@@ -2,14 +2,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use fold_core::WorkerName;
 use fold_daemon::mcp::{FoldServer, FooterPart, FooterSource, INSTRUCTIONS};
 use fold_daemon::services::agents::{AgentService, SessionContext};
 use fold_daemon::services::events::{EventBus, EventService};
 use fold_daemon::services::messages::MessageService;
 use fold_daemon::services::tasks::TaskService;
 use fold_daemon::services::workspaces::WorkspaceService;
-use fold_store::agents;
 use fold_store::testing::TestProject;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
@@ -150,38 +148,6 @@ async fn register_agent_creates_the_agent_once_and_merges_tags() {
 }
 
 #[tokio::test]
-async fn register_worker_names_the_worker_and_its_parent() {
-    let project = TestProject::new().await;
-    let client = connect(&project).await;
-    call(&client, "register_agent", json!({"name": "frontend"})).await;
-    assert_eq!(
-        call(&client, "register_worker", json!({"name": "ui"})).await,
-        json!({"worker": "frontend/ui", "parent": "frontend"})
-    );
-    assert_eq!(
-        call(
-            &client,
-            "register_worker",
-            json!({"name": "forms", "parent": "frontend/ui"})
-        )
-        .await,
-        json!({"worker": "frontend/ui/forms", "parent": "frontend/ui"})
-    );
-    assert_eq!(
-        call(&client, "register_worker", json!({"name": "ui"})).await,
-        json!({"worker": "frontend/ui", "parent": "frontend"})
-    );
-    let error = call_err(
-        &client,
-        "register_worker",
-        json!({"name": "x", "parent": "frontend/none"}),
-    )
-    .await;
-    assert_eq!(error["code"], "worker_not_found");
-    assert_eq!(error["hint"], "call register_worker");
-}
-
-#[tokio::test]
 async fn list_agents_shows_each_agent_with_its_tags_and_workers_in_registration_order() {
     let project = TestProject::new().await;
     let reader = connect(&project).await;
@@ -196,7 +162,6 @@ async fn list_agents_shows_each_agent_with_its_tags_and_workers_in_registration_
         json!({"name": "frontend", "tags": ["web", "ui"]}),
     )
     .await;
-    call(&frontend, "register_worker", json!({"name": "a"})).await;
     let backend = connect(&project).await;
     call(&backend, "register_agent", json!({"name": "backend"})).await;
     let listed = call(&reader, "list_agents", json!({})).await;
@@ -217,10 +182,10 @@ async fn list_agents_shows_each_agent_with_its_tags_and_workers_in_registration_
     assert_eq!(
         summary,
         vec![
-            json!({"name": "frontend", "tags": ["ui", "web"], "workers": ["frontend", "frontend/a"]}),
+            json!({"name": "frontend", "tags": ["ui", "web"], "workers": ["frontend"]}),
             json!({"name": "backend", "tags": [], "workers": ["backend"]}),
         ],
-        "registration order, the main worker first"
+        "registration order, one worker each"
     );
 }
 
@@ -228,17 +193,11 @@ async fn list_agents_shows_each_agent_with_its_tags_and_workers_in_registration_
 async fn any_other_tool_before_registration_names_register_agent() {
     let project = TestProject::new().await;
     let client = connect(&project).await;
-    for tool in ["register_worker", "claim_task", "send_message"] {
+    for tool in ["claim_task", "send_message"] {
         let error = call_err(&client, tool, json!({"name": "ui"})).await;
         assert_eq!(error["code"], "agent_not_registered", "{tool}");
         assert_eq!(error["hint"], "call register_agent", "{tool}");
     }
-    let listed = call(&client, "list_agents", json!({"as": "frontend"})).await;
-    assert_eq!(
-        listed["agents"],
-        json!([]),
-        "an unbound session has no worker to act as"
-    );
 
     call(&client, "register_agent", json!({"name": "frontend"})).await;
     let unknown = client
@@ -253,127 +212,6 @@ async fn any_other_tool_before_registration_names_register_agent() {
         error.data,
         Some(json!({"hint": "call tools/list to see the tools of this server"}))
     );
-}
-
-#[tokio::test]
-async fn register_agent_as_a_missing_worker_writes_nothing() {
-    let project = TestProject::new().await;
-    let client = connect(&project).await;
-    let error = call_err(
-        &client,
-        "register_agent",
-        json!({"name": "frontend", "as": "frontend/nope"}),
-    )
-    .await;
-    assert_eq!(error["code"], "worker_not_found");
-    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM agents")
-        .fetch_one(project.store().read())
-        .await
-        .unwrap();
-    assert_eq!(rows, 0);
-    let error = call_err(&client, "get_inbox", json!({})).await;
-    assert_eq!(
-        error["code"], "agent_not_registered",
-        "the session stays unbound"
-    );
-
-    let registered = call(
-        &client,
-        "register_agent",
-        json!({"name": "frontend", "as": "frontend"}),
-    )
-    .await;
-    assert_eq!(registered["created"], true);
-    call(&client, "register_worker", json!({"name": "ui"})).await;
-    let again = connect(&project).await;
-    let registered = call(
-        &again,
-        "register_agent",
-        json!({"name": "frontend", "as": "frontend/ui"}),
-    )
-    .await;
-    assert_eq!(registered["created"], false);
-}
-
-#[tokio::test]
-async fn as_resolves_only_the_callers_own_workers_and_records_the_call() {
-    let project = TestProject::new().await;
-    let frontend = connect(&project).await;
-    call(&frontend, "register_agent", json!({"name": "frontend"})).await;
-    call(&frontend, "register_worker", json!({"name": "ui"})).await;
-    let backend = connect(&project).await;
-    call(&backend, "register_agent", json!({"name": "backend"})).await;
-
-    for worker in ["frontend/ui", "frontend", "backend/none"] {
-        let error = call_err(&backend, "list_agents", json!({"as": worker})).await;
-        assert_eq!(error["code"], "worker_not_found", "{worker}");
-        assert_eq!(error["hint"], "call register_worker", "{worker}");
-    }
-
-    call(&frontend, "list_agents", json!({"as": "frontend/ui"})).await;
-    let store = project.store();
-    let agent = agents::find_agent(
-        store.read(),
-        &fold_core::AgentName::parse("frontend").unwrap(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let ui = agents::find_worker(
-        store.read(),
-        agent.id,
-        &WorkerName::parse("frontend/ui").unwrap(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(ui.activity.as_deref(), Some("list_agents"));
-    assert_eq!(ui.last_call_at, Some(project.now()));
-    let main = agents::main_worker(store.read(), agent.id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(main.activity.as_deref(), Some("register_worker"));
-
-    let unbound = connect(&project).await;
-    let error = call_err(
-        &unbound,
-        "register_agent",
-        json!({"name": "review", "as": "frontend/ui"}),
-    )
-    .await;
-    assert_eq!(error["code"], "worker_not_found");
-    assert_eq!(error["hint"], "call register_worker");
-    let error = call_err(&unbound, "claim_task", json!({})).await;
-    assert_eq!(
-        error["code"], "agent_not_registered",
-        "the session stays unbound"
-    );
-    assert!(
-        agents::find_agent(
-            store.read(),
-            &fold_core::AgentName::parse("review").unwrap()
-        )
-        .await
-        .unwrap()
-        .is_none(),
-        "the refused call created no agent"
-    );
-
-    let registered = connect(&project).await;
-    call(
-        &registered,
-        "register_agent",
-        json!({"name": "review", "as": "review"}),
-    )
-    .await;
-    let error = call_err(
-        &registered,
-        "register_agent",
-        json!({"name": "review", "as": "review/none"}),
-    )
-    .await;
-    assert_eq!(error["code"], "worker_not_found");
 }
 
 #[tokio::test]
@@ -392,33 +230,11 @@ async fn bad_input_is_refused_with_a_code() {
             json!({"name": "a", "tags": ["No"]}),
             "invalid_name",
         ),
-        (
-            "register_agent",
-            json!({"name": "a", "as": 5}),
-            "invalid_request",
-        ),
-        (
-            "register_agent",
-            json!({"name": "a", "as": "a//b"}),
-            "invalid_name",
-        ),
     ];
     for (tool, arguments, code) in cases {
         let error = call_err(&client, tool, arguments.clone()).await;
         assert_eq!(error["code"], code, "{arguments}");
     }
-    call(&client, "register_agent", json!({"name": "a"})).await;
-    let error = call_err(&client, "register_worker", json!({"name": "a/b"})).await;
-    assert_eq!(error["code"], "invalid_name");
-    let error = call_err(
-        &client,
-        "register_worker",
-        json!({"name": "b", "parent": "B"}),
-    )
-    .await;
-    assert_eq!(error["code"], "invalid_name");
-    let error = call_err(&client, "list_agents", json!({"as": []})).await;
-    assert_eq!(error["code"], "invalid_request");
 }
 
 #[tokio::test]
@@ -432,11 +248,9 @@ async fn every_result_ends_with_the_footer_line_when_a_count_is_not_zero() {
     let (client, _) = connect_with(&project, sources).await;
     let calls = [
         ("list_agents", json!({})),
-        ("register_worker", json!({"name": "ui"})),
         ("claim_task", json!({})),
         ("register_agent", json!({"name": "frontend"})),
-        ("register_worker", json!({"name": "ui"})),
-        ("list_agents", json!({"as": "frontend/none"})),
+        ("list_agents", json!({})),
     ];
     for (tool, arguments) in calls {
         let result = call_raw(&client, tool, arguments).await;
@@ -476,7 +290,6 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
         names,
         [
             "register_agent",
-            "register_worker",
             "get_activity",
             "list_agents",
             "define_area",
@@ -547,9 +360,14 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
     );
     for tool in &tools {
         assert!(tool.description.is_some(), "{}", tool.name);
-        let properties = tool.input_schema["properties"].as_object().unwrap();
-        assert!(properties.contains_key("as"), "{}", tool.name);
-        for (field, schema) in properties {
+        let properties = tool
+            .input_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        assert!(!properties.contains_key("as"), "{}", tool.name);
+        for (field, schema) in &properties {
             assert!(
                 schema["description"]
                     .as_str()

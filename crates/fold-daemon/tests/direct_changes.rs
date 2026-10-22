@@ -59,7 +59,7 @@ async fn integrate_task(fx: &Fixture, author: &Actor) {
         .detail()
         .unwrap();
     give_role(fx.project.store(), "review", Role::Reviewer, None).await;
-    let review = fx.agents.actor(&fx.review.ctx, None).await.unwrap();
+    let review = fx.agents.actor(&fx.review.ctx).await.unwrap();
     fx.reviews
         .submit_review(&review, p(1), 1, Verdict::Approve, "ok", Vec::new())
         .await
@@ -190,12 +190,10 @@ async fn only_the_main_agent_opens_the_main_workspace_or_submits_to_it() {
     give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     let lead = main_actor(&fx.backend.worker);
     let review = main_actor(&fx.review.worker);
-    let subagent = main_actor(&fx.subagent(&fx.frontend, "plan").await);
     let unsupervised = by(&fx.frontend.worker);
     for (actor, code) in [
         (&lead, codes::MAIN_AGENT_REQUIRED),
         (&review, codes::MAIN_AGENT_REQUIRED),
-        (&subagent, codes::MAIN_AGENT_REQUIRED),
         (&human(), codes::MAIN_AGENT_REQUIRED),
         (&Actor::System, codes::MAIN_AGENT_REQUIRED),
         (&unsupervised, codes::ORCHESTRATOR_REQUIRED),

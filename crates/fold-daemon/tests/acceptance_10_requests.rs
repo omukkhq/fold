@@ -97,7 +97,13 @@ async fn acceptance_10_a_human_request_becomes_two_tasks_through_a_drafted_and_r
         .await;
     assert_eq!(status, StatusCode::CREATED, "{answer}");
     let answer = answer["id"].as_str().unwrap().to_owned();
-    assert_eq!(frontend.next().await, wire(TOKEN, &message_notice(&answer)));
+    assert_eq!(
+        frontend.next().await,
+        wire(
+            TOKEN,
+            &message_notice(&answer, "human:ana on RQ-1", "By title is enough.")
+        )
+    );
     let thread = h
         .call("frontend", "get_thread", json!({"request": "RQ-1"}))
         .await;

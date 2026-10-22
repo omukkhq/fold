@@ -302,12 +302,11 @@ async fn every_request_tool_refuses_with_a_code_and_a_hint() {
     assert!(error["hint"].as_str().unwrap().contains("list_requests"));
 
     ok(&h, "frontend", "create_request", json!({"body": "slow"})).await;
-    ok(&h, "frontend", "register_worker", json!({"name": "ui"})).await;
     let error = err(
         &h,
-        "frontend",
+        "review",
         "claim_request",
-        json!({"id": "RQ-1", "kind": "bug", "title": "Slow", "as": "frontend/ui"}),
+        json!({"id": "RQ-1", "kind": "bug", "title": "Slow"}),
     )
     .await;
     assert_eq!(error["code"], "orchestrator_required");
@@ -466,11 +465,14 @@ fn every_input_field_has_a_description() {
     tools.extend(fold_daemon::mcp::messages::tools());
     for tool in &tools {
         assert!(tool.description.is_some(), "{}", tool.name);
-        let properties = tool.input_schema["properties"]
-            .as_object()
-            .unwrap_or_else(|| panic!("{} has no properties", tool.name));
-        assert!(properties.contains_key("as"), "{}", tool.name);
-        for (field, schema) in properties {
+        let properties = tool
+            .input_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        assert!(!properties.contains_key("as"), "{}", tool.name);
+        for (field, schema) in &properties {
             let described = schema["description"]
                 .as_str()
                 .is_some_and(|text| !text.trim().is_empty());

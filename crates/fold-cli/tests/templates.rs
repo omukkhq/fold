@@ -4,9 +4,8 @@ const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 const REFERENCE: &str = include_str!("../templates/REFERENCE.md");
 
-const FOLD_TOOLS: [&str; 97] = [
+const FOLD_TOOLS: [&str; 96] = [
     "register_agent",
-    "register_worker",
     "list_agents",
     "define_area",
     "update_area",

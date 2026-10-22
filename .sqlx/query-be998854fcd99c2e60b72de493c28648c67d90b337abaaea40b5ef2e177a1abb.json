@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS \"count!: i64\"\n           FROM message_recipients r\n           JOIN workers w ON w.id = r.worker_id\n           JOIN agents a ON a.id = w.agent_id\n           WHERE a.name = ? AND w.parent_worker_id IS NULL\n             AND r.delivered_at IS NULL AND r.acked_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "count!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "be998854fcd99c2e60b72de493c28648c67d90b337abaaea40b5ef2e177a1abb"
+}

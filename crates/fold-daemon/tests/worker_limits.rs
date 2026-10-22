@@ -123,17 +123,6 @@ async fn a_lead_and_an_empty_change_are_refused_and_a_human_sets_a_limit_over_ht
         .refused(&lead, "set_worker_limits", json!({"task_worker": 2}))
         .await;
     assert_eq!(denied["code"], codes::MAIN_AGENT_REQUIRED);
-    harness
-        .call(MAIN, "register_worker", json!({"name": "helper"}))
-        .await;
-    let subagent = harness
-        .refused(
-            MAIN,
-            "set_worker_limits",
-            json!({"task_worker": 2, "as": "frontend/helper"}),
-        )
-        .await;
-    assert_eq!(subagent["code"], codes::MAIN_AGENT_REQUIRED);
     let nothing = harness.refused(MAIN, "set_worker_limits", json!({})).await;
     assert_eq!(nothing["code"], codes::INVALID_REQUEST);
     let both = harness

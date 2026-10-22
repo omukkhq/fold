@@ -83,9 +83,8 @@ async fn register_agent_is_idempotent_and_merges_tags() {
         types,
         ["agent.registered", "worker.registered", "session.started"]
     );
-    let main = service.resolve_worker(&ctx, None).await.unwrap();
+    let main = service.resolve_worker(&ctx).await.unwrap();
     assert_eq!(main.name, worker("frontend"));
-    assert_eq!(main.parent_id, None);
 }
 
 #[tokio::test]
@@ -194,87 +193,7 @@ async fn an_unknown_or_ended_session_cannot_register() {
 }
 
 #[tokio::test]
-async fn register_worker_builds_children_under_the_main_worker() {
-    let project = TestProject::new().await;
-    let (service, _bus) = setup(&project);
-    let mut ctx = service.start_session(1).await.unwrap();
-    service
-        .register_agent(&mut ctx, &agent("frontend"), &[])
-        .await
-        .unwrap();
-    let ui = service.register_worker(&ctx, "ui", None).await.unwrap();
-    assert!(ui.created);
-    assert_eq!(ui.worker.name, worker("frontend/ui"));
-    let main = service.resolve_worker(&ctx, None).await.unwrap();
-    assert_eq!(ui.worker.parent_id, Some(main.id));
-
-    let again = service.register_worker(&ctx, "ui", None).await.unwrap();
-    assert!(!again.created);
-    assert_eq!(again.worker.id, ui.worker.id);
-
-    let nested = service
-        .register_worker(&ctx, "btn", Some(&worker("frontend/ui")))
-        .await
-        .unwrap();
-    assert_eq!(nested.worker.name, worker("frontend/ui/btn"));
-    assert_eq!(nested.worker.parent_id, Some(ui.worker.id));
-
-    let types: Vec<String> = stored(&project).await.into_iter().map(|e| e.0).collect();
-    assert_eq!(
-        types.iter().filter(|t| *t == "worker.registered").count(),
-        3
-    );
-
-    let bad = fold_error(
-        service
-            .register_worker(&ctx, "Bad", None)
-            .await
-            .unwrap_err(),
-    );
-    assert_eq!(bad.code(), codes::INVALID_NAME);
-    let missing = fold_error(
-        service
-            .register_worker(&ctx, "x", Some(&worker("frontend/nope")))
-            .await
-            .unwrap_err(),
-    );
-    assert_eq!(missing.code(), codes::WORKER_NOT_FOUND);
-}
-
-#[tokio::test]
-async fn register_worker_needs_a_registered_agent_and_never_adopts_a_foreign_parent() {
-    let project = TestProject::new().await;
-    let (service, _bus) = setup(&project);
-    let unbound = service.start_session(1).await.unwrap();
-    let error = fold_error(
-        service
-            .register_worker(&unbound, "ui", None)
-            .await
-            .unwrap_err(),
-    );
-    assert_eq!(error.code(), codes::AGENT_NOT_REGISTERED);
-
-    let mut front = service.start_session(2).await.unwrap();
-    service
-        .register_agent(&mut front, &agent("frontend"), &[])
-        .await
-        .unwrap();
-    let mut back = service.start_session(3).await.unwrap();
-    service
-        .register_agent(&mut back, &agent("backend"), &[])
-        .await
-        .unwrap();
-    let error = fold_error(
-        service
-            .register_worker(&back, "x", Some(&worker("frontend")))
-            .await
-            .unwrap_err(),
-    );
-    assert_eq!(error.code(), codes::WORKER_NOT_FOUND);
-}
-
-#[tokio::test]
-async fn resolve_worker_hides_workers_of_other_agents() {
+async fn each_session_resolves_to_the_one_worker_of_its_agent() {
     let project = TestProject::new().await;
     let (service, _bus) = setup(&project);
     let mut front = service.start_session(1).await.unwrap();
@@ -282,30 +201,22 @@ async fn resolve_worker_hides_workers_of_other_agents() {
         .register_agent(&mut front, &agent("frontend"), &[])
         .await
         .unwrap();
-    service.register_worker(&front, "ui", None).await.unwrap();
     let mut back = service.start_session(2).await.unwrap();
     service
         .register_agent(&mut back, &agent("backend"), &[])
         .await
         .unwrap();
-
-    let own = service
-        .resolve_worker(&front, Some(&worker("frontend/ui")))
+    let mut again = service.start_session(3).await.unwrap();
+    service
+        .register_agent(&mut again, &agent("frontend"), &[])
         .await
         .unwrap();
-    assert_eq!(own.name, worker("frontend/ui"));
-    for foreign in ["frontend/ui", "frontend", "backend/ghost"] {
-        let error = fold_error(
-            service
-                .resolve_worker(&back, Some(&worker(foreign)))
-                .await
-                .unwrap_err(),
-        );
-        assert_eq!(error.code(), codes::WORKER_NOT_FOUND, "{foreign}");
-        assert_eq!(error.hint(), Some("call register_worker"));
-    }
+
+    let first = service.resolve_worker(&front).await.unwrap();
+    assert_eq!(first.name, worker("frontend"));
+    assert_eq!(service.resolve_worker(&again).await.unwrap().id, first.id);
     assert_eq!(
-        service.resolve_worker(&back, None).await.unwrap().name,
+        service.resolve_worker(&back).await.unwrap().name,
         worker("backend")
     );
 }
@@ -318,7 +229,7 @@ async fn require_agent_fails_before_binding() {
     let error = fold_error(service.require_agent(&ctx).await.unwrap_err());
     assert_eq!(error.code(), codes::AGENT_NOT_REGISTERED);
     assert_eq!(error.hint(), Some("call register_agent"));
-    let error = fold_error(service.resolve_worker(&ctx, None).await.unwrap_err());
+    let error = fold_error(service.resolve_worker(&ctx).await.unwrap_err());
     assert_eq!(error.code(), codes::AGENT_NOT_REGISTERED);
 
     service
@@ -348,7 +259,7 @@ async fn record_call_updates_activity_and_times() {
         .register_agent(&mut ctx, &agent("frontend"), &[])
         .await
         .unwrap();
-    let main = service.resolve_worker(&ctx, None).await.unwrap();
+    let main = service.resolve_worker(&ctx).await.unwrap();
     assert_eq!(main.activity, None);
     assert_eq!(main.last_call_at, None);
 
@@ -362,7 +273,7 @@ async fn record_call_updates_activity_and_times() {
         )
         .await
         .unwrap();
-    let after = service.resolve_worker(&ctx, None).await.unwrap();
+    let after = service.resolve_worker(&ctx).await.unwrap();
     assert_eq!(after.activity.as_deref(), Some("claim_task T-12"));
     assert_eq!(after.last_call_at, Some(project.now()));
     let session = agents::find_session(project.store().read(), ctx.session_id)
@@ -376,7 +287,7 @@ async fn record_call_updates_activity_and_times() {
         .record_call(&ctx, &main, "list_tasks", None)
         .await
         .unwrap();
-    let after = service.resolve_worker(&ctx, None).await.unwrap();
+    let after = service.resolve_worker(&ctx).await.unwrap();
     assert_eq!(after.activity.as_deref(), Some("list_tasks"));
     assert_eq!(after.last_call_at, Some(project.now()));
 }
@@ -570,23 +481,19 @@ async fn actor_carries_the_resolved_worker_and_the_current_tags() {
     let project = TestProject::new().await;
     let (service, _bus) = setup(&project);
     let ctx = registered(&service, "frontend", &[tag("web")]).await;
-    service.register_worker(&ctx, "ui", None).await.unwrap();
+    let actor = service.actor(&ctx).await.unwrap();
     assert_eq!(
-        service
-            .actor(&ctx, Some(&worker("frontend/ui")))
-            .await
-            .unwrap(),
+        actor,
         Actor::Agent(AgentActor {
             agent: agent("frontend"),
-            worker: worker("frontend/ui"),
+            worker: worker("frontend"),
             tags: vec![tag("web")],
         })
     );
-    let main = service.actor(&ctx, None).await.unwrap();
-    assert_eq!(main.event_actor().as_str(), "frontend");
+    assert_eq!(actor.event_actor().as_str(), "frontend");
     let unbound = service.start_session(8).await.unwrap();
     assert_eq!(
-        fold_error(service.actor(&unbound, None).await.unwrap_err()).code(),
+        fold_error(service.actor(&unbound).await.unwrap_err()).code(),
         codes::AGENT_NOT_REGISTERED
     );
 }

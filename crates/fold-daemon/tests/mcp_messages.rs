@@ -181,9 +181,12 @@ async fn the_message_tools_are_listed_with_described_inputs() {
             .find(|tool| tool.name == name)
             .unwrap_or_else(|| panic!("{name} is not listed"));
         let schema = serde_json::to_value(tool.input_schema.as_ref()).unwrap();
-        let properties = schema["properties"].as_object().unwrap();
-        assert!(properties.contains_key("as"), "{name}");
-        for (field, property) in properties {
+        let properties = schema["properties"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        assert!(!properties.contains_key("as"), "{name}");
+        for (field, property) in &properties {
             assert!(
                 property["description"].is_string(),
                 "{name}.{field} has no description"
@@ -286,38 +289,6 @@ async fn a_reply_acknowledges_the_message_it_answers_for_a_recipient_only() {
 }
 
 #[tokio::test]
-async fn a_main_workers_reply_leaves_its_child_workers_row_unacknowledged() {
-    let fixture = Fixture::new().await;
-    let frontend = fixture.connect("frontend").await;
-    call(&frontend, "register_worker", json!({"name": "ui"})).await;
-    let backend = fixture.connect("backend").await;
-    call(
-        &backend,
-        "send_message",
-        json!({"to": ["frontend/ui"], "body": "the button?"}),
-    )
-    .await;
-    call(
-        &frontend,
-        "send_message",
-        json!({"to": ["backend"], "body": "on it", "reply_to": "m-1"}),
-    )
-    .await;
-    let ui = call(&frontend, "get_inbox", json!({"as": "frontend/ui"})).await;
-    assert_eq!(inbox_ids(&ui), pairs(&[("m-1", "frontend/ui")]));
-    assert_eq!(fixture.acknowledged_events().await, 0);
-    call(
-        &frontend,
-        "send_message",
-        json!({"to": ["backend"], "body": "done", "reply_to": "m-1", "as": "frontend/ui"}),
-    )
-    .await;
-    let cleared = call(&frontend, "get_inbox", json!({"as": "frontend/ui"})).await;
-    assert_eq!(cleared, json!({"messages": []}));
-    assert_eq!(fixture.acknowledged_events().await, 1);
-}
-
-#[tokio::test]
 async fn acknowledge_takes_several_ids_and_a_wrong_id_acknowledges_nothing() {
     let fixture = Fixture::new().await;
     let frontend = fixture.connect("frontend").await;
@@ -410,52 +381,17 @@ async fn a_message_sent_while_the_receiver_is_away_waits_for_its_next_session() 
 }
 
 #[tokio::test]
-async fn as_reads_one_worker_and_include_workers_reads_them_all() {
-    let fixture = Fixture::new().await;
-    let frontend = fixture.connect("frontend").await;
-    call(&frontend, "register_worker", json!({"name": "ui"})).await;
-    let backend = fixture.connect("backend").await;
-    call(
-        &backend,
-        "send_message",
-        json!({"to": ["frontend"], "body": "x"}),
-    )
-    .await;
-    call(
-        &backend,
-        "send_message",
-        json!({"to": ["frontend/ui"], "body": "y"}),
-    )
-    .await;
-    let main = call(&frontend, "get_inbox", json!({})).await;
-    assert_eq!(inbox_ids(&main), pairs(&[("m-1", "frontend")]));
-    let ui = call(&frontend, "get_inbox", json!({"as": "frontend/ui"})).await;
-    assert_eq!(inbox_ids(&ui), pairs(&[("m-2", "frontend/ui")]));
-    assert_eq!(ui["messages"][0]["addressed_as"], "worker");
-    let all = call(&frontend, "get_inbox", json!({"include_workers": true})).await;
-    assert_eq!(
-        inbox_ids(&all),
-        pairs(&[("m-1", "frontend"), ("m-2", "frontend/ui")])
-    );
-    let wrong = call_raw(&frontend, "acknowledge_message", json!({"ids": ["m-2"]})).await;
-    assert_eq!(body(&wrong)["error"]["code"], "message_not_found");
-    let acknowledged = call(
-        &frontend,
-        "acknowledge_message",
-        json!({"ids": ["m-2"], "as": "frontend/ui"}),
-    )
-    .await;
-    assert_eq!(acknowledged, json!({"acknowledged": ["m-2"]}));
-}
-
-#[tokio::test]
 async fn the_footer_counts_unread_messages_and_drops_the_part_once_acknowledged() {
     let fixture = Fixture::new().await;
     let frontend = fixture.connect("frontend").await;
-    call(&frontend, "register_worker", json!({"name": "ui"})).await;
     let backend = fixture.connect("backend").await;
-    for to in ["frontend", "frontend/ui"] {
-        call(&backend, "send_message", json!({"to": [to], "body": "x"})).await;
+    for _ in 0..2 {
+        call(
+            &backend,
+            "send_message",
+            json!({"to": ["frontend"], "body": "x"}),
+        )
+        .await;
     }
     let listed = call_raw(&frontend, "list_agents", json!({})).await;
     let line = footer(&listed).unwrap();
@@ -463,12 +399,7 @@ async fn the_footer_counts_unread_messages_and_drops_the_part_once_acknowledged(
     call(&frontend, "acknowledge_message", json!({"ids": ["m-1"]})).await;
     let line = footer(&call_raw(&frontend, "list_agents", json!({})).await).unwrap();
     assert!(line.starts_with("fold: 1 unread"), "{line}");
-    let last = call_raw(
-        &frontend,
-        "acknowledge_message",
-        json!({"ids": ["m-2"], "as": "frontend/ui"}),
-    )
-    .await;
+    let last = call_raw(&frontend, "acknowledge_message", json!({"ids": ["m-2"]})).await;
     assert!(
         footer(&last).is_none_or(|line| !line.contains("unread")),
         "{last:?}"
@@ -496,7 +427,7 @@ async fn errors_carry_the_code_and_the_next_tool() {
             "code": "recipient_not_found",
             "message": "recipient ghost does not exist",
             "details": {"to": ["ghost"]},
-            "hint": "list the agents and their workers with list_agents",
+            "hint": "list the agents with list_agents",
         })
     );
     for (tool, arguments) in [
@@ -531,16 +462,6 @@ async fn errors_carry_the_code_and_the_next_tool() {
             "send_message",
             json!({"to": ["frontend"], "body": "x", "task": "P-1"}),
             "invalid_id",
-        ),
-        (
-            "get_inbox",
-            json!({"include_workers": "yes"}),
-            "invalid_request",
-        ),
-        (
-            "get_inbox",
-            json!({"as": "frontend/ghost"}),
-            "worker_not_found",
         ),
     ] {
         let result = call_raw(&frontend, tool, arguments).await;

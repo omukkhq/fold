@@ -88,7 +88,7 @@ async fn with_role(fx: &Fixture, name: &str, role: Role) -> Actor {
         .await
         .unwrap();
     give_role(&fx.handle.store, name, role, None).await;
-    agents.actor(&session, None).await.unwrap()
+    agents.actor(&session).await.unwrap()
 }
 
 /// Registers the main agent `main` with the `main` tag, as `fld claude` gives it, and returns its actor.
@@ -103,7 +103,7 @@ async fn main_agent(fx: &Fixture) -> Actor {
         )
         .await
         .unwrap();
-    agents.actor(&session, None).await.unwrap()
+    agents.actor(&session).await.unwrap()
 }
 
 pub async fn approve(fx: &Fixture, reviewer: &Actor, proposal: u32) {

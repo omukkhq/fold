@@ -250,7 +250,7 @@ pub struct ProposalSummary {
     #[schema(example = "T-12")]
     pub task: String,
     pub title: String,
-    /// The worker that opened the proposal, `agent` or `agent/worker`.
+    /// The worker that opened the proposal, named as its agent.
     pub author: String,
     pub state: ProposalStateView,
     /// The latest integration of the current version conflicted with main.
@@ -543,7 +543,7 @@ impl From<GateState> for ProposalGate {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct ReviewClaim {
-    /// The worker, `agent` or `agent/worker`.
+    /// The worker, named as its agent.
     pub holder: String,
     /// UTC milliseconds.
     pub claimed_at: i64,

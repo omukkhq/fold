@@ -2,7 +2,7 @@ const HUMAN_PREFIX = "human:";
 
 export type PersonKind = "human" | "agent";
 
-/** An actor arrives as `human:<name>` for a human; anything else (`frontend`, `frontend/ui`, `fold`) is an agent. */
+/** An actor arrives as `human:<name>` for a human; anything else (`frontend`, `fold`) is an agent. */
 export function isHumanName(actor: string): boolean {
   return actor.startsWith(HUMAN_PREFIX);
 }
@@ -16,7 +16,7 @@ export function bareName(actor: string): string {
   return isHumanName(actor) ? actor.slice(HUMAN_PREFIX.length) : actor;
 }
 
-/** `@tanim`, `@frontend/ui`: the person as plain text where markup is not possible, such as a placeholder. */
+/** `@tanim`, `@frontend`: the person as plain text where markup is not possible, such as a placeholder. */
 export function atName(actor: string): string {
   return `@${bareName(actor)}`;
 }
@@ -26,7 +26,7 @@ export function reviewerActor(reviewer: string | null): string | null {
   return reviewer === null ? null : `${HUMAN_PREFIX}${reviewer}`;
 }
 
-/** The names a mention can point at. Agents hold both agent names and worker names (`frontend`, `frontend/ui`). */
+/** The names a mention can point at. An agent's worker has the agent's name, so agents hold agent names (`frontend`). */
 export interface People {
   humans: readonly string[];
   agents: readonly string[];

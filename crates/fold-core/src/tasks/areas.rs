@@ -209,7 +209,6 @@ pub fn feedback_to(
             let name = WorkerName::main(agent);
             readers.iter().any(|reader| reader.name == name)
         }
-        Address::Worker(worker) => readers.iter().any(|reader| &reader.name == worker),
         Address::Tag(_) | Address::All | Address::Human(_) | Address::Humans => false,
     };
     let refused: Vec<String> = to
@@ -426,9 +425,9 @@ mod tests {
             ]
         );
         assert_eq!(
-            readers(Some("web-lead/ui"), &["ui"], &["web-lead"]),
+            readers(Some("web-worker"), &["ui"], &["web-lead"]),
             [
-                ("web-lead/ui".to_owned(), ReaderRole::ClaimHolder),
+                ("web-worker".to_owned(), ReaderRole::ClaimHolder),
                 ("web-lead".to_owned(), ReaderRole::AreaLead),
             ]
         );
@@ -484,8 +483,8 @@ mod tests {
     #[test]
     fn feedback_without_recipients_goes_to_the_first_reader() {
         assert_eq!(
-            feedback_to(t12(), None, &offered(Some("web-lead/ui"))).unwrap(),
-            addresses(&["web-lead/ui"])
+            feedback_to(t12(), None, &offered(Some("web-worker"))).unwrap(),
+            addresses(&["web-worker"])
         );
         assert_eq!(
             feedback_to(t12(), None, &offered(None)).unwrap(),
@@ -497,23 +496,16 @@ mod tests {
     }
 
     #[test]
-    fn feedback_takes_recipients_that_are_readers_by_agent_or_worker_name() {
-        let readers = offered(Some("web-lead/ui"));
-        let to = addresses(&["web-lead/ui", "web-lead", "main"]);
+    fn feedback_takes_recipients_that_are_readers() {
+        let readers = offered(Some("web-worker"));
+        let to = addresses(&["web-worker", "web-lead", "main"]);
         assert_eq!(feedback_to(t12(), Some(to.clone()), &readers).unwrap(), to);
     }
 
     #[test]
     fn feedback_to_anyone_but_a_reader_is_refused() {
-        let readers = offered(Some("web-lead/ui"));
-        for entry in [
-            "backend",
-            "web-lead/other",
-            "tag:ui",
-            "all",
-            "humans",
-            "human:ana",
-        ] {
+        let readers = offered(Some("web-worker"));
+        for entry in ["backend", "tag:ui", "all", "humans", "human:ana"] {
             let refused =
                 feedback_to(t12(), Some(addresses(&["main", entry])), &readers).unwrap_err();
             assert_eq!(refused.code(), codes::RECIPIENT_NOT_READER, "{entry}");

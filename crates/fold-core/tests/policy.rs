@@ -76,7 +76,7 @@ fn human_names_follow_the_agent_name_pattern() {
 #[test]
 fn only_an_agent_can_claim() {
     use fold_core::policy::can_claim;
-    assert!(can_claim(&agent("frontend/ui/deep", &[])).is_ok());
+    assert!(can_claim(&agent("frontend", &[])).is_ok());
     for actor in [human("tanim"), Actor::System] {
         let denied = can_claim(&actor).unwrap_err();
         assert_eq!(denied.code(), codes::ACTOR_CANNOT_CLAIM);
@@ -87,8 +87,8 @@ fn only_an_agent_can_claim() {
 #[test]
 fn only_the_owning_worker_abandons_a_workspace() {
     use fold_core::policy::can_abandon_workspace;
-    let owner = WorkerName::parse("frontend/ui").unwrap();
-    assert!(can_abandon_workspace(&agent("frontend/ui", &[]), Some(&owner)).is_ok());
+    let owner = WorkerName::parse("design").unwrap();
+    assert!(can_abandon_workspace(&agent("design", &[]), Some(&owner)).is_ok());
     for actor in [
         agent("frontend", &[]),
         agent("backend", &["review"]),
@@ -99,7 +99,7 @@ fn only_the_owning_worker_abandons_a_workspace() {
         assert_eq!(denied.code(), codes::NOT_WORKSPACE_OWNER, "{actor:?}");
         assert!(denied.hint().contains("get_workspace"));
     }
-    assert!(can_abandon_workspace(&agent("frontend/ui", &[]), None).is_err());
+    assert!(can_abandon_workspace(&agent("design", &[]), None).is_err());
 }
 
 #[test]
@@ -116,11 +116,8 @@ fn only_a_human_sends_feedback() {
 #[test]
 fn only_an_agents_worker_has_an_inbox() {
     use fold_core::policy::can_use_inbox;
-    let worker = agent("frontend/ui", &[]);
-    assert_eq!(
-        can_use_inbox(&worker).unwrap().worker.as_str(),
-        "frontend/ui"
-    );
+    let worker = agent("design", &[]);
+    assert_eq!(can_use_inbox(&worker).unwrap().worker.as_str(), "design");
     for actor in [human("tanim"), Actor::System] {
         let denied = can_use_inbox(&actor).unwrap_err();
         assert_eq!(denied.code(), codes::INVALID_REQUEST);
@@ -133,7 +130,7 @@ fn only_a_human_or_the_daemon_pushes() {
     use fold_core::policy::can_push;
     assert!(can_push(&human("tanim")).is_ok());
     assert!(can_push(&Actor::System).is_ok());
-    let denied = can_push(&agent("frontend/ui", &["review"])).unwrap_err();
+    let denied = can_push(&agent("design", &["review"])).unwrap_err();
     assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
     assert!(denied.hint().contains("fld push"));
 }
@@ -141,8 +138,8 @@ fn only_a_human_or_the_daemon_pushes() {
 #[test]
 fn only_the_owning_worker_changes_a_workspace() {
     use fold_core::policy::can_change_workspace;
-    let owner = WorkerName::parse("frontend/ui").unwrap();
-    assert!(can_change_workspace(&agent("frontend/ui", &[]), Some(&owner)).is_ok());
+    let owner = WorkerName::parse("design").unwrap();
+    assert!(can_change_workspace(&agent("design", &[]), Some(&owner)).is_ok());
     for actor in [
         agent("frontend", &[]),
         agent("backend", &["review"]),
@@ -153,14 +150,14 @@ fn only_the_owning_worker_changes_a_workspace() {
         assert_eq!(denied.code(), codes::NOT_WORKSPACE_OWNER, "{actor:?}");
         assert!(denied.hint().contains("get_workspace"));
     }
-    assert!(can_change_workspace(&agent("frontend/ui", &[]), None).is_err());
+    assert!(can_change_workspace(&agent("design", &[]), None).is_err());
 }
 
 #[test]
 fn only_the_owning_worker_runs_the_checks_of_a_workspace() {
     use fold_core::policy::can_run_checks;
-    let owner = WorkerName::parse("frontend/ui").unwrap();
-    assert!(can_run_checks(&agent("frontend/ui", &[]), Some(&owner)).is_ok());
+    let owner = WorkerName::parse("design").unwrap();
+    assert!(can_run_checks(&agent("design", &[]), Some(&owner)).is_ok());
     for actor in [
         agent("frontend", &[]),
         agent("review", &["main"]),
@@ -170,14 +167,14 @@ fn only_the_owning_worker_runs_the_checks_of_a_workspace() {
         let denied = can_run_checks(&actor, Some(&owner)).unwrap_err();
         assert_eq!(denied.code(), codes::NOT_WORKSPACE_OWNER, "{actor:?}");
     }
-    assert!(can_run_checks(&agent("frontend/ui", &[]), None).is_err());
+    assert!(can_run_checks(&agent("design", &[]), None).is_err());
 }
 
 #[test]
 fn the_owning_worker_or_the_daemon_takes_an_automatic_checkpoint() {
     use fold_core::policy::can_take_auto_checkpoint;
-    let owner = WorkerName::parse("frontend/ui").unwrap();
-    assert!(can_take_auto_checkpoint(&agent("frontend/ui", &[]), Some(&owner)).is_ok());
+    let owner = WorkerName::parse("design").unwrap();
+    assert!(can_take_auto_checkpoint(&agent("design", &[]), Some(&owner)).is_ok());
     assert!(can_take_auto_checkpoint(&Actor::System, Some(&owner)).is_ok());
     assert!(can_take_auto_checkpoint(&Actor::System, None).is_ok());
     for actor in [

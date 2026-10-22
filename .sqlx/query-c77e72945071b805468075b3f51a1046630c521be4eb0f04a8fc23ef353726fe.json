@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!: i64\", agent_id, name, parent_worker_id, last_call_at, activity\n           FROM workers ORDER BY name",
+  "query": "SELECT id AS \"id!: i64\", agent_id, name, last_call_at, activity\n           FROM workers WHERE agent_id = ? AND parent_worker_id IS NULL",
   "describe": {
     "columns": [
       {
@@ -37,19 +37,8 @@
         }
       },
       {
-        "name": "parent_worker_id",
-        "ordinal": 3,
-        "type_info": "Integer",
-        "origin": {
-          "Table": {
-            "table": "workers",
-            "name": "parent_worker_id"
-          }
-        }
-      },
-      {
         "name": "last_call_at",
-        "ordinal": 4,
+        "ordinal": 3,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -60,7 +49,7 @@
       },
       {
         "name": "activity",
-        "ordinal": 5,
+        "ordinal": 4,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -71,16 +60,15 @@
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 1
     },
     "nullable": [
       false,
       false,
       false,
       true,
-      true,
       true
     ]
   },
-  "hash": "2637edd41e7482691466994b7b7cc4f773ccd66297b60736df12145977464d46"
+  "hash": "c77e72945071b805468075b3f51a1046630c521be4eb0f04a8fc23ef353726fe"
 }

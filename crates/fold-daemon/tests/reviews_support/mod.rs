@@ -335,15 +335,6 @@ impl Fixture {
             .advance(Duration::from_secs(minutes * 60))
             .unwrap();
     }
-
-    /// A subagent worker `<agent>/<segment>` of a registered agent.
-    pub async fn subagent(&self, agent: &Agent, segment: &str) -> WorkerRow {
-        self.agents
-            .register_worker(&agent.ctx, segment, None)
-            .await
-            .unwrap()
-            .worker
-    }
 }
 
 /// A workspace service over the project that shares `objects` and `locks`, as `WorkspaceService::for_project` shares the project's.
@@ -373,7 +364,7 @@ async fn register(agents: &AgentService, name: &str, tags: &[&str]) -> Agent {
         .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &tags)
         .await
         .unwrap();
-    let worker = agents.resolve_worker(&ctx, None).await.unwrap();
+    let worker = agents.resolve_worker(&ctx).await.unwrap();
     Agent { ctx, worker }
 }
 

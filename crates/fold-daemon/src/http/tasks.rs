@@ -243,7 +243,7 @@ pub struct BoardCard {
     pub blocked_by: Vec<String>,
     /// How many open tasks wait directly for this one; 0 once it is Done.
     pub blocks: u32,
-    /// The worker holding the implementation claim, `agent` or `agent/worker`.
+    /// The worker holding the implementation claim, named as its agent.
     #[schema(required = true)]
     pub worker: Option<String>,
     /// The live task workspace.
@@ -470,7 +470,7 @@ pub enum ClaimKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct TaskClaim {
     pub kind: ClaimKind,
-    /// The worker, `agent` or `agent/worker`.
+    /// The worker, named as its agent.
     pub holder: String,
     /// UTC milliseconds.
     pub claimed_at: i64,
@@ -1151,7 +1151,7 @@ impl From<fold_core::tasks::areas::ReaderRole> for ReaderRole {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct TaskReader {
-    /// The worker, `agent` or `agent/worker`; feedback addressed to it by name reaches it.
+    /// The worker, named as its agent; feedback addressed to it by name reaches it.
     #[schema(example = "web-t12")]
     pub name: String,
     pub role: ReaderRole,

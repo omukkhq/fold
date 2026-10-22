@@ -240,7 +240,7 @@ async fn register(agents: &AgentService, name: &str) -> WorkerRow {
         .register_agent(&mut ctx, &AgentName::parse(name).unwrap(), &[])
         .await
         .unwrap();
-    agents.resolve_worker(&ctx, None).await.unwrap()
+    agents.resolve_worker(&ctx).await.unwrap()
 }
 
 #[cfg(test)]

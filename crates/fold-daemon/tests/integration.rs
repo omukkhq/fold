@@ -137,7 +137,7 @@ fn pull(fx: &Fixture, readme: &str) -> PullIntegration {
 /// `review` is a reviewer and acts with it.
 async fn reviewer(fx: &Fixture) -> Actor {
     give_role(fx.project.store(), "review", Role::Reviewer, None).await;
-    fx.agents.actor(&fx.review.ctx, None).await.unwrap()
+    fx.agents.actor(&fx.review.ctx).await.unwrap()
 }
 
 async fn approve(fx: &Fixture, actor: &Actor, proposal: u32) {
@@ -423,7 +423,7 @@ async fn human_integration_is_refused_by_a_stale_expected_version() {
 async fn agent_cannot_integrate_its_own_proposal() {
     let fx = Fixture::new().await;
     fx.proposal().await;
-    let author = fx.agents.actor(&fx.frontend.ctx, None).await.unwrap();
+    let author = fx.agents.actor(&fx.frontend.ctx).await.unwrap();
     let before = untouched(&fx).await;
 
     let error = refusal(fx.reviews.integrate_proposal(&author, p(1), None).await);
