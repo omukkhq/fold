@@ -221,6 +221,17 @@ async fn acceptance_21_a_question_names_lines_that_exist() {
             "{ask}"
         );
     }
+    let (_, partial) = http(
+        &h,
+        Method::POST,
+        &path,
+        Some(&json!({"version": 1, "path": FILE, "body": "why"})),
+    )
+    .await;
+    assert_eq!(
+        partial["error"]["message"],
+        "a question about lines needs path, side, start_line and end_line"
+    );
     let (status, body) = http(&h, Method::POST, "/proposals/P-9/questions", Some(&json!({"version": 1, "path": FILE, "side": "new", "start_line": 1, "end_line": 1, "body": "why"}))).await;
     assert_eq!(
         (status, body["error"]["code"].as_str().unwrap()),

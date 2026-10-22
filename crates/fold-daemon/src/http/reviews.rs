@@ -1337,8 +1337,7 @@ pub async fn ask_proposal_author(
     ApiJson(body): ApiJson<AskAuthorBody>,
 ) -> Result<(StatusCode, Json<MessageView>), ApiError> {
     let proposal = proposal(&id)?;
-    let location = CommentLocation::from_parts(
-        "question",
+    let location = CommentLocation::question_parts(
         body.path,
         body.side.map(Side::from),
         body.start_line,
