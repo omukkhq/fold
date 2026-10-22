@@ -269,12 +269,8 @@ impl AgentService {
             return Err(FoldError::from(denied).into());
         }
         let session_id = ctx.session_id;
-        // A session that `fld claude` starts asks for the tag in its handshake from outside every worker's process tree; the supervised main's own adapter runs inside its process tree.
-        let interactive_main = origin == TagOrigin::Handshake
-            && ctx.peer == SessionPeer::Unsupervised
-            && tags.iter().any(Tag::is_main);
-        // A worker of another role never holds the tag, and the tag rule refuses it in the registration.
-        let role = if interactive_main {
+        let unsupervised = ctx.peer == SessionPeer::Unsupervised;
+        let role = if unsupervised {
             let mut conn = self
                 .store
                 .read()
@@ -287,10 +283,13 @@ impl AgentService {
         } else {
             None
         };
-        let gate = self
-            .workers
-            .as_ref()
-            .filter(|_| interactive_main && role.is_none_or(|role| role == fold_core::Role::Main));
+        // A session from outside every worker's process tree is an interactive main agent when it asks for the tag in its handshake, as `fld claude`'s session does, or when it names the supervised main, whose agent holds the tag; the supervised main's own adapter runs inside its process tree. A worker of another role never holds the tag, and the tag rule refuses it in the registration.
+        let interactive_main = unsupervised
+            && match role {
+                None => origin == TagOrigin::Handshake && tags.iter().any(Tag::is_main),
+                Some(role) => role == fold_core::Role::Main,
+            };
+        let gate = self.workers.as_ref().filter(|_| interactive_main);
         if let Some(supervisor) = gate {
             supervisor.enter_interactive_main(session_id, name)?;
         }

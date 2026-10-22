@@ -83,7 +83,8 @@ async fn acceptance_27_a_request_is_handled_end_to_end_by_the_supervised_main() 
     );
     until_state(&h, MAIN, WorkerState::Idle).await;
 
-    h.connect(MAIN).await;
+    // The calls of the supervised main come from its own adapter, inside its process tree.
+    h.connect_under(MAIN, runs[0].pid).await;
     h.call(
         MAIN,
         "claim_request",

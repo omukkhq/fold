@@ -105,7 +105,7 @@ impl Supervisor {
         })
     }
 
-    /// Counts the session `session` of `agent`, which asked for the `main` tag from outside every worker's process tree, as an interactive main agent. While fold runs or starts the supervised main, such a session is refused with `main_supervised`.
+    /// Counts the session `session` of `agent`, which asked for the `main` tag or named the supervised main from outside every worker's process tree, as an interactive main agent. While fold runs or starts the supervised main, such a session is refused with `main_supervised`.
     pub fn enter_interactive_main(&self, session: i64, agent: &AgentName) -> Result<(), FoldError> {
         let mut gate = lock(&self.inner.main_gate);
         if gate.starting || self.is_running(agent) {

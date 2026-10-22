@@ -63,9 +63,15 @@ async fn reply(harness: &Harness, message: &str, body: &str) -> String {
     sent["id"].as_str().unwrap().to_owned()
 }
 
+/// A session of the supervised main's own adapter, from inside the process tree of its newest run.
+async fn connect_main(harness: &mut Harness, fake: &FakeClaude) {
+    let run = fake.runs_of(MAIN).pop().expect("the supervised main runs");
+    harness.connect_under(MAIN, run.pid).await;
+}
+
 /// The supervised main asks the humans to approve its plan, linked to no task, and ends its turn; returns the ask.
-async fn ask_for_the_plan(harness: &mut Harness) -> String {
-    harness.connect(MAIN).await;
+async fn ask_for_the_plan(harness: &mut Harness, fake: &FakeClaude) -> String {
+    connect_main(harness, fake).await;
     let ask = harness
         .send_with(
             MAIN,
@@ -201,7 +207,7 @@ async fn a_message_to_the_stopped_supervised_main_resumes_it_once() {
     let fake = FakeClaude::new("result");
     let mut harness = supervised(&fake).await;
     let session = worker(&harness, MAIN).await.session_id;
-    let ask = ask_for_the_plan(&mut harness).await;
+    let ask = ask_for_the_plan(&mut harness, &fake).await;
     stop_by_fold(&harness).await;
 
     let answer = reply(&harness, &ask, "OK").await;
@@ -220,7 +226,7 @@ async fn a_message_to_the_stopped_supervised_main_resumes_it_once() {
 async fn a_humans_stop_holds_the_supervised_main_until_a_human_starts_it_again() {
     let fake = FakeClaude::new("result");
     let mut harness = supervised(&fake).await;
-    let ask = ask_for_the_plan(&mut harness).await;
+    let ask = ask_for_the_plan(&mut harness, &fake).await;
     stop(&harness).await;
     assert!(held(&harness).await);
 
@@ -262,7 +268,7 @@ async fn a_humans_stop_holds_the_supervised_main_until_a_human_starts_it_again()
 async fn a_paused_project_holds_the_supervised_main_until_its_resume() {
     let fake = FakeClaude::new("result");
     let mut harness = supervised(&fake).await;
-    let ask = ask_for_the_plan(&mut harness).await;
+    let ask = ask_for_the_plan(&mut harness, &fake).await;
     stop_by_fold(&harness).await;
     let (status, body) = http(&harness, Method::POST, "/pause", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -296,7 +302,7 @@ async fn a_paused_project_holds_the_supervised_main_until_its_resume() {
 async fn the_plan_waits_for_a_human_reply_in_its_thread() {
     let fake = FakeClaude::new("result");
     let mut harness = supervised(&fake).await;
-    let ask = ask_for_the_plan(&mut harness).await;
+    let ask = ask_for_the_plan(&mut harness, &fake).await;
     let (status, needs) = http(&harness, Method::GET, "/needs-you", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
@@ -335,10 +341,14 @@ async fn the_interactive_and_the_supervised_main_refuse_each_other() {
     let error = refused.error.unwrap();
     assert_eq!(error.code, "main_supervised", "{error:?}");
     let untagged = handshake_of(&harness, MAIN, &[]).await;
-    assert!(
-        untagged.ok,
-        "the supervised main's own adapter has no tag request"
+    assert_eq!(
+        untagged.error.map(|error| error.code),
+        Some("main_supervised".to_owned()),
+        "a terminal session that names the running supervised main is a second main agent"
     );
+    connect_main(&mut harness, &fake).await;
+    harness.call(MAIN, "get_inbox", json!({})).await;
+    harness.disconnect(MAIN).await;
     harness
         .call(
             "frontend",
@@ -472,7 +482,7 @@ async fn a_request_starts_the_supervised_main_and_never_while_the_setting_is_off
 async fn a_closed_workspace_of_the_supervised_main_goes_once_its_turn_ends() {
     let fake = FakeClaude::new("result");
     let mut harness = supervised(&fake).await;
-    harness.connect(MAIN).await;
+    connect_main(&mut harness, &fake).await;
     let opened = harness.call(MAIN, "open_main_workspace", json!({})).await;
     let ws = opened["workspace"].as_str().unwrap().to_owned();
     let dir = std::path::Path::new(harness.root()).join(opened["path"].as_str().unwrap());
