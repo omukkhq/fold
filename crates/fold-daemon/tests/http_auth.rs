@@ -777,6 +777,38 @@ async fn a_sign_in_link_opens_one_session_and_then_stops_working() {
 }
 
 #[tokio::test]
+async fn two_opens_of_one_sign_in_link_at_once_sign_in_once() {
+    let fixture = Fixture::new().await;
+    let secret = link_secret(&fixture, "tanim").await;
+    let open = || {
+        send(
+            fixture.http(),
+            Method::POST,
+            SESSION,
+            None,
+            Some(json!({ "link": secret })),
+        )
+    };
+    let (first, second) = tokio::join!(open(), open());
+    let mut results = [first, second].map(|answer| {
+        let cookies = answer.cookies().len();
+        (answer.status, answer.code().to_owned(), cookies)
+    });
+    results.sort_by_key(|(status, _, _)| status.as_u16());
+    assert_eq!(
+        results,
+        [
+            (StatusCode::NO_CONTENT, String::new(), 1),
+            (
+                StatusCode::UNAUTHORIZED,
+                "invalid_sign_in_link".to_owned(),
+                0
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn a_sign_in_link_works_only_within_its_lifetime() {
     let fixture = Fixture::new().await;
     let clock = fixture.project.clock();
