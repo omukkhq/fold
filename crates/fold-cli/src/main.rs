@@ -55,7 +55,7 @@ enum Command {
     Subscribe(news::SubscribeArgs),
     /// Manage the tokens that sign humans in to the web interface from any browser; fld web signs you in on this machine
     Token(token::TokenArgs),
-    /// Print a one-time link that signs you in to the web interface; it works once, within 5 minutes, starting the daemon when needed
+    /// Print a one-time link that signs you in to the web interface; it works once, for a few minutes, starting the daemon when needed
     Web(commands::web::WebArgs),
     /// Add, remove and list the remote Git repositories that fld push and fld pull sync main with
     Remote(commands::remote::RemoteArgs),

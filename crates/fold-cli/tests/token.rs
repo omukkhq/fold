@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::sync::Arc;
 
-use fold_core::{HumanName, ManualClock};
+use fold_core::{Clock, HumanName, ManualClock};
 use fold_daemon::http::host::CLIENT_HEADER;
+use fold_daemon::services::projects::SIGN_IN_LINK_LIFETIME;
 use fold_daemon::{Daemon, DaemonConfig, RunningDaemon};
 use fold_store::projects;
 use tempfile::TempDir;
@@ -220,9 +221,15 @@ async fn fld_web_prints_a_link_that_signs_in_once() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let mut lines = stdout.lines();
     let url = lines.next().unwrap();
+    let expires = ManualClock::new()
+        .now()
+        .checked_add(SIGN_IN_LINK_LIFETIME)
+        .unwrap();
     assert_eq!(
         lines.collect::<Vec<_>>(),
-        ["open the link in a browser on this machine within 5 minutes; it signs you in once"]
+        [format!(
+            "open the link in a browser on this machine before {expires}; it signs you in once"
+        )]
     );
     let link = url
         .strip_prefix(&format!("http://{addr}/sign-in#link="))

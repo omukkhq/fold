@@ -691,10 +691,10 @@ async fn gc_daily(
 
 async fn collect_all(state: &AppState) {
     match projects::purge_expired_web_sessions(&state.registry, state.clock.now()).await {
-        Ok(purged) => tracing::info!(purged, "expired web sessions purged"),
+        Ok(purged) => tracing::info!(purged, "expired web sessions and sign-in links purged"),
         Err(error) => tracing::error!(
             code = error.log_code(),
-            "expired web sessions could not be purged"
+            "expired web sessions and sign-in links could not be purged"
         ),
     }
     for handle in state.projects.handles() {

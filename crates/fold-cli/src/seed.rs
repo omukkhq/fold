@@ -214,8 +214,8 @@ fn seed(args: &SeedArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), SeedEr
         .unwrap_or(serve::DEFAULT_LISTEN);
     write(format!("board: http://{listen}/p/{slug}/board"))?;
     write(format!(
-        "sign in as {HUMAN} within 5 minutes, once: {}",
-        built.sign_in
+        "sign in as {HUMAN} once, before {}: {}",
+        built.sign_in_until, built.sign_in
     ))
 }
 
@@ -224,8 +224,9 @@ struct Built {
     proposals: usize,
     workers: usize,
     columns: Vec<(String, u64)>,
-    /// A one-time sign-in link for the seed's human.
+    /// A one-time sign-in link for the seed's human, and when it stops working.
     sign_in: String,
+    sign_in_until: fold_core::Timestamp,
 }
 
 async fn build(socket: &Path, root: &Path, slug: &str) -> Result<Built, SeedError> {
@@ -665,9 +666,15 @@ impl Seeder {
                 tool: "create_sign_in_link",
             })?
             .to_owned();
+        let sign_in_until = crate::commands::web::expiry(&link.body["expires_at"]).ok_or(
+            SeedError::Unexpected {
+                tool: "create_sign_in_link",
+            },
+        )?;
         let length = |value: &Value| value.as_array().map_or(0, Vec::len);
         Ok(Built {
             sign_in,
+            sign_in_until,
             tasks: self.tasks,
             proposals: length(&proposals["proposals"]),
             workers: length(&workers["workers"]),
