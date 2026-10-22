@@ -252,9 +252,20 @@ async fn a_new_session_records_the_fingerprint_without_a_note() {
     let harness = lead_running(&fake, WorkerState::Idle).await;
     read_by_older_fold(&harness, LEAD).await;
 
-    harness
-        .call(MAIN, "restart_worker", json!({"name": LEAD}))
+    let (status, restarted) = harness
+        .http(
+            Method::POST,
+            &format!("/api/v1/projects/demo/workers/{LEAD}/restart"),
+            Some(&json!({})),
+            HUMAN,
+        )
         .await;
+    assert_eq!(status, StatusCode::OK, "{restarted}");
+    assert_eq!(restarted["state"], "starting", "{restarted}");
+    assert_eq!(
+        restarted["older_fold"], false,
+        "a starting session records its fingerprint once its process is in place"
+    );
     let runs = until_runs(&fake, LEAD, 2).await;
     assert!(!runs[1].has("--resume"));
     let turns = user_turns(&runs[1]);
