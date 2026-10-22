@@ -566,7 +566,7 @@ async fn the_review_lead_changes_an_open_plan_within_five_tasks() {
     .await;
 }
 
-/// The main agent claims or batches no proposal of an open plan and never adds to a plan, but on the user's word takes a member out or closes the plan, whose proposals a reviewer can then get alone.
+/// The main agent claims or batches no proposal of an open plan and never adds to a plan, but on the user's word takes a member out or closes the plan, whose proposals a reviewer can then get alone; the list then leaves the closed plan out unless asked for every plan.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_main_agent_takes_members_out_of_a_plan_or_closes_it() {
     let (h, _fake) = with_review_lead().await;
@@ -636,4 +636,20 @@ async fn the_main_agent_takes_members_out_of_a_plan_or_closes_it() {
         json!({"role": "reviewer", "proposals": [p1, p2]}),
     )
     .await;
+
+    // The list shows only the open plans unless asked for every plan, within its limit.
+    let listed = h.call("review-lead", "list_review_plans", json!({})).await;
+    assert_eq!(listed["plans"], json!([]), "{listed}");
+    let listed = h
+        .call(
+            "review-lead",
+            "list_review_plans",
+            json!({"open": false, "limit": 1}),
+        )
+        .await;
+    assert_eq!(listed["plans"][0]["id"], "rp-1", "{listed}");
+    let refused = h
+        .refused("review-lead", "list_review_plans", json!({"limit": 0}))
+        .await;
+    assert_eq!(refused["code"], codes::INVALID_REQUEST, "{refused}");
 }

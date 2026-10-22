@@ -9,7 +9,9 @@ use serde_json::{Value, json};
 use super::super::error::from_review;
 use super::super::parse;
 use super::{id, proposal_id, version};
-use crate::services::reviews::{PlanChange, ProposalPlan, ReviewPlanView, ReviewService};
+use crate::services::reviews::{
+    DEFAULT_PLAN_LIST, PlanChange, ProposalPlan, ReviewPlanView, ReviewService,
+};
 
 pub const CREATE_REVIEW_PLAN: &str = "create_review_plan";
 pub const CHANGE_REVIEW_PLAN: &str = "change_review_plan";
@@ -63,9 +65,12 @@ pub struct ReviewPlanIdInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct ListReviewPlansInput {
-    /// Only the plans that are open: waiting for tasks or for their start.
+    /// Only the plans that are open, waiting for tasks or for their start: true when left out; false lists the started and ended plans too.
     #[serde(default)]
-    pub open: bool,
+    pub open: Option<bool>,
+    /// The most plans to return, the newest ones, in number order: 1 to 100, 20 when left out.
+    #[serde(default)]
+    pub limit: Option<u32>,
     /// The worker that makes this call, such as review/plan. Leave it out to act as the main worker.
     #[serde(rename = "as", default)]
     pub as_worker: Option<String>,
@@ -90,7 +95,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_REVIEW_PLANS,
-            "List review plans with their state, proposals and awaited tasks.",
+            "List review plans with their state, proposals and awaited tasks: the open ones unless open is false, the newest 20 unless limit says otherwise.",
             schema_for_type::<ListReviewPlansInput>(),
         ),
     ]
@@ -117,7 +122,10 @@ pub async fn run(
         LIST_REVIEW_PLANS => {
             let input: ListReviewPlansInput = parse(arguments)?;
             let plans = reviews
-                .list_review_plans(input.open)
+                .list_review_plans(
+                    input.open.unwrap_or(true),
+                    Some(input.limit.unwrap_or(DEFAULT_PLAN_LIST)),
+                )
                 .await
                 .map_err(from_review)?;
             json!({"plans": plans.iter().map(plan_json).collect::<Vec<_>>()})

@@ -182,6 +182,12 @@ pub(crate) async fn take_plan_for_start(
     })
 }
 
+/// The most plans one `list_review_plans` returns.
+pub const MAX_PLAN_LIST: u32 = 100;
+
+/// How many plans `list_review_plans` returns when the caller names no limit.
+pub const DEFAULT_PLAN_LIST: u32 = 20;
+
 /// What `change_review_plan` does to an open plan.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlanChange {
@@ -817,19 +823,25 @@ impl ReviewService {
         plan_view(&mut conn, row).await
     }
 
-    /// Plans in number order, only the open ones when `open_only`.
+    /// Plans in number order, only the open ones when `open_only`, and only the newest `limit`, lowered to [`MAX_PLAN_LIST`]; 0 is `invalid_request` and `None` lists all.
     pub async fn list_review_plans(
         &self,
         open_only: bool,
+        limit: Option<u32>,
     ) -> Result<Vec<ReviewPlanView>, ReviewError> {
+        let limit = crate::services::page_limit(limit, MAX_PLAN_LIST)?;
         let mut conn = self
             .store
             .read()
             .acquire()
             .await
             .map_err(StoreError::from)?;
+        let mut rows = store::list_plans(&mut *conn, open_only).await?;
+        if let Some(limit) = limit.and_then(|limit| usize::try_from(limit).ok()) {
+            rows.drain(..rows.len().saturating_sub(limit));
+        }
         let mut views = Vec::new();
-        for row in store::list_plans(&mut *conn, open_only).await? {
+        for row in rows {
             views.push(plan_view(&mut conn, row).await?);
         }
         Ok(views)
