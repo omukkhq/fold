@@ -19,6 +19,7 @@ use crate::paths::{RepoPath, WorkspaceError, open_parent, os_bytes, resolve};
 use crate::platform::is_executable;
 use crate::restore::{occupied, occupied_above};
 use crate::scan::{Reading, hash_stable};
+use crate::snapshot::{remove_below, store_changed_trees};
 
 /// Main's side of a conflict is written beside the conflicted path under this suffix.
 pub const SIDECAR_SUFFIX: &[u8] = b".fold-main";
@@ -160,6 +161,33 @@ pub fn write_merge_with(
     Ok(apply(objects, root, index, merge, &ours, labels, suffix)?.conflicted)
 }
 
+/// The tree that the folder holding `ours_tree` holds once [`write_merge_with`] wrote `merge` with `labels` and `suffix`, stored with every blob and tree it needs, and the paths that conflict, in the order [`write_merge_with`] returns them. Nothing in the folder is read or written, so a caller can record what the write does before it starts. Blocking.
+pub fn merge_target(
+    objects: &ObjectStore,
+    merge: &TreeMerge,
+    ours_tree: &ObjectHash,
+    labels: &MarkerLabels,
+    suffix: &[u8],
+) -> Result<(ObjectHash, Vec<ConflictedPath>), FoldError> {
+    for (_, bytes) in &merge.new_blobs {
+        objects.write(ObjectKind::Blob, bytes)?;
+    }
+    let ours = load_flat(objects, ours_tree)?;
+    let plan = plan(objects, merge, &ours, labels, suffix)?;
+    let mut target = ours.clone();
+    for path in &plan.removals {
+        target.remove(path.as_bytes());
+    }
+    for path in &plan.sidecars {
+        remove_below(&mut target, path);
+    }
+    for (path, entry) in plan.writes.iter().chain(&plan.sidecar_writes) {
+        target.insert(path.as_bytes().to_vec(), *entry);
+    }
+    let tree = store_changed_trees(objects, Some(*ours_tree), &ours, &target)?;
+    Ok((tree, plan.conflicted))
+}
+
 /// The conflicted paths that still hold a marker line or whose `<path>.fold-main` still exists, in the order given.
 pub fn unresolved(
     root: &Path,
@@ -233,6 +261,15 @@ fn apply(
         let done = batch.write_entry(objects, path, entry, &opts)?;
         index.upsert(path.clone(), done.stat);
         written += 1;
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!(
+            "merge_after_first_write",
+            written == plan.removals.len() + 1,
+            |_| Err(FoldError::new(
+                codes::FAILPOINT,
+                "merge_after_first_write fired"
+            ))
+        );
     }
     batch.finish()?;
     Ok(Applied {
