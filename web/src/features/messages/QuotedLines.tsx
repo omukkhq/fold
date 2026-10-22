@@ -1,6 +1,7 @@
 import { FileCode } from "lucide-react";
 import type { MessageLines } from "@/api/messages";
 import { HrefLink } from "@/app/HrefLink";
+import { CODE_BOX, textFlow } from "@/components/text/textFlow";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { cutNote, lineRefHref, lineRefText, quotedLines } from "./lineRef";
@@ -35,7 +36,12 @@ export function QuotedLines({
           </HrefLink>
         )}
       </figcaption>
-      <pre className="overflow-x-auto bg-surface py-6 font-mono text-code leading-snug text-text">
+      <pre
+        className={cn(
+          CODE_BOX,
+          "bg-surface py-6 font-mono text-code leading-snug text-text",
+        )}
+      >
         {quotedLines(lines).map((line) => (
           <div key={line.number} className="flex">
             <span
@@ -44,7 +50,7 @@ export function QuotedLines({
             >
               {line.number}
             </span>
-            <code className="pr-10 whitespace-pre">{line.text}</code>
+            <code className={cn("pr-10", textFlow("code"))}>{line.text}</code>
           </div>
         ))}
       </pre>

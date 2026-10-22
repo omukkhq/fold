@@ -7,6 +7,7 @@ import { Button } from "@/components/button/Button";
 import { copyOutcome, type CopyState } from "@/components/mono/commitCopy";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { Skeleton } from "@/components/states/Skeleton";
+import { CODE_BOX, textFlow } from "@/components/text/textFlow";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
@@ -102,7 +103,12 @@ function LogPanel({
       ) : !result || lines.length === 0 ? (
         <p className="text-code text-text-muted">No log is stored.</p>
       ) : (
-        <div className="overflow-x-auto rounded-l bg-surface py-10 inset-ring inset-ring-border-subtle">
+        <div
+          className={cn(
+            CODE_BOX,
+            "rounded-l bg-surface py-10 inset-ring inset-ring-border-subtle",
+          )}
+        >
           {result.truncated ? (
             <p className="px-14 pb-6 text-meta text-text-faint">
               fold keeps only the end of a long log.
@@ -124,7 +130,8 @@ function LogPanel({
                 </span>
                 <code
                   className={cn(
-                    "pr-14 whitespace-pre",
+                    "pr-14",
+                    textFlow("code"),
                     line.error ? "text-danger" : "text-text",
                   )}
                 >

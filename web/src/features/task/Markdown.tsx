@@ -10,6 +10,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { InlineCode } from "@/components/code/CodeText";
 import { SyntaxText } from "@/components/code/SyntaxText";
+import { CODE_BOX } from "@/components/text/textFlow";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { MentionLink } from "@/mentions/MentionLink";
@@ -139,7 +140,9 @@ const COMPONENTS: Components = {
     <Code className={className}>{children}</Code>
   ),
   pre: ({ children }) => (
-    <pre className="overflow-x-auto rounded-m bg-sunken p-12 font-mono text-meta">
+    <pre
+      className={cn(CODE_BOX, "rounded-m bg-sunken p-12 font-mono text-meta")}
+    >
       <InFence.Provider value>{children}</InFence.Provider>
     </pre>
   ),
@@ -149,7 +152,7 @@ const COMPONENTS: Components = {
     </blockquote>
   ),
   table: ({ children }) => (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto wrap-normal">
       <table className="border-collapse text-bar text-text">{children}</table>
     </div>
   ),
@@ -211,7 +214,7 @@ const Body = memo(function Body({
   plugins: NonNullable<ComponentProps<typeof ReactMarkdown>["remarkPlugins"]>;
 }) {
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex min-w-0 flex-col gap-6 wrap-anywhere">
       <ReactMarkdown remarkPlugins={plugins} skipHtml components={COMPONENTS}>
         {children}
       </ReactMarkdown>

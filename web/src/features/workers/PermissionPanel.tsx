@@ -18,6 +18,7 @@ import {
   type WorkerQuestion,
 } from "@/api/workers";
 import { Button, IconButton } from "@/components/button/Button";
+import { textFlow } from "@/components/text/textFlow";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { PersonName } from "@/people/PersonName";
@@ -168,7 +169,9 @@ function QuestionBody({
         </Section>
         <Section title="Input">
           <div className="flex flex-col gap-4 rounded-m bg-sunken px-12 py-10 inset-ring inset-ring-border">
-            <pre className="font-mono text-code break-all whitespace-pre-wrap text-text">
+            <pre
+              className={cn("font-mono text-code text-text", textFlow("prose"))}
+            >
               {input.text}
             </pre>
             {input.note ? (
