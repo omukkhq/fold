@@ -17,6 +17,7 @@ import {
   checkRunsLine,
   humanVerdict,
   integrateBlock,
+  integrationRunsLine,
   ownApprovalLine,
   showsApproveLine,
   visibleActions,
@@ -128,6 +129,41 @@ describe("integrateBlock", () => {
       gates: humanGates({ merge: { status: "checked_at_integration" } }),
     });
     expect(integrateBlock(p, null)).toBeNull();
+  });
+
+  it("waits while an integration check run of the current version runs, and not for a proposal-stage run", () => {
+    const running = (stage: "proposal" | "integration") =>
+      proposalDetail(proposalSummary("P-46", { current_version: 5 }), {
+        checks: [
+          checkRun(163, {
+            stage,
+            state: "running",
+            finished_at: null,
+            version: stage === "integration" ? 5 : null,
+          }),
+          checkRun(152),
+        ],
+      });
+    expect(integrateBlock(running("integration"), "r76")).toBe(
+      "fold runs the integration checks of v5. Integrate when they end.",
+    );
+    expect(integrationRunsLine(5)).toBe(
+      integrateBlock(running("integration"), "r76"),
+    );
+    expect(integrateBlock(running("proposal"), "r76")).toBeNull();
+    const ended = proposalDetail(
+      proposalSummary("P-46", { current_version: 5 }),
+      { checks: [checkRun(163, { stage: "integration", state: "passed" })] },
+    );
+    expect(integrateBlock(ended, "r76")).toBeNull();
+    const failed = {
+      ...running("integration"),
+      summary: proposalSummary("P-46", {
+        current_version: 5,
+        checks_failed: true,
+      }),
+    };
+    expect(integrateBlock(failed, "r76")).toBe(CHECKS_FAILED);
   });
 });
 

@@ -1089,6 +1089,35 @@ describe("Proposal detail", () => {
     ).toBeNull();
   });
 
+  it("disables Integrate while an integration check of the current version runs that no queued request of it started", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      checks: [
+        checkRun(17, {
+          stage: "integration",
+          purpose: "integrate",
+          version: 2,
+          state: "running",
+          finished_at: null,
+        }),
+      ],
+    }));
+    renderAt("/p/demo/proposals/P-4");
+    const panel = await integration();
+    const integrate = within(panel).getByRole("button", { name: "Integrate" });
+    expect(integrate).toHaveProperty("disabled", true);
+    expect(
+      document.getElementById(integrate.getAttribute("aria-describedby") ?? "")
+        ?.textContent,
+    ).toBe("fold runs the integration checks of v2. Integrate when they end.");
+    expect(
+      within(panel).getByRole("button", { name: "Approve v2" }),
+    ).toHaveProperty("disabled", true);
+    expect(
+      within(panel).getByRole("button", { name: "Request changes" }),
+    ).toHaveProperty("disabled", false);
+  });
+
   it("shows Approve as pending, then the human approval once the server answers", async () => {
     const user = userEvent.setup();
     renderAt("/p/demo/proposals/P-4");

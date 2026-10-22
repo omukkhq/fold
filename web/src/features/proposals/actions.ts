@@ -78,6 +78,11 @@ export function checkRunsLine(version: number): string {
   return `A check runs on v${String(version)}. Approve when it ends.`;
 }
 
+/** The line under a disabled Integrate while an integration check run of the current version runs. */
+export function integrationRunsLine(version: number): string {
+  return `fold runs the integration checks of v${String(version)}. Integrate when they end.`;
+}
+
 /** The check runs of the current version, or none when the proposal read selected an earlier version. */
 function currentRuns(proposal: ProposalDetail) {
   return proposal.selected.version === proposal.summary.current_version
@@ -117,6 +122,7 @@ export function approveBlock(
 /**
  * Why Integrate cannot work for the signed-in human, from the first unmet gate in the daemon's report; null when no gate stands in the way.
  * For a human only the human review mark and the prerequisites can be unmet: the caller and approval gates hold, because the integrating human approves in the same action. For the same reason a human integrates a marked task only after a reviewer agent approved it, as for Approve.
+ * An integration run of the current version that fold started by itself or for a review batch has no queued request, so the daemon would queue the human's request behind it, to be refused once that integration ends or to run the checks a second time.
  */
 export function integrateBlock(
   proposal: ProposalDetail,
@@ -124,6 +130,13 @@ export function integrateBlock(
 ): string | null {
   if (proposal.summary.checks_failed) return CHECKS_FAILED;
   if (agentApprovesFirst(proposal)) return AGENT_APPROVES_FIRST;
+  if (
+    currentRuns(proposal).some(
+      (run) => run.stage === "integration" && run.state === "running",
+    )
+  ) {
+    return integrationRunsLine(proposal.summary.current_version);
+  }
   const gate = shownGates(proposal.gates).find((g) => g.status === "unmet");
   if (!gate) return null;
   if (gate.gate === "human_review") {
