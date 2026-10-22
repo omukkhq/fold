@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT m.number, w.name AS \"worker?: String\", r.human, r.addressed_as,\n                  r.delivered_at, r.acked_at, r.pushed_at\n           FROM message_recipients r\n           JOIN messages m ON m.id = r.message_id\n           LEFT JOIN workers w ON w.id = r.worker_id\n           WHERE m.number IN (SELECT value FROM json_each(?))\n           ORDER BY m.number, r.id",
+  "query": "SELECT m.number, w.name AS \"worker?: String\", r.human, r.addressed_as,\n                  r.delivered_at, r.acked_at, r.pushed_at, fw.name AS \"forwarded_to?: String\"\n           FROM message_recipients r\n           JOIN messages m ON m.id = r.message_id\n           LEFT JOIN workers w ON w.id = r.worker_id\n           LEFT JOIN workers fw ON fw.id = r.forwarded_to\n           WHERE m.number IN (SELECT value FROM json_each(?))\n           ORDER BY m.number, r.id",
   "describe": {
     "columns": [
       {
@@ -79,6 +79,17 @@
             "name": "pushed_at"
           }
         }
+      },
+      {
+        "name": "forwarded_to?: String",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "workers",
+            "name": "name"
+          }
+        }
       }
     ],
     "parameters": {
@@ -91,8 +102,9 @@
       false,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "e5fdccd7e3848b8738bf333e6f9b479d8a4f60ea5af4b3218de2a7693560d284"
+  "hash": "e8be86d870a24ae4a086cc0db9e2552995c60f2209365387b1cb46b826943b82"
 }

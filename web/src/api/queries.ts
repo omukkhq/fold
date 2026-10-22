@@ -3,8 +3,13 @@ import { getComparison, getFileDiff } from "./diff";
 import { RECENT_EVENTS, listAgents } from "./agents";
 import { getProjectGit } from "./git";
 import { keys } from "./keys";
-import { countAwaitingHuman, listThreads } from "./messages";
+import {
+  countAwaitingHuman,
+  listProposalThreads,
+  listThreads,
+} from "./messages";
 import { getProject, listProjects } from "./projects";
+import { localDayStart } from "../format/days";
 import {
   getProposal,
   getProposalChanges,
@@ -22,8 +27,14 @@ import { getSession } from "./session";
 import { listNeedsYou, listWorkerQuestions, listWorkers } from "./workers";
 import { getWorkspace } from "./workspaces";
 
-export const projectsQuery = () =>
-  queryOptions({ queryKey: keys.projects(), queryFn: listProjects });
+/** The list of the viewer's day at `now`: the next day reads it again, with the costs of that day. */
+export const projectsQuery = (now: number = Date.now()) => {
+  const today = localDayStart(now);
+  return queryOptions({
+    queryKey: keys.projectList(today),
+    queryFn: () => listProjects(today),
+  });
+};
 
 export const projectQuery = (slug: string) =>
   queryOptions({
@@ -84,6 +95,14 @@ export const threadQuery = (slug: string, thread: string) =>
   queryOptions({
     queryKey: keys.messagesThread(slug, thread),
     queryFn: () => getThread(slug, thread),
+    staleTime: Infinity,
+  });
+
+/** The threads linked to a proposal, which hold the questions about its lines. */
+export const proposalThreadsQuery = (slug: string, proposal: string) =>
+  queryOptions({
+    queryKey: keys.proposalThreads(slug, proposal),
+    queryFn: () => listProposalThreads(slug, proposal),
     staleTime: Infinity,
   });
 

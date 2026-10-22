@@ -109,6 +109,13 @@ describe("names", () => {
     expect(replyPlaceholder(thread("m-9", { participants: ["human:a"] }))).toBe(
       "Reply…",
     );
+    expect(
+      replyPlaceholder(
+        thread("m-8", {
+          participants: ["human:a", "api-audit", "api-lead", "fold"],
+        }),
+      ),
+    ).toBe("Reply to @api-audit, @api-lead…");
   });
 });
 

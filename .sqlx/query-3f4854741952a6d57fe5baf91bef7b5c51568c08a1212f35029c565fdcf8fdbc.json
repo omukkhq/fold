@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO message_line_refs\n             (message_id, version_id, path, side, start_line, end_line, excerpt, excerpt_cut)\n         VALUES ((SELECT id FROM messages WHERE number = ?1),\n                 (SELECT v.id FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id\n                  WHERE p.number = ?2 AND v.version = ?3),\n                 ?4, ?5, ?6, ?7, ?8, ?9)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "3f4854741952a6d57fe5baf91bef7b5c51568c08a1212f35029c565fdcf8fdbc"
+}

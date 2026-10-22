@@ -10,6 +10,7 @@ import { isApiError } from "./errors";
 import { keys } from "./keys";
 import {
   addComment,
+  askAuthor,
   editProposalFile,
   getProposal,
   getProposalChanges,
@@ -29,6 +30,7 @@ import {
   proposalFileQuery,
   proposalQuery,
   proposalsQuery,
+  proposalThreadsQuery,
 } from "./queries";
 
 afterEach(() => {
@@ -169,6 +171,32 @@ describe("human writes", () => {
       body: "Defaults please.",
       reply_to: null,
     });
+  });
+
+  it("posts a question about lines to the author and answers with the stored message", async () => {
+    const calls = stubFetch({
+      [`POST ${P}/P-4/questions`]: {
+        status: 201,
+        body: { id: "m-7", thread: "m-7" },
+      },
+    });
+    const question = {
+      version: 1,
+      path: "migrations/0004_reports.sql",
+      side: "old" as const,
+      start_line: 3,
+      end_line: 3,
+      body: "Why here?",
+    };
+    const stored = await askAuthor("demo", "P-4", question);
+    expect(stored.id).toBe("m-7");
+    expect(calls[0]?.body).toEqual(question);
+  });
+
+  it("keys a proposal's threads under the messages prefix, so message events refresh them", () => {
+    const key = proposalThreadsQuery("demo", "P-4").queryKey;
+    expect(key).toEqual(keys.proposalThreads("demo", "P-4"));
+    expect(key.slice(0, 2)).toEqual(keys.messages("demo"));
   });
 
   it("posts a verdict with its body and comments", async () => {

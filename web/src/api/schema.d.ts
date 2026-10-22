@@ -245,6 +245,40 @@ export interface paths {
         patch: operations["update_checklist_item"];
         trace?: never;
     };
+    "/api/v1/projects/{slug}/cost": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What the project's supervised workers cost: the total, the splits by role, area, model, worker and task, and the cost by slot and role. */
+        get: operations["project_cost"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/cost/tasks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What one task cost, with one row per worker that built it or reviewed one of its proposals. */
+        get: operations["task_cost"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/diff": {
         parameters: {
             query?: never;
@@ -305,7 +339,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** A named human's feedback on a task, message in a request's clarification thread, or reply to a message. Feedback goes to the task's claim holder and a request message to the request's drafter unless `to` names recipients; a reply answers a question to humans, which clears the task's `question` attention. The message changes no task or request state. */
+        /** A named human's feedback on a task, message in a request's clarification thread, or reply to a message. Feedback goes only to the task's readers, as `GET /tasks/{id}/readers` lists them: to `to` when given, otherwise to the first reader. A request message goes to the request's drafter unless `to` names recipients; a reply answers a question to humans, which clears the task's `question` attention. The message changes no task or request state. */
         post: operations["send_feedback"];
         delete?: never;
         options?: never;
@@ -322,7 +356,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Collects the project's garbage: prunes checkpoints, removes closed workspace directories past their retention and deletes unreferenced objects. Socket only; used by `fld gc`. */
+        /** Collects the project's garbage: prunes checkpoints, removes the closed workspace directories that are still there and deletes unreferenced objects. Socket only; used by `fld gc`. */
         post: operations["run_gc"];
         delete?: never;
         options?: never;
@@ -531,6 +565,23 @@ export interface paths {
         put?: never;
         /** A named human integrates the current version onto main and approves it in the same action. A conflicting merge publishes nothing: the answer is `integration_conflicted` with each conflicting path and its kind in `details.files`, and the full report is on the proposal. */
         post: operations["integrate_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/proposals/{id}/questions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Asks the proposal's author about a run of lines of a version: one message from the named human to the worker holding the task's implementation claim, else the proposal's author, linked to the task and the proposal and carrying the lines and their text. It waits for the author's answer in its thread. It writes no review, verdict or comment and never changes whose turn it is, and it changes no task state. */
+        post: operations["ask_proposal_author"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1106,6 +1157,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/tasks/{id}/readers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Who a human's feedback on the task can go to: the worker that holds the implementation claim, the lead of the task's area (none for a task of Main or in no area) and the main agent. Only they answer for the task. */
+        get: operations["task_readers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/tasks/{id}/send-back": {
         parameters: {
             query?: never;
@@ -1460,6 +1528,20 @@ export interface components {
              */
             expected_version: number;
         };
+        AreaCost: {
+            /**
+             * @description Null for the review lead and the reviewers, who review the work of every area.
+             * @example web
+             */
+            area: string | null;
+            /** Format: int64 */
+            cost_micro_usd: number;
+            tokens: components["schemas"]["TokenCounts"];
+            /** Format: int64 */
+            turns: number;
+            /** Format: int64 */
+            workers: number;
+        };
         /** @description A part of the project that one area lead owns through one task label. */
         AreaEntry: {
             /**
@@ -1489,6 +1571,32 @@ export interface components {
             model: string | null;
             /** @example web */
             name: string;
+        };
+        /** @description A human's question to a proposal's author about a run of lines of one file of a version. */
+        AskAuthorBody: {
+            /** @description The question, plain text with some visible character. In message text `#` names a fold item and `@` names a file; the daemon parses nothing. */
+            body: string;
+            /**
+             * Format: int32
+             * @description Inclusive.
+             */
+            end_line: number;
+            /**
+             * @description The file the lines belong to, relative to the project root.
+             * @example web/src/board.ts
+             */
+            path: string;
+            side: components["schemas"]["CommentSide"];
+            /**
+             * Format: int32
+             * @description From 1.
+             */
+            start_line: number;
+            /**
+             * Format: int32
+             * @description The version whose lines the question is about; any version of the proposal.
+             */
+            version: number;
         };
         AttentionItem: {
             /** @description For a `question`: one of the task's open asks is closable, so a human can mark it answered with the asks route, because it is no worker's `AskUserQuestion`, which only a reply in its thread ends. False for every other kind. */
@@ -1975,6 +2083,43 @@ export interface components {
             main: string;
             version: string;
         };
+        /** @description A sum of turns. */
+        CostAmount: {
+            /**
+             * Format: int64
+             * @description Millionths of a US dollar, as Claude Code reported them.
+             */
+            cost_micro_usd: number;
+            tokens: components["schemas"]["TokenCounts"];
+            /** Format: int64 */
+            turns: number;
+            /**
+             * Format: int64
+             * @description How many workers ran the turns.
+             */
+            workers: number;
+        };
+        /**
+         * @description Which part of a task's cost a worker's turns are: `build` for a task worker's, `review` for a reviewer's.
+         * @enum {string}
+         */
+        CostPartKind: "build" | "review";
+        /** @description The cost of one role's turns in one slot of `slot_minutes`. */
+        CostSlot: {
+            /** Format: int64 */
+            cost_micro_usd: number;
+            role: components["schemas"]["WorkerRole"];
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the start of the slot.
+             */
+            start: number;
+            /**
+             * Format: int64
+             * @description Every token of the slot's turns.
+             */
+            tokens: number;
+        };
         CreateLabelBody: {
             /**
              * @description One of sage, slate, teal, ink, gold, moss, plum, stone.
@@ -2259,7 +2404,7 @@ export interface components {
             request?: string | null;
             /** @description The task the feedback is about, such as `T-12`. Needed when neither `request` nor `reply_to` is given. */
             task?: string | null;
-            /** @description The recipients, as an agent, `agent/worker`, `tag:<tag>`, `all`, `human:<name>` or `humans`. Left out, feedback goes to the task's claim holder, a request message to the request's drafter and a reply to the parent's sender. */
+            /** @description The recipients, as an agent, `agent/worker`, `tag:<tag>`, `all`, `human:<name>` or `humans`. Feedback on a task takes only the task's readers, and left out it goes to the first of them; left out, a request message to the request's drafter and a reply to the parent's sender. */
             to?: string[] | null;
         };
         /** @enum {string} */
@@ -2316,7 +2461,7 @@ export interface components {
             bytes_freed: number;
             /**
              * Format: int64
-             * @description Automatic checkpoints beyond the kept number, and every checkpoint of a removed workspace.
+             * @description Automatic checkpoints beyond the kept number, and every checkpoint of a workspace closed for longer than `closed_workspace_days`.
              */
             checkpoints_pruned: number;
             /**
@@ -2343,7 +2488,7 @@ export interface components {
             tmp_removed: number;
             /**
              * Format: int64
-             * @description Directories of archived or abandoned workspaces past their retention.
+             * @description Directories of archived or abandoned workspaces that the run removed.
              */
             workspaces_removed: number;
         };
@@ -2576,6 +2721,32 @@ export interface components {
             /** @example Recharts */
             label: string;
         };
+        /** @description A run of lines of one file of a proposal version, with their text. */
+        MessageLines: {
+            /**
+             * Format: int32
+             * @description Inclusive.
+             */
+            end_line: number;
+            /** @description The lines joined by newlines, without their line endings. */
+            excerpt: string;
+            /** @description The excerpt holds only the first lines of the run: at most 100 lines and 20000 characters. */
+            excerpt_cut: boolean;
+            /** @example web/src/board.ts */
+            path: string;
+            /** @description `old` reads the version's base, `new` the version. */
+            side: components["schemas"]["CommentSide"];
+            /**
+             * Format: int32
+             * @description From 1.
+             */
+            start_line: number;
+            /**
+             * Format: int32
+             * @description The version of the message's proposal.
+             */
+            version: number;
+        };
         /** @description A notice about a message got through to a session or the worker process of a recipient agent for the first time, so the message's thread shows that the message waits there. It is the `data` of the live `message.pushed` event; the recipients' `pushed_at` is committed before it is sent. */
         MessagePushed: {
             /**
@@ -2606,6 +2777,7 @@ export interface components {
             header: string | null;
             /** @example m-31 */
             id: string;
+            lines: components["schemas"]["MessageLines"] | null;
             /** @example P-3 */
             proposal: string | null;
             recipients: components["schemas"]["RecipientView"][];
@@ -2633,6 +2805,20 @@ export interface components {
              * @example m-31
              */
             thread: string;
+        };
+        ModelCost: {
+            /** Format: int64 */
+            cost_micro_usd: number;
+            /**
+             * @description Null for turns that ended before Claude Code named a model.
+             * @example claude-sonnet-5
+             */
+            model: string | null;
+            tokens: components["schemas"]["TokenCounts"];
+            /** Format: int64 */
+            turns: number;
+            /** Format: int64 */
+            workers: number;
         };
         /** @description On loopback, the name the person works under. */
         NameSignIn: {
@@ -2790,6 +2976,57 @@ export interface components {
          * @enum {string}
          */
         ProjectAttentionKind: "uncommitted_changes" | "head_moved";
+        /** @description What the project's supervised workers cost, in millionths of a US dollar, from the values Claude Code reported. The main agent is the user's own Claude Code session, which fold does not supervise, so its cost is in none of them. */
+        ProjectCostTotals: {
+            /** Format: int64 */
+            all_time_micro_usd: number;
+            /**
+             * Format: int64
+             * @description Every token of every turn, each turn's own from the usage Claude Code reported.
+             */
+            all_time_tokens: number;
+            /**
+             * Format: int64
+             * @description The turns that ended since the start of the day the list was asked for with `today`, else since midnight UTC.
+             */
+            today_micro_usd: number;
+            /**
+             * Format: int64
+             * @description The turns that ended since the start of the week the list was asked for with `week`, else since midnight UTC six days ago.
+             */
+            week_micro_usd: number;
+        };
+        /** @description What the project's supervised workers cost since `since`, from the values Claude Code reported for each turn; fold keeps no price table. The main agent is the user's own Claude Code session, which fold does not supervise, so its cost is not here. */
+        ProjectCostView: {
+            /** @description The most expensive first. */
+            by_area: components["schemas"]["AreaCost"][];
+            /** @description The most expensive first. */
+            by_model: components["schemas"]["ModelCost"][];
+            /** @description Every role, a role without a turn with 0. */
+            by_role: components["schemas"]["RoleCost"][];
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the end of the oldest turn in the range; null without a turn.
+             */
+            first_turn_at: number | null;
+            /**
+             * Format: int64
+             * @description The `since` of the request; null for all time.
+             */
+            since: number | null;
+            /**
+             * Format: int32
+             * @example 15
+             */
+            slot_minutes: number;
+            /** @description Oldest first; a slot without a turn is left out. A range of up to seven days has 15-minute slots, which add up to any viewer's own hours and days, because every time zone's offset is a whole number of them; a longer range has hour slots, which a viewer adds up into days. */
+            slots: components["schemas"]["CostSlot"][];
+            /** @description Every task a turn in the range counts for, the most expensive first. */
+            tasks: components["schemas"]["TaskCost"][];
+            total: components["schemas"]["CostAmount"];
+            /** @description The most expensive first. */
+            workers: components["schemas"]["WorkerCost"][];
+        };
         /**
          * @description What is at a project's folder. `present`: the folder holds `.fold/` with its database. `folder_missing`: the folder is gone, as on a disk that is not mounted; fold opens the project again when it is back. `fold_missing`: the folder is there without `.fold/`; only a removed project is listed so, since fold takes any other off by itself. `database_missing`: `.fold/` holds no database.
          * @enum {string}
@@ -2813,6 +3050,7 @@ export interface components {
             agents: components["schemas"]["ProjectAgent"][];
             /** @description What needs a person in the project as a whole, beside the attention items of its tasks; empty when nothing does. */
             attention: components["schemas"]["ProjectAttentionKind"][];
+            cost: components["schemas"]["ProjectCostTotals"];
             /** @description Unarchived tasks per board column. */
             counts: components["schemas"]["BoardCounts"];
             /**
@@ -3122,6 +3360,11 @@ export interface components {
             /** @description The human's note to the worker. */
             message: string | null;
         };
+        /**
+         * @description Why a reader is offered for a human's feedback on a task.
+         * @enum {string}
+         */
+        ReaderRole: "claim_holder" | "area_lead" | "main_agent";
         /** @description One recipient row. Names starting `human:` are humans. */
         RecipientView: {
             /**
@@ -3136,6 +3379,11 @@ export interface components {
              * @description UTC milliseconds; null until an inbox returned the row.
              */
             delivered_at: number | null;
+            /**
+             * @description The lead that fold sent the message on to because this recipient, a stopped worker, could not start to answer it; the sender itself when the sender is that lead. Null while fold has not sent it on.
+             * @example web-lead
+             */
+            forwarded_to: string | null;
             /** @example frontend/ui */
             name: string;
             /**
@@ -3626,6 +3874,16 @@ export interface components {
             /** @description The hash of the revision's root tree. */
             tree: string;
         };
+        RoleCost: {
+            /** Format: int64 */
+            cost_micro_usd: number;
+            role: components["schemas"]["WorkerRole"];
+            tokens: components["schemas"]["TokenCounts"];
+            /** Format: int64 */
+            turns: number;
+            /** Format: int64 */
+            workers: number;
+        };
         /** @description A worker role's settings from `.fold/config.toml`. */
         RoleEntry: {
             /**
@@ -3823,6 +4081,39 @@ export interface components {
             /** @description True once the lease ran out without a renewal. */
             stale: boolean;
         };
+        /** @description What one task cost in the range: `build` is its task workers' turns, `review` the turns of the reviewers of its proposals. */
+        TaskCost: {
+            /** @description The area of the task workers that built it; null while only reviewers worked on it. */
+            area: string | null;
+            /** Format: int64 */
+            build_micro_usd: number;
+            /** Format: int64 */
+            review_micro_usd: number;
+            /** @example T-12 */
+            task: string;
+            title: string;
+            tokens: components["schemas"]["TokenCounts"];
+            /** Format: int64 */
+            total_micro_usd: number;
+            /** Format: int64 */
+            turns: number;
+        };
+        /** @description What one task cost in all: its task workers' turns and the turns of the reviewers of its proposals, from the values Claude Code reported. */
+        TaskCostView: {
+            /** Format: int64 */
+            build_micro_usd: number;
+            /** Format: int64 */
+            review_micro_usd: number;
+            /** @example T-12 */
+            task: string;
+            tokens: components["schemas"]["TokenCounts"];
+            /** Format: int64 */
+            total_micro_usd: number;
+            /** Format: int64 */
+            turns: number;
+            /** @description The builders first, then the reviewers, each in the order they first worked on the task. */
+            workers: components["schemas"]["TaskWorkerCost"][];
+        };
         TaskEdge: {
             direction: components["schemas"]["EdgeDirection"];
             origin: components["schemas"]["EdgeOrigin"];
@@ -3896,6 +4187,18 @@ export interface components {
              * @description The current version.
              */
             version: number;
+        };
+        TaskReader: {
+            /**
+             * @description The worker, `agent` or `agent/worker`; feedback addressed to it by name reaches it.
+             * @example web-t12
+             */
+            name: string;
+            role: components["schemas"]["ReaderRole"];
+        };
+        TaskReaders: {
+            /** @description The default reader first: the claim holder, else the area lead, else the main agent. Each worker once, under its first role. */
+            readers: components["schemas"]["TaskReader"][];
         };
         /** @description A task worker's report that the work of a `no_proposal` task is finished, with the lead check that answered it. */
         TaskReport: {
@@ -4021,6 +4324,22 @@ export interface components {
             workspace: string | null;
             workspace_info: components["schemas"]["TaskWorkspaceInfo"] | null;
         };
+        /** @description One worker's turns for the task. */
+        TaskWorkerCost: {
+            /** Format: int64 */
+            cost_micro_usd: number;
+            /** @description The model of the worker's newest turn for the task. */
+            model: string | null;
+            /** @example web-worker */
+            name: string;
+            part: components["schemas"]["CostPartKind"];
+            /** @description The proposals of the task a reviewer reviewed, such as `P-3`, in number order; empty for a build. */
+            proposals: string[];
+            role: components["schemas"]["WorkerRole"];
+            tokens: components["schemas"]["TokenCounts"];
+            /** Format: int64 */
+            turns: number;
+        };
         TaskWorkspaceInfo: {
             /**
              * @description The revision the workspace is based on.
@@ -4088,6 +4407,25 @@ export interface components {
              * @example T-12
              */
             task: string | null;
+        };
+        /** @description The tokens of turns, each turn's own from the usage Claude Code reported for it, so a resumed session counts none twice. A stop's interrupt adds none. */
+        TokenCounts: {
+            /** Format: int64 */
+            cache_read: number;
+            /** Format: int64 */
+            cache_write: number;
+            /**
+             * Format: int64
+             * @description Input tokens that the prompt cache did not hold.
+             */
+            input: number;
+            /** Format: int64 */
+            output: number;
+            /**
+             * Format: int64
+             * @description All four added up.
+             */
+            total: number;
         };
         /** @description Off loopback, a web token from `fld token create`. */
         TokenSignIn: {
@@ -4169,6 +4507,22 @@ export interface components {
         };
         /** @enum {string} */
         WatchModeView: "watching" | "degraded";
+        /** @description One worker's turns in the range. A stopped, failed or restarted worker keeps its turns. */
+        WorkerCost: {
+            /** @description Null for the review lead and reviewers. */
+            area: string | null;
+            /** Format: int64 */
+            cost_micro_usd: number;
+            /** @description The model of the worker's newest turn in the range. */
+            model: string | null;
+            /** @example web-worker */
+            name: string;
+            role: components["schemas"]["WorkerRole"];
+            state: components["schemas"]["WorkerProcessState"];
+            tokens: components["schemas"]["TokenCounts"];
+            /** Format: int64 */
+            turns: number;
+        };
         WorkerEntry: {
             /** @description The last tool the worker called, followed by its task id when the call named one, such as `claim_task T-12`. */
             activity: string | null;
@@ -4849,6 +5203,10 @@ export interface operations {
             query?: {
                 /** @description List the projects a person removed from fold too; they are left out without it. */
                 include_removed?: boolean;
+                /** @description UTC milliseconds of the start of the viewer's day, from which each project's cost of today counts; midnight UTC without it. */
+                today?: number;
+                /** @description UTC milliseconds of the start of the viewer's last seven days, from which each project's cost of the week counts; midnight UTC six days ago without it. */
+                week?: number;
             };
             header?: never;
             path?: never;
@@ -4865,7 +5223,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProjectList"];
                 };
             };
-            /** @description `invalid_request`: `include_removed` is not `true` or `false` */
+            /** @description `invalid_request`: `include_removed` is not `true` or `false`, or `today` or `week` is not a time */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -4983,7 +5341,12 @@ export interface operations {
     };
     show_project: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description UTC milliseconds of the start of the viewer's day, from which the project's cost of today counts; midnight UTC without it. */
+                today?: number;
+                /** @description UTC milliseconds of the start of the viewer's last seven days, from which the project's cost of the week counts; midnight UTC six days ago without it. */
+                week?: number;
+            };
             header?: never;
             path: {
                 /** @description The project slug */
@@ -5000,6 +5363,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectSummary"];
+                };
+            };
+            /** @description `invalid_request`: `today` or `week` is not a time */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
@@ -5051,7 +5423,12 @@ export interface operations {
     };
     remove_project: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description UTC milliseconds of the start of the viewer's day, from which the project's cost of today counts; midnight UTC without it. */
+                today?: number;
+                /** @description UTC milliseconds of the start of the viewer's last seven days, from which the project's cost of the week counts; midnight UTC six days ago without it. */
+                week?: number;
+            };
             header?: never;
             path: {
                 /** @description The project slug */
@@ -5068,6 +5445,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectSummary"];
+                };
+            };
+            /** @description `invalid_request`: `today` or `week` is not a time */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
@@ -5785,6 +6171,165 @@ export interface operations {
             };
         };
     };
+    project_cost: {
+        parameters: {
+            query?: {
+                /** @description UTC milliseconds: count only the turns that ended at or after it, such as the start of the viewer's day; every turn without it. */
+                since?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's cost */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectCostView"];
+                };
+            };
+            /** @description `invalid_request`: `since` is not a time */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    task_cost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task id, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The task's cost */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskCostView"];
+                };
+            };
+            /** @description `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     get_diff: {
         parameters: {
             query: {
@@ -6092,8 +6637,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `task_not_found`, `request_not_found`, `message_not_found`, `proposal_not_found`, `unknown_human`, `recipient_not_found` (also when the task has no claim holder, or the request no drafter, and `to` is left out) or `project_not_found` */
+            /** @description `task_not_found`, `request_not_found`, `message_not_found`, `proposal_not_found`, `unknown_human`, `recipient_not_found` (also when the task has no reader, or the request no drafter, and `to` is left out) or `project_not_found` */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `recipient_not_reader`: feedback on a task names a recipient that is not one of the task's readers */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7474,6 +8028,98 @@ export interface operations {
             };
         };
     };
+    ask_proposal_author: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The proposal id, such as P-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskAuthorBody"];
+            };
+        };
+        responses: {
+            /** @description The stored question */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageView"];
+                };
+            };
+            /** @description `invalid_request`: an empty body or a malformed request; `invalid_path` or `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `proposal_not_found`: no such proposal or version, or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_comment_path` or `invalid_comment_range`: the lines are not in the file on that side */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     send_for_review_again: {
         parameters: {
             query?: never;
@@ -8728,7 +9374,12 @@ export interface operations {
     };
     restore_project: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description UTC milliseconds of the start of the viewer's day, from which the project's cost of today counts; midnight UTC without it. */
+                today?: number;
+                /** @description UTC milliseconds of the start of the viewer's last seven days, from which the project's cost of the week counts; midnight UTC six days ago without it. */
+                week?: number;
+            };
             header?: never;
             path: {
                 /** @description The project slug */
@@ -8745,6 +9396,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectSummary"];
+                };
+            };
+            /** @description `invalid_request`: `today` or `week` is not a time */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
@@ -10940,6 +11600,85 @@ export interface operations {
             };
             /** @description `task_closed`: the task is archived */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    task_readers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The task id, such as T-12 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The readers, the default first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskReaders"];
+                };
+            };
+            /** @description `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `task_not_found` or `project_not_found` */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

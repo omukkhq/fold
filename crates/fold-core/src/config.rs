@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::roles::{CacheTtl, Role, WorkerLimits, is_command_word as plain_word};
+use crate::agents::roles::{
+    CacheTtl, HandoffAt, Role, WorkerLimits, is_command_word as plain_word,
+};
 use crate::error::{FoldError, codes};
 
 /// The commented file `fld init` writes to `.fold/config.toml`. Every value line is commented out and holds the default.
@@ -76,7 +78,7 @@ pub struct RoleConfig {
     /// The MCP servers the role may load, by name: `fold` and servers of the project's `.mcp.json`. Without it the role loads every server the user's own Claude Code loads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<Vec<String>>,
-    /// Only for the long-lived roles: the share of the model's context window, in percent, past which fold gives the worker a fresh context through a hand-off note.
+    /// Only for the long-lived roles: the share of the model's context window, in percent, past which fold gives the worker a fresh context through a hand-off note. Without it, [`crate::roles::default_handoff_percent`] of the window applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff_at: Option<u64>,
 }
@@ -90,14 +92,11 @@ pub struct RoleSettings {
     pub idle_minutes: Option<u64>,
     pub mcp: Option<Vec<String>>,
     /// `None` for a short-lived role, which stops when its work is done and is never refreshed.
-    pub handoff_at: Option<u64>,
+    pub handoff_at: Option<HandoffAt>,
 }
 
 /// How long a short-lived worker may stay idle before fold stops it, when its role sets no `idle_minutes`.
 pub const DEFAULT_IDLE_MINUTES: u64 = 15;
-
-/// The share of its model's context window, in percent, past which a long-lived worker gets a fresh context, when its role sets no `handoff_at`.
-pub const DEFAULT_HANDOFF_AT: u64 = 60;
 
 /// The `[git]` section: the branch of the project folder's repository `.git` that every integration is committed to and the folder has checked out.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,9 +185,11 @@ impl ProjectConfig {
             idle_minutes: (!role.is_long_lived())
                 .then(|| section.idle_minutes.unwrap_or(DEFAULT_IDLE_MINUTES)),
             mcp: section.mcp,
-            handoff_at: role
-                .is_long_lived()
-                .then(|| section.handoff_at.unwrap_or(DEFAULT_HANDOFF_AT)),
+            handoff_at: role.is_long_lived().then(|| {
+                section
+                    .handoff_at
+                    .map_or(HandoffAt::Default, HandoffAt::Percent)
+            }),
         }
     }
 
@@ -629,7 +630,7 @@ mod tests {
             }
         );
         let reviewer = defaults.role(Role::Reviewer);
-        assert_eq!(reviewer.cache_ttl, CacheTtl::OneHour);
+        assert_eq!(reviewer.cache_ttl, CacheTtl::FiveMinutes);
         assert_eq!(reviewer.idle_minutes, Some(DEFAULT_IDLE_MINUTES));
         assert_eq!(reviewer.mcp, None);
         let lead = defaults.role(Role::ReviewLead);
@@ -642,12 +643,28 @@ mod tests {
     }
 
     #[test]
-    fn handoff_at_is_a_percent_for_the_long_lived_roles() {
-        let config = ProjectConfig::from_toml("[roles.review_lead]\nhandoff_at = 45\n").unwrap();
-        assert_eq!(config.role(Role::ReviewLead).handoff_at, Some(45));
+    fn both_leads_hand_off_at_the_window_default_without_a_handoff_at() {
+        let config = ProjectConfig::from_toml("").unwrap();
         assert_eq!(
             config.role(Role::AreaLead).handoff_at,
-            Some(DEFAULT_HANDOFF_AT)
+            Some(HandoffAt::Default)
+        );
+        assert_eq!(
+            config.role(Role::ReviewLead).handoff_at,
+            Some(HandoffAt::Default)
+        );
+    }
+
+    #[test]
+    fn handoff_at_is_a_percent_for_the_long_lived_roles() {
+        let config = ProjectConfig::from_toml("[roles.review_lead]\nhandoff_at = 45\n").unwrap();
+        assert_eq!(
+            config.role(Role::ReviewLead).handoff_at,
+            Some(HandoffAt::Percent(45))
+        );
+        assert_eq!(
+            config.role(Role::AreaLead).handoff_at,
+            Some(HandoffAt::Default)
         );
         assert_eq!(config.role(Role::TaskWorker).handoff_at, None);
         assert_eq!(config.role(Role::Reviewer).handoff_at, None);

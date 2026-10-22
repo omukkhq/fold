@@ -19,6 +19,7 @@ mod handoffs;
 mod pause;
 mod previous_sessions;
 mod questions;
+mod turns;
 mod workers;
 
 pub use activity::agent_activity;
@@ -36,16 +37,20 @@ pub use questions::{
     find_question, insert_answer, insert_question, insert_question_message, open_ask_of_thread,
     open_questions, question_by_id, question_messages, questions_of_worker,
 };
+pub use turns::{CostSlot, CostTotals, cost_groups, cost_slots, cost_totals};
 pub use workers::{
     AreaRow, BoundWorker, NewWorkerProcess, ProcessEnd, TurnTotals, WorkerProcessRow,
     bind_proposal, bind_task, claims_held, clear_worker_pid, find_area, find_worker_process,
     insert_area, insert_worker_process, label_id, list_areas, list_worker_processes,
-    mark_worker_working, proposals_without_verdict, record_exit, record_turn,
+    mark_session_lost, mark_worker_working, proposals_without_verdict, record_exit, record_turn,
     restart_worker_process, review_lead, reviewers_of_proposal, running_counts, set_area_lead,
     set_area_profile, set_worker_context, set_worker_pid, set_worker_state, task_workers_of_task,
     tasks_awaiting_proposal,
 };
-pub use workers::{OwedReview, PendingResume, pending_resumes, reviews_owed_to_ended_reviewers};
+pub use workers::{
+    OwedReview, PendingResume, pending_resumes, reviews_owed_to_ended_reviewers,
+    unreviewed_claims_of_ended_reviewer,
+};
 pub use workers::{clear_turn_error, forget_made_up_model, record_turn_error, set_exit_error};
 
 /// Row ids of these tables stay inside the daemon; the public handles are the names.

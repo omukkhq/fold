@@ -418,7 +418,7 @@ async fn workspace(
         })
 }
 
-/// Only an active workspace with its directory has working files. A closed workspace keeps its directory only until `fld gc` removes it, and a missing one has lost it, so comparing either would show every file as deleted.
+/// Only an active workspace with its directory has working files. fold removes a closed workspace's directory once it closes, and a missing one has lost it, so comparing either would show every file as deleted.
 fn inactive_workspace(id: WorkspaceId, state: WorkspaceState) -> FoldError {
     let hint = match state {
         WorkspaceState::Missing => {

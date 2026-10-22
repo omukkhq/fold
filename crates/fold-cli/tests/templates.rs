@@ -107,7 +107,7 @@ const FOLD_TOOLS: [&str; 96] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 168] = [
+const FOLD_ERROR_CODES: [&str; 169] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -268,6 +268,7 @@ const FOLD_ERROR_CODES: [&str; 168] = [
     "main_area",
     "ask_not_open",
     "ask_close_denied",
+    "recipient_not_reader",
     "review_lead_delegates",
     "review_plan_not_found",
     "review_plan_not_open",

@@ -2,8 +2,8 @@ use fold_core::events::types;
 use fold_core::policy::{self, Starter};
 use fold_core::reviews::ScopeChoice;
 use fold_core::roles::{
-    AreaProfile, AreaProfileChange, StartFacts, check_model, default_worker_name, first_turn,
-    outside_area, session_uuid,
+    AreaProfile, AreaProfileChange, CacheTtl, StartFacts, check_model, default_worker_name,
+    first_turn, outside_area, session_uuid,
 };
 use fold_core::tasks::areas::{check_led_area, check_new_area};
 use fold_core::{
@@ -15,7 +15,7 @@ use fold_store::{StoreError, WriteTx};
 use fold_store::{tasks, workspaces};
 use serde_json::json;
 
-use super::{AgentError, AgentService, main_actor};
+use super::{AgentError, AgentService, SessionContext, main_actor};
 use crate::services::events::EventBuffer;
 use crate::services::projects::load_config;
 use crate::services::reviews::{Assignment, assign_reviews_in_tx};
@@ -298,6 +298,19 @@ impl AgentService {
     /// The project's worker settings from `.fold/config.toml`, or its defaults when there is no file; `None` when the service knows no project folder or the file does not parse, so a list still answers.
     pub async fn worker_config(&self) -> Option<ProjectConfig> {
         load_config(self.config_paths()?).await.ok()
+    }
+
+    /// The prompt cache lifetime of the worker process that runs `session`: the project's `cache_ttl` for the worker's role, or the role's default when the configuration cannot be read, as a launch would see it. `None` when no worker process of the session's own agent runs the session, such as the main agent's session or a session that a person opened by hand under a worker's name.
+    pub async fn session_cache_ttl(&self, session: &SessionContext) -> Option<CacheTtl> {
+        let agent = session.agent.as_ref()?;
+        if session.peer.worker() != Some(agent) {
+            return None;
+        }
+        let process = self.get_worker(agent).await.ok()?;
+        Some(match self.worker_config().await {
+            Some(config) => config.role(process.role).cache_ttl,
+            None => process.role.default_cache_ttl(),
+        })
     }
 
     /// The transcript path of each row's session, in the order of `rows`; all `None` for a service that runs no worker processes. See [`Supervisor::transcripts`].

@@ -182,6 +182,7 @@ define_codes! {
     ASK_NOT_OPEN = "ask_not_open",
     ASK_CLOSE_DENIED = "ask_close_denied",
     PROJECT_WORKERS_RUNNING = "project_workers_running",
+    RECIPIENT_NOT_READER = "recipient_not_reader",
     REVIEW_LEAD_DELEGATES = "review_lead_delegates",
     REVIEW_PLAN_NOT_FOUND = "review_plan_not_found",
     REVIEW_PLAN_NOT_OPEN = "review_plan_not_open",

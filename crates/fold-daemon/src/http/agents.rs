@@ -16,6 +16,7 @@ use crate::services::agents::{
     WorkerOverview, WorkspaceSummary,
 };
 
+pub mod cost;
 pub mod environment;
 pub mod questions;
 pub mod workers;
@@ -24,6 +25,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_agents))
         .merge(workers::routes())
+        .merge(cost::routes())
         .merge(questions::routes())
         .merge(environment::routes())
 }

@@ -30,6 +30,7 @@ export type ProposalDetail = Schemas["ProposalDetail"];
 export type ComparisonTotals = Schemas["ComparisonTotals"];
 /** A line comment, or a comment on the version as a whole when the four range fields are absent. */
 export type NewComment = Schemas["AddCommentBody"];
+export type NewQuestion = Schemas["AskAuthorBody"];
 export type NewReview = Schemas["ReviewBody"];
 export type SubmittedReview = Schemas["SubmittedReview"];
 export type IntegrationResult = Schemas["IntegrationResult"];
@@ -146,6 +147,20 @@ export async function addComment(
     api.POST("/api/v1/projects/{slug}/proposals/{id}/comments", {
       params: base(slug, id),
       body: comment,
+    }),
+  );
+}
+
+/** A question to the proposal's author about lines of `question.version`; answers with the stored message. It writes no review and changes no turn. Rejects with the daemon's codes, such as `invalid_comment_range`. */
+export async function askAuthor(
+  slug: string,
+  id: string,
+  question: NewQuestion,
+): Promise<Schemas["MessageView"]> {
+  return unwrap(
+    api.POST("/api/v1/projects/{slug}/proposals/{id}/questions", {
+      params: base(slug, id),
+      body: question,
     }),
   );
 }

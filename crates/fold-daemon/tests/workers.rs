@@ -323,7 +323,7 @@ async fn a_task_worker_stops_when_its_last_proposal_opens_after_an_earlier_one_i
 
 #[tokio::test]
 async fn an_idle_task_worker_stops_after_its_idle_minutes_and_resumes_with_a_turn() {
-    let fake = FakeClaude::new("result");
+    let fake = FakeClaude::new("result").resuming_with("resumed");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
     areas(&harness).await;
@@ -960,7 +960,7 @@ async fn a_human_defines_areas_and_starts_and_stops_leads_over_http() {
             {"role": "area_lead", "cache_ttl": "1h", "model": null},
             {"role": "review_lead", "cache_ttl": "1h", "model": null},
             {"role": "task_worker", "cache_ttl": "5m", "model": null},
-            {"role": "reviewer", "cache_ttl": "1h", "model": null},
+            {"role": "reviewer", "cache_ttl": "5m", "model": null},
         ])
     );
     let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
@@ -1045,7 +1045,7 @@ async fn a_reviewer_stops_once_its_batch_review_gives_every_proposal_a_verdict()
     assert_eq!(started["worker"]["name"], "reviewer");
     assert_eq!(started["worker"]["proposals"], json!(["P-1", "P-2"]));
     let run = until_runs(&fake, "reviewer", 1, 2).await.remove(0);
-    assert_eq!(run.env["CLAUDE_CODE_PROMPT_CACHE_TTL"], "1h");
+    assert_eq!(run.env["CLAUDE_CODE_PROMPT_CACHE_TTL"], "5m");
     assert!(run.stdin[1].contains("reviewer for P-1, P-2"));
     assert!(run.stdin[1].contains("in batch rb-1"), "{}", run.stdin[1]);
     let by_lead = harness
@@ -2761,7 +2761,7 @@ async fn a_review_lead_hears_at_a_daemon_start_of_the_proposals_that_wait_for_a_
     assert_eq!(caught_up.len(), 1, "{caught_up:?}");
     assert!(
         caught_up[0].contains(&format!(
-            "These open proposals wait for a review and nobody holds a live review claim of them: {proposal}."
+            "These open proposals wait for a review and no reviewer works on them: {proposal}."
         )),
         "{}",
         caught_up[0]
@@ -2819,7 +2819,7 @@ async fn a_review_lead_catch_up_leaves_out_the_proposals_of_tasks_of_main() {
     assert_eq!(caught_up.len(), 1, "{caught_up:?}");
     assert!(
         caught_up[0].contains(&format!(
-            "These open proposals wait for a review and nobody holds a live review claim of them: {proposal}."
+            "These open proposals wait for a review and no reviewer works on them: {proposal}."
         )),
         "{}",
         caught_up[0]
@@ -2889,8 +2889,7 @@ async fn a_catch_up_names_in_ready_order_only_the_ready_tasks_of_the_area_that_n
 }
 
 #[tokio::test]
-async fn a_task_claim_of_a_stopped_worker_hides_no_task_and_only_a_live_review_claim_hides_its_proposal()
- {
+async fn a_claim_of_a_stopped_worker_hides_no_work_from_the_catch_up_and_a_live_one_does() {
     let fake = FakeClaude::new("result");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
@@ -2936,26 +2935,11 @@ async fn a_task_claim_of_a_stopped_worker_hides_no_task_and_only_a_live_review_c
         assert_eq!(given["worker"]["name"], reviewer, "{given}");
         until_state(&harness, reviewer, WorkerState::Idle).await;
     }
-    for reviewer in ["reviewer", "reviewer-2"] {
-        harness
-            .call(&review_lead, "stop_worker", json!({"name": reviewer}))
-            .await;
-        until_state(&harness, reviewer, WorkerState::Stopped).await;
-    }
-    // The lease of the first reviewer's claim runs out; the second keeps a live claim although its reviewer has ended.
+    // The first reviewer ends in the middle of its review and nobody resumes it, however live its claim's lease.
     harness
-        .handle
-        .store
-        .write(async |tx| {
-            sqlx::query(
-                "UPDATE claims SET renewed_at = 1 WHERE kind = 'review' AND worker_id = (SELECT id FROM workers WHERE name = 'reviewer')",
-            )
-            .execute(tx.conn())
-            .await?;
-            Ok::<_, fold_store::StoreError>(())
-        })
-        .await
-        .unwrap();
+        .call(&review_lead, "stop_worker", json!({"name": "reviewer"}))
+        .await;
+    until_state(&harness, "reviewer", WorkerState::Stopped).await;
     let held = harness
         .call(
             MAIN,
@@ -2993,10 +2977,10 @@ async fn a_task_claim_of_a_stopped_worker_hides_no_task_and_only_a_live_review_c
     assert_eq!(caught_up.len(), 1, "{caught_up:?}");
     assert!(
         caught_up[0].contains(&format!(
-            "These open proposals wait for a review and nobody holds a live review claim of them: {}.",
+            "These open proposals wait for a review and no reviewer works on them: {}.",
             proposals[0]
         )),
-        "the proposal with the stale claim waits, the live claim of the ended reviewer-2 keeps the other: {}",
+        "the stopped reviewer's proposal waits, the running reviewer-2 keeps the other: {}",
         caught_up[0]
     );
     let runs = until_runs(&fake, &lead, lead_runs + 1, 2).await;

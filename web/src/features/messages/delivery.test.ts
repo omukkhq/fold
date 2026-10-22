@@ -109,6 +109,34 @@ describe("delivery", () => {
       ).lead,
     ).toBe("acknowledged by");
   });
+  it("names the lead that got the message of a task worker that could not start", () => {
+    const forwarded = recipient("backend-worker-10", {
+      forwarded_to: "backend-lead",
+    });
+    expect(recipientState(forwarded, NOW, "human:tanim")).toEqual({
+      lead: "",
+      actor: "backend-worker-10",
+      at: null,
+      note: "cannot start now · sent on to @backend-lead",
+    });
+    expect(recipientState(forwarded, NOW, "backend-lead").note).toBe(
+      "cannot start now",
+    );
+    expect(recipientState({ ...forwarded, delivered_at: NOW }, NOW).lead).toBe(
+      "delivered to",
+    );
+    const lines = deliveryLines(
+      baseMessage("m-221", {
+        sender: "human:tanim",
+        recipients: [forwarded, recipient("backend-lead")],
+      }),
+      NOW,
+    );
+    expect(lines.map((line) => [line.lead, line.actor])).toEqual([
+      ["", "backend-worker-10"],
+      ["not delivered to", "backend-lead"],
+    ]);
+  });
   it("has a line per recipient", () => {
     const lines = deliveryLines(message, NOW);
     expect(lines).toHaveLength(4);

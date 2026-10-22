@@ -23,6 +23,7 @@ use crate::services::workspaces::WorkspaceLocks;
 /// Claude Code's headless stream-json protocol as fold reads and writes it, the oldest Claude Code fold drives, and the sign-in answer of `claude auth status`. It is public because `fld doctor` checks the installed Claude Code with the same version and sign-in types.
 pub mod claude;
 mod context;
+mod cost;
 /// The environment of the workers: which variables of the login shell they take, and what the daemon found about it at its start.
 pub mod environment;
 mod needs_you;
@@ -37,6 +38,7 @@ pub use context::{
     CONTEXT_READY_TASKS, ContextClaim, MAX_SESSION_CONTEXT, SessionFacts,
     render as render_session_context,
 };
+pub use cost::{ProjectCost, cost_totals};
 pub use needs_you::{NeedsYouItem, NeedsYouKind, Screen, needs_you, with_folder_attention};
 pub use overview::{
     AgentAttention, AgentOverview, ClaimSummary, MAX_OVERVIEW_EVENTS, OverviewFilter,
