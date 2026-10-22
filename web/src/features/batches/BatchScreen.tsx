@@ -6,6 +6,7 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
+import * as RadixTabs from "@radix-ui/react-tabs";
 import { useState } from "react";
 import {
   Bot,
@@ -40,9 +41,10 @@ import {
   segmentClasses,
 } from "@/components/segments/segmentStyles";
 import { Skeleton } from "@/components/states/Skeleton";
+import { TAB_BY_STATE, TAB_LIST } from "@/components/overlay/tabStyles";
 import { detailHref } from "@/features/proposals/view";
 import { cn } from "@/lib/cn";
-import { focusRing } from "@/lib/focus";
+import { focusRing, insetFocusRing } from "@/lib/focus";
 import { PersonName } from "@/people/PersonName";
 import { StatePill, StepText } from "@/features/workers/parts";
 import { StopWorker } from "@/features/workers/StopWorker";
@@ -66,6 +68,13 @@ import {
   type VerdictKind,
 } from "./present";
 import { integrateFailure, integrationNote } from "./integration";
+import {
+  batchTab,
+  batchTabSearch,
+  isBatchTab,
+  type BatchSearch,
+} from "./merged";
+import { MergedChanges } from "./MergedChanges";
 import { projectPath } from "@/routes/paths";
 
 const HEAD =
@@ -218,7 +227,15 @@ function BatchIntegration({
   );
 }
 
-export function BatchScreen({ slug, id }: { slug: string; id: string }) {
+export interface BatchScreenProps {
+  slug: string;
+  id: string;
+  search: BatchSearch;
+  /** A tab change pushes a history entry, so Back returns to the earlier tab; a file on the same tab replaces the entry. */
+  onSearch: (next: BatchSearch, history?: "push" | "replace") => void;
+}
+
+export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
   const { data: batch } = useSuspenseQuery(reviewBatchQuery(slug, id));
   const proposals = useQuery(proposalsQuery(slug));
   const workers = useQuery(workersQuery(slug));
@@ -252,9 +269,9 @@ export function BatchScreen({ slug, id }: { slug: string; id: string }) {
   const checkout = checkoutView(batch);
 
   return (
-    <div className="flex flex-col gap-16 px-24 pt-20 pb-24">
-      <div className="flex items-start justify-between gap-16">
-        <div className="flex flex-col gap-4">
+    <div className="flex min-w-0 flex-col gap-16 px-16 pt-20 pb-24 md:px-24">
+      <div className="flex flex-wrap items-start justify-between gap-16">
+        <div className="flex min-w-0 flex-col gap-4">
           <nav aria-label="Breadcrumb" className="flex items-center gap-8">
             <HrefLink
               href={projectPath(slug, "proposals")}
@@ -299,209 +316,254 @@ export function BatchScreen({ slug, id }: { slug: string; id: string }) {
           <StopReviewer slug={slug} worker={reviewer} />
         ) : null}
       </div>
-      <div className="flex items-start gap-16">
-        <div className="flex min-w-0 flex-1 flex-col gap-16">
-          {conflicts.map((proposal) => (
-            <div
-              key={proposal}
-              role="alert"
-              className="flex items-start gap-12 rounded-m bg-danger-soft px-16 py-12"
-            >
-              <GitMerge
-                aria-hidden="true"
-                size={16}
-                className="mt-2 shrink-0 text-danger"
-              />
-              <div className="flex min-w-0 flex-1 flex-col gap-4">
-                <p className="text-body font-semibold text-danger">
-                  {proposal} conflicts with main
-                </p>
-                <p className="text-bar text-text-muted">
-                  The other members keep their verdicts. fold resumes the task
-                  worker of {proposal} to resolve the conflict, then the
-                  reviewer checks the batch again.
-                </p>
-              </div>
-              <HrefLink
-                href={projectPath(slug, "proposals", proposal)}
-                className={cn(buttonClasses("secondary", "md"), focusRing)}
-              >
-                <span className={buttonIconClass("secondary")}>
-                  <Diff aria-hidden="true" size={15} />
-                </span>
-                Show conflict
-              </HrefLink>
-            </div>
-          ))}
-          {switchable ? (
-            <div className="flex flex-wrap items-center gap-12">
-              <div role="group" aria-label="Change" className={SEGMENT_LIST}>
-                {CHANGE_OPTIONS.map((option) => (
-                  <button
-                    key={option.mode}
-                    type="button"
-                    aria-pressed={mode === option.mode}
-                    onClick={() => {
-                      setMode(option.mode);
-                    }}
-                    className={cn(
-                      segmentClasses(mode === option.mode),
-                      focusRing,
-                    )}
+      <RadixTabs.Root
+        value={batchTab(search)}
+        onValueChange={(value) => {
+          if (isBatchTab(value))
+            onSearch(batchTabSearch(search, value), "push");
+        }}
+        className="flex min-w-0 flex-col gap-16"
+      >
+        <RadixTabs.List aria-label="Batch" className={TAB_LIST}>
+          <RadixTabs.Trigger
+            value="members"
+            className={cn(TAB_BY_STATE, focusRing)}
+          >
+            Members
+          </RadixTabs.Trigger>
+          <RadixTabs.Trigger
+            value="changes"
+            className={cn(TAB_BY_STATE, focusRing)}
+          >
+            Merged changes
+          </RadixTabs.Trigger>
+        </RadixTabs.List>
+        <RadixTabs.Content value="changes" className={insetFocusRing}>
+          <MergedChanges
+            slug={slug}
+            batch={batch}
+            path={search.path}
+            onPath={(path) => {
+              onSearch({ tab: "changes", path });
+            }}
+          />
+        </RadixTabs.Content>
+        <RadixTabs.Content value="members" className={insetFocusRing}>
+          <div className="flex min-w-0 flex-col gap-16 lg:flex-row lg:items-start">
+            <div className="flex min-w-0 flex-1 flex-col gap-16">
+              {conflicts.map((proposal) => (
+                <div
+                  key={proposal}
+                  role="alert"
+                  className="flex items-start gap-12 rounded-m bg-danger-soft px-16 py-12"
+                >
+                  <GitMerge
+                    aria-hidden="true"
+                    size={16}
+                    className="mt-2 shrink-0 text-danger"
+                  />
+                  <div className="flex min-w-0 flex-1 flex-col gap-4">
+                    <p className="text-body font-semibold text-danger">
+                      {proposal} conflicts with main
+                    </p>
+                    <p className="text-bar text-text-muted">
+                      The other members keep their verdicts. fold resumes the
+                      task worker of {proposal} to resolve the conflict, then
+                      the reviewer checks the batch again.
+                    </p>
+                  </div>
+                  <HrefLink
+                    href={projectPath(slug, "proposals", proposal)}
+                    className={cn(buttonClasses("secondary", "md"), focusRing)}
                   >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-              <p className="text-bar text-text-muted">
-                A member with a newer version shows only what changed after the
-                newest earlier version that got a verdict.
-              </p>
-            </div>
-          ) : null}
-          <div className="overflow-x-auto rounded-l border border-border-subtle bg-surface">
-            <table className="w-full border-collapse" aria-label="Members">
-              <thead className="bg-bg">
-                <tr className="border-b border-border-subtle">
-                  {[
-                    "Proposal",
-                    "Title",
-                    "Task",
-                    "Author",
-                    "Version",
-                    "Change",
-                    "Verdict",
-                  ].map((head) => (
-                    <th key={head} scope="col" className={HEAD}>
-                      {head}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr
-                    key={row.proposal}
-                    className="border-b border-border-subtle last:border-b-0"
+                    <span className={buttonIconClass("secondary")}>
+                      <Diff aria-hidden="true" size={15} />
+                    </span>
+                    Show conflict
+                  </HrefLink>
+                </div>
+              ))}
+              {switchable ? (
+                <div className="flex flex-wrap items-center gap-12">
+                  <div
+                    role="group"
+                    aria-label="Change"
+                    className={SEGMENT_LIST}
                   >
-                    <td className={cn(CELL, MONO)}>
-                      <HrefLink
-                        href={detailHref(
-                          slug,
-                          row.proposal,
-                          memberSearch(changes.get(row.proposal)),
-                        )}
+                    {CHANGE_OPTIONS.map((option) => (
+                      <button
+                        key={option.mode}
+                        type="button"
+                        aria-pressed={mode === option.mode}
+                        onClick={() => {
+                          setMode(option.mode);
+                        }}
                         className={cn(
-                          "rounded-s underline-offset-2 hover:underline",
+                          segmentClasses(mode === option.mode),
                           focusRing,
                         )}
                       >
-                        {row.proposal}
-                      </HrefLink>
-                    </td>
-                    <td className={cn(CELL, "w-full")}>
-                      <span className="text-body font-medium text-text">
-                        {row.title ?? row.proposal}
-                      </span>
-                    </td>
-                    <td className={cn(CELL, MONO)}>{row.task}</td>
-                    <td className={CELL}>
-                      {row.author === null ? (
-                        <span className="text-code text-text-faint">-</span>
-                      ) : (
-                        <PersonName name={row.author} slot="authorCell" />
-                      )}
-                    </td>
-                    <td className={cn(CELL, MONO)}>{row.version}</td>
-                    <td className={CELL}>
-                      <ChangeCell change={changes.get(row.proposal)} />
-                    </td>
-                    <td className={CELL}>
-                      <VerdictCell row={row} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <BatchIntegration
-            slug={slug}
-            id={batch.id}
-            note={integrationNote(batch)}
-            human={(session.data?.human ?? null) !== null}
-          />
-        </div>
-        <div className="flex w-review-panel shrink-0 flex-col gap-16">
-          <section aria-label="Batch checkout" className={CARD}>
-            <h2 className="flex items-center gap-8">
-              <GitMerge
-                aria-hidden="true"
-                size={15}
-                className="text-text-muted"
-              />
-              <span className={OVERLINE}>Batch checkout</span>
-            </h2>
-            <p className="flex flex-wrap items-center gap-8">
-              <StatePill pill={checkout} />
-              {checkout.line ? (
-                <span className="font-mono text-meta text-text">
-                  {checkout.line}
-                </span>
-              ) : null}
-            </p>
-            <p className="text-bar text-text-muted">
-              The checkout holds main with every proposal of the batch applied,
-              so the reviewer runs the tests on the whole.
-            </p>
-            {checkout.path ? (
-              <p className="flex items-center gap-8 rounded-m bg-sunken px-10 py-7">
-                <span className="min-w-0 flex-1 truncate font-mono text-meta text-text">
-                  {checkout.path}
-                </span>
-                <IconButton
-                  aria-label="Copy the path"
-                  size="sm"
-                  onClick={() => {
-                    void navigator.clipboard
-                      .writeText(checkout.path ?? "")
-                      .catch(() => undefined);
-                  }}
-                >
-                  <Copy aria-hidden="true" size={14} />
-                </IconButton>
-              </p>
-            ) : null}
-          </section>
-          {reviewer ? (
-            <section aria-label="Reviewer" className={CARD}>
-              <h2 className="flex items-center gap-8">
-                <Bot aria-hidden="true" size={15} className="text-text-muted" />
-                <span className={OVERLINE}>Reviewer</span>
-              </h2>
-              <div className="flex items-center justify-between gap-8">
-                <div className="flex flex-col gap-2">
-                  <PersonName name={reviewer.name} slot="panelName" />
-                  <span className="text-meta text-text-muted">
-                    {reviewerLine(reviewer)}
-                  </span>
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-bar text-text-muted">
+                    A member with a newer version shows only what changed after
+                    the newest earlier version that got a verdict.
+                  </p>
                 </div>
-                <StatePill pill={workerPill(reviewer.state)} />
+              ) : null}
+              <div className="overflow-x-auto rounded-l border border-border-subtle bg-surface">
+                <table className="w-full border-collapse" aria-label="Members">
+                  <thead className="bg-bg">
+                    <tr className="border-b border-border-subtle">
+                      {[
+                        "Proposal",
+                        "Title",
+                        "Task",
+                        "Author",
+                        "Version",
+                        "Change",
+                        "Verdict",
+                      ].map((head) => (
+                        <th key={head} scope="col" className={HEAD}>
+                          {head}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => (
+                      <tr
+                        key={row.proposal}
+                        className="border-b border-border-subtle last:border-b-0"
+                      >
+                        <td className={cn(CELL, MONO)}>
+                          <HrefLink
+                            href={detailHref(
+                              slug,
+                              row.proposal,
+                              memberSearch(changes.get(row.proposal)),
+                            )}
+                            className={cn(
+                              "rounded-s underline-offset-2 hover:underline",
+                              focusRing,
+                            )}
+                          >
+                            {row.proposal}
+                          </HrefLink>
+                        </td>
+                        <td
+                          className={cn(CELL, "w-full min-w-(--width-column)")}
+                        >
+                          <span className="text-body font-medium text-text">
+                            {row.title ?? row.proposal}
+                          </span>
+                        </td>
+                        <td className={cn(CELL, MONO)}>{row.task}</td>
+                        <td className={CELL}>
+                          {row.author === null ? (
+                            <span className="text-code text-text-faint">-</span>
+                          ) : (
+                            <PersonName name={row.author} slot="authorCell" />
+                          )}
+                        </td>
+                        <td className={cn(CELL, MONO)}>{row.version}</td>
+                        <td className={CELL}>
+                          <ChangeCell change={changes.get(row.proposal)} />
+                        </td>
+                        <td className={CELL}>
+                          <VerdictCell row={row} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              <StepText step={workerStep(reviewer, steps.data ?? {})} />
-              <p className="text-code text-text-muted">
-                {workerTotals(reviewer)}
-              </p>
-            </section>
-          ) : null}
-        </div>
-      </div>
+              <BatchIntegration
+                slug={slug}
+                id={batch.id}
+                note={integrationNote(batch)}
+                human={(session.data?.human ?? null) !== null}
+              />
+            </div>
+            <div className="flex min-w-0 flex-col gap-16 lg:w-review-panel lg:shrink-0">
+              <section aria-label="Batch checkout" className={CARD}>
+                <h2 className="flex items-center gap-8">
+                  <GitMerge
+                    aria-hidden="true"
+                    size={15}
+                    className="text-text-muted"
+                  />
+                  <span className={OVERLINE}>Batch checkout</span>
+                </h2>
+                <p className="flex flex-wrap items-center gap-8">
+                  <StatePill pill={checkout} />
+                  {checkout.line ? (
+                    <span className="font-mono text-meta text-text">
+                      {checkout.line}
+                    </span>
+                  ) : null}
+                </p>
+                <p className="text-bar text-text-muted">
+                  The checkout holds main with every proposal of the batch
+                  applied, so the reviewer runs the tests on the whole.
+                </p>
+                {checkout.path ? (
+                  <p className="flex items-center gap-8 rounded-m bg-sunken px-10 py-7">
+                    <span className="min-w-0 flex-1 truncate font-mono text-meta text-text">
+                      {checkout.path}
+                    </span>
+                    <IconButton
+                      aria-label="Copy the path"
+                      size="sm"
+                      onClick={() => {
+                        void navigator.clipboard
+                          .writeText(checkout.path ?? "")
+                          .catch(() => undefined);
+                      }}
+                    >
+                      <Copy aria-hidden="true" size={14} />
+                    </IconButton>
+                  </p>
+                ) : null}
+              </section>
+              {reviewer ? (
+                <section aria-label="Reviewer" className={CARD}>
+                  <h2 className="flex items-center gap-8">
+                    <Bot
+                      aria-hidden="true"
+                      size={15}
+                      className="text-text-muted"
+                    />
+                    <span className={OVERLINE}>Reviewer</span>
+                  </h2>
+                  <div className="flex items-center justify-between gap-8">
+                    <div className="flex flex-col gap-2">
+                      <PersonName name={reviewer.name} slot="panelName" />
+                      <span className="text-meta text-text-muted">
+                        {reviewerLine(reviewer)}
+                      </span>
+                    </div>
+                    <StatePill pill={workerPill(reviewer.state)} />
+                  </div>
+                  <StepText step={workerStep(reviewer, steps.data ?? {})} />
+                  <p className="text-code text-text-muted">
+                    {workerTotals(reviewer)}
+                  </p>
+                </section>
+              ) : null}
+            </div>
+          </div>
+        </RadixTabs.Content>
+      </RadixTabs.Root>
     </div>
   );
 }
 
 export function BatchPending() {
   return (
-    <div className="flex flex-col gap-16 px-24 pt-20 pb-24">
+    <div className="flex min-w-0 flex-col gap-16 px-16 pt-20 pb-24 md:px-24">
       <Skeleton />
       <Skeleton />
     </div>

@@ -453,8 +453,8 @@ function invalidationKeys(
         ...(event.type === "integration.held" ? [keys.needsYou(slug)] : []),
       ];
     case "main":
-      // Needs you lists main's invalid checks file only while main stays on the revision that holds the integrations.
-      return [repository, board, keys.needsYou(slug)];
+      // Needs you lists main's invalid checks file only while main stays on the revision that holds the integrations. A batch's merged change is built on main's head.
+      return [repository, board, keys.needsYou(slug), keys.reviewBatches(slug)];
     case "remote":
       return [repository, keys.git(slug)];
     case "human_change":

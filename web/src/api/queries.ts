@@ -22,7 +22,12 @@ import {
   getCheckRun,
 } from "./proposals";
 import { getRequest, getThread, listRequests } from "./requests";
-import { getReviewBatch, listReviewBatches } from "./reviews";
+import {
+  getReviewBatch,
+  getReviewBatchDiff,
+  getReviewBatchFileDiff,
+  listReviewBatches,
+} from "./reviews";
 import { getSession } from "./session";
 import { listNeedsYou, listWorkerQuestions, listWorkers } from "./workers";
 import { getWorkspace } from "./workspaces";
@@ -260,5 +265,23 @@ export const reviewBatchQuery = (slug: string, id: string) =>
   queryOptions({
     queryKey: keys.reviewBatch(slug, id),
     queryFn: () => getReviewBatch(slug, id),
+    staleTime: Infinity,
+  });
+
+export const reviewBatchDiffQuery = (slug: string, id: string) =>
+  queryOptions({
+    queryKey: keys.reviewBatchDiff(slug, id),
+    queryFn: () => getReviewBatchDiff(slug, id),
+    staleTime: Infinity,
+  });
+
+export const reviewBatchFileDiffQuery = (
+  slug: string,
+  id: string,
+  path: string,
+) =>
+  queryOptions({
+    queryKey: keys.reviewBatchFileDiff(slug, id, path),
+    queryFn: () => getReviewBatchFileDiff(slug, id, path),
     staleTime: Infinity,
   });

@@ -11,6 +11,7 @@ use super::tasks::TaskError;
 use super::workspaces::{WorkspaceError, WorkspaceService};
 use checks::CheckRunner;
 
+mod batch_changes;
 mod batch_integration;
 mod batches;
 mod changes;
@@ -31,6 +32,7 @@ mod scopes;
 mod verdicts;
 mod views;
 
+pub use batch_changes::{BatchMergedChange, MergedBasis, MergedConflict, MergedMember};
 pub use batch_integration::{
     BatchIntegration, BatchIntegrationView, BatchStanding, MemberIntegration,
 };

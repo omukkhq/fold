@@ -530,6 +530,16 @@ describe("invalidation rules", () => {
     expect(hit(keys.proposal(slug, "P-3"))).toBe(true);
   });
 
+  it("refreshes the review batches and their merged changes when main moves", () => {
+    invalidated = [];
+    applyEvent(client, slug, ev("main.advanced", { revision: "r9" }));
+    expect(hit(keys.reviewBatches(slug))).toBe(true);
+    expect(refreshes(keys.reviewBatchDiff(slug, "rb-3"))).toBe(true);
+    expect(refreshes(keys.reviewBatchFileDiff(slug, "rb-3", "a.ts"))).toBe(
+      true,
+    );
+  });
+
   it("refreshes the review batches for a batch's queued integration and its members' integrations, and not for a single one", () => {
     for (const type of ["integration.queued", "integration.succeeded"]) {
       invalidated = [];
