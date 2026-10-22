@@ -145,6 +145,42 @@ async fn acceptance_21_a_human_asks_the_author_about_lines_of_the_diff() {
 }
 
 #[tokio::test]
+async fn acceptance_21_a_human_asks_the_author_about_the_whole_proposal() {
+    let h = Harness::start().await;
+    let task = h.create_task("frontend", "board numbers").await;
+    let work = h.start_work("frontend", &task).await;
+    work.write(&[(FILE, CONTENT)]);
+    let proposal = h.propose("frontend", &work, "Board numbers").await;
+    let before = review_state(&h, &proposal, &task).await;
+
+    let (status, sent) = http(
+        &h,
+        Method::POST,
+        &format!("/proposals/{proposal}/questions"),
+        Some(&json!({"version": 1, "body": "Why constants and not an enum?"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    let question = sent["id"].as_str().unwrap().to_owned();
+    assert_eq!(sent["sender"], format!("human:{HUMAN}"));
+    assert_eq!(sent["task"], task.as_str());
+    assert_eq!(sent["proposal"], proposal.as_str());
+    assert_eq!(sent["recipients"][0]["name"], "frontend");
+    assert_eq!(sent["lines"], Value::Null);
+    assert!(h.inbox("frontend").await.contains(&question));
+
+    let listing = get(&h, &format!("/messages?proposal={proposal}")).await;
+    assert!(
+        listing["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|thread| thread["id"] == question.as_str())
+    );
+    assert_eq!(review_state(&h, &proposal, &task).await, before);
+}
+
+#[tokio::test]
 async fn acceptance_21_a_question_names_lines_that_exist() {
     let h = Harness::start().await;
     let task = h.create_task("frontend", "board numbers").await;
@@ -183,6 +219,16 @@ async fn acceptance_21_a_question_names_lines_that_exist() {
             StatusCode::BAD_REQUEST,
             "invalid_request",
         ),
+        (
+            json!({"version": 1, "path": FILE, "body": "why"}),
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+        ),
+        (
+            json!({"version": 2, "body": "why"}),
+            StatusCode::NOT_FOUND,
+            "proposal_not_found",
+        ),
     ] {
         let (answer, body) = http(&h, Method::POST, &path, Some(&ask)).await;
         assert_eq!(
@@ -191,6 +237,17 @@ async fn acceptance_21_a_question_names_lines_that_exist() {
             "{ask}"
         );
     }
+    let (_, partial) = http(
+        &h,
+        Method::POST,
+        &path,
+        Some(&json!({"version": 1, "path": FILE, "body": "why"})),
+    )
+    .await;
+    assert_eq!(
+        partial["error"]["message"],
+        "a question about lines needs path, side, start_line and end_line"
+    );
     let (status, body) = http(&h, Method::POST, "/proposals/P-9/questions", Some(&json!({"version": 1, "path": FILE, "side": "new", "start_line": 1, "end_line": 1, "body": "why"}))).await;
     assert_eq!(
         (status, body["error"]["code"].as_str().unwrap()),

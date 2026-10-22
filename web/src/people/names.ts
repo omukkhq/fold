@@ -2,7 +2,7 @@ const HUMAN_PREFIX = "human:";
 
 export type PersonKind = "human" | "agent";
 
-/** An actor arrives as `human:<name>` for a human; anything else (`frontend`, `frontend/ui`, `fold`) is an agent. */
+/** An actor arrives as `human:<name>` for a human; anything else (`frontend`, `fold`) is an agent. */
 export function isHumanName(actor: string): boolean {
   return actor.startsWith(HUMAN_PREFIX);
 }
@@ -16,7 +16,7 @@ export function bareName(actor: string): string {
   return isHumanName(actor) ? actor.slice(HUMAN_PREFIX.length) : actor;
 }
 
-/** `@tanim`, `@frontend/ui`: the person as plain text where markup is not possible, such as a placeholder. */
+/** `@tanim`, `@frontend`: the person as plain text where markup is not possible, such as a placeholder. */
 export function atName(actor: string): string {
   return `@${bareName(actor)}`;
 }

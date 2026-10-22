@@ -883,6 +883,49 @@ describe("invalidation rules", () => {
       live("ws-5", "x"),
     );
   });
+
+  it("refreshes only the current version for a proposal event, and an earlier version only for an event that names it", () => {
+    const v3 = keys.proposalVersion(slug, "P-4", 3);
+    for (const type of [
+      "proposal.opened",
+      "proposal.updated",
+      "review.submitted",
+      "checks.started",
+    ]) {
+      invalidated = [];
+      applyEvent(client, slug, ev(type, { proposal: "P-4" }));
+      expect(refreshes(keys.proposal(slug, "P-4")), type).toBe(true);
+      expect(refreshes(v3), type).toBe(false);
+    }
+    invalidated = [];
+    applyEvent(
+      client,
+      slug,
+      ev("checks.finished", {
+        proposal: "P-4",
+        data: { run: "cr-2", state: "failed", version: 3 },
+      }),
+    );
+    expect(refreshes(v3)).toBe(true);
+    expect(refreshes(keys.proposalVersion(slug, "P-4", 2))).toBe(false);
+    expect(refreshes(keys.proposal(slug, "P-4"))).toBe(true);
+    invalidated = [];
+    applyEvent(
+      client,
+      slug,
+      ev("review.submitted", { proposal: "P-4", data: { version: 3 } }),
+    );
+    expect(refreshes(v3)).toBe(true);
+    for (const extra of [
+      { data: { version: 3 } },
+      { proposal: "P-4", data: { version: "3" } },
+      { proposal: "P-4", data: { version: 0 } },
+    ]) {
+      invalidated = [];
+      applyEvent(client, slug, ev("checks.finished", extra));
+      expect(refreshes(v3), JSON.stringify(extra)).toBe(false);
+    }
+  });
 });
 
 describe("ended workspaces", () => {

@@ -7,6 +7,7 @@ import type {
   ReviewScopeRule,
   Verdict,
 } from "@/api/proposals";
+import type { WorkerList } from "@/api/workers";
 import { bareName, isHumanName, reviewerActor } from "@/people/names";
 import {
   actorSegment,
@@ -297,4 +298,12 @@ export function evidenceLines(
   return evidence
     .split("\n")
     .map((text) => ({ text, command: text.startsWith("$") }));
+}
+
+/** The area of the worker that wrote the proposal; null for a worker fold does not run, or one outside every area. */
+export function authorArea(
+  list: Pick<WorkerList, "workers"> | undefined,
+  author: string,
+): string | null {
+  return list?.workers.find((w) => w.name === author)?.area ?? null;
 }

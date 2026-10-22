@@ -199,8 +199,11 @@ describe("the change switch", () => {
       new Map([["P-4", full]]),
     );
     expect(changes.get("P-4")?.counts).toBe("2 files · +40 −0");
-    expect(memberSearch(changes.get("P-3"))).toEqual({ since: 1 });
-    expect(memberSearch(changes.get("P-4"))).toEqual({});
-    expect(memberSearch(undefined)).toEqual({});
+    expect(memberSearch(changes.get("P-3"))).toEqual({
+      tab: "changes",
+      since: 1,
+    });
+    expect(memberSearch(changes.get("P-4"))).toEqual({ tab: "changes" });
+    expect(memberSearch(undefined)).toEqual({ tab: "changes" });
   });
 });

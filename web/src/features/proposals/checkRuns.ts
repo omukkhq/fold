@@ -1,34 +1,9 @@
 import type {
-  CheckOutcome,
   CheckResult,
   CheckRun,
   CheckRunReason,
-  CheckRunState,
   ProposalSummary,
 } from "@/api/proposals";
-
-/** The most log lines the checks section shows; the stored log keeps more. */
-export const LOG_LINES = 60;
-
-/** One command of a run as the checks section lists it. */
-export interface CheckLine {
-  name: string;
-  outcome: CheckOutcome;
-  /** What happened, such as "failed · exit 4 · 1.2 s". */
-  text: string;
-  /** A command whose stored log end the section can show. */
-  hasLog: boolean;
-}
-
-/** One run as the checks section lists it, newest first. */
-export interface RunView {
-  id: string;
-  title: string;
-  state: CheckRunState;
-  /** Why the run ended as it did; null for a passed or running run. */
-  note: string | null;
-  lines: CheckLine[];
-}
 
 const REASONS: Record<CheckRunReason, string> = {
   check_failed: "a required check failed",
@@ -69,40 +44,6 @@ export function outcomeText(result: CheckResult): string {
     case "not_run":
       return "not run: the setup failed";
   }
-}
-
-function title(run: CheckRun): string {
-  if (run.stage !== "integration") return `Proposal checks on ${run.base}`;
-  // A batch's run checked every member together and is stored on the last of them, so its version names only that member.
-  if (run.batch !== null) {
-    return `Integration checks of batch ${run.batch} on ${run.base}`;
-  }
-  const version = run.version === null ? "" : ` of v${String(run.version)}`;
-  return `Integration checks${version} on ${run.base}`;
-}
-
-/** The runs of the shown version as the section lists them, in the order the daemon sends them: newest first. */
-export function runViews(runs: readonly CheckRun[]): RunView[] {
-  return runs.map((run) => ({
-    id: run.id,
-    title: title(run),
-    state: run.state,
-    note: run.reason === null ? null : reasonText(run.reason),
-    lines: run.results.map((result) => ({
-      name: result.name,
-      outcome: result.outcome,
-      text: outcomeText(result),
-      hasLog: result.log_bytes > 0,
-    })),
-  }));
-}
-
-/** The last `lines` lines of a stored log, with a first line that says when the start was cut. */
-export function logTail(result: CheckResult, lines = LOG_LINES): string {
-  const all = result.log.replace(/\n+$/, "").split("\n");
-  const kept = all.slice(-lines);
-  const cut = result.truncated || kept.length < all.length;
-  return cut ? ["…", ...kept].join("\n") : kept.join("\n");
 }
 
 /** The result of `name` in a run read with its logs. */

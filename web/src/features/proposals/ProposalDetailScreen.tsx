@@ -1,45 +1,45 @@
+import * as RadixTabs from "@radix-ui/react-tabs";
 import {
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
-import { GitPullRequest, Pencil } from "lucide-react";
+import { GitPullRequest } from "lucide-react";
 import { useState } from "react";
 import { keys } from "@/api/keys";
+import { sendMessage, type NewMessage } from "@/api/messages";
 import {
   addComment,
   askAuthor,
   integrateProposal,
   sendForReviewAgain,
   submitReview,
-  type ChangeRange,
+  type CheckRun,
   type NewComment,
   type NewQuestion,
   type NewReview,
-  type ProposalDetail,
-  type ReviewComment,
 } from "@/api/proposals";
 import {
-  proposalChangesQuery,
   proposalCommentsQuery,
-  proposalFileDiffQuery,
   proposalQuery,
   proposalThreadsQuery,
+  proposalVersionQuery,
+  workersQuery,
 } from "@/api/queries";
+import { olderNotListed } from "@/api/pages";
+import { revisionsQuery } from "@/api/repositoryQueries";
 import { HrefLink } from "@/app/HrefLink";
-import { Button } from "@/components/button/Button";
 import { buttonClasses } from "@/components/button/buttonStyles";
+import { TAB_BY_STATE, TAB_LIST } from "@/components/overlay/tabStyles";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
-import { DiffViewer, type FileDiffView } from "@/features/diff/DiffViewer";
-import { currentFile, fileBody, listedFiles } from "@/features/diff/layout";
-import type { DiffSelection } from "@/features/diff/selection";
-import { revisionsQuery } from "@/api/repositoryQueries";
 import { cn } from "@/lib/cn";
-import { focusRing } from "@/lib/focus";
+import { focusRing, insetFocusRing } from "@/lib/focus";
 import { useNow } from "@/live/useNow";
+import { projectPath } from "@/routes/paths";
 import {
   actedVersion,
   APPROVE_BODY,
@@ -49,34 +49,30 @@ import {
   visibleActions,
   type HumanAction,
 } from "./actions";
-import { AskAuthorBox } from "./AskAuthorBox";
-import { canEdit, editableFile } from "./edit";
-import { describeFailure, reloadsProposal } from "./errors";
-import { FileEditor } from "./FileEditor";
+import { ChangesTab } from "./ChangesTab";
 import { QUEUED_BLOCK, queuedNote } from "./checkRuns";
+import { ChecksTab } from "./ChecksTab";
+import { allRuns } from "./runList";
+import { conversationThreads } from "./conversation";
+import { ConversationTab } from "./ConversationTab";
+import { describeFailure, reloadsProposal } from "./errors";
+import type { ActionHandlers } from "./HumanActions";
 import { integrationOf, mainHead } from "./integration";
-import {
-  lineMenu,
-  lineQuestions,
-  questionHref,
-  questionLabel,
-  questionMarks,
-  type LineQuestion,
-} from "./lineQuestions";
+import { lineQuestions } from "./lineQuestions";
+import { OverviewTab } from "./OverviewTab";
+import { authorArea } from "./present";
 import { ProposalHeader } from "./ProposalHeader";
-import { QuestionMarker } from "./QuestionMarker";
-import { SelectionMenu } from "./SelectionMenu";
-import { SidePanel } from "./SidePanel";
-import { CommentComposer, ThreadBox } from "./Threads";
-import { buildThreads, heldLines, placeThreads } from "./threadsModel";
+import { runsCount } from "./stateLine";
 import {
-  emptyChangeText,
+  detailHref,
+  detailTab,
+  isDetailTab,
   resolveView,
-  shownVersion,
+  tabSearch,
   type DetailSearch,
+  type DetailTab,
   type DetailView,
 } from "./view";
-import { projectPath } from "@/routes/paths";
 
 interface ProposalDetailScreenProps {
   slug: string;
@@ -84,252 +80,28 @@ interface ProposalDetailScreenProps {
   search: DetailSearch;
   /** The signed-in human; null before the name prompt is answered. */
   human: string | null;
-  onSearch: (next: DetailSearch) => void;
+  /** A tab change pushes a history entry, so Back returns to the earlier tab; a file, version or run on the same tab replaces the entry. */
+  onSearch: (next: DetailSearch, history?: "push" | "replace") => void;
 }
 
-function failureText(error: unknown): string {
-  return describeFailure(error).text;
-}
-
-function useFileDiff(
-  slug: string,
-  id: string,
-  range: ChangeRange,
-  path: string | null,
-): FileDiffView {
-  const query = useQuery({
-    ...proposalFileDiffQuery(slug, id, range, path ?? ""),
-    enabled: path !== null,
-  });
-  if (query.isError) {
-    return {
-      status: "error",
-      retry: () => {
-        void query.refetch();
-      },
-    };
-  }
-  return query.data
-    ? { status: "ready", diff: query.data }
-    : { status: "pending" };
-}
-
-/** A line comment or a question from the diff selection, exactly as the selection gives its range. */
-type LineComment = DiffSelection & { body: string };
-
-/** What the selected lines show: the menu, or the box of the action the human chose there. */
-type SelectionMode = "menu" | "ask" | "comment";
-
-interface DiffAreaProps {
-  slug: string;
-  proposal: ProposalDetail;
-  comments: readonly ReviewComment[];
-  questions: readonly LineQuestion[];
-  view: DetailView;
-  search: DetailSearch;
-  human: string | null;
-  now: number;
-  onSearch: (next: DetailSearch) => void;
-  onComment: (comment: LineComment) => Promise<void>;
-  /** Resolves once the question is stored and the proposal's threads are read again. */
-  onAsk: (question: LineComment) => Promise<void>;
-  /** Resolves once the proposal with the human's new version is read again. */
-  onEdited: (path: string) => Promise<void>;
-}
-
-function DiffArea({
-  slug,
-  proposal,
-  comments,
-  questions,
-  view,
-  search,
-  human,
-  now,
-  onSearch,
-  onComment,
-  onAsk,
-  onEdited,
-}: DiffAreaProps) {
-  const id = proposal.summary.id;
-  const comparison = useQuery(proposalChangesQuery(slug, id, view.range));
-  const [selection, setSelection] = useState<DiffSelection | null>(null);
-  const [mode, setMode] = useState<SelectionMode>("menu");
-  const select = (next: DiffSelection | null) => {
-    setSelection(next);
-    setMode("menu");
-  };
-  const [editing, setEditing] = useState<string | null>(null);
-  const files = comparison.data ? listedFiles(comparison.data.files) : [];
-  const file = currentFile(files, search.path);
-  const fileDiff = useFileDiff(
-    slug,
-    id,
-    view.range,
-    file !== null && fileBody(file) === "text" ? file.path : null,
-  );
-  const version = shownVersion(view);
-  const threads = buildThreads(comments, version);
-  const byId = new Map(threads.map((t) => [t.id, t]));
-  // Only the file on screen has its hunks read; a file whose text is not shown holds no line.
-  const held = new Map<string, ReadonlySet<string>>();
-  if (file !== null && fileBody(file) !== "text") {
-    held.set(file.path, new Set());
-  } else if (file !== null && fileDiff.status === "ready") {
-    held.set(file.path, heldLines(fileDiff.diff.hunks));
-  }
-  const { placed, unplaced } = placeThreads(
-    threads,
-    files.map((f) => f.path),
-    view.kind === "version",
-    held,
-  );
-  const editable = canEdit(proposal, human, view) && editableFile(file);
-  const questionById = new Map(questions.map((q) => [q.id, q]));
-
-  if (comparison.isPending) return <Skeleton className="min-w-0 flex-1" />;
-  if (comparison.isError) {
-    return (
-      <ErrorBanner
-        className="min-w-0 flex-1"
-        title="The diff could not load."
-        message="The comparison did not arrive."
-        onRetry={() => void comparison.refetch()}
-      />
-    );
-  }
-  const data = comparison.data;
-  if (editable && editing === file.path) {
-    return (
-      <FileEditor
-        slug={slug}
-        id={id}
-        view={view}
-        path={file.path}
-        onCancel={() => {
-          setEditing(null);
-        }}
-        onSaved={async () => {
-          await onEdited(file.path);
-        }}
-      />
-    );
-  }
+function TabTrigger({
+  value,
+  label,
+  count,
+}: {
+  value: DetailTab;
+  label: string;
+  count: string | null;
+}) {
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-16">
-      {editable ? (
-        <div className="flex justify-end">
-          <Button
-            size="sm"
-            icon={<Pencil aria-hidden="true" size={14} />}
-            onClick={() => {
-              select(null);
-              setEditing(file.path);
-            }}
-          >
-            Edit {file.path}
-          </Button>
-        </div>
-      ) : null}
-      {files.length === 0 ? (
-        <EmptyPanel title="No changes">{emptyChangeText(view)}</EmptyPanel>
-      ) : (
-        <DiffViewer
-          comparison={data}
-          filesTitle="Files"
-          selectedPath={file?.path}
-          onSelectFile={(path) => {
-            select(null);
-            onSearch({ ...search, path });
-          }}
-          fileDiff={fileDiff}
-          selection={selection}
-          onSelect={select}
-          threads={placed}
-          marks={questionMarks(questions, view)}
-          renderMark={(mark, first) => {
-            const question = questionById.get(mark.id);
-            return question ? (
-              <QuestionMarker
-                href={questionHref(slug, question)}
-                label={questionLabel(question)}
-                answered={question.answered}
-                focusable={first}
-              />
-            ) : null;
-          }}
-          renderThread={(anchor) => {
-            const thread = byId.get(anchor.id);
-            return thread ? (
-              <ThreadBox slug={slug} thread={thread} now={now} />
-            ) : null;
-          }}
-          renderComposer={(sel) => {
-            const menu = lineMenu(proposal, human, view, sel.side, sel.path);
-            const key = `${sel.path}:${sel.side}:${String(sel.start_line)}:${String(sel.end_line)}`;
-            if (mode === "ask" && menu.ask !== null) {
-              return (
-                <AskAuthorBox
-                  slug={slug}
-                  key={key}
-                  selection={sel}
-                  version={view.version}
-                  failureText={failureText}
-                  onCancel={() => {
-                    setMode("menu");
-                  }}
-                  onSubmit={async (body) => {
-                    await onAsk({ ...sel, body });
-                    select(null);
-                  }}
-                />
-              );
-            }
-            if (mode === "comment" && menu.comment !== null) {
-              return (
-                <CommentComposer
-                  slug={slug}
-                  key={key}
-                  selection={sel}
-                  human={menu.comment}
-                  failureText={failureText}
-                  onCancel={() => {
-                    setMode("menu");
-                  }}
-                  onSubmit={async (body) => {
-                    await onComment({ ...sel, body });
-                    select(null);
-                  }}
-                />
-              );
-            }
-            return (
-              <SelectionMenu
-                slug={slug}
-                id={id}
-                menu={menu}
-                onAsk={() => {
-                  setMode("ask");
-                }}
-                onComment={() => {
-                  setMode("comment");
-                }}
-              />
-            );
-          }}
-        />
+    <RadixTabs.Trigger value={value} className={cn(TAB_BY_STATE, focusRing)}>
+      {label}
+      {count === null ? null : (
+        <span className="rounded-s bg-sunken px-6 text-caption font-medium text-text-muted">
+          {count}
+        </span>
       )}
-      {unplaced.length > 0 ? (
-        <section aria-label="Other comments" className="flex flex-col gap-10">
-          <h2 className="text-overline leading-snug font-semibold text-primary-text uppercase">
-            Other comments
-          </h2>
-          {unplaced.map((thread) => (
-            <ThreadBox key={thread.id} slug={slug} thread={thread} now={now} />
-          ))}
-        </section>
-      ) : null}
-    </div>
+    </RadixTabs.Trigger>
   );
 }
 
@@ -352,6 +124,15 @@ export function ProposalDetailScreen({
   const threads = useQuery({
     ...proposalThreadsQuery(slug, id),
     enabled: data !== null,
+  });
+  const workers = useQuery({ ...workersQuery(slug), enabled: data !== null });
+  const current = data?.summary.current_version ?? 0;
+  // The proposal read carries the check runs of one version only, so each earlier version is read for its runs.
+  const earlier = (data?.versions ?? [])
+    .map((v) => v.version)
+    .filter((v) => v !== current);
+  const earlierReads = useQueries({
+    queries: earlier.map((version) => proposalVersionQuery(slug, id, version)),
   });
   const queryClient = useQueryClient();
   const now = useNow(true, 30_000);
@@ -403,6 +184,12 @@ export function ProposalDetailScreen({
       });
     },
   });
+  const reply = useMutation({
+    mutationFn: (input: NewMessage) => sendMessage(slug, input),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: keys.messages(slug) });
+    },
+  });
   const reviewAgain = useMutation({
     mutationFn: (version: number) => sendForReviewAgain(slug, id, version),
     onSuccess: reload,
@@ -431,7 +218,9 @@ export function ProposalDetailScreen({
   }
 
   const summary = data.summary;
+  const tab = detailTab(search);
   const view = resolveView(data, search);
+  const currentView = resolveView(data, {});
   const revisionList = revisions.data?.items ?? [];
   const main = mainHead(revisionList);
   const integration = integrationOf(summary, revisionList, integrate.data);
@@ -447,103 +236,197 @@ export function ProposalDetailScreen({
         : null;
   const shown = failure === null ? null : describeFailure(failure);
 
+  const runs = new Map<number, readonly CheckRun[]>([[current, data.checks]]);
+  const failedVersions = new Set<number>();
+  earlier.forEach((version, index) => {
+    const read = earlierReads[index];
+    if (read?.data) runs.set(version, read.data.checks);
+    else if (read?.isError) failedVersions.add(version);
+  });
+  // A version whose read failed leaves its runs out rather than holding the Checks tab in its loading state.
+  const settled = earlierReads.every((read) => !read.isPending);
+  const runItems = settled ? allRuns(runs) : null;
+  const conversation =
+    threads.data && comments.data
+      ? conversationThreads(data, threads.data.items, comments.data)
+      : null;
+
+  const actionsFor = (acted: DetailView): ActionHandlers => ({
+    visible: visibleActions(data, human),
+    pending,
+    failure: shown?.place === "inline" ? shown.text : null,
+    integrateBlock: queued === null ? integrateBlock(data, main) : QUEUED_BLOCK,
+    approveBlock: approveBlock(data),
+    onApprove: () => {
+      review.mutate(humanVerdict(acted, "approve", APPROVE_BODY));
+    },
+    onIntegrate: () => {
+      integrate.mutate(actedVersion(acted));
+    },
+    onReviewAgain: () => {
+      reviewAgain.mutate(actedVersion(acted));
+    },
+    onRequestChanges: async (body) => {
+      await review.mutateAsync(humanVerdict(acted, "request_changes", body));
+    },
+  });
+  const tabHref = (next: DetailSearch) => detailHref(slug, id, next);
+  // A panel spans the page, so its ring is drawn inside it where no edge clips it.
+  const content = insetFocusRing;
+
   return (
-    <div className="flex flex-col">
+    <div className="flex min-w-0 flex-col">
       <ProposalHeader
         slug={slug}
         proposal={data}
-        view={view}
         main={main}
         revision={integration?.revision ?? null}
         batch={integration?.batch ?? null}
         now={now}
       />
       {shown?.place === "banner" ? (
-        <ErrorBanner title="The request failed." message={shown.text} />
+        <ErrorBanner
+          className="mx-16 mt-12 md:mx-24"
+          title="The request failed."
+          message={shown.text}
+        />
       ) : null}
-      <div className="flex items-start gap-20 px-24 pt-16 pb-24">
-        <DiffArea
-          key={`${String(view.range.version)}:${String(view.range.since)}`}
-          slug={slug}
-          proposal={data}
-          comments={comments.data ?? []}
-          questions={lineQuestions(threads.data?.items ?? [], id)}
-          view={view}
-          search={search}
-          human={human}
-          now={now}
-          onSearch={onSearch}
-          onComment={async ({ path, side, start_line, end_line, body }) => {
-            await comment.mutateAsync({
-              version: view.version,
-              path,
-              side,
-              start_line,
-              end_line,
-              body,
-              reply_to: null,
-            });
-          }}
-          onAsk={async ({ path, side, start_line, end_line, body }) => {
-            await ask.mutateAsync({
-              version: view.version,
-              path,
-              side,
-              start_line,
-              end_line,
-              body,
-            });
-          }}
-          onEdited={async (path) => {
-            await reload();
-            onSearch({ path });
-          }}
-        />
-        <SidePanel
-          slug={slug}
-          proposal={data}
-          view={view}
-          human={human}
-          now={now}
-          main={main}
-          integration={integration}
-          queued={queued}
-          actions={{
-            visible: visibleActions(data, human),
-            pending,
-            failure: shown?.place === "inline" ? shown.text : null,
-            integrateBlock:
-              queued === null ? integrateBlock(data, main) : QUEUED_BLOCK,
-            approveBlock: approveBlock(data),
-            onApprove: () => {
-              review.mutate(humanVerdict(view, "approve", APPROVE_BODY));
-            },
-            onIntegrate: () => {
-              integrate.mutate(actedVersion(view));
-            },
-            onReviewAgain: () => {
-              reviewAgain.mutate(actedVersion(view));
-            },
-            onRequestChanges: async (body) => {
-              await review.mutateAsync(
-                humanVerdict(view, "request_changes", body),
-              );
-            },
-          }}
-        />
-      </div>
+      <RadixTabs.Root
+        value={tab}
+        onValueChange={(value) => {
+          if (isDetailTab(value)) onSearch(tabSearch(search, value), "push");
+        }}
+        className="flex min-w-0 flex-col"
+      >
+        <div className="px-16 pt-8 md:px-24">
+          <RadixTabs.List
+            aria-label="Proposal"
+            className={cn(TAB_LIST, "flex-wrap")}
+          >
+            <TabTrigger value="overview" label="Overview" count={null} />
+            <TabTrigger
+              value="changes"
+              label="Changes"
+              count={String(data.totals.files)}
+            />
+            <TabTrigger
+              value="checks"
+              label="Checks"
+              count={runsCount(runItems?.length ?? null)}
+            />
+            <TabTrigger
+              value="conversation"
+              label="Conversation"
+              count={conversation === null ? null : String(conversation.length)}
+            />
+          </RadixTabs.List>
+        </div>
+        <RadixTabs.Content value="overview" className={content}>
+          <OverviewTab
+            slug={slug}
+            proposal={data}
+            human={human}
+            now={now}
+            main={main}
+            integration={integration}
+            queued={queued}
+            actions={actionsFor(currentView)}
+            actionView={currentView}
+            runs={runs}
+            failedVersions={failedVersions}
+            comments={comments.data ?? []}
+            threads={conversation}
+            area={authorArea(workers.data, summary.author)}
+            tabHref={tabHref}
+          />
+        </RadixTabs.Content>
+        <RadixTabs.Content value="changes" className={content}>
+          <ChangesTab
+            slug={slug}
+            proposal={data}
+            comments={comments.data ?? []}
+            questions={lineQuestions(threads.data?.items ?? [], id)}
+            view={view}
+            search={search}
+            human={human}
+            now={now}
+            runs={runs.get(view.version) ?? null}
+            actions={actionsFor(view)}
+            onSearch={onSearch}
+            onComment={async ({ path, side, start_line, end_line, body }) => {
+              await comment.mutateAsync({
+                version: view.version,
+                path,
+                side,
+                start_line,
+                end_line,
+                body,
+                reply_to: null,
+              });
+            }}
+            onAsk={async ({ path, side, start_line, end_line, body }) => {
+              await ask.mutateAsync({
+                version: view.version,
+                path,
+                side,
+                start_line,
+                end_line,
+                body,
+              });
+            }}
+            onEdited={async (path) => {
+              await reload();
+              onSearch({ tab: "changes", path });
+            }}
+          />
+        </RadixTabs.Content>
+        <RadixTabs.Content value="checks" className={content}>
+          <ChecksTab
+            slug={slug}
+            id={id}
+            items={runItems}
+            search={search}
+            now={now}
+          />
+        </RadixTabs.Content>
+        <RadixTabs.Content value="conversation" className={content}>
+          <ConversationTab
+            slug={slug}
+            proposal={data}
+            threads={conversation}
+            olderNote={
+              threads.data?.more
+                ? olderNotListed(threads.data.items.length, "message threads")
+                : null
+            }
+            human={human}
+            now={now}
+            changesHref={tabHref({ tab: "changes" })}
+            onAsk={async (body) => {
+              await ask.mutateAsync({ version: current, body });
+            }}
+            onReply={async (replyTo, body) => {
+              await reply.mutateAsync({ reply_to: replyTo, body });
+            }}
+            onComment={async (replyTo, body) => {
+              await comment.mutateAsync({
+                version: current,
+                body,
+                reply_to: replyTo,
+              });
+            }}
+          />
+        </RadixTabs.Content>
+      </RadixTabs.Root>
     </div>
   );
 }
 
 export function ProposalDetailPending() {
   return (
-    <div className="flex flex-col gap-16 px-24 pt-18 pb-24">
+    <div className="flex flex-col gap-16 px-16 pt-18 pb-24 md:px-24">
       <Skeleton />
-      <div className="flex items-start gap-20">
-        <Skeleton className="flex-1" />
-        <Skeleton className="w-review-panel shrink-0" />
-      </div>
+      <Skeleton className="flex-1" />
     </div>
   );
 }

@@ -8,6 +8,7 @@ import {
   review as reviewOf,
 } from "@/test/proposals";
 import {
+  authorArea,
   approvers,
   claimLine,
   claimText,
@@ -26,6 +27,7 @@ import {
   versionVerdict,
   waitingOn,
 } from "./present";
+import { workerList, workerProcess } from "@/test/workers";
 
 function review(
   version: number,
@@ -365,5 +367,20 @@ describe("who made a version", () => {
       "the reviewer",
     );
     expect(evidenceSource(undefined)).toBe("the author");
+  });
+});
+
+describe("authorArea", () => {
+  it("reads the area of the worker that wrote the proposal", () => {
+    const list = workerList({
+      workers: [
+        workerProcess("frontend/ui", { area: "web" }),
+        workerProcess("review", { area: null }),
+      ],
+    });
+    expect(authorArea(list, "frontend/ui")).toBe("web");
+    expect(authorArea(list, "review")).toBeNull();
+    expect(authorArea(list, "outside")).toBeNull();
+    expect(authorArea(undefined, "frontend/ui")).toBeNull();
   });
 });
