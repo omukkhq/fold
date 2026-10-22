@@ -6,7 +6,8 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use fold_core::object::{ObjectKind, hash_object};
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_vcs::checkout::{
-    FolderEntry, folder_changes, folder_stamp, follow, held, overlay, read_folder_entry,
+    FolderEntry, folder_changes, folder_stamp, follow, follow_unchanged, held, overlay,
+    read_folder_entry,
 };
 use fold_vcs::paths::RepoPath;
 
@@ -191,6 +192,40 @@ fn a_follow_waits_while_a_path_main_changed_holds_a_human_change_then_writes_eve
             path("run.sh")
         ]
     );
+}
+
+#[test]
+fn a_follow_of_unchanged_paths_writes_only_those_and_leaves_the_rest() {
+    let (dir, store) = store();
+    let root = dir.path().join("folder");
+    for text in [&b"one\n"[..], b"two\n", b"mine\n"] {
+        blob(&store, text);
+    }
+    write(&root, "a.txt", b"one\n");
+    write(&root, "b.txt", b"two\n");
+    write(&root, "c.txt", b"mine\n");
+    write(&root, "gone.txt", b"one\n");
+    let from = flat(&[
+        ("a.txt", file(b"one\n")),
+        ("b.txt", file(b"one\n")),
+        ("c.txt", file(b"one\n")),
+        ("gone.txt", file(b"one\n")),
+    ]);
+    let to = flat(&[
+        ("a.txt", file(b"two\n")),
+        ("b.txt", file(b"two\n")),
+        ("c.txt", file(b"two\n")),
+        ("new.txt", file(b"two\n")),
+    ]);
+    let changes = folder_changes(&root, &from, &to, 1024, &HOST).unwrap();
+    // `b.txt` holds the new entry already and `c.txt` a change of the human's, which a follow would wait on.
+    let written = follow_unchanged(&store, &root, &from, &to, &changes, HOST).unwrap();
+    assert_eq!(written, [path("a.txt"), path("gone.txt"), path("new.txt")]);
+    assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"two\n");
+    assert_eq!(fs::read(root.join("b.txt")).unwrap(), b"two\n");
+    assert_eq!(fs::read(root.join("c.txt")).unwrap(), b"mine\n");
+    assert_eq!(fs::read(root.join("new.txt")).unwrap(), b"two\n");
+    assert!(!root.join("gone.txt").exists());
 }
 
 #[test]

@@ -4,7 +4,7 @@ use fold_core::tree::FlatTree;
 use fold_core::{FoldError, ProjectPaths, RevisionId, Timestamp};
 use fold_store::workspaces::{
     Checkout, StashState, checkout, genesis, git_sync, head, merged_commits, newest_human_change,
-    set_checkout, stash_stack,
+    open_unstash, set_checkout, stash_stack,
 };
 use fold_store::{Store, StoreError};
 use fold_vcs::checkout::{Followed, folder_changes, follow, overlay};
@@ -18,6 +18,7 @@ use fold_vcs::objects::ObjectStore;
 use fold_vcs::platform::Capabilities;
 use fold_vcs::revision_store::write_initial_tree;
 use fold_vcs::scan::{ScanOptions, scan};
+use fold_vcs::stash::changed_paths;
 
 use fold_core::events::types;
 use fold_core::{Actor, EventError, NewEvent};
@@ -255,7 +256,7 @@ pub async fn sync_folder(context: &RemoteContext, git: &Git) -> Result<FolderSyn
     })
 }
 
-/// Brings the project folder to main through its checkout record, as [`fold_vcs::checkout::follow`] describes, the same way with Git sync on or off: when a path main changed holds a change of the human's that no revision records, nothing is written and the folder stays on its revision until `fld record` records the change, a resolution of the human change brings it onto main, or the human takes it back; otherwise every path main changed gets main's entry. Paths main did not change are never touched. The newest human change that main holds is laid over the record first, so the human's recorded files count as fold's. While `fld unstash` left conflict markers that wait for the human, nothing is written either, and the held paths are the conflicted ones. While Git sync is on the folder also moves only together with its branch: when the branch shows a change fold did not make, or commits fold did not write, nothing is written, so `git status` keeps telling the human's changes from main's. The record tree goes into the object store, then the record row, so a stop between the writes and the row leaves files that the next follow finds holding main's entries and takes as written. The caller holds the project's folder lock.
+/// Brings the project folder to main through its checkout record, as [`fold_vcs::checkout::follow`] describes, the same way with Git sync on or off: when a path main changed holds a change of the human's that no revision records, nothing is written and the folder stays on its revision until `fld record` records the change, a resolution of the human change brings it onto main, or the human takes it back; otherwise every path main changed gets main's entry. Paths main did not change are never touched. The newest human change that main holds is laid over the record first, so the human's recorded files count as fold's. While `fld unstash` left conflict markers that wait for the human, nothing is written either, and the held paths are the conflicted ones; so too while an unstash that stopped part-way waits to be finished, with the paths it writes. While Git sync is on the folder also moves only together with its branch: when the branch shows a change fold did not make, or commits fold did not write, nothing is written, so `git status` keeps telling the human's changes from main's. The record tree goes into the object store, then the record row, so a stop between the writes and the row leaves files that the next follow finds holding main's entries and takes as written. The caller holds the project's folder lock.
 pub(crate) async fn follow_folder(
     store: &Store,
     paths: &ProjectPaths,
@@ -270,8 +271,11 @@ pub(crate) async fn follow_folder(
     };
     let recorded = checkout(read).await?;
     let synced = git_sync(read).await?.is_some();
-    let (newest, stash_held) = {
+    let (newest, stash_held, unstash) = {
         let mut conn = read.acquire().await.map_err(StoreError::from)?;
+        let unstash = open_unstash(&mut conn)
+            .await?
+            .map(|journal| (journal.folder_tree, journal.target_tree));
         let newest = newest_human_change(&mut conn, true).await?;
         let stash_held = stash_stack(&mut conn)
             .await?
@@ -284,7 +288,7 @@ pub(crate) async fn follow_folder(
                     .map(|row| String::from_utf8_lossy(&row.path).into_owned())
                     .collect::<Vec<String>>()
             });
-        (newest, stash_held)
+        (newest, stash_held, unstash)
     };
     let (record_tree, from, mut human_change) = match recorded.clone() {
         Some(found) => (found.tree, found.revision, found.human_change),
@@ -330,8 +334,9 @@ pub(crate) async fn follow_folder(
     } else {
         None
     };
-    // While the conflict markers of an unstash wait in the folder, the folder stays where it is, as while a path main changed holds a change of the human's.
+    // While the conflict markers of an unstash wait in the folder, or an unstash that stopped part-way waits to be finished, the folder stays where it is, as while a path main changed holds a change of the human's.
     let may_write = stash_held.is_none()
+        && unstash.is_none()
         && if synced {
             matches!(branch, Some(BranchState::Fold { .. }))
         } else {
@@ -361,7 +366,7 @@ pub(crate) async fn follow_folder(
         let followed = if may_write {
             follow(&objects, root, &record, &main, &changes, caps)?
         } else {
-            // The folder holds files of a branch fold did not write, which Git puts back when fold's branch returns, or the markers of an unstash that wait for the human, so they settle no path of the record.
+            // The folder holds files of a branch fold did not write, which Git puts back when fold's branch returns, or the files of an unstash that wait for the human or for the unstash's end, so they settle no path of the record.
             Followed {
                 record,
                 ..Followed::default()
@@ -373,9 +378,15 @@ pub(crate) async fn follow_folder(
         let tree = write_initial_tree(&objects, followed.record.clone())?;
         let unrecorded =
             !followed.held.is_empty() || differs(&paths, &followed.record, max_file_bytes, caps)?;
-        let held: Vec<String> = match stash_held {
-            Some(held) => held,
-            None => followed.held.iter().map(ToString::to_string).collect(),
+        let held: Vec<String> = match (stash_held, unstash) {
+            (Some(held), _) => held,
+            (None, Some((from, to))) => {
+                changed_paths(&load_flat(&objects, &from)?, &load_flat(&objects, &to)?)
+                    .iter()
+                    .map(|path| String::from_utf8_lossy(path).into_owned())
+                    .collect()
+            }
+            (None, None) => followed.held.iter().map(ToString::to_string).collect(),
         };
         let unrecorded = unrecorded || !held.is_empty();
         Ok((tree, held, unrecorded, wrote))

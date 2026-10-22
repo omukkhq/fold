@@ -4,8 +4,8 @@ use fold_core::Timestamp;
 use fold_core::merge::ConflictKind;
 use fold_store::testing::TestProject;
 use fold_store::workspaces::{
-    ConflictRow, NewStash, StashState, apply_stash, conflict_stash, drop_stash, gc_roots,
-    insert_stash, stash_stack,
+    ConflictRow, NewStash, NewUnstash, StashState, UnstashEnd, apply_stash, close_unstash,
+    conflict_stash, drop_stash, gc_roots, insert_stash, insert_unstash, open_unstash, stash_stack,
 };
 use fold_store::{Store, StoreError};
 
@@ -130,6 +130,115 @@ async fn the_stack_is_newest_first_and_an_entry_only_moves_forward() {
                     tree: seed::tree("b"),
                     revision: "r9".parse().unwrap(),
                     actor: "human:ana",
+                    now: Timestamp::EPOCH,
+                },
+            )
+            .await
+        })
+        .await;
+    assert!(matches!(missing, Err(StoreError::RevisionNotFound(_))));
+}
+
+async fn open_journal(
+    store: &Store,
+    stash_id: i64,
+    conflicts: &[ConflictRow],
+) -> Result<i64, StoreError> {
+    store
+        .write(async |tx| {
+            insert_unstash(
+                tx,
+                &NewUnstash {
+                    stash_id,
+                    folder_tree: seed::tree("folder"),
+                    target_tree: seed::tree("target"),
+                    revision: "r1".parse().unwrap(),
+                    actor: "human:ana",
+                    conflicts,
+                    now: Timestamp::EPOCH,
+                },
+            )
+            .await
+        })
+        .await
+}
+
+#[tokio::test]
+async fn one_unstash_journal_row_is_open_at_a_time_and_it_only_closes_once() {
+    let project = TestProject::new().await;
+    let store = project.store();
+    seed::workspace(store, 1).await;
+    let entry = push(store, "entry").await;
+    let rows = [ConflictRow {
+        path: b"a.txt".to_vec(),
+        kind: ConflictKind::BothModifiedText,
+    }];
+    let id = open_journal(store, entry, &rows).await.unwrap();
+    let mut conn = store.read().acquire().await.unwrap();
+    let open = open_unstash(&mut conn).await.unwrap().unwrap();
+    drop(conn);
+    assert_eq!((open.id, open.stash_id), (id, entry));
+    assert_eq!(open.folder_tree, seed::tree("folder"));
+    assert_eq!(open.target_tree, seed::tree("target"));
+    assert_eq!(open.revision.to_string(), "r1");
+    assert_eq!(open.actor, "human:ana");
+    assert_eq!(open.conflicts, rows);
+    // An open row keeps both trees from the collection.
+    let roots = gc_roots(store.read()).await.unwrap();
+    assert!(roots.contains(&seed::tree("folder")) && roots.contains(&seed::tree("target")));
+    assert!(open_journal(store, entry, &[]).await.is_err());
+
+    let at = Timestamp::from_millis(5).unwrap();
+    let closed = store
+        .write(async |tx| {
+            Ok::<_, StoreError>((
+                close_unstash(tx, id, UnstashEnd::Finished, at).await?,
+                close_unstash(tx, id, UnstashEnd::Abandoned, at).await?,
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!(closed, (true, false));
+    let mut conn = store.read().acquire().await.unwrap();
+    assert!(open_unstash(&mut conn).await.unwrap().is_none());
+    drop(conn);
+    assert!(
+        !gc_roots(store.read())
+            .await
+            .unwrap()
+            .contains(&seed::tree("target"))
+    );
+    let next = open_journal(store, entry, &[]).await.unwrap();
+    assert!(
+        store
+            .write(async |tx| close_unstash(tx, next, UnstashEnd::Abandoned, at).await)
+            .await
+            .unwrap()
+    );
+    for sql in [
+        "UPDATE folder_unstashes SET state = 'open', closed_at = NULL",
+        "UPDATE folder_unstashes SET state = 'abandoned' WHERE state = 'finished'",
+        "UPDATE folder_unstashes SET target_tree_hash = 'other'",
+        "DELETE FROM folder_unstashes",
+        "UPDATE folder_unstash_conflicts SET kind = 'add_add'",
+        "DELETE FROM folder_unstash_conflicts",
+        "INSERT INTO folder_unstashes (stash_id, folder_tree_hash, target_tree_hash, revision_id, actor, state, started_at) VALUES (1, 't', 't', 1, 'human:ana', 'open', 0)",
+        "INSERT INTO folder_unstashes (stash_id, folder_tree_hash, target_tree_hash, revision_id, actor, state, started_at) VALUES (1, 't', 'u', 1, 'frontend', 'open', 0)",
+        "INSERT INTO folder_unstashes (stash_id, folder_tree_hash, target_tree_hash, revision_id, actor, state, started_at) VALUES (1, 't', 'u', 1, 'human:ana', 'finished', 0)",
+    ] {
+        assert!(exec(store, sql).await.is_err(), "{sql}");
+    }
+    let missing = store
+        .write(async |tx| {
+            insert_unstash(
+                tx,
+                &NewUnstash {
+                    stash_id: entry,
+                    folder_tree: seed::tree("a"),
+                    target_tree: seed::tree("b"),
+                    revision: "r9".parse().unwrap(),
+                    actor: "human:ana",
+                    conflicts: &[],
                     now: Timestamp::EPOCH,
                 },
             )

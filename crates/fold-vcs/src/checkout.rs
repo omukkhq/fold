@@ -301,6 +301,23 @@ pub fn follow(
     Ok(followed)
 }
 
+/// Brings each path of `changes` that still holds the entry of `from` to that of `to`, as [`follow`] writes it, and leaves every other path as it is: one that holds the entry of `to` already, and one that holds a change of the human's. Returns the paths it wrote or removed, in path order. Blocking.
+pub fn follow_unchanged(
+    objects: &ObjectStore,
+    root: &Path,
+    from: &FlatTree,
+    to: &FlatTree,
+    changes: &[(RepoPath, FolderEntry)],
+    caps: Capabilities,
+) -> Result<Vec<RepoPath>, WorkspaceError> {
+    let unchanged: Vec<(RepoPath, FolderEntry)> = changes
+        .iter()
+        .filter(|(path, found)| found.holds(from.get(path.as_bytes())))
+        .cloned()
+        .collect();
+    Ok(follow(objects, root, from, to, &unchanged, caps)?.written)
+}
+
 /// What a follow knows before it writes: `record` with main's entry for every path of `changes` that holds it already, and the [`held`] paths. Reads no file.
 fn hold(record: &FlatTree, main: &FlatTree, changes: &[(RepoPath, FolderEntry)]) -> Followed {
     let mut followed = Followed {

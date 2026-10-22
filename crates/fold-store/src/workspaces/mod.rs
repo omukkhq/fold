@@ -52,6 +52,6 @@ pub use revisions::{
     initial_revision, insert_revision, list_after, list_recent,
 };
 pub use stashes::{
-    NewStash, StashRow, StashState, apply_stash, conflict_stash, drop_stash, insert_stash,
-    stash_stack,
+    NewStash, NewUnstash, StashRow, StashState, UnstashEnd, UnstashRow, apply_stash, close_unstash,
+    conflict_stash, drop_stash, insert_stash, insert_unstash, open_unstash, stash_stack,
 };

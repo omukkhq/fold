@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT path, kind FROM folder_unstash_conflicts WHERE unstash_id = ? ORDER BY path",
+  "describe": {
+    "columns": [
+      {
+        "name": "path",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "folder_unstash_conflicts",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "name": "kind",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "folder_unstash_conflicts",
+            "name": "kind"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "2e2188ae23a10f557df6335fb18d5fb6569bf33a0bb60cdfcaa37d2d128f0f9c"
+}

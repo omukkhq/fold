@@ -18,7 +18,8 @@ use fold_vcs::restore::{RestoreOptions, restore_tree};
 use fold_vcs::scan::{DEFAULT_MAX_FILE_BYTES, ScanOptions};
 use fold_vcs::snapshot::snapshot;
 use fold_vcs::sync::{
-    ConflictedPath, MarkerLabels, SyncInput, SyncOutcome, sidecar, sync, unresolved, write_merge,
+    ConflictedPath, MarkerLabels, STASH_SIDECAR_SUFFIX, SyncInput, SyncOutcome, merge_target,
+    sidecar, sync, unresolved, write_merge, write_merge_with,
 };
 
 use crate::common::*;
@@ -694,6 +695,49 @@ fn write_merge_uses_the_caller_s_labels() {
         ws.text("f"),
         "a\n<<<<<<< sync workspace\nmine\n||||||| export\nold\n=======\nmain\n>>>>>>> remote\nb\n"
     );
+}
+
+#[test]
+fn merge_target_is_the_tree_the_folder_holds_after_the_write() {
+    let mut ws = Ws::new(&[("f", b"a\nold\nb\n"), ("gone", b"g\n"), ("bin", b"\0one")]);
+    ws.write("f", b"a\nmine\nb\n");
+    ws.write("bin", b"\0two");
+    ws.write("bin.fold-stash", b"stale");
+    let ours_tree = ws.checkpoint();
+    let theirs = ws.main(&[
+        ("f", b"a\nstashed\nb\n"),
+        ("bin", b"\0three"),
+        ("new/file", b"n\n"),
+    ]);
+    let load = |hash: &ObjectHash| {
+        let object = ws.store.read_expecting(hash, ObjectKind::Tree)?;
+        Ok(Tree::decode(&object.payload)?)
+    };
+    let base = flatten(&ws.base, &load).unwrap();
+    let ours = flatten(&ours_tree, &load).unwrap();
+    let main = flatten(&theirs, &load).unwrap();
+    let blob = |hash: &ObjectHash| Ok(ws.store.read_expecting(hash, ObjectKind::Blob)?.payload);
+    let merge = merge_trees(&base, &ours, &main, &blob).unwrap();
+    let labels = MarkerLabels::unstash(r(4), 0);
+    let (target, planned) =
+        merge_target(&ws.store, &merge, &ours_tree, &labels, STASH_SIDECAR_SUFFIX).unwrap();
+    // Nothing is written until the merge is.
+    assert_eq!(ws.text("f"), "a\nmine\nb\n");
+    assert!(ws.exists("gone"));
+    let written = write_merge_with(
+        &ws.store,
+        &ws.root,
+        &mut ws.index,
+        &merge,
+        &ours_tree,
+        &labels,
+        STASH_SIDECAR_SUFFIX,
+    )
+    .unwrap();
+    assert_eq!(written, planned);
+    assert_eq!(ws.read("bin.fold-stash"), b"\0three");
+    assert!(!ws.exists("gone"));
+    assert_eq!(ws.checkpoint(), target);
 }
 
 #[test]
