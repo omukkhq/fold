@@ -556,6 +556,69 @@ async fn a_member_that_conflicts_goes_back_alone_and_the_others_integrate_togeth
 }
 
 #[tokio::test]
+async fn a_batch_whose_checks_fold_failed_to_run_waits_for_main_even_when_its_last_member_conflicts()
+ {
+    // P-4, the last ready member, conflicts with P-2, so the batch's run is stored on P-3.
+    let scene = Scene::with_checks("test -f src/lib.rs", |task, dir| match task {
+        2 => std::fs::write(dir.join("README.md"), "# demo\nfrom two\n").unwrap(),
+        4 => std::fs::write(dir.join("README.md"), "# demo\nfrom four\n").unwrap(),
+        _ => {}
+    })
+    .await;
+    let batch = scene.batch(&[2, 3, 4]).await;
+    scene.review(batch, &[2, 3, 4], &[]).await;
+    // A file where fold's check directory belongs keeps fold from preparing it.
+    let checks = scene.fx.project.paths().checks_dir();
+    let parent = checks.parent().unwrap().to_path_buf();
+    eventually(WAIT, async || {
+        if checks.join("fold-checks.toml").is_file() {
+            Ok(())
+        } else {
+            Err(())
+        }
+    })
+    .await;
+    std::fs::remove_dir_all(&parent).unwrap();
+    std::fs::write(&parent, "").unwrap();
+
+    assert!(
+        scene
+            .fx
+            .reviews()
+            .integrate_ready()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let runs = "SELECT COUNT(*) FROM check_runs WHERE stage = 'integration'";
+    assert_eq!(scene.count(runs).await, 2, "P-6's run and the batch's");
+    let stored = scene
+        .count(
+            "SELECT p.number FROM check_runs c JOIN proposals p ON p.id = c.proposal_id
+             WHERE c.reason = 'fold_failed'",
+        )
+        .await;
+    assert_eq!(stored, 3, "the run is on P-3, the last member that merged");
+    for _ in 0..2 {
+        assert!(
+            scene
+                .fx
+                .reviews()
+                .integrate_ready()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert_eq!(
+        scene.count(runs).await,
+        2,
+        "fold does not run the batch again on the same main"
+    );
+    assert!(scene.integrations().await.iter().all(|row| row.0 == 6));
+}
+
+#[tokio::test]
 async fn a_member_that_needs_the_sent_back_member_waits_and_integrates_on_its_own_later() {
     let scene = Scene::new().await;
     scene

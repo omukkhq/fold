@@ -7,7 +7,7 @@ use fold_core::reviews::batches::{
     BatchMemberFacts, BatchOutcome, BatchReadiness, MemberStanding, StandingFacts, batch_readiness,
     member_standing, waits_on_comment,
 };
-use fold_core::reviews::checks::{RunReason, Stage};
+use fold_core::reviews::checks::RunReason;
 use fold_core::revision::{Revision, StoredRevision};
 use fold_core::{
     Actor, AddressedAs, CheckRunId, EventActor, FoldError, IdKind, IntegrationId, MessageBody,
@@ -292,25 +292,19 @@ impl ReviewService {
             let BatchReadiness::Final { members: ready } = readiness else {
                 continue;
             };
-            let last = ready.last().and_then(|proposal| {
-                members
+            // The run is stored on the last member that merged, which is not the last ready member when that one conflicts, so the batch's own newest run decides.
+            if let Some(newest) = checks::newest_batch_run(&mut *read, batch).await?
+                && newest.reason == Some(RunReason::FoldFailed)
+                && newest.base == head
+            {
+                let current: HashSet<i64> = members
                     .iter()
-                    .find(|member| member.standing.proposal == *proposal)
-                    .and_then(|member| member.facts.as_ref())
-            });
-            if let Some(last) = last {
-                let newest = checks::runs_of_version(
-                    &mut *read,
-                    last.proposal.task,
-                    last.proposal.id,
-                    last.target.version,
-                )
-                .await?
-                .into_iter()
-                .find(|run| run.stage == Stage::Integration);
-                if newest.is_some_and(|run| {
-                    run.reason == Some(RunReason::FoldFailed) && run.base == head
-                }) {
+                    .filter(|member| ready.contains(&member.standing.proposal))
+                    .filter_map(|member| member.facts.as_ref())
+                    .map(|facts| facts.target.version_id)
+                    .collect();
+                let checked = checks::run_member_versions(&mut *read, newest.id).await?;
+                if checked.iter().all(|version| current.contains(version)) {
                     continue;
                 }
             }

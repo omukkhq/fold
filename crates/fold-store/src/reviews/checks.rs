@@ -422,6 +422,35 @@ pub async fn runs_of_version(
     rows(raw)
 }
 
+/// The newest integration run of the review batch's members together, if one started.
+pub async fn newest_batch_run(
+    executor: impl SqliteExecutor<'_>,
+    batch: ReviewBatchId,
+) -> Result<Option<CheckRunRow>, StoreError> {
+    let number = batch.to_db();
+    let raw = select_runs!("WHERE b.number = ?1 ORDER BY c.id DESC LIMIT 1", number)
+        .fetch_all(executor)
+        .await?;
+    Ok(rows(raw)?.pop())
+}
+
+/// The version row ids of the members a batch's run checked together.
+pub async fn run_member_versions(
+    executor: impl SqliteExecutor<'_>,
+    run: CheckRunId,
+) -> Result<Vec<i64>, StoreError> {
+    let number = run.to_db();
+    Ok(sqlx::query_scalar!(
+        r#"SELECT m.version_id AS "version!: i64" FROM check_run_members m
+           JOIN check_runs r ON r.id = m.run_id
+           WHERE r.number = ?
+           ORDER BY m.version_id"#,
+        number
+    )
+    .fetch_all(executor)
+    .await?)
+}
+
 /// Every run that has not ended, oldest first: after a daemon start, the runs a stop cut short.
 pub async fn running_runs(
     executor: impl SqliteExecutor<'_>,
