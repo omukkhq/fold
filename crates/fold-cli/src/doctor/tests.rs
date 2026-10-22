@@ -135,9 +135,10 @@ impl Fixture {
                 .unwrap();
             store.close().await.unwrap();
         });
-        std::fs::create_dir_all(root.join(".claude/skills/fold")).unwrap();
         for file in SKILL_FILES {
-            std::fs::write(root.join(file), "# fold\n").unwrap();
+            let path = root.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "# fold\n").unwrap();
         }
         std::fs::write(root.join(AGENTS_FILE), good_agents()).unwrap();
         root
