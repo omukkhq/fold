@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fold_core::events::types;
+use fold_core::policy::SessionPeer;
 use fold_core::{
     Actor, Address, AgentActor, AgentName, EventActor, EventType, HumanName, MessageBody,
     MessageId, NewEvent, TaskDescription, TaskId, TaskTitle, Timestamp,
@@ -76,6 +77,17 @@ impl Fixture {
         Self::with_bus(EventBus::new()).await
     }
 
+    /// A fixture whose agent service reads the project's `.fold/config.toml`, written with `config`.
+    async fn with_config(config: &str) -> Self {
+        let mut fx = Self::new().await;
+        std::fs::write(fx.project.paths().config(), config).unwrap();
+        fx.agents = fx
+            .agents
+            .clone()
+            .with_project_config(fx.project.paths().clone());
+        fx
+    }
+
     async fn with_bus(bus: EventBus) -> Self {
         let project = TestProject::new().await;
         let clock = Arc::new(project.clock().clone());
@@ -114,8 +126,15 @@ impl Fixture {
 
     /// An adapter session of agent `name` over an in-memory stream, already registered and caught up with every stored event.
     async fn connect(&self, name: &str) -> Session {
+        self.connect_with_peer(name, SessionPeer::Unsupervised)
+            .await
+    }
+
+    /// [`Fixture::connect`] for a session whose socket peer runs under `peer`.
+    async fn connect_with_peer(&self, name: &str, peer: SessionPeer) -> Session {
         let events = EventService::new(self.store().clone(), self.bus.clone());
-        let context = self.agents.start_session(7).await.unwrap();
+        let mut context = self.agents.start_session(7).await.unwrap();
+        context.peer = peer;
         let server = FoldServer::new(
             self.agents.clone(),
             events,
@@ -948,6 +967,92 @@ async fn a_timeout_above_the_limit_is_lowered_to_1500_seconds() {
     let result = time.within(waiting).await.unwrap();
     assert_eq!(body(&result), json!({"timed_out": true}));
     assert!(started.elapsed() < Duration::from_secs(1600));
+}
+
+/// Starts a wait for 99 999 s as the agent `frontend`, which fold supervises with `role`, in a session whose peer is `peer`, and returns it with the paused clock that drives it.
+#[cfg(test)]
+async fn supervised_wait(
+    fx: &Fixture,
+    role: &str,
+    peer: SessionPeer,
+) -> (ManualTime, tokio::task::JoinHandle<CallToolResult>) {
+    let session = fx.connect_with_peer("frontend", peer).await;
+    fx.sql(&format!(
+        "INSERT INTO worker_processes (agent_id, role, session_id, state, started_by, started_at) \
+         SELECT id, '{role}', 'session-1', 'working', 'main', 1 FROM agents WHERE name = 'frontend'"
+    ))
+    .await;
+    let time = ManualTime::start();
+    let client = session.client.clone();
+    let waiting = tokio::spawn(async move {
+        client
+            .call_tool(params("wait_for_events", json!({"timeout_s": 99_999})))
+            .await
+            .unwrap()
+    });
+    time.until(|| fx.bus.waiters() == 1).await;
+    (time, waiting)
+}
+
+#[cfg(test)]
+fn frontend_process() -> SessionPeer {
+    SessionPeer::Worker(AgentName::parse("frontend").unwrap())
+}
+
+/// Checks that the wait runs past 270 s and times out at 1500 s.
+#[cfg(test)]
+async fn assert_long_wait(time: ManualTime, waiting: tokio::task::JoinHandle<CallToolResult>) {
+    tokio::time::advance(Duration::from_secs(271)).await;
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!waiting.is_finished());
+    tokio::time::advance(Duration::from_secs(1230)).await;
+    let result = time.within(waiting).await.unwrap();
+    assert_eq!(body(&result), json!({"timed_out": true}));
+}
+
+/// Checks that the wait times out at 270 s.
+#[cfg(test)]
+async fn assert_short_wait(time: ManualTime, waiting: tokio::task::JoinHandle<CallToolResult>) {
+    tokio::time::advance(Duration::from_secs(271)).await;
+    let result = time.within(waiting).await.unwrap();
+    assert_eq!(body(&result), json!({"timed_out": true}));
+}
+
+#[tokio::test]
+async fn a_reviewer_with_the_five_minute_cache_waits_at_most_270_seconds() {
+    let fx = Fixture::new().await;
+    let (time, waiting) = supervised_wait(&fx, "reviewer", frontend_process()).await;
+    assert_short_wait(time, waiting).await;
+}
+
+#[tokio::test]
+async fn a_lead_with_the_one_hour_cache_keeps_its_longer_wait() {
+    let fx = Fixture::new().await;
+    let (time, waiting) = supervised_wait(&fx, "review_lead", frontend_process()).await;
+    assert_long_wait(time, waiting).await;
+}
+
+#[tokio::test]
+async fn a_session_opened_by_hand_under_a_workers_name_keeps_its_longer_wait() {
+    let fx = Fixture::new().await;
+    let (time, waiting) = supervised_wait(&fx, "reviewer", SessionPeer::Unsupervised).await;
+    assert_long_wait(time, waiting).await;
+}
+
+#[tokio::test]
+async fn a_reviewer_that_the_project_gives_the_one_hour_cache_keeps_its_longer_wait() {
+    let fx = Fixture::with_config("[roles.reviewer]\ncache_ttl = \"1h\"\n").await;
+    let (time, waiting) = supervised_wait(&fx, "reviewer", frontend_process()).await;
+    assert_long_wait(time, waiting).await;
+}
+
+#[tokio::test]
+async fn a_lead_that_the_project_gives_the_five_minute_cache_waits_at_most_270_seconds() {
+    let fx = Fixture::with_config("[roles.review_lead]\ncache_ttl = \"5m\"\n").await;
+    let (time, waiting) = supervised_wait(&fx, "review_lead", frontend_process()).await;
+    assert_short_wait(time, waiting).await;
 }
 
 #[tokio::test]
