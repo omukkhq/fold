@@ -5,6 +5,7 @@ import { cn } from "../lib/cn";
 import { NeedsYou } from "./NeedsYou";
 import { PauseControl } from "./PauseControl";
 import { Wordmark } from "@/components/Wordmark";
+import { NotificationBell } from "@/features/notifications/NotificationBell";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { SignedInName } from "./SignedInName";
 import { StreamStatus } from "./StreamStatus";
@@ -29,6 +30,7 @@ export function TopBar({ slug }: { slug: string }) {
         <PauseControl slug={slug} />
         <NeedsYou slug={slug} />
         <AgentChips slug={slug} />
+        <NotificationBell slug={slug} />
         <SignedInName />
         <ThemeToggle />
       </div>

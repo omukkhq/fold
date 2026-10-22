@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorReply, stubFetch } from "@/test/stubFetch";
 import { EVENT_LIMIT } from "../live/eventList";
 import { ApiError, isApiError } from "./errors";
-import { eventTransport, listEvents, openEventStream } from "./events";
+import {
+  eventTransport,
+  listEventPage,
+  listEvents,
+  openEventStream,
+} from "./events";
 
 describe("eventTransport", () => {
   it("opens the daemon's event stream of the project", async () => {
@@ -177,5 +182,30 @@ describe("listEvents", () => {
     await expect(listEvents("demo")).rejects.toSatisfy((e: unknown) =>
       isApiError(e, "project_not_found"),
     );
+  });
+});
+
+describe("listEventPage", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reads the newest page, then the page before a seq", async () => {
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo/events/history": {
+        body: { events: [], before: null },
+      },
+    });
+    expect(await listEventPage("demo", null, 500)).toEqual({
+      events: [],
+      before: null,
+    });
+    await listEventPage("demo", 40, 500);
+    expect(
+      calls.map((c) => [c.search.get("before"), c.search.get("limit")]),
+    ).toEqual([
+      [null, "500"],
+      ["40", "500"],
+    ]);
   });
 });

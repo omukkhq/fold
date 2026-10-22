@@ -168,6 +168,8 @@
   --width-project-agents: var(--width-project-agents);
   --width-project-state: var(--width-project-state);
   --width-needs-you: var(--width-needs-you);
+  --width-notifications: var(--width-notifications);
+  --width-toast: var(--width-toast);
   --width-transcript: var(--width-transcript);
   --width-column: var(--width-column);
   --width-fact-label: var(--width-fact-label);
