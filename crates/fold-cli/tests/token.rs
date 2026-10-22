@@ -225,10 +225,13 @@ async fn fld_web_prints_a_link_that_signs_in_once() {
         .now()
         .checked_add(SIGN_IN_LINK_LIFETIME)
         .unwrap();
+    let at = expires.to_string();
     assert_eq!(
         lines.collect::<Vec<_>>(),
         [format!(
-            "open the link in a browser on this machine before {expires}; it signs you in once"
+            "open the link in a browser on this machine within 5 minutes, before {} {} UTC; it signs you in once",
+            &at[..10],
+            &at[11..19]
         )]
     );
     let link = url

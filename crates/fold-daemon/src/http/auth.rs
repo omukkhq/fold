@@ -305,6 +305,8 @@ pub struct CreatedLink {
     /// UTC milliseconds after which the link no longer signs in.
     #[schema(value_type = i64)]
     pub expires_at: Timestamp,
+    /// Seconds from now until `expires_at`, by the daemon's clock, so a client tells the person how long the link lasts without comparing clocks.
+    pub expires_in_secs: u64,
 }
 
 /// Creates a one-time sign-in link for `fld web`, for the human that `x-fold-human` names. Only over the socket, where the `Human` extractor refuses a process in the tree of a worker that fold started or of a check command that fold runs. The link opens one session, within a few minutes.
@@ -331,6 +333,7 @@ pub async fn create_link(
         Json(CreatedLink {
             url: format!("{}{SIGN_IN_ROUTE}{}", web_origin(state.listen), link.secret),
             expires_at: link.expires_at,
+            expires_in_secs: projects::SIGN_IN_LINK_LIFETIME.as_secs(),
         }),
     ))
 }

@@ -2264,6 +2264,11 @@ export interface components {
              * @description UTC milliseconds after which the link no longer signs in.
              */
             expires_at: number;
+            /**
+             * Format: int64
+             * @description Seconds from now until `expires_at`, by the daemon's clock, so a client tells the person how long the link lasts without comparing clocks.
+             */
+            expires_in_secs: number;
             /** @description The link to open in a browser on this machine. Its secret is in the fragment. */
             url: string;
         };

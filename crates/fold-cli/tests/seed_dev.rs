@@ -158,13 +158,16 @@ async fn the_seed_fills_every_column_and_every_state_of_the_review_screens() {
     assert!(stdout.contains("seeded project demo"), "{stdout}");
     assert!(stdout.contains("board: http://127.0.0.1:7420/p/demo/board"));
     let port = host.daemon.http_addr().port();
+    let at = ManualClock::new()
+        .now()
+        .checked_add(fold_daemon::services::projects::SIGN_IN_LINK_LIFETIME)
+        .unwrap()
+        .to_string();
     assert!(
         stdout.contains(&format!(
-            "sign in as dev once, before {}: http://127.0.0.1:{port}/sign-in#link=",
-            ManualClock::new()
-                .now()
-                .checked_add(fold_daemon::services::projects::SIGN_IN_LINK_LIFETIME)
-                .unwrap()
+            "sign in as dev once, within 5 minutes, before {} {} UTC: http://127.0.0.1:{port}/sign-in#link=",
+            &at[..10],
+            &at[11..19]
         )),
         "{stdout}"
     );

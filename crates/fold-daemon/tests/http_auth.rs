@@ -703,6 +703,10 @@ async fn link_secret(fixture: &Fixture, human: &str) -> String {
                 .as_millis()
         )
     );
+    assert_eq!(
+        answer.body["expires_in_secs"],
+        json!(SIGN_IN_LINK_LIFETIME.as_secs())
+    );
     secret.to_owned()
 }
 
