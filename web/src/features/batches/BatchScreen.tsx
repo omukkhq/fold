@@ -269,9 +269,9 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
   const checkout = checkoutView(batch);
 
   return (
-    <div className="flex flex-col gap-16 px-24 pt-20 pb-24">
-      <div className="flex items-start justify-between gap-16">
-        <div className="flex flex-col gap-4">
+    <div className="flex min-w-0 flex-col gap-16 px-16 pt-20 pb-24 md:px-24">
+      <div className="flex flex-wrap items-start justify-between gap-16">
+        <div className="flex min-w-0 flex-col gap-4">
           <nav aria-label="Breadcrumb" className="flex items-center gap-8">
             <HrefLink
               href={projectPath(slug, "proposals")}
@@ -349,7 +349,7 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
           />
         </RadixTabs.Content>
         <RadixTabs.Content value="members" className={insetFocusRing}>
-          <div className="flex items-start gap-16">
+          <div className="flex min-w-0 flex-col gap-16 lg:flex-row lg:items-start">
             <div className="flex min-w-0 flex-1 flex-col gap-16">
               {conflicts.map((proposal) => (
                 <div
@@ -453,7 +453,9 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
                             {row.proposal}
                           </HrefLink>
                         </td>
-                        <td className={cn(CELL, "w-full")}>
+                        <td
+                          className={cn(CELL, "w-full min-w-(--width-column)")}
+                        >
                           <span className="text-body font-medium text-text">
                             {row.title ?? row.proposal}
                           </span>
@@ -485,7 +487,7 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
                 human={(session.data?.human ?? null) !== null}
               />
             </div>
-            <div className="flex w-review-panel shrink-0 flex-col gap-16">
+            <div className="flex min-w-0 flex-col gap-16 lg:w-review-panel lg:shrink-0">
               <section aria-label="Batch checkout" className={CARD}>
                 <h2 className="flex items-center gap-8">
                   <GitMerge
@@ -561,7 +563,7 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
 
 export function BatchPending() {
   return (
-    <div className="flex flex-col gap-16 px-24 pt-20 pb-24">
+    <div className="flex min-w-0 flex-col gap-16 px-16 pt-20 pb-24 md:px-24">
       <Skeleton />
       <Skeleton />
     </div>
