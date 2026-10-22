@@ -146,6 +146,11 @@ pub fn worker_fingerprints() -> BTreeMap<Role, String> {
         .collect()
 }
 
+/// The fingerprint of the role text this fld gives the main agent's own session that `fld claude` starts, whose prompt is the interactive main agent's.
+pub fn main_fingerprint() -> String {
+    session_fingerprint(VERSION, fold_core::main_prompt(), role_skill(Role::Main))
+}
+
 /// The version of the fld that holds these skills.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -820,6 +825,12 @@ mod tests {
             );
         }
         assert_eq!(role_skill(Role::Main), MAIN_SKILL);
+        assert_ne!(
+            main_fingerprint(),
+            fingerprints[&Role::Main],
+            "the supervised main's prompt is not the interactive one's"
+        );
+        assert_eq!(main_fingerprint(), main_fingerprint());
     }
 
     #[test]

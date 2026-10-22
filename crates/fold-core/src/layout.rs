@@ -109,6 +109,13 @@ impl ProjectPaths {
         self.fold_dir().join("sessions").join(agent.as_str())
     }
 
+    /// The session that `fld claude` last started or resumed as `agent`, with the fingerprint of the role text that session read (see [`crate::roles::session_fingerprint`]), so a resume by another fld tells the session to load its skill again. Its `.` keeps it apart from the session records, as no agent name holds one.
+    pub fn main_session_fingerprint(&self, agent: &AgentName) -> PathBuf {
+        self.fold_dir()
+            .join("sessions")
+            .join(format!("{}.fingerprint", agent.as_str()))
+    }
+
     /// The MCP servers of the project that Claude Code reads.
     pub fn mcp_json(&self) -> PathBuf {
         self.root.join(".mcp.json")
@@ -298,6 +305,10 @@ mod tests {
         assert_eq!(
             paths.main_session(&AgentName::parse("main").unwrap()),
             Path::new("/srv/demo/.fold/sessions/main")
+        );
+        assert_eq!(
+            paths.main_session_fingerprint(&AgentName::parse("main").unwrap()),
+            Path::new("/srv/demo/.fold/sessions/main.fingerprint")
         );
         let workspace = WorkspaceId::from_number(9).unwrap();
         assert_eq!(
