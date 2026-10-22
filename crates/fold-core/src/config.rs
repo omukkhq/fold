@@ -28,6 +28,7 @@ pub struct ProjectConfig {
     pub remotes: BTreeMap<String, RemoteConfig>,
     pub integration: IntegrationConfig,
     pub workers: WorkersConfig,
+    pub main: MainConfig,
     /// The settings of each worker role by role name, as `[roles.<role>]` sections; a role without one takes its defaults.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub roles: BTreeMap<String, RoleConfig>,
@@ -140,6 +141,7 @@ pub const GIT_SECTION: &str = "git";
 pub const REMOTES_SECTION: &str = "remotes";
 pub const INTEGRATION_SECTION: &str = "integration";
 pub const WORKERS_SECTION: &str = "workers";
+pub const MAIN_SECTION: &str = "main";
 pub const ROLES_SECTION: &str = "roles";
 
 /// The `[integration]` section.
@@ -148,6 +150,14 @@ pub const ROLES_SECTION: &str = "roles";
 pub struct IntegrationConfig {
     /// fold integrates each proposal that becomes ready by itself. With `false`, a proposal integrates only when an agent that decides reviews or a human calls for it.
     pub automatic: bool,
+}
+
+/// The `[main]` section: who runs the main agent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MainConfig {
+    /// fold runs the main agent as a supervised worker of role `main`, so the project works on a server where nobody runs `fld claude`; the humans talk to it in the web app. With `false`, the main agent is the user's own `fld claude` session.
+    pub supervised: bool,
 }
 
 impl Default for IntegrationConfig {
@@ -171,6 +181,7 @@ impl Default for ProjectConfig {
             remotes: BTreeMap::new(),
             integration: IntegrationConfig::default(),
             workers: WorkersConfig::default(),
+            main: MainConfig::default(),
             roles: BTreeMap::new(),
         }
     }
@@ -218,6 +229,10 @@ impl ProjectConfig {
             }
             if key == ROLES_SECTION {
                 check_roles_section(value)?;
+                continue;
+            }
+            if key == MAIN_SECTION {
+                check_main_section(value)?;
                 continue;
             }
             if !known.contains(key) {
@@ -369,6 +384,21 @@ fn check_integration_section(value: &toml::Value) -> Result<(), FoldError> {
     Ok(())
 }
 
+fn check_main_section(value: &toml::Value) -> Result<(), FoldError> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| refused(MAIN_SECTION, "must be a table"))?;
+    for (key, value) in table {
+        let name = format!("{MAIN_SECTION}.{key}");
+        match key.as_str() {
+            "supervised" if value.is_bool() => {}
+            "supervised" => return Err(refused(&name, "must be true or false")),
+            _ => return Err(refused(&name, "is not a config key")),
+        }
+    }
+    Ok(())
+}
+
 fn check_workers_section(value: &toml::Value) -> Result<(), FoldError> {
     let table = value
         .as_table()
@@ -397,7 +427,7 @@ fn check_roles_section(value: &toml::Value) -> Result<(), FoldError> {
         let role = Role::parse(role_name).ok_or_else(|| {
             refused(
                 &section,
-                "is not a role: use area_lead, review_lead, task_worker or reviewer",
+                "is not a role: use area_lead, review_lead, task_worker, reviewer or main",
             )
         })?;
         let fields = value
@@ -431,7 +461,10 @@ fn check_roles_section(value: &toml::Value) -> Result<(), FoldError> {
                     }
                 }
                 "handoff_at" if !role.is_long_lived() => {
-                    return Err(refused(&name, "applies only to area_lead and review_lead"));
+                    return Err(refused(
+                        &name,
+                        "applies only to area_lead, review_lead and main",
+                    ));
                 }
                 "handoff_at" => match value.as_integer() {
                     Some(percent) if (1..=99).contains(&percent) => {}
@@ -578,7 +611,7 @@ mod tests {
         // No remote exists by default, so the template names the section in a comment only.
         assert!(CONFIG_TEMPLATE.contains("`[remotes.<name>]`"));
         assert_eq!(named, fields);
-        assert_eq!(fields.len(), 12);
+        assert_eq!(fields.len(), 13);
         assert_eq!(known_keys().len(), 8);
         // Only comments: the file as written changes nothing.
         let as_written = ProjectConfig::from_toml(CONFIG_TEMPLATE).unwrap();
@@ -707,7 +740,7 @@ mod tests {
             ("[workers]\nmax_per_area = \"2\"", "workers.max_per_area"),
             ("[workers]\nmin = 1", "workers.min"),
             ("roles = 3", "roles"),
-            ("[roles]\nmain = {}", "roles.main"),
+            ("[roles]\nboss = {}", "roles.boss"),
             ("[roles]\ntask_worker = 3", "roles.task_worker"),
             (
                 "[roles.task_worker]\nmodel = \"-x\"",
@@ -882,6 +915,42 @@ mod tests {
         let secret = "https://user:token@example.com/app.git\n";
         let error = check_remote(secret).unwrap_err();
         assert!(!error.message().contains("token"));
+    }
+
+    #[test]
+    fn the_main_section_lets_fold_run_the_main_agent() {
+        assert!(!ProjectConfig::default().main.supervised);
+        let on = ProjectConfig::from_toml("[main]\nsupervised = true\n").unwrap();
+        assert!(on.main.supervised);
+        assert!(
+            !ProjectConfig::from_toml("[main]\n")
+                .unwrap()
+                .main
+                .supervised
+        );
+        let settings = on.role(Role::Main);
+        assert_eq!(settings.cache_ttl, CacheTtl::OneHour);
+        assert_eq!(settings.idle_minutes, None);
+        assert_eq!(settings.handoff_at, Some(HandoffAt::Default));
+        let model = ProjectConfig::from_toml("[roles.main]\nmodel = \"opus\"\nhandoff_at = 50\n")
+            .unwrap()
+            .role(Role::Main);
+        assert_eq!(model.model.as_deref(), Some("opus"));
+        assert_eq!(model.handoff_at, Some(HandoffAt::Percent(50)));
+        for (text, key) in [
+            ("main = true", "main"),
+            ("[main]\nsupervised = 1", "main.supervised"),
+            ("[main]\nname = \"main\"", "main.name"),
+            ("[roles.main]\nidle_minutes = 5", "roles.main.idle_minutes"),
+        ] {
+            let error = ProjectConfig::from_toml(text).unwrap_err();
+            assert_eq!(error.code(), "invalid_config", "{text}");
+            assert_eq!(
+                error.details().cloned().map(serde_json::Value::Object),
+                Some(serde_json::json!({"key": key})),
+                "{text}"
+            );
+        }
     }
 
     #[test]

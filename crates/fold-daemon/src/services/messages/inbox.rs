@@ -24,7 +24,7 @@ pub struct InboxItem {
     pub thread: MessageId,
     pub reply_to: Option<MessageId>,
     pub sender: Sender,
-    /// The worker whose row this is. With `include_workers` one message can appear once per worker.
+    /// The worker whose row this is.
     pub to: WorkerName,
     pub addressed_as: AddressedAs,
     pub task: Option<TaskId>,

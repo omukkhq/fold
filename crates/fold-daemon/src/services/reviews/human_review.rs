@@ -29,7 +29,7 @@ pub struct AwaitingHumanReview {
 }
 
 impl ReviewService {
-    /// Turns on the human review mark of an open task, or changes it when a human asks. A reviewer must be a human of the host registry. An agent repeating the mark changes nothing and appends no event. The mark never changes the task's status.
+    /// Turns on the human review mark of an open task, or changes it when a human asks. A reviewer must be a human of the host registry. An agent repeating the mark changes nothing and appends no event. The mark never changes the task's status; it takes the task out of a review plan, since a marked proposal is reviewed alone.
     pub async fn require_human_review(
         &self,
         actor: &Actor,
@@ -72,6 +72,7 @@ impl ReviewService {
                         "set_by": mark.set_by.as_str(),
                     }))?;
                 buffer.append(tx, &event, now).await?;
+                super::settle_plans(tx, &mut buffer, now).await?;
                 Ok::<_, ReviewError>(mark)
             })
             .await?;

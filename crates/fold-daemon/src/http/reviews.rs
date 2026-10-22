@@ -723,6 +723,33 @@ impl From<ConflictReport> for ConflictReportView {
     }
 }
 
+/// The review plan an open proposal without a review waits in: the review lead gives it to one reviewer together with the plan's other proposals once the awaited tasks open theirs or the wait ends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ReviewPlanWait {
+    #[schema(example = "rp-2")]
+    pub plan: String,
+    /// When the wait ends at the latest, in UTC milliseconds.
+    pub deadline_at: i64,
+    /// The wait ended, so the plan waits only for the review lead to start its reviewer.
+    pub wait_ended: bool,
+    /// The tasks whose proposals the plan still waits for, by task number.
+    pub awaited: Vec<String>,
+    /// The plan's open proposals, this one included.
+    pub proposals: Vec<String>,
+}
+
+impl From<crate::services::reviews::ProposalPlan> for ReviewPlanWait {
+    fn from(plan: crate::services::reviews::ProposalPlan) -> Self {
+        Self {
+            plan: plan.plan.to_string(),
+            deadline_at: plan.deadline_at.as_millis(),
+            wait_ended: plan.wait_ended,
+            awaited: plan.awaited.iter().map(ToString::to_string).collect(),
+            proposals: plan.proposals.iter().map(ToString::to_string).collect(),
+        }
+    }
+}
+
 /// A proposal as the requesting human sees it.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ProposalDetail {
@@ -758,6 +785,9 @@ pub struct ProposalDetail {
     pub totals: ComparisonTotals,
     /// The check runs of the selected version, newest first, without their logs: the proposal-stage runs of exactly its files, then its integration runs.
     pub checks: Vec<checks::CheckRun>,
+    /// The review plan the open proposal waits in; null when it waits in none.
+    #[schema(required = true)]
+    pub review_plan: Option<ReviewPlanWait>,
 }
 
 impl From<service::ProposalView> for ProposalDetail {
@@ -812,6 +842,7 @@ impl From<service::ProposalView> for ProposalDetail {
                 .into_iter()
                 .map(checks::CheckRun::from)
                 .collect(),
+            review_plan: view.review_plan.map(ReviewPlanWait::from),
         }
     }
 }

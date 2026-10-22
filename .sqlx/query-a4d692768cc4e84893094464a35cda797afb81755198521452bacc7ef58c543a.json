@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT i.outcome, c.number AS \"run?: i64\", i.created_at\n           FROM review_batch_integrations i\n           JOIN review_batches b ON b.id = i.batch_id\n           LEFT JOIN check_runs c ON c.id = i.check_run_id\n           WHERE b.number = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "outcome",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_batch_integrations",
+            "name": "outcome"
+          }
+        }
+      },
+      {
+        "name": "run?: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "check_runs",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batch_integrations",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "a4d692768cc4e84893094464a35cda797afb81755198521452bacc7ef58c543a"
+}

@@ -22,6 +22,7 @@ mod fresh;
 mod gate;
 mod launch;
 mod lines;
+mod main;
 mod message;
 mod questions;
 mod refresh;
@@ -187,6 +188,12 @@ struct Inner {
     answering: Mutex<HashSet<AgentName>>,
     /// The workers whose start for a message is under way, so two events start one.
     message_starts: Mutex<HashSet<AgentName>>,
+    /// Who runs the main agent now: the interactive main sessions and a start of the supervised main.
+    main_gate: Mutex<main::MainGate>,
+    /// While a start of the supervised main is under way, the turns that came meanwhile, for its process.
+    main_waking: Mutex<Option<Vec<String>>>,
+    /// Wakes the project's removal of closed workspace directories, which follows only stored events: the supervised main's turn ends with none, and its closed workspaces become due once it is idle.
+    cleanup_due: Mutex<Option<Arc<tokio::sync::Notify>>>,
 }
 
 impl Drop for Inner {
@@ -248,6 +255,9 @@ impl Supervisor {
                 unreachable_owed: AtomicBool::new(false),
                 answering: Mutex::new(HashSet::new()),
                 message_starts: Mutex::new(HashSet::new()),
+                main_gate: Mutex::new(main::MainGate::default()),
+                main_waking: Mutex::new(None),
+                cleanup_due: Mutex::new(None),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();
@@ -258,6 +268,11 @@ impl Supervisor {
 
     pub fn set_launcher(&self, launcher: Launcher) {
         *lock(&self.inner.launcher) = launcher;
+    }
+
+    /// The notifier of the project's removal of closed workspace directories, which the end of each turn of the supervised main wakes.
+    pub fn set_cleanup_due(&self, due: Arc<tokio::sync::Notify>) {
+        *lock(&self.inner.cleanup_due) = Some(due);
     }
 
     /// Where the workers' Claude Code keeps the transcript of each session of `ids`, in the order of `ids`: the folder of the launcher's environment, a relative one in the project folder, where every worker runs, which is followed to its real path as Claude Code names it. Each is `None` when fold cannot tell; see [`transcript_path`].

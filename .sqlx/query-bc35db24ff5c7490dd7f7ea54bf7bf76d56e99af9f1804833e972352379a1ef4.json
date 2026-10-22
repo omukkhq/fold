@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO check_run_members (run_id, version_id)\n             SELECT r.id, ?2 FROM check_runs r WHERE r.number = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "bc35db24ff5c7490dd7f7ea54bf7bf76d56e99af9f1804833e972352379a1ef4"
+}

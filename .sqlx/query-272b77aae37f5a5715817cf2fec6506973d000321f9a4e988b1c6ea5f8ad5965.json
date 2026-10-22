@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO review_batch_waits (batch_id, version_id, created_at)\n         SELECT b.id, ?2, ?3 FROM review_batches b WHERE b.number = ?1\n         ON CONFLICT (batch_id, version_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "272b77aae37f5a5715817cf2fec6506973d000321f9a4e988b1c6ea5f8ad5965"
+}

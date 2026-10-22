@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO review_batch_integrations (batch_id, outcome, check_run_id, created_at)\n         SELECT b.id, ?2, (SELECT id FROM check_runs WHERE number = ?3), ?4\n         FROM review_batches b WHERE b.number = ?1\n         ON CONFLICT (batch_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "62effd134933c4a0b4758c78c07afba8d566b5fe50d17aed33ed87521914b416"
+}

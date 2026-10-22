@@ -93,22 +93,26 @@ task_worker = 4                      # task workers running at once
 reviewer = 3                         # reviewers running at once
 max_per_area = 2                     # optional: task workers of one area at once
 
-[roles.task_worker]                  # also area_lead, review_lead and reviewer
+[main]
+supervised = false                   # true: fold runs the main agent as a supervised worker of role main, for a server where nobody runs `fld claude`
+
+[roles.task_worker]                  # also area_lead, review_lead, reviewer and main
 model = "sonnet"                     # passed to Claude Code as --model
 cache_ttl = "5m"                     # "1h" or "5m": "1h" for leads and "5m" for reviewers and task workers by default
 idle_minutes = 15                    # task_worker and reviewer only: an idle worker stops after this long
 mcp = ["fold", "pencil"]             # the servers the role may load: fold and servers of the project's .mcp.json
 
 [roles.review_lead]
-handoff_at = 50                      # area_lead and review_lead only: the percent of the context window past which fold refreshes the lead through a hand-off note; without it, 85% of the window below 220k tokens and 60% from 220k
+handoff_at = 50                      # area_lead, review_lead and main only: the percent of the context window past which fold refreshes the lead through a hand-off note; without it, 85% of the window below 220k tokens and 60% from 220k
 ```
 
 - The top-level numbers must be whole numbers above 0. A worker limit has no upper bound, and 0 lets no worker of its role start; the leads are outside the limits, and a lower limit never stops a running worker.
 - `automatic = true` integrates a proposal once a reviewer, the main agent or a human approved it, nothing asks for changes, a human approved it when the task is marked, and every prerequisite task is Done.
 - A role without `mcp` loads every server the user's own Claude Code loads. With `mcp`, the worker gets the fold server and each named server of the project's `.mcp.json`; servers of the user's own configuration are never copied.
 - An older file with `remote` and `push_on_integrate` in `[git]` is read as `[remotes.origin]` on the `[git]` branch.
+- `supervised = true` under `[main]` makes fold run the main agent itself: it starts it at the daemon's start, keeps its session, and resumes it for a message to it, a request, a ready task of `main` or a review it must act on, never while the project is paused. The humans talk to it in the web app, and `fld claude` refuses with `main_supervised`. While a `fld claude` session is the main agent, fold starts no supervised one (`main_interactive`), and once that session ends fold starts it. A human's Stop on the Agents screen holds the supervised main: fold starts it for no work until a human starts it in a new session.
 
-Role prompts. `.fold/roles/<role>.md` (`area_lead`, `review_lead`, `task_worker` or `reviewer`) replaces the prompt that ships with fold for that role, and `.fold/roles/main.md` replaces the main agent's; fold adds its shared authority and recovery rules after either. A worker gets a changed prompt at its next start.
+Role prompts. `.fold/roles/<role>.md` (`area_lead`, `review_lead`, `task_worker` or `reviewer`) replaces the prompt that ships with fold for that role, and `.fold/roles/main.md` replaces the main agent's; fold adds its shared authority and recovery rules after either. For the supervised main, fold first adds its rules of a main agent without a terminal after `.fold/roles/main.md`. A worker gets a changed prompt at its next start.
 
 ## Areas
 
@@ -145,7 +149,7 @@ Start and set up:
 - `fld` with no command: print fold's status: the fld version, whether the daemon runs, its web address and socket, whether a service runs it, and the project of the current folder. It never starts the daemon, and it names `fld restart` when the daemon runs another version.
 - `fld init [DIR] [--name NAME] [--with-git] [--git-name NAME --git-email EMAIL]`: make the folder a fold project and register it. Without `DIR` the current folder; a new `DIR` is created. `--with-git` turns Git sync on: in a Git repository its `HEAD` commit becomes the genesis, else fold creates `.git`, and every revision becomes a commit on the `[git]` branch. `fld init --refresh [DIR]` rewrites fold's Claude Code files (`AGENTS.md` or `CLAUDE.md` section, the skill and this file) in an existing project.
 - `fld setup [--no-start] [--claude] [--remove]`: install the service that starts the daemon at login (a systemd user unit on Linux, a launchd agent on macOS) and start it, then offer to add fold to the user's Claude Code config. `--claude` only adds fold to Claude Code; `--remove` takes fold's entries out of it.
-- `fld claude [--name NAME] [-- ARGS]`: start the daemon when needed and continue the main agent's last session, or start one. `fld new` (also `fld new claude`) starts a new main session.
+- `fld claude [--name NAME] [-- ARGS]`: start the daemon when needed and continue the main agent's last session, or start one. `fld new` (also `fld new claude`) starts a new main session. A project with `supervised = true` under `[main]` refuses it with `main_supervised`.
 - `fld serve [--listen ADDR] [--socket PATH] [--web-dir DIR]`: run the daemon in the foreground; the service runs it the same way.
 - `fld mcp`: the stdio connection of a Claude Code session to the daemon, which Claude Code starts itself.
 - `fld restart`: restart the daemon, so a newly installed fld takes over; supervised workers stop and continue in their sessions.
@@ -183,7 +187,7 @@ The daemon serves the web app at `http://127.0.0.1:7420` by default. On loopback
 - Board: the five columns of the tasks, with search and the Attention and Blocked only filters. The board is read only; cards move when fold's state changes. A card with a question for you has Mark answered, for an answer you gave elsewhere. New task opens a form (title, description, area and labels, who does the work), which suggests a request first.
 - Task (a card): edit the title, description, area and labels; edit the checklist; add and remove dependencies; set, change and clear a blocker; require or turn off human review; Mark Done on a human task; Complete task or Send back on a reported `no_proposal` task; send feedback to the task's agents; archive the task. It also shows the workspace, checkpoints, changesets, the proposal and the working changes.
 - Activity: live workspaces, review checkouts and the event stream.
-- Proposals: the list, with the proposals that wait for your review marked Waits for you, counted on the tab and shown alone by a filter, and each proposal's diff (full or since the last review), its check runs and conflicts. A person comments on lines, approves the version, requests changes, integrates, edits a file into a new version and sends that version for review again. A batch page shows a review batch's members and stops its reviewer.
+- Proposals: the list, with the proposals that wait for your review marked Waits for you, counted on the tab and shown alone by a filter, and each proposal's diff (full or since the last review), its check runs and conflicts. A person comments on lines, approves the version, requests changes, integrates, edits a file into a new version and sends that version for review again. A batch page shows a review batch's members and stops its reviewer. A proposal that waits in a review plan for related tasks shows the awaited tasks and the time the wait ends, on its page and its board card.
 - Requests: create a request with attachments; on a request, approve a draft, request changes, edit the draft into a new version, close it and answer its clarification thread.
 - Agents: the main agent, the leads and their workers with state, model, turns, cost and context. Start an area lead or the review lead, stop a worker, start a worker in a new session, and allow or deny a worker's tool permission.
 - Messages: the threads that concern you, filtered by agent, task or proposal, or to those marked Waits for you, which the tab's count counts; reply, answer a question with its choices or free text, mark a thread's questions answered, and send feedback. Agents' messages to each other are on each task and in Activity. The leads, the reviewers and the task workers ask the humans directly with `asks_human`, so their questions wait in Needs you under Questions, and a reply goes back to the asker in the same thread, never through the main agent.
@@ -204,5 +208,5 @@ Every fold tool by purpose; the skill holds their arguments and workflows.
 - Repository and workspaces: `get_repository_state`, `get_revision`, `compare_revisions`, `create_workspace`, `get_workspace`, `get_workspace_changes`, `record_checkpoint`, `list_checkpoints`, `restore_checkpoint`, `record_changes`, `sync_workspace`, `abandon_workspace`, `open_main_workspace`, `submit_main_change`, `add_exclude_patterns`.
 - Checks: `run_checks`, `get_check_run`.
 - Proposals: `create_proposal`, `list_proposals`, `get_proposal`, `get_proposal_diff`, `update_proposal`, `close_proposal`, `integrate_proposal`.
-- Reviews: `claim_review`, `release_review`, `create_review_checkout`, `submit_review`, `submit_review_fix`, `get_review_comments`, `set_review_scope`, `create_review_batch`, `list_review_batches`, `get_review_batch`, `remove_from_batch`, `create_batch_checkout`, `submit_batch_review`.
+- Reviews: `claim_review`, `release_review`, `create_review_checkout`, `submit_review`, `submit_review_fix`, `get_review_comments`, `set_review_scope`, `create_review_batch`, `list_review_batches`, `get_review_batch`, `remove_from_batch`, `create_batch_checkout`, `submit_batch_review`, `integrate_review_batch`, `create_review_plan`, `change_review_plan`, `get_review_plan`, `list_review_plans`.
 - Requests: `create_request`, `list_requests`, `get_request`, `claim_request`, `release_request`, `submit_request_draft`, `request_draft_changes`, `edit_request_draft`, `approve_request_draft`, `close_request`.

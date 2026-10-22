@@ -7,6 +7,7 @@ pub mod revisions_support;
 pub mod seed;
 
 mod agents_schema;
+mod batch_integration_schema;
 mod changesets;
 mod check_runs_schema;
 mod checklists;
@@ -30,6 +31,7 @@ mod registry;
 mod removal;
 mod requests_schema;
 mod review_batches_schema;
+mod review_plans_schema;
 mod reviews_schema;
 mod revision_reads;
 mod revisions;

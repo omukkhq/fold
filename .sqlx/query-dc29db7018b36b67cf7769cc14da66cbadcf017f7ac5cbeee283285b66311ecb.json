@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO review_plans (number, lead_agent_id, created_at, deadline_at)\n         SELECT ?1, a.id, ?3, ?4 FROM agents a WHERE a.name = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "dc29db7018b36b67cf7769cc14da66cbadcf017f7ac5cbeee283285b66311ecb"
+}

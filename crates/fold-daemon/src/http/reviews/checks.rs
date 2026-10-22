@@ -182,6 +182,9 @@ pub struct CheckRun {
     pub created_at: i64,
     #[schema(required = true)]
     pub finished_at: Option<i64>,
+    /// The review batch whose members an integration run checked together; the run shows on each member's page.
+    #[schema(required = true, example = "rb-2")]
+    pub batch: Option<String>,
     /// In run order: the setup first, then each check of the stage.
     pub results: Vec<CheckResult>,
 }
@@ -200,6 +203,7 @@ impl From<CheckRunView> for CheckRun {
             reason: run.reason.map(CheckRunReason::from),
             created_at: run.created_at.as_millis(),
             finished_at: run.finished_at.map(|at| at.as_millis()),
+            batch: run.batch.map(|batch| batch.to_string()),
             results: view
                 .results
                 .into_iter()

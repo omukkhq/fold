@@ -69,6 +69,7 @@ export function workerList(fields: Partial<WorkerList> = {}): WorkerList {
     roles: [],
     limits: null,
     pause: { paused_since: null, paused_by: null },
+    main_supervised: false,
     ...fields,
   };
 }
@@ -141,6 +142,15 @@ export function batch(fields: Partial<ReviewBatch> = {}): ReviewBatch {
     comments: [],
     members: [],
     verdicts: [],
+    integration: {
+      state: "not_submitted",
+      pending: [],
+      members: [],
+      queued: false,
+      outcome: null,
+      run: null,
+      revisions: [],
+    },
     ...fields,
   };
 }

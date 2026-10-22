@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM reviews r\n               JOIN proposal_versions v ON v.id = r.version_id\n               JOIN proposals p ON p.id = v.proposal_id\n               WHERE p.number = ?1 AND v.version >= ?2 AND r.verdict = 'request_changes'\n           ) AS \"found!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "found!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a1d06ee183a88c87bc0ed9cb9514f15a9bf3671da37becc0cdfe0ace20c5d9fe"
+}

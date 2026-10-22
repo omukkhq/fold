@@ -54,7 +54,10 @@ const reviewer = workerProcess("review-b3", {
 
 async function setup(
   shown: ReviewBatch,
-  extra: Record<string, StubReply | (() => StubReply)> = {},
+  extra: Record<
+    string,
+    StubReply | (() => StubReply | Promise<StubReply>)
+  > = {},
   session: Session = { human: "tanim", authenticated: true },
 ) {
   const calls = stubFetch({
@@ -229,6 +232,103 @@ describe("BatchScreen", () => {
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: /reviewer/ })).toBeNull();
     });
+  });
+
+  it("integrates a ready batch on request and keeps the action pending until the daemon answers", async () => {
+    const ready = batch({
+      ...rb3,
+      state: "submitted",
+      integration: {
+        ...rb3.integration,
+        state: "ready",
+        members: ["P-3", "P-4"],
+      },
+    });
+    const ended = batch({
+      ...ready,
+      integration: {
+        ...ready.integration,
+        state: "ended",
+        outcome: "together",
+        members: [],
+        revisions: [
+          { proposal: "P-3", version: 2, revision: "r18" },
+          { proposal: "P-4", version: 1, revision: "r19" },
+        ],
+      },
+    });
+    let release: () => void = () => undefined;
+    const answered = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let integrated = false;
+    const calls = await setup(ready, {
+      [`POST ${BASE}/reviews/batches/rb-3/integrate`]: async () => {
+        await answered;
+        integrated = true;
+        return {
+          body: { batch: "rb-3", result: "together", run: null, members: [] },
+        };
+      },
+      [`GET ${BASE}/reviews/batches/rb-3`]: () => ({
+        body: integrated ? ended : ready,
+      }),
+    });
+    const region = screen.getByRole("region", { name: "Integration" });
+    expect(
+      within(region).getByText(
+        "Ready: P-3, P-4 integrate together, with one run of the integration checks.",
+      ),
+    ).toBeTruthy();
+    await userEvent.click(
+      within(region).getByRole("button", { name: "Integrate the batch" }),
+    );
+    const pending = await within(region).findByRole("button", {
+      name: "Integrating…",
+    });
+    expect(pending.getAttribute("aria-busy")).toBe("true");
+    expect(within(region).queryByText(/Integrated together/)).toBeNull();
+    release();
+    expect(
+      await within(region).findByText(
+        "Integrated together: P-3 as r18, P-4 as r19.",
+      ),
+    ).toBeTruthy();
+    expect(within(region).queryByRole("button")).toBeNull();
+    expect(
+      calls.filter((call) => call.method === "POST").map((call) => call.path),
+    ).toEqual([`${BASE}/reviews/batches/rb-3/integrate`]);
+  });
+
+  it("shows a refused integrate by its reason and offers it only to a named human", async () => {
+    const ready = batch({
+      ...rb3,
+      state: "submitted",
+      integration: { ...rb3.integration, state: "ready", members: ["P-3"] },
+    });
+    await setup(ready, {
+      [`POST ${BASE}/reviews/batches/rb-3/integrate`]: {
+        status: 400,
+        body: {
+          error: {
+            code: "invalid_request",
+            message: "",
+            details: { reason: "batch_waiting" },
+          },
+        },
+      },
+    });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Integrate the batch" }),
+    );
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "A member has no final verdict yet.",
+    );
+    cleanup();
+    await setup(ready, {}, { human: null, authenticated: true });
+    expect(
+      screen.queryByRole("button", { name: "Integrate the batch" }),
+    ).toBeNull();
   });
 
   it("offers Stop reviewer only to a named human", async () => {

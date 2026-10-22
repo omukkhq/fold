@@ -1066,7 +1066,7 @@ fn starter_agent(started_by: &str) -> Option<AgentName> {
 }
 
 /// Reads only what the event's rule needs.
-async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError> {
+pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError> {
     let mut ctx = PushContext::default();
     let kind = event.event_type;
     if kind == fold_core::events::types::MESSAGE_SENT {
@@ -1247,6 +1247,17 @@ async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError
             .any(|label| label.name.is_main());
         ctx.review_claim = row.review_claim.map(|worker| worker.agent());
         ctx.retired = row.state != reviews::ProposalState::Open;
+        if [
+            fold_core::events::types::PROPOSAL_OPENED,
+            fold_core::events::types::PROPOSAL_VERSION_ADDED,
+            fold_core::events::types::PROPOSAL_REVIEW_AGAIN_REQUESTED,
+        ]
+        .contains(&kind)
+        {
+            ctx.planned = reviews::plans::live_plan_of_proposal(store.read(), proposal)
+                .await?
+                .is_some();
+        }
         if kind == fold_core::events::types::INTEGRATION_SUCCEEDED {
             ctx.reviewer = integrated_reviewer(store, event, proposal).await?;
         }

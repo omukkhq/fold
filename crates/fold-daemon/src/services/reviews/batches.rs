@@ -19,6 +19,7 @@ use fold_vcs::browse;
 use fold_vcs::compare::Totals;
 use serde_json::{Value, json};
 
+use super::batch_integration::{BatchIntegrationView, mark_ready_at_submission};
 use super::changes::ChangeRange;
 use super::checkouts::remove_unnamed_dir;
 use super::claims::{TAKEN_OVER, already_claimed, take_review_claim};
@@ -292,6 +293,8 @@ pub struct ReviewBatchView {
     pub verdicts: Vec<BatchVerdictView>,
     /// The comments about members together, each with the members it is on.
     pub comments: Vec<BatchCommentView>,
+    /// Whether the approved members integrate together now, wait for the others, or did.
+    pub integration: BatchIntegrationView,
 }
 
 /// A comment of a batch review about members together. Each member in `members` has a whole-version comment that points to it.
@@ -387,7 +390,7 @@ enum Inserted {
 
 /// Review batches: related open proposals one reviewer reviews together, with one checkout of all of them merged onto main and one verdict per member.
 impl ReviewService {
-    /// Makes a batch of two or more open proposals for the actor's worker and takes the review claim of each, all in one transaction, by the rules of `claim_review`: the author's agent and every agent that does not decide reviews are refused, a claim another worker holds refuses the whole batch, and a stale one is taken over. Members are placed in dependency order of their tasks, ties by task number. A proposal in another open batch is `already_in_batch`; the partial unique index on open members decides a race.
+    /// Makes a batch of two or more open proposals for the actor's worker and takes the review claim of each, all in one transaction, by the rules of `claim_review`: the author's agent and every agent that does not decide reviews are refused, a claim another worker holds refuses the whole batch, and a stale one is taken over. Members are placed in dependency order of their tasks, ties by task number. A proposal in another open batch is `already_in_batch`, and one that waits in a review plan `already_in_plan`; the partial unique index on open members decides a race.
     pub async fn create_review_batch(
         &self,
         actor: &Actor,
@@ -418,6 +421,7 @@ impl ReviewService {
                 for &proposal in &proposals {
                     let row =
                         require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
+                    super::refuse_planned(tx, proposal).await?;
                     let main_task = task_in_main_area(tx.conn(), row.task).await?;
                     let agent = policy::can_claim_review(actor, standing, &row.author, main_task)
                         .map_err(|denied| {
@@ -828,6 +832,7 @@ impl ReviewService {
                         })).collect::<Vec<Value>>(),
                     }))?;
                 buffer.append(tx, &event, now).await?;
+                mark_ready_at_submission(tx, batch, now).await?;
                 Ok::<_, ReviewError>(SubmittedBatch {
                     batch,
                     reviewed,
@@ -932,6 +937,7 @@ impl ReviewService {
                 created_at: comment.created_at,
             })
             .collect();
+        let integration = self.batch_integration_view(row.id).await?;
         Ok(ReviewBatchView {
             id: row.id,
             holder: row.holder,
@@ -943,6 +949,7 @@ impl ReviewService {
             checkout,
             verdicts,
             comments,
+            integration,
         })
     }
 
@@ -1283,7 +1290,7 @@ fn open_batch(row: Option<BatchRow>, batch: ReviewBatchId) -> Result<BatchRow, R
     .into())
 }
 
-fn batch_not_found(batch: ReviewBatchId) -> ReviewError {
+pub(super) fn batch_not_found(batch: ReviewBatchId) -> ReviewError {
     FoldError::new(
         codes::REVIEW_BATCH_NOT_FOUND,
         format!("{batch} does not exist"),

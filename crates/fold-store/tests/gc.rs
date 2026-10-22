@@ -310,6 +310,56 @@ async fn a_closed_workspace_waits_while_its_agent_has_an_open_session() {
 }
 
 #[tokio::test]
+async fn a_closed_workspace_of_the_supervised_main_is_due_while_it_is_idle_between_turns() {
+    let project = TestProject::new().await;
+    let store = project.store();
+    for n in 1..=2 {
+        seed::workspace(store, n).await;
+    }
+    execute(
+        store,
+        "INSERT INTO agents (id, name, created_at) VALUES (1, 'main', 0), (2, 'web-lead', 0);
+         INSERT INTO workers (id, agent_id, name, parent_worker_id, created_at) VALUES (1, 1, 'main', NULL, 0), (2, 2, 'web-lead', NULL, 0);
+         INSERT INTO worker_processes (agent_id, role, session_id, state, started_by, started_at, idle_since) VALUES (1, 'main', 's1', 'working', 'fold', 0, NULL), (2, 'review_lead', 's2', 'idle', 'main', 0, 1);
+         INSERT INTO sessions (id, agent_id, pid, started_at) VALUES (1, 1, 10, 0), (2, 2, 11, 0);
+         UPDATE workspaces SET state = 'archived', closed_at = 0, worker_id = 1 WHERE number = 1;
+         UPDATE workspaces SET state = 'abandoned', closed_at = 0, worker_id = 2 WHERE number = 2;",
+    )
+    .await;
+    let due = || async {
+        closed_directories_due(store.read(), None)
+            .await
+            .unwrap()
+            .iter()
+            .map(|closed| closed.id.number())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        due().await,
+        Vec::<u32>::new(),
+        "a working main and an idle lead keep their closed workspaces"
+    );
+    for state in ["starting", "stopping"] {
+        execute(
+            store,
+            &format!("UPDATE worker_processes SET state = '{state}' WHERE agent_id = 1"),
+        )
+        .await;
+        assert_eq!(due().await, Vec::<u32>::new(), "{state}");
+    }
+    execute(
+        store,
+        "UPDATE worker_processes SET state = 'idle', idle_since = 2 WHERE agent_id = 1",
+    )
+    .await;
+    assert_eq!(
+        due().await,
+        vec![1],
+        "the idle main and its own adapter's session hold nothing back"
+    );
+}
+
+#[tokio::test]
 async fn checkpoints_of_a_closed_workspace_are_due_once_its_close_and_removal_are_old() {
     let project = TestProject::new().await;
     let store = project.store();

@@ -262,14 +262,47 @@ impl AgentService {
             return Err(FoldError::from(denied).into());
         }
         let session_id = ctx.session_id;
+        let unsupervised = ctx.peer == SessionPeer::Unsupervised;
+        let role = if unsupervised {
+            let mut conn = self
+                .store
+                .read()
+                .acquire()
+                .await
+                .map_err(StoreError::from)?;
+            agents::find_worker_process(&mut conn, name)
+                .await?
+                .map(|row| row.role)
+        } else {
+            None
+        };
+        // A session from outside every worker's process tree is an interactive main agent when it asks for the tag in its handshake, as `fld claude`'s session does, or when it names the supervised main, whose agent holds the tag; the supervised main's own adapter runs inside its process tree. A worker of another role never holds the tag, and the tag rule refuses it in the registration.
+        let interactive_main = unsupervised
+            && match role {
+                None => origin == TagOrigin::Handshake && tags.iter().any(Tag::is_main),
+                Some(role) => role == fold_core::Role::Main,
+            };
+        let gate = self.workers.as_ref().filter(|_| interactive_main);
+        if let Some(supervisor) = gate {
+            supervisor.enter_interactive_main(session_id, name)?;
+        }
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
-        let (registered, started_at) = self
+        let written = self
             .store
             .write(async |tx| {
                 register_agent_in(tx, &mut buffer, session_id, name, tags, origin, now).await
             })
-            .await?;
+            .await;
+        let (registered, started_at) = match written {
+            Ok(written) => written,
+            Err(error) => {
+                if let Some(supervisor) = gate {
+                    supervisor.leave_interactive_main(session_id);
+                }
+                return Err(error);
+            }
+        };
         self.bus.publish(buffer);
         ctx.agent = Some(name.clone());
         self.push.restore(name, started_at).await;
@@ -407,6 +440,9 @@ impl AgentService {
             })
             .await?;
         self.bus.publish(buffer);
+        if let Some(supervisor) = &self.workers {
+            supervisor.leave_interactive_main(ctx.session_id);
+        }
         if let Some((agent, started_at)) = last {
             self.push.clear_registered_by(&agent, started_at).await;
         }
@@ -441,6 +477,9 @@ impl AgentService {
             .await?;
         self.bus.publish(buffer);
         self.push.clear_all();
+        if let Some(supervisor) = &self.workers {
+            supervisor.clear_interactive_main();
+        }
         Ok(ended)
     }
 }
@@ -490,7 +529,7 @@ async fn register_agent_in(
     if tags.iter().any(Tag::is_main) {
         let supervised = agents::find_worker_process(tx.conn(), name)
             .await?
-            .is_some();
+            .is_some_and(|row| row.role != fold_core::Role::Main);
         let holders: Vec<i64> = agents::all_tags(tx.conn())
             .await?
             .into_iter()

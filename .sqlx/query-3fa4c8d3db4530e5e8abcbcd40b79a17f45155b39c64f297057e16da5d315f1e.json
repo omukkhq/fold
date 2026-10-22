@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO review_plan_members (plan_id, task_id, added_at)\n             SELECT r.id, t.id, ?3 FROM review_plans r, tasks t WHERE r.number = ?1 AND t.number = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "3fa4c8d3db4530e5e8abcbcd40b79a17f45155b39c64f297057e16da5d315f1e"
+}

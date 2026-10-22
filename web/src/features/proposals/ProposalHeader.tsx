@@ -1,7 +1,7 @@
 import { ActorText } from "@/people/ActorText";
 import { segmentsText, type Segments } from "@/people/segments";
 import { PersonName } from "@/people/PersonName";
-import { ChevronRight, GitPullRequest } from "lucide-react";
+import { ChevronRight, GitPullRequest, Hourglass } from "lucide-react";
 import type { ProposalDetail } from "@/api/proposals";
 import { HrefLink } from "@/app/HrefLink";
 import { TAB_LIST, tabClasses } from "@/components/overlay/tabStyles";
@@ -18,6 +18,7 @@ import {
   reviewPill,
   versionText,
 } from "./present";
+import { planWait } from "./planWait";
 import { ReviewPill } from "./ReviewPill";
 import {
   changeOptions,
@@ -33,18 +34,24 @@ export function ProposalHeader({
   view,
   main,
   revision,
+  batch,
+  now,
 }: {
   slug: string;
   proposal: ProposalDetail;
   view: DetailView;
+  now: number;
   /** The head of main; null until the revisions arrive. */
   main: string | null;
   /** The revision an integrated proposal became; null until it is known. */
   revision: string | null;
+  /** The review batch the proposal integrated with; null for one integrated on its own. */
+  batch: string | null;
 }) {
   const summary = proposal.summary;
   const options = changeOptions(proposal, view);
   const current = currentVersion(proposal);
+  const wait = planWait(proposal.review_plan, summary.id, now);
   const meta = [
     `proposal ${versionText(summary)}`,
     current
@@ -92,6 +99,7 @@ export function ProposalHeader({
           pill={reviewPill(summary, {
             long: true,
             revision,
+            batch,
             conflictMain: proposal.conflict?.main_revision ?? null,
           })}
           large
@@ -119,6 +127,17 @@ export function ProposalHeader({
           </span>
         ))}
       </div>
+      {wait === null ? null : (
+        <p
+          data-plan-wait={wait.state}
+          className="flex items-start gap-6 self-start rounded-s bg-secondary-soft px-10 py-5 text-meta leading-normal text-secondary-text"
+        >
+          <Hourglass aria-hidden="true" size={13} className="mt-2 shrink-0" />
+          <span>
+            <span className="font-semibold">{wait.title}</span> · {wait.detail}
+          </span>
+        </p>
+      )}
       <div className={cn(TAB_LIST, "justify-between")}>
         <nav aria-label="Versions" className="flex items-center gap-22">
           {versionTabs(proposal, view).map((tab) => (

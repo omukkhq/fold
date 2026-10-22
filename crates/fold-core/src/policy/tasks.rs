@@ -174,7 +174,6 @@ mod tests {
             ("lead", agent("web-lead"), true),
             ("lead's other worker", agent("web-lead/plan"), true),
             ("main agent", tagged("main", "main"), true),
-            ("main agent's subagent", tagged("main/plan", "main"), true),
             ("other task worker", agent("api-worker"), false),
             ("other tag", tagged("api-worker", "backend"), false),
             (

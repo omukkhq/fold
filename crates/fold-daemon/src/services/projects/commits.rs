@@ -408,6 +408,7 @@ mod tests {
             }),
             changeset: None,
             message: None,
+            batch: None,
         }
     }
 

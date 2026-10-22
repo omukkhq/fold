@@ -9,7 +9,7 @@ use super::PolicyDenied;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Starter {
     Human,
-    /// The main worker of the agent with the `main` tag: the user's own interactive session, which `fld claude` starts. Without that agent there is no main agent.
+    /// The main worker of the agent with the `main` tag: the user's own interactive session, which `fld claude` starts, or the supervised worker of role `main` that fold runs in its place. Without that agent there is no main agent.
     MainAgent,
     /// The main worker of an agent that fold does not supervise and that lacks the `main` tag, such as a session opened by hand.
     Unsupervised,
@@ -31,6 +31,7 @@ impl Starter {
                 None => Starter::Unsupervised,
                 Some((Role::AreaLead, Some(area))) => Starter::AreaLead(area),
                 Some((Role::ReviewLead, _)) => Starter::ReviewLead,
+                Some((Role::Main, _)) => Starter::MainAgent,
                 Some((Role::AreaLead, None) | (Role::TaskWorker | Role::Reviewer, _)) => {
                     Starter::ShortLived
                 }
@@ -95,7 +96,7 @@ pub fn can_set_worker_limits(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
-/// The main agent or a named human starts the leads; an area lead starts the task workers of its own area; the review lead starts the reviewers. A subagent worker, a short-lived worker and a lead of another kind start nothing.
+/// The main agent or a named human starts the leads; an area lead starts the task workers of its own area; the review lead starts the reviewers. A subagent worker, a short-lived worker and a lead of another kind start nothing, and nobody starts the supervised main: fold runs it when the project's setting says so.
 pub fn can_start_worker(starter: &Starter, role: Role) -> Result<(), PolicyDenied> {
     match (role, starter) {
         (Role::AreaLead | Role::ReviewLead, Starter::Human | Starter::MainAgent)
@@ -118,6 +119,11 @@ pub fn can_start_worker(starter: &Starter, role: Role) -> Result<(), PolicyDenie
             code: codes::WORKER_START_DENIED,
             message: "only the review lead can start a reviewer",
             hint: "ask the review lead to call start_worker",
+        }),
+        (Role::Main, _) => Err(PolicyDenied {
+            code: codes::WORKER_START_DENIED,
+            message: "fold starts the supervised main agent itself",
+            hint: "set supervised = true under [main] in .fold/config.toml; fold then runs the main agent and starts it for its work",
         }),
     }
 }
@@ -294,10 +300,11 @@ fn not_the_main_agent(hint: &'static str) -> PolicyDenied {
     }
 }
 
-/// Only a long-lived worker gets a fresh context: a short-lived one stops when its work is done, and the main agent is the user's own session, which clears its context itself.
-pub fn can_write_handoff(starter: &Starter) -> Result<(), PolicyDenied> {
+/// Only a long-lived worker gets a fresh context: a short-lived one stops when its work is done, and the interactive main agent is the user's own session, which clears its context itself. The supervised main, the worker of role `main` (`role`) that fold runs as the main agent, is long-lived and has no terminal to clear its context, so fold refreshes it from its note like a lead.
+pub fn can_write_handoff(starter: &Starter, role: Option<Role>) -> Result<(), PolicyDenied> {
     match starter {
         Starter::AreaLead(_) | Starter::ReviewLead => Ok(()),
+        Starter::MainAgent if role == Some(Role::Main) => Ok(()),
         Starter::MainAgent => Err(PolicyDenied {
             code: codes::HANDOFF_DENIED,
             message: "fold does not refresh the main agent's session",
@@ -328,6 +335,27 @@ mod tests {
 
     fn area(name: &str) -> AreaName {
         AreaName::parse(name).unwrap()
+    }
+
+    #[test]
+    fn the_supervised_main_acts_as_the_main_agent_and_nobody_starts_it() {
+        assert_eq!(
+            Starter::of(&agent("main"), Some((Role::Main, None))),
+            Starter::MainAgent
+        );
+        for starter in [
+            Starter::Human,
+            Starter::MainAgent,
+            Starter::AreaLead(area("web")),
+            Starter::ReviewLead,
+            Starter::System,
+        ] {
+            let refused = can_start_worker(&starter, Role::Main).unwrap_err();
+            assert_eq!(refused.code(), codes::WORKER_START_DENIED);
+            assert!(refused.hint().contains("[main]"));
+        }
+        assert!(can_stop_worker(&Starter::Human, Role::Main, None).is_ok());
+        assert!(can_stop_worker(&Starter::ReviewLead, Role::Main, None).is_err());
     }
 
     #[test]
@@ -496,7 +524,7 @@ mod tests {
         );
         assert!(can_stop_worker(&Starter::Unsupervised, Role::TaskWorker, None).is_err());
         assert_eq!(
-            can_write_handoff(&Starter::Unsupervised)
+            can_write_handoff(&Starter::Unsupervised, None)
                 .unwrap_err()
                 .code(),
             codes::HANDOFF_DENIED
@@ -687,17 +715,20 @@ mod tests {
     }
 
     #[test]
-    fn only_a_lead_writes_a_hand_off_note() {
-        assert!(can_write_handoff(&Starter::AreaLead(area("web"))).is_ok());
-        assert!(can_write_handoff(&Starter::ReviewLead).is_ok());
-        for starter in [
-            Starter::MainAgent,
-            Starter::Human,
-            Starter::ShortLived,
-            Starter::System,
+    fn only_a_lead_or_the_supervised_main_writes_a_hand_off_note() {
+        assert!(can_write_handoff(&Starter::AreaLead(area("web")), Some(Role::AreaLead)).is_ok());
+        assert!(can_write_handoff(&Starter::ReviewLead, Some(Role::ReviewLead)).is_ok());
+        assert!(can_write_handoff(&Starter::MainAgent, Some(Role::Main)).is_ok());
+        let interactive = can_write_handoff(&Starter::MainAgent, None).unwrap_err();
+        assert_eq!(interactive.code(), codes::HANDOFF_DENIED);
+        assert!(interactive.hint().contains("/clear"));
+        for (starter, role) in [
+            (Starter::Human, None),
+            (Starter::ShortLived, Some(Role::TaskWorker)),
+            (Starter::System, None),
         ] {
             assert_eq!(
-                can_write_handoff(&starter).unwrap_err().code(),
+                can_write_handoff(&starter, role).unwrap_err().code(),
                 codes::HANDOFF_DENIED
             );
         }

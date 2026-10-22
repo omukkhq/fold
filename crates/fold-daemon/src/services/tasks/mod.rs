@@ -648,6 +648,7 @@ async fn update_in_tx(
     buffer.append(tx, &event, now).await?;
     mark_main_task(tx, buffer, id, entering_main, now).await?;
     unmark_main_task(tx, buffer, id, leaving_main, now).await?;
+    crate::services::reviews::settle_plans(tx, buffer, now).await?;
     Ok(())
 }
 

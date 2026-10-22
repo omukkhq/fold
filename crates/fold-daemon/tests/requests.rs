@@ -89,7 +89,7 @@ struct Fixture {
     tasks: TaskService,
 }
 
-/// Agents `frontend` (main worker and its subagent `frontend/ui`), `backend` and `review`, each with a main worker. `frontend`, `backend` and `review` lead the areas `front`, `work` and `checks`, so each may claim a request. Nobody has a session.
+/// Agents `frontend`, `backend` and `review`, each with its worker. `frontend`, `backend` and `review` lead the areas `front`, `work` and `checks`, so each may claim a request. Nobody has a session.
 impl Fixture {
     async fn new() -> Self {
         let project = TestProject::new().await;
@@ -103,8 +103,8 @@ impl Fixture {
         execute(
             project.store(),
             "INSERT INTO agents (id, name, created_at) VALUES (1, 'frontend', 0), (2, 'backend', 0), (3, 'review', 0);
-             INSERT INTO workers (id, agent_id, name, parent_worker_id, created_at) VALUES
-                 (1, 1, 'frontend', NULL, 0), (2, 1, 'frontend/ui', 1, 0), (3, 2, 'backend', NULL, 0), (4, 3, 'review', NULL, 0);",
+             INSERT INTO workers (id, agent_id, name, created_at) VALUES
+                 (1, 1, 'frontend', 0), (3, 2, 'backend', 0), (4, 3, 'review', 0);",
         )
         .await;
         give_role(project.store(), "frontend", Role::AreaLead, Some("front")).await;
@@ -224,7 +224,7 @@ async fn a_human_creates_a_request_with_an_attachment_and_a_mention() {
 
     let by_agent = fx
         .tasks
-        .create_request(&agent("backend/tests"), "Is retry safe?", Vec::new())
+        .create_request(&agent("backend"), "Is retry safe?", Vec::new())
         .await
         .unwrap();
     assert_eq!(by_agent.id, rq(2));
@@ -287,7 +287,7 @@ async fn only_an_orchestrator_claims_and_the_claim_sorts_and_names_the_request()
     execute(
         fx.project.store(),
         "INSERT INTO agents (id, name, created_at) VALUES (4, 'docs', 0);
-         INSERT INTO workers (id, agent_id, name, parent_worker_id, created_at) VALUES (5, 4, 'docs', NULL, 0);",
+         INSERT INTO workers (id, agent_id, name, created_at) VALUES (5, 4, 'docs', 0);",
     )
     .await;
     // `docs` has neither the `main` tag nor a lead's role, as a session opened by hand.
@@ -427,7 +427,7 @@ async fn drafts_changes_edits_and_approval_follow_the_requester() {
 
     let v1 = fx
         .tasks
-        .submit_request_draft(&agent("frontend/ui"), id, draft(&["c1"], &[]), None, None)
+        .submit_request_draft(&agent("frontend"), id, draft(&["c1"], &[]), None, None)
         .await
         .unwrap();
     assert_eq!(
@@ -570,7 +570,7 @@ async fn drafts_changes_edits_and_approval_follow_the_requester() {
 
     let detail = fx.tasks.get_request(id).await.unwrap();
     assert_eq!(detail.drafts.len(), 3);
-    assert_eq!(detail.drafts[0].author, "frontend/ui");
+    assert_eq!(detail.drafts[0].author, "frontend");
     assert_eq!(detail.drafts[2].author, "human:tanim");
     assert_eq!(
         detail.drafts[2].note.as_deref(),
@@ -630,7 +630,7 @@ async fn an_approval_that_fails_leaves_nothing_behind() {
     )
     .await;
     fx.tasks
-        .approve_request_draft(&agent("backend/sub"), id, 1)
+        .approve_request_draft(&agent("backend"), id, 1)
         .await
         .unwrap_err();
     assert_eq!(fx.count("SELECT COUNT(*) FROM tasks").await, 0);
@@ -639,7 +639,7 @@ async fn an_approval_that_fails_leaves_nothing_behind() {
     execute(fx.project.store(), "DROP TRIGGER refuse_approval").await;
     let approved = fx
         .tasks
-        .approve_request_draft(&agent("backend/sub"), id, 1)
+        .approve_request_draft(&agent("backend"), id, 1)
         .await
         .unwrap();
     assert_eq!(approved.tasks.len(), 2);
@@ -657,7 +657,7 @@ async fn release_close_and_invalid_drafts() {
     assert_eq!(code(&foreign), codes::DRAFTER_REQUIRED);
     let released = fx
         .tasks
-        .release_request(&agent("frontend/ui"), id)
+        .release_request(&agent("frontend"), id)
         .await
         .unwrap();
     assert_eq!(

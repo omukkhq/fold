@@ -255,6 +255,28 @@ describe("eventLine", () => {
       "reviewed rb-3",
     );
     expect(line("review.batch_closed", { batch: "rb-3" })).toBe("closed rb-3");
+    expect(
+      line("review.plan_created", { plan: "rp-2", awaited: ["T-7", "T-8"] }),
+    ).toBe("made rp-2, waiting for T-7, T-8");
+    expect(line("review.plan_created", { plan: "rp-2" })).toBe("made rp-2");
+    expect(line("review.plan_changed")).toBe("changed a review plan");
+    expect(line("review.plan_joined", { plan: "rp-2" })).toBe(
+      "P-4 joined rp-2",
+    );
+    expect(
+      line("review.plan_left", { plan: "rp-2", reason: "depends_on_member" }),
+    ).toBe("T-12 left rp-2: depends on member");
+    expect(line("review.plan_left", { plan: "rp-2" })).toBe("T-12 left rp-2");
+    expect(line("review.plan_wait_ended", { plan: "rp-2" })).toBe(
+      "the wait of rp-2 ended",
+    );
+    expect(line("review.plan_started", { plan: "rp-2", batch: "rb-4" })).toBe(
+      "started rp-2 as rb-4",
+    );
+    expect(line("review.plan_started", { plan: "rp-2", batch: null })).toBe(
+      "started rp-2 for one reviewer",
+    );
+    expect(line("review.plan_ended", { plan: "rp-2" })).toBe("ended rp-2");
     expect(line("area.defined", { area: "web", label: "ui" })).toBe(
       "defined web over label ui",
     );
@@ -608,9 +630,78 @@ describe("eventLine", () => {
     expect(eventLine(event("integration.held", { revision: null })).text).toBe(
       "held the integrations: fold-checks.toml on main is not valid",
     );
+    const batch = { proposal: null, task: null, data: { batch: "rb-3" } };
+    expect(eventLine(event("integration.queued", batch)).text).toBe(
+      "queued the integration of rb-3",
+    );
+    expect(eventLine(event("integration.unqueued", batch)).text).toBe(
+      "took the integration of rb-3 out of the queue",
+    );
   });
 
-  it("marks integrations, main moves, request approvals and recorded human changes as emphasised, review approvals by their verdict", () => {
+  it("names the batch a proposal integrated with", () => {
+    const data = { batch: "rb-3" };
+    expect(eventLine(event("proposal.integrated", { data })).text).toBe(
+      "integrated P-4 into main with batch rb-3 as r17",
+    );
+    expect(
+      eventLine(event("proposal.integrated", { data, revision: null })).text,
+    ).toBe("integrated P-4 into main with batch rb-3");
+    expect(eventLine(event("integration.succeeded", { data })).text).toBe(
+      "integration succeeded with batch rb-3 as r17",
+    );
+  });
+
+  it("says how a batch's integration ended and what it published", () => {
+    const members = [
+      { proposal: "P-3", revision: "r18" },
+      { proposal: "P-5", revision: "r19" },
+      { proposal: "P-6" },
+      "junk",
+      null,
+      { revision: "r20" },
+    ];
+    const ended = (data: Record<string, unknown>) =>
+      eventLine(event("review.batch_integrated", { data })).text;
+    expect(ended({ batch: "rb-3", outcome: "together", members })).toBe(
+      "integrated rb-3 together: P-3 as r18, P-5 as r19, P-6",
+    );
+    expect(ended({ batch: "rb-3", outcome: "together" })).toBe(
+      "integrated rb-3",
+    );
+    expect(ended({ batch: "rb-3", outcome: "one_at_a_time", members })).toBe(
+      "the checks of rb-3 failed together, so its members integrated one at a time: P-3 as r18, P-5 as r19, P-6",
+    );
+    expect(ended({ batch: "rb-3", outcome: "one_at_a_time" })).toBe(
+      "the checks of rb-3 failed together, and no member integrated on its own",
+    );
+    expect(ended({ batch: "rb-3", outcome: "none", members: [] })).toBe(
+      "rb-3 had no member to integrate together",
+    );
+    expect(ended({})).toBe(
+      "a review batch had no member to integrate together",
+    );
+    expect(
+      eventLine(event("review.batch_waiting", { data: { batch: "rb-3" } }))
+        .text,
+    ).toBe("rb-3 waits for a verdict on P-4");
+    const waitEnded = (data: Record<string, unknown>) =>
+      eventLine(event("review.batch_wait_ended", { data })).text;
+    expect(waitEnded({ batch: "rb-3", left: ["P-4", "P-6"] })).toBe(
+      "the wait of rb-3 ended; P-4, P-6 left its turn",
+    );
+    expect(waitEnded({ batch: "rb-3", left: [] })).toBe(
+      "the wait of rb-3 ended",
+    );
+    const ready = (data: Record<string, unknown>) =>
+      eventLine(event("review.batch_ready", { data })).text;
+    expect(ready({ batch: "rb-3", members: ["P-4", "P-6"] })).toBe(
+      "rb-3 is ready: P-4, P-6 integrate together",
+    );
+    expect(ready({ batch: "rb-3" })).toBe("rb-3 is ready to integrate");
+  });
+
+  it("marks integrations, main moves, request approvals, recorded human changes and batch integrations as emphasised, review approvals by their verdict", () => {
     const emphasised = EVENT_TYPES.filter(
       (type) => eventLine(event(type)).emphasis,
     );
@@ -620,6 +711,7 @@ describe("eventLine", () => {
       "main.advanced",
       "request.approved",
       "human_change.recorded",
+      "review.batch_integrated",
     ]);
   });
 });

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.number AS \"number!: i64\"\n           FROM review_batches b\n           WHERE b.state = 'submitted'\n             AND NOT EXISTS (SELECT 1 FROM review_batch_integrations i WHERE i.batch_id = b.id)\n           ORDER BY b.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_batches",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0e768ff6ffb0dcf45a6fefa675cba382b334179e4dc5d4f8e84176b1caa26b60"
+}

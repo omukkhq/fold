@@ -27,7 +27,9 @@ pub use agents::roles::{
 };
 pub use agents::{AgentName, AreaName, HumanName, MAIN_AREA, MAIN_TAG, NameError, Tag, WorkerName};
 pub use clock::{Clock, ManualClock};
-pub use config::{CONFIG_TEMPLATE, GitConfig, IntegrationConfig, ProjectConfig, RemoteConfig};
+pub use config::{
+    CONFIG_TEMPLATE, GitConfig, IntegrationConfig, MainConfig, ProjectConfig, RemoteConfig,
+};
 pub use error::{FoldError, codes};
 pub use events::{
     AgentEventFacts, Event, EventActor, EventError, EventFilter, EventType, LiveEvent, NewEvent,
@@ -36,7 +38,7 @@ pub use events::{
 pub use ids::{
     ChangesetId, CheckRunId, ChecklistItemId, CheckpointId, CommentId, IdKind, IdParseError,
     IntegrationId, MessageId, PermissionQuestionId, ProposalId, RequestId, ReviewBatchId,
-    RevisionId, TaskId, WebTokenId, WorkspaceId,
+    ReviewPlanId, RevisionId, TaskId, WebTokenId, WorkspaceId,
 };
 pub use layout::{
     HostPaths, ProjectPaths, main_workspace_path, review_batch_checkout_path, review_checkout_path,

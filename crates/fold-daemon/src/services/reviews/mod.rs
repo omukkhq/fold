@@ -11,6 +11,7 @@ use super::tasks::TaskError;
 use super::workspaces::{WorkspaceError, WorkspaceService};
 use checks::CheckRunner;
 
+mod batch_integration;
 mod batches;
 mod changes;
 mod checkouts;
@@ -22,6 +23,7 @@ mod human_edits;
 mod human_review;
 mod integrate;
 mod notify;
+mod plans;
 mod proposals;
 mod questions;
 mod review_fixes;
@@ -29,6 +31,9 @@ mod scopes;
 mod verdicts;
 mod views;
 
+pub use batch_integration::{
+    BatchIntegration, BatchIntegrationView, BatchStanding, MemberIntegration,
+};
 pub use batches::{
     BatchCheckout, BatchComment, BatchCommentView, BatchLines, BatchMemberView, BatchReviewed,
     BatchVerdict, BatchVerdictView, LeftOut, LeftOutReason, MemberSince, ReviewBatchView,
@@ -46,6 +51,11 @@ pub use integrate::{
     AutomaticIntegration, DirectChange, DirectOutcome, HumanRecord, IntegrationOutcome,
     PullIntegration, PullOutcome, RecordIntegration,
 };
+pub use plans::{
+    AwaitedTask, DEFAULT_PLAN_LIST, MAX_PLAN_LIST, PlanChange, ProposalPlan, ReviewPlanView,
+    proposal_plan, proposal_plans,
+};
+pub(crate) use plans::{mark_plan_started, refuse_planned, settle_plans, take_plan_for_start};
 pub(crate) use proposals::proposal_missing;
 pub use proposals::{
     DEFAULT_PROPOSAL_LIST, MAX_PROPOSAL_LIST, ProposalDetail, ProposalFilter, ProposalListing,

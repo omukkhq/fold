@@ -65,6 +65,12 @@ pub fn handoff_overdue(asked_turns: u64, turns: u64) -> bool {
     turns.saturating_sub(asked_turns) >= HANDOFF_TURNS
 }
 
+/// Whether fold asks the supervised main for its hand-off note again at `turns`, after it asked at its `asked_turns`-th turn and got none: every [`HANDOFF_TURNS`] turns. The main agent's next session starts only from its own note, so a large context never starts it fresh without one.
+pub fn handoff_reask_due(asked_turns: u64, turns: u64) -> bool {
+    let since = turns.saturating_sub(asked_turns);
+    since > 0 && since.is_multiple_of(HANDOFF_TURNS)
+}
+
 /// The note without its surrounding white space. An empty note or one longer than [`MAX_HANDOFF_CHARS`] is refused with `invalid_request`; the error names the length, never the text.
 pub fn check_handoff(body: &str) -> Result<&str, FoldError> {
     let body = body.trim();
@@ -129,6 +135,7 @@ pub fn refresh_turn(facts: &RefreshFacts<'_>) -> String {
             format!("the area lead of area {area}, which owns the tasks labelled {label}")
         }
         (Role::ReviewLead, _) => "the review lead".to_owned(),
+        (Role::Main, _) => "the main agent of this project, supervised by fold".to_owned(),
         (role, _) => format!("a worker of role {role}"),
     };
     let _ = writeln!(
@@ -335,5 +342,26 @@ mod tests {
         });
         assert!(other.contains("a worker of role area_lead"));
         assert!(other.contains("wrote no hand-off note"));
+        assert!(!handoff_reask_due(4, 4));
+        assert!(!handoff_reask_due(4, 6));
+        assert!(handoff_reask_due(4, 7));
+        assert!(!handoff_reask_due(4, 8));
+        assert!(handoff_reask_due(4, 10));
+        let main = AgentName::parse("main").unwrap();
+        let supervised = refresh_turn(&RefreshFacts {
+            role: Role::Main,
+            name: &main,
+            area: None,
+            note: Some("Waiting for the OK to the plan in m-4."),
+            tasks: &[],
+            task_count: 0,
+            proposals: &[],
+            proposal_count: 0,
+            unread: 1,
+        });
+        assert!(
+            supervised.contains("as main, the main agent of this project, supervised by fold,")
+        );
+        assert!(supervised.contains("Waiting for the OK to the plan in m-4."));
     }
 }

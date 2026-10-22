@@ -146,5 +146,8 @@ pub fn run_json(view: &CheckRunView) -> Value {
     if let Some(number) = run.version {
         line["version"] = json!(version(number));
     }
+    if let Some(batch) = run.batch {
+        line["batch"] = json!(batch);
+    }
     line
 }

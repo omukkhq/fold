@@ -168,3 +168,13 @@ ask_close_denied
 project_workers_running
 recipient_not_reader
 review_lead_delegates
+review_plan_not_found
+review_plan_not_open
+review_plan_too_large
+review_plan_denied
+task_not_awaitable
+proposal_not_plannable
+already_in_plan
+main_supervised
+main_interactive
+main_not_supervised

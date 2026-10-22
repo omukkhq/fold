@@ -43,7 +43,7 @@ fn sample_event() -> Event {
     Event {
         seq: 41,
         event_type: types::TASK_CREATED,
-        actor: EventActor::parse("frontend/ui").unwrap(),
+        actor: EventActor::parse("frontend").unwrap(),
         task: TaskId::from_number(12),
         proposal: None,
         workspace: WorkspaceId::from_number(9),
@@ -58,7 +58,7 @@ fn sample_workspace() -> LiveWorkspace {
     LiveWorkspace {
         workspace: WorkspaceId::from_number(9).unwrap(),
         task: Some(TaskId::from_number(12).unwrap()),
-        worker: "frontend/ui".to_owned(),
+        worker: "frontend".to_owned(),
         base: RevisionId::from_number(17).unwrap(),
         files: vec![ChangedFile {
             path: "src/board.ts".to_owned(),

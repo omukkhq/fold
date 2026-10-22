@@ -30,6 +30,7 @@ use crate::services::workspaces::StateComparison;
 
 pub mod batches;
 pub mod checks;
+pub mod plans;
 
 pub const CREATE_PROPOSAL: &str = "create_proposal";
 pub const LIST_PROPOSALS: &str = "list_proposals";
@@ -357,6 +358,7 @@ pub fn tools() -> Vec<Tool> {
         ),
     ];
     tools.extend(batches::tools());
+    tools.extend(plans::tools());
     tools.push(Tool::new(
         SUBMIT_MAIN_CHANGE,
         "Main agent only, and only after the user's explicit OK to the diff and summary you showed. Integrate the newest changeset of your main workspace onto main as one revision and one Git commit with your message, with no task, proposal or review; the main workspace then closes. integration_conflicted means main moved: details list the files; call sync_workspace, resolve them, call record_changes, show the user the new diff and submit again.",
@@ -405,9 +407,12 @@ pub async fn call(
         SUBMIT_REVIEW_FIX => submit_review_fix(reviews, &actor, arguments).await?,
         _ => match batches::run(reviews, tool, &actor, arguments).await? {
             Some(value) => value,
-            None => match checks::run(reviews, tool, &actor, arguments).await? {
+            None => match plans::run(reviews, tool, &actor, arguments).await? {
                 Some(value) => value,
-                None => return Ok(None),
+                None => match checks::run(reviews, tool, &actor, arguments).await? {
+                    Some(value) => value,
+                    None => return Ok(None),
+                },
             },
         },
     };
@@ -617,6 +622,11 @@ fn view_json(view: &ProposalView) -> Value {
         "checks": view.checks.iter().map(checks::run_json).collect::<Vec<_>>(),
         "checks_failed": summary.checks_failed,
         "integration_queued": summary.integration_queued,
+        "review_plan": view.review_plan.as_ref().map(plans::proposal_plan_json),
+        "integrated": view.integrated.map(|(revision, batch)| json!({
+            "revision": revision,
+            "batch": batch,
+        })),
         "files": view.files.iter().map(file_line).collect::<Vec<_>>(),
         "totals": {
             "files": view.totals.files,

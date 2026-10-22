@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use fold_core::events::types;
-use fold_core::{AgentName, EventActor, FoldError, NewEvent, WorkerState, codes};
+use fold_core::{AgentName, EventActor, FoldError, NewEvent, Role, WorkerState, codes};
 use fold_store::StoreError;
 use fold_store::agents::{self, ProcessEnd, WorkerProcessRow};
 use serde_json::json;
@@ -28,14 +28,23 @@ impl Supervisor {
         &self,
         agent: &AgentName,
     ) -> Result<(), AgentError> {
-        self.stop_when(agent, |_| true).await.map(|_| ())
+        self.stop_when(agent, |_| true, false).await.map(|_| ())
     }
 
-    /// [`Supervisor::stop`] of a worker that `still` holds for, read in the transaction that marks it `stopping`. Returns whether it stopped the worker.
+    /// [`Supervisor::stop`] of the supervised main for a human, who wants it to stay stopped: the row is held in the transaction that marks it `stopping`, or at once when it has ended already, so no notice, message or catch-up starts it until a human starts it again.
+    pub(in crate::services::agents::workers) async fn stop_and_hold(
+        &self,
+        agent: &AgentName,
+    ) -> Result<(), AgentError> {
+        self.stop_when(agent, |_| true, true).await.map(|_| ())
+    }
+
+    /// [`Supervisor::stop`] of a worker that `still` holds for, read in the transaction that marks it `stopping`; with `hold`, a supervised main is also held (see [`Supervisor::stop_and_hold`]). Returns whether it stopped the worker.
     async fn stop_when(
         &self,
         agent: &AgentName,
         still: impl Fn(&WorkerProcessRow) -> bool,
+        hold: bool,
     ) -> Result<bool, AgentError> {
         let now = self.inner.clock.now();
         let started = self
@@ -45,11 +54,21 @@ impl Supervisor {
                 let Some(row) = agents::find_worker_process(tx.conn(), agent).await? else {
                     return Ok::<_, StoreError>(None);
                 };
-                if !row.state.is_running() || !still(&row) {
+                let hold = hold && row.role == Role::Main;
+                if !row.state.is_running() {
+                    if hold && row.state != WorkerState::Starting {
+                        agents::hold_worker(tx, row.id, now).await?;
+                    }
+                    return Ok(None);
+                }
+                if !still(&row) {
                     return Ok(None);
                 }
                 let working = row.state == WorkerState::Working;
                 agents::set_worker_state(tx, row.id, WorkerState::Stopping, now).await?;
+                if hold {
+                    agents::hold_worker(tx, row.id, now).await?;
+                }
                 Ok(Some((row, working)))
             })
             .await?;
@@ -346,7 +365,7 @@ impl Supervisor {
                     && current.state == WorkerState::Idle
                     && current.idle_since == Some(since)
             };
-            match self.stop_when(&row.agent, still_idle).await {
+            match self.stop_when(&row.agent, still_idle, false).await {
                 Ok(true) => stopped.push(row.agent),
                 Ok(false) => {}
                 Err(error) => {
@@ -403,7 +422,9 @@ impl Supervisor {
                             }
                             fold_core::Role::TaskWorker => waiting.get(&row.id),
                             fold_core::Role::Reviewer => missing.get(&row.id),
-                            fold_core::Role::AreaLead | fold_core::Role::ReviewLead => None,
+                            fold_core::Role::AreaLead
+                            | fold_core::Role::ReviewLead
+                            | fold_core::Role::Main => None,
                         };
                         open == Some(&0)
                     })

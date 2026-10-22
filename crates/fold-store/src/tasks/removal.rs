@@ -4,7 +4,7 @@ use sqlx::SqliteConnection;
 use crate::error::StoreError;
 use crate::store::WriteTx;
 
-/// What a task has left behind that `delete_task` may not erase. Workspaces and proposals count in any state and of any kind; a message counts when it names the task, and a worker's turn when it counts for the task.
+/// What a task has left behind that `delete_task` may not erase. Workspaces and proposals count in any state and of any kind; a message counts when it names the task, a worker's turn when it counts for the task, and a review plan when the task was ever one of its members.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TaskHistory {
     pub workspace: bool,
@@ -13,6 +13,7 @@ pub struct TaskHistory {
     pub message: bool,
     pub report: bool,
     pub turn: bool,
+    pub review_plan: bool,
 }
 
 impl TaskHistory {
@@ -23,6 +24,7 @@ impl TaskHistory {
             || self.message
             || self.report
             || self.turn
+            || self.review_plan
     }
 }
 
@@ -34,7 +36,8 @@ pub async fn history(conn: &mut SqliteConnection, task: TaskId) -> Result<TaskHi
                   EXISTS (SELECT 1 FROM completions c WHERE c.task_id = t.id) AS "completion!: bool",
                   EXISTS (SELECT 1 FROM messages m WHERE m.task_id = t.id) AS "message!: bool",
                   EXISTS (SELECT 1 FROM task_reports r WHERE r.task_id = t.id) AS "report!: bool",
-                  EXISTS (SELECT 1 FROM worker_turns x WHERE x.task_id = t.id) AS "turn!: bool"
+                  EXISTS (SELECT 1 FROM worker_turns x WHERE x.task_id = t.id) AS "turn!: bool",
+                  EXISTS (SELECT 1 FROM review_plan_members m WHERE m.task_id = t.id) AS "review_plan!: bool"
            FROM tasks t WHERE t.number = ?"#,
         number
     )
@@ -47,6 +50,7 @@ pub async fn history(conn: &mut SqliteConnection, task: TaskId) -> Result<TaskHi
         message: row.message,
         report: row.report,
         turn: row.turn,
+        review_plan: row.review_plan,
     }))
 }
 

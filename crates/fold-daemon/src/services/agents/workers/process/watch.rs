@@ -381,6 +381,10 @@ pub(super) async fn watch_done(
         };
         let supervisor = Supervisor { inner };
         supervisor.on_event(&event).await;
+        tokio::spawn(supervisor.clone().wake_main(event.clone()));
+        if event.event_type == types::WORKER_STOPPED {
+            tokio::spawn(supervisor.clone().catch_up_after_stop(event.clone()));
+        }
         let done = match supervisor.done_workers(&event).await {
             Ok(done) => done,
             Err(error) => {

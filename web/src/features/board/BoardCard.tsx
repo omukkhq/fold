@@ -37,6 +37,7 @@ import {
   leadCheckMark,
   messagesText,
   needsText,
+  planWaitText,
   proposalLook,
   proposalText,
   taskPath,
@@ -71,13 +72,33 @@ function Meta({
   );
 }
 
-function ProposalPill({ proposal }: { proposal: BoardProposal }) {
+/** The proposal pill; a proposal that waits in a review plan says under it what its batch waits for. */
+function ProposalPill({
+  proposal,
+  now,
+}: {
+  proposal: BoardProposal;
+  now: number;
+}) {
   const { icon: Icon, color } = PROPOSAL_ICON[proposalLook(proposal)];
-  return (
+  const wait = planWaitText(proposal, now);
+  const pill = (
     <span className="inline-flex items-center gap-4 self-start rounded-s bg-surface px-7 py-2 text-meta font-medium text-text inset-ring inset-ring-border">
       <Icon aria-hidden="true" size={12} className={color} />
       {proposalText(proposal)}
     </span>
+  );
+  if (wait === null) {
+    return pill;
+  }
+  return (
+    <div className="flex flex-col gap-4">
+      {pill}
+      <p className="flex items-start gap-4 text-meta leading-normal text-text-muted">
+        <Hourglass aria-hidden="true" size={12} className="mt-2 shrink-0" />
+        <span className="min-w-0">{wait}</span>
+      </p>
+    </div>
   );
 }
 
@@ -251,7 +272,9 @@ export function BoardCard({
           className="self-start"
         />
       ) : null}
-      {card.proposal ? <ProposalPill proposal={card.proposal} /> : null}
+      {card.proposal ? (
+        <ProposalPill proposal={card.proposal} now={now} />
+      ) : null}
       {leadCheck ? <LeadCheckPill mark={leadCheck} /> : null}
       {hasFooter ? (
         <div className="flex items-center justify-between gap-8 border-t border-border-subtle pt-7">

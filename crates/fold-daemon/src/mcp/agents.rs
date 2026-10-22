@@ -3,7 +3,9 @@ use fold_core::roles::{
 };
 use fold_core::text::shorten;
 use fold_core::turn_errors;
-use fold_core::{AgentName, AreaName, FoldError, LabelName, ProposalId, Role, Tag, TaskId, codes};
+use fold_core::{
+    AgentName, AreaName, FoldError, LabelName, ProposalId, ReviewPlanId, Role, Tag, TaskId, codes,
+};
 use fold_store::agents::{AreaRow, HandoffRow, PreviousSessionRow, WorkerProcessRow};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
@@ -96,6 +98,9 @@ pub struct StartWorkerInput {
     /// The proposals a reviewer reviews, such as P-3: one proposal, or two or more related proposals, which fold makes into a review batch of the reviewer's.
     #[serde(default)]
     pub proposals: Vec<String>,
+    /// For a reviewer, in place of proposals: the review plan whose open proposals it reviews, such as rp-2. Two or more become one batch; the tasks the plan still waits for leave it.
+    #[serde(default)]
+    pub plan: Option<String>,
     /// For a reviewer's revised proposals: the scope of the review you choose for some of them, each with its reason, when fold's suggested_scope from get_proposal_diff does not fit. The other proposals follow the suggestion, and the reviewer follows the scope it gets.
     #[serde(default)]
     pub scopes: Vec<super::reviews::ScopeChoiceInput>,
@@ -218,7 +223,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             WRITE_HANDOFF,
-            "As an area lead or the review lead, store your hand-off note when fold asks for it; fold then starts you again with a fresh context whose first turn holds the note and the current fold state.",
+            "As an area lead, the review lead or the supervised main, store your hand-off note when fold asks for it; fold then starts you again with a fresh context whose first turn holds the note and the current fold state.",
             schema_for_type::<WriteHandoffInput>(),
         ),
         Tool::new(
@@ -329,6 +334,9 @@ pub async fn start_worker(server: &FoldServer, arguments: &JsonObject) -> Result
         area: input.area.as_deref().map(AreaName::parse).transpose()?,
         tasks: ids::<TaskId>(&input.tasks, "task")?,
         proposals: ids::<ProposalId>(&input.proposals, "proposal")?,
+        plan: ids::<ReviewPlanId>(input.plan.as_slice(), "review plan")?
+            .first()
+            .copied(),
         scopes: super::reviews::scope_choices(&input.scopes)?,
         model: input.model,
         instructions: input.instructions,
