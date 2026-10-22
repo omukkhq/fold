@@ -688,7 +688,7 @@ impl ReviewService {
         self.get_review_plan(plan).await
     }
 
-    /// Changes an open plan in one transaction with `review.plan_changed`: `remove` takes tasks out, awaited or joined, as `removed`, so a removed proposal is reviewed on its own; `close` takes every member out the same way; `add_proposals` and `add_tasks` add members by the rules of [`ReviewService::create_review_plan`], tasks only before the wait ended. The deadline stays. A plan left without members ends with `review.plan_ended`. The review lead changes a plan in every way, and the main agent only removes and closes (`policy::can_change_plan`).
+    /// Changes an open plan in one transaction with `review.plan_changed`: `remove` takes tasks out, awaited or joined, as `removed`, so a removed proposal is reviewed on its own; `close` takes every member out the same way; `add_proposals` and `add_tasks` add members by the rules of [`ReviewService::create_review_plan`], tasks only before the wait ended. The deadline stays; a plan past it whose wait the deadline job has yet to end ends its wait in the same write first, as the job would, so a change never adds a task to wait for after the deadline. A plan left without members ends with `review.plan_ended`. The review lead changes a plan in every way, and the main agent only removes and closes (`policy::can_change_plan`).
     pub async fn change_review_plan(
         &self,
         actor: &Actor,
@@ -729,9 +729,14 @@ impl ReviewService {
             .write(async |tx| {
                 let starter = starter_of(tx, actor).await?;
                 policy::can_change_plan(&starter, adds).map_err(FoldError::from)?;
-                let row = open_plan(tx, plan).await?;
-                if !add_tasks.is_empty() && (row.wait_ended_at.is_some() || now >= row.deadline_at)
-                {
+                let mut row = open_plan(tx, plan).await?;
+                // A plan past its deadline that the job has yet to reach ends its wait here, as the job would.
+                let mut left = Vec::new();
+                if row.wait_ended_at.is_none() && now >= row.deadline_at {
+                    left = end_plan_wait(tx, &mut buffer, plan, now).await?;
+                    row = open_plan(tx, plan).await?;
+                }
+                if !add_tasks.is_empty() && row.wait_ended_at.is_some() {
                     return Err(FoldError::new(
                         codes::REVIEW_PLAN_NOT_OPEN,
                         format!("the wait of {plan} ended, so it takes no task to wait for"),
@@ -740,7 +745,7 @@ impl ReviewService {
                     .with_hint(format!("start the plan with start_worker and plan {plan}"))
                     .into());
                 }
-                for &task in &remove {
+                for &task in remove.iter().filter(|task| !left.contains(task)) {
                     if !store::release_member(tx, plan, task, PlanRelease::Removed, now).await? {
                         return Err(FoldError::new(
                             codes::INVALID_REQUEST,
@@ -754,7 +759,11 @@ impl ReviewService {
                         .into());
                     }
                 }
-                let mut removed = remove.clone();
+                let mut removed: Vec<TaskId> = remove
+                    .iter()
+                    .filter(|task| !left.contains(task))
+                    .copied()
+                    .collect();
                 let mut live: Vec<TaskId> = store::members(tx.conn(), plan)
                     .await?
                     .into_iter()
@@ -857,33 +866,13 @@ impl ReviewService {
             let done = self
                 .store
                 .write(async |tx| {
-                    if !store::end_wait(tx, plan, now).await? {
+                    let open = store::get_plan(tx.conn(), plan).await?.is_some_and(|row| {
+                        row.state == PlanState::Open && row.wait_ended_at.is_none()
+                    });
+                    if !open {
                         return Ok::<_, ReviewError>(false);
                     }
-                    let members = store::members(tx.conn(), plan).await?;
-                    let mut left = Vec::new();
-                    for member in members.iter().filter(|member| member.is_awaited()) {
-                        store::release_member(tx, plan, member.task, PlanRelease::Deadline, now)
-                            .await?;
-                        left.push(member.task);
-                    }
-                    let proposals: Vec<ProposalId> = members
-                        .iter()
-                        .filter(|member| member.is_live())
-                        .filter_map(|member| member.proposal)
-                        .collect();
-                    if proposals.is_empty() {
-                        end_plan(tx, &mut buffer, &EventActor::fold(), plan, "deadline", now)
-                            .await?;
-                        return Ok(true);
-                    }
-                    let event = NewEvent::new(types::REVIEW_PLAN_WAIT_ENDED, EventActor::fold())?
-                        .data(json!({
-                        "plan": plan.to_string(),
-                        "proposals": ids(&proposals),
-                        "left": ids(&left),
-                    }))?;
-                    buffer.append(tx, &event, now).await?;
+                    end_plan_wait(tx, &mut buffer, plan, now).await?;
                     Ok(true)
                 })
                 .await?;
@@ -892,6 +881,40 @@ impl ReviewService {
         }
         Ok(ended)
     }
+}
+
+/// Ends the wait of the open plan `plan`, whose wait has not ended, inside the caller's write: the tasks it still waits for leave as `deadline` and are returned, and `review.plan_wait_ended` by fold names the open proposals the review lead now gives to one reviewer. A plan without an open proposal ends with `review.plan_ended`.
+async fn end_plan_wait(
+    tx: &mut WriteTx,
+    buffer: &mut EventBuffer,
+    plan: ReviewPlanId,
+    now: Timestamp,
+) -> Result<Vec<TaskId>, ReviewError> {
+    if !store::end_wait(tx, plan, now).await? {
+        return Err(StoreError::Corrupt("review_plans.wait_ended_at").into());
+    }
+    let members = store::members(tx.conn(), plan).await?;
+    let mut left = Vec::new();
+    for member in members.iter().filter(|member| member.is_awaited()) {
+        store::release_member(tx, plan, member.task, PlanRelease::Deadline, now).await?;
+        left.push(member.task);
+    }
+    let proposals: Vec<ProposalId> = members
+        .iter()
+        .filter(|member| member.is_live())
+        .filter_map(|member| member.proposal)
+        .collect();
+    if proposals.is_empty() {
+        end_plan(tx, buffer, &EventActor::fold(), plan, "deadline", now).await?;
+        return Ok(left);
+    }
+    let event = NewEvent::new(types::REVIEW_PLAN_WAIT_ENDED, EventActor::fold())?.data(json!({
+        "plan": plan.to_string(),
+        "proposals": ids(&proposals),
+        "left": ids(&left),
+    }))?;
+    buffer.append(tx, &event, now).await?;
+    Ok(left)
 }
 
 async fn plan_view(

@@ -653,3 +653,54 @@ async fn the_main_agent_takes_members_out_of_a_plan_or_closes_it() {
         .await;
     assert_eq!(refused["code"], codes::INVALID_REQUEST, "{refused}");
 }
+
+/// A change to a plan past its deadline that the job has yet to reach ends the wait in the same write, as the job would: it takes no task to wait for, and a removal of a task that the deadline already took out changes nothing more.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_change_after_the_deadline_ends_the_wait_first() {
+    let (h, _fake) = with_review_lead().await;
+    let first = task(&h, "First").await;
+    let second = task(&h, "Second").await;
+    let third = task(&h, "Third").await;
+    let fourth = task(&h, "Fourth").await;
+    let (p1, _) = open(&h, &first, "src/first.rs").await;
+    h.call(
+        "review-lead",
+        "create_review_plan",
+        json!({"proposals": [p1], "tasks": [second, third]}),
+    )
+    .await;
+    h.project
+        .clock()
+        .advance(Duration::from_secs(60 * 60))
+        .unwrap();
+    let refused = h
+        .refused(
+            "review-lead",
+            "change_review_plan",
+            json!({"id": "rp-1", "add_tasks": [fourth]}),
+        )
+        .await;
+    assert_eq!(refused["code"], codes::REVIEW_PLAN_NOT_OPEN, "{refused}");
+    assert!(kinds(&h.events().await, "review.plan_wait_ended").is_empty());
+
+    let changed = h
+        .call(
+            "review-lead",
+            "change_review_plan",
+            json!({"id": "rp-1", "remove": [second]}),
+        )
+        .await;
+    assert_eq!(changed["wait_ended"], true, "{changed}");
+    assert_eq!(changed["proposals"], json!([p1]));
+    assert_eq!(changed["awaited"], json!([]));
+    let events = h.events().await;
+    let ended = kinds(&events, "review.plan_wait_ended");
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0].data["left"], json!([second, third]));
+    assert_eq!(
+        kinds(&events, "review.plan_changed")[0].data["removed"],
+        json!([])
+    );
+    let reviews = h.handle.reviews(&h.state.registry);
+    assert_eq!(reviews.end_due_plan_waits().await.unwrap(), 0);
+}

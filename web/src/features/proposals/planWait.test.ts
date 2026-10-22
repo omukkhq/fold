@@ -27,6 +27,13 @@ describe("planWait", () => {
     });
   });
 
+  it("names the next check, never a past time, once the deadline passed before fold ended the wait", () => {
+    expect(planWait(plan(), "P-3", DEADLINE)?.detail).toBe(
+      "rp-2 waits for T-7, T-8 until the next check",
+    );
+    expect(planWait(plan(), "P-3", DEADLINE + 60_000)?.state).toBe("waiting");
+  });
+
   it("puts the date in front of a deadline on another day", () => {
     const tomorrow = new Date(2026, 9, 22, 0, 30).getTime();
     expect(planWait(plan({ deadline_at: tomorrow }), "P-3", NOW)?.detail).toBe(
