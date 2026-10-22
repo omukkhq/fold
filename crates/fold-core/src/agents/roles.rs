@@ -981,6 +981,22 @@ mod tests {
     }
 
     #[test]
+    fn every_prompt_reads_the_part_of_its_role_once_from_the_skill() {
+        for (prompt, part) in [
+            (Role::Main.prompt(), "MAIN.md"),
+            (main_prompt(), "MAIN.md"),
+            (Role::AreaLead.prompt(), "AREA_LEAD.md"),
+            (Role::ReviewLead.prompt(), "REVIEW_LEAD.md"),
+            (Role::TaskWorker.prompt(), "TASK_WORKER.md"),
+            (Role::Reviewer.prompt(), "REVIEWER.md"),
+        ] {
+            let read = format!("Load the `fold` skill and read its `{part}`");
+            assert_eq!(prompt.matches(&read).count(), 1, "{part}");
+            assert!(!prompt.contains("Orchestrating section"), "{part}");
+        }
+    }
+
+    #[test]
     fn shipped_prompts_include_shared_authority_and_recovery_rules() {
         for prompt in Role::ALL
             .into_iter()

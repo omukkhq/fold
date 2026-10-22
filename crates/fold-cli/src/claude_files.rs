@@ -2,6 +2,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use fold_core::layout::{HOOKS, hook_group};
+use fold_core::roles::Role;
 use fold_core::{FoldError, codes};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
@@ -32,13 +33,78 @@ pub const AGENTS_END: &str = "<!-- fold:end -->";
 pub const SKILL_FILE: &str = ".claude/skills/fold/SKILL.md";
 /// The reference beside the skill: fold's file formats, the human's commands and the web app's screens, which a session reads when its task needs them instead of holding them in every context.
 pub const REFERENCE_FILE: &str = ".claude/skills/fold/REFERENCE.md";
+pub const MAIN_PART_FILE: &str = ".claude/skills/fold/MAIN.md";
+pub const AREA_LEAD_PART_FILE: &str = ".claude/skills/fold/AREA_LEAD.md";
+pub const REVIEW_LEAD_PART_FILE: &str = ".claude/skills/fold/REVIEW_LEAD.md";
+pub const TASK_WORKER_PART_FILE: &str = ".claude/skills/fold/TASK_WORKER.md";
+pub const REVIEWER_PART_FILE: &str = ".claude/skills/fold/REVIEWER.md";
+/// Every error code with what to do, which an agent reads only when a refusal's hint does not settle its next step.
+pub const ERRORS_FILE: &str = ".claude/skills/fold/ERRORS.md";
 /// The files of the fold skill, which fold owns whole.
-pub const SKILL_FILES: [&str; 2] = [SKILL_FILE, REFERENCE_FILE];
+pub const SKILL_FILES: [&str; 8] = [
+    SKILL_FILE,
+    REFERENCE_FILE,
+    MAIN_PART_FILE,
+    AREA_LEAD_PART_FILE,
+    REVIEW_LEAD_PART_FILE,
+    TASK_WORKER_PART_FILE,
+    REVIEWER_PART_FILE,
+    ERRORS_FILE,
+];
 
 /// Not named `AGENTS.md`, so an agent working in the fold repository never loads it as rules.
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 const SKILL: &str = include_str!("../templates/SKILL.md");
 const REFERENCE: &str = include_str!("../templates/REFERENCE.md");
+const ERRORS: &str = include_str!("../templates/ERRORS.md");
+
+/// Joins the sections of one role's part of the skill, so that an agent reads one file for its role while each section has one source that several parts share. The shared rules always come last.
+macro_rules! part {
+    ($($section:literal),+) => {
+        concat!(
+            $(include_str!(concat!("../templates/parts/", $section, ".md")), "\n",)+
+            include_str!("../templates/parts/shared.md")
+        )
+    };
+}
+
+/// The skill's part for each role: every step of that role and the shared rules, so that a worker loads only what its role needs.
+const MAIN_PART: &str = part!(
+    "main",
+    "planning",
+    "kinds",
+    "workers",
+    "building",
+    "reviewing",
+    "scope"
+);
+const AREA_LEAD_PART: &str = part!("area_lead", "planning", "kinds", "workers");
+const REVIEW_LEAD_PART: &str = part!("review_lead", "scope", "workers");
+const TASK_WORKER_PART: &str = part!("task_worker", "building", "kinds");
+const REVIEWER_PART: &str = part!("reviewer", "reviewing", "scope");
+
+/// The text fold writes into each of [`SKILL_FILES`], in the same order.
+pub const SKILL_TEXTS: [&str; 8] = [
+    SKILL,
+    REFERENCE,
+    MAIN_PART,
+    AREA_LEAD_PART,
+    REVIEW_LEAD_PART,
+    TASK_WORKER_PART,
+    REVIEWER_PART,
+    ERRORS,
+];
+
+/// The file of the skill that holds the steps of `role`. The supervised main reads the interactive main agent's part.
+pub fn part_file(role: Role) -> &'static str {
+    match role {
+        Role::Main => MAIN_PART_FILE,
+        Role::AreaLead => AREA_LEAD_PART_FILE,
+        Role::ReviewLead => REVIEW_LEAD_PART_FILE,
+        Role::TaskWorker => TASK_WORKER_PART_FILE,
+        Role::Reviewer => REVIEWER_PART_FILE,
+    }
+}
 
 /// `details.reason` of a Claude Code file that fold cannot merge into.
 pub const MALFORMED_REASON: &str = "malformed_claude_file";
@@ -134,7 +200,7 @@ pub fn write(root: &Path) -> Result<(), ClaudeFileError> {
     if let Some((end, text)) = without_stale_section(&project, root, name)? {
         changes.push(Change::Write(end, text));
     }
-    for (relative, text) in SKILL_FILES.into_iter().zip([SKILL, REFERENCE]) {
+    for (relative, text) in SKILL_FILES.into_iter().zip(SKILL_TEXTS) {
         changes.push(Change::Write(
             link_end_of(&root.join(relative))?,
             text.as_bytes().to_vec(),
@@ -737,8 +803,9 @@ mod tests {
     fn the_files_sit_in_the_folders() {
         let parent = |file: &str| Path::new(file).parent().map(Path::to_owned);
         assert_eq!(parent(SETTINGS_FILE), Some(PathBuf::from(FOLDERS[0])));
-        assert_eq!(parent(SKILL_FILE), Some(PathBuf::from(FOLDERS[2])));
-        assert_eq!(parent(REFERENCE_FILE), Some(PathBuf::from(FOLDERS[2])));
+        for file in SKILL_FILES {
+            assert_eq!(parent(file), Some(PathBuf::from(FOLDERS[2])), "{file}");
+        }
         assert_eq!(parent(FOLDERS[2]), Some(PathBuf::from(FOLDERS[1])));
         assert_eq!(parent(FOLDERS[1]), Some(PathBuf::from(FOLDERS[0])));
     }

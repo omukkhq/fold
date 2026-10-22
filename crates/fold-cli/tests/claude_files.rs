@@ -4,8 +4,8 @@ use std::process::{Command, Output};
 
 use fold_cli::claude_files::{
     self, AGENTS_BEGIN, AGENTS_END, AGENTS_FILE, CLAUDE_FILE, ClaudeFileError, MALFORMED_REASON,
-    MCP_FILE, REFERENCE_FILE, SETTINGS_FILE, SKILL_FILE, agents_md, instructions_file,
-    shadowing_files, stale_section, without_section,
+    MCP_FILE, REFERENCE_FILE, SETTINGS_FILE, SKILL_FILE, SKILL_FILES, SKILL_TEXTS, agents_md,
+    instructions_file, shadowing_files, stale_section, without_section,
 };
 use tempfile::TempDir;
 
@@ -25,14 +25,15 @@ fn read(root: &Path, relative: &str) -> String {
 /// The modification time of each of fold's files.
 #[cfg(test)]
 fn mtimes(root: &Path) -> Vec<std::time::SystemTime> {
-    [AGENTS_FILE, SKILL_FILE, REFERENCE_FILE]
+    std::iter::once(AGENTS_FILE)
+        .chain(SKILL_FILES)
         .map(|relative| {
             std::fs::metadata(root.join(relative))
                 .unwrap()
                 .modified()
                 .unwrap()
         })
-        .to_vec()
+        .collect()
 }
 
 #[cfg(test)]
@@ -63,18 +64,38 @@ fn a_fresh_write_gives_the_section_and_the_skill_and_a_refresh_changes_no_byte()
     );
     let reference = read(root, REFERENCE_FILE);
     assert!(reference.starts_with("# fold reference\n"), "{reference}");
+    for (file, text) in SKILL_FILES.into_iter().zip(SKILL_TEXTS) {
+        assert_eq!(read(root, file), text, "{file}");
+    }
 
     let before = mtimes(root);
-    let bytes: Vec<String> = [AGENTS_FILE, SKILL_FILE, REFERENCE_FILE]
-        .map(|relative| read(root, relative))
-        .to_vec();
+    let files = || std::iter::once(AGENTS_FILE).chain(SKILL_FILES);
+    let bytes: Vec<String> = files().map(|relative| read(root, relative)).collect();
     claude_files::write(root).unwrap();
     claude_files::write(root).unwrap();
-    let after: Vec<String> = [AGENTS_FILE, SKILL_FILE, REFERENCE_FILE]
-        .map(|relative| read(root, relative))
-        .to_vec();
+    let after: Vec<String> = files().map(|relative| read(root, relative)).collect();
     assert_eq!(bytes, after);
     assert_eq!(before, mtimes(root), "an unchanged file is not written");
+}
+
+/// A project that an earlier fold set up holds only the skill and the reference; a refresh adds the part of each role next to them and leaves a file the user put there alone.
+#[test]
+fn a_refresh_of_an_earlier_skill_adds_the_parts_and_keeps_the_users_files() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let folder = root.join(SKILL_FILE).parent().unwrap().to_owned();
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(root.join(SKILL_FILE), "an earlier skill\n").unwrap();
+    std::fs::write(root.join(REFERENCE_FILE), "an earlier reference\n").unwrap();
+    std::fs::write(folder.join("notes.md"), "my notes\n").unwrap();
+    claude_files::write(root).unwrap();
+    for (file, text) in SKILL_FILES.into_iter().zip(SKILL_TEXTS) {
+        assert_eq!(read(root, file), text, "{file}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(folder.join("notes.md")).unwrap(),
+        "my notes\n"
+    );
 }
 
 /// The expected texts are literals, so they prove that the user's keys keep their order and their values.

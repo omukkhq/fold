@@ -206,6 +206,12 @@ pub fn init_files(project: &Path) -> (usize, u64) {
         "AGENTS.md",
         ".claude/skills/fold/SKILL.md",
         ".claude/skills/fold/REFERENCE.md",
+        ".claude/skills/fold/MAIN.md",
+        ".claude/skills/fold/AREA_LEAD.md",
+        ".claude/skills/fold/REVIEW_LEAD.md",
+        ".claude/skills/fold/TASK_WORKER.md",
+        ".claude/skills/fold/REVIEWER.md",
+        ".claude/skills/fold/ERRORS.md",
         ".foldignore",
         ".gitignore",
     ];

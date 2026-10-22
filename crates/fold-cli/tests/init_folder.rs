@@ -220,7 +220,7 @@ fn init_with_git_records_the_gitignore_change_as_r2_and_commits_from_r1() {
     );
     assert_eq!(
         git(&project, &["ls-tree", "-r", "--name-only", "HEAD"]),
-        ".claude/skills/fold/REFERENCE.md\n.claude/skills/fold/SKILL.md\n.foldignore\n.gitignore\nAGENTS.md\nREADME.md\nlink\nrun.sh\nsrc/lib.rs\n"
+        ".claude/skills/fold/AREA_LEAD.md\n.claude/skills/fold/ERRORS.md\n.claude/skills/fold/MAIN.md\n.claude/skills/fold/REFERENCE.md\n.claude/skills/fold/REVIEWER.md\n.claude/skills/fold/REVIEW_LEAD.md\n.claude/skills/fold/SKILL.md\n.claude/skills/fold/TASK_WORKER.md\n.foldignore\n.gitignore\nAGENTS.md\nREADME.md\nlink\nrun.sh\nsrc/lib.rs\n"
     );
     // The empty genesis gets no commit, so the history starts at r1.
     assert_eq!(git(&project, &["rev-list", "--count", "HEAD"]).trim(), "2");

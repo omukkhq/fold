@@ -1,8 +1,54 @@
 use std::collections::BTreeSet;
 
+use fold_cli::claude_files::{self, SKILL_FILES, SKILL_TEXTS, part_file};
+use fold_core::roles::Role;
+
 const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 const REFERENCE: &str = include_str!("../templates/REFERENCE.md");
+
+/// The file name of a skill file, such as `MAIN.md`.
+#[cfg(test)]
+fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// The text fold writes into the skill file `path`.
+#[cfg(test)]
+fn skill_text(path: &str) -> &'static str {
+    SKILL_FILES
+        .into_iter()
+        .zip(SKILL_TEXTS)
+        .find(|(file, _)| *file == path)
+        .map(|(_, text)| text)
+        .unwrap_or_else(|| panic!("{path} is no skill file"))
+}
+
+/// The part of the skill that holds the steps of `role`.
+#[cfg(test)]
+fn part(role: Role) -> &'static str {
+    skill_text(part_file(role))
+}
+
+/// Every file of the skill but the reference, which has tests of its own, by file name: the index, the part of each role and the errors.
+#[cfg(test)]
+fn skill_files() -> Vec<(&'static str, &'static str)> {
+    SKILL_FILES
+        .into_iter()
+        .zip(SKILL_TEXTS)
+        .filter(|(path, _)| *path != claude_files::REFERENCE_FILE)
+        .map(|(path, text)| (file_name(path), text))
+        .collect()
+}
+
+/// The backticked identifiers of every file of [`skill_files`] together.
+#[cfg(test)]
+fn skill_identifiers() -> BTreeSet<String> {
+    skill_files()
+        .into_iter()
+        .flat_map(|(_, text)| backticked_identifiers(text))
+        .collect()
+}
 
 const FOLD_TOOLS: [&str; 96] = [
     "register_agent",
@@ -350,22 +396,165 @@ const NON_TOOL_NAMES: [&str; 43] = [
     "area_leads",
 ];
 
-const SECTIONS: [&str; 14] = [
-    "Identity",
+const SECTIONS: [&str; 3] = ["Parts", "Identity", "Sessions opened by hand"];
+
+/// The rules every role shares, which end each part of the skill.
+const SHARED_SECTIONS: [&str; 9] = [
+    "Reference",
+    "Rights",
     "Messaging",
     "Noticing news",
-    "Orchestrating",
-    "Orchestrator",
-    "Worker",
-    "Reviewer",
     "Mentions",
     "Requests",
-    "Task template",
     "Subagents",
-    "Worker agents",
-    "Errors",
+    "Recovery",
     "Never",
 ];
+
+/// The sections of each role's part before the shared ones.
+#[cfg(test)]
+fn part_sections(role: Role) -> &'static [&'static str] {
+    match role {
+        Role::Main => &[
+            "Orchestrating",
+            "Orchestrator",
+            "Task template",
+            "Drafting requests",
+            "Task kinds",
+            "Worker agents",
+            "Building a task",
+            "Reviewing",
+            "Review scope",
+            "Integration",
+        ],
+        Role::AreaLead => &[
+            "Area lead",
+            "Orchestrator",
+            "Task template",
+            "Drafting requests",
+            "Task kinds",
+            "Worker agents",
+        ],
+        Role::ReviewLead => &[
+            "Review lead",
+            "Review scope",
+            "Integration",
+            "Worker agents",
+        ],
+        Role::TaskWorker => &["Task worker", "Building a task", "Task kinds"],
+        Role::Reviewer => &["Reviewer", "Reviewing", "Review scope", "Integration"],
+    }
+}
+
+/// Tools that the steps of a role call, which its prompt or its part of the skill must teach, so that no step of the role is out of its reach.
+#[cfg(test)]
+fn role_steps(role: Role) -> &'static [&'static str] {
+    match role {
+        Role::Main => &[
+            "define_area",
+            "update_area",
+            "create_label",
+            "create_task_plan",
+            "require_human_review",
+            "clear_blocker",
+            "complete_task",
+            "start_worker",
+            "stop_worker",
+            "restart_worker",
+            "set_worker_limits",
+            "pause_project",
+            "resume_project",
+            "open_main_workspace",
+            "submit_main_change",
+            "add_exclude_patterns",
+            "claim_task",
+            "claim_review",
+            "change_review_plan",
+            "claim_request",
+            "submit_request_draft",
+            "submit_review",
+            "integrate_proposal",
+            "compare_revisions",
+            "mark_answered",
+        ],
+        Role::AreaLead => &[
+            "get_task_graph",
+            "get_ready_tasks",
+            "create_task_plan",
+            "create_task",
+            "add_dependency",
+            "add_checklist_item",
+            "start_worker",
+            "list_workers",
+            "stop_worker",
+            "complete_task",
+            "send_back_task",
+            "set_blocker",
+            "takeover_claim",
+            "write_handoff",
+            "claim_request",
+            "submit_request_draft",
+            "release_request",
+            "mark_answered",
+        ],
+        Role::ReviewLead => &[
+            "list_proposals",
+            "get_proposal_diff",
+            "start_worker",
+            "create_review_plan",
+            "get_review_plan",
+            "change_review_plan",
+            "list_review_plans",
+            "set_review_scope",
+            "release_review",
+            "remove_from_batch",
+            "integrate_proposal",
+            "integrate_review_batch",
+            "write_handoff",
+        ],
+        Role::TaskWorker => &[
+            "get_task",
+            "get_workspace",
+            "create_workspace",
+            "get_workspace_changes",
+            "run_checks",
+            "get_check_run",
+            "update_checklist_item",
+            "record_checkpoint",
+            "list_checkpoints",
+            "restore_checkpoint",
+            "record_changes",
+            "sync_workspace",
+            "compare_revisions",
+            "create_proposal",
+            "update_proposal",
+            "get_review_comments",
+            "close_proposal",
+            "abandon_workspace",
+            "release_task",
+            "report_task",
+            "create_request",
+        ],
+        Role::Reviewer => &[
+            "get_proposal",
+            "get_proposal_diff",
+            "get_review_comments",
+            "create_review_checkout",
+            "get_check_run",
+            "submit_review_fix",
+            "submit_review",
+            "release_review",
+            "create_batch_checkout",
+            "submit_batch_review",
+            "remove_from_batch",
+            "list_review_batches",
+            "get_review_batch",
+            "integrate_proposal",
+            "integrate_review_batch",
+            "create_request",
+        ],
+    }
+}
 
 /// Each lowercase identifier with an underscore inside a backtick span.
 fn backticked_identifiers(text: &str) -> BTreeSet<String> {
@@ -404,7 +593,10 @@ fn known_names() -> BTreeSet<&'static str> {
 #[test]
 fn every_backticked_identifier_is_a_tool_a_code_or_an_allowed_name() {
     let known = known_names();
-    for (name, text) in [("SKILL.md", SKILL), ("agents_section.md", AGENTS_SECTION)] {
+    for (name, text) in skill_files()
+        .into_iter()
+        .chain([("agents_section.md", AGENTS_SECTION)])
+    {
         for identifier in backticked_identifiers(text) {
             assert!(
                 known.contains(identifier.as_str()),
@@ -436,12 +628,11 @@ fn server_tools() -> BTreeSet<String> {
 #[test]
 fn no_template_names_a_hand_started_session() {
     let instructions = fold_daemon::mcp::INSTRUCTIONS;
-    for (name, text) in [
-        ("SKILL.md", SKILL),
+    for (name, text) in skill_files().into_iter().chain([
         ("agents_section.md", AGENTS_SECTION),
         ("main.md", fold_core::main_prompt()),
         ("INSTRUCTIONS", instructions),
-    ] {
+    ]) {
         assert!(!text.contains("FOLD_AGENT="), "{name}");
     }
 }
@@ -488,8 +679,8 @@ fn the_tool_list_is_the_server_list_and_the_skill_teaches_no_pending_tool() {
             "pending `{tool}` is not in FOLD_TOOLS"
         );
         assert!(
-            !backticked_identifiers(SKILL).contains(tool),
-            "SKILL.md teaches `{tool}`: remove it from PENDING_TOOLS"
+            !skill_identifiers().contains(tool),
+            "the skill teaches `{tool}`: remove it from PENDING_TOOLS"
         );
     }
     let listed: BTreeSet<String> = FOLD_TOOLS.into_iter().map(str::to_owned).collect();
@@ -525,12 +716,12 @@ fn the_code_list_is_the_core_codes_and_the_pending_codes() {
 
 #[test]
 fn the_skill_names_every_tool() {
-    let named = backticked_identifiers(SKILL);
+    let named = skill_identifiers();
     for tool in FOLD_TOOLS
         .into_iter()
         .filter(|tool| !PENDING_TOOLS.contains(tool))
     {
-        assert!(named.contains(tool), "SKILL.md does not name `{tool}`");
+        assert!(named.contains(tool), "no part of the skill names `{tool}`");
     }
 }
 
@@ -549,7 +740,11 @@ fn the_tool_and_code_lists_have_no_duplicates() {
 #[test]
 fn the_agents_section_is_short_and_has_no_imports_or_design_documents() {
     assert!(AGENTS_SECTION.lines().count() <= 40);
-    for text in [AGENTS_SECTION, SKILL] {
+    for text in skill_files()
+        .into_iter()
+        .map(|(_, text)| text)
+        .chain([AGENTS_SECTION])
+    {
         assert!(text.lines().all(|line| !line.starts_with('@')));
         assert!(!text.contains("ARCHITECTURE.md"));
         assert!(!text.contains("IMPLEMENTATION_PLAN.md"));
@@ -568,7 +763,11 @@ fn the_agents_section_points_to_the_skill_and_the_repository_rules() {
 
 #[test]
 fn neither_template_uses_the_banned_word_for_a_proposal() {
-    for text in [AGENTS_SECTION, SKILL] {
+    for text in skill_files()
+        .into_iter()
+        .map(|(_, text)| text)
+        .chain([AGENTS_SECTION])
+    {
         assert!(!text.to_lowercase().contains("pull request"));
         let abbreviation = text
             .split(|c: char| !c.is_ascii_alphanumeric())
@@ -581,6 +780,12 @@ fn neither_template_uses_the_banned_word_for_a_proposal() {
 fn both_templates_keep_agents_out_of_the_project_folder() {
     assert!(AGENTS_SECTION.contains("Never edit the files of the project folder"));
     assert!(SKILL.contains("Never edit the files of the project folder"));
+    for role in Role::ALL {
+        assert!(
+            part(role).contains("Never edit the files of the project folder"),
+            "{role}"
+        );
+    }
 }
 
 #[test]
@@ -601,6 +806,121 @@ fn the_skill_has_the_frontmatter_keys_and_every_section() {
 }
 
 #[test]
+fn each_part_of_the_skill_has_its_role_sections_then_the_shared_ones() {
+    for role in Role::ALL {
+        let text = part(role);
+        let headings: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("## "))
+            .collect();
+        let expected: Vec<&str> = part_sections(role)
+            .iter()
+            .copied()
+            .chain(SHARED_SECTIONS)
+            .collect();
+        assert_eq!(headings, expected, "{role}");
+        assert!(text.starts_with("# fold: "), "{role}");
+        assert_eq!(text.matches("\n# ").count(), 0, "{role}: one title");
+    }
+    let errors = skill_text(claude_files::ERRORS_FILE);
+    assert!(errors.starts_with("# fold errors\n"));
+    for code in [
+        "agent_not_registered",
+        "worker_claim_denied",
+        "review_plan_denied",
+    ] {
+        assert!(errors.contains(&format!("| `{code}` |")), "{code}");
+    }
+}
+
+#[test]
+fn the_skill_index_names_every_part() {
+    for path in SKILL_FILES
+        .into_iter()
+        .filter(|path| *path != claude_files::SKILL_FILE)
+    {
+        let name = file_name(path);
+        assert!(
+            SKILL.contains(&format!("- `{name}`: ")),
+            "SKILL.md does not list `{name}`"
+        );
+        assert_eq!(
+            std::path::Path::new(path).parent(),
+            std::path::Path::new(claude_files::SKILL_FILE).parent(),
+            "{path} sits next to the index"
+        );
+    }
+    assert!(
+        SKILL.split_whitespace().count() < 1000,
+        "the index stays short"
+    );
+}
+
+#[test]
+fn every_role_prompt_points_to_the_part_of_its_role() {
+    for role in Role::ALL {
+        let name = file_name(part_file(role));
+        assert!(
+            role.prompt().contains(&format!("read its `{name}`")),
+            "{role} does not point to {name}"
+        );
+        for other in Role::ALL.into_iter().filter(|other| *other != role) {
+            let other_name = file_name(part_file(other));
+            assert!(
+                !role.prompt().contains(&format!("`{other_name}`")),
+                "{role} names {other_name}"
+            );
+        }
+    }
+    assert!(fold_core::main_prompt().contains("read its `MAIN.md`"));
+}
+
+#[test]
+fn each_role_reaches_every_step_of_its_role() {
+    for role in Role::ALL {
+        let named: BTreeSet<String> = backticked_identifiers(role.prompt())
+            .into_iter()
+            .chain(backticked_identifiers(part(role)))
+            .collect();
+        for tool in role_steps(role) {
+            assert!(FOLD_TOOLS.contains(tool), "{role}: `{tool}` is no tool");
+            assert!(
+                named.contains(*tool),
+                "neither the prompt nor the part of {role} names `{tool}`"
+            );
+        }
+    }
+    let worker = part(Role::TaskWorker);
+    for kept in [
+        "`sync_workspace(ws)`",
+        "`report_task(id, note)`",
+        "`unresolved_conflicts`",
+        "`workspace_write_unfinished`",
+    ] {
+        assert!(worker.contains(kept), "{kept}");
+    }
+    let reviewer = part(Role::Reviewer);
+    for kept in [
+        "`suggested_scope`",
+        "`scope_rules`",
+        "`batch_conflict`",
+        "`left_out`",
+    ] {
+        assert!(reviewer.contains(kept), "{kept}");
+    }
+    for (role, wrong) in [
+        (Role::TaskWorker, "define_area"),
+        (Role::Reviewer, "create_proposal"),
+        (Role::Reviewer, "define_area"),
+    ] {
+        assert!(
+            !backticked_identifiers(part(role)).contains(wrong),
+            "{role} part names `{wrong}`"
+        );
+    }
+}
+
+#[test]
 fn the_skill_maps_existing_code_into_areas_before_planning() {
     for rule in [
         "map the code before you plan",
@@ -608,14 +928,19 @@ fn the_skill_maps_existing_code_into_areas_before_planning() {
         "with the folders each area owns",
         "name the folders it owns",
     ] {
-        assert!(SKILL.contains(rule), "{rule}");
+        assert!(part(Role::Main).contains(rule), "{rule}");
     }
 }
 
 #[test]
 fn the_skill_uses_exactly_the_four_verdicts() {
-    for verdict in ["comment", "request_changes", "approve", "reject"] {
-        assert!(SKILL.contains(&format!("`{verdict}`")), "{verdict}");
+    for role in [Role::Reviewer, Role::Main] {
+        for verdict in ["comment", "request_changes", "approve", "reject"] {
+            assert!(
+                part(role).contains(&format!("`{verdict}`")),
+                "{role}: {verdict}"
+            );
+        }
     }
 }
 
@@ -625,7 +950,9 @@ fn the_skill_sends_missing_work_back_and_new_work_to_a_request() {
         "Send work that this task still misses, such as an unticked checklist step or an acceptance criterion with no work, back with `request_changes`.",
         "Describe new work outside the task, such as a feature the task did not ask for, with `create_request`; the proposal can still be approved.",
     ] {
-        assert!(SKILL.contains(rule), "{rule}");
+        for role in [Role::Reviewer, Role::Main] {
+            assert!(part(role).contains(rule), "{role}: {rule}");
+        }
     }
 }
 
