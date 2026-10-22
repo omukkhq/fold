@@ -15,7 +15,7 @@ use fold_core::{Actor, AgentActor, EventActor, MAIN_TAG, NewEvent, Tag, Timestam
 use fold_daemon::projects::ProjectHandle;
 use fold_daemon::services::events::EventBuffer;
 use fold_daemon::services::projects::gc;
-use fold_daemon::services::reviews::IntegrationOutcome;
+use fold_daemon::services::reviews::{DirectChange, DirectOutcome, IntegrationOutcome};
 use fold_daemon::services::workspaces::{DirectoryRemoval, follow_closed_workspaces};
 use fold_store::StoreError;
 use fold_store::projects::ProjectRow;
@@ -58,6 +58,11 @@ async fn abandoned_with_changes(fx: &Fixture) {
         .abandon_workspace(&author, ws(1), "the plan changed")
         .await
         .unwrap();
+}
+
+/// `frontend`'s session ends, as a session opened by hand ends when Claude Code exits.
+async fn frontend_leaves(fx: &Fixture) {
+    fx.agents.end_session(&fx.frontend.ctx).await.unwrap();
 }
 
 async fn removed(fx: &Fixture, workspace: u32) -> bool {
@@ -127,6 +132,8 @@ async fn an_integrated_workspace_and_its_review_checkout_lose_their_directories(
         .await
         .unwrap();
     assert!(matches!(outcome, IntegrationOutcome::Succeeded { .. }));
+    frontend_leaves(&fx).await;
+    fx.agents.end_session(&fx.review.ctx).await.unwrap();
 
     until_removed(&fx, 1, &fx.task_dir()).await;
     until_removed(&fx, checkout.id.number(), &checkout_dir).await;
@@ -144,6 +151,7 @@ async fn unrecorded_tracked_files_get_a_checkpoint_before_the_directory_goes() {
     let fx = Fixture::new().await;
     let _follower = follow(&fx);
     abandoned_with_changes(&fx).await;
+    frontend_leaves(&fx).await;
 
     until_removed(&fx, 1, &fx.task_dir()).await;
     let checkpoints = list_checkpoints(fx.project.store().read(), ws(1), false)
@@ -190,6 +198,7 @@ async fn a_closed_workspace_waits_until_the_worker_process_of_its_agent_ends() {
     ))
     .await;
     abandoned_with_changes(&fx).await;
+    frontend_leaves(&fx).await;
     assert_eq!(
         fx.workspaces.remove_closed_directory(ws(1)).await.unwrap(),
         DirectoryRemoval::NotDue
@@ -301,6 +310,7 @@ async fn the_project_folder_the_main_workspace_and_active_workspaces_are_never_t
 async fn a_removal_that_fails_leaves_the_row_for_the_next_gc() {
     let fx = Fixture::new().await;
     abandoned_with_changes(&fx).await;
+    frontend_leaves(&fx).await;
     let ws_dir = fx.project.paths().ws_dir();
     let mode = fs::metadata(&ws_dir).unwrap().permissions().mode();
     fs::set_permissions(&ws_dir, Permissions::from_mode(0o500)).unwrap();
@@ -335,6 +345,7 @@ async fn a_removal_that_fails_leaves_the_row_for_the_next_gc() {
 async fn a_tracked_file_the_final_checkpoint_cannot_read_keeps_the_directory() {
     let fx = Fixture::new().await;
     abandoned_with_changes(&fx).await;
+    frontend_leaves(&fx).await;
     let lib = fx.task_dir().join("src/lib.rs");
     fs::set_permissions(&lib, Permissions::from_mode(0o000)).unwrap();
     if fs::read(&lib).is_ok() {
@@ -393,6 +404,7 @@ async fn files_only_an_automatic_checkpoint_holds_get_a_final_checkpoint_that_au
         .abandon_workspace(&author, ws(1), "the plan changed")
         .await
         .unwrap();
+    frontend_leaves(&fx).await;
 
     let removal = fx.workspaces.remove_closed_directory(ws(1)).await.unwrap();
     let DirectoryRemoval::Removed {
@@ -423,4 +435,80 @@ async fn files_only_an_automatic_checkpoint_holds_get_a_final_checkpoint_that_au
         .unwrap()
         .payload;
     assert_eq!(lib, UNRECORDED.as_bytes());
+}
+
+#[tokio::test]
+async fn a_closed_workspace_of_a_session_opened_by_hand_waits_until_the_session_ends() {
+    let fx = Fixture::new().await;
+    let _follower = follow(&fx);
+    abandoned_with_changes(&fx).await;
+    assert_eq!(
+        fx.workspaces.remove_closed_directory(ws(1)).await.unwrap(),
+        DirectoryRemoval::NotDue,
+        "frontend has no worker process, but its session is open"
+    );
+    assert_eq!(fx.workspaces.remove_closed_directories(&|| false).await, 0);
+    assert!(fx.task_dir().join("src/lib.rs").is_file());
+    assert_eq!(final_checkpoints(&fx).await, 0);
+
+    frontend_leaves(&fx).await;
+    until_removed(&fx, 1, &fx.task_dir()).await;
+    assert_eq!(final_checkpoints(&fx).await, 1);
+}
+
+#[tokio::test]
+async fn an_integrated_main_workspace_waits_until_the_main_session_ends() {
+    let fx = Fixture::with_main_frontend().await;
+    let _follower = follow(&fx);
+    let main = Actor::Agent(AgentActor {
+        agent: fx.frontend.worker.name.agent(),
+        worker: fx.frontend.worker.name.clone(),
+        tags: vec![Tag::parse(MAIN_TAG).unwrap()],
+    });
+    let opened = fx.workspaces.open_main_workspace(&main).await.unwrap();
+    let main_dir = fx.project.paths().root().join(&opened.workspace.path);
+    fs::write(main_dir.join("AGENTS.md"), "rules\n").unwrap();
+    let recorded = fx
+        .workspaces
+        .record_changes(&main, opened.workspace.id, "Add the agent rules")
+        .await
+        .unwrap();
+    let outcome = fx
+        .reviews
+        .integrate_direct(
+            &main,
+            DirectChange {
+                changeset: recorded.changeset,
+                message: "Add the agent rules".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(outcome, DirectOutcome::Succeeded { .. }));
+    let number = opened.workspace.id.number();
+    assert_eq!(
+        fx.count(&format!(
+            "SELECT COUNT(*) FROM workspaces WHERE number = {number} AND state = 'archived'"
+        ))
+        .await,
+        1
+    );
+    assert_eq!(
+        fx.workspaces
+            .remove_closed_directory(opened.workspace.id)
+            .await
+            .unwrap(),
+        DirectoryRemoval::NotDue,
+        "the main session is connected"
+    );
+    assert!(main_dir.join("AGENTS.md").is_file());
+
+    frontend_leaves(&fx).await;
+    until_removed(&fx, number, &main_dir).await;
+    assert_eq!(
+        final_checkpoints(&fx).await,
+        0,
+        "the integrated files are the changeset's"
+    );
+    assert!(fx.project.paths().root().join("README.md").is_file());
 }

@@ -71,7 +71,7 @@ pub struct ProjectHandle {
     pub checks: CheckRunner,
     /// Brings the project folder to main after each integration and when its Git branch changes, commits each revision to the project's repository while Git sync is on, and pushes it when the configuration asks.
     auto_commit: AutoCommit,
-    /// Removes the directory of each closed workspace once its worker process has ended.
+    /// Removes the directory of each closed workspace once its owning agent has no running worker process and no open session.
     workspace_cleanup: ProjectTask,
     /// Wakes `workspace_cleanup` for every closed workspace that is due, not only those its events name.
     cleanup_due: Arc<tokio::sync::Notify>,

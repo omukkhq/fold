@@ -261,7 +261,7 @@ impl WorkspaceService {
         })
     }
 
-    /// Abandons a live workspace of the actor's worker, which `policy::can_abandon_workspace` requires to be the owner: it becomes `abandoned` and `closed_at` is set, and the task goes back to Todo or Backlog. The claim stays; fold removes the directory after the commit, once the worker process of the owning agent has ended. Refused while the task has an open proposal; the author closes it first, and nothing closes it on the worker's behalf. The main workspace has no task, so abandoning it only closes it and discards its unsubmitted change. `reason` is the worker's short explanation, which `workspace.abandoned` carries.
+    /// Abandons a live workspace of the actor's worker, which `policy::can_abandon_workspace` requires to be the owner: it becomes `abandoned` and `closed_at` is set, and the task goes back to Todo or Backlog. The claim stays; fold removes the directory after the commit, once the owning agent has no running worker process and no open session. Refused while the task has an open proposal; the author closes it first, and nothing closes it on the worker's behalf. The main workspace has no task, so abandoning it only closes it and discards its unsubmitted change. `reason` is the worker's short explanation, which `workspace.abandoned` carries.
     pub async fn abandon_workspace(
         &self,
         actor: &Actor,

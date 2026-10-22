@@ -22,6 +22,7 @@ async fn a_stop_after_the_final_checkpoint_leaves_a_removal_that_gc_completes() 
         .abandon_workspace(&author, ws(1), "the plan changed")
         .await
         .unwrap();
+    fx.agents.end_session(&fx.frontend.ctx).await.unwrap();
 
     fail::cfg("workspace_removal_after_checkpoint", "return").unwrap();
     let result = fx.workspaces.remove_closed_directory(ws(1)).await;

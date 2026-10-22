@@ -15,6 +15,7 @@ use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::jobs::{JobProgress, QuietCheckpoints, spawn_auto_checkpoints};
 use fold_daemon::projects::{ProjectHandle, Projects};
+use fold_daemon::services::agents::SessionContext;
 use fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME;
 use fold_daemon::services::reviews::ReviewService;
 use fold_daemon::services::tasks::CreateTask;
@@ -47,6 +48,7 @@ struct Fixture {
     handle: Arc<ProjectHandle>,
     workspaces: WorkspaceService,
     actor: Actor,
+    session: SessionContext,
     workspace: WorkspaceId,
     dir: PathBuf,
 }
@@ -110,6 +112,7 @@ impl Fixture {
             handle,
             workspaces,
             actor,
+            session,
             workspace: view.id,
             dir,
         }
@@ -402,7 +405,8 @@ async fn a_failed_checkpoint_refuses_the_command() {
         .abandon_workspace(&fx.actor, fx.workspace, "a different approach")
         .await
         .unwrap();
-    // The closed workspace's directory goes after its final checkpoint, the only one it gets.
+    fx.handle.agents().end_session(&fx.session).await.unwrap();
+    // Once the session has ended, the closed workspace's directory goes after its final checkpoint, the only one it gets.
     fold_store::testing::eventually(WAIT, async || {
         let finals = fx.with_reason(CheckpointReason::BeforeRemoval).await.len();
         if !fx.dir.exists() && finals == 1 {

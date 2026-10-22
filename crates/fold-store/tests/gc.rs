@@ -277,6 +277,39 @@ async fn a_closed_workspace_waits_while_a_worker_process_of_its_agent_runs() {
 }
 
 #[tokio::test]
+async fn a_closed_workspace_waits_while_its_agent_has_an_open_session() {
+    let project = TestProject::new().await;
+    let store = project.store();
+    for n in 1..=2 {
+        seed::workspace(store, n).await;
+    }
+    execute(
+        store,
+        "INSERT INTO agents (id, name, created_at) VALUES (1, 'main', 0), (2, 'other', 0);
+         INSERT INTO workers (id, agent_id, name, parent_worker_id, created_at) VALUES (1, 1, 'main', NULL, 0), (2, 2, 'other', NULL, 0);
+         INSERT INTO sessions (id, agent_id, pid, started_at) VALUES (1, 1, 10, 0), (2, NULL, 11, 0);
+         UPDATE workspaces SET state = 'archived', closed_at = 0, worker_id = 1 WHERE number = 1;
+         UPDATE workspaces SET state = 'abandoned', closed_at = 0, worker_id = 2 WHERE number = 2;",
+    )
+    .await;
+    let due = || async {
+        closed_directories_due(store.read(), None)
+            .await
+            .unwrap()
+            .iter()
+            .map(|closed| closed.id.number())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        due().await,
+        vec![2],
+        "an agent without a worker process waits for its session; an unbound session holds nothing"
+    );
+    execute(store, "UPDATE sessions SET ended_at = 1 WHERE id = 1").await;
+    assert_eq!(due().await, vec![1, 2]);
+}
+
+#[tokio::test]
 async fn checkpoints_of_a_closed_workspace_are_due_once_its_close_and_removal_are_old() {
     let project = TestProject::new().await;
     let store = project.store();
