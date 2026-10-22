@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
@@ -7,7 +8,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use fold_core::{Clock, ManualClock, Timestamp};
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::{router, socket_router};
+use fold_daemon::http::socket_router;
 use fold_daemon::{Daemon, DaemonConfig, DaemonError, RunningDaemon};
 use fold_store::projects::{self, ProjectRow};
 use fold_store::testing::{TestProject, eventually};
@@ -19,6 +20,8 @@ use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UnixStream};
 use tower::ServiceExt;
+
+use crate::common::{session_cookie, signed_in_router};
 
 #[cfg(test)]
 const WAIT: Duration = Duration::from_secs(10);
@@ -109,12 +112,28 @@ async fn call(
 
 #[cfg(test)]
 /// Sends one HTTP/1.1 request on a fresh connection and returns the status and JSON body.
-async fn raw_http<S>(mut stream: S, method: &str, path: &str, body: &str) -> (u16, Value)
+async fn raw_http<S>(stream: S, method: &str, path: &str, body: &str) -> (u16, Value)
 where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
 {
+    raw_http_with(stream, method, path, body, None).await
+}
+
+#[cfg(test)]
+/// [`raw_http`] with the `Cookie` header `cookie`.
+async fn raw_http_with<S>(
+    mut stream: S,
+    method: &str,
+    path: &str,
+    body: &str,
+    cookie: Option<&str>,
+) -> (u16, Value)
+where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+{
+    let cookie = cookie.map_or_else(String::new, |cookie| format!("cookie: {cookie}\r\n"));
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\n{CLIENT_HEADER}: test\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+        "{method} {path} HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\n{CLIENT_HEADER}: test\r\n{cookie}content-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(request.as_bytes()).await.unwrap();
@@ -160,18 +179,24 @@ async fn the_socket_is_private_and_a_second_daemon_is_refused() {
 }
 
 #[tokio::test]
-async fn a_non_loopback_daemon_starts_and_its_api_needs_the_session_cookie() {
-    let mut host = Host::new();
-    host.config.listen = "0.0.0.0:0".parse().unwrap();
-    let daemon = host.start().await;
-    assert!(daemon.state().auth_required());
-    let tcp = TcpStream::connect(daemon.http_addr()).await.unwrap();
-    let (status, body) = raw_http(tcp, "GET", "/api/v1/projects", "").await;
-    assert_eq!((status, code(&body)), (401, "auth_required"));
-    let unix = UnixStream::connect(daemon.socket_path()).await.unwrap();
-    let (status, body) = raw_http(unix, "GET", "/api/v1/projects", "").await;
-    assert_eq!((status, body), (200, json!({"projects": []})));
-    daemon.shutdown().await;
+async fn on_loopback_and_on_every_address_the_api_needs_the_session_cookie_over_tcp_only() {
+    for listen in ["127.0.0.1:0", "0.0.0.0:0"] {
+        let mut host = Host::new();
+        host.config.listen = listen.parse().unwrap();
+        let daemon = host.start().await;
+        let addr = SocketAddr::from(([127, 0, 0, 1], daemon.http_addr().port()));
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        let (status, body) = raw_http(tcp, "GET", "/api/v1/projects", "").await;
+        assert_eq!((status, code(&body)), (401, "auth_required"), "{listen}");
+        let cookie = session_cookie(daemon.state(), "ana").await;
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        let (status, body) = raw_http_with(tcp, "GET", "/api/v1/projects", "", Some(&cookie)).await;
+        assert_eq!((status, body), (200, json!({"projects": []})), "{listen}");
+        let unix = UnixStream::connect(daemon.socket_path()).await.unwrap();
+        let (status, body) = raw_http(unix, "GET", "/api/v1/projects", "").await;
+        assert_eq!((status, body), (200, json!({"projects": []})), "{listen}");
+        daemon.shutdown().await;
+    }
 }
 
 #[tokio::test]
@@ -182,7 +207,13 @@ async fn projects_are_listed_and_unknown_routes_and_slugs_use_the_envelope() {
     let daemon = host.start().await;
     let state = daemon.state().clone();
 
-    let (status, body) = call(router(state.clone()), Method::GET, "/api/v1/projects", None).await;
+    let (status, body) = call(
+        signed_in_router(&state, "ana").await,
+        Method::GET,
+        "/api/v1/projects",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let project = &body["projects"][0];
     assert_eq!(
@@ -196,7 +227,7 @@ async fn projects_are_listed_and_unknown_routes_and_slugs_use_the_envelope() {
     assert_eq!(project["overview"]["counts"]["backlog"], 0);
 
     let (status, body) = call(
-        router(state.clone()),
+        signed_in_router(&state, "ana").await,
         Method::GET,
         "/api/v1/projects/alpha",
         None,
@@ -205,13 +236,19 @@ async fn projects_are_listed_and_unknown_routes_and_slugs_use_the_envelope() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["slug"], "alpha");
 
-    let (status, body) = call(router(state.clone()), Method::GET, "/api/v1/nothing", None).await;
+    let (status, body) = call(
+        signed_in_router(&state, "ana").await,
+        Method::GET,
+        "/api/v1/nothing",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(code(&body), "not_found");
     assert_eq!(body["error"]["details"], json!({}));
 
     let (status, body) = call(
-        router(state.clone()),
+        signed_in_router(&state, "ana").await,
         Method::DELETE,
         "/api/v1/projects",
         None,
@@ -220,7 +257,13 @@ async fn projects_are_listed_and_unknown_routes_and_slugs_use_the_envelope() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(code(&body), "not_found");
 
-    let (status, body) = call(router(state), Method::GET, "/api/v1/projects/ghost", None).await;
+    let (status, body) = call(
+        signed_in_router(&state, "ana").await,
+        Method::GET,
+        "/api/v1/projects/ghost",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(code(&body), "project_not_found");
     daemon.shutdown().await;
@@ -235,10 +278,16 @@ async fn opening_a_project_works_over_the_socket_only_and_is_idempotent() {
     let registry = host.registry().await;
     add(&registry, "late", late.paths().root(), host.clock.now()).await;
 
-    let (_, body) = call(router(state.clone()), Method::GET, "/api/v1/projects", None).await;
+    let (_, body) = call(
+        signed_in_router(&state, "ana").await,
+        Method::GET,
+        "/api/v1/projects",
+        None,
+    )
+    .await;
     assert_eq!(body["projects"][0]["available"], false);
     let (status, body) = call(
-        router(state.clone()),
+        signed_in_router(&state, "ana").await,
         Method::GET,
         "/api/v1/projects/late",
         None,
@@ -250,12 +299,13 @@ async fn opening_a_project_works_over_the_socket_only_and_is_idempotent() {
     );
 
     let open = r#"{"slug":"late"}"#;
+    let cookie = session_cookie(&state, "ana").await;
     let tcp = TcpStream::connect(daemon.http_addr()).await.unwrap();
-    let (status, body) = raw_http(tcp, "POST", "/api/v1/projects", open).await;
+    let (status, body) = raw_http_with(tcp, "POST", "/api/v1/projects", open, Some(&cookie)).await;
     assert_eq!(status, 404);
     assert_eq!(code(&body), "not_found");
     let (status, body) = call(
-        router(state.clone()),
+        signed_in_router(&state, "ana").await,
         Method::POST,
         "/api/v1/projects",
         Some(open),
@@ -270,10 +320,16 @@ async fn opening_a_project_works_over_the_socket_only_and_is_idempotent() {
         assert_eq!(body, json!({"slug": "late", "name": "Project late"}));
     }
     assert_eq!(state.projects.handles().len(), 1);
-    let (_, body) = call(router(state.clone()), Method::GET, "/api/v1/projects", None).await;
+    let (_, body) = call(
+        signed_in_router(&state, "ana").await,
+        Method::GET,
+        "/api/v1/projects",
+        None,
+    )
+    .await;
     assert_eq!(body["projects"][0]["available"], true);
     let (status, _) = call(
-        router(state.clone()),
+        signed_in_router(&state, "ana").await,
         Method::GET,
         "/api/v1/projects/late",
         None,
@@ -399,7 +455,7 @@ async fn a_corrupt_project_is_unavailable_while_another_project_works() {
     let state = daemon.state().clone();
 
     let (status, body) = call(
-        router(state.clone()),
+        signed_in_router(&state, "ana").await,
         Method::GET,
         "/api/v1/projects/bad",
         None,
@@ -409,7 +465,7 @@ async fn a_corrupt_project_is_unavailable_while_another_project_works() {
     assert_eq!(code(&body), "project_unavailable");
     // A `.fold/` without its database keeps the registration and says how to get the project back.
     let (status, body) = call(
-        router(state.clone()),
+        signed_in_router(&state, "ana").await,
         Method::GET,
         "/api/v1/projects/missing",
         None,
@@ -431,14 +487,20 @@ async fn a_corrupt_project_is_unavailable_while_another_project_works() {
             .is_some()
     );
     let (status, _) = call(
-        router(state.clone()),
+        signed_in_router(&state, "ana").await,
         Method::GET,
         "/api/v1/projects/good",
         None,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (_, body) = call(router(state.clone()), Method::GET, "/api/v1/projects", None).await;
+    let (_, body) = call(
+        signed_in_router(&state, "ana").await,
+        Method::GET,
+        "/api/v1/projects",
+        None,
+    )
+    .await;
     let availability: Vec<(&str, bool)> = body["projects"]
         .as_array()
         .unwrap()
@@ -514,8 +576,9 @@ async fn the_socket_tells_a_handshake_from_http_by_the_first_byte() {
 async fn the_tcp_listener_serves_the_api() {
     let host = Host::new();
     let daemon = host.start().await;
+    let cookie = session_cookie(daemon.state(), "ana").await;
     let tcp = TcpStream::connect(daemon.http_addr()).await.unwrap();
-    let (status, body) = raw_http(tcp, "GET", "/api/v1/projects", "").await;
+    let (status, body) = raw_http_with(tcp, "GET", "/api/v1/projects", "", Some(&cookie)).await;
     assert_eq!((status, body), (200, json!({"projects": []})));
     let tcp = TcpStream::connect(daemon.http_addr()).await.unwrap();
     let (status, body) = raw_http(tcp, "GET", "/api/elsewhere?token=secret", "").await;
@@ -529,9 +592,13 @@ async fn shutdown_ends_an_open_event_stream_before_the_drain_timeout() {
     let alpha = TestProject::new().await;
     host.register("alpha", &alpha).await;
     let daemon = host.start().await;
+    let cookie = session_cookie(daemon.state(), "ana").await;
     let mut tcp = TcpStream::connect(daemon.http_addr()).await.unwrap();
     tcp.write_all(
-        b"GET /api/v1/projects/alpha/events HTTP/1.1\r\nhost: 127.0.0.1\r\naccept: text/event-stream\r\n\r\n",
+        format!(
+            "GET /api/v1/projects/alpha/events HTTP/1.1\r\nhost: 127.0.0.1\r\naccept: text/event-stream\r\ncookie: {cookie}\r\n\r\n"
+        )
+        .as_bytes(),
     )
     .await
     .unwrap();

@@ -18,6 +18,8 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use crate::common::{session_cookie, signed_in_router};
+
 /// A bodiless write that only a named human makes; it succeeds once, because `T-1` is then archived.
 const PATH: &str = "/api/v1/projects/demo/tasks/T-1/archive";
 
@@ -90,7 +92,13 @@ impl Fixture {
         }
     }
 
-    fn http(&self) -> Router {
+    /// The TCP router, signed in as `tanim`.
+    async fn http(&self) -> Router {
+        signed_in_router(&self.state, "tanim").await
+    }
+
+    /// The TCP router without a session.
+    fn signed_out(&self) -> Router {
         router(self.state.clone())
     }
 
@@ -142,13 +150,17 @@ fn code(body: &Value) -> &str {
 }
 
 #[tokio::test]
-async fn a_write_with_the_cookie_acts_as_that_human() {
+async fn a_write_with_a_session_cookie_acts_as_its_human() {
     let fixture = Fixture::new().await;
+    let cookie = format!(
+        "theme=dark; {}",
+        session_cookie(&fixture.state, "tanim").await
+    );
     let (status, body) = call(
-        fixture.http(),
+        fixture.signed_out(),
         Method::POST,
         PATH,
-        &[("cookie", "theme=dark; fold_human=tanim")],
+        &[("cookie", &cookie)],
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
@@ -166,8 +178,9 @@ async fn a_write_with_the_cookie_acts_as_that_human() {
 #[tokio::test]
 async fn a_repeated_write_keeps_the_human() {
     let fixture = Fixture::new().await;
-    let cookie = [("cookie", "fold_human=tanim")];
-    call(fixture.http(), Method::POST, PATH, &cookie).await;
+    let session = session_cookie(&fixture.state, "tanim").await;
+    let cookie = [("cookie", session.as_str())];
+    call(fixture.signed_out(), Method::POST, PATH, &cookie).await;
     let first = registry::find_human(
         fixture.project.registry().read(),
         &HumanName::parse("tanim").unwrap(),
@@ -178,7 +191,7 @@ async fn a_repeated_write_keeps_the_human() {
         .project
         .clock()
         .set(Timestamp::from_millis(fixture.project.now().as_millis() + 5000).unwrap());
-    let (status, body) = call(fixture.http(), Method::POST, PATH, &cookie).await;
+    let (status, body) = call(fixture.signed_out(), Method::POST, PATH, &cookie).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(code(&body), "task_closed");
     assert_eq!(fixture.archive_actors().await.len(), 1);
@@ -206,20 +219,42 @@ async fn the_socket_takes_the_name_from_the_header() {
 }
 
 #[tokio::test]
-async fn a_request_without_a_name_gets_human_name_required() {
+async fn a_request_without_a_name_gets_human_name_required_or_auth_required() {
     let fixture = Fixture::new().await;
-    // Each transport reads only its own source: the header is ignored over HTTP and the cookie over the socket.
-    for (router, headers) in [
-        (fixture.http(), vec![]),
-        (fixture.socket(), vec![]),
-        (fixture.http(), vec![("x-fold-human", "tanim")]),
-        (fixture.socket(), vec![("cookie", "fold_human=tanim")]),
-        (fixture.http(), vec![("cookie", "fold_human=; other=1")]),
-        (fixture.socket(), vec![("x-fold-human", "")]),
+    let session = session_cookie(&fixture.state, "tanim").await;
+    // Each transport reads only its own source: over HTTP only the session names the human, never a header or a name cookie, and the socket reads no cookie.
+    for (router, headers, expected) in [
+        (fixture.signed_out(), vec![], "auth_required"),
+        (
+            fixture.signed_out(),
+            vec![("x-fold-human", "tanim")],
+            "auth_required",
+        ),
+        (
+            fixture.signed_out(),
+            vec![("cookie", "fold_human=tanim")],
+            "auth_required",
+        ),
+        (fixture.socket(), vec![], "human_name_required"),
+        (
+            fixture.socket(),
+            vec![("cookie", "fold_human=tanim")],
+            "human_name_required",
+        ),
+        (
+            fixture.socket(),
+            vec![("cookie", session.as_str())],
+            "human_name_required",
+        ),
+        (
+            fixture.socket(),
+            vec![("x-fold-human", "")],
+            "human_name_required",
+        ),
     ] {
         let (status, body) = call(router, Method::POST, PATH, &headers).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{headers:?}");
-        assert_eq!(code(&body), "human_name_required");
+        assert_eq!(code(&body), expected, "{headers:?}");
     }
     assert!(fixture.archive_actors().await.is_empty());
 }
@@ -228,7 +263,7 @@ async fn a_request_without_a_name_gets_human_name_required() {
 async fn an_invalid_name_gets_invalid_name() {
     let fixture = Fixture::new().await;
     for (router, headers) in [
-        (fixture.http(), vec![("cookie", "fold_human=Tanim")]),
+        (fixture.socket(), vec![("x-fold-human", "Tanim")]),
         (fixture.socket(), vec![("x-fold-human", "a b")]),
     ] {
         let (status, body) = call(router, Method::POST, PATH, &headers).await;
@@ -250,9 +285,10 @@ async fn an_invalid_name_gets_invalid_name() {
 #[tokio::test]
 async fn an_unknown_task_or_project_is_not_found() {
     let fixture = Fixture::new().await;
-    let cookie = [("cookie", "fold_human=tanim")];
+    let session = session_cookie(&fixture.state, "tanim").await;
+    let cookie = [("cookie", session.as_str())];
     let (status, body) = call(
-        fixture.http(),
+        fixture.signed_out(),
         Method::POST,
         "/api/v1/projects/demo/tasks/T-9/archive",
         &cookie,
@@ -261,7 +297,7 @@ async fn an_unknown_task_or_project_is_not_found() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(code(&body), "task_not_found");
     let (status, body) = call(
-        fixture.http(),
+        fixture.http().await,
         Method::POST,
         "/api/v1/projects/other/tasks/T-1/archive",
         &cookie,
@@ -307,7 +343,7 @@ async fn the_agents_route_returns_the_overview_in_registration_order() {
     let fixture = Fixture::new().await;
     let registered = fixture.project.now().as_millis();
     let backend = fixture.register("backend").await;
-    let (status, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    let (status, body) = call(fixture.http().await, Method::GET, AGENTS, &[]).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let names: Vec<&str> = body["agents"]
         .as_array()
@@ -345,7 +381,7 @@ async fn the_agents_route_returns_the_overview_in_registration_order() {
     let (_, body) = call(fixture.socket(), Method::GET, AGENTS, &[]).await;
     assert_eq!(body["agents"][1]["presence"], "idle");
     fixture.agents().end_session(&backend).await.unwrap();
-    let (_, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    let (_, body) = call(fixture.http().await, Method::GET, AGENTS, &[]).await;
     assert_eq!(body["agents"][1]["presence"], "offline");
     assert_eq!(body["agents"][1]["sessions"], 0);
     assert_eq!(body["agents"][1]["open_sessions"], json!([]));
@@ -391,7 +427,7 @@ async fn the_agents_route_gives_a_supervised_agent_the_state_of_its_process() {
         .await
         .unwrap();
 
-    let (status, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    let (status, body) = call(fixture.http().await, Method::GET, AGENTS, &[]).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let lead = body["agents"]
         .as_array()
@@ -425,7 +461,7 @@ async fn open_sessions_carry_the_working_directory_of_the_handshake() {
         .unwrap();
     agents.register_agent(&mut two, &name, &[]).await.unwrap();
 
-    let (status, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    let (status, body) = call(fixture.http().await, Method::GET, AGENTS, &[]).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         body["agents"][1]["open_sessions"],
@@ -435,7 +471,7 @@ async fn open_sessions_carry_the_working_directory_of_the_handshake() {
         ])
     );
     agents.end_session(&one).await.unwrap();
-    let (_, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    let (_, body) = call(fixture.http().await, Method::GET, AGENTS, &[]).await;
     assert_eq!(body["agents"][1]["sessions"], 1);
     assert_eq!(body["agents"][1]["open_sessions"][0]["pid"], 81232);
     assert_eq!(
@@ -468,7 +504,7 @@ async fn events_returns_at_most_the_requested_number_newest_first() {
         .await
         .unwrap();
     let (status, body) = call(
-        fixture.http(),
+        fixture.http().await,
         Method::GET,
         &format!("{AGENTS}?events=3"),
         &[],
@@ -493,7 +529,7 @@ async fn events_returns_at_most_the_requested_number_newest_first() {
     );
 
     let (_, body) = call(
-        fixture.http(),
+        fixture.http().await,
         Method::GET,
         &format!("{AGENTS}?events=100"),
         &[],
@@ -505,7 +541,7 @@ async fn events_returns_at_most_the_requested_number_newest_first() {
         "clamped to 50"
     );
     let (_, body) = call(
-        fixture.http(),
+        fixture.http().await,
         Method::GET,
         &format!("{AGENTS}?events=0"),
         &[],
@@ -515,7 +551,7 @@ async fn events_returns_at_most_the_requested_number_newest_first() {
 
     for query in ["events=abc", "events=-1", "events=3.5"] {
         let (status, body) = call(
-            fixture.http(),
+            fixture.http().await,
             Method::GET,
             &format!("{AGENTS}?{query}"),
             &[],
@@ -565,10 +601,10 @@ async fn the_route_judges_stale_claims_by_the_configured_lease() {
         .unwrap();
     tasks.claim_task(&backend, task.id).await.unwrap();
     fixture.advance(59_999);
-    let (_, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    let (_, body) = call(fixture.http().await, Method::GET, AGENTS, &[]).await;
     assert_eq!(body["agents"][1]["workers"][0]["claims"][0]["stale"], false);
     fixture.advance(1);
-    let (_, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    let (_, body) = call(fixture.http().await, Method::GET, AGENTS, &[]).await;
     let claim = &body["agents"][1]["workers"][0]["claims"][0];
     assert_eq!(claim["task"], task.id.to_string());
     assert_eq!(claim["kind"], "implementation");
@@ -584,7 +620,7 @@ async fn an_invalid_configuration_fails_the_overview_and_leaves_the_project_open
         "lease_minutes = \"soon\"\n",
     )
     .unwrap();
-    let (status, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    let (status, body) = call(fixture.http().await, Method::GET, AGENTS, &[]).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(code(&body), "invalid_config");
     let (status, body) = call(
@@ -597,7 +633,7 @@ async fn an_invalid_configuration_fails_the_overview_and_leaves_the_project_open
     assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
 
     std::fs::write(fixture.project.paths().config(), "lease_minutes = 3\n").unwrap();
-    let (status, body) = call(fixture.http(), Method::GET, AGENTS, &[]).await;
+    let (status, body) = call(fixture.http().await, Method::GET, AGENTS, &[]).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 }
 
@@ -672,7 +708,11 @@ async fn the_worker_environment_answers_only_on_the_socket_and_names_no_value() 
         })
     );
 
-    let response = router(state).oneshot(request()).await.unwrap();
+    let response = signed_in_router(&state, "ana")
+        .await
+        .oneshot(request())
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let text = String::from_utf8(bytes.to_vec()).unwrap();

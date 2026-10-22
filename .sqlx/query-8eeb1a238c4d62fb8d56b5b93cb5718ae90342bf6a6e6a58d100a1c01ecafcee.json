@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.id AS \"id!: i64\", s.session_hash, s.token_id, h.name, s.last_used_at, s.expires_at\n           FROM web_sessions s\n           LEFT JOIN web_tokens t ON t.id = s.token_id\n           JOIN humans h ON h.id = s.human_id\n           WHERE s.session_hash = ? AND (s.token_id IS NULL OR t.revoked_at IS NULL)",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "web_sessions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "session_hash",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "web_sessions",
+            "name": "session_hash"
+          }
+        }
+      },
+      {
+        "name": "token_id",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "web_sessions",
+            "name": "token_id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "humans",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "last_used_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "web_sessions",
+            "name": "last_used_at"
+          }
+        }
+      },
+      {
+        "name": "expires_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "web_sessions",
+            "name": "expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8eeb1a238c4d62fb8d56b5b93cb5718ae90342bf6a6e6a58d100a1c01ecafcee"
+}

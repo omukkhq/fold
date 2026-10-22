@@ -18,7 +18,6 @@ use fold_core::{
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::events::LiveWorkspace;
-use fold_daemon::http::router;
 use fold_daemon::jobs::{JobProgress, spawn_lease_sweeper, spawn_stalls};
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::{AgentService, SessionContext};
@@ -235,7 +234,11 @@ impl Fixture {
             .uri("/api/v1/projects/demo/agents")
             .body(Body::empty())
             .unwrap();
-        let response = router(self.state.clone()).oneshot(request).await.unwrap();
+        let response = crate::common::signed_in_router(&self.state, "ana")
+            .await
+            .oneshot(request)
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         let body: Value = serde_json::from_slice(&bytes).unwrap();
@@ -287,7 +290,11 @@ impl Fixture {
             .uri(uri)
             .body(Body::empty())
             .unwrap();
-        let response = router(self.state.clone()).oneshot(request).await.unwrap();
+        let response = crate::common::signed_in_router(&self.state, "ana")
+            .await
+            .oneshot(request)
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         serde_json::from_slice(&bytes).unwrap()

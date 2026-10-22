@@ -212,7 +212,11 @@ fn seed(args: &SeedArgs, dirs: &Dirs, out: &mut impl Write) -> Result<(), SeedEr
         .ok()
         .and_then(|file| file.listen)
         .unwrap_or(serve::DEFAULT_LISTEN);
-    write(format!("board: http://{listen}/p/{slug}/board"))
+    write(format!("board: http://{listen}/p/{slug}/board"))?;
+    write(format!(
+        "sign in as {HUMAN} once, {}: {}",
+        built.sign_in_until, built.sign_in
+    ))
 }
 
 struct Built {
@@ -220,6 +224,9 @@ struct Built {
     proposals: usize,
     workers: usize,
     columns: Vec<(String, u64)>,
+    /// A one-time sign-in link for the seed's human, and when it stops working.
+    sign_in: String,
+    sign_in_until: String,
 }
 
 async fn build(socket: &Path, root: &Path, slug: &str) -> Result<Built, SeedError> {
@@ -651,8 +658,25 @@ impl Seeder {
             .main
             .call("list_workers", json!({"include_stopped": true}))
             .await?;
+        let link = self
+            .human
+            .request(Method::POST, "/api/v1/sign-in-links", None)
+            .await?;
+        let sign_in = link.body["url"]
+            .as_str()
+            .filter(|_| link.is_success())
+            .ok_or(SeedError::Unexpected {
+                tool: "create_sign_in_link",
+            })?
+            .to_owned();
+        let sign_in_until =
+            crate::commands::web::expiry(&link.body).ok_or(SeedError::Unexpected {
+                tool: "create_sign_in_link",
+            })?;
         let length = |value: &Value| value.as_array().map_or(0, Vec::len);
         Ok(Built {
+            sign_in,
+            sign_in_until,
             tasks: self.tasks,
             proposals: length(&proposals["proposals"]),
             workers: length(&workers["workers"]),

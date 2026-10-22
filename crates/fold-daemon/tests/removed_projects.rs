@@ -7,7 +7,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use fold_core::{WorkerState, codes};
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::router;
+use fold_daemon::http::socket_router;
 use fold_daemon::projects::Slot;
 use fold_daemon::services::projects::{self as project_service, init_project};
 use http_body_util::BodyExt;
@@ -25,14 +25,15 @@ async fn call(
     path: &str,
     human: Option<&str>,
 ) -> (StatusCode, Value) {
-    let mut request = Request::builder()
+    let request = Request::builder()
         .header(CLIENT_HEADER, "test")
         .method(method)
         .uri(path);
-    if let Some(human) = human {
-        request = request.header("cookie", format!("fold_human={human}"));
-    }
-    let response = router(state.clone())
+    let router = match human {
+        Some(human) => crate::common::signed_in_router(state, human).await,
+        None => socket_router(state.clone()),
+    };
+    let response = router
         .oneshot(request.body(Body::empty()).unwrap())
         .await
         .unwrap();

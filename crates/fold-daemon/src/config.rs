@@ -5,7 +5,7 @@ use std::time::Duration;
 /// Everything the daemon needs from the host. The daemon reads no environment variable; `fold-cli` builds this from flags, `daemon.toml` and the XDG directories.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonConfig {
-    /// The HTTP listen address. Off loopback every guarded `/api` route needs the `fold_session` cookie of a live session.
+    /// The HTTP listen address. On every address, loopback too, every guarded `/api` route needs the `fold_session` cookie of a live session.
     pub listen: SocketAddr,
     pub socket: PathBuf,
     /// Holds `registry.db`.
@@ -14,7 +14,7 @@ pub struct DaemonConfig {
     pub runtime_dir: PathBuf,
     /// Serve the web files from this folder instead of the ones compiled into the binary.
     pub web_dir: Option<PathBuf>,
-    /// How long a web sign-in lasts off loopback, counted from the sign-in. It is a host setting, the same for every project.
+    /// How long a web sign-in lasts, counted from the sign-in. It is a host setting, the same for every project.
     pub session_lifetime: Duration,
 }
 

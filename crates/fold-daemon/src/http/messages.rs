@@ -295,7 +295,7 @@ pub async fn list_messages(
                 codes::HUMAN_NAME_REQUIRED,
                 "`mine` needs a signed-in human",
             )
-            .with_hint("sign in to the web interface, or set FOLD_HUMAN for the CLI")
+            .with_hint("set FOLD_HUMAN to your name, then run the command again")
             .into());
         }
     };

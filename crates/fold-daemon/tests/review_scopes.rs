@@ -5,7 +5,6 @@ use axum::http::{Method, Request};
 use fold_core::roles::Role;
 use fold_core::{WorkerState, codes};
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::router;
 use fold_daemon::mcp::FoldServer;
 use fold_daemon::services::events::EventService;
 use fold_daemon::services::messages::MessageService;
@@ -131,15 +130,15 @@ async fn http(fx: &Fixture, method: Method, path: &str, body: Option<Value>) -> 
     let request = Request::builder()
         .method(method)
         .uri(format!("/api/v1/projects/demo{path}"))
-        .header(CLIENT_HEADER, "test")
-        .header("cookie", "fold_human=tanim");
+        .header(CLIENT_HEADER, "test");
     let request = match body {
         Some(value) => request
             .header("content-type", "application/json")
             .body(Body::from(value.to_string())),
         None => request.body(Body::empty()),
     };
-    let response = router(fx.state.clone())
+    let response = crate::common::signed_in_router(&fx.state, "tanim")
+        .await
         .oneshot(request.unwrap())
         .await
         .unwrap();

@@ -34,7 +34,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_event_history))
 }
 
-/// The project's events as Server-Sent Events: every stored event after `Last-Event-ID`, then one `snapshot` of the live workspaces, then each stored and live event as it happens. A stored event's frame carries its `seq` as the SSE `id`; live and snapshot frames carry none, so the browser keeps the last stored `seq`. Live frames a client has not read yet collapse to the newest per workspace and per agent. A client that falls more than the bus capacity behind has its stream ended and reconnects with its last id. Off loopback the stream ends at the first keep-alive period after its session is signed out, revoked or expired, and the reconnect gets `auth_required`.
+/// The project's events as Server-Sent Events: every stored event after `Last-Event-ID`, then one `snapshot` of the live workspaces, then each stored and live event as it happens. A stored event's frame carries its `seq` as the SSE `id`; live and snapshot frames carry none, so the browser keeps the last stored `seq`. Live frames a client has not read yet collapse to the newest per workspace and per agent. A client that falls more than the bus capacity behind has its stream ended and reconnects with its last id. Over TCP the stream ends at the first keep-alive period after its session is signed out, revoked or expired, and the reconnect gets `auth_required`.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/events",
@@ -57,10 +57,9 @@ pub async fn stream_events(
     parts: Parts,
 ) -> Result<Sse<impl Stream<Item = Result<sse::Event, axum::Error>>>, ApiError> {
     let headers = &parts.headers;
-    let session = (state.auth_required()
-        && parts.extensions.get::<Transport>() != Some(&Transport::Socket))
-    .then(|| cookie(headers, SESSION_COOKIE))
-    .flatten();
+    let session = (parts.extensions.get::<Transport>() != Some(&Transport::Socket))
+        .then(|| cookie(headers, SESSION_COOKIE))
+        .flatten();
     let last_event_id = headers
         .get("last-event-id")
         .map(|value| parse_last_event_id(value.as_bytes()))

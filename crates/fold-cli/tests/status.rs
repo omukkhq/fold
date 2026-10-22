@@ -120,6 +120,7 @@ async fn a_bare_fld_names_the_port_the_running_daemon_got() {
     );
     let port: u16 = lines[1]
         .strip_prefix(&prefix)
+        .and_then(|rest| rest.strip_suffix("; fld web prints a sign-in link"))
         .unwrap_or_else(|| panic!("{text}"))
         .parse()
         .unwrap();

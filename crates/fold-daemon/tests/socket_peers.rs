@@ -359,6 +359,60 @@ async fn a_human_name_from_a_workers_process_tree_is_refused_over_the_socket() {
 }
 
 #[tokio::test]
+async fn a_token_or_a_sign_in_link_from_a_workers_process_tree_is_refused() {
+    let host = Host::start().await;
+    let token = r#"{"human":"ana"}"#;
+    let (status, code) = socket_http(&host, "POST", "/api/v1/tokens", "ana", token).await;
+    assert_eq!(
+        (status, code.as_str()),
+        (201, ""),
+        "the user's terminal makes a token"
+    );
+    let (status, code) = socket_http(&host, "POST", "/api/v1/sign-in-links", "ana", "").await;
+    assert_eq!(
+        (status, code.as_str()),
+        (201, ""),
+        "the user's terminal makes a link"
+    );
+
+    host.record_worker("web-worker", std::process::id()).await;
+    let (status, code) = socket_http(&host, "POST", "/api/v1/tokens", "ana", token).await;
+    assert_eq!((status, code.as_str()), (403, "worker_peer_refused"));
+    let (status, code) = socket_http(&host, "POST", "/api/v1/sign-in-links", "ana", "").await;
+    assert_eq!((status, code.as_str()), (403, "worker_peer_refused"));
+    let registry = &host.daemon.state().registry;
+    let tokens: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM web_tokens")
+        .fetch_one(registry.read())
+        .await
+        .unwrap();
+    let links: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sign_in_links")
+        .fetch_one(registry.read())
+        .await
+        .unwrap();
+    assert_eq!((tokens, links), (1, 1), "a refused request made one");
+    host.daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_check_makes_no_token_and_no_sign_in_link() {
+    let host = Host::start().await;
+    let check = RunningCheck::start(None).await;
+    for (path, body) in [
+        ("/api/v1/tokens", r#"{"human":"ana"}"#),
+        ("/api/v1/sign-in-links", ""),
+    ] {
+        let (status, code) = peer_http(&host, check.peer(), path, "ana", body.to_owned()).await;
+        assert_eq!(
+            (status, code.as_str()),
+            (403, "worker_peer_refused"),
+            "{path}"
+        );
+    }
+    check.stop().await;
+    host.daemon.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_hook_from_a_workers_process_tree_names_only_the_workers_own_agent() {
     let host = Host::start().await;
     host.record_worker("web-worker", std::process::id()).await;

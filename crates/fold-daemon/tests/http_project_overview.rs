@@ -8,7 +8,6 @@ use fold_core::tree::FlatTree;
 use fold_daemon::daemon::{AppState, DaemonStart, DaemonState, StartedBy};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::router;
 use fold_daemon::projects::Projects;
 use fold_daemon::services::agents::AgentService;
 use fold_daemon::services::agents::environment::WorkerEnvironment;
@@ -32,8 +31,7 @@ async fn call(
     let mut request = Request::builder()
         .header(CLIENT_HEADER, "test")
         .method(method)
-        .uri(path)
-        .header("cookie", "fold_human=ana");
+        .uri(path);
     let body = match body {
         Some(body) => {
             request = request.header("content-type", "application/json");
@@ -41,7 +39,8 @@ async fn call(
         }
         None => Body::empty(),
     };
-    let response = router(state.clone())
+    let response = crate::common::signed_in_router(state, "ana")
+        .await
         .oneshot(request.body(body).unwrap())
         .await
         .unwrap();

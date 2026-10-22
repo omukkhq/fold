@@ -7,30 +7,30 @@ use fold_core::reviews::Verdict;
 use fold_core::roles::Role;
 use fold_core::{HumanName, ProposalId};
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::{openapi, router};
+use fold_daemon::http::{openapi, socket_router};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use crate::common::signed_in_router;
+
 const BASE: &str = "/api/v1/projects/demo";
-const TANIM: (&str, &str) = ("cookie", "fold_human=tanim");
-const ANA: (&str, &str) = ("cookie", "fold_human=ana");
+const TANIM: &str = "tanim";
+const ANA: &str = "ana";
 const EDITED: &str = "pub fn y() {}\n// checked\n";
 
+/// Sends the request through the TCP router signed in as `human`, or over the socket without a human, the only transport where a request names none.
 async fn send(
     fx: &Fixture,
     method: Method,
     path: &str,
     body: Option<Value>,
-    headers: &[(&str, &str)],
+    human: Option<&str>,
 ) -> (StatusCode, Value) {
     let mut request = Request::builder()
         .header(CLIENT_HEADER, "test")
         .method(method)
         .uri(format!("{BASE}{path}"));
-    for (name, value) in headers {
-        request = request.header(*name, *value);
-    }
     let body = match body {
         Some(value) => {
             request = request.header("content-type", "application/json");
@@ -38,10 +38,11 @@ async fn send(
         }
         None => Body::empty(),
     };
-    let response = router(fx.state.clone())
-        .oneshot(request.body(body).unwrap())
-        .await
-        .unwrap();
+    let router = match human {
+        Some(human) => signed_in_router(&fx.state, human).await,
+        None => socket_router(fx.state.clone()),
+    };
+    let response = router.oneshot(request.body(body).unwrap()).await.unwrap();
     let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let value = if bytes.is_empty() {
@@ -64,8 +65,8 @@ async fn marked() -> Fixture {
     let review = fx.agent("review").await;
     give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
     // A human is known once a request named them.
-    send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
-    send(&fx, Method::GET, "/proposals/P-1", None, &[ANA]).await;
+    send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
+    send(&fx, Method::GET, "/proposals/P-1", None, Some(ANA)).await;
     fx.reviews()
         .require_human_review(
             &fx.agent("planner").await,
@@ -101,7 +102,7 @@ async fn the_marked_human_reads_edits_and_sends_a_file_for_review_again() {
         Method::GET,
         "/proposals/P-1/file?path=src/lib.rs",
         None,
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{file}");
@@ -113,7 +114,7 @@ async fn the_marked_human_reads_edits_and_sends_a_file_for_review_again() {
         Method::POST,
         "/proposals/P-1/edits",
         edit(1, EDITED),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{version}");
@@ -123,7 +124,7 @@ async fn the_marked_human_reads_edits_and_sends_a_file_for_review_again() {
     assert_eq!(version["review_again"], false);
     assert_eq!(version["files_modified"], 1);
 
-    let (_, detail) = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    let (_, detail) = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
     assert_eq!(detail["summary"]["current_version"], 2);
     assert_eq!(detail["summary"]["latest_verdict"], "approve");
     assert_eq!(detail["agent_approved"], true);
@@ -137,7 +138,7 @@ async fn the_marked_human_reads_edits_and_sends_a_file_for_review_again() {
         Method::GET,
         "/proposals/P-1/file?path=src/lib.rs&version=2",
         None,
-        &[],
+        None,
     )
     .await;
     assert_eq!(file["text"], EDITED);
@@ -147,7 +148,7 @@ async fn the_marked_human_reads_edits_and_sends_a_file_for_review_again() {
         Method::POST,
         "/proposals/P-1/review-again",
         Some(json!({"version": 1})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(
@@ -159,7 +160,7 @@ async fn the_marked_human_reads_edits_and_sends_a_file_for_review_again() {
         Method::POST,
         "/proposals/P-1/review-again",
         Some(json!({"version": 2})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{summary}");
@@ -170,7 +171,7 @@ async fn the_marked_human_reads_edits_and_sends_a_file_for_review_again() {
         Method::POST,
         "/proposals/P-1/review-again",
         Some(json!({"version": 2})),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(
@@ -185,7 +186,7 @@ async fn the_marked_human_reads_edits_and_sends_a_file_for_review_again() {
             json!("already_sent")
         )
     );
-    let (_, detail) = send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
+    let (_, detail) = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
     assert_eq!(detail["versions"][1]["review_again"], true);
     assert_eq!(detail["agent_approved"], false);
 }
@@ -196,43 +197,43 @@ async fn edit_refusals_carry_their_declared_status() {
     let cases = [
         (
             edit(1, EDITED),
-            vec![ANA],
+            Some(ANA),
             StatusCode::FORBIDDEN,
             "human_edit_denied",
         ),
         (
             edit(2, EDITED),
-            vec![TANIM],
+            Some(TANIM),
             StatusCode::CONFLICT,
             "stale_version",
         ),
         (
             edit(1, "pub fn y() {}\n"),
-            vec![TANIM],
+            Some(TANIM),
             StatusCode::CONFLICT,
             "version_unchanged",
         ),
         (
             Some(json!({"version": 1, "path": "../x", "content": "a"})),
-            vec![TANIM],
+            Some(TANIM),
             StatusCode::BAD_REQUEST,
             "invalid_path",
         ),
         (
             Some(json!({"version": 1, "path": "src/none.rs", "content": "a"})),
-            vec![TANIM],
+            Some(TANIM),
             StatusCode::UNPROCESSABLE_ENTITY,
             "file_not_editable",
         ),
         (
             edit(1, EDITED),
-            vec![],
+            None,
             StatusCode::UNAUTHORIZED,
             "human_name_required",
         ),
     ];
-    for (body, headers, status, expected) in cases {
-        let (got, answer) = send(&fx, Method::POST, "/proposals/P-1/edits", body, &headers).await;
+    for (body, human, status, expected) in cases {
+        let (got, answer) = send(&fx, Method::POST, "/proposals/P-1/edits", body, human).await;
         assert_eq!((got, code(&answer)), (status, expected), "{answer}");
         assert_declared("/edits", "post", got);
         assert!(!answer.to_string().contains("checked"), "{answer}");
@@ -242,7 +243,7 @@ async fn edit_refusals_carry_their_declared_status() {
         Method::POST,
         "/proposals/P-1/edits",
         edit(1, EDITED),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     // The worker has not synced the first edit yet; a second edit replaces the write that waits.
@@ -251,7 +252,7 @@ async fn edit_refusals_carry_their_declared_status() {
         Method::POST,
         "/proposals/P-1/edits",
         edit(2, "x\n"),
-        &[TANIM],
+        Some(TANIM),
     )
     .await;
     assert_eq!(
@@ -263,7 +264,7 @@ async fn edit_refusals_carry_their_declared_status() {
         Method::POST,
         "/proposals/P-1/review-again",
         Some(json!({"version": 3})),
-        &[ANA],
+        Some(ANA),
     )
     .await;
     assert_eq!(
@@ -276,7 +277,7 @@ async fn edit_refusals_carry_their_declared_status() {
         Method::GET,
         "/proposals/P-1/file?path=src/none.rs",
         None,
-        &[],
+        None,
     )
     .await;
     assert_eq!((got, code(&missing)), (StatusCode::NOT_FOUND, "not_found"));

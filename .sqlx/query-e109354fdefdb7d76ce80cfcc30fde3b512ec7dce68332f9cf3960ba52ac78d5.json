@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO sign_in_links (link_hash, human_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "e109354fdefdb7d76ce80cfcc30fde3b512ec7dce68332f9cf3960ba52ac78d5"
+}

@@ -10,7 +10,7 @@ use fold_core::{
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::{router, socket_router};
+use fold_daemon::http::socket_router;
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::AgentService;
 use fold_daemon::services::messages::{MessageService, SendMessage};
@@ -22,8 +22,9 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use crate::common::signed_in_router;
+
 const BASE: &str = "/api/v1/projects/demo";
-const COOKIE: (&str, &str) = ("cookie", "fold_human=tanim");
 
 #[cfg(test)]
 fn agent(name: &str) -> Actor {
@@ -134,8 +135,9 @@ impl Fixture {
         }
     }
 
-    fn http(&self) -> Router {
-        router(self.state.clone())
+    /// The TCP router, signed in as `tanim`.
+    async fn http(&self) -> Router {
+        signed_in_router(&self.state, "tanim").await
     }
 
     /// A message to a human is marked as asking for an answer.
@@ -172,9 +174,10 @@ impl Fixture {
             .unwrap();
     }
 
+    /// A read over the socket that names no human.
     async fn get(&self, path: &str) -> (StatusCode, Value) {
         call(
-            self.http(),
+            socket_router(self.state.clone()),
             Method::GET,
             &format!("{BASE}{path}"),
             &[],
@@ -183,12 +186,18 @@ impl Fixture {
         .await
     }
 
-    async fn feedback(&self, headers: &[(&str, &str)], body: Value) -> (StatusCode, Value) {
+    /// Feedback as `tanim` when `signed_in`, else over the socket without a human.
+    async fn feedback(&self, signed_in: bool, body: Value) -> (StatusCode, Value) {
+        let router = if signed_in {
+            self.http().await
+        } else {
+            socket_router(self.state.clone())
+        };
         call(
-            self.http(),
+            router,
             Method::POST,
             &format!("{BASE}/feedback"),
-            headers,
+            &[],
             Some(body),
         )
         .await
@@ -337,7 +346,7 @@ async fn mine_lists_only_the_threads_that_concern_the_signed_in_human() {
     crate::common::roles::give_main_tag(&fixture.handle.store, "backend").await;
     let (status, sent) = fixture
         .feedback(
-            &[COOKIE],
+            true,
             json!({"body": "about T-2", "task": "T-2", "to": ["backend"]}),
         )
         .await;
@@ -356,10 +365,10 @@ async fn mine_lists_only_the_threads_that_concern_the_signed_in_human() {
         .await;
     let mine = async |query: &str| {
         call(
-            fixture.http(),
+            fixture.http().await,
             Method::GET,
             &format!("{BASE}/messages?mine=true{query}"),
-            &[COOKIE],
+            &[],
             None,
         )
         .await
@@ -455,10 +464,7 @@ async fn a_thread_is_read_by_any_of_its_messages() {
 async fn feedback_goes_to_the_first_reader_and_only_to_the_readers() {
     let fixture = Fixture::new().await;
     let (status, lead) = fixture
-        .feedback(
-            &[COOKIE],
-            json!({"body": "use the short copy", "task": "T-1"}),
-        )
+        .feedback(true, json!({"body": "use the short copy", "task": "T-1"}))
         .await;
     assert_eq!(status, StatusCode::CREATED, "{lead}");
     assert_eq!(
@@ -474,10 +480,7 @@ async fn feedback_goes_to_the_first_reader_and_only_to_the_readers() {
     )
     .await;
     let (status, sent) = fixture
-        .feedback(
-            &[COOKIE],
-            json!({"body": "use the short copy", "task": "T-1"}),
-        )
+        .feedback(true, json!({"body": "use the short copy", "task": "T-1"}))
         .await;
     assert_eq!(status, StatusCode::CREATED, "{sent}");
     assert_eq!(sent["id"], "m-2");
@@ -488,7 +491,7 @@ async fn feedback_goes_to_the_first_reader_and_only_to_the_readers() {
     assert_eq!(inbox[0].id.to_string(), "m-2");
     let (status, named) = fixture
         .feedback(
-            &[COOKIE],
+            true,
             json!({"body": "fyi", "task": "T-1", "to": ["frontend", "design"]}),
         )
         .await;
@@ -500,7 +503,7 @@ async fn feedback_goes_to_the_first_reader_and_only_to_the_readers() {
         json!(["human:tanim"]),
     ] {
         let (status, body) = fixture
-            .feedback(&[COOKIE], json!({"body": "fyi", "task": "T-1", "to": to}))
+            .feedback(true, json!({"body": "fyi", "task": "T-1", "to": to}))
             .await;
         assert_eq!(status, StatusCode::CONFLICT, "{to}: {body}");
         assert_eq!(code(&body), "recipient_not_reader", "{to}");
@@ -518,7 +521,7 @@ async fn feedback_goes_to_the_first_reader_and_only_to_the_readers() {
         .await
         .unwrap();
     let (status, body) = fixture
-        .feedback(&[COOKIE], json!({"body": "x", "task": "T-3"}))
+        .feedback(true, json!({"body": "x", "task": "T-3"}))
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_eq!(
@@ -527,7 +530,7 @@ async fn feedback_goes_to_the_first_reader_and_only_to_the_readers() {
         "a task in no area of a project without a main agent has no reader"
     );
     let (status, body) = fixture
-        .feedback(&[COOKIE], json!({"body": "x", "task": "T-9"}))
+        .feedback(true, json!({"body": "x", "task": "T-9"}))
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(code(&body), "task_not_found");
@@ -554,7 +557,7 @@ async fn a_human_reply_joins_the_thread_and_goes_to_the_asking_worker() {
     let (_, thread) = fixture.get("/threads/m-1").await;
     assert_eq!(thread["messages"].as_array().unwrap().len(), 2);
     let (status, body) = fixture
-        .feedback(&[COOKIE], json!({"body": "x", "reply_to": "m-7"}))
+        .feedback(true, json!({"body": "x", "reply_to": "m-7"}))
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(code(&body), "message_not_found");
@@ -564,7 +567,7 @@ async fn a_human_reply_joins_the_thread_and_goes_to_the_asking_worker() {
 async fn feedback_needs_a_named_human_and_a_task_or_reply() {
     let fixture = Fixture::new().await;
     let (status, body) = fixture
-        .feedback(&[], json!({"body": "x", "task": "T-1"}))
+        .feedback(false, json!({"body": "x", "task": "T-1"}))
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(code(&body), "human_name_required");
@@ -572,7 +575,7 @@ async fn feedback_needs_a_named_human_and_a_task_or_reply() {
         socket_router(fixture.state.clone()),
         Method::POST,
         &format!("{BASE}/feedback"),
-        &[COOKIE],
+        &[("cookie", "fold_human=tanim")],
         Some(json!({"body": "x", "task": "T-1"})),
     )
     .await;
@@ -592,7 +595,7 @@ async fn feedback_needs_a_named_human_and_a_task_or_reply() {
             "invalid_name",
         ),
     ] {
-        let (status, body) = fixture.feedback(&[COOKIE], request.clone()).await;
+        let (status, body) = fixture.feedback(true, request.clone()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{request}");
         assert_eq!(code(&body), expected, "{request}");
     }
@@ -610,7 +613,7 @@ async fn a_task_s_mine_listing_holds_the_human_s_threads_with_the_agents_replies
     crate::common::roles::give_main_tag(&fixture.handle.store, "backend").await;
     let (status, sent) = fixture
         .feedback(
-            &[COOKIE],
+            true,
             json!({"body": "shorter copy", "task": "T-1", "to": ["backend"]}),
         )
         .await;
@@ -624,10 +627,10 @@ async fn a_task_s_mine_listing_holds_the_human_s_threads_with_the_agents_replies
     fixture.send("frontend", &["humans"], Some(1), None).await;
     fixture.send("frontend", &["humans"], Some(2), None).await;
     let (status, body) = call(
-        fixture.http(),
+        fixture.http().await,
         Method::GET,
         &format!("{BASE}/messages?mine=true&task=T-1"),
-        &[COOKIE],
+        &[],
         None,
     )
     .await;

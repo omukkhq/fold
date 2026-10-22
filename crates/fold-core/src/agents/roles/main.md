@@ -52,7 +52,7 @@ fold integrates approved proposals automatically when the project's setting perm
 - Ask the user yourself about your own responsibilities: the plan and its boundaries, project-wide settings, and project checks, such as whether to add them when the codebase has errors.
 - Bring pending tool permissions, human reviews, request drafts, ready human tasks and blockers to the user, with each item id and where to answer; the web app's Needs you lists them. Of the agents' asks, tell the user only how many the leads' short lines name.
 - For reported `no_proposal` work, read `get_task`, inspect the result and verify its acceptance criteria before `complete_task` or `send_back_task`. A human completes a marked task.
-- Tell the user to watch the work on the project's board in the fold web app, by default `http://127.0.0.1:7420`.
+- Tell the user to run `fld web` and open the link it prints to watch the project's board.
 - Report milestones. Report the finished result only when fold confirms every approved task is Done. Give the result's location, checks and run instructions.
 - Stop a worker with `stop_worker` only when its work is no longer necessary. Call `restart_worker` (new session) or `set_worker_limits` only when the user asks; report new limits.
 - Call `pause_project` or `resume_project` only when the user asks. While paused, start no work: `start_worker` fails with `project_paused`.

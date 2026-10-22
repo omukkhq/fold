@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::daemon_support::caught_up;
+use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use fold_core::events::types;
@@ -141,7 +142,8 @@ impl Fixture {
 
     /// Opens the stream and returns its frames; panics unless the daemon answered 200 with an event stream.
     async fn open(&self, last_event_id: Option<&str>) -> Frames {
-        let response = router(self.state.clone())
+        let response = crate::common::signed_in_router(&self.state, "ana")
+            .await
             .oneshot(request(PATH, last_event_id))
             .await
             .unwrap();
@@ -158,10 +160,22 @@ impl Fixture {
 
     /// The status and error code of a request that is refused.
     async fn refused(&self, path: &str, last_event_id: Option<&str>) -> (StatusCode, String) {
-        let response = router(self.state.clone())
-            .oneshot(request(path, last_event_id))
-            .await
-            .unwrap();
+        self.refused_by(
+            crate::common::signed_in_router(&self.state, "ana").await,
+            path,
+            last_event_id,
+        )
+        .await
+    }
+
+    /// [`Fixture::refused`] through `router`.
+    async fn refused_by(
+        &self,
+        router: Router,
+        path: &str,
+        last_event_id: Option<&str>,
+    ) -> (StatusCode, String) {
+        let response = router.oneshot(request(path, last_event_id)).await.unwrap();
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         let body: Value = serde_json::from_slice(&bytes).unwrap();
@@ -631,12 +645,15 @@ async fn a_bad_last_event_id_or_an_unknown_project_is_refused() {
 }
 
 #[tokio::test]
-async fn off_loopback_the_stream_needs_the_session_cookie() {
-    let fx = Fixture::listening("0.0.0.0").await;
-    assert_eq!(
-        fx.refused(PATH, None).await,
-        (StatusCode::UNAUTHORIZED, "auth_required".to_owned())
-    );
+async fn on_loopback_and_on_every_address_the_stream_needs_the_session_cookie() {
+    for listen in ["127.0.0.1", "0.0.0.0"] {
+        let fx = Fixture::listening(listen).await;
+        assert_eq!(
+            fx.refused_by(router(fx.state.clone()), PATH, None).await,
+            (StatusCode::UNAUTHORIZED, "auth_required".to_owned()),
+            "{listen}"
+        );
+    }
 }
 
 #[tokio::test]

@@ -2,7 +2,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use fold_core::requests::MAX_ATTACHMENT_BYTES;
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::router;
+use fold_daemon::http::socket_router;
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -11,7 +11,7 @@ use crate::common::acceptance::{FORM_BOUNDARY, FormPart, Harness};
 
 #[cfg(test)]
 const BASE: &str = "/api/v1/projects/demo";
-/// A raw request through the HTTP router, as `human` when one is named.
+/// A raw request through the HTTP router signed in as `human`, or over the socket without a human when none is named.
 #[cfg(test)]
 async fn send(
     h: &Harness,
@@ -25,13 +25,14 @@ async fn send(
         .header(CLIENT_HEADER, "test")
         .method(method)
         .uri(path);
-    if let Some(human) = human {
-        request = request.header("cookie", format!("fold_human={human}"));
-    }
     if let Some(content_type) = content_type {
         request = request.header("content-type", content_type);
     }
-    router(h.state.clone())
+    let router = match human {
+        Some(human) => crate::common::signed_in_router(&h.state, human).await,
+        None => socket_router(h.state.clone()),
+    };
+    router
         .oneshot(request.body(Body::from(body)).unwrap())
         .await
         .unwrap()

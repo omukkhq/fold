@@ -16,7 +16,7 @@ use fold_core::{EventFilter, ManualClock, RevisionId, TaskId, Timestamp, Workspa
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::{router, socket_router};
+use fold_daemon::http::socket_router;
 use fold_daemon::jobs::{JobProgress, spawn_gc_daily};
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::projects::{GcReport, create_web_session, create_web_token, gc};
@@ -589,7 +589,12 @@ async fn the_route_answers_on_the_socket_only() {
     fixture.age_all();
     let state = state_with(&[&fixture], fixture.project.clock()).await;
 
-    let (status, body) = call(router(state.clone()), "/api/v1/projects/p0/gc", "{}").await;
+    let (status, body) = call(
+        crate::common::signed_in_router(&state, "ana").await,
+        "/api/v1/projects/p0/gc",
+        "{}",
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"]["code"], "not_found");
 

@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
-use fold_core::ManualClock;
+use fold_core::{Clock, ManualClock};
 use fold_daemon::daemon::AppState;
-use fold_daemon::http::router;
+use fold_daemon::http::socket_router;
 use fold_daemon::services::agents::Launcher;
 use fold_daemon::{Daemon, DaemonConfig, RunningDaemon};
 use http_body_util::BodyExt;
@@ -97,10 +97,10 @@ impl Host {
         let request = Request::builder()
             .method(Method::GET)
             .uri(format!("{BASE}{path}"))
-            .header("cookie", "fold_human=dev")
+            .header("x-fold-human", "dev")
             .body(Body::empty())
             .unwrap();
-        let response = router(state).oneshot(request).await.unwrap();
+        let response = socket_router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK, "GET {path}");
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         serde_json::from_slice(&bytes).unwrap()
@@ -157,6 +157,20 @@ async fn the_seed_fills_every_column_and_every_state_of_the_review_screens() {
     assert!(output.status.success(), "{stdout}\n{stderr}");
     assert!(stdout.contains("seeded project demo"), "{stdout}");
     assert!(stdout.contains("board: http://127.0.0.1:7420/p/demo/board"));
+    let port = host.daemon.http_addr().port();
+    let at = ManualClock::new()
+        .now()
+        .checked_add(fold_daemon::services::projects::SIGN_IN_LINK_LIFETIME)
+        .unwrap()
+        .to_string();
+    assert!(
+        stdout.contains(&format!(
+            "sign in as dev once, within 5 minutes, before {} {} UTC: http://127.0.0.1:{port}/sign-in#link=",
+            &at[..10],
+            &at[11..19]
+        )),
+        "{stdout}"
+    );
 
     let board = host.get("/board").await;
     let columns = board["columns"].as_array().unwrap();

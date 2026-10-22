@@ -11,7 +11,7 @@ use fold_core::{
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::{router, socket_router};
+use fold_daemon::http::socket_router;
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::{
     ContextClaim, MAX_SESSION_CONTEXT, SessionFacts, render_session_context,
@@ -428,7 +428,12 @@ async fn every_hook_route_is_not_found_on_the_tcp_router() {
         "/api/v1/hooks/stop/delivered",
         "/api/v1/hooks/edit",
     ] {
-        let (status, answer) = post(router(fixture.state.clone()), path, &body).await;
+        let (status, answer) = post(
+            crate::common::signed_in_router(&fixture.state, "ana").await,
+            path,
+            &body,
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
         assert_eq!(answer["error"]["code"], codes::NOT_FOUND, "{path}");
     }

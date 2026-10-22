@@ -11,7 +11,7 @@ use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::http::host::CLIENT_HEADER;
-use fold_daemon::http::{router, socket_router};
+use fold_daemon::http::socket_router;
 use fold_daemon::mcp::handshake::{self, Answer, PROTOCOL_VERSION};
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::Launcher;
@@ -565,13 +565,13 @@ impl Harness {
             .unwrap()
     }
 
-    /// `POST /requests` with the multipart form of `parts`, as the human `human` when one is named, the way the web's New request dialog sends it.
+    /// `POST /requests` with the multipart form of `parts`, signed in as `human` the way the web's New request dialog sends it, or over the socket without a human when none is named.
     pub async fn create_request_form(
         &self,
         parts: &[FormPart<'_>],
         human: Option<&str>,
     ) -> (StatusCode, Value) {
-        let mut request = Request::builder()
+        let request = Request::builder()
             .header(CLIENT_HEADER, "test")
             .method(Method::POST)
             .uri(format!("/api/v1/projects/{SLUG}/requests"))
@@ -579,17 +579,18 @@ impl Harness {
                 "content-type",
                 format!("multipart/form-data; boundary={FORM_BOUNDARY}"),
             );
-        if let Some(human) = human {
-            request = request.header("cookie", format!("fold_human={human}"));
-        }
+        let router = match human {
+            Some(human) => crate::common::signed_in_router(&self.state, human).await,
+            None => socket_router(self.state.clone()),
+        };
         let request = request.body(Body::from(multipart_form(parts))).unwrap();
-        let response = router(self.state.clone()).oneshot(request).await.unwrap();
+        let response = router.oneshot(request).await.unwrap();
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&bytes).unwrap())
     }
 
-    /// A request through the HTTP router as the human `human`, named by the `fold_human` cookie the way the browser sends it.
+    /// A request through the HTTP router as the human `human`, signed in with the cookie of a session the way the browser sends it.
     pub async fn http(
         &self,
         method: Method,
@@ -600,8 +601,7 @@ impl Harness {
         let request = Request::builder()
             .header(CLIENT_HEADER, "test")
             .method(method)
-            .uri(path)
-            .header("cookie", format!("fold_human={human}"));
+            .uri(path);
         let request = match body {
             Some(body) => request
                 .header("content-type", "application/json")
@@ -609,7 +609,11 @@ impl Harness {
             None => request.body(Body::empty()),
         }
         .unwrap();
-        let response = router(self.state.clone()).oneshot(request).await.unwrap();
+        let response = crate::common::signed_in_router(&self.state, human)
+            .await
+            .oneshot(request)
+            .await
+            .unwrap();
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&bytes).unwrap())

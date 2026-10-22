@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use axum::extract::{Request, State};
 use axum::http::header::{HOST, ORIGIN};
@@ -96,9 +96,36 @@ pub fn host_allowed(listen: IpAddr, host: &str) -> bool {
     }
 }
 
+/// The origin a browser on this machine opens for a listener bound to `listen`: a listener on every address, `0.0.0.0` or `::`, answers on loopback too, while a browser cannot open the unspecified address itself.
+pub fn web_origin(listen: SocketAddr) -> String {
+    let reachable = match listen {
+        SocketAddr::V4(addr) if addr.ip().is_unspecified() => {
+            SocketAddr::from((Ipv4Addr::LOCALHOST, addr.port()))
+        }
+        SocketAddr::V6(addr) if addr.ip().is_unspecified() => {
+            SocketAddr::from((Ipv6Addr::LOCALHOST, addr.port()))
+        }
+        addr => addr,
+    };
+    format!("http://{reachable}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_web_origin_names_loopback_for_every_address_and_the_address_otherwise() {
+        for (listen, origin) in [
+            ("0.0.0.0:7420", "http://127.0.0.1:7420"),
+            ("[::]:7420", "http://[::1]:7420"),
+            ("127.0.0.1:7420", "http://127.0.0.1:7420"),
+            ("192.168.1.5:7420", "http://192.168.1.5:7420"),
+            ("[::1]:9000", "http://[::1]:9000"),
+        ] {
+            assert_eq!(web_origin(listen.parse().unwrap()), origin, "{listen}");
+        }
+    }
 
     fn ip(text: &str) -> IpAddr {
         text.parse().unwrap()
