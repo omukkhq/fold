@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE review_plan_members\n         SET proposal_id = (SELECT id FROM proposals WHERE number = ?3),\n             version_id = (SELECT v.id FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id\n                           WHERE p.number = ?3 AND v.version = ?4),\n             joined_at = ?5\n         WHERE released_at IS NULL AND proposal_id IS NULL\n           AND plan_id = (SELECT id FROM review_plans WHERE number = ?1)\n           AND task_id = (SELECT id FROM tasks WHERE number = ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "835ea3ad8c4626edf50c7e2d296239c61419a480c6356fcb35574f56555b9ea9"
+}

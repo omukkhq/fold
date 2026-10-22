@@ -11,7 +11,7 @@ use super::{TaskDetail, TaskError, TaskService, TaskView, areas_of, task_not_fou
 use crate::services::agents::starter_of;
 use crate::services::events::EventBuffer;
 
-/// The hold mark, which the board labels Blocker. Each command is one write transaction that appends `task.hold_set` or `task.hold_cleared`; neither runs `recompute`, because the hold never changes a status.
+/// The hold mark, which the board labels Blocker. Each command is one write transaction that appends `task.hold_set` or `task.hold_cleared`; neither runs `recompute`, because the hold never changes a status, but a new hold takes the task out of a review plan that waits for it.
 impl TaskService {
     /// Puts a task that no agent has started on hold with `reason`, or changes the reason of its hold, by a human, the main agent or the lead of an area whose label the task carries. A task with a claim, a live task workspace or an open proposal, or one past Todo, is refused with `task_hold_denied` and the detail reason `started`. The same reason again changes nothing and appends no event. While the hold is on, `get_ready_tasks` leaves the task out, a claim is refused and no lead starts a task worker for it.
     pub async fn set_hold(
@@ -68,6 +68,7 @@ impl TaskService {
                     .task(task)
                     .data(json!({"reason": mark.reason.as_str()}))?;
                 buffer.append(tx, &event, now).await?;
+                crate::services::reviews::settle_plans(tx, &mut buffer, now).await?;
                 Ok::<_, TaskError>(())
             })
             .await?;

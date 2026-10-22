@@ -156,6 +156,13 @@ define_event_types! {
     WORKER_MODEL_UNREACHABLE = "worker.model_unreachable",
     MESSAGE_PUSHED = "message.pushed",
     MESSAGE_ASK_CLOSED = "message.ask_closed",
+    REVIEW_PLAN_CREATED = "review.plan_created",
+    REVIEW_PLAN_CHANGED = "review.plan_changed",
+    REVIEW_PLAN_JOINED = "review.plan_joined",
+    REVIEW_PLAN_LEFT = "review.plan_left",
+    REVIEW_PLAN_WAIT_ENDED = "review.plan_wait_ended",
+    REVIEW_PLAN_STARTED = "review.plan_started",
+    REVIEW_PLAN_ENDED = "review.plan_ended",
 }
 
 impl EventType {

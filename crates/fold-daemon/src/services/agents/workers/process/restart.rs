@@ -281,7 +281,7 @@ impl Supervisor {
             kept.contains(&agent) || self.is_running(&agent)
         };
         let read = self.inner.store.read();
-        let (tasks, proposals) = match row.role {
+        let (tasks, proposals, plans) = match row.role {
             Role::AreaLead => {
                 let Some(area) = &row.area else {
                     return Ok(None);
@@ -289,7 +289,11 @@ impl Supervisor {
                 let Some(area) = agents::find_area(read, area).await? else {
                     return Ok(None);
                 };
-                (ready_in_area(read, &area.label, &holds).await?, Vec::new())
+                (
+                    ready_in_area(read, &area.label, &holds).await?,
+                    Vec::new(),
+                    Vec::new(),
+                )
             }
             Role::Main => return self.main_waiting(Some(row.agent_id), kept).await,
             Role::ReviewLead => {
@@ -300,8 +304,16 @@ impl Supervisor {
                         .into_iter()
                         .map(|review| review.proposal)
                         .collect();
+                let planned = reviews::plans::list_plans(read, true).await?;
                 let mut proposals = Vec::new();
                 for proposal in open {
+                    // A proposal in a plan waits for the plan's start, which the plan's line names.
+                    if reviews::plans::live_plan_of_proposal(read, proposal.id)
+                        .await?
+                        .is_some()
+                    {
+                        continue;
+                    }
                     let waits = waits_for_review(&proposal)
                         && proposal
                             .review_claim
@@ -317,7 +329,8 @@ impl Supervisor {
                         proposals.push(proposal.id);
                     }
                 }
-                (Vec::new(), proposals)
+                let plans = planned.into_iter().map(|plan| plan.id).collect();
+                (Vec::new(), proposals, plans)
             }
             Role::TaskWorker | Role::Reviewer => return Ok(None),
         };
@@ -326,6 +339,7 @@ impl Supervisor {
             area: row.area.as_ref(),
             tasks: &tasks,
             proposals: &proposals,
+            plans: &plans,
         }))
     }
 

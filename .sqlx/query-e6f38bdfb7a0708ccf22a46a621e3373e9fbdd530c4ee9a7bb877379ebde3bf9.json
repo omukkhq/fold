@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.number AS \"number!: i64\"\n           FROM review_plans r JOIN review_batches b ON b.id = r.review_batch_id\n           WHERE b.number = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "review_plans",
+            "name": "number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e6f38bdfb7a0708ccf22a46a621e3373e9fbdd530c4ee9a7bb877379ebde3bf9"
+}

@@ -4,7 +4,7 @@ const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 const REFERENCE: &str = include_str!("../templates/REFERENCE.md");
 
-const FOLD_TOOLS: [&str; 92] = [
+const FOLD_TOOLS: [&str; 96] = [
     "register_agent",
     "register_worker",
     "list_agents",
@@ -97,13 +97,17 @@ const FOLD_TOOLS: [&str; 92] = [
     "set_review_scope",
     "restart_worker",
     "mark_answered",
+    "create_review_plan",
+    "change_review_plan",
+    "get_review_plan",
+    "list_review_plans",
 ];
 
 /// The tools of `FOLD_TOOLS` that the MCP server lists and the skill does not teach yet. A tool leaves this list in the change that teaches it.
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 165] = [
+const FOLD_ERROR_CODES: [&str; 172] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -266,6 +270,13 @@ const FOLD_ERROR_CODES: [&str; 165] = [
     "ask_close_denied",
     "recipient_not_reader",
     "review_lead_delegates",
+    "review_plan_not_found",
+    "review_plan_not_open",
+    "review_plan_too_large",
+    "review_plan_denied",
+    "task_not_awaitable",
+    "proposal_not_plannable",
+    "already_in_plan",
     "main_supervised",
     "main_interactive",
     "main_not_supervised",
@@ -292,7 +303,7 @@ const INVALID_REQUEST_REASONS: [&str; 14] = [
     "main_approves",
 ];
 
-const NON_TOOL_NAMES: [&str; 40] = [
+const NON_TOOL_NAMES: [&str; 43] = [
     "human_review",
     "fold_failed",
     "left_out",
@@ -333,6 +344,9 @@ const NON_TOOL_NAMES: [&str; 40] = [
     "main_approves",
     "previous_sessions",
     "asks_human",
+    "depends_on_member",
+    "proposal_open",
+    "area_leads",
 ];
 
 const SECTIONS: [&str; 14] = [

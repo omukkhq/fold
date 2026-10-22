@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE review_plan_members SET released_at = ?4, release_reason = ?3\n         WHERE released_at IS NULL\n           AND plan_id = (SELECT id FROM review_plans WHERE number = ?1)\n           AND task_id = (SELECT id FROM tasks WHERE number = ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "99d33c491d118a2db87b81a50390591811f93894eebc56a3e593f95e00633297"
+}

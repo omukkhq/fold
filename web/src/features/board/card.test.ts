@@ -9,6 +9,7 @@ import {
   leadCheckMark,
   messagesText,
   needsText,
+  planWaitText,
   proposalLook,
   proposalText,
   taskPath,
@@ -23,6 +24,7 @@ const proposal = (
   version: 1,
   checks_failed: false,
   revision,
+  review_plan: null,
 });
 
 describe("taskPath", () => {
@@ -166,5 +168,29 @@ describe("human tasks and blockers", () => {
         blocker: { reason: "Wait for the logo", set_by: "web-lead", set_at: 1 },
       }),
     ).toEqual({ text: "Blocker", reason: "Wait for the logo" });
+  });
+});
+
+describe("planWaitText", () => {
+  const waiting: BoardProposal = {
+    ...proposal("open"),
+    review_plan: {
+      plan: "rp-1",
+      deadline_at: new Date(2026, 9, 21, 15, 0).getTime(),
+      wait_ended: false,
+      awaited: ["T-5"],
+      proposals: ["P-3"],
+    },
+  };
+  const now = new Date(2026, 9, 21, 14, 0).getTime();
+
+  it("reads an open proposal of a plan as waiting for its batch", () => {
+    expect(proposalText(waiting)).toBe("P-3 · waiting for a batch");
+    expect(planWaitText(waiting, now)).toBe("rp-1 waits for T-5 until 15:00");
+  });
+
+  it("is null for a proposal in no plan", () => {
+    expect(planWaitText(proposal("open"), now)).toBeNull();
+    expect(proposalText(proposal("open"))).toBe("P-3 · waiting for review");
   });
 });
