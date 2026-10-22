@@ -47,7 +47,7 @@ import {
   type DetailSearch,
   type DetailView,
 } from "./view";
-import { viewedKey } from "./viewed";
+import { shownPath, viewedKey } from "./viewed";
 
 function failureText(error: unknown): string {
   return describeFailure(error).text;
@@ -197,7 +197,6 @@ function ChangeBody({
   const comparison = useQuery(proposalChangesQuery(slug, id, view.range));
   const [selection, setSelection] = useState<DiffSelection | null>(null);
   const [mode, setMode] = useState<SelectionMode>("menu");
-  const tree = useChangedFiles(viewedKey(slug, id, view.range));
   const select = (next: DiffSelection | null) => {
     setSelection(next);
     setMode("menu");
@@ -205,6 +204,10 @@ function ChangeBody({
   const [editing, setEditing] = useState<string | null>(null);
   const files = comparison.data ? listedFiles(comparison.data.files) : [];
   const file = currentFile(files, search.path);
+  const tree = useChangedFiles(
+    viewedKey(slug, id, view.range),
+    comparison.data ? shownPath(comparison.data, file?.path) : null,
+  );
   const fileDiff = useFileDiff(
     proposalFileDiffQuery(slug, id, view.range, file?.path ?? ""),
     file !== null && fileBody(file) === "text",

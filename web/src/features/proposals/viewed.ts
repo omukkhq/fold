@@ -1,4 +1,6 @@
+import type { ComparedFile, FileWarning } from "@/api/diff";
 import type { ChangeRange } from "@/api/proposals";
+import { listedFiles, shownEntry } from "@/features/diff/layout";
 
 /** The part of the browser's storage the viewed marks use; null where the browser gives none. */
 export interface MarkStore {
@@ -52,6 +54,48 @@ export function toggleViewed(
   if (next.has(path)) next.delete(path);
   else next.add(path);
   return next;
+}
+
+/** The file whose diff the panel shows for `selectedPath`; null when it shows a warning, which has no viewed mark, or nothing. */
+export function shownPath(
+  comparison: {
+    files: readonly ComparedFile[];
+    warnings: readonly FileWarning[];
+  },
+  selectedPath: string | undefined,
+): string | null {
+  const shown = shownEntry(
+    listedFiles(comparison.files),
+    comparison.warnings,
+    selectedPath,
+  );
+  return shown?.kind === "file" ? shown.file.path : null;
+}
+
+/** The viewed marks with the file last opened. */
+export interface OpenMarks {
+  opened: string | null;
+  viewed: ReadonlySet<string>;
+}
+
+function markOpened(marks: OpenMarks, path: string): OpenMarks {
+  if (marks.opened === path && marks.viewed.has(path)) return marks;
+  const viewed = marks.viewed.has(path)
+    ? marks.viewed
+    : new Set([...marks.viewed, path]);
+  return { opened: path, viewed };
+}
+
+/** Opening a file marks it viewed. The shown file opens only when it changes, so a re-render, a live update or a refetch keeps a file the reader unchecked unviewed. The same marks come back when nothing changes. */
+export function showFile(marks: OpenMarks, shown: string | null): OpenMarks {
+  if (shown === marks.opened) return marks;
+  if (shown === null) return { ...marks, opened: null };
+  return markOpened(marks, shown);
+}
+
+/** A reader who selects a file opens it, even when it is already shown; null selects a file without a viewed mark. */
+export function selectFile(marks: OpenMarks, path: string | null): OpenMarks {
+  return path === null ? marks : markOpened(marks, path);
 }
 
 /** `2 of 33 viewed`, counting only the files the change lists. */
