@@ -23,7 +23,7 @@ function move(
   at = seq * 1_000,
   task = `T-${String(seq)}`,
 ): CardMove & { title: string | null } {
-  return { seq, task, from: "review", to: "done", at, by: null, title: null };
+  return { seq, task, from: "review", to: "done", at, title: null };
 }
 
 function entry(seq: number, unread = true, at = seq * 1_000): FeedEntry {
@@ -184,7 +184,6 @@ describe("parseFeed", () => {
       JSON.stringify({ ...good, entries: "x" }),
       JSON.stringify({ ...good, entries: [{ ...entry(1), to: "later" }] }),
       JSON.stringify({ ...good, entries: [{ ...entry(1), title: 4 }] }),
-      JSON.stringify({ ...good, entries: [{ ...entry(1), by: 4 }] }),
       JSON.stringify({ ...good, read: { seq: 1.5, at: 1 } }),
       JSON.stringify({ ...good, cleared: "x" }),
       JSON.stringify({ ...good, hidden: "x" }),

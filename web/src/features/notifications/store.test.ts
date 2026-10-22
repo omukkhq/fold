@@ -50,9 +50,8 @@ const noTitle = () => null;
 function frame(
   replay: boolean,
   title: (task: string) => string | null = noTitle,
-  self: string | null = null,
 ): Frame {
-  return { replay, title, self };
+  return { replay, title };
 }
 
 function storeWith(options: Partial<NotificationOptions> = {}) {
@@ -242,60 +241,20 @@ function stored(
   seq: number,
   type: DurableEvent["type"],
   task: string,
-  actor = "fold",
-  at = seq * 1_000,
 ): EventEnvelope {
   return {
     kind: "event",
     seq,
     type,
-    actor,
+    actor: "fold",
     task,
     proposal: null,
     workspace: null,
     revision: null,
     data: {},
-    created_at: at,
+    created_at: seq * 1_000,
   };
 }
-
-describe("own moves", () => {
-  it("gives no entry and no toast for a move the signed-in human caused", () => {
-    const { store } = storeWith();
-    const me = frame(false, noTitle, "human:ana");
-    store.receive(
-      "demo",
-      stored(1, "integration.succeeded", "T-1", "human:ana"),
-      me,
-    );
-    store.receive(
-      "demo",
-      { ...moved(2, "T-1", "done"), created_at: 1_000 },
-      me,
-    );
-    vi.advanceTimersByTime(BATCH_WINDOW_MS);
-    expect(store.feed("demo")).toEqual([]);
-    expect(store.toasts()).toEqual([]);
-  });
-
-  it("shows another human's move", () => {
-    const { store } = storeWith();
-    const me = frame(false, noTitle, "human:ana");
-    store.receive(
-      "demo",
-      stored(1, "integration.succeeded", "T-1", "human:bo"),
-      me,
-    );
-    store.receive(
-      "demo",
-      { ...moved(2, "T-1", "done"), created_at: 1_000 },
-      me,
-    );
-    vi.advanceTimersByTime(BATCH_WINDOW_MS);
-    expect(store.feed("demo").map((e) => e.by)).toEqual(["human:bo"]);
-    expect(store.toasts()).toHaveLength(1);
-  });
-});
 
 describe("toast text", () => {
   it("names the title and shows no toast for a task back where it started", () => {
@@ -324,11 +283,11 @@ describe("deleted tasks", () => {
   });
 });
 
-function historyEvent(seq: number, task: string, actor = "fold"): DurableEvent {
+function historyEvent(seq: number, task: string): DurableEvent {
   return {
     seq,
     type: "task.status_changed",
-    actor,
+    actor: "fold",
     task,
     proposal: null,
     workspace: null,
@@ -340,12 +299,10 @@ function historyEvent(seq: number, task: string, actor = "fold"): DurableEvent {
 
 function source(
   events: DurableEvent[],
-  self: string | null = null,
 ): HistorySource & { read: ReturnType<typeof vi.fn> } {
   return {
     read: vi.fn(() => Promise.resolve({ events, before: null })),
     title: (task: string) => (task === "T-5" ? "From history" : null),
-    self: () => self,
   };
 }
 
@@ -374,24 +331,6 @@ describe("fill", () => {
     expect(store.feed("demo")).toHaveLength(1);
     await store.fill("demo", source([historyEvent(2, "T-2")]));
     expect(store.feed("demo").map((e) => e.task)).toEqual(["T-2"]);
-  });
-
-  it("leaves out the history moves the signed-in human caused", async () => {
-    const { store } = storeWith();
-    const integrated: DurableEvent = {
-      ...historyEvent(1, "T-1", "human:ana"),
-      type: "integration.succeeded",
-      data: {},
-      created_at: 2_000,
-    };
-    await store.fill(
-      "demo",
-      source(
-        [historyEvent(3, "T-3"), historyEvent(2, "T-1"), integrated],
-        "human:ana",
-      ),
-    );
-    expect(store.feed("demo").map((e) => e.task)).toEqual(["T-3"]);
   });
 
   it("tries again on refill after a failure, and only then", async () => {

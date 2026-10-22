@@ -48,7 +48,6 @@ function receive(slug: string, event: EventEnvelope, replay = false) {
     notificationStore.receive(slug, event, {
       replay,
       title: (task) => (task === "T-12" ? "Add the bell" : null),
-      self: null,
     });
   });
 }

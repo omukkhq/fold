@@ -171,7 +171,6 @@ function isEntry(value: unknown): value is FeedEntry {
     typeof value.task === "string" &&
     isTaskStatus(value.from) &&
     isTaskStatus(value.to) &&
-    (value.by === null || typeof value.by === "string") &&
     (value.title === null || typeof value.title === "string") &&
     typeof value.unread === "boolean"
   );

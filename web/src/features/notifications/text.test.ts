@@ -10,7 +10,7 @@ function move(
   from: TaskStatus = "in_progress",
   title: string | null = null,
 ): CardMove & { title: string | null } {
-  return { seq, task, from, to, at: seq, by: null, title };
+  return { seq, task, from, to, at: seq, title };
 }
 
 describe("toastText", () => {

@@ -49,16 +49,12 @@ export interface Frame {
   replay: boolean;
   /** The task's title in the cached board, or null. */
   title: (task: string) => string | null;
-  /** The signed-in human as an actor (`human:ana`), or null. A move that this human's command caused is no notification for them. */
-  self: string | null;
 }
 
 /** Where a fill reads the daemon's history and what it adds to each move. */
 export interface HistorySource {
   read: PageReader;
   title: (task: string) => string | null;
-  /** The signed-in human as an actor, read when the history arrives. */
-  self: () => string | null;
 }
 
 export interface NotificationStore {
@@ -94,10 +90,6 @@ type FillState = "idle" | "loading" | "done";
 
 interface Filler extends HistorySource {
   state: FillState;
-}
-
-function othersMove(move: CardMove, self: string | null): boolean {
-  return move.by === null || move.by !== self;
 }
 
 export function createNotificationStore(
@@ -189,10 +181,7 @@ export function createNotificationStore(
     filler.state = "loading";
     let moves: CardMove[];
     try {
-      moves = await loadMoves(
-        filler.read,
-        (move) => keeps(state(slug), move) && othersMove(move, filler.self()),
-      );
+      moves = await loadMoves(filler.read, (move) => keeps(state(slug), move));
     } catch {
       if (fillers.get(slug) === filler) {
         filler.state = "idle";
@@ -228,7 +217,7 @@ export function createNotificationStore(
         setState(slug, removeTask(state(slug), gone));
       }
       const move = reader(slug)(event);
-      if (move === null || !othersMove(move, frame.self)) {
+      if (move === null) {
         return;
       }
       const entry: TitledMove = { ...move, title: frame.title(move.task) };

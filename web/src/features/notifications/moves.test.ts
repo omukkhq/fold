@@ -15,13 +15,12 @@ function event(
   task: string | null,
   data: Record<string, unknown> = {},
   at = 1_000,
-  actor = "fold",
 ): EventEnvelope & DurableEvent {
   return {
     kind: "event",
     seq,
     type,
-    actor,
+    actor: "fold",
     task,
     proposal: null,
     workspace: null,
@@ -44,7 +43,6 @@ describe("createMoveReader", () => {
       from: "review",
       to: "done",
       at: 1_000,
-      by: null,
     });
   });
 
@@ -100,45 +98,6 @@ describe("createMoveReader", () => {
         event(5, "task.status_changed", "T-1", { from: "done", to: "done" }),
       ),
     ).toBeNull();
-  });
-});
-
-describe("the human of a move", () => {
-  it("names the human whose command made the change in the same transaction", () => {
-    const read = createMoveReader();
-    expect(
-      read(event(1, "integration.succeeded", "T-12", {}, 1_000, "human:ana")),
-    ).toBeNull();
-    read(event(2, "task.completed", "T-12"));
-    expect(
-      read(
-        event(3, "task.status_changed", "T-12", { from: "review", to: "done" }),
-      ),
-    ).toMatchObject({ by: "human:ana" });
-    expect(
-      read(
-        event(
-          4,
-          "task.status_changed",
-          "T-13",
-          { from: "backlog", to: "todo" },
-          2_000,
-        ),
-      ),
-    ).toMatchObject({ by: null });
-  });
-
-  it("names no human for an agent's command", () => {
-    const read = createMoveReader();
-    read(event(1, "claim.acquired", "T-12", {}, 1_000, "frontend"));
-    expect(
-      read(
-        event(2, "task.status_changed", "T-12", {
-          from: "todo",
-          to: "in_progress",
-        }),
-      ),
-    ).toMatchObject({ by: null });
   });
 });
 
