@@ -411,7 +411,7 @@ async fn a_reviewer_reads_only_the_change_since_the_last_verdict() {
     .await;
     assert_eq!(
         hunks["hunks"],
-        json!([{"header": "@@ -1,1 +1,2 @@", "lines": [" pub fn y() {}\n", "+pub fn z() {}\n"]}])
+        json!([{"header": "@@ -1,1 +1,2 @@", "lines": [" 1 pub fn y() {}\n", "+2 pub fn z() {}\n"]}])
     );
     ok(
         &review,
@@ -574,7 +574,7 @@ async fn a_change_since_an_earlier_version_leaves_out_what_main_gained() {
     .await;
     assert_eq!(
         hunks["hunks"],
-        json!([{"header": "@@ -1,1 +1,2 @@", "lines": [" pub fn y() {}\n", "+pub fn z() {}\n"]}])
+        json!([{"header": "@@ -1,1 +1,2 @@", "lines": [" 1 pub fn y() {}\n", "+2 pub fn z() {}\n"]}])
     );
     let error = err(
         &review,

@@ -206,7 +206,7 @@ async fn compare_revisions_lists_files_or_gives_one_file_s_hunks() {
             "binary": false,
             "hunks": [{
                 "header": "@@ -1,1 +1,2 @@",
-                "lines": [" fn a() {}\n", "+fn b() {}\n"],
+                "lines": [" 1 fn a() {}\n", "+2 fn b() {}\n"],
             }],
         })
     );

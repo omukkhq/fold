@@ -67,7 +67,7 @@ async fn revise(harness: &Harness, proposal: &str, work: &Work, file: &str, roun
         .await;
 }
 
-/// The numbers of the lines of one compact hunk, counted from its header as a reviewer counts them: `(mark, old, new, text)` for each line.
+/// The numbers of the lines of one compact hunk, counted from its header: `(mark, old, new, text)` for each line. Each line's own number must be the counted number of its side.
 fn numbered(hunk: &Value) -> Vec<(char, Option<u32>, Option<u32>, String)> {
     let header = hunk["header"].as_str().unwrap();
     let numbers: Vec<u32> = header
@@ -82,13 +82,16 @@ fn numbered(hunk: &Value) -> Vec<(char, Option<u32>, Option<u32>, String)> {
     for line in hunk["lines"].as_array().unwrap() {
         let line = line.as_str().unwrap();
         let mark = line.chars().next().unwrap();
-        let text = line[1..].to_owned();
         let numbers = match mark {
             ' ' => (Some(old), Some(new)),
             '-' => (Some(old), None),
             '+' => (None, Some(new)),
             _ => continue,
         };
+        let (number, text) = line[1..].split_once(' ').unwrap();
+        let shown = if mark == '-' { numbers.0 } else { numbers.1 };
+        assert_eq!(Some(number.parse().unwrap()), shown, "{line}");
+        let text = text.to_owned();
         old += u32::from(numbers.0.is_some());
         new += u32::from(numbers.1.is_some());
         lines.push((mark, numbers.0, numbers.1, text));
@@ -342,7 +345,7 @@ async fn the_default_reads_of_a_reviewed_proposal_are_smaller_and_keep_what_an_a
     assert_eq!(lines[40].2, Some(41));
     assert_eq!(lines[40].3, "    let value_41 = compute(41) + 1;\n");
 
-    // A reviewer places a comment on the added line of the since change by counting from the hunk header.
+    // A reviewer places a comment on the added line of the since change with the number on the line.
     let since_lines = numbered(&since["hunks"][0]);
     let line_41 = |mark: char| {
         since_lines
@@ -388,6 +391,49 @@ async fn the_default_reads_of_a_reviewed_proposal_are_smaller_and_keep_what_an_a
         text.lines().nth(40),
         Some("    let value_41 = compute(41) + 1;"),
         "the new number is the line of the version's file"
+    );
+
+    // Deep in the long hunk of the whole file, the numbers on two lines place a range comment on exactly those lines.
+    let hunk = diff["hunks"][0]["lines"].as_array().unwrap();
+    let number = |index: usize| -> u64 {
+        let line = hunk[index].as_str().unwrap();
+        line[1..].split_once(' ').unwrap().0.parse().unwrap()
+    };
+    let (first, last) = (number(66), number(67));
+    assert_eq!((first, last), (67, 68));
+    harness
+        .call(
+            "review",
+            "submit_review",
+            json!({"id": "P-3", "version": 3, "verdict": "comment", "body": "", "comments": [
+                {"path": "src/report.rs", "start_line": first, "end_line": last, "side": "new", "body": "join these"},
+            ]}),
+        )
+        .await;
+    let comments = harness
+        .call("review", "get_review_comments", json!({"id": "P-3"}))
+        .await;
+    let placed = comments["comments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|comment| comment["body"] == "join these")
+        .unwrap();
+    assert_eq!(
+        (&placed["start_line"], &placed["end_line"]),
+        (&json!(67), &json!(68))
+    );
+    let shown: Vec<&str> = text.lines().skip(66).take(2).collect();
+    let quoted: Vec<String> = [66, 67]
+        .iter()
+        .map(|index| {
+            let line = hunk[*index].as_str().unwrap();
+            line[1..].split_once(' ').unwrap().1.trim_end().to_owned()
+        })
+        .collect();
+    assert_eq!(
+        shown, quoted,
+        "the comment's lines are the lines the hunk shows"
     );
 }
 

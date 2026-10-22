@@ -153,7 +153,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             COMPARE_REVISIONS,
-            "Compare two states: revisions, changesets, checkpoints or the working files of a workspace. Lists the changed files with line counts, or one file's hunks when you pass path, in the form get_proposal_diff describes: a header \"@@ -old_start,old_lines +new_start,new_lines @@\" and one string per line, a mark (space, - or +) and the text. Number the lines from the header: a context line takes the next old and new number, a removed line the next old number, an added line the next new number.",
+            "Compare two states: revisions, changesets, checkpoints or the working files of a workspace. Lists the changed files with line counts, or one file's hunks when you pass path, in the form get_proposal_diff describes: a header \"@@ -old_start,old_lines +new_start,new_lines @@\" and one string per line: a mark (space, - or +), the line's number, a space and the text. Use the number on the line: a removed line has its old number, a context or added line its new number.",
             schema_for_type::<CompareRevisionsInput>(),
         ),
         Tool::new(
@@ -319,16 +319,17 @@ pub(super) fn file_diff_value(diff: &FileDiff) -> Value {
 /// The line after a hunk line whose file ends without a line terminator, as unified diffs write it.
 const NO_NEWLINE: &str = "\\ No newline at end of file";
 
-/// A hunk in the unified diff form: a header with the first line number and the line count of each side, and each line as one string, its mark (` ` context, `-` removed, `+` added) followed by its text with its terminator. The numbers of each line follow from the header: a context line takes the next number of both sides, a removed line of the old side and an added line of the new side.
+/// A hunk in the unified diff form: a header with the first line number and the line count of each side, and each line as one string: its mark (` ` context, `-` removed, `+` added), its line number, a space and its text with its terminator. A removed line carries its old-side number and the other lines their new-side number, so a reviewer places a comment without counting lines.
 fn hunk_value(hunk: &Hunk) -> Value {
     let mut lines = Vec::with_capacity(hunk.lines.len());
     for line in &hunk.lines {
-        let mark = match line.kind {
-            LineKind::Context => ' ',
-            LineKind::Added => '+',
-            LineKind::Removed => '-',
+        let (mark, number) = match line.kind {
+            LineKind::Context => (' ', line.new_no),
+            LineKind::Added => ('+', line.new_no),
+            LineKind::Removed => ('-', line.old_no),
         };
-        lines.push(format!("{mark}{}", line.text));
+        let number = number.unwrap_or_default();
+        lines.push(format!("{mark}{number} {}", line.text));
         if line.no_newline {
             lines.push(NO_NEWLINE.to_owned());
         }
@@ -632,7 +633,7 @@ mod tests {
 
     use super::*;
 
-    /// Reads a hunk of [`hunk_value`] back into its lines, numbering them from the header the way a reviewer does to place a comment.
+    /// Reads a hunk of [`hunk_value`] back into its lines, numbering them from the header, and checks that the number on each line is that number.
     fn decode(value: &Value) -> (u32, u32, u32, u32, Vec<DiffLine>) {
         let header = value["header"].as_str().unwrap();
         let numbers: Vec<u32> = header
@@ -664,12 +665,23 @@ mod tests {
                 continue;
             }
             let (mark, rest) = text.split_at(1);
+            let (number, rest) = rest.split_once(' ').unwrap();
+            let number: u32 = number.parse().unwrap();
             let (kind, old_no, new_no) = match mark {
                 " " => (LineKind::Context, Some(old), Some(new)),
                 "-" => (LineKind::Removed, Some(old), None),
                 "+" => (LineKind::Added, None, Some(new)),
                 _ => panic!("{text}"),
             };
+            assert_eq!(
+                Some(number),
+                if kind == LineKind::Removed {
+                    old_no
+                } else {
+                    new_no
+                },
+                "the number on {text:?} is the one counted from the header"
+            );
             old += u32::from(old_no.is_some());
             new += u32::from(new_no.is_some());
             lines.push(DiffLine {
@@ -722,7 +734,7 @@ mod tests {
         let hunks = diff_text("", "one\ntwo\n", 3);
         let value = hunk_value(&hunks[0]);
         assert_eq!(value["header"], "@@ -0,0 +1,2 @@");
-        assert_eq!(value["lines"], json!(["+one\n", "+two\n"]));
+        assert_eq!(value["lines"], json!(["+1 one\n", "+2 two\n"]));
         assert_eq!(decode(&value).4, hunks[0].lines);
     }
 }
