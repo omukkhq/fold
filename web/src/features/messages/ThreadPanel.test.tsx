@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-router";
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -129,12 +130,76 @@ describe("ThreadPanel", () => {
     ).toBe("/p/demo/t/T-12");
   });
 
+  it("says a message to humans was sent to them and marks the signed-in human", async () => {
+    daemon.on("GET /api/v1/session", {
+      status: 200,
+      body: { human: "tanim", authenticated: true },
+    });
+    await setup(() => Promise.resolve(), {
+      ...thread,
+      messages: [
+        message(MESSAGE, {
+          sender: "web-worker",
+          recipients: [recipient("human:tanim"), recipient("human:rafeed")],
+          body: "Which one?",
+          sent_at: NOW,
+        }),
+      ],
+    });
+    const lines = await screen.findAllByText("sent to", { exact: false });
+    await waitFor(() => {
+      expect(lines.map((line) => line.textContent)).toEqual([
+        "sent to@tanim (you)",
+        "sent to@rafeed",
+      ]);
+    });
+    expect(screen.queryByText("not delivered to", { exact: false })).toBeNull();
+  });
+
   it("refuses an empty reply", async () => {
     const onReply = vi.fn(() => Promise.resolve());
     await setup(onReply);
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByText("Write a message first.")).toBeTruthy();
     expect(onReply).not.toHaveBeenCalled();
+  });
+
+  it("sends on Enter and starts a new line on Shift+Enter", async () => {
+    const onReply = vi.fn(() => Promise.resolve());
+    await setup(onReply);
+    await userEvent.type(
+      screen.getByLabelText("Reply"),
+      "Use it{Shift>}{Enter}{/Shift}Recharts{Enter}",
+    );
+    expect(onReply).toHaveBeenCalledTimes(1);
+    expect(onReply).toHaveBeenCalledWith(MESSAGE, "Use it\nRecharts");
+  });
+
+  it("does nothing on Enter in an empty box", async () => {
+    const onReply = vi.fn(() => Promise.resolve());
+    await setup(onReply);
+    const box = screen.getByLabelText<HTMLTextAreaElement>("Reply");
+    await userEvent.type(box, "  {Enter}");
+    expect(onReply).not.toHaveBeenCalled();
+    expect(box.value).toBe("  ");
+    expect(screen.queryByText("Write a message first.")).toBeNull();
+  });
+
+  it("never sends the Enter of an input method", async () => {
+    const onReply = vi.fn(() => Promise.resolve());
+    await setup(onReply);
+    const box = screen.getByLabelText("Reply");
+    await userEvent.type(box, "kanji");
+    fireEvent.keyDown(box, { key: "Enter", isComposing: true });
+    // Safari ends the composition before the keydown of its Enter.
+    fireEvent.compositionStart(box);
+    fireEvent.compositionEnd(box);
+    fireEvent.keyDown(box, { key: "Enter" });
+    fireEvent.keyUp(box, { key: "Enter" });
+    await userEvent.type(box, " ok{Enter}");
+    await waitFor(() => {
+      expect(onReply.mock.calls).toEqual([[MESSAGE, "kanji ok"]]);
+    });
   });
 
   it("shows pending without adding a message, then clears the box", async () => {
@@ -259,13 +324,29 @@ describe("ThreadPanel question", () => {
       vi.fn(() => Promise.resolve()),
     );
     expect(await screen.findByText("Question · answered")).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: /^Recharts · chosen/ }),
-    ).toHaveProperty("ariaPressed", "true");
+    const choices = screen.getByRole("list", { name: "Choices" });
+    const marked = within(choices).getAllByRole("img", { name: "chosen" });
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.closest("button")?.textContent).toContain("Recharts");
+    expect(marked[0]?.getAttribute("class")).toContain("text-success");
+    for (const button of within(choices).getAllByRole("button")) {
+      expect(button.className).not.toContain("opacity");
+      expect(button.textContent).not.toContain("· chosen");
+    }
     expect(
       screen.getByText("Chosen option of the question above."),
     ).toBeTruthy();
     expect(screen.queryByLabelText("Your own answer")).toBeNull();
+  });
+
+  it("answers on Enter in the own-answer box", async () => {
+    const onReply = vi.fn(() => Promise.resolve());
+    renderThread(asked, onReply);
+    await userEvent.type(
+      await screen.findByLabelText("Your own answer"),
+      "Neither{Shift>}{Enter}{/Shift}Use SVG{Enter}",
+    );
+    expect(onReply).toHaveBeenCalledWith(QUESTION, "Neither\nUse SVG");
   });
 
   it("sends a free answer and shows a refusal with its code", async () => {

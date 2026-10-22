@@ -18,6 +18,20 @@ describe("PersonName", () => {
     expect(container.querySelector('[role="img"]')).toBeNull();
   });
 
+  it("marks the signed-in human as you, and only them", () => {
+    const { container } = render(
+      <PersonList
+        names={["human:tanim", "human:rafeed", "tanim"]}
+        you="tanim"
+      />,
+    );
+    expect(
+      [...container.querySelectorAll("[data-person]")].map(
+        (name) => name.textContent,
+      ),
+    ).toEqual(["@tanim (you)", "@rafeed", "@tanim"]);
+  });
+
   it("draws an agent as @name in the secondary colour", () => {
     render(<PersonName name="frontend/ui" />);
     const name = screen.getByText("@frontend/ui");

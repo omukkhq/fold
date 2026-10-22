@@ -1,16 +1,18 @@
 import { PersonList, PersonName } from "@/people/PersonName";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { ArrowRight, Send, SquareKanban } from "lucide-react";
 import { HrefLink } from "@/app/HrefLink";
 import type { ThreadView } from "@/api/messages";
+import { sessionQuery } from "@/api/queries";
 import { Button } from "@/components/button/Button";
 import {
   buttonClasses,
   buttonIconClass,
 } from "@/components/button/buttonStyles";
-import { MentionTextarea } from "@/mentions/MentionTextarea";
+import { MessageComposer } from "@/mentions/MessageComposer";
 import { failureText } from "@/format/failure";
 import { formatAsOf } from "@/format/time";
 import { cn } from "@/lib/cn";
@@ -49,6 +51,7 @@ interface ThreadPanelProps {
 export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
   const last = thread.messages.at(-1);
   const chosen = chosenAnswers(thread);
+  const you = useQuery(sessionQuery()).data?.human ?? null;
   const {
     control,
     handleSubmit,
@@ -111,7 +114,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
             thread {thread.id}
             {thread.task ? ` · linked to ${thread.task}` : ""}
             {thread.proposal ? ` · ${thread.proposal}` : ""} ·{" "}
-            <PersonList names={thread.participants} />
+            <PersonList names={thread.participants} you={you} />
           </p>
         </div>
         {threadCanMarkAnswered(thread) ? (
@@ -138,9 +141,12 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
         role="region"
         aria-label="Messages"
         tabIndex={0}
-        className={cn("min-h-0 flex-1 overflow-y-auto", insetFocusRing)}
+        className={cn(
+          "flex min-h-0 flex-1 flex-col overflow-y-auto",
+          insetFocusRing,
+        )}
       >
-        <ol ref={content} className="flex flex-col gap-12 p-18">
+        <ol ref={content} className="mt-auto flex flex-col gap-12 p-18">
           {thread.messages.map((message) => (
             <li key={message.id} className="flex flex-col gap-4">
               {isQuestion(message) ? (
@@ -151,7 +157,11 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
               ) : null}
               <article className="flex flex-col gap-4 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
                 <p className="flex items-center gap-8 font-mono text-caption text-text-muted">
-                  <PersonName name={message.sender} slot="messageHead" />
+                  <PersonName
+                    name={message.sender}
+                    slot="messageHead"
+                    you={you}
+                  />
                   <ArrowRight
                     aria-label="to"
                     role="img"
@@ -161,6 +171,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
                   <PersonList
                     names={recipientActors(message)}
                     nameClassName="text-bar"
+                    you={you}
                   />
                   <span className="ml-auto font-ui text-meta text-text-faint">
                     {formatAsOf(now, message.sent_at)}
@@ -187,6 +198,7 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
                 )}
                 {isQuestion(message) ? (
                   <QuestionChoices
+                    slug={slug}
                     thread={thread}
                     question={message}
                     onReply={reply}
@@ -200,7 +212,11 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
                     className="flex items-center gap-6 text-meta text-text-faint"
                   >
                     {line.lead}
-                    <PersonName name={line.actor} className="text-bar" />
+                    <PersonName
+                      name={line.actor}
+                      className="text-bar"
+                      you={you}
+                    />
                     {line.at === null ? null : ` · ${line.at}`}
                     {line.note === null ? null : ` · ${line.note}`}
                   </li>
@@ -216,19 +232,17 @@ export function ThreadPanel({ slug, thread, now, onReply }: ThreadPanelProps) {
         noValidate
         className="flex shrink-0 flex-col gap-6 border-t border-border-subtle px-18 py-12"
       >
-        <div className="flex items-center gap-8">
+        <div className="flex items-end gap-8">
           <Controller
             control={control}
             name="body"
             render={({ field }) => (
-              <MentionTextarea
+              <MessageComposer
                 slug={slug}
-                rows={1}
                 aria-label="Reply"
                 placeholder={replyPlaceholder(thread)}
-                readOnly={isSubmitting}
+                pending={isSubmitting}
                 aria-invalid={errors.body ? true : undefined}
-                className="resize-none py-9"
                 ref={field.ref}
                 value={field.value}
                 onValueChange={field.onChange}

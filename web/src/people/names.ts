@@ -16,6 +16,16 @@ export function bareName(actor: string): string {
   return isHumanName(actor) ? actor.slice(HUMAN_PREFIX.length) : actor;
 }
 
+/** Whether `actor` is the signed-in human, whom the session names by the bare name (`tanim`); null when the session names no one. */
+export function isYou(actor: string, human: string | null): boolean {
+  return human !== null && isHumanName(actor) && bareName(actor) === human;
+}
+
+/** The actor `PersonName` takes for the signed-in human. */
+export function humanActor(human: string): string {
+  return `${HUMAN_PREFIX}${human}`;
+}
+
 /** `@tanim`, `@frontend`: the person as plain text where markup is not possible, such as a placeholder. */
 export function atName(actor: string): string {
   return `@${bareName(actor)}`;
@@ -23,7 +33,7 @@ export function atName(actor: string): string {
 
 /** A human reviewer the daemon holds as a bare name (`tanim`), as the actor `PersonName` takes; null when no one is named. */
 export function reviewerActor(reviewer: string | null): string | null {
-  return reviewer === null ? null : `${HUMAN_PREFIX}${reviewer}`;
+  return reviewer === null ? null : humanActor(reviewer);
 }
 
 /** The names a mention can point at. An agent's worker has the agent's name, so agents hold agent names (`frontend`). */

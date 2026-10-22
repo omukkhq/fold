@@ -50,6 +50,17 @@ describe("delivery", () => {
     });
     expect(states[3]).toMatchObject({ lead: "read by", actor: "human:tanim" });
   });
+  it("says a human's message was sent until the daemon records the read", () => {
+    expect(recipientState(recipient("human:rafeed"), NOW)).toEqual({
+      lead: "sent to",
+      actor: "human:rafeed",
+      at: null,
+      note: null,
+    });
+    expect(
+      recipientState(recipient("human:rafeed", { acknowledged_at: NOW }), NOW),
+    ).toMatchObject({ lead: "read by", actor: "human:rafeed" });
+  });
   it("says when fold cannot tell an agent that the message waits", () => {
     const unreachable = recipient("main", { reachable: false });
     expect(recipientState(unreachable, NOW)).toEqual({
