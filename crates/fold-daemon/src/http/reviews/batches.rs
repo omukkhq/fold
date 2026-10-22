@@ -596,7 +596,7 @@ impl From<BatchMergedChange> for ReviewBatchDiff {
     responses(
         (status = 200, description = "The merged change's files", body = ReviewBatchDiff),
         (status = 400, description = "`invalid_id`", body = ErrorEnvelope),
-        (status = 404, description = "`review_batch_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 404, description = "`review_batch_not_found`, `revision_not_found`: main has no revision, or `project_not_found`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
@@ -633,7 +633,7 @@ pub struct ReviewBatchFileQuery {
     responses(
         (status = 200, description = "The file's hunks", body = FileDiffView),
         (status = 400, description = "`invalid_id`, `invalid_path`, or `invalid_request`: the query string is not valid", body = ErrorEnvelope),
-        (status = 404, description = "`review_batch_not_found`, `path_not_in_comparison` or `project_not_found`", body = ErrorEnvelope),
+        (status = 404, description = "`review_batch_not_found`, `path_not_in_comparison`, `revision_not_found`: main has no revision, or `project_not_found`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )

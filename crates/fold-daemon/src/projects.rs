@@ -23,7 +23,7 @@ use crate::services::reviews::ReviewService;
 use crate::services::reviews::checks::{CheckPermits, CheckRunner, recover_check_runs};
 use crate::services::tasks::TaskService;
 use crate::services::workspaces::{
-    CarryCache, WorkspaceLocks, WorkspaceService, follow_closed_workspaces,
+    BatchMergeCache, CarryCache, WorkspaceLocks, WorkspaceService, follow_closed_workspaces,
 };
 use crate::support::unpoisoned;
 
@@ -62,6 +62,8 @@ pub struct ProjectHandle {
     pub live: LiveState,
     /// The earlier proposal versions that reads carried onto a newer base, shared by every review read of the project.
     pub carries: Arc<CarryCache>,
+    /// The batches that reads merged in memory, shared by every review read of the project.
+    pub batch_merges: Arc<BatchMergeCache>,
     /// The Claude Code inbox sockets of the project's agents. They live in memory only, so a restarted daemon has none until the session-start hooks run again.
     pub push: PushTargets,
     push_task: PushTask,
@@ -237,6 +239,7 @@ impl ProjectHandle {
             capabilities,
             live,
             carries: Arc::new(CarryCache::default()),
+            batch_merges: Arc::new(BatchMergeCache::default()),
             push,
             push_task,
             workers,

@@ -2,6 +2,7 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use fold_core::object::ObjectHash;
 use fold_core::reviews::Verdict;
 use fold_core::{ProposalId, ReviewBatchId};
 use fold_daemon::http::router;
@@ -13,6 +14,7 @@ use crate::common::roles::give_role;
 use crate::proposal_tools_support::{Fixture, t};
 use fold_core::roles::Role;
 use fold_daemon::services::reviews::BatchVerdict;
+use fold_vcs::objects::ObjectStore;
 
 async fn get(fx: &Fixture, path: &str) -> (StatusCode, Value) {
     let request = Request::builder()
@@ -193,9 +195,21 @@ async fn an_unknown_or_malformed_batch_is_refused() {
     assert_eq!(body["error"]["code"], "invalid_id");
 }
 
+/// P-1 adds a line above `README.md`'s one line and P-2 a line below it, so the merge of P-2 makes a line-merged file.
+const AROUND_README: [(&str, &str); 2] = [
+    ("README.md", "intro\n# demo\n"),
+    ("README.md", "# demo\nend\n"),
+];
+
+fn stored(fx: &Fixture, hash: &Value) -> bool {
+    let objects = ObjectStore::open_existing(&fx.project.paths().fold_dir()).unwrap();
+    let hash: ObjectHash = hash.as_str().unwrap().parse().unwrap();
+    objects.contains(&hash).unwrap()
+}
+
 #[tokio::test]
 async fn the_merged_change_holds_every_member_on_main_and_writes_nothing() {
-    let fx = batched_with(TWO_FILES).await;
+    let fx = batched_with(AROUND_README).await;
     let before = stored_objects(&fx);
 
     let (status, body) = get(&fx, "/reviews/batches/rb-1/diff").await;
@@ -210,26 +224,33 @@ async fn the_merged_change_holds_every_member_on_main_and_writes_nothing() {
         body["members"],
         json!([{"proposal": "P-1", "version": 1}, {"proposal": "P-2", "version": 1}])
     );
-    assert_eq!(
-        changed(&body),
-        [pair("src/one.rs", "added"), pair("src/two.rs", "added")]
-    );
+    assert_eq!(changed(&body), [pair("README.md", "modified")]);
     assert_eq!(
         body["totals"],
-        json!({"files": 2, "added_lines": 2, "removed_lines": 0})
+        json!({"files": 1, "added_lines": 2, "removed_lines": 0})
     );
-    let (status, file) = get(&fx, "/reviews/batches/rb-1/diff/file?path=src/two.rs").await;
+    let (status, file) = get(&fx, "/reviews/batches/rb-1/diff/file?path=README.md").await;
     assert_eq!(status, StatusCode::OK, "{file}");
-    assert_eq!(file["path"], "src/two.rs");
+    assert_eq!(file["path"], "README.md");
     assert_eq!(file["source"], "recorded");
-    assert_eq!(file["hunks"][0]["lines"][0]["kind"], "added");
-    assert_eq!(file["hunks"][0]["lines"][0]["text"], "one line\n");
+    let added: Vec<&str> = file["hunks"][0]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|line| line["kind"] == "added")
+        .map(|line| line["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(added, ["intro\n", "end\n"]);
     assert_eq!(
         stored_objects(&fx),
         before,
         "the merged tree stays in memory"
     );
-    let (status, missing) = get(&fx, "/reviews/batches/rb-1/diff/file?path=README.md").await;
+    assert!(
+        !stored(&fx, &file["new_hash"]),
+        "the line-merged file stays in memory"
+    );
+    let (status, missing) = get(&fx, "/reviews/batches/rb-1/diff/file?path=src/lib.rs").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(missing["error"]["code"], "path_not_in_comparison");
 
@@ -238,8 +259,30 @@ async fn the_merged_change_holds_every_member_on_main_and_writes_nothing() {
         .create_batch_checkout(&review, ReviewBatchId::from_number(1).unwrap())
         .await
         .unwrap();
+    assert!(
+        stored(&fx, &file["new_hash"]),
+        "the checkout stores the file the view merged"
+    );
     let (_, again) = get(&fx, "/reviews/batches/rb-1/diff").await;
     assert_eq!(again, body, "the checkout holds the same tree");
+}
+
+#[tokio::test]
+async fn the_file_list_and_each_file_of_a_merged_change_share_one_merge() {
+    let fx = batched_with(TWO_FILES).await;
+    let merges = &fx.handle.batch_merges;
+
+    let (status, _) = get(&fx, "/reviews/batches/rb-1/diff").await;
+    assert_eq!(status, StatusCode::OK);
+    for path in ["src/one.rs", "src/two.rs"] {
+        let (status, file) =
+            get(&fx, &format!("/reviews/batches/rb-1/diff/file?path={path}")).await;
+        assert_eq!(status, StatusCode::OK, "{file}");
+    }
+    let (status, _) = get(&fx, "/reviews/batches/rb-1/diff").await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert_eq!((merges.misses(), merges.hits()), (1, 3));
 }
 
 #[tokio::test]

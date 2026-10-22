@@ -9917,7 +9917,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `review_batch_not_found` or `project_not_found` */
+            /** @description `review_batch_not_found`, `revision_not_found`: main has no revision, or `project_not_found` */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -9999,7 +9999,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `review_batch_not_found`, `path_not_in_comparison` or `project_not_found` */
+            /** @description `review_batch_not_found`, `path_not_in_comparison`, `revision_not_found`: main has no revision, or `project_not_found` */
             404: {
                 headers: {
                     [name: string]: unknown;
