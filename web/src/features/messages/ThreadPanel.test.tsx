@@ -324,9 +324,15 @@ describe("ThreadPanel question", () => {
       vi.fn(() => Promise.resolve()),
     );
     expect(await screen.findByText("Question · answered")).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: /^Recharts · chosen/ }),
-    ).toHaveProperty("ariaPressed", "true");
+    const choices = screen.getByRole("list", { name: "Choices" });
+    const marked = within(choices).getAllByRole("img", { name: "chosen" });
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.closest("button")?.textContent).toContain("Recharts");
+    expect(marked[0]?.getAttribute("class")).toContain("text-success");
+    for (const button of within(choices).getAllByRole("button")) {
+      expect(button.className).not.toContain("opacity");
+      expect(button.textContent).not.toContain("· chosen");
+    }
     expect(
       screen.getByText("Chosen option of the question above."),
     ).toBeTruthy();

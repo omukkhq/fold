@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2, Send } from "lucide-react";
+import { CircleCheck, Loader2, Send } from "lucide-react";
 import { useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import type { MessageView, ThreadView } from "@/api/messages";
@@ -94,33 +94,40 @@ export function QuestionChoices({
               <button
                 type="button"
                 disabled={answered || pending}
-                aria-pressed={chosen}
                 onClick={() => {
                   void answer(label);
                 }}
                 className={cn(
-                  "flex w-full flex-col items-start gap-2 rounded-m bg-surface px-12 py-8 text-left inset-ring inset-ring-border enabled:hover:bg-sunken disabled:cursor-default",
-                  chosen && "bg-primary-soft inset-ring-2 inset-ring-ink",
-                  answered && !chosen && "opacity-55",
+                  "flex w-full items-center gap-12 rounded-m bg-surface px-12 py-8 text-left inset-ring inset-ring-border enabled:hover:bg-sunken disabled:cursor-default",
                   focusRing,
                 )}
               >
-                <span className="flex items-center gap-8 text-body font-semibold text-text">
-                  {chosen ? `${label} · chosen` : label}
-                  {sending === label ? (
-                    <Loader2
-                      aria-label="sending"
-                      role="img"
-                      size={13}
-                      className="animate-spin text-text-muted motion-reduce:animate-none"
-                    />
-                  ) : null}
-                </span>
-                {description === null ? null : (
-                  <span className="text-code text-text-muted">
-                    {description}
+                <span className="flex min-w-0 flex-1 flex-col items-start gap-2">
+                  <span className="flex items-center gap-8 text-body font-semibold text-text">
+                    {label}
+                    {sending === label ? (
+                      <Loader2
+                        aria-label="sending"
+                        role="img"
+                        size={13}
+                        className="animate-spin text-text-muted motion-reduce:animate-none"
+                      />
+                    ) : null}
                   </span>
-                )}
+                  {description === null ? null : (
+                    <span className="text-code text-text-muted">
+                      {description}
+                    </span>
+                  )}
+                </span>
+                {chosen ? (
+                  <CircleCheck
+                    aria-label="chosen"
+                    role="img"
+                    size={16}
+                    className="shrink-0 text-success"
+                  />
+                ) : null}
               </button>
             </li>
           );
