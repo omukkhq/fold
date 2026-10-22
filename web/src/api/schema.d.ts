@@ -580,7 +580,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Asks the proposal's author about a run of lines of a version: one message from the named human to the worker holding the task's implementation claim, else the proposal's author, linked to the task and the proposal and carrying the lines and their text. It waits for the author's answer in its thread. It writes no review, verdict or comment and never changes whose turn it is, and it changes no task state. */
+        /** Asks the proposal's author about a run of lines of a version, or about the whole proposal: one message from the named human to the worker holding the task's implementation claim, else the proposal's author, linked to the task and the proposal and carrying the lines and their text when it names lines. It waits for the author's answer in its thread. It writes no review, verdict or comment and never changes whose turn it is, and it changes no task state. */
         post: operations["ask_proposal_author"];
         delete?: never;
         options?: never;
@@ -1589,7 +1589,7 @@ export interface components {
             /** @example web */
             name: string;
         };
-        /** @description A human's question to a proposal's author about a run of lines of one file of a version. */
+        /** @description A human's question to a proposal's author: about a run of lines of one file of a version when `path`, `side`, `start_line` and `end_line` are all given, about the whole proposal when none is. */
         AskAuthorBody: {
             /** @description The question, plain text with some visible character. In message text `#` names a fold item and `@` names a file; the daemon parses nothing. */
             body: string;
@@ -1597,21 +1597,21 @@ export interface components {
              * Format: int32
              * @description Inclusive.
              */
-            end_line: number;
+            end_line?: number | null;
             /**
              * @description The file the lines belong to, relative to the project root.
              * @example web/src/board.ts
              */
-            path: string;
-            side: components["schemas"]["CommentSide"];
+            path?: string | null;
+            side?: components["schemas"]["CommentSide"] | null;
             /**
              * Format: int32
              * @description From 1.
              */
-            start_line: number;
+            start_line?: number | null;
             /**
              * Format: int32
-             * @description The version whose lines the question is about; any version of the proposal.
+             * @description The version the question is about; any version of the proposal.
              */
             version: number;
         };
@@ -8159,7 +8159,7 @@ export interface operations {
                     "application/json": components["schemas"]["MessageView"];
                 };
             };
-            /** @description `invalid_request`: an empty body or a malformed request; `invalid_path` or `invalid_id` */
+            /** @description `invalid_request`: an empty body, some but not all of the four line fields, or a malformed request; `invalid_path` or `invalid_id` */
             400: {
                 headers: {
                     [name: string]: unknown;

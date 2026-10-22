@@ -164,7 +164,7 @@ describe("BatchScreen", () => {
     expect(await within(table).findByText("2 files · +40 −0")).toBeTruthy();
     expect(
       within(table).getByRole("link", { name: "P-3" }).getAttribute("href"),
-    ).toBe("/p/demo/proposals/P-3?since=1");
+    ).toBe("/p/demo/proposals/P-3?tab=changes&since=1");
     const change = screen.getByRole("group", { name: "Change" });
     await user.click(
       within(change).getByRole("button", { name: "Full change" }),
@@ -173,7 +173,7 @@ describe("BatchScreen", () => {
     expect(within(table).queryByText("since v1")).toBeNull();
     expect(
       within(table).getByRole("link", { name: "P-3" }).getAttribute("href"),
-    ).toBe("/p/demo/proposals/P-3");
+    ).toBe("/p/demo/proposals/P-3?tab=changes");
   });
 
   it("lists the members with their verdicts, the checkout and the reviewer", async () => {

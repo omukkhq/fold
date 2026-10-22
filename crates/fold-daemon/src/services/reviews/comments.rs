@@ -38,6 +38,29 @@ impl CommentLocation {
         start_line: Option<u32>,
         end_line: Option<u32>,
     ) -> Result<Option<CommentLocation>, FoldError> {
+        let message = format!("{field}: a line comment needs path, side, start_line and end_line");
+        Self::parts(field, message, path, side, start_line, end_line)
+    }
+
+    /// The lines a human's question to the author names: all four fields, or none for a question about the whole proposal. Any other mix is `invalid_request`.
+    pub fn question_parts(
+        path: Option<String>,
+        side: Option<Side>,
+        start_line: Option<u32>,
+        end_line: Option<u32>,
+    ) -> Result<Option<CommentLocation>, FoldError> {
+        let message = "a question about lines needs path, side, start_line and end_line".to_owned();
+        Self::parts("question", message, path, side, start_line, end_line)
+    }
+
+    fn parts(
+        field: &str,
+        message: String,
+        path: Option<String>,
+        side: Option<Side>,
+        start_line: Option<u32>,
+        end_line: Option<u32>,
+    ) -> Result<Option<CommentLocation>, FoldError> {
         match (path, side, start_line, end_line) {
             (None, None, None, None) => Ok(None),
             (Some(path), Some(side), Some(start_line), Some(end_line)) => {
@@ -48,12 +71,9 @@ impl CommentLocation {
                     end_line,
                 }))
             }
-            _ => Err(FoldError::new(
-                codes::INVALID_REQUEST,
-                format!("{field}: a line comment needs path, side, start_line and end_line"),
-            )
-            .with_details([("field", json!(field))])
-            .with_hint("give path, side, start_line and end_line together, or none of them")),
+            _ => Err(FoldError::new(codes::INVALID_REQUEST, message)
+                .with_details([("field", json!(field))])
+                .with_hint("give path, side, start_line and end_line together, or none of them")),
         }
     }
 
