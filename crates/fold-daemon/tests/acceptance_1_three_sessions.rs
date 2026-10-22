@@ -72,7 +72,7 @@ async fn acceptance_1_three_sessions_share_one_view_of_agents_tasks_and_reposito
     }
     assert!(
         agents[2]["tags"].as_array().is_none_or(Vec::is_empty),
-        "the review lead's rights come from its role, not a tag: {agents}"
+        "the reviewer's rights come from its role, not a tag: {agents}"
     );
 
     let tasks = views[1]["tasks"].as_array().unwrap();

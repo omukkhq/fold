@@ -149,7 +149,7 @@ impl Fixture {
             crate::common::roles::give_role(
                 project.store(),
                 "review",
-                fold_core::roles::Role::ReviewLead,
+                fold_core::roles::Role::Reviewer,
                 None,
             )
             .await;
@@ -185,7 +185,7 @@ impl Fixture {
         }
     }
 
-    /// [`Fixture::new`] with `review` as the review lead and `backend` as the main agent, since only they claim a review.
+    /// [`Fixture::new`] with `review` as a reviewer and `backend` as the main agent: the main agent claims a review itself, and a reviewer gets its claim as the review lead's `start_worker` gives it.
     pub async fn with_reviewers() -> Self {
         Self::build(Cast::Reviewers).await
     }

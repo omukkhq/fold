@@ -287,6 +287,8 @@ impl Supervisor {
             Some(0) => None,
             _ => process.stderr.text(LAST_LINES).await,
         };
+        // A `--resume` that found no session exits too; fold starts the worker in a new session next, so the event says so.
+        let session_lost = *process.session.borrow() == Some(false);
         let mut buffer = EventBuffer::new();
         let agent = &process.agent;
         self.inner
@@ -307,11 +309,15 @@ impl Supervisor {
                         agents::set_exit_error(tx, id, stderr, now).await?;
                     }
                     agents::record_exit(tx, id, ProcessEnd::Failed("exited"), code, now).await?;
-                    NewEvent::new(types::WORKER_FAILED, EventActor::fold())?.data(json!({
+                    let mut data = json!({
                         "agent": agent.as_str(),
                         "reason": "exited",
                         "exit_code": code,
-                    }))?
+                    });
+                    if session_lost {
+                        data["session_lost"] = json!(true);
+                    }
+                    NewEvent::new(types::WORKER_FAILED, EventActor::fold())?.data(data)?
                 };
                 buffer.append(tx, &event, now).await?;
                 Ok(())
@@ -321,13 +327,14 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Does from the stored state what the events the watcher missed would have done: answers each `ask` question whose messages all have their replies, stops each short-lived worker whose work is done, tells each running task worker about changes requested of it, and serves the resumes, send-backs and failed proposal checks the limits held back.
+    /// Does from the stored state what the events the watcher missed would have done: answers each `ask` question whose messages all have their replies, stops each short-lived worker whose work is done, tells each running task worker about changes requested of it, and serves the resumes, send-backs, failed proposal checks and reviews of new versions the limits held back.
     async fn recover(self) {
         self.answer_open_asks().await;
         self.stop_done_workers().await;
         self.notify_running_authors().await;
         self.clone().resume_owed_send_backs().await;
         self.clone().resume_owed_gate_runs().await;
+        self.clone().resume_owed_reviewers(None).await;
         self.clone().resume_owed_messages().await;
         self.resume_pending().await;
     }
@@ -395,6 +402,13 @@ pub(super) async fn watch_done(
         {
             tokio::spawn(supervisor.clone().resume_sent_back(task));
         }
+        // A version that waits for a reviewer that has ended resumes that reviewer, which still holds the review claim.
+        if (event.event_type == types::PROPOSAL_VERSION_ADDED
+            || event.event_type == types::PROPOSAL_REVIEW_AGAIN_REQUESTED)
+            && let Some(proposal) = event.proposal
+        {
+            tokio::spawn(supervisor.clone().resume_owed_reviewers(Some(proposal)));
+        }
         if let Some(agent) = super::message::answering_agent(&event) {
             supervisor.stop_if_answered(&agent).await;
         }
@@ -412,6 +426,7 @@ pub(super) async fn watch_done(
         {
             tokio::spawn(supervisor.clone().resume_owed_send_backs());
             tokio::spawn(supervisor.clone().resume_owed_gate_runs());
+            tokio::spawn(supervisor.clone().resume_owed_reviewers(None));
             tokio::spawn(supervisor.resume_pending());
         }
     }

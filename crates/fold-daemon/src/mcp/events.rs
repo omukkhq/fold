@@ -16,7 +16,9 @@ use super::error::{from_agent, from_events};
 use super::parse;
 use super::{FoldServer, FooterPart, FooterSource};
 use crate::services::agents::{AgentService, SessionContext};
-use crate::services::events::{EventPage, EventQuery, EventService, WaitQuery, WaitStep};
+use crate::services::events::{
+    EventPage, EventQuery, EventService, WaitQuery, WaitStep, cap_for_cache,
+};
 
 pub const GET_EVENTS: &str = "get_events";
 pub const WAIT_FOR_EVENTS: &str = "wait_for_events";
@@ -56,7 +58,7 @@ pub struct WaitForEventsInput {
     /// Wake only for events about this proposal, such as P-3.
     #[serde(default)]
     pub proposal: Option<String>,
-    /// The longest wait in seconds: 300 when left out, at most 1500.
+    /// The longest wait in seconds: 300 when left out, at most 1500. When fold started you with the five-minute prompt cache, it ends the wait after at most 270 whatever this says; call again when a wait returns with nothing new.
     #[serde(default)]
     pub timeout_s: Option<u64>,
     /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
@@ -156,11 +158,16 @@ pub async fn wait_for_events(
     context: &RequestContext<RoleServer>,
 ) -> Result<Value, FoldError> {
     let input: WaitForEventsInput = parse(arguments)?;
+    let ttl = server
+        .agents
+        .session_cache_ttl(&server.session().await)
+        .await;
+    let timeout_s = cap_for_cache(input.timeout_s, ttl);
     let query = WaitQuery {
         types: input.types,
         task: input.task,
         proposal: input.proposal,
-        timeout_s: input.timeout_s,
+        timeout_s,
     };
     let mut waiter = server
         .events

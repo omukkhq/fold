@@ -198,8 +198,7 @@ async fn acceptance_21_a_question_about_an_integrated_proposal_goes_to_its_autho
     let work = h.start_work("frontend", &task).await;
     work.write(&[(FILE, CONTENT)]);
     let proposal = h.propose("frontend", &work, "Board numbers").await;
-    h.call("review", "claim_review", json!({"id": proposal}))
-        .await;
+    h.give_review("review", &proposal).await;
     h.approve(&proposal).await;
     let integrated = h
         .call(

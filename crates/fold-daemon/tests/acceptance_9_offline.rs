@@ -328,20 +328,20 @@ async fn flow() {
         )
         .await;
     harness
-        .call("backend", "acknowledge_message", json!({"id": question}))
+        .call("backend", "acknowledge_message", json!({"ids": [question]}))
         .await;
     assert_eq!(harness.inbox("frontend").await, [answer.as_str()]);
     harness
-        .call("frontend", "acknowledge_message", json!({"id": answer}))
+        .call("frontend", "acknowledge_message", json!({"ids": [answer]}))
         .await;
     assert!(harness.inbox("backend").await.is_empty());
     assert!(harness.inbox("frontend").await.is_empty());
 
-    // 5. Proposal and integration: review, the review lead, approves and integrates.
+    // 5. Proposal and integration: review, a reviewer, approves and integrates.
     crate::common::roles::give_role(
         &harness.handle.store,
         "review",
-        fold_core::roles::Role::ReviewLead,
+        fold_core::roles::Role::Reviewer,
         None,
     )
     .await;
@@ -354,9 +354,7 @@ async fn flow() {
         .await;
     assert_eq!(created["status"], "review", "{created}");
     let proposal = created["id"].as_str().unwrap().to_owned();
-    harness
-        .call("review", "claim_review", json!({"id": proposal}))
-        .await;
+    harness.give_review("review", &proposal).await;
     harness.approve(&proposal).await;
     let integrated = harness
         .call(

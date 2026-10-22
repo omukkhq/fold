@@ -24,6 +24,7 @@ use crate::services::agents::workers::{
     is_paused_refusal, new_session, not_supervised, refuse_while_paused,
 };
 use crate::services::events::EventBuffer;
+use crate::services::messages::tell_lead_in_tx;
 use crate::services::projects::load_config;
 
 /// Why fold resumes a task worker: a review asked for changes, the proposal conflicts with main at integration, or its integration checks failed.
@@ -338,6 +339,157 @@ impl Supervisor {
         }
     }
 
+    /// Resumes each reviewer that has ended while it holds the review claim of a proposal whose newest version waits for it (see [`agents::reviews_owed_to_ended_reviewers`]), in its own session with a turn that names the versions: a new version never waits for the claim's lease to run out, and the review lead never takes it over. `proposal` is the proposal whose new version an event announced; without it every owed review is served. A resume that a pause or the worker limits refuse leaves the review owed, and the resume of the pause or the next stopped worker serves it. A reviewer whose session is gone starts in a new one with the same turn.
+    pub(super) async fn resume_owed_reviewers(self, proposal: Option<ProposalId>) {
+        let owed = match agents::reviews_owed_to_ended_reviewers(self.inner.store.read(), proposal)
+            .await
+        {
+            Ok(owed) => owed,
+            Err(error) => {
+                tracing::warn!(
+                    code = error.log_code(),
+                    "could not read the reviews owed to ended reviewers"
+                );
+                return;
+            }
+        };
+        let mut by_reviewer: BTreeMap<AgentName, Vec<(ProposalId, u32)>> = BTreeMap::new();
+        for review in owed {
+            by_reviewer
+                .entry(review.agent)
+                .or_default()
+                .push((review.proposal, review.version));
+        }
+        for (agent, versions) in by_reviewer {
+            if let Err(error) = self.resume_reviewer(&agent, &versions).await {
+                tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not resume a reviewer for a new version");
+            }
+        }
+    }
+
+    async fn resume_reviewer(
+        &self,
+        agent: &AgentName,
+        versions: &[(ProposalId, u32)],
+    ) -> Result<(), AgentError> {
+        // The row and the claims are read under the lock, so a second event finds the reviewer running, and a version whose claim a new reviewer took over since the owed reviews were read is left to that reviewer.
+        let resuming = self.inner.resuming.lock().await;
+        let mut conn = self
+            .inner
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        let Some(worker) = agents::find_worker_process(&mut conn, agent).await? else {
+            return Ok(());
+        };
+        if worker.role != Role::Reviewer || worker.state.is_running() {
+            return Ok(());
+        }
+        let mut held = Vec::with_capacity(versions.len());
+        for (proposal, version) in versions {
+            let holds = reviews::unreleased_review_claim(&mut *conn, *proposal)
+                .await?
+                .is_some_and(|claim| claim.worker.agent() == *agent);
+            let current = reviews::get_proposal(&mut *conn, *proposal)
+                .await?
+                .is_some_and(|row| {
+                    row.state == ProposalState::Open && row.current_version == *version
+                });
+            if holds && current {
+                held.push((*proposal, *version));
+            }
+        }
+        drop(conn);
+        if held.is_empty() {
+            return Ok(());
+        }
+        let versions = held.as_slice();
+        let turn = reviewer_turn(versions);
+        let watch = match self.resume(agent, turn.clone(), &[]).await {
+            Ok(watch) => watch,
+            // The row is left as it was, so the review stays owed and a later resume serves it.
+            Err(error) if is_paused_refusal(&error) => return Ok(()),
+            Err(AgentError::Fold(error)) if error.code() == codes::WORKER_LIMIT_REACHED => {
+                return Ok(());
+            }
+            Err(AgentError::Fold(error)) if error.code() == codes::WORKER_EXISTS => {
+                if let Some(run) = lock(&self.inner.running).get(agent) {
+                    let _ = run.input.send(Input::Turn(turn));
+                }
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        drop(resuming);
+        let outcome = match watch {
+            Some(watch) => watch.outcome().await,
+            None => SessionStart::Ended,
+        };
+        match outcome {
+            SessionStart::Went => self.record_reviewer_resumed(agent, versions).await,
+            SessionStart::Lost => {
+                let resumed = self.reviewer_resumed_events(agent, versions, false).await?;
+                self.clone()
+                    .start_lost_with(agent.clone(), Some(turn), resumed)
+                    .await;
+                Ok(())
+            }
+            SessionStart::Ended => Ok(()),
+        }
+    }
+
+    /// `worker.resumed` of reason `new_version` for each version, once the resumed reviewer's session runs.
+    async fn record_reviewer_resumed(
+        &self,
+        agent: &AgentName,
+        versions: &[(ProposalId, u32)],
+    ) -> Result<(), AgentError> {
+        let resumed = self.reviewer_resumed_events(agent, versions, true).await?;
+        let now = self.inner.clock.now();
+        let mut buffer = EventBuffer::new();
+        self.inner
+            .store
+            .write(async |tx| {
+                for event in &resumed {
+                    buffer.append(tx, event, now).await?;
+                }
+                Ok::<_, AgentError>(())
+            })
+            .await?;
+        self.inner.bus.publish(buffer);
+        Ok(())
+    }
+
+    /// One `worker.resumed` of reason `new_version` for each version; `resumed` is false for a reviewer whose session was gone, so it started in a new one.
+    async fn reviewer_resumed_events(
+        &self,
+        agent: &AgentName,
+        versions: &[(ProposalId, u32)],
+        resumed: bool,
+    ) -> Result<Vec<NewEvent>, AgentError> {
+        let mut events = Vec::with_capacity(versions.len());
+        for (proposal, version) in versions {
+            let row = reviews::get_proposal(self.inner.store.read(), *proposal)
+                .await?
+                .ok_or(StoreError::Corrupt("proposals.number"))?;
+            events.push(
+                NewEvent::new(types::WORKER_RESUMED, EventActor::fold())?
+                    .task(row.task)
+                    .proposal(*proposal)
+                    .data(json!({
+                        "agent": agent.as_str(),
+                        "proposal": proposal.to_string(),
+                        "version": version,
+                        "reason": "new_version",
+                        "resumed": resumed,
+                    }))?,
+            );
+        }
+        Ok(events)
+    }
+
     /// Tells each running task worker about the requested changes and conflicts recorded since its process started, from the stored reviews and integrations. The watcher calls it after it fell behind the bus, when the events that would have reached the task worker as notices may be lost.
     pub(super) async fn notify_running_authors(&self) {
         for (agent, found) in self.owed_to_running().await {
@@ -491,7 +643,17 @@ impl Supervisor {
             SessionStart::Went => self.record_resumed(agent, &found).await,
             SessionStart::Lost => {
                 let instructions = fresh_instructions(&found_turn_parts(&found));
-                self.start_fresh(agent, &found, &instructions).await
+                let resumed = found
+                    .iter()
+                    .map(|found| resumed_event(agent, found, false))
+                    .collect::<Result<Vec<_>, _>>()?;
+                match self.start_fresh(agent, &resumed, &instructions).await {
+                    Err(error) if is_limit_refusal(&error) => {
+                        self.tell_lead_of_refused_start(agent).await;
+                        Ok(())
+                    }
+                    started => started,
+                }
             }
             SessionStart::Ended => Ok(()),
         }
@@ -516,11 +678,21 @@ impl Supervisor {
         agent: AgentName,
         instructions: Option<String>,
     ) {
+        self.start_lost_with(agent, instructions, Vec::new()).await;
+    }
+
+    /// [`Supervisor::start_lost`] that records `resumed`, the `worker.resumed` events of the work the new session takes, instead of one of reason `session_lost`. A start that a pause refuses records `session_lost` when the resume of the pause serves it.
+    async fn start_lost_with(
+        self,
+        agent: AgentName,
+        instructions: Option<String>,
+        resumed: Vec<NewEvent>,
+    ) {
         let fresh = match self
             .lost_instructions(&agent, instructions.as_deref())
             .await
         {
-            Ok(text) => self.start_fresh(&agent, &[], &text).await,
+            Ok(text) => self.start_fresh(&agent, &resumed, &text).await,
             Err(error) => Err(error),
         };
         match fresh {
@@ -528,10 +700,86 @@ impl Supervisor {
             Err(error) if is_paused_refusal(&error) => {
                 lock(&self.inner.held_lost).insert(agent, instructions);
             }
+            Err(error) if is_limit_refusal(&error) => {
+                tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not start a worker whose session is gone");
+                self.tell_lead_of_refused_start(&agent).await;
+            }
             Err(error) => {
                 tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not start a worker whose session is gone");
             }
         }
+    }
+
+    /// A worker whose session is gone and whose new session the worker limits refuse leaves its work to nobody: the start before moved its start time, so no resume is owed any more. Its lead, the one a message to it goes on to, hears from fold what waits: a reviewer's versions without a verdict, a task worker's tasks. A lead is outside the limits, so it never gets here.
+    async fn tell_lead_of_refused_start(&self, agent: &AgentName) {
+        if let Err(error) = self.try_tell_lead_of_refused_start(agent).await {
+            tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not tell the lead of a worker that cannot start");
+        }
+    }
+
+    async fn try_tell_lead_of_refused_start(&self, agent: &AgentName) -> Result<(), AgentError> {
+        let read = self.inner.store.read();
+        let mut conn = read.acquire().await.map_err(StoreError::from)?;
+        let Some(row) = agents::find_worker_process(&mut conn, agent).await? else {
+            return Ok(());
+        };
+        drop(conn);
+        let (task, proposal, text) = match row.role {
+            Role::Reviewer => {
+                let mut waiting = Vec::new();
+                for proposal in agents::unreviewed_claims_of_ended_reviewer(read, agent).await? {
+                    if let Some(found) = reviews::get_proposal(read, proposal).await? {
+                        waiting.push(found);
+                    }
+                }
+                let Some(first) = waiting.first() else {
+                    return Ok(());
+                };
+                let listed = waiting
+                    .iter()
+                    .map(|row| format!("{} v{}", row.id, row.current_version))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (
+                    Some(first.task),
+                    Some(first.id),
+                    format!(
+                        "@{agent} lost its session and the reviewer limit refuses it a new one now, so {listed} waits for a review. Give it to a reviewer with start_worker when a place is free; the start takes over the claim."
+                    ),
+                )
+            }
+            Role::TaskWorker => {
+                let Some(first) = row.tasks.first() else {
+                    return Ok(());
+                };
+                let listed = row
+                    .tasks
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (
+                    Some(*first),
+                    None,
+                    format!(
+                        "@{agent} lost its session and the worker limits refuse it a new one now, so its work on {listed} waits. Start a task worker for it with start_worker when a place is free; the start takes over the claims."
+                    ),
+                )
+            }
+            Role::AreaLead | Role::ReviewLead | Role::Main => return Ok(()),
+        };
+        let now = self.inner.clock.now();
+        let mut buffer = EventBuffer::new();
+        self.inner
+            .store
+            .write(async |tx| {
+                tell_lead_in_tx(tx, &mut buffer, &row, task, proposal, text, now)
+                    .await
+                    .map_err(AgentError::from)
+            })
+            .await?;
+        self.inner.bus.publish(buffer);
+        Ok(())
     }
 
     /// What a worker whose session is gone is told in its new session: a task worker to check its claims and proposals, a reviewer to check its verdicts, a lead to read its latest hand-off note, then the starter's instructions.
@@ -649,11 +897,11 @@ impl Supervisor {
         Ok(())
     }
 
-    /// The worker's session is gone: the same row, so the same author or lead, starts again with a new session, its binding and `instructions`, which name what `found` asks of it. With nothing found it records one `worker.resumed` of reason `session_lost`. A row that did not end `failed` was stopped on purpose and stays stopped.
+    /// The worker's session is gone: the same row, so the same author, reviewer or lead, starts again with a new session, its binding and `instructions`, which name the work that `resumed`, its `worker.resumed` events, records. Without them it records one `worker.resumed` of reason `session_lost`. A row that did not end `failed` was stopped on purpose and stays stopped.
     async fn start_fresh(
         &self,
         agent: &AgentName,
-        found: &[Found],
+        resumed: &[NewEvent],
         instructions: &str,
     ) -> Result<(), AgentError> {
         let config = load_config(&self.inner.paths).await?;
@@ -690,12 +938,10 @@ impl Supervisor {
                         "resumed": false,
                     }))?;
                 buffer.append(tx, &event, now).await?;
-                for found in found {
-                    buffer
-                        .append(tx, &resumed_event(agent, found, false)?, now)
-                        .await?;
+                for event in resumed {
+                    buffer.append(tx, event, now).await?;
                 }
-                if found.is_empty() {
+                if resumed.is_empty() {
                     let event = NewEvent::new(types::WORKER_RESUMED, EventActor::fold())?.data(
                         json!({"agent": agent.as_str(), "reason": "session_lost", "resumed": false}),
                     )?;
@@ -726,6 +972,11 @@ impl Supervisor {
         self.launch(&row, false, Some(turn)).await?;
         Ok(())
     }
+}
+
+/// A start that the worker limits refused.
+fn is_limit_refusal(error: &AgentError) -> bool {
+    matches!(error, AgentError::Fold(error) if error.code() == codes::WORKER_LIMIT_REACHED)
 }
 
 fn resumed_event(
@@ -763,6 +1014,18 @@ fn resume_turn(found: &[Found]) -> String {
     format!(
         "fold resumed you because work you proposed needs you again.\n\n{}\n\n{STOP_LINE}",
         found_turn_parts(found)
+    )
+}
+
+/// The turn a reviewer that fold resumed gets: each version to review, and that it still holds the claims.
+fn reviewer_turn(versions: &[(ProposalId, u32)]) -> String {
+    let listed = versions
+        .iter()
+        .map(|(proposal, version)| format!("{proposal} v{version}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "fold resumed you because a proposal you review has a new version: {listed}. You still hold the review claim. Read get_proposal first, and tell the review lead with send_message if a claim is gone. Check out the version with create_review_checkout and review it with submit_review; fold stops you again once each of your proposals has a verdict."
     )
 }
 

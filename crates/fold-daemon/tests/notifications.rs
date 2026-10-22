@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::common::roles::give_role;
+use crate::common::roles::{give_main_tag, give_review_claim, give_role};
 use crate::reviews_support;
 use fold_core::roles::Role;
 
@@ -117,6 +117,11 @@ impl Notified {
     /// Makes `agent` a review lead, as if fold had started it as one.
     async fn lead(&self, agent: &str) {
         give_role(self.fx.project.store(), agent, Role::ReviewLead, None).await;
+    }
+
+    /// Gives `agent` the review claim of `P-1` as a stored row, whatever its role, so a test can make the review lead hold one.
+    async fn give_claim(&self, agent: &str) {
+        give_review_claim(self.fx.project.store(), agent, p(1), self.fx.project.now()).await;
     }
 
     async fn actor(&self, agent: &reviews_support::Agent) -> Actor {
@@ -255,8 +260,9 @@ async fn integration_messages_go_to_author_reviewer_and_owners_of_newly_todo_tas
     let ready = n.dependent_task(&by(&n.fx.backend.worker)).await;
     n.fx.proposal().await;
     let review = n.actor(&n.fx.review).await;
-    n.fx.reviews.claim_review(&review, p(1)).await.unwrap();
-    n.approve(&review).await;
+    // The review lead gives no verdict, so a human approves; `review` holds the claim and integrates.
+    n.give_claim("review").await;
+    n.approve(&human()).await;
     let mut frontend = n.inbox("frontend");
 
     assert_eq!(n.integrate(&review).await, r(2));
@@ -299,10 +305,11 @@ async fn an_agent_with_several_roles_gets_one_message() {
     let ui = n.fx.subagent(&n.fx.frontend, "ui").await;
     n.dependent_task(&by(&ui)).await;
     n.fx.proposal().await;
-    let review = n.actor(&n.fx.review).await;
+    give_main_tag(n.fx.project.store(), "backend").await;
+    let backend = n.actor(&n.fx.backend).await;
     // Nobody holds the review claim, so the reviewer is the agent whose approval stands.
-    n.approve(&review).await;
-    let mut reviewer = n.inbox("review");
+    n.approve(&backend).await;
+    let mut reviewer = n.inbox("backend");
     let mut author = n.inbox("frontend");
 
     n.integrate(&human()).await;
@@ -311,7 +318,7 @@ async fn an_agent_with_several_roles_gets_one_message() {
     assert_eq!(messages.len(), 1);
     assert_eq!(
         n.recipients(messages[0].0).await,
-        pairs(&[("frontend", "agent"), ("review", "agent")])
+        pairs(&[("backend", "agent"), ("frontend", "agent")])
     );
     // The released claim is gone, so the push finds the reviewer through the approval; the integrating human's own approval reaches nobody once the proposal is integrated.
     let integrated = "fold: P-1 integrated as r2. Call get_inbox.";
@@ -329,11 +336,10 @@ async fn push_goes_to_the_review_lead_on_proposal_opened() {
 
     n.fx.proposal().await;
 
-    let opened = "fold: P-1 opened for T-1. Call claim_review.";
+    let opened = "fold: P-1 opened for T-1. Call start_worker.";
     assert_eq!(review.next().await, opened);
 
-    let reviewer = n.actor(&n.fx.review).await;
-    n.fx.reviews.claim_review(&reviewer, p(1)).await.unwrap();
+    n.give_claim("review").await;
     n.fx.write("src/more.rs", "pub fn more() {}\n");
     n.fx.reviews
         .update_proposal(&by(&n.fx.frontend.worker), p(1), None)
@@ -341,7 +347,8 @@ async fn push_goes_to_the_review_lead_on_proposal_opened() {
         .unwrap()
         .detail()
         .unwrap();
-    let version = "fold: P-1 has version 2. Call create_review_checkout.";
+    // The review lead holds the claim but never checks a version out, so it gives the claim up.
+    let version = "fold: P-1 has version 2; release your review claim with release_review, then give it to a reviewer. Call start_worker.";
     assert_eq!(review.next().await, version);
     // `backend` leads no review, so the first notice it gets is the sentinel.
     n.send(&agent("frontend"), &["backend"]).await;
@@ -396,8 +403,7 @@ async fn human_approval_pushes_only_the_review_claim_holder() {
     assert_eq!(review.next().await, arrived);
     assert_eq!(author.next().await, arrived);
 
-    let reviewer = n.actor(&n.fx.review).await;
-    n.fx.reviews.claim_review(&reviewer, p(1)).await.unwrap();
+    n.give_claim("review").await;
     n.approve(&human()).await;
     assert_eq!(review.next().await, approved);
     n.send(&agent("frontend"), &["backend"]).await;

@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fold_core::dag::Dag;
 use fold_core::events::types;
+use fold_core::policy::AgentStanding;
 use fold_core::reviews::{ScopeChoice, Side, Verdict, last_verdict_version};
 use fold_core::{
     Actor, AgentActor, CommentId, EventActor, FoldError, IdKind, NewEvent, ProposalId,
@@ -510,7 +511,8 @@ impl ReviewService {
     ) -> Result<BatchCheckout, ReviewError> {
         let read = self.store.read();
         let row = open_batch(batches::get_batch(read, batch).await?, batch)?;
-        batch_gate(actor, &row)?;
+        let standing = agents::standing_of(read, actor).await?;
+        review_gate(actor, standing, &row)?;
         let members = open_members(batches::members(read, batch).await?);
         let merged_members = member_versions(&members);
         if let Some(existing) = batches::active_batch_checkout(read, batch).await? {
@@ -645,12 +647,12 @@ impl ReviewService {
         check_verdict_shapes(&verdicts)?;
         let read = self.store.read();
         let row = open_batch(batches::get_batch(read, batch).await?, batch)?;
-        batch_gate(actor, &row)?;
+        let standing = agents::standing_of(read, actor).await?;
+        review_gate(actor, standing, &row)?;
         let members = open_members(batches::members(read, batch).await?);
         for verdict in &verdicts {
             member_of(&members, batch, verdict.proposal)?;
         }
-        let standing = agents::standing_of(read, actor).await?;
         let mut conn = read.acquire().await.map_err(StoreError::from)?;
         for verdict in &verdicts {
             if let Some(proposal) = reviews::get_proposal(&mut *conn, verdict.proposal).await? {
@@ -1243,14 +1245,26 @@ fn check_verdict_body(verdict: &BatchVerdict, comments: usize) -> Result<(), Rev
 }
 
 fn batch_gate<'a>(actor: &'a Actor, row: &BatchRow) -> Result<&'a AgentActor, ReviewError> {
-    policy::can_review_batch(actor, &row.holder).map_err(|denied| {
-        FoldError::from(denied)
-            .with_details([
-                ("batch", json!(row.id.to_string())),
-                ("holder", json!(row.holder.as_str())),
-            ])
-            .into()
-    })
+    policy::can_change_batch(actor, &row.holder).map_err(|denied| batch_denied(denied, row))
+}
+
+/// The gate of a checkout or a submit of the batch, which review it: the holder's agent, and never the review lead.
+fn review_gate<'a>(
+    actor: &'a Actor,
+    standing: AgentStanding,
+    row: &BatchRow,
+) -> Result<&'a AgentActor, ReviewError> {
+    policy::can_review_batch(actor, standing, &row.holder)
+        .map_err(|denied| batch_denied(denied, row))
+}
+
+fn batch_denied(denied: policy::PolicyDenied, row: &BatchRow) -> ReviewError {
+    FoldError::from(denied)
+        .with_details([
+            ("batch", json!(row.id.to_string())),
+            ("holder", json!(row.holder.as_str())),
+        ])
+        .into()
 }
 
 fn open_batch(row: Option<BatchRow>, batch: ReviewBatchId) -> Result<BatchRow, ReviewError> {

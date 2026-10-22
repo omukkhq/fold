@@ -186,11 +186,21 @@ function startedText(event: DurableEvent): string {
     : `started ${worker} as ${roleText(role)}`;
 }
 
-/** A task worker handed its proposal again: `resumed` is false when its session was gone and it started in a new one. */
+/** A task worker handed its proposal again, or a reviewer a new version of a proposal it reviews: `resumed` is false when its session was gone and it started in a new one. */
 function resumedText(event: DurableEvent): string {
   const worker = workerOf(event);
   if (event.data.reason === "session_lost") {
     return `restarted ${worker} in a new session`;
+  }
+  if (event.data.reason === "new_version") {
+    const version = count(event.data.version);
+    const which =
+      version === null
+        ? `a new version of ${proposalOf(event)}`
+        : `v${String(version)} of ${proposalOf(event)}`;
+    return event.data.resumed === false
+      ? `restarted ${worker} in a new session to review ${which}`
+      : `resumed ${worker} to review ${which}`;
   }
   if (event.data.reason === "sent_back") {
     return `resumed ${worker} for the send-back of ${taskOf(event)}`;

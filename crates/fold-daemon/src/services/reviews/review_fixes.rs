@@ -2,12 +2,14 @@ use std::collections::BTreeSet;
 
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
+use fold_core::policy::AgentStanding;
 use fold_core::reviews::MAX_REASON_CHARS;
 use fold_core::reviews::checks::{Purpose, RunReason, RunState};
 use fold_core::{
     Actor, AgentActor, ChangesetId, CheckRunId, CheckpointId, FoldError, NewEvent, ProposalId,
     RevisionId, TaskId, WorkspaceId, codes, policy,
 };
+use fold_store::agents;
 use fold_store::reviews::checks::CheckRunRow;
 use fold_store::reviews::{self, NewVersion, ProposalRow, ReviewClaimRow};
 use fold_store::workspaces::{self, CheckpointReason, WorkspaceRow};
@@ -78,7 +80,8 @@ impl ReviewService {
             .map_err(StoreError::from)?;
         let row = require_open(reviews::get_proposal(&mut *conn, proposal).await?, proposal)?;
         let holder = reviews::unreleased_review_claim(&mut *conn, proposal).await?;
-        let reviewer = fix_gate(actor, &row, holder.as_ref())?;
+        let standing = agents::standing_of(&mut *conn, actor).await?;
+        let reviewer = fix_gate(actor, standing, &row, holder.as_ref())?;
         let current = current_version(&mut conn, proposal).await?;
         require_version(proposal, version, current.version)?;
         let worker = actor_worker(&mut conn, reviewer)
@@ -191,7 +194,8 @@ impl ReviewService {
                 let row =
                     require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
                 let holder = reviews::unreleased_review_claim(tx.conn(), proposal).await?;
-                let reviewer = fix_gate(actor, &row, holder.as_ref())?;
+                let standing = agents::standing_of(tx.conn(), actor).await?;
+                let reviewer = fix_gate(actor, standing, &row, holder.as_ref())?;
                 let current = current_version(tx.conn(), proposal).await?;
                 require_version(proposal, fix.version, current.version)?;
                 let worker = worker_row(tx, reviewer).await?;
@@ -402,7 +406,8 @@ async fn fix_in_tx(
     let (fixed, checkout_id, now) = (input.fixed, input.fix.checkout, input.fixed.taken_at);
     let row = require_open(reviews::get_proposal(tx.conn(), proposal).await?, proposal)?;
     let holder = reviews::unreleased_review_claim(tx.conn(), proposal).await?;
-    let reviewer = fix_gate(actor, &row, holder.as_ref())?;
+    let standing = agents::standing_of(tx.conn(), actor).await?;
+    let reviewer = fix_gate(actor, standing, &row, holder.as_ref())?;
     let current = current_version(tx.conn(), proposal).await?;
     require_version(proposal, version, current.version)?;
     let worker = worker_row(tx, reviewer).await?;
@@ -493,11 +498,12 @@ async fn fix_in_tx(
 
 fn fix_gate<'a>(
     actor: &'a Actor,
+    standing: AgentStanding,
     row: &ProposalRow,
     holder: Option<&ReviewClaimRow>,
 ) -> Result<&'a AgentActor, ReviewError> {
     let holder = holder.map(|claim| &claim.worker);
-    policy::can_fix_in_review(actor, holder, &row.author).map_err(|denied| {
+    policy::can_fix_in_review(actor, standing, holder, &row.author).map_err(|denied| {
         FoldError::from(denied)
             .with_details([
                 ("proposal", json!(row.id.to_string())),

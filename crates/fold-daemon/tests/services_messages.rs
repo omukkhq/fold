@@ -781,6 +781,15 @@ async fn the_sent_event_names_recipients_and_never_holds_the_body() {
             BusMessage::Live(event) => panic!("unexpected live event {event:?}"),
         }
     }
+    // The reply also acknowledged the message it answered.
+    match tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+        .await
+        .unwrap()
+        .unwrap()
+    {
+        BusMessage::Durable(event) => assert_eq!(event.event_type, types::MESSAGE_ACKNOWLEDGED),
+        BusMessage::Live(event) => panic!("unexpected live event {event:?}"),
+    }
     fixture
         .messages
         .send(&agent("frontend"), message(&["ghost"], "refused"))

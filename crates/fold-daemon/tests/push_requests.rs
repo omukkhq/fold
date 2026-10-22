@@ -46,7 +46,7 @@ async fn each_request_step_pushes_the_agent_that_acts_next() {
         json!({"body": "The board is slow"}),
     )
     .await;
-    // The area lead `backend` hears of it; the review lead `review` drafts no request.
+    // The area lead `backend` hears of it; the reviewer `review` drafts no request.
     let created = "fold: RQ-1 created. Call claim_request.";
     expect(&mut backend, created).await;
 

@@ -26,9 +26,9 @@ async fn acceptance_2_a_reply_lands_in_the_senders_inbox_and_in_one_thread() {
         )
         .await;
     let acknowledged = harness
-        .call("backend", "acknowledge_message", json!({"id": question}))
+        .call("backend", "acknowledge_message", json!({"ids": [question]}))
         .await;
-    assert_eq!(acknowledged["acknowledged"], json!([question]));
+    assert_eq!(acknowledged["acknowledged"], json!([]));
     assert!(harness.inbox("backend").await.is_empty());
 
     let inbox = harness.call("frontend", "get_inbox", json!({})).await;
@@ -49,7 +49,7 @@ async fn acceptance_2_messages_wait_through_a_reconnect_and_a_daemon_restart() {
     let first = harness.send("frontend", &["backend"], "first").await;
     assert_eq!(harness.inbox("backend").await, [first.as_str()]);
     harness
-        .call("backend", "acknowledge_message", json!({"id": first}))
+        .call("backend", "acknowledge_message", json!({"ids": [first]}))
         .await;
 
     harness.disconnect("backend").await;
@@ -59,7 +59,7 @@ async fn acceptance_2_messages_wait_through_a_reconnect_and_a_daemon_restart() {
     harness.connect("backend").await;
     assert_eq!(harness.inbox("backend").await, [second.as_str()]);
     harness
-        .call("backend", "acknowledge_message", json!({"id": second}))
+        .call("backend", "acknowledge_message", json!({"ids": [second]}))
         .await;
 
     let third = harness
@@ -128,10 +128,18 @@ async fn acceptance_2_the_push_wakes_an_idle_session_and_skips_an_agent_without_
     assert_eq!(harness.inbox("review").await, [first, sentinel]);
 }
 
-/// Acceptance 2, session push: a proposal opened while `review` is idle wakes it through its inbox socket with a notice naming `claim_review`, because `review` is the review lead. The author's own agent hears nothing about its proposal; as the lead of the task's area it heard that the task was ready.
+/// Acceptance 2, session push: a proposal opened while `review` is idle wakes it through its inbox socket with a notice naming `start_worker`, because `review` is the review lead, which gives the review to a reviewer. The author's own agent hears nothing about its proposal; as the lead of the task's area it heard that the task was ready.
 #[tokio::test]
 async fn acceptance_2_a_proposal_opened_while_review_is_idle_wakes_it_through_the_push() {
-    let harness = Harness::start().await;
+    let mut harness = Harness::start_without_roles().await;
+    crate::common::roles::give_role(
+        &harness.handle.store,
+        "review",
+        fold_core::roles::Role::ReviewLead,
+        None,
+    )
+    .await;
+    harness.lead_the_work_area().await;
     let mut review = harness.register_inbox("review").await;
     let mut backend = harness.register_inbox("backend").await;
 

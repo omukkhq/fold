@@ -43,15 +43,17 @@ async fn batched() -> Fixture {
             .unwrap();
     }
     let review = fx.agent("review").await;
-    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
     let proposals = [1, 2].map(|n| ProposalId::from_number(n).unwrap()).to_vec();
-    let batch = fx
-        .reviews()
-        .create_review_batch(&review, proposals)
-        .await
-        .unwrap();
+    let batch = crate::common::roles::give_batch(
+        &fx.handle.store,
+        "review",
+        &proposals,
+        fx.handle.clock.now(),
+    )
+    .await;
     fx.reviews()
-        .create_batch_checkout(&review, batch.id)
+        .create_batch_checkout(&review, batch)
         .await
         .unwrap();
     fx

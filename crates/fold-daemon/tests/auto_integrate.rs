@@ -73,9 +73,9 @@ impl Running {
     }
 }
 
-/// Registers `name` as the review lead, returning its actor.
-pub async fn review_lead(fx: &Fixture, name: &str) -> Actor {
-    with_role(fx, name, Role::ReviewLead).await
+/// Registers `name` as a reviewer, returning its actor.
+pub async fn reviewer(fx: &Fixture, name: &str) -> Actor {
+    with_role(fx, name, Role::Reviewer).await
 }
 
 /// Registers `name` as a worker that fold started in `role`, returning its actor.
@@ -201,7 +201,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 async fn an_approved_proposal_integrates_with_no_tool_call_and_gets_its_git_commit() {
     let fx = Fixture::new().await;
     let author = fx.agent("frontend").await;
-    let review = review_lead(&fx, "review").await;
+    let review = reviewer(&fx, "review").await;
     propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
     let job = Running::start(&fx.state);
     job.runs(1).await;
@@ -267,7 +267,7 @@ async fn only_the_agent_with_the_main_tag_approves_as_the_main_agent() {
 async fn a_marked_proposal_waits_for_the_human_after_the_agent_approval() {
     let fx = Fixture::new().await;
     let author = fx.agent("frontend").await;
-    let review = review_lead(&fx, "review").await;
+    let review = reviewer(&fx, "review").await;
     fx.reviews()
         .require_human_review(&review, t(1), None, "touches the public API")
         .await
@@ -330,7 +330,7 @@ async fn two_dependent_proposals_integrate_in_dependency_order() {
     let author = fx.agent("frontend").await;
     // `T-2` is in the area that `backend` leads.
     let second = fx.agent("backend").await;
-    let review = review_lead(&fx, "review").await;
+    let review = reviewer(&fx, "review").await;
     propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
     propose(&fx, &second, 2, "README.md", "# demo, exported\n").await;
     fx.handle
@@ -364,7 +364,7 @@ async fn two_dependent_proposals_integrate_in_dependency_order() {
 async fn a_conflict_leaves_the_proposal_open_and_is_recorded_once() {
     let fx = Fixture::new().await;
     let author = fx.agent("frontend").await;
-    let review = review_lead(&fx, "review").await;
+    let review = reviewer(&fx, "review").await;
     let other = fx.agent("backend").await;
     propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
     propose(&fx, &other, 2, "src/lib.rs", "pub fn z() {}\n").await;
@@ -420,7 +420,7 @@ async fn with_automatic_off_nothing_integrates_on_its_own() {
     let fx = Fixture::new().await;
     write_config(&fx, "[integration]\nautomatic = false\n");
     let author = fx.agent("frontend").await;
-    let review = review_lead(&fx, "review").await;
+    let review = reviewer(&fx, "review").await;
     propose(&fx, &author, 1, "src/lib.rs", "pub fn y() {}\n").await;
     let job = Running::start(&fx.state);
     job.runs(1).await;

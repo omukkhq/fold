@@ -333,7 +333,7 @@ async fn the_proposal_and_task_rules_read_their_context() {
         .await;
     assert_eq!(
         lead.next().await,
-        wire(TOKEN, "fold: P-3 opened. Call claim_review.")
+        wire(TOKEN, "fold: P-3 opened. Call start_worker.")
     );
 
     fixture

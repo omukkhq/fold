@@ -122,7 +122,7 @@ pub async fn file_of(h: &Harness, revision: &str, path: &str) -> Option<String> 
     Some(text)
 }
 
-/// `agent` builds `task` with `files` and the review lead integrates it.
+/// `agent` builds `task` with `files` and the reviewer `review` integrates it.
 pub async fn integrate(h: &Harness, agent: &str, files: &[(&str, &str)]) -> String {
     let task = h.create_task(agent, "Agent work").await;
     let work = h.start_work(agent, &task).await;

@@ -8,7 +8,7 @@ use fold_core::roles::{
     CatchUpFacts, FLD_MISSING, MainCatchUp, Role, StartFacts, catch_up_turn, first_turn,
     main_catch_up_turn, needs_restart,
 };
-use fold_core::{AgentName, AreaName, RequestId, WorkerName, WorkerState};
+use fold_core::{AgentName, AreaName, ProposalId, RequestId, WorkerName, WorkerState};
 use fold_store::agents::{self, WorkerProcessRow};
 use fold_store::reviews::{self, ProposalRow, ProposalState};
 use fold_store::tasks::LabelRow;
@@ -30,7 +30,7 @@ pub const MCP_RETRY_TURN: &str = "fold resumed you after your fold MCP server fa
 pub const PAUSE_TURN: &str = "fold resumed you after a pause of every agent of the project. Your claims kept their leases. Check your inbox, your claims and your workspace, then continue your work.";
 
 impl Supervisor {
-    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped, and every worker that could not reach fold: `--resume` of its session, with a turn that tells a working one to go on and a turn that tells the other one that its fold connection failed. A lead hears in the same turn of the work that waits for it, and an idle lead with nothing waiting gets no turn. A worker whose fld binary was gone resumes only once the fld path names a file again. A start reads the rows once, so a worker that fails the same way again stays failed until the next start. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. A row that cannot be served is logged and the next row is served. Requested changes, conflicts and send-backs that the worker limits held back are then served. A start in a paused project does none of this: the resume of the pause runs the workers again, those that could not reach fold among them.
+    /// Runs again, after a daemon start, every worker that was working or idle when the daemon stopped, and every worker that could not reach fold: `--resume` of its session, with a turn that tells a working one to go on and a turn that tells the other one that its fold connection failed. A lead hears in the same turn of the work that waits for it, and an idle lead with nothing waiting gets no turn. A worker whose fld binary was gone resumes only once the fld path names a file again. A start reads the rows once, so a worker that fails the same way again stays failed until the next start. A worker whose session is gone starts again in a new one, a lead with its latest hand-off note. A worker with an open question waits without a process until a human answers it, and then resumes with the answer as its first turn. A worker left `starting` ends `failed` and one left `stopping` ends `stopped`. A row that cannot be served is logged and the next row is served. Requested changes, conflicts, send-backs and reviews of new versions that the worker limits held back are then served. A start in a paused project does none of this: the resume of the pause runs the workers again, those that could not reach fold among them.
     pub async fn resume_after_restart(&self) -> Result<(), AgentError> {
         if self.is_paused().await? {
             self.inner.unreachable_owed.store(true, Ordering::SeqCst);
@@ -62,6 +62,7 @@ impl Supervisor {
         tokio::spawn(self.clone().resume_pending());
         tokio::spawn(self.clone().resume_owed_send_backs());
         tokio::spawn(self.clone().resume_owed_gate_runs());
+        tokio::spawn(self.clone().resume_owed_reviewers(None));
         tokio::spawn(self.clone().resume_owed_messages());
         tokio::spawn(self.clone().catch_up_main());
         Ok(())
@@ -126,7 +127,7 @@ impl Supervisor {
             .is_paused())
     }
 
-    /// Ends a pause that began at `paused_at`: each worker that was working, idle or starting runs again in its own session with [`PAUSE_TURN`], followed by the first turn a starting worker never read, the answer to a question a human answered during the pause, the requested changes, conflicts and send-backs its task worker missed, and the work that waits for a lead; a worker left `stopping` ends `stopped`. When the daemon started during the pause, each worker that could not reach fold runs again with [`MCP_RETRY_TURN`], as that start would have resumed it. The resumes, send-backs and fresh starts of lost sessions that the pause held back are then served. A row that cannot be served is logged and the next row is served.
+    /// Ends a pause that began at `paused_at`: each worker that was working, idle or starting runs again in its own session with [`PAUSE_TURN`], followed by the first turn a starting worker never read, the answer to a question a human answered during the pause, the requested changes, conflicts and send-backs its task worker missed, and the work that waits for a lead; a worker left `stopping` ends `stopped`. When the daemon started during the pause, each worker that could not reach fold runs again with [`MCP_RETRY_TURN`], as that start would have resumed it. The resumes, send-backs, reviews of new versions and fresh starts of lost sessions that the pause held back are then served. A row that cannot be served is logged and the next row is served.
     pub(in crate::services::agents::workers) async fn resume_after_pause(
         &self,
         paused_at: fold_core::Timestamp,
@@ -194,6 +195,7 @@ impl Supervisor {
         tokio::spawn(self.clone().resume_pending());
         tokio::spawn(self.clone().resume_owed_send_backs());
         tokio::spawn(self.clone().resume_owed_gate_runs());
+        tokio::spawn(self.clone().resume_owed_reviewers(None));
         tokio::spawn(self.clone().resume_owed_messages());
         tokio::spawn(self.clone().catch_up_main());
         Ok(())
@@ -254,7 +256,7 @@ impl Supervisor {
         (!parts.is_empty()).then(|| parts.join("\n\n"))
     }
 
-    /// The work that waits for a lead, see [`catch_up_turn`]. A claim hides its task or proposal only while its worker runs or is among `kept`, the workers the same start runs again. A read that fails is logged and names nothing, so the lead still runs.
+    /// The work that waits for a lead, see [`catch_up_turn`]. A claim hides its task or proposal while its worker runs or is among `kept`, the workers the same start runs again; a review claim also hides its proposal while fold owes its reviewer that has ended a resume for the newest version (see [`agents::reviews_owed_to_ended_reviewers`]). A read that fails is logged and names nothing, so the lead still runs.
     pub(super) async fn catch_up(
         &self,
         row: &WorkerProcessRow,
@@ -263,7 +265,7 @@ impl Supervisor {
         match self.waiting_for(row, kept).await {
             Ok(text) => text,
             Err(error) => {
-                tracing::warn!(agent = %row.agent, code = error.log_code(), "could not read the work that waits for a lead");
+                tracing::warn!(agent = %row.agent, code = code_of(&error), "could not read the work that waits for a lead");
                 None
             }
         }
@@ -273,7 +275,7 @@ impl Supervisor {
         &self,
         row: &WorkerProcessRow,
         kept: &BTreeSet<AgentName>,
-    ) -> Result<Option<String>, StoreError> {
+    ) -> Result<Option<String>, AgentError> {
         let holds = |worker: &WorkerName| {
             let agent = worker.agent();
             kept.contains(&agent) || self.is_running(&agent)
@@ -298,7 +300,7 @@ impl Supervisor {
                     state: Some(RequestState::Open),
                     ..requests::RequestFilter::default()
                 };
-                let mut conn = read.acquire().await?;
+                let mut conn = read.acquire().await.map_err(StoreError::from)?;
                 let mut waiting: Vec<RequestId> = requests::list(&mut conn, &filter)
                     .await?
                     .into_iter()
@@ -315,13 +317,19 @@ impl Supervisor {
             }
             Role::ReviewLead => {
                 let open = reviews::list_proposals(read, Some(ProposalState::Open), None).await?;
+                let owed: BTreeSet<ProposalId> =
+                    agents::reviews_owed_to_ended_reviewers(read, None)
+                        .await?
+                        .into_iter()
+                        .map(|review| review.proposal)
+                        .collect();
                 let mut proposals = Vec::new();
                 for proposal in open {
                     let waits = waits_for_review(&proposal)
                         && proposal
                             .review_claim
                             .as_ref()
-                            .is_none_or(|holder| !holds(holder));
+                            .is_none_or(|holder| !holds(holder) && !owed.contains(&proposal.id));
                     // A human or the main agent decides a proposal of a task of Main, never the review lead.
                     if waits
                         && !tasks::labels_for(read, proposal.task)

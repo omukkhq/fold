@@ -75,7 +75,7 @@ auto_checkpoint_quiet_seconds = 120  # quiet time before an automatic checkpoint
 auto_checkpoints_kept = 20           # automatic checkpoints each workspace keeps
 max_file_bytes = 52428800            # a larger file keeps its recorded version and gives a warning
 stall_minutes = 5                    # a claimed task without a file change for this long counts as stalled
-closed_workspace_days = 14           # how long `fld gc` keeps a closed workspace directory
+closed_workspace_days = 14           # how long `fld gc` keeps the checkpoints of a closed workspace, a record only
 
 [git]
 branch = "main"                      # the branch of the project folder's .git that every integration commits to
@@ -107,7 +107,7 @@ handoff_at = 50                      # area_lead, review_lead and main only: the
 ```
 
 - The top-level numbers must be whole numbers above 0. A worker limit has no upper bound, and 0 lets no worker of its role start; the leads are outside the limits, and a lower limit never stops a running worker.
-- `automatic = true` integrates a proposal once the review lead, a reviewer, the main agent or a human approved it, nothing asks for changes, a human approved it when the task is marked, and every prerequisite task is Done.
+- `automatic = true` integrates a proposal once a reviewer, the main agent or a human approved it, nothing asks for changes, a human approved it when the task is marked, and every prerequisite task is Done.
 - A role without `mcp` loads every server the user's own Claude Code loads. With `mcp`, the worker gets the fold server and each named server of the project's `.mcp.json`; servers of the user's own configuration are never copied.
 - An older file with `remote` and `push_on_integrate` in `[git]` is read as `[remotes.origin]` on the `[git]` branch.
 - `supervised = true` under `[main]` makes fold run the main agent itself: it starts it at the daemon's start, keeps its session, and resumes it for a message to it, a request, a ready task of `main` or a review it must act on, never while the project is paused. The humans talk to it in the web app, and `fld claude` refuses with `main_supervised`. While a `fld claude` session is the main agent, fold starts no supervised one (`main_interactive`).
@@ -168,7 +168,7 @@ Work in the project folder:
 
 Maintenance and access:
 
-- `fld gc [--dry-run]`: delete unreferenced objects, prune automatic checkpoints beyond `auto_checkpoints_kept`, and remove closed workspace directories older than `closed_workspace_days`. `--dry-run` only counts.
+- `fld gc [--dry-run]`: delete unreferenced objects, prune automatic checkpoints beyond `auto_checkpoints_kept`, remove the closed workspace directories that are still there, and prune the checkpoints of workspaces closed longer than `closed_workspace_days`. fold removes a workspace's directory as soon as the workspace closes and its owning agent has no running worker process and no open session, after a final checkpoint of the tracked files it had not recorded (a review checkout takes none). That checkpoint is a record, not a restore point: a closed workspace is never restored. `fld gc` retries a removal that failed. `--dry-run` only counts.
 - `fld token create NAME [--label TEXT]`: create a sign-in token for the web app off localhost for the human `NAME` and print it once. `fld token list` shows the tokens without their secrets, and `fld token revoke ID` (such as `wt-3`) ends every session made from one.
 - `fld subscribe [EMAIL]`: subscribe an address to fold release news.
 

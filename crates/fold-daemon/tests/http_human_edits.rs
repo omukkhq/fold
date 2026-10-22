@@ -56,13 +56,13 @@ fn code(body: &Value) -> &str {
     body["error"]["code"].as_str().unwrap_or_default()
 }
 
-/// `frontend` opens P-1 on T-1, changing `src/lib.rs`; `review` is the review lead and approved v1; the task's human review mark names `tanim`.
+/// `frontend` opens P-1 on T-1, changing `src/lib.rs`; `review` is a reviewer and approved v1; the task's human review mark names `tanim`.
 async fn marked() -> Fixture {
     let fx = Fixture::new().await;
     let frontend = fx.agent("frontend").await;
     fx.proposal(&frontend, 1, "pub fn y() {}\n").await;
     let review = fx.agent("review").await;
-    give_role(&fx.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
     // A human is known once a request named them.
     send(&fx, Method::GET, "/proposals/P-1", None, &[TANIM]).await;
     send(&fx, Method::GET, "/proposals/P-1", None, &[ANA]).await;

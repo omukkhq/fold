@@ -452,7 +452,7 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
         ),
         (Role::AreaLead, None) => format!("fold started you as {}, an area lead.", facts.name),
         (Role::ReviewLead, _) => format!(
-            "fold started you as {}, the review lead. Review the open proposals yourself, or give one proposal or a group of related proposals to a reviewer with start_worker.",
+            "fold started you as {}, the review lead. Give each open proposal, or a group of related proposals, to a reviewer with start_worker; you never review a proposal yourself.",
             facts.name
         ),
         (Role::TaskWorker, _) => format!(
@@ -488,7 +488,7 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
     }
 }
 
-/// What waits for a lead whose process starts again in its own session: for an area lead the ready tasks of its area in the ready order, for the review lead the open proposals that have no verdict on their current version. A claim hides a task or proposal only while its worker runs or the same start runs it again, because a start moves the claim of a worker that has ended.
+/// What waits for a lead whose process starts again in its own session: for an area lead the ready tasks of its area in the ready order, for the review lead the open proposals that have no verdict on their current version and that no reviewer works on. A claim hides its task or proposal only while its worker runs or the same start runs it again, because a start moves the claim of a worker that has ended; a review claim also hides its proposal while fold owes its ended reviewer a resume for the newest version, since that reviewer gets the version.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatchUpFacts<'a> {
     pub role: Role,
@@ -511,7 +511,7 @@ pub fn catch_up_turn(facts: &CatchUpFacts<'_>) -> Option<String> {
             ))
         }
         Role::ReviewLead if !facts.proposals.is_empty() => Some(format!(
-            "These open proposals wait for a review: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, then review them yourself or give them to reviewers with start_worker, which also moves the claim of a reviewer that has ended.",
+            "These open proposals wait for a review and no reviewer works on them: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, and give them to reviewers with start_worker, which also moves the claim of a reviewer that has ended. Leave a proposal to a reviewer that runs or that fold resumes for a new version.",
             listed(facts.proposals.iter().map(ToString::to_string).collect())
         )),
         Role::AreaLead | Role::ReviewLead | Role::TaskWorker | Role::Reviewer | Role::Main => None,
@@ -1014,8 +1014,8 @@ mod tests {
 
     #[test]
     fn reviewer_prompts_require_current_evidence_and_handle_omitted_verdicts() {
-        for role in [Role::ReviewLead, Role::Reviewer] {
-            let prompt = role.prompt();
+        {
+            let prompt = Role::Reviewer.prompt();
             assert!(prompt.contains("acceptance criteria"));
             assert!(prompt.contains("`submit_review_fix`"));
             assert!(prompt.contains("The kind of fix decides, not its size."));
@@ -1032,15 +1032,23 @@ mod tests {
                 prompt
                     .contains("public API, a schema, a migration, or security or permission code")
             );
-            assert!(!prompt.contains("Change review:"), "{role:?}");
-            assert!(!prompt.contains("Full review:"), "{role:?}");
+            assert!(!prompt.contains("Change review:"));
+            assert!(!prompt.contains("Full review:"));
         }
         let worker = Role::TaskWorker.prompt();
         assert!(worker.contains("call `run_checks` for the task before `create_proposal`"));
         assert!(worker.contains("Wait for `checks.finished` with `wait_for_events`"));
+        assert!(worker.contains("fold ends a `wait_for_events` after at most 270 s"));
+        assert!(
+            Role::Reviewer
+                .prompt()
+                .contains("fold ends a `wait_for_events` after at most 270 s")
+        );
         let lead = Role::ReviewLead.prompt();
-        assert!(lead.contains("before taking claims or creating a batch"));
         assert!(lead.contains("You decide the scope when you assign the review"));
+        assert!(lead.contains("never resolve it yourself"));
+        assert!(lead.contains("`base_conflicts`"));
+        assert!(lead.contains("public API, a schema, a migration, or security or permission code"));
         assert!(lead.contains("`set_review_scope`"));
         assert!(
             Role::Reviewer
@@ -1048,6 +1056,40 @@ mod tests {
                 .contains("Follow the scope you get.")
         );
         assert!(lead.contains("makes a batch of the group for it, in the same step"));
+    }
+
+    #[test]
+    fn the_review_lead_gives_every_review_to_a_reviewer() {
+        let lead = Role::ReviewLead.prompt();
+        assert!(lead.contains("`review_lead_delegates`"));
+        assert!(lead.contains("You never review a proposal yourself"));
+        assert!(lead.contains("start a new reviewer for them"));
+        assert!(lead.contains("fold resumes the reviewer that holds its review claim"));
+        for tool in ["`create_batch_checkout`", "`submit_review_fix`"] {
+            assert!(lead.contains(tool), "{tool}");
+        }
+        for self_review in [
+            "self-review",
+            "Approve only",
+            "Never edit a batch checkout.",
+        ] {
+            assert!(!lead.contains(self_review), "{self_review}");
+        }
+        assert!(
+            Role::Reviewer
+                .prompt()
+                .contains("fold resumes you in the same session for that version")
+        );
+        let turn = first_turn(&StartFacts {
+            role: Role::ReviewLead,
+            name: &AgentName::parse("review").unwrap(),
+            area: None,
+            tasks: &[],
+            proposals: &[],
+            batch: None,
+            instructions: None,
+        });
+        assert!(turn.contains("you never review a proposal yourself"));
     }
 
     #[test]
@@ -1267,7 +1309,11 @@ mod tests {
             ..facts(Role::ReviewLead, &[], &proposals)
         })
         .unwrap();
-        assert!(review.contains("wait for a review: P-4."), "{review}");
+        assert!(
+            review.contains("no reviewer works on them: P-4."),
+            "{review}"
+        );
+        assert!(!review.contains("yourself"), "{review}");
         assert!(
             review.contains("list_proposals") && review.contains("start_worker"),
             "{review}"

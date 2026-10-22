@@ -72,11 +72,11 @@ async fn until_resumed(harness: &Harness, count: usize) -> Vec<(Option<String>, 
     .await
 }
 
-/// Area `web` over label `ui` with one task per title, its lead `web-lead`, and the task worker `web-worker` that the lead started for every task, connected and waiting for work. `review` is the review lead.
+/// Area `web` over label `ui` with one task per title, its lead `web-lead`, and the task worker `web-worker` that the lead started for every task, connected and waiting for work. `review` is a reviewer.
 pub async fn task_worker_for(fake: &FakeClaude, titles: &[&str], state: WorkerState) -> Harness {
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
-    give_role(&harness.handle.store, "review", Role::ReviewLead, None).await;
+    give_role(&harness.handle.store, "review", Role::Reviewer, None).await;
     harness
         .call(MAIN, "create_label", json!({"name": "ui", "color": "sage"}))
         .await;
@@ -150,7 +150,7 @@ fn position(events: &[StoredEvent], kind: &str, pick: impl Fn(&StoredEvent) -> b
 }
 
 /// The task worker records its workspace and sends the next version of `P-1`.
-async fn post_next_version(harness: &Harness, work: &Work) {
+pub async fn post_next_version(harness: &Harness, work: &Work) {
     harness
         .call(
             TASK_WORKER,
@@ -468,13 +468,7 @@ async fn a_batch_review_resumes_the_task_worker_once_with_every_member_it_wrote(
     menu.write(&[("menu.html", "<p>menu</p>\n")]);
     harness.propose(TASK_WORKER, &menu, "Draw the menu").await;
     until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
-    harness
-        .call(
-            "review",
-            "create_review_batch",
-            json!({"proposals": ["P-1", "P-2"]}),
-        )
-        .await;
+    harness.give_batch("review", &["P-1", "P-2"]).await;
     harness
         .call(
             "review",
@@ -1139,4 +1133,162 @@ async fn red_proposal_checks_resume_a_stopped_task_worker_with_the_failed_check(
     assert_eq!(resumed[0].1["reason"], "checks");
     assert_eq!(resumed[0].1["stage"], "proposal");
     assert_eq!(resumed[0].1["run"], "cr-1");
+}
+
+/// The reviewer that the review lead starts for `P-1`.
+pub const REVIEWER: &str = "reviewer";
+
+/// [`proposed_by_a_task_worker`] with the review lead running and its reviewer for `P-1`, which asked for changes on v1, so fold stopped it with the review claim and resumed the task worker, which waits idle.
+pub async fn reviewed_by_a_started_reviewer(fake: &FakeClaude) -> (Harness, Work) {
+    let (mut harness, work) =
+        proposed_by_a_task_worker(fake, &[("page.html", "<p>page</p>\n")]).await;
+    harness
+        .call(MAIN, "start_worker", json!({"role": "review_lead"}))
+        .await;
+    until_state(&harness, "review-lead", WorkerState::Idle).await;
+    harness.connect("review-lead").await;
+    let started = harness
+        .call(
+            "review-lead",
+            "start_worker",
+            json!({"role": "reviewer", "proposals": ["P-1"]}),
+        )
+        .await;
+    assert_eq!(started["worker"]["name"], REVIEWER, "{started}");
+    until_state(&harness, REVIEWER, WorkerState::Idle).await;
+    harness.connect(REVIEWER).await;
+    harness
+        .call(REVIEWER, "create_review_checkout", json!({"id": "P-1"}))
+        .await;
+    harness
+        .call(
+            REVIEWER,
+            "submit_review",
+            json!({"id": "P-1", "version": 1, "verdict": "request_changes", "body": "Split the page."}),
+        )
+        .await;
+    until_state(&harness, REVIEWER, WorkerState::Stopped).await;
+    until_runs(fake, TASK_WORKER, 2).await;
+    until_state(&harness, TASK_WORKER, WorkerState::Idle).await;
+    (harness, work)
+}
+
+/// The holder of the review claim of `P-1`, as `get_proposal` shows it.
+pub async fn review_claim_holder(harness: &Harness) -> Value {
+    harness
+        .call(MAIN, "get_proposal", json!({"id": "P-1"}))
+        .await["claim"]["holder"]
+        .clone()
+}
+
+/// A new version of a proposal whose reviewer fold stopped after its verdict goes back to that reviewer at once, in its own session and with the claim it holds: nobody waits for the claim's lease to run out, and the review lead starts nobody.
+#[tokio::test]
+async fn a_new_version_resumes_the_stopped_reviewer_that_holds_its_claim() {
+    let fake = FakeClaude::new("result");
+    let (harness, work) = reviewed_by_a_started_reviewer(&fake).await;
+    let stopped = worker(&harness, REVIEWER).await;
+    assert_eq!(review_claim_holder(&harness).await, REVIEWER);
+
+    work.write(&[("page.html", "<h1>page</h1>\n")]);
+    post_next_version(&harness, &work).await;
+
+    let runs = until_runs(&fake, REVIEWER, 2).await;
+    assert_eq!(runs[1].flag("--resume"), Some(stopped.session_id.as_str()));
+    let turn = &runs[1].stdin[1];
+    for wanted in [
+        "P-1 v2",
+        "You still hold the review claim",
+        "create_review_checkout",
+    ] {
+        assert!(turn.contains(wanted), "{wanted}: {turn}");
+    }
+    let resumed = until_resumed(&harness, 2).await;
+    let (proposal, data) = resumed.last().unwrap();
+    assert_eq!(proposal.as_deref(), Some("P-1"));
+    assert_eq!(data["agent"], REVIEWER);
+    assert_eq!(data["reason"], "new_version");
+    assert_eq!(data["version"], 2);
+    assert_eq!(review_claim_holder(&harness).await, REVIEWER);
+    let started: usize = harness
+        .events()
+        .await
+        .iter()
+        .filter(|event| event.kind == "worker.started" && event.data["role"] == "reviewer")
+        .count();
+    assert_eq!(
+        started, 2,
+        "the reviewer's start and its resume, no new reviewer"
+    );
+
+    until_state(&harness, REVIEWER, WorkerState::Idle).await;
+    harness
+        .call(REVIEWER, "create_review_checkout", json!({"id": "P-1"}))
+        .await;
+    harness
+        .call(
+            REVIEWER,
+            "submit_review",
+            json!({"id": "P-1", "version": 2, "verdict": "approve", "body": "Split now."}),
+        )
+        .await;
+    until_state(&harness, REVIEWER, WorkerState::Stopped).await;
+    assert_eq!(fake.runs_of(REVIEWER).len(), 2);
+}
+
+/// A version whose reviewer fold cannot resume because the reviewer limit is full waits only until a reviewer stops.
+#[tokio::test]
+async fn a_reviewer_resume_the_limits_refuse_runs_once_a_reviewer_stops() {
+    let fake = FakeClaude::new("result");
+    let (mut harness, work) = reviewed_by_a_started_reviewer(&fake).await;
+    let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
+    std::fs::write(&config, "[workers]\nreviewer = 1\n").unwrap();
+    harness
+        .call(
+            MAIN,
+            "create_task",
+            json!({"title": "Draw the menu", "labels": ["ui"]}),
+        )
+        .await;
+    let other = harness
+        .call(
+            "web-lead",
+            "start_worker",
+            json!({"role": "task_worker", "tasks": ["T-2"]}),
+        )
+        .await;
+    let other = other["worker"]["name"].as_str().unwrap().to_owned();
+    until_state(&harness, &other, WorkerState::Idle).await;
+    harness.connect(&other).await;
+    let menu = harness.start_work(&other, "T-2").await;
+    menu.write(&[("menu.html", "<p>menu</p>\n")]);
+    harness.propose(&other, &menu, "Draw the menu").await;
+    harness
+        .call(
+            "review-lead",
+            "start_worker",
+            json!({"role": "reviewer", "proposals": ["P-2"]}),
+        )
+        .await;
+    until_state(&harness, "reviewer-2", WorkerState::Idle).await;
+    harness
+        .project
+        .clock()
+        .advance(Duration::from_secs(1))
+        .unwrap();
+
+    work.write(&[("page.html", "<h1>page</h1>\n")]);
+    post_next_version(&harness, &work).await;
+    assert_eq!(
+        worker(&harness, REVIEWER).await.state,
+        WorkerState::Stopped,
+        "the other reviewer holds the only place"
+    );
+    assert_eq!(fake.runs_of(REVIEWER).len(), 1);
+
+    harness
+        .call("review-lead", "stop_worker", json!({"name": "reviewer-2"}))
+        .await;
+    let runs = until_runs(&fake, REVIEWER, 2).await;
+    assert!(runs[1].has("--resume"));
+    assert!(runs[1].stdin[1].contains("P-1 v2"), "{}", runs[1].stdin[1]);
 }
