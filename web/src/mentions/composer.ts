@@ -7,15 +7,19 @@ export type ComposerKey = "send" | "swallow" | "pass";
 export interface ComposerKeyInput {
   key: string;
   shiftKey: boolean;
-  /** True while an input method still composes the text, and for the key that ends the composition. */
+  /** True while an input method still composes the text. */
   isComposing: boolean;
+  /** 229 for a key an input method takes, such as the Enter with which Safari ends a composition after `compositionend`. */
+  keyCode: number;
   pending: boolean;
   text: string;
 }
 
+const IME_KEY_CODE = 229;
+
 export function composerKey(input: ComposerKeyInput): ComposerKey {
   if (input.key !== "Enter" || input.shiftKey) return "pass";
-  if (input.isComposing) return "pass";
+  if (input.isComposing || input.keyCode === IME_KEY_CODE) return "pass";
   // An Enter that cannot send must not add a new line either, or the box grows with empty lines.
   if (input.pending || input.text.trim() === "") return "swallow";
   return "send";

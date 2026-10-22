@@ -12,6 +12,7 @@ const enter: ComposerKeyInput = {
   key: "Enter",
   shiftKey: false,
   isComposing: false,
+  keyCode: 13,
   pending: false,
   text: "Use the short versions.",
 };
@@ -27,6 +28,10 @@ describe("composerKey", () => {
 
   it("never sends while an input method composes", () => {
     expect(composerKey({ ...enter, isComposing: true })).toBe("pass");
+  });
+
+  it("never sends the key an input method takes, such as Safari's Enter after compositionend", () => {
+    expect(composerKey({ ...enter, keyCode: 229 })).toBe("pass");
   });
 
   it("swallows Enter on empty or blank text", () => {

@@ -32,8 +32,8 @@ export const MessageComposer = forwardRef<
   {
     pending,
     onKeyDown,
-    onKeyUp,
     onCompositionStart,
+    onCompositionEnd,
     readOnly,
     className,
     value,
@@ -42,7 +42,6 @@ export const MessageComposer = forwardRef<
   ref,
 ) {
   const inner = useRef<HTMLTextAreaElement | null>(null);
-  // Safari fires `compositionend` before the keydown of the Enter that ends it, so the flag lasts until that key comes up.
   const composing = useRef(false);
   useLayoutEffect(() => {
     if (inner.current) fit(inner.current);
@@ -80,6 +79,8 @@ export const MessageComposer = forwardRef<
           key: event.key,
           shiftKey: event.shiftKey,
           isComposing: event.nativeEvent.isComposing || composing.current,
+          // eslint-disable-next-line @typescript-eslint/no-deprecated -- Safari marks the Enter that ends a composition, after compositionend, only by keyCode 229.
+          keyCode: event.keyCode,
           pending: pending || readOnly === true,
           text: value,
         });
@@ -87,13 +88,13 @@ export const MessageComposer = forwardRef<
         if (action === "send") event.currentTarget.form?.requestSubmit();
         onKeyDown?.(event);
       }}
-      onKeyUp={(event) => {
-        composing.current = event.nativeEvent.isComposing;
-        onKeyUp?.(event);
-      }}
       onCompositionStart={(event) => {
         composing.current = true;
         onCompositionStart?.(event);
+      }}
+      onCompositionEnd={(event) => {
+        composing.current = false;
+        onCompositionEnd?.(event);
       }}
     />
   );

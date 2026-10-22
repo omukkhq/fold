@@ -306,14 +306,27 @@ describe("ThreadPanel", () => {
     const box = screen.getByLabelText("Reply");
     await userEvent.type(box, "kanji");
     fireEvent.keyDown(box, { key: "Enter", isComposing: true });
-    // Safari ends the composition before the keydown of its Enter.
     fireEvent.compositionStart(box);
-    fireEvent.compositionEnd(box);
     fireEvent.keyDown(box, { key: "Enter" });
-    fireEvent.keyUp(box, { key: "Enter" });
+    // Safari ends the composition before the keydown of its Enter, which carries keyCode 229.
+    fireEvent.compositionEnd(box);
+    fireEvent.keyDown(box, { key: "Enter", keyCode: 229 });
     await userEvent.type(box, " ok{Enter}");
     await waitFor(() => {
       expect(onReply.mock.calls).toEqual([[MESSAGE, "kanji ok"]]);
+    });
+  });
+
+  it("sends on the first Enter after a composition the mouse ended", async () => {
+    const onReply = vi.fn(() => Promise.resolve());
+    await setup(onReply);
+    const box = screen.getByLabelText("Reply");
+    await userEvent.type(box, "kanji");
+    fireEvent.compositionStart(box);
+    fireEvent.compositionEnd(box);
+    fireEvent.keyDown(box, { key: "Enter", keyCode: 13 });
+    await waitFor(() => {
+      expect(onReply.mock.calls).toEqual([[MESSAGE, "kanji"]]);
     });
   });
 
