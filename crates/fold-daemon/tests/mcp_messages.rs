@@ -70,6 +70,14 @@ impl Fixture {
         )
     }
 
+    /// How many `message.acknowledged` events the project has stored.
+    async fn acknowledged_events(&self) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE type = 'message.acknowledged'")
+            .fetch_one(self.project.store().read())
+            .await
+            .unwrap()
+    }
+
     /// A new adapter session of agent `name` over an in-memory stream, already registered.
     async fn connect(&self, name: &str) -> Client {
         let events = EventService::new(self.project.store().clone(), self.bus.clone());
@@ -261,6 +269,11 @@ async fn a_reply_acknowledges_the_message_it_answers_for_a_recipient_only() {
     .await;
     let still = call(&backend, "get_inbox", json!({})).await;
     assert_eq!(inbox_ids(&still), pairs(&[("m-1", "backend")]));
+    assert_eq!(
+        fixture.acknowledged_events().await,
+        0,
+        "a reply to a message its sender did not receive acknowledges nothing"
+    );
     call(
         &backend,
         "send_message",
@@ -269,6 +282,39 @@ async fn a_reply_acknowledges_the_message_it_answers_for_a_recipient_only() {
     .await;
     let cleared = call(&backend, "get_inbox", json!({})).await;
     assert_eq!(cleared, json!({"messages": []}));
+    assert_eq!(fixture.acknowledged_events().await, 1);
+}
+
+#[tokio::test]
+async fn a_main_workers_reply_leaves_its_child_workers_row_unacknowledged() {
+    let fixture = Fixture::new().await;
+    let frontend = fixture.connect("frontend").await;
+    call(&frontend, "register_worker", json!({"name": "ui"})).await;
+    let backend = fixture.connect("backend").await;
+    call(
+        &backend,
+        "send_message",
+        json!({"to": ["frontend/ui"], "body": "the button?"}),
+    )
+    .await;
+    call(
+        &frontend,
+        "send_message",
+        json!({"to": ["backend"], "body": "on it", "reply_to": "m-1"}),
+    )
+    .await;
+    let ui = call(&frontend, "get_inbox", json!({"as": "frontend/ui"})).await;
+    assert_eq!(inbox_ids(&ui), pairs(&[("m-1", "frontend/ui")]));
+    assert_eq!(fixture.acknowledged_events().await, 0);
+    call(
+        &frontend,
+        "send_message",
+        json!({"to": ["backend"], "body": "done", "reply_to": "m-1", "as": "frontend/ui"}),
+    )
+    .await;
+    let cleared = call(&frontend, "get_inbox", json!({"as": "frontend/ui"})).await;
+    assert_eq!(cleared, json!({"messages": []}));
+    assert_eq!(fixture.acknowledged_events().await, 1);
 }
 
 #[tokio::test]
@@ -296,6 +342,14 @@ async fn acknowledge_takes_several_ids_and_a_wrong_id_acknowledges_nothing() {
     assert_eq!(unchanged["messages"].as_array().map(Vec::len), Some(3));
     let empty = call_raw(&backend, "acknowledge_message", json!({"ids": []})).await;
     assert_eq!(empty.is_error, Some(true));
+    let error = &body(&empty)["error"];
+    assert_eq!(error["code"], "invalid_request");
+    assert!(
+        error["hint"]
+            .as_str()
+            .is_some_and(|hint| hint.contains("acknowledge_message")),
+        "{error}"
+    );
     let done = call(
         &backend,
         "acknowledge_message",

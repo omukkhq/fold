@@ -348,6 +348,31 @@ async fn acceptance_23_a_worker_limit_sends_the_message_on_to_the_area_lead_and_
 }
 
 #[tokio::test]
+async fn acceptance_23_the_leads_reply_to_a_forwarded_message_acknowledges_only_the_leads_row() {
+    let fake = FakeClaude::new("result");
+    let (harness, _work) = stopped_task_worker(&fake).await;
+    fill_the_area(&harness).await;
+
+    let message = feedback(&harness, "Why a page?").await;
+    until_forwarded(&harness, &message, TASK_WORKER).await;
+    until_recipient(&harness, &message, LEAD, |_| true).await;
+    harness
+        .send_with(
+            LEAD,
+            json!({"to": ["humans"], "body": "A page links better.", "reply_to": message}),
+        )
+        .await;
+
+    let lead_row = until_recipient(&harness, &message, LEAD, |_| true).await;
+    assert!(!lead_row["acknowledged_at"].is_null(), "{lead_row}");
+    assert!(!harness.inbox(LEAD).await.contains(&message));
+    let worker_row = until_recipient(&harness, &message, TASK_WORKER, |_| true).await;
+    assert_eq!(worker_row["forwarded_to"], LEAD, "{worker_row}");
+    assert!(worker_row["acknowledged_at"].is_null(), "{worker_row}");
+    assert_eq!(fake.runs_of(TASK_WORKER).len(), 1);
+}
+
+#[tokio::test]
 async fn acceptance_23_a_worker_limit_that_holds_the_task_workers_own_resume_sends_the_message_on_at_once()
  {
     let fake = FakeClaude::new("result");
