@@ -300,7 +300,7 @@ pub async fn main_workspace_paths(
     Ok(paths)
 }
 
-/// Moves a live workspace to `state` and stamps `closed_at`. Only the row changes; the directory stays until garbage collection. False when the workspace is not live or does not exist, and then nothing changes.
+/// Moves a live workspace to `state` and stamps `closed_at`. Only the row changes; the daemon removes the directory after the commit. False when the workspace is not live or does not exist, and then nothing changes.
 pub async fn close(
     tx: &mut WriteTx,
     workspace: WorkspaceId,
