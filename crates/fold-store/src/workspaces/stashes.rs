@@ -193,3 +193,149 @@ pub async fn drop_stash(tx: &mut WriteTx, id: i64, now: Timestamp) -> Result<boo
     .rows_affected();
     Ok(dropped == 1)
 }
+
+/// How an unstash's journal row closes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnstashEnd {
+    /// The entry moved as the row says, in the same transaction.
+    Finished,
+    /// The unstash wrote nothing in the folder, so the entry stays stashed.
+    Abandoned,
+}
+
+/// The open journal row of an unstash, which a stop between its files and the entry's row leaves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnstashRow {
+    /// The row id, which the daemon keeps to itself.
+    pub id: i64,
+    /// The row id of the entry the unstash merges.
+    pub stash_id: i64,
+    /// The folder's tree as the unstash read it.
+    pub folder_tree: ObjectHash,
+    /// The tree the folder holds once every write of the unstash is done.
+    pub target_tree: ObjectHash,
+    /// The main revision the folder held, which the conflict markers name.
+    pub revision: RevisionId,
+    /// The event actor label of the human who ran it.
+    pub actor: String,
+    /// The paths where the merge conflicts, in path byte order; none for a clean merge.
+    pub conflicts: Vec<ConflictRow>,
+}
+
+/// A new journal row; both trees are in the object store already.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewUnstash<'a> {
+    pub stash_id: i64,
+    pub folder_tree: ObjectHash,
+    pub target_tree: ObjectHash,
+    pub revision: RevisionId,
+    pub actor: &'a str,
+    pub conflicts: &'a [ConflictRow],
+    pub now: Timestamp,
+}
+
+/// Opens the journal row of an unstash in the caller's write transaction and returns its row id. A second open row is refused by the database.
+pub async fn insert_unstash(tx: &mut WriteTx, unstash: &NewUnstash<'_>) -> Result<i64, StoreError> {
+    let (folder, target, revision, started_at) = (
+        unstash.folder_tree.to_string(),
+        unstash.target_tree.to_string(),
+        unstash.revision.to_db(),
+        unstash.now.as_millis(),
+    );
+    let id = sqlx::query_scalar!(
+        r#"INSERT INTO folder_unstashes (stash_id, folder_tree_hash, target_tree_hash, revision_id, actor, state, started_at)
+           SELECT ?1, ?2, ?3, r.id, ?5, 'open', ?6
+           FROM revisions r WHERE r.number = ?4
+           RETURNING id AS "id!: i64""#,
+        unstash.stash_id,
+        folder,
+        target,
+        revision,
+        unstash.actor,
+        started_at
+    )
+    .fetch_optional(tx.conn())
+    .await?
+    .ok_or(StoreError::RevisionNotFound(unstash.revision))?;
+    for conflict in unstash.conflicts {
+        let kind = conflict.kind.as_str();
+        sqlx::query!(
+            "INSERT INTO folder_unstash_conflicts (unstash_id, path, kind) VALUES (?, ?, ?)",
+            id,
+            conflict.path,
+            kind
+        )
+        .execute(tx.conn())
+        .await?;
+    }
+    Ok(id)
+}
+
+/// The open journal row of an unstash, when a stop left one.
+pub async fn open_unstash(conn: &mut SqliteConnection) -> Result<Option<UnstashRow>, StoreError> {
+    let Some(row) = sqlx::query!(
+        r#"SELECT u.id AS "id!: i64", u.stash_id AS "stash_id!: i64", u.folder_tree_hash, u.target_tree_hash,
+                  r.number AS "revision!: i64", u.actor
+           FROM folder_unstashes u JOIN revisions r ON r.id = u.revision_id
+           WHERE u.state = 'open'"#
+    )
+    .fetch_optional(&mut *conn)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let conflicts = sqlx::query!(
+        r#"SELECT path, kind FROM folder_unstash_conflicts WHERE unstash_id = ? ORDER BY path"#,
+        row.id
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .map(|found| {
+        Ok(ConflictRow {
+            path: found.path,
+            kind: ConflictKind::parse(&found.kind)
+                .ok_or(StoreError::Corrupt("folder_unstash_conflicts.kind"))?,
+        })
+    })
+    .collect::<Result<_, StoreError>>()?;
+    Ok(Some(UnstashRow {
+        id: row.id,
+        stash_id: row.stash_id,
+        folder_tree: tree_hash(&row.folder_tree_hash, "folder_unstashes.folder_tree_hash")?,
+        target_tree: tree_hash(&row.target_tree_hash, "folder_unstashes.target_tree_hash")?,
+        revision: number(
+            row.revision,
+            RevisionId::try_from_db,
+            "folder_unstashes.revision_id",
+        )?,
+        actor: row.actor,
+        conflicts,
+    }))
+}
+
+/// Closes the open journal row `id` as `end`. False when it is closed already.
+pub async fn close_unstash(
+    tx: &mut WriteTx,
+    id: i64,
+    end: UnstashEnd,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let (state, closed_at) = (
+        match end {
+            UnstashEnd::Finished => "finished",
+            UnstashEnd::Abandoned => "abandoned",
+        },
+        now.as_millis(),
+    );
+    let closed = sqlx::query!(
+        "UPDATE folder_unstashes SET state = ?, closed_at = ? WHERE id = ? AND state = 'open'",
+        state,
+        closed_at,
+        id
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(closed == 1)
+}

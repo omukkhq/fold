@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT u.id AS \"id!: i64\", u.stash_id AS \"stash_id!: i64\", u.folder_tree_hash, u.target_tree_hash,\n                  r.number AS \"revision!: i64\", u.actor\n           FROM folder_unstashes u JOIN revisions r ON r.id = u.revision_id\n           WHERE u.state = 'open'",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "folder_unstashes",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "stash_id!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "folder_unstashes",
+            "name": "stash_id"
+          }
+        }
+      },
+      {
+        "name": "folder_tree_hash",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "folder_unstashes",
+            "name": "folder_tree_hash"
+          }
+        }
+      },
+      {
+        "name": "target_tree_hash",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "folder_unstashes",
+            "name": "target_tree_hash"
+          }
+        }
+      },
+      {
+        "name": "revision!: i64",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "revisions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "actor",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "folder_unstashes",
+            "name": "actor"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "da489f0ebb3f75d90cc80f30a2f1c9dbfed288eb9495b6eaf4dc17a1b643f0fd"
+}
