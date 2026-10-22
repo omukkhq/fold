@@ -153,7 +153,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             COMPARE_REVISIONS,
-            "Compare two states: revisions, changesets, checkpoints or the working files of a workspace. Lists the changed files with line counts, or one file's hunks when you pass path, in the form get_proposal_diff describes: a header \"@@ -old_start,old_lines +new_start,new_lines @@\" and one string per line, a mark (space, - or +) and the text.",
+            "Compare two states: revisions, changesets, checkpoints or the working files of a workspace. Lists the changed files with line counts, or one file's hunks when you pass path, in the form get_proposal_diff describes: a header \"@@ -old_start,old_lines +new_start,new_lines @@\" and one string per line, a mark (space, - or +) and the text. Number the lines from the header: a context line takes the next old and new number, a removed line the next old number, an added line the next new number.",
             schema_for_type::<CompareRevisionsInput>(),
         ),
         Tool::new(
@@ -319,7 +319,7 @@ pub(super) fn file_diff_value(diff: &FileDiff) -> Value {
 /// The line after a hunk line whose file ends without a line terminator, as unified diffs write it.
 const NO_NEWLINE: &str = "\\ No newline at end of file";
 
-/// A hunk in the unified diff form: a header with the first line number and the line count of each side, and each line as one string, its mark (` ` context, `-` removed, `+` added) followed by its text with its terminator. The numbers of each line follow from the header: a context line takes the next number of both sides, a removed line of the old side and an added line of the new side. One object per line spent more on its keys than on the line text.
+/// A hunk in the unified diff form: a header with the first line number and the line count of each side, and each line as one string, its mark (` ` context, `-` removed, `+` added) followed by its text with its terminator. The numbers of each line follow from the header: a context line takes the next number of both sides, a removed line of the old side and an added line of the new side.
 fn hunk_value(hunk: &Hunk) -> Value {
     let mut lines = Vec::with_capacity(hunk.lines.len());
     for line in &hunk.lines {

@@ -211,7 +211,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_WORKERS,
-            "List the areas with their leads, models and MCP servers, and the workers that run or failed, with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human. stopped_count counts the stopped workers; pass include_stopped true to list them, such as to read a finished worker's sessions, and include_instructions true for each area's instructions.",
+            "List the areas with their leads, models and MCP servers, and the workers that run or failed, each with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human. stopped_count counts the stopped workers; pass include_stopped true to list them, such as to read a finished worker's sessions, and include_instructions true for each area's instructions.",
             schema_for_type::<ListWorkersInput>(),
         ),
         Tool::new(
