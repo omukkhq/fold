@@ -6,7 +6,9 @@ import {
   recipientActors,
   recipientState,
   routeLine as routeLineSegments,
+  unreadBy,
 } from "./delivery";
+import { formatAsOfMinute } from "@/format/time";
 import { segmentsText } from "@/people/segments";
 
 const routeLine = (...args: Parameters<typeof routeLineSegments>) =>
@@ -51,18 +53,57 @@ describe("delivery", () => {
     });
     expect(states[3]).toMatchObject({ lead: "read by", actor: "human:tanim" });
   });
-  it("says a human's message was sent until the daemon records the read", () => {
-    expect(recipientState(recipient("human:rafeed"), NOW)).toEqual({
+  it("says a human's message was delivered when it was sent until the human reads it", () => {
+    const sent = NOW - 60_000;
+    const human = recipientState(recipient("human:rafeed"), NOW, null, sent);
+    expect(human).toMatchObject({
       tone: "delivered",
-      lead: "sent to",
+      lead: "delivered to",
       actor: "human:rafeed",
-      at: null,
       note: null,
     });
+    expect(human.at).toBe(formatAsOfMinute(NOW, sent));
+    expect(recipientState(recipient("human:rafeed"), NOW).at).toBe(
+      formatAsOfMinute(NOW, NOW),
+    );
     expect(
       recipientState(recipient("human:rafeed", { acknowledged_at: NOW }), NOW),
     ).toMatchObject({ lead: "read by", actor: "human:rafeed" });
   });
+
+  it("never says not delivered to a human", () => {
+    const lines = deliveryLines(
+      baseMessage("m-2", {
+        sent_at: NOW,
+        recipients: [
+          recipient("human:rafeed", { reachable: false }),
+          recipient("review"),
+        ],
+      }),
+      NOW,
+    );
+    expect(lines.map((line) => line.lead)).toEqual([
+      "delivered to",
+      "not delivered to",
+    ]);
+  });
+
+  it("finds the newest message that waits for the signed-in human", () => {
+    const thread = [
+      baseMessage("m-1", { recipients: [recipient("human:tanim")] }),
+      baseMessage("m-2", {
+        recipients: [recipient("human:ana"), recipient("human:tanim")],
+      }),
+      baseMessage("m-3", {
+        recipients: [recipient("human:tanim", { acknowledged_at: NOW })],
+      }),
+      baseMessage("m-4", { recipients: [recipient("human:ana")] }),
+    ];
+    expect(unreadBy(thread, "tanim")).toBe("m-2");
+    expect(unreadBy(thread, "rafeed")).toBeNull();
+    expect(unreadBy(thread, null)).toBeNull();
+  });
+
   it("says when fold cannot tell an agent that the message waits", () => {
     const unreachable = recipient("main", { reachable: false });
     expect(recipientState(unreachable, NOW)).toEqual({

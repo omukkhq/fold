@@ -88,7 +88,7 @@ describe("receipts", () => {
       "Not delivered to @review",
       "2 cannot start now",
       "read by @tanim and 1 other",
-      "sent to @mitu",
+      "delivered to @mitu",
     ]);
     expect(result.tones).toEqual(["failed", "forwarded", "read", "delivered"]);
   });

@@ -36,7 +36,7 @@ export function PersonName({
     >
       {own && youWord ? "you" : `@${bareName(name)}`}
       {own && !youWord ? (
-        <span className="font-normal text-text-muted"> (you)</span>
+        <span className="font-regular text-text-muted"> (you)</span>
       ) : null}
     </span>
   );

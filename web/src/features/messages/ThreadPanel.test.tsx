@@ -23,6 +23,7 @@ import { daemon } from "@/test/daemon";
 import { message, recipient, thread as baseThread } from "@/test/messages";
 import { ApiError } from "@/api/errors";
 import type { ThreadView } from "@/api/messages";
+import { formatAsOfMinute } from "@/format/time";
 import { ThreadPanel } from "./ThreadPanel";
 
 afterEach(() => {
@@ -130,10 +131,14 @@ describe("ThreadPanel", () => {
     ).toBe("/p/demo/t/T-12");
   });
 
-  it("says a message to humans was sent to them and names the signed-in human you", async () => {
+  it("says a message to humans was delivered, marks the signed-in human and marks the thread read for them", async () => {
     daemon.on("GET /api/v1/session", {
       status: 200,
       body: { human: "tanim", authenticated: true },
+    });
+    daemon.on(`POST /api/v1/projects/demo/threads/${MESSAGE}/read`, {
+      status: 200,
+      body: { read: [MESSAGE] },
     });
     await setup(() => Promise.resolve(), {
       ...thread,
@@ -150,10 +155,17 @@ describe("ThreadPanel", () => {
     await waitFor(() => {
       expect(article.textContent).toContain("to you and @rafeed");
     });
-    expect(article.textContent).toContain("Sent to @rafeed|Sent to you");
+    expect(article.textContent).toContain(
+      `Delivered to @rafeed · ${formatAsOfMinute(NOW, NOW)}|Delivered to you · ${formatAsOfMinute(NOW, NOW)}`,
+    );
     expect(screen.getByText("Today")).toBeTruthy();
     expect(screen.queryByText("not delivered to", { exact: false })).toBeNull();
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+    await waitFor(() => {
+      expect(
+        daemon.made(`POST /api/v1/projects/demo/threads/${MESSAGE}/read`),
+      ).toHaveLength(1);
+    });
   });
 
   it("folds the receipts of many recipients and opens the full list in place", async () => {

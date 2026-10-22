@@ -769,3 +769,49 @@ async fn a_task_offers_its_claim_holder_its_area_lead_and_the_main_agent_as_read
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(code(&body), "invalid_id");
 }
+
+#[tokio::test]
+async fn the_signed_in_human_marks_a_thread_read_for_themselves_only() {
+    let fixture = Fixture::new().await;
+    fixture
+        .send("design", &["human:tanim", "human:ana"], None, None)
+        .await;
+    let read = async |path: &str| {
+        call(
+            fixture.http().await,
+            Method::POST,
+            &format!("{BASE}{path}"),
+            &[],
+            None,
+        )
+        .await
+    };
+    let (status, body) = read("/threads/m-1/read").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, json!({"read": ["m-1"]}));
+    let (_, thread) = fixture.get("/threads/m-1").await;
+    let rows = &thread["messages"][0]["recipients"];
+    assert_eq!(rows[0]["name"], "human:tanim");
+    assert!(rows[0]["acknowledged_at"].is_i64(), "{rows}");
+    assert_eq!(rows[1]["name"], "human:ana");
+    assert!(rows[1]["acknowledged_at"].is_null(), "{rows}");
+    let (status, body) = read("/threads/m-1/read").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"read": []}), "a repeat changes nothing");
+    let (status, body) = read("/threads/T-1/read").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(code(&body), "invalid_id");
+    let (status, body) = read("/threads/m-9/read").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(code(&body), "message_not_found");
+    let (status, body) = call(
+        socket_router(fixture.state.clone()),
+        Method::POST,
+        &format!("{BASE}/threads/m-1/read"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(code(&body), "human_name_required");
+}
