@@ -969,12 +969,12 @@ mod tests {
     #[test]
     fn the_main_agent_and_the_leads_are_pointed_to_the_reference() {
         assert!(main_prompt().contains(
-            "Read the skill's `REFERENCE.md` before you plan checks, config or areas, or tell the user a command."
+            "Read the `fold` skill's `REFERENCE.md` before you plan checks, config or areas, or tell the user a command."
         ));
         for role in [Role::ReviewLead, Role::AreaLead] {
             assert!(
                 role.prompt()
-                    .contains("Checks section of the skill's `REFERENCE.md`"),
+                    .contains("Checks section of the `fold` skill's `REFERENCE.md`"),
                 "{role}"
             );
         }

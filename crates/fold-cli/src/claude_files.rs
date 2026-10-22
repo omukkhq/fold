@@ -13,7 +13,7 @@ pub use fold_core::layout::{
     AGENT_ENV, AGENT_TAGS_ENV, ALLOW_FOLD_TOOLS, MCP_SERVER_NAME, MCP_SERVERS_KEY,
 };
 
-/// The folders of Claude Code files that fold's files sit in, each one inside the one before.
+/// The folders of Claude Code files that fold's files sit in. Each folder after `.claude/skills` is the folder of one skill: the `fold` skill and the skill of each role.
 pub const FOLDERS: [&str; 8] = [
     ".claude",
     ".claude/skills",
@@ -39,37 +39,41 @@ pub const CLAUDE_FILE: &str = "CLAUDE.md";
 pub const AGENTS_BEGIN: &str = "<!-- fold:begin -->";
 pub const AGENTS_END: &str = "<!-- fold:end -->";
 
+/// The `fold` skill: the index of the role skills, and the skill of a session opened by hand, which has no role.
 pub const SKILL_FILE: &str = ".claude/skills/fold/SKILL.md";
 /// The reference beside the skill: fold's file formats, the human's commands and the web app's screens, which a session reads when its task needs them instead of holding them in every context.
 pub const REFERENCE_FILE: &str = ".claude/skills/fold/REFERENCE.md";
-/// The skill of each role is a skill of its own, so that one Skill call loads the steps of the role and nothing else.
-pub const MAIN_PART_FILE: &str = ".claude/skills/fold-main/SKILL.md";
-pub const AREA_LEAD_PART_FILE: &str = ".claude/skills/fold-area-lead/SKILL.md";
-pub const REVIEW_LEAD_PART_FILE: &str = ".claude/skills/fold-review-lead/SKILL.md";
-pub const TASK_WORKER_PART_FILE: &str = ".claude/skills/fold-task-worker/SKILL.md";
-pub const REVIEWER_PART_FILE: &str = ".claude/skills/fold-reviewer/SKILL.md";
+/// Each role has a skill of its own, so that one Skill call loads the steps of the role and nothing else.
+pub const MAIN_SKILL_FILE: &str = ".claude/skills/fold-main/SKILL.md";
+/// See [`MAIN_SKILL_FILE`].
+pub const AREA_LEAD_SKILL_FILE: &str = ".claude/skills/fold-area-lead/SKILL.md";
+/// See [`MAIN_SKILL_FILE`].
+pub const REVIEW_LEAD_SKILL_FILE: &str = ".claude/skills/fold-review-lead/SKILL.md";
+/// See [`MAIN_SKILL_FILE`].
+pub const TASK_WORKER_SKILL_FILE: &str = ".claude/skills/fold-task-worker/SKILL.md";
+/// See [`MAIN_SKILL_FILE`].
+pub const REVIEWER_SKILL_FILE: &str = ".claude/skills/fold-reviewer/SKILL.md";
 /// Every error code with what to do, which an agent reads only when a refusal's hint does not settle its next step.
 pub const ERRORS_FILE: &str = ".claude/skills/fold/ERRORS.md";
-/// The files of the fold skill, which fold owns whole.
+/// The files of fold's skills, which fold owns whole.
 pub const SKILL_FILES: [&str; 8] = [
     SKILL_FILE,
     REFERENCE_FILE,
-    MAIN_PART_FILE,
-    AREA_LEAD_PART_FILE,
-    REVIEW_LEAD_PART_FILE,
-    TASK_WORKER_PART_FILE,
-    REVIEWER_PART_FILE,
+    MAIN_SKILL_FILE,
+    AREA_LEAD_SKILL_FILE,
+    REVIEW_LEAD_SKILL_FILE,
+    TASK_WORKER_SKILL_FILE,
+    REVIEWER_SKILL_FILE,
     ERRORS_FILE,
 ];
 
 /// Not named `AGENTS.md`, so an agent working in the fold repository never loads it as rules.
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
-const SKILL: &str = include_str!("../templates/SKILL.md");
 const REFERENCE: &str = include_str!("../templates/REFERENCE.md");
 const ERRORS: &str = include_str!("../templates/ERRORS.md");
 
-/// Joins the sections of one role's skill, so that an agent loads one skill for its role while each section has one source that several roles share. The first section holds the skill's frontmatter, and the shared rules always come last.
-macro_rules! part {
+/// Joins the sections of one skill, so that an agent loads one skill for its role while each section has one source that several skills share. The first section holds the skill's frontmatter, and the shared rules always come last.
+macro_rules! skill {
     ($($section:literal),+) => {
         concat!(
             $(include_str!(concat!("../templates/parts/", $section, ".md")), "\n",)+
@@ -78,41 +82,44 @@ macro_rules! part {
     };
 }
 
+const SKILL: &str = skill!("index", "identity");
 /// The skill of each role: every step of that role and the shared rules, so that a worker loads only what its role needs.
-const MAIN_PART: &str = part!(
+const MAIN_SKILL: &str = skill!(
     "main",
+    "identity",
     "planning",
     "kinds",
     "workers",
     "building",
     "reviewing",
+    "batch",
     "scope"
 );
-const AREA_LEAD_PART: &str = part!("area_lead", "planning", "kinds", "workers");
-const REVIEW_LEAD_PART: &str = part!("review_lead", "scope", "workers");
-const TASK_WORKER_PART: &str = part!("task_worker", "building", "kinds");
-const REVIEWER_PART: &str = part!("reviewer", "reviewing", "scope");
+const AREA_LEAD_SKILL: &str = skill!("area_lead", "planning", "kinds", "workers");
+const REVIEW_LEAD_SKILL: &str = skill!("review_lead", "scope", "workers");
+const TASK_WORKER_SKILL: &str = skill!("task_worker", "building", "kinds");
+const REVIEWER_SKILL: &str = skill!("reviewer", "batch", "reviewing", "scope");
 
 /// The text fold writes into each of [`SKILL_FILES`], in the same order.
 pub const SKILL_TEXTS: [&str; 8] = [
     SKILL,
     REFERENCE,
-    MAIN_PART,
-    AREA_LEAD_PART,
-    REVIEW_LEAD_PART,
-    TASK_WORKER_PART,
-    REVIEWER_PART,
+    MAIN_SKILL,
+    AREA_LEAD_SKILL,
+    REVIEW_LEAD_SKILL,
+    TASK_WORKER_SKILL,
+    REVIEWER_SKILL,
     ERRORS,
 ];
 
 /// The skill file that holds the steps of `role`. The supervised main loads the interactive main agent's skill.
-pub fn part_file(role: Role) -> &'static str {
+pub fn role_skill_file(role: Role) -> &'static str {
     match role {
-        Role::Main => MAIN_PART_FILE,
-        Role::AreaLead => AREA_LEAD_PART_FILE,
-        Role::ReviewLead => REVIEW_LEAD_PART_FILE,
-        Role::TaskWorker => TASK_WORKER_PART_FILE,
-        Role::Reviewer => REVIEWER_PART_FILE,
+        Role::Main => MAIN_SKILL_FILE,
+        Role::AreaLead => AREA_LEAD_SKILL_FILE,
+        Role::ReviewLead => REVIEW_LEAD_SKILL_FILE,
+        Role::TaskWorker => TASK_WORKER_SKILL_FILE,
+        Role::Reviewer => REVIEWER_SKILL_FILE,
     }
 }
 

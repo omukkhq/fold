@@ -78,9 +78,9 @@ fn a_fresh_write_gives_the_section_and_the_skill_and_a_refresh_changes_no_byte()
     assert_eq!(before, mtimes(root), "an unchanged file is not written");
 }
 
-/// A project that an earlier fold set up holds only the skill and the reference; a refresh adds the part of each role next to them and leaves a file the user put there alone.
+/// A project that an earlier fold set up holds only the fold skill and the reference; a refresh adds the skill of each role next to them and leaves a file the user put there alone.
 #[test]
-fn a_refresh_of_an_earlier_skill_adds_the_parts_and_keeps_the_users_files() {
+fn a_refresh_of_an_earlier_skill_adds_the_role_skills_and_keeps_the_users_files() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
     let folder = root.join(SKILL_FILE).parent().unwrap().to_owned();

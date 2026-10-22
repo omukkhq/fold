@@ -65,6 +65,8 @@ A worker may spawn Claude Code subagents for small, atomic tasks inside its own 
 
 ## Recovery
 
+Results display versions such as `v2`, but `version`, `since` and `expected_version` arguments are integers: pass `2`, not the string `v2`.
+
 When the hint of a refusal does not settle the next step, read `.claude/skills/fold/ERRORS.md` of the `fold` skill: every error code with what to do.
 
 When Claude Code's auto mode is not sure about a tool call of a worker, fold asks a human and the worker waits for the answer. A worker that uses `AskUserQuestion` asks the humans a question with choices, and the human's reply is its answer.

@@ -16,7 +16,7 @@ pub enum Seat {
     NoRole,
 }
 
-/// The fold tools that a seat calls in most of its turns, from the steps of its role prompt and its part of the skill. Every other tool stays deferred, so a session pays for its schema only when it looks the tool up.
+/// The fold tools that a seat calls in most of its turns, from the steps of its role prompt and its role skill. Every other tool stays deferred, so a session pays for its schema only when it looks the tool up.
 pub fn always_loaded(seat: Seat) -> &'static [&'static str] {
     match seat {
         Seat::Unbound => &["register_agent"],

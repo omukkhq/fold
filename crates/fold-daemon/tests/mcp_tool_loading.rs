@@ -87,6 +87,16 @@ async fn each_role_loads_its_frequent_tools_at_once_and_defers_the_rare_ones() {
     assert!(!reviewer.contains("create_proposal"));
 }
 
+/// The supervised main is a worker that fold runs in the role `main`, without the tag of `fld claude`'s session, and it follows the same steps.
+#[tokio::test]
+async fn the_supervised_main_loads_the_tools_of_the_main_agent() {
+    let mut harness = Harness::start_without_leads().await;
+    give_role(&harness.handle.store.clone(), "chief", Role::Main, None).await;
+    harness.connect("chief").await;
+    let (marked, _) = marked(harness.client("chief")).await;
+    assert_eq!(marked, names(Seat::Role(Role::Main)));
+}
+
 #[tokio::test]
 async fn a_session_without_an_agent_loads_only_the_tool_that_binds_it() {
     let harness = Harness::start_without_leads().await;

@@ -69,7 +69,7 @@ fld claude
 
 The first time you use fld on a device, it asks for the name that fold shows for you, and keeps it for every project. Set `FOLD_HUMAN` to use another name.
 
-`fld init` adds fold's section to the project's agent instructions and the fold skill to the project. The first `fld claude` or `fld setup` asks once to add the fold connection and hooks to your Claude Code user configuration. `fld claude` starts the daemon when needed and opens your main agent session. To start the daemon at login instead, run `fld setup` once: it installs a systemd user service on Linux and a launchd agent on macOS. Run `fld` alone to see the daemon's state, its version and web address, and the project of the current folder.
+`fld init` adds fold's section to the project's agent instructions and fold's skills to the project: the `fold` skill and one skill for each agent role. The first `fld claude` or `fld setup` asks once to add the fold connection and hooks to your Claude Code user configuration. `fld claude` starts the daemon when needed and opens your main agent session. To start the daemon at login instead, run `fld setup` once: it installs a systemd user service on Linux and a launchd agent on macOS. Run `fld` alone to see the daemon's state, its version and web address, and the project of the current folder.
 
 The **Projects** page lists the projects in fold, and a search by name, slug, or folder also finds the removed ones. **Remove** takes a project off fold while no worker of the project runs, and leaves its data in its folder; `fld claude`, `fld new`, or `fld init` in that folder, or **Add back** in the search, brings it back.
 

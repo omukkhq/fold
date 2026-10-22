@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
 
-use fold_cli::claude_files::{self, SKILL_FILES, SKILL_TEXTS, part_file};
+use fold_cli::claude_files::{self, SKILL_FILES, SKILL_TEXTS, role_skill_file};
 use fold_core::roles::Role;
 
-const SKILL: &str = include_str!("../templates/SKILL.md");
+/// The rules every skill ends with.
+const SHARED: &str = include_str!("../templates/parts/shared.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 const REFERENCE: &str = include_str!("../templates/REFERENCE.md");
 
@@ -35,13 +36,19 @@ fn skill_text(path: &str) -> &'static str {
         .unwrap_or_else(|| panic!("{path} is no skill file"))
 }
 
-/// The part of the skill that holds the steps of `role`.
+/// The skill that holds the steps of `role`.
 #[cfg(test)]
-fn part(role: Role) -> &'static str {
-    skill_text(part_file(role))
+fn role_skill(role: Role) -> &'static str {
+    skill_text(role_skill_file(role))
 }
 
-/// Every file of the skill but the reference, which has tests of its own, by file name: the index, the part of each role and the errors.
+/// The `fold` skill: the index of the role skills and the skill of a session opened by hand.
+#[cfg(test)]
+fn index() -> &'static str {
+    skill_text(claude_files::SKILL_FILE)
+}
+
+/// Every skill file but the reference, which has tests of its own, by file name: the index, the skill of each role and the errors.
 #[cfg(test)]
 fn skill_files() -> Vec<(&'static str, &'static str)> {
     SKILL_FILES
@@ -412,9 +419,10 @@ const NON_TOOL_NAMES: [&str; 48] = [
     "include_done",
 ];
 
-const SECTIONS: [&str; 3] = ["Skills", "Identity", "Sessions opened by hand"];
+/// The sections of the index before the shared ones.
+const SECTIONS: [&str; 3] = ["Skills", "Sessions opened by hand", "Identity"];
 
-/// The rules every role shares, which end each part of the skill.
+/// The rules every role shares, which end each skill.
 const SHARED_SECTIONS: [&str; 9] = [
     "Reference",
     "Rights",
@@ -427,12 +435,13 @@ const SHARED_SECTIONS: [&str; 9] = [
     "Never",
 ];
 
-/// The sections of each role's part before the shared ones.
+/// The sections of each role's skill before the shared ones.
 #[cfg(test)]
-fn part_sections(role: Role) -> &'static [&'static str] {
+fn role_sections(role: Role) -> &'static [&'static str] {
     match role {
         Role::Main => &[
             "Orchestrating",
+            "Identity",
             "Orchestrator",
             "Task template",
             "Drafting requests",
@@ -440,6 +449,7 @@ fn part_sections(role: Role) -> &'static [&'static str] {
             "Worker agents",
             "Building a task",
             "Reviewing",
+            "Review batches",
             "Review scope",
             "Integration",
         ],
@@ -458,11 +468,17 @@ fn part_sections(role: Role) -> &'static [&'static str] {
             "Worker agents",
         ],
         Role::TaskWorker => &["Task worker", "Building a task", "Task kinds"],
-        Role::Reviewer => &["Reviewer", "Reviewing", "Review scope", "Integration"],
+        Role::Reviewer => &[
+            "Reviewer",
+            "Review batches",
+            "Reviewing",
+            "Review scope",
+            "Integration",
+        ],
     }
 }
 
-/// Tools that the steps of a role call, which its prompt or its part of the skill must teach, so that no step of the role is out of its reach.
+/// Tools that the steps of a role call, which its prompt or its skill must teach, so that no step of the role is out of its reach.
 #[cfg(test)]
 fn role_steps(role: Role) -> &'static [&'static str] {
     match role {
@@ -492,6 +508,12 @@ fn role_steps(role: Role) -> &'static [&'static str] {
             "integrate_proposal",
             "compare_revisions",
             "mark_answered",
+            "create_review_batch",
+            "create_batch_checkout",
+            "submit_batch_review",
+            "remove_from_batch",
+            "list_review_batches",
+            "get_review_batch",
         ],
         Role::AreaLead => &[
             "get_task_graph",
@@ -737,7 +759,7 @@ fn the_skill_names_every_tool() {
         .into_iter()
         .filter(|tool| !PENDING_TOOLS.contains(tool))
     {
-        assert!(named.contains(tool), "no part of the skill names `{tool}`");
+        assert!(named.contains(tool), "no skill names `{tool}`");
     }
 }
 
@@ -795,10 +817,10 @@ fn neither_template_uses_the_banned_word_for_a_proposal() {
 #[test]
 fn both_templates_keep_agents_out_of_the_project_folder() {
     assert!(AGENTS_SECTION.contains("Never edit the files of the project folder"));
-    assert!(SKILL.contains("Never edit the files of the project folder"));
+    assert!(index().contains("Never edit the files of the project folder"));
     for role in Role::ALL {
         assert!(
-            part(role).contains("Never edit the files of the project folder"),
+            role_skill(role).contains("Never edit the files of the project folder"),
             "{role}"
         );
     }
@@ -806,7 +828,7 @@ fn both_templates_keep_agents_out_of_the_project_folder() {
 
 #[test]
 fn the_skill_has_the_frontmatter_keys_and_every_section() {
-    let rest = SKILL.strip_prefix("---\n").expect("frontmatter");
+    let rest = index().strip_prefix("---\n").expect("frontmatter");
     let (frontmatter, _) = rest.split_once("\n---\n").expect("frontmatter end");
     let keys: Vec<&str> = frontmatter
         .lines()
@@ -814,18 +836,21 @@ fn the_skill_has_the_frontmatter_keys_and_every_section() {
         .collect();
     assert_eq!(keys, ["name", "description"]);
     assert!(frontmatter.contains("name: fold\n"));
-    let headings: Vec<&str> = SKILL
+    assert!(frontmatter.contains("A session opened by hand loads it"));
+    let headings: Vec<&str> = index()
         .lines()
         .filter_map(|line| line.strip_prefix("## "))
         .collect();
-    assert_eq!(headings, SECTIONS);
+    let expected: Vec<&str> = SECTIONS.into_iter().chain(SHARED_SECTIONS).collect();
+    assert_eq!(headings, expected);
+    assert!(index().ends_with(SHARED));
 }
 
 #[test]
 fn each_role_skill_has_its_frontmatter_its_sections_then_the_shared_ones() {
     for role in Role::ALL {
-        let text = part(role);
-        let name = skill_name(part_file(role));
+        let text = role_skill(role);
+        let name = skill_name(role_skill_file(role));
         let (frontmatter, body) = frontmatter(text);
         let keys: Vec<&str> = frontmatter
             .lines()
@@ -843,7 +868,7 @@ fn each_role_skill_has_its_frontmatter_its_sections_then_the_shared_ones() {
             .lines()
             .filter_map(|line| line.strip_prefix("## "))
             .collect();
-        let expected: Vec<&str> = part_sections(role)
+        let expected: Vec<&str> = role_sections(role)
             .iter()
             .copied()
             .chain(SHARED_SECTIONS)
@@ -875,10 +900,10 @@ fn each_role_skill_has_its_frontmatter_its_sections_then_the_shared_ones() {
 fn the_skill_index_names_every_skill_and_file() {
     let index_folder = std::path::Path::new(claude_files::SKILL_FILE).parent();
     for role in Role::ALL {
-        let path = part_file(role);
+        let path = role_skill_file(role);
         let name = skill_name(path);
         assert!(
-            SKILL.contains(&format!("- `{name}`: ")),
+            index().contains(&format!("- `{name}`: ")),
             "SKILL.md does not list `{name}`"
         );
         assert!(path.ends_with(&format!("/{name}/SKILL.md")), "{path}");
@@ -893,27 +918,30 @@ fn the_skill_index_names_every_skill_and_file() {
     for path in [claude_files::ERRORS_FILE, claude_files::REFERENCE_FILE] {
         let name = skill_name(path);
         assert!(
-            SKILL.contains(&format!("- `{name}`, next to this file: ")),
+            index().contains(&format!("- `{name}`, next to this file: ")),
             "SKILL.md does not list `{name}`"
         );
         assert_eq!(std::path::Path::new(path).parent(), index_folder, "{path}");
     }
     assert_eq!(SKILL_FILES.len(), Role::ALL.len() + 3);
+    let own = index()
+        .strip_suffix(SHARED)
+        .expect("the shared rules end the index");
     assert!(
-        SKILL.split_whitespace().count() < 1000,
-        "the index stays short"
+        own.split_whitespace().count() < 1000,
+        "the index stays short before the shared rules"
     );
 }
 
 #[test]
 fn every_role_prompt_loads_only_the_skill_of_its_role() {
     for role in Role::ALL {
-        let name = skill_name(part_file(role));
+        let name = skill_name(role_skill_file(role));
         let load = format!("Load the `{name}` skill");
         assert!(role.prompt().contains(&load), "{role} does not load {name}");
         assert!(!role.prompt().contains("Load the `fold` skill"), "{role}");
         for other in Role::ALL.into_iter().filter(|other| *other != role) {
-            let other_name = skill_name(part_file(other));
+            let other_name = skill_name(role_skill_file(other));
             assert!(
                 !role.prompt().contains(&format!("`{other_name}`")),
                 "{role} names {other_name}"
@@ -922,7 +950,7 @@ fn every_role_prompt_loads_only_the_skill_of_its_role() {
     }
     assert!(fold_core::main_prompt().contains("Load the `fold-main` skill"));
     for role in Role::ALL {
-        let name = skill_name(part_file(role));
+        let name = skill_name(role_skill_file(role));
         assert!(
             fold_daemon::mcp::INSTRUCTIONS.contains(name),
             "INSTRUCTIONS do not name {name}"
@@ -935,17 +963,17 @@ fn each_role_reaches_every_step_of_its_role() {
     for role in Role::ALL {
         let named: BTreeSet<String> = backticked_identifiers(role.prompt())
             .into_iter()
-            .chain(backticked_identifiers(part(role)))
+            .chain(backticked_identifiers(role_skill(role)))
             .collect();
         for tool in role_steps(role) {
             assert!(FOLD_TOOLS.contains(tool), "{role}: `{tool}` is no tool");
             assert!(
                 named.contains(*tool),
-                "neither the prompt nor the part of {role} names `{tool}`"
+                "neither the prompt nor the skill of {role} names `{tool}`"
             );
         }
     }
-    let worker = part(Role::TaskWorker);
+    let worker = role_skill(Role::TaskWorker);
     for kept in [
         "`sync_workspace(ws)`",
         "`report_task(id, note)`",
@@ -954,7 +982,7 @@ fn each_role_reaches_every_step_of_its_role() {
     ] {
         assert!(worker.contains(kept), "{kept}");
     }
-    let reviewer = part(Role::Reviewer);
+    let reviewer = role_skill(Role::Reviewer);
     for kept in [
         "`suggested_scope`",
         "`scope_rules`",
@@ -969,20 +997,52 @@ fn each_role_reaches_every_step_of_its_role() {
         (Role::Reviewer, "define_area"),
     ] {
         assert!(
-            !backticked_identifiers(part(role)).contains(wrong),
-            "{role} part names `{wrong}`"
+            !backticked_identifiers(role_skill(role)).contains(wrong),
+            "{role} skill names `{wrong}`"
         );
     }
 }
 
-/// The tools a role's session loads at once are the tools its steps call: each one is named in the role's prompt or its part of the skill.
+/// A rule that several skills need sits in one section that each of them includes, so it is in every skill that needs it and once in each.
+#[test]
+fn each_shared_rule_is_once_in_every_skill_that_needs_it() {
+    let versions = "arguments are integers: pass `2`, not the string `v2`";
+    let requester = "Only the requester decides.";
+    for text in Role::ALL.into_iter().map(role_skill).chain([index()]) {
+        assert_eq!(text.matches(versions).count(), 1);
+        assert_eq!(text.matches(requester).count(), 1);
+    }
+    for role in [Role::Main, Role::Reviewer] {
+        assert_eq!(
+            role_skill(role).matches("## Review batches\n").count(),
+            1,
+            "{role}"
+        );
+    }
+    let named = backticked_identifiers(index());
+    for tool in [
+        "send_message",
+        "create_request",
+        "submit_review",
+        "mark_answered",
+    ] {
+        assert!(named.contains(tool), "the index does not name `{tool}`");
+    }
+    assert!(
+        index().contains("Every tool but `register_agent` refuses with `agent_not_registered`")
+    );
+    assert!(role_skill(Role::Main).contains("## Identity\n"));
+    assert_eq!(index().matches("## Identity\n").count(), 1);
+}
+
+/// The tools a role's session loads at once are the tools its steps call: each one is named in the role's prompt or its skill.
 #[test]
 fn the_tools_a_role_loads_at_once_are_named_in_its_steps() {
     use fold_daemon::mcp::loading::{Seat, always_loaded};
     for role in Role::ALL {
         let named: BTreeSet<String> = backticked_identifiers(role.prompt())
             .into_iter()
-            .chain(backticked_identifiers(part(role)))
+            .chain(backticked_identifiers(role_skill(role)))
             .collect();
         let loaded = always_loaded(Seat::Role(role));
         assert!(!loaded.is_empty(), "{role}");
@@ -993,7 +1053,7 @@ fn the_tools_a_role_loads_at_once_are_named_in_its_steps() {
             );
         }
     }
-    assert!(SKILL.contains("`register_agent`"));
+    assert!(index().contains("`register_agent`"));
 }
 
 #[test]
@@ -1004,7 +1064,7 @@ fn the_skill_maps_existing_code_into_areas_before_planning() {
         "with the folders each area owns",
         "name the folders it owns",
     ] {
-        assert!(part(Role::Main).contains(rule), "{rule}");
+        assert!(role_skill(Role::Main).contains(rule), "{rule}");
     }
 }
 
@@ -1013,7 +1073,7 @@ fn the_skill_uses_exactly_the_four_verdicts() {
     for role in [Role::Reviewer, Role::Main] {
         for verdict in ["comment", "request_changes", "approve", "reject"] {
             assert!(
-                part(role).contains(&format!("`{verdict}`")),
+                role_skill(role).contains(&format!("`{verdict}`")),
                 "{role}: {verdict}"
             );
         }
@@ -1027,7 +1087,7 @@ fn the_skill_sends_missing_work_back_and_new_work_to_a_request() {
         "Describe new work outside the task, such as a feature the task did not ask for, with `create_request`; the proposal can still be approved.",
     ] {
         for role in [Role::Reviewer, Role::Main] {
-            assert!(part(role).contains(rule), "{role}: {rule}");
+            assert!(role_skill(role).contains(rule), "{role}: {rule}");
         }
     }
 }
@@ -1343,7 +1403,7 @@ fn every_backticked_identifier_of_the_reference_is_known() {
 
 #[test]
 fn the_skill_points_to_the_reference_and_it_has_no_imports_or_design_documents() {
-    assert!(SKILL.contains("`REFERENCE.md` next to this file"));
+    assert!(index().contains("`REFERENCE.md`, next to this file"));
     assert!(REFERENCE.lines().all(|line| !line.starts_with('@')));
     assert!(!REFERENCE.contains("ARCHITECTURE.md"));
     assert!(!REFERENCE.contains("IMPLEMENTATION_PLAN.md"));
