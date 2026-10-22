@@ -458,6 +458,18 @@ async fn the_server_lists_described_tools_and_sends_the_workflow() {
     assert!(INSTRUCTIONS.contains("register_agent"));
     assert!(INSTRUCTIONS.contains("fld claude"));
     assert!(INSTRUCTIONS.contains("start_worker"));
+    let review_rule = "work that the task still misses back with request_changes, describe new work outside the task with create_request (the proposal can still be approved)";
+    let ask_rule = "ask the humans with asks_human for a product decision or a conflict with a settled decision";
+    let review_tools = fold_daemon::mcp::reviews::tools();
+    let fix = review_tools
+        .iter()
+        .find(|tool| tool.name == "submit_review_fix")
+        .and_then(|tool| tool.description.as_deref())
+        .unwrap();
+    for text in [INSTRUCTIONS, fix] {
+        assert!(text.contains(review_rule), "{text}");
+        assert!(text.contains(ask_rule), "{text}");
+    }
     let tools = client.list_all_tools().await.unwrap();
     let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_ref()).collect();
     assert_eq!(
