@@ -105,6 +105,30 @@ describe("MessagesScreen", () => {
     ).toBeTruthy();
   });
 
+  it("marks the open thread in the list only while its pane shows", async () => {
+    const current = () =>
+      within(screen.getByRole("list", { name: "Threads" }))
+        .getAllByRole("link")
+        .filter((link) => link.getAttribute("aria-current") === "true");
+    await setup({}, [question]);
+    expect(current()).toHaveLength(0);
+    cleanup();
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    await setup({}, [question]);
+    expect(current()).toHaveLength(1);
+    cleanup();
+    vi.unstubAllGlobals();
+    await setup({ thread: FIRST }, [question]);
+    expect(current()).toHaveLength(1);
+  });
+
   it("names a thread by its first line and marks a question waiting for a human", async () => {
     await setup({}, [question]);
     const list = screen.getByRole("list", { name: "Threads" });

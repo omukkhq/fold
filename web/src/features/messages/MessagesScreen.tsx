@@ -26,6 +26,7 @@ import { HrefLink } from "@/app/HrefLink";
 import { buttonClasses } from "@/components/button/buttonStyles";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
+import { useMediaQuery } from "@/lib/pageState";
 import { IconButton } from "@/components/button/Button";
 import { Tooltip } from "@/components/overlay/Tooltip";
 import { Menu } from "@/components/overlay/Menu";
@@ -47,6 +48,7 @@ import { isMissingThread, openThread } from "./openThread";
 import { messagesHref, type MessagesSearch } from "./search";
 import { ThreadList } from "./ThreadList";
 import { ThreadPanel } from "./ThreadPanel";
+import { paneShown, WIDE_LAYOUT } from "./readGate";
 
 interface MessagesScreenProps {
   slug: string;
@@ -116,6 +118,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
   });
   const open =
     target.kind === "listed" ? target.thread : (unlisted.data ?? null);
+  const paneOnScreen = paneShown(search.thread, useMediaQuery(WIDE_LAYOUT));
   const show = showFilter(filter);
   const listHref = messagesHref(slug, { ...search, thread: undefined });
 
@@ -258,7 +261,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
           ) : (
             <ThreadList
               threads={shown}
-              selected={open?.id ?? null}
+              selected={paneOnScreen ? (open?.id ?? null) : null}
               now={dataUpdatedAt}
               you={you}
               hrefOf={(thread) =>
@@ -306,6 +309,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
             thread={open}
             now={dataUpdatedAt}
             backHref={listHref}
+            shown={paneOnScreen}
             onReply={async (replyTo, body) => {
               await send.mutateAsync({ reply_to: replyTo, body });
             }}

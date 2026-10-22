@@ -7,6 +7,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -59,13 +60,20 @@ const thread = baseThread(MESSAGE, {
 async function setup(
   onReply: (replyTo: string, body: string) => Promise<void>,
   shown: ThreadView = thread,
+  onScreen = true,
 ) {
   const root = createRootRoute();
   const index = createRoute({
     getParentRoute: () => root,
     path: "/",
     component: () => (
-      <ThreadPanel slug="demo" thread={shown} now={NOW} onReply={onReply} />
+      <ThreadPanel
+        slug="demo"
+        thread={shown}
+        now={NOW}
+        onReply={onReply}
+        shown={onScreen}
+      />
     ),
   });
   const router = createRouter({
@@ -166,6 +174,40 @@ describe("ThreadPanel", () => {
         daemon.made(`POST /api/v1/projects/demo/threads/${MESSAGE}/read`),
       ).toHaveLength(1);
     });
+  });
+
+  it("marks nothing read while the pane is hidden, and marks it once the tab comes back", async () => {
+    daemon.on("GET /api/v1/session", {
+      status: 200,
+      body: { human: "tanim", authenticated: true },
+    });
+    daemon.on(`POST /api/v1/projects/demo/threads/${MESSAGE}/read`, {
+      status: 200,
+      body: { read: [MESSAGE] },
+    });
+    const read = `POST /api/v1/projects/demo/threads/${MESSAGE}/read`;
+    await setup(() => Promise.resolve(), thread, false);
+    await waitFor(() => {
+      expect(screen.getByRole("article").textContent).toContain("to you");
+    });
+    expect(daemon.made(read)).toHaveLength(0);
+    cleanup();
+    const state = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockReturnValue("hidden");
+    await setup(() => Promise.resolve());
+    await waitFor(() => {
+      expect(screen.getByRole("article").textContent).toContain("to you");
+    });
+    expect(daemon.made(read)).toHaveLength(0);
+    state.mockReturnValue("visible");
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await waitFor(() => {
+      expect(daemon.made(read)).toHaveLength(1);
+    });
+    state.mockRestore();
   });
 
   it("folds the receipts of many recipients and opens the full list in place", async () => {
