@@ -328,7 +328,7 @@ pub fn can_update_proposal<'a>(
     }
 }
 
-/// Closing withdraws a proposal. The author's agent withdraws its own work through any of its workers, and an agent that [acts on reviews](AgentStanding::acts_on_reviews) or a human may close any proposal; the system never closes one on anybody's behalf. `standing` is the acting agent's.
+/// Closing withdraws a proposal. The author's agent withdraws its own work, and an agent that [acts on reviews](AgentStanding::acts_on_reviews) or a human may close any proposal; the system never closes one on anybody's behalf. `standing` is the acting agent's.
 pub fn can_close_proposal(
     actor: &Actor,
     standing: AgentStanding,
@@ -419,7 +419,7 @@ pub fn can_submit_verdict<'a>(
     }
 }
 
-/// A review is a second agent's look at the work, so the author's agent never claims its own proposal through any of its workers. A claim lets its holder check out, fix and verdict the proposal for the user, so only the main agent claims one, for a review of its own. The review lead gives a reviewer its claims when it starts it and never claims ([`can_review`]), and the reviewer never claims. An area lead or a task worker asks the review lead instead. Nobody claims the review of a task of Main (`main_task`), as [`can_assign_review`] says. Only an agent's worker holds a claim. `standing` is the acting agent's. It returns the admitted agent, which becomes the reviewer.
+/// A review is a second agent's look at the work, so the author's agent never claims its own proposal. A claim lets its holder check out, fix and verdict the proposal for the user, so only the main agent claims one, for a review of its own. The review lead gives a reviewer its claims when it starts it and never claims ([`can_review`]), and the reviewer never claims. An area lead or a task worker asks the review lead instead. Nobody claims the review of a task of Main (`main_task`), as [`can_assign_review`] says. Only an agent's worker holds a claim. `standing` is the acting agent's. It returns the admitted agent, which becomes the reviewer.
 pub fn can_claim_review<'a>(
     actor: &'a Actor,
     standing: AgentStanding,
@@ -495,7 +495,7 @@ pub fn can_release_review<'a>(
     }
 }
 
-/// A review checkout serves the review the claim holds, so only the holder's agent creates one, through any of its workers: each review worker gets a directory of its own. The review lead never reviews ([`can_review`]), whatever it holds. `holder` is the claim's worker; an unclaimed proposal is refused too. `standing` is the acting agent's.
+/// A review checkout serves the review the claim holds, so only the holder's agent creates one: each review worker gets a directory of its own. The review lead never reviews ([`can_review`]), whatever it holds. `holder` is the claim's worker; an unclaimed proposal is refused too. `standing` is the acting agent's.
 pub fn can_create_review_checkout<'a>(
     actor: &'a Actor,
     standing: AgentStanding,
@@ -514,7 +514,7 @@ pub fn can_create_review_checkout<'a>(
     }
 }
 
-/// A reviewer fixes what it finds inside the task's agreed scope itself, in its own review checkout, and the fix becomes the next version under the reviewer's name. Only the agent that holds the review claim makes it, through any of its workers, because the fix is part of the review the claim holds; the author's agent never does, since its change goes through `update_proposal`, and the review lead never reviews ([`can_review`]). A human changes a proposal only through a human edit, and the system never. `holder` is the claim's worker, `author` the proposal's author and `standing` the acting agent's. It returns the admitted reviewer, which becomes the new version's author.
+/// A reviewer fixes what it finds inside the task's agreed scope itself, in its own review checkout, and the fix becomes the next version under the reviewer's name. Only the agent that holds the review claim makes it, because the fix is part of the review the claim holds; the author's agent never does, since its change goes through `update_proposal`, and the review lead never reviews ([`can_review`]). A human changes a proposal only through a human edit, and the system never. `holder` is the claim's worker, `author` the proposal's author and `standing` the acting agent's. It returns the admitted reviewer, which becomes the new version's author.
 pub fn can_fix_in_review<'a>(
     actor: &'a Actor,
     standing: AgentStanding,

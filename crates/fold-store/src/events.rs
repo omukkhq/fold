@@ -495,7 +495,7 @@ pub async fn recipient_agents(
         .collect()
 }
 
-/// The claims, prerequisites and proposals of every worker of the agent. The caller passes one read transaction, so its three queries see one state.
+/// The claims, prerequisites and proposals of the agent, read through every worker row it has, so a row named `agent/name` that a project still holds counts for its agent. The caller passes one read transaction, so its three queries see one state.
 pub async fn agent_facts(
     conn: &mut SqliteConnection,
     agent_id: i64,

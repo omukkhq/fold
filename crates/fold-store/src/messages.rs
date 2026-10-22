@@ -470,7 +470,7 @@ pub struct OwedMessage {
     pub sender: Sender,
 }
 
-/// Every [`OwedMessage`] in message number order, of `agent` alone when it is given. Only rows addressed to the agent or to one of its workers by name count, so a message to a tag or to every agent starts no stopped worker, and fold's own messages never do. An agent with a connected session, or with a session opened since its process stopped, such as one a person runs in a terminal of their own, is left out: that session takes the message, and a second process must not run beside it.
+/// Every [`OwedMessage`] in message number order, of `agent` alone when it is given. Only rows addressed to the agent by name count, also those to a row named `agent/name` that a project still holds, so a message to a tag or to every agent starts no stopped worker, and fold's own messages never do. An agent with a connected session, or with a session opened since its process stopped, such as one a person runs in a terminal of their own, is left out: that session takes the message, and a second process must not run beside it.
 pub async fn owed_to_stopped(
     executor: impl SqliteExecutor<'_>,
     agent: Option<&AgentName>,

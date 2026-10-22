@@ -169,7 +169,7 @@ impl AgentService {
         })
     }
 
-    /// Who the actor is for the worker rules: a human, the main agent, an agent that is neither, a supervised worker of some role, a subagent or the daemon.
+    /// Who the actor is for the worker rules: a human, the main agent, an agent that is neither, a supervised worker of some role or the daemon.
     pub async fn starter(&self, actor: &Actor) -> Result<Starter, AgentError> {
         let supervised = match actor {
             Actor::Agent(agent) => {
