@@ -80,7 +80,7 @@ export function isPausedWorker(state: WorkerState, paused: boolean): boolean {
 
 const PAUSED_PILL: StatePill = { label: "paused", tone: "paused" };
 
-/** The main agent has no process fold runs; its pill is the agent's presence. */
+/** The interactive main agent has no process fold runs; its pill is the agent's presence. */
 export function mainPill(presence: AgentView["presence"]): StatePill {
   switch (presence) {
     case "active":
@@ -97,6 +97,7 @@ const ROLE_NAMES: Record<WorkerRole, string> = {
   review_lead: "Review lead",
   task_worker: "Task worker",
   reviewer: "Reviewer",
+  main: "Main agent",
 };
 
 export function roleName(role: WorkerRole): string {
@@ -186,8 +187,10 @@ export interface TeamRow {
   restart: boolean;
   /** The ids of the sessions the worker had before its current one, oldest first. */
   previousSessions: string[];
-  /** The worker's Claude Code session; null for the main agent, whose session fold does not run. */
+  /** The worker's Claude Code session; null for the interactive main agent, whose session fold does not run. */
   session: SessionView | null;
+  /** The main agent that fold runs as a supervised worker, with no terminal. */
+  supervised: boolean;
 }
 
 export interface TeamGroup {
@@ -314,11 +317,15 @@ export function canRestart(state: WorkerState): boolean {
 
 /** The role, then how many sessions the worker had before its current one. */
 export function roleLine(worker: WorkerProcess): string {
+  const role =
+    worker.role === "main"
+      ? `${roleName(worker.role)} · supervised by fold`
+      : roleName(worker.role);
   const earlier = worker.previous_sessions.length;
-  if (earlier === 0) return roleName(worker.role);
+  if (earlier === 0) return role;
   const sessions =
     earlier === 1 ? "1 earlier session" : `${String(earlier)} earlier sessions`;
-  return `${roleName(worker.role)} · ${sessions}`;
+  return `${role} · ${sessions}`;
 }
 
 export function stopControl(state: WorkerState): StopControl {
@@ -389,6 +396,8 @@ function boundOf(
         text: count === 0 ? NONE : plural(count, "proposal"),
       };
     }
+    case "main":
+      return { kind: "text", text: NONE };
     case "task_worker": {
       if (worker.tasks.length === 0) return { kind: "text", text: NONE };
       const text = worker.tasks
@@ -463,6 +472,7 @@ function runningRow(
     restart: canRestart(worker.state),
     previousSessions: worker.previous_sessions.map((s) => s.session_id),
     session: sessionView(worker),
+    supervised: worker.role === "main",
   };
 }
 
@@ -501,6 +511,7 @@ function mainRow(agent: AgentView, human: string | null): TeamRow {
     restart: false,
     previousSessions: [],
     session: null,
+    supervised: false,
   };
 }
 
@@ -532,13 +543,20 @@ export function waitsForTaskWorkers(
 
 /**
  * The team: the main agents first, then one group per area with its lead and the task workers under it, then the review lead with its reviewers.
- * A main agent is an agent fold does not supervise: the user's own Claude Code session.
+ * A main agent is an agent fold does not supervise, the user's own Claude Code session, or the worker of role `main` that fold runs in its place.
  */
 export function teamGroups(input: TeamInput): TeamGroup[] {
   const { workers, areas } = input.workers;
   const supervised = new Set(workers.map((w) => w.name));
   const groups: TeamGroup[] = [];
-  const mains = input.agents.filter((agent) => !supervised.has(agent.name));
+  const mains = [
+    ...workers
+      .filter((w) => w.role === "main")
+      .map((w) => workerRow(w, input, false)),
+    ...input.agents
+      .filter((agent) => !supervised.has(agent.name))
+      .map((agent) => mainRow(agent, input.human)),
+  ];
   if (mains.length > 0) {
     groups.push({
       key: "main",
@@ -547,7 +565,7 @@ export function teamGroups(input: TeamInput): TeamGroup[] {
       area: null,
       owned: 0,
       profile: NO_PROFILE,
-      rows: mains.map((agent) => mainRow(agent, input.human)),
+      rows: mains,
     });
   }
   const areaNames = [
@@ -616,6 +634,18 @@ function orderRows(
     rows.push(...children.map((child) => workerRow(child, input, true)));
   }
   return rows;
+}
+
+/** Fold runs the main agent of the group, so it has no terminal and no person runs it. */
+export function isSupervisedMain(group: TeamGroup): boolean {
+  return group.kind === "main" && group.rows.some((row) => row.supervised);
+}
+
+/** What the main agent's group head says of the session it runs in. */
+export function mainNote(group: TeamGroup): string {
+  return isSupervisedMain(group)
+    ? "supervised by fold · answers in the web app"
+    : "your terminal session";
 }
 
 /** `area · lead owns 4 tasks`; an area named apart from its label says its name. */

@@ -149,6 +149,8 @@ pub enum WorkerRole {
     ReviewLead,
     TaskWorker,
     Reviewer,
+    /// The supervised main agent, which fold runs when the project's `[main] supervised` setting is on; nobody starts it.
+    Main,
 }
 
 impl From<Role> for WorkerRole {
@@ -158,6 +160,7 @@ impl From<Role> for WorkerRole {
             Role::ReviewLead => Self::ReviewLead,
             Role::TaskWorker => Self::TaskWorker,
             Role::Reviewer => Self::Reviewer,
+            Role::Main => Self::Main,
         }
     }
 }
@@ -169,6 +172,7 @@ impl From<WorkerRole> for Role {
             WorkerRole::ReviewLead => Self::ReviewLead,
             WorkerRole::TaskWorker => Self::TaskWorker,
             WorkerRole::Reviewer => Self::Reviewer,
+            WorkerRole::Main => Self::Main,
         }
     }
 }

@@ -524,3 +524,29 @@ async fn fld_claude_notes_that_a_person_uses_the_project() {
     registry.close().await.unwrap();
     guard.stop().await;
 }
+
+#[tokio::test]
+async fn fld_claude_refuses_a_second_main_agent_where_fold_runs_the_supervised_one() {
+    let host = Host::new().await;
+    let config = ProjectPaths::new(&host.root).config();
+    std::fs::write(&config, "[main]\nsupervised = true\n").unwrap();
+
+    let output = fld_claude(&host, &[], &host.root).await;
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "claude did not run");
+    let stderr = text(&output.stderr);
+    assert!(
+        stderr.contains(
+            "main_supervised: fold runs the main agent of this project as a supervised worker"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("hint: talk to the main agent in the fold web app"),
+        "{stderr}"
+    );
+    assert!(
+        daemons(&host.default_socket()).is_empty(),
+        "the refusal starts no daemon"
+    );
+}

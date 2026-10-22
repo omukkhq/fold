@@ -982,7 +982,7 @@ fn starter_agent(started_by: &str) -> Option<AgentName> {
 }
 
 /// Reads only what the event's rule needs.
-async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError> {
+pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext, StoreError> {
     let mut ctx = PushContext::default();
     let kind = event.event_type;
     if kind == fold_core::events::types::MESSAGE_SENT {

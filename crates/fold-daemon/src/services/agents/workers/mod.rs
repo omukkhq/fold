@@ -455,7 +455,7 @@ impl AgentService {
                             .into());
                         }
                     }
-                    Role::Reviewer => {}
+                    Role::Reviewer | Role::Main => {}
                 }
                 limits::check_running(
                     tx,
@@ -741,6 +741,11 @@ fn binding_area(
             }
             Ok(Some(own.clone()))
         }
+        // `can_start_worker` refuses every start of the supervised main before its binding is read.
+        Role::Main => Err(invalid(
+            "fold starts the supervised main agent itself",
+            "set supervised = true under [main] in .fold/config.toml",
+        )),
         Role::Reviewer => {
             if no_proposals || !no_tasks || request.area.is_some() {
                 return Err(invalid(

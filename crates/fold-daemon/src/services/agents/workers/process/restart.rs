@@ -3,18 +3,22 @@ use std::sync::atomic::Ordering;
 
 use fold_core::dag::Dag;
 use fold_core::readiness::{Candidate, ready_order, unblock_count};
+use fold_core::requests::RequestState;
 use fold_core::roles::{
-    CatchUpFacts, FLD_MISSING, Role, StartFacts, catch_up_turn, first_turn, needs_restart,
+    CatchUpFacts, FLD_MISSING, MainCatchUp, Role, StartFacts, catch_up_turn, first_turn,
+    main_catch_up_turn, needs_restart,
 };
-use fold_core::{AgentName, WorkerName, WorkerState};
+use fold_core::{AgentName, AreaName, RequestId, WorkerName, WorkerState};
 use fold_store::agents::{self, WorkerProcessRow};
 use fold_store::reviews::{self, ProposalRow, ProposalState};
 use fold_store::tasks::LabelRow;
-use fold_store::{StoreError, tasks};
+use fold_store::tasks::requests;
+use fold_store::{StoreError, messages, tasks};
 
 use super::{Supervisor, lock, resume, reviewer_batch};
 use crate::services::agents::AgentError;
 use crate::services::agents::workers::code_of;
+use crate::services::projects::load_config;
 
 /// The turn a worker that was working gets after a daemon restart resumed its session.
 pub const RESTART_TURN: &str = "fold restarted while you were working. Check your claims and your workspace, then continue your work.";
@@ -59,6 +63,7 @@ impl Supervisor {
         tokio::spawn(self.clone().resume_owed_send_backs());
         tokio::spawn(self.clone().resume_owed_gate_runs());
         tokio::spawn(self.clone().resume_owed_messages());
+        tokio::spawn(self.clone().catch_up_main());
         Ok(())
     }
 
@@ -97,6 +102,12 @@ impl Supervisor {
     ) -> Result<(), AgentError> {
         if self.waits_for_answer(row).await? {
             return Ok(());
+        }
+        if row.role == Role::Main {
+            let config = load_config(&self.inner.paths).await?;
+            if self.main_refusal(&config).is_some() {
+                return self.end_unallowed_main(row).await;
+            }
         }
         let now = self.inner.clock.now();
         self.inner
@@ -184,6 +195,7 @@ impl Supervisor {
         tokio::spawn(self.clone().resume_owed_send_backs());
         tokio::spawn(self.clone().resume_owed_gate_runs());
         tokio::spawn(self.clone().resume_owed_messages());
+        tokio::spawn(self.clone().catch_up_main());
         Ok(())
     }
 
@@ -243,7 +255,11 @@ impl Supervisor {
     }
 
     /// The work that waits for a lead, see [`catch_up_turn`]. A claim hides its task or proposal only while its worker runs or is among `kept`, the workers the same start runs again. A read that fails is logged and names nothing, so the lead still runs.
-    async fn catch_up(&self, row: &WorkerProcessRow, kept: &BTreeSet<AgentName>) -> Option<String> {
+    pub(super) async fn catch_up(
+        &self,
+        row: &WorkerProcessRow,
+        kept: &BTreeSet<AgentName>,
+    ) -> Option<String> {
         match self.waiting_for(row, kept).await {
             Ok(text) => text,
             Err(error) => {
@@ -271,28 +287,31 @@ impl Supervisor {
                 let Some(area) = agents::find_area(read, area).await? else {
                     return Ok(None);
                 };
-                let in_area =
-                    |labels: &[LabelRow]| labels.iter().any(|label| label.name == area.label);
-                let snapshot = tasks::ready_snapshot(read).await?;
-                let held = tasks::held_todo(read).await?;
-                let dag = Dag::from_edges(snapshot.edges);
-                let candidates: Vec<Candidate> = snapshot
-                    .candidates
-                    .iter()
-                    .filter(|task| in_area(&task.labels))
-                    .map(|task| (task.id, task.created_at))
-                    .chain(
-                        held.iter()
-                            .filter(|task| in_area(&task.labels) && !holds(&task.holder))
-                            .map(|task| (task.id, task.created_at)),
-                    )
-                    .map(|(task, created_at)| Candidate {
-                        task,
-                        unblock_count: unblock_count(task, &dag, &snapshot.statuses),
-                        created_at,
-                    })
+                (ready_in_area(read, &area.label, &holds).await?, Vec::new())
+            }
+            Role::Main => {
+                let Some(area) = agents::find_area(read, &AreaName::main()).await? else {
+                    return Ok(None);
+                };
+                let tasks = ready_in_area(read, &area.label, &holds).await?;
+                let filter = requests::RequestFilter {
+                    state: Some(RequestState::Open),
+                    ..requests::RequestFilter::default()
+                };
+                let mut conn = read.acquire().await?;
+                let mut waiting: Vec<RequestId> = requests::list(&mut conn, &filter)
+                    .await?
+                    .into_iter()
+                    .filter(|request| request.drafter.is_none())
+                    .map(|request| request.id)
                     .collect();
-                (ready_order(&candidates), Vec::new())
+                waiting.reverse();
+                let unread = messages::unread_count(&mut *conn, row.agent_id).await?;
+                return Ok(main_catch_up_turn(&MainCatchUp {
+                    tasks: &tasks,
+                    requests: &waiting,
+                    unread,
+                }));
             }
             Role::ReviewLead => {
                 let open = reviews::list_proposals(read, Some(ProposalState::Open), None).await?;
@@ -343,6 +362,35 @@ impl Supervisor {
             instructions: None,
         }))
     }
+}
+
+/// The ready tasks of the area of `label` in the ready order, with the Todo tasks whose claim a worker holds that `holds` says no longer runs.
+async fn ready_in_area(
+    read: &fold_store::SqlitePool,
+    label: &fold_core::LabelName,
+    holds: &impl Fn(&WorkerName) -> bool,
+) -> Result<Vec<fold_core::TaskId>, StoreError> {
+    let in_area = |labels: &[LabelRow]| labels.iter().any(|row| row.name == *label);
+    let snapshot = tasks::ready_snapshot(read).await?;
+    let held = tasks::held_todo(read).await?;
+    let dag = Dag::from_edges(snapshot.edges);
+    let candidates: Vec<Candidate> = snapshot
+        .candidates
+        .iter()
+        .filter(|task| in_area(&task.labels))
+        .map(|task| (task.id, task.created_at))
+        .chain(
+            held.iter()
+                .filter(|task| in_area(&task.labels) && !holds(&task.holder))
+                .map(|task| (task.id, task.created_at)),
+        )
+        .map(|(task, created_at)| Candidate {
+            task,
+            unblock_count: unblock_count(task, &dag, &snapshot.statuses),
+            created_at,
+        })
+        .collect();
+    Ok(ready_order(&candidates))
 }
 
 /// An open proposal whose current version has no verdict and nothing its author must change first.

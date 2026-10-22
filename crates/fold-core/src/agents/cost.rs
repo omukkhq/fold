@@ -134,7 +134,7 @@ pub struct CostReport {
     pub first_turn_at: Option<Timestamp>,
     /// Every role in [`Role::ALL`] order, a role without a turn with nothing.
     pub by_role: Vec<(Role, Amount)>,
-    /// The areas of the leads and the task workers, and `None` for the review lead and the reviewers, who work for every area; the most expensive first.
+    /// The areas of the leads and the task workers, and `None` for the review lead, the reviewers and the supervised main, who work for every area; the most expensive first.
     pub by_area: Vec<(Option<AreaName>, Amount)>,
     /// The most expensive first.
     pub by_model: Vec<(Option<String>, Amount)>,
@@ -144,10 +144,10 @@ pub struct CostReport {
     pub tasks: Vec<TaskCost>,
 }
 
-/// The area a turn counts for in the split by area: reviewers and the review lead review every area's work, so they have none.
+/// The area a turn counts for in the split by area: reviewers and the review lead review every area's work, and the supervised main plans for all of them, so they have none.
 fn area_of(group: &TurnGroup) -> Option<AreaName> {
     match group.role {
-        Role::ReviewLead | Role::Reviewer => None,
+        Role::ReviewLead | Role::Reviewer | Role::Main => None,
         Role::AreaLead | Role::TaskWorker => group.area.clone(),
     }
 }

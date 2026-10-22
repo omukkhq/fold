@@ -23,7 +23,9 @@ import {
   heldBatch,
   isPausedWorker,
   isEmptyTeam,
+  isSupervisedMain,
   mainAgentName,
+  mainNote,
   mainPill,
   noticeStep,
   ownedTasks,
@@ -91,6 +93,7 @@ describe("pills", () => {
     expect(roleName("review_lead")).toBe("Review lead");
     expect(roleName("task_worker")).toBe("Task worker");
     expect(roleName("reviewer")).toBe("Reviewer");
+    expect(roleName("main")).toBe("Main agent");
   });
 
   it("takes the agent of a worker actor", () => {
@@ -443,6 +446,76 @@ describe("teamGroups", () => {
     expect(hasNoLeads(groups)).toBe(false);
     expect(isEmptyTeam(groups)).toBe(false);
     expect(mainAgentName(groups)).toBe("main");
+  });
+
+  it("puts the supervised main in the main group with a lead's controls", () => {
+    const groups = teamGroups(
+      input({
+        human: "tanim",
+        agents: [agent("main"), agent("web-lead")],
+        workers: workerList({
+          areas,
+          workers: [
+            workerProcess("main", {
+              role: "main",
+              area: null,
+              state: "idle",
+              started_by: "fold",
+              previous_sessions: [
+                {
+                  session_id: "11111111-2222-4333-8444-555555555555",
+                  reason: "handoff",
+                  ended_at: 1,
+                },
+              ],
+            }),
+            workerProcess("web-lead", { state: "idle" }),
+          ],
+        }),
+      }),
+    );
+    expect(groups.map((g) => g.key)).toEqual(["main", "area:web", "area:api"]);
+    const [main, web] = groups;
+    expect(main?.rows).toHaveLength(1);
+    expect(main?.rows[0]).toMatchObject({
+      name: "main",
+      role: "Main agent",
+      roleLine: "Main agent · supervised by fold · 1 earlier session",
+      pill: { label: "idle", tone: "idle" },
+      bound: { kind: "text", text: "-" },
+      stop: "stop",
+      restart: true,
+      supervised: true,
+      session: { short: "0f8e2c1a" },
+    });
+    expect(web?.rows.map((r) => r.name)).toEqual(["web-lead"]);
+    expect(main && isSupervisedMain(main)).toBe(true);
+    expect(main && mainNote(main)).toBe(
+      "supervised by fold · answers in the web app",
+    );
+    expect(web && isSupervisedMain(web)).toBe(false);
+    expect(hasNoLeads(groups)).toBe(false);
+    expect(mainAgentName(groups)).toBe("main");
+
+    const stopped = teamGroups(
+      input({
+        workers: workerList({
+          workers: [
+            workerProcess("main", {
+              role: "main",
+              area: null,
+              state: "stopped",
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(stopped[0]?.rows[0]).toMatchObject({ stop: null, restart: true });
+    const interactive = teamGroups(input({ agents: [agent("main")] }));
+    expect(interactive[0] && isSupervisedMain(interactive[0])).toBe(false);
+    expect(interactive[0] && mainNote(interactive[0])).toBe(
+      "your terminal session",
+    );
   });
 
   it("words the bound column of workers with nothing bound", () => {

@@ -434,7 +434,7 @@ async fn acceptance_11_the_main_agent_runs_the_team_from_a_request_to_three_comm
                 assert_eq!(row.state, WorkerState::Stopped, "{}", row.agent);
                 assert_eq!(row.exit_code, Some(0), "{}", row.agent);
             }
-            Role::AreaLead | Role::ReviewLead => {
+            Role::AreaLead | Role::ReviewLead | Role::Main => {
                 assert!(row.state.is_running(), "{} keeps running", row.agent);
             }
         }

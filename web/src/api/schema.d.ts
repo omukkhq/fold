@@ -4717,7 +4717,7 @@ export interface components {
          * @description The kinds of worker fold runs.
          * @enum {string}
          */
-        WorkerRole: "area_lead" | "review_lead" | "task_worker" | "reviewer";
+        WorkerRole: "area_lead" | "review_lead" | "task_worker" | "reviewer" | "main";
         WorkerWorkspace: {
             /**
              * @description The revision the workspace is based on.

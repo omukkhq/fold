@@ -9,7 +9,7 @@ use super::PolicyDenied;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Starter {
     Human,
-    /// The main worker of the agent with the `main` tag: the user's own interactive session, which `fld claude` starts. Without that agent there is no main agent.
+    /// The main worker of the agent with the `main` tag: the user's own interactive session, which `fld claude` starts, or the supervised worker of role `main` that fold runs in its place. Without that agent there is no main agent.
     MainAgent,
     /// The main worker of an agent that fold does not supervise and that lacks the `main` tag, such as a session opened by hand.
     Unsupervised,
@@ -34,6 +34,7 @@ impl Starter {
                 None => Starter::Unsupervised,
                 Some((Role::AreaLead, Some(area))) => Starter::AreaLead(area),
                 Some((Role::ReviewLead, _)) => Starter::ReviewLead,
+                Some((Role::Main, _)) => Starter::MainAgent,
                 Some((Role::AreaLead, None) | (Role::TaskWorker | Role::Reviewer, _)) => {
                     Starter::ShortLived
                 }
@@ -98,7 +99,7 @@ pub fn can_set_worker_limits(starter: &Starter) -> Result<(), PolicyDenied> {
     }
 }
 
-/// The main agent or a named human starts the leads; an area lead starts the task workers of its own area; the review lead starts the reviewers. A subagent worker, a short-lived worker and a lead of another kind start nothing.
+/// The main agent or a named human starts the leads; an area lead starts the task workers of its own area; the review lead starts the reviewers. A subagent worker, a short-lived worker and a lead of another kind start nothing, and nobody starts the supervised main: fold runs it when the project's setting says so.
 pub fn can_start_worker(starter: &Starter, role: Role) -> Result<(), PolicyDenied> {
     match (role, starter) {
         (Role::AreaLead | Role::ReviewLead, Starter::Human | Starter::MainAgent)
@@ -121,6 +122,11 @@ pub fn can_start_worker(starter: &Starter, role: Role) -> Result<(), PolicyDenie
             code: codes::WORKER_START_DENIED,
             message: "only the review lead can start a reviewer",
             hint: "ask the review lead to call start_worker",
+        }),
+        (Role::Main, _) => Err(PolicyDenied {
+            code: codes::WORKER_START_DENIED,
+            message: "fold starts the supervised main agent itself",
+            hint: "set supervised = true under [main] in .fold/config.toml; fold then runs the main agent and starts it for its work",
         }),
     }
 }
@@ -331,6 +337,31 @@ mod tests {
 
     fn area(name: &str) -> AreaName {
         AreaName::parse(name).unwrap()
+    }
+
+    #[test]
+    fn the_supervised_main_acts_as_the_main_agent_and_nobody_starts_it() {
+        assert_eq!(
+            Starter::of(&agent("main"), Some((Role::Main, None))),
+            Starter::MainAgent
+        );
+        assert_eq!(
+            Starter::of(&agent("main/sub"), Some((Role::Main, None))),
+            Starter::Subagent
+        );
+        for starter in [
+            Starter::Human,
+            Starter::MainAgent,
+            Starter::AreaLead(area("web")),
+            Starter::ReviewLead,
+            Starter::System,
+        ] {
+            let refused = can_start_worker(&starter, Role::Main).unwrap_err();
+            assert_eq!(refused.code(), codes::WORKER_START_DENIED);
+            assert!(refused.hint().contains("[main]"));
+        }
+        assert!(can_stop_worker(&Starter::Human, Role::Main, None).is_ok());
+        assert!(can_stop_worker(&Starter::ReviewLead, Role::Main, None).is_err());
     }
 
     #[test]

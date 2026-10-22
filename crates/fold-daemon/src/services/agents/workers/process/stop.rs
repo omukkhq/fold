@@ -403,7 +403,9 @@ impl Supervisor {
                             }
                             fold_core::Role::TaskWorker => waiting.get(&row.id),
                             fold_core::Role::Reviewer => missing.get(&row.id),
-                            fold_core::Role::AreaLead | fold_core::Role::ReviewLead => None,
+                            fold_core::Role::AreaLead
+                            | fold_core::Role::ReviewLead
+                            | fold_core::Role::Main => None,
                         };
                         open == Some(&0)
                     })

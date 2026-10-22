@@ -269,14 +269,31 @@ impl AgentService {
             return Err(FoldError::from(denied).into());
         }
         let session_id = ctx.session_id;
+        // A session that `fld claude` starts asks for the tag in its handshake from outside every worker's process tree; the supervised main's own adapter runs inside its process tree.
+        let interactive_main = origin == TagOrigin::Handshake
+            && ctx.peer == SessionPeer::Unsupervised
+            && tags.iter().any(Tag::is_main);
+        let gate = self.workers.as_ref().filter(|_| interactive_main);
+        if let Some(supervisor) = gate {
+            supervisor.enter_interactive_main(session_id, name)?;
+        }
         let now = self.clock.now();
         let mut buffer = EventBuffer::new();
-        let (registered, started_at) = self
+        let written = self
             .store
             .write(async |tx| {
                 register_agent_in(tx, &mut buffer, session_id, name, tags, origin, now).await
             })
-            .await?;
+            .await;
+        let (registered, started_at) = match written {
+            Ok(written) => written,
+            Err(error) => {
+                if let Some(supervisor) = gate {
+                    supervisor.leave_interactive_main(session_id);
+                }
+                return Err(error);
+            }
+        };
         self.bus.publish(buffer);
         ctx.agent = Some(name.clone());
         self.push.restore(name, started_at).await;
@@ -490,6 +507,9 @@ impl AgentService {
             })
             .await?;
         self.bus.publish(buffer);
+        if let Some(supervisor) = &self.workers {
+            supervisor.leave_interactive_main(ctx.session_id);
+        }
         if let Some((agent, started_at)) = last {
             self.push.clear_registered_by(&agent, started_at).await;
         }
@@ -524,6 +544,9 @@ impl AgentService {
             .await?;
         self.bus.publish(buffer);
         self.push.clear_all();
+        if let Some(supervisor) = &self.workers {
+            supervisor.clear_interactive_main();
+        }
         Ok(ended)
     }
 }
@@ -573,7 +596,7 @@ async fn register_agent_in(
     if tags.iter().any(Tag::is_main) {
         let supervised = agents::find_worker_process(tx.conn(), name)
             .await?
-            .is_some();
+            .is_some_and(|row| row.role != fold_core::Role::Main);
         let holders: Vec<i64> = agents::all_tags(tx.conn())
             .await?
             .into_iter()

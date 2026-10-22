@@ -111,7 +111,7 @@ async fn lead_of(
     let lead = match worker.role {
         Role::TaskWorker => area_lead(tx, task, worker).await?,
         Role::Reviewer => agents::review_lead(tx.conn()).await?,
-        Role::AreaLead | Role::ReviewLead => None,
+        Role::AreaLead | Role::ReviewLead | Role::Main => None,
     };
     match lead {
         Some(lead) => Ok(Some(lead)),

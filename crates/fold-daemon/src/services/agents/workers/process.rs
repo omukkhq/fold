@@ -22,6 +22,7 @@ mod fresh;
 mod gate;
 mod launch;
 mod lines;
+mod main;
 mod message;
 mod questions;
 mod refresh;
@@ -185,6 +186,10 @@ struct Inner {
     answering: Mutex<HashSet<AgentName>>,
     /// The workers whose start for a message is under way, so two events start one.
     message_starts: Mutex<HashSet<AgentName>>,
+    /// Who runs the main agent now: the interactive main sessions and a start of the supervised main.
+    main_gate: Mutex<main::MainGate>,
+    /// While a start of the supervised main is under way, the turns that came meanwhile, for its process.
+    main_waking: Mutex<Option<Vec<String>>>,
 }
 
 impl Drop for Inner {
@@ -244,6 +249,8 @@ impl Supervisor {
                 unreachable_owed: AtomicBool::new(false),
                 answering: Mutex::new(HashSet::new()),
                 message_starts: Mutex::new(HashSet::new()),
+                main_gate: Mutex::new(main::MainGate::default()),
+                main_waking: Mutex::new(None),
             }),
         };
         let receiver = supervisor.inner.bus.subscribe();

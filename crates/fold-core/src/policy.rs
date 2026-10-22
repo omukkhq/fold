@@ -56,9 +56,9 @@ impl AgentStanding {
         role: None,
     };
 
-    /// The user's own session, which `fld claude` starts with the `main` tag. While no agent has the tag there is no main agent, and a session opened by hand without a role decides nothing.
+    /// The user's own session, which `fld claude` starts with the `main` tag, or the supervised main, which fold runs with the tag. While no agent has the tag there is no main agent, and a session opened by hand without a role decides nothing.
     pub fn is_main_agent(self) -> bool {
-        self.holds_main
+        self.holds_main || self.role == Some(Role::Main)
     }
 
     /// Approving, rejecting and integrating decide a proposal's fate. The main agent and the review lead act for the user, and a reviewer reviews for the review lead that started it; an area lead and a task worker only comment and ask for changes.
@@ -141,7 +141,7 @@ pub fn can_claim_task<'a>(
             message: "an area lead claims only a task of its own area",
             hint: "call get_task to see the task's labels, and start a task worker with start_worker for a task of your area",
         }),
-        Some(Role::ReviewLead) | None => Err(PolicyDenied {
+        Some(Role::ReviewLead | Role::Main) | None => Err(PolicyDenied {
             code: codes::ORCHESTRATOR_REQUIRED,
             message: "only the lead of the task's area or the main agent claims a task",
             hint: "ask the lead of the task's area to start a task worker for it with start_worker",
@@ -177,7 +177,7 @@ pub enum TagOrigin {
     RegisterTool,
 }
 
-/// The main agent is the user's own interactive session, which `fld claude` starts with the `main` tag in its adapter's handshake. So a worker that fold started (`supervised`) never takes `main`, a `register_agent` call never gives it to an agent that lacks it (`holds_main`), and while another agent holds it (`held_by_other`) nobody else takes it. The database holds the last rule too, with a unique index on the tag.
+/// The main agent is the user's own interactive session, which `fld claude` starts with the `main` tag in its adapter's handshake, or the supervised main, which fold gives the tag when it first starts it. So a worker that fold started in another role (`supervised`) never takes `main`, a `register_agent` call never gives it to an agent that lacks it (`holds_main`), and while another agent holds it (`held_by_other`) nobody else takes it. The database holds the last rule too, with a unique index on the tag.
 pub fn can_take_main_tag(
     origin: TagOrigin,
     holds_main: bool,
@@ -639,7 +639,8 @@ mod tests {
             .into_iter()
             .filter(|role| supervised(*role).decides_reviews())
             .collect();
-        assert_eq!(deciders, [Role::ReviewLead, Role::Reviewer]);
+        assert_eq!(deciders, [Role::ReviewLead, Role::Reviewer, Role::Main]);
+        assert!(supervised(Role::Main).is_main_agent());
         assert!(MAIN.decides_reviews());
         assert!(!UNSUPERVISED.decides_reviews());
     }

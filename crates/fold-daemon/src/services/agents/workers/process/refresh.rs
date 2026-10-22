@@ -3,9 +3,9 @@ use std::sync::atomic::Ordering;
 use fold_core::events::types;
 use fold_core::roles::{
     HANDOFF_REQUEST, RefreshFacts, SUMMARY_ITEMS, SummaryProposal, SummaryTask, handoff_due,
-    handoff_overdue, refresh_turn,
+    handoff_overdue, handoff_reask_due, refresh_turn,
 };
-use fold_core::{AgentName, AreaName, EventActor, NewEvent, WorkerState};
+use fold_core::{AgentName, AreaName, EventActor, NewEvent, Role, WorkerState};
 use fold_store::agents::{self, ProcessEnd, SessionEnd, WorkerProcessRow};
 use fold_store::{StoreError, messages};
 use serde_json::json;
@@ -67,7 +67,11 @@ impl Supervisor {
             return Ok(());
         }
         if let Some(asked) = agents::handoff_asked(&mut *conn, row.id).await? {
-            if handoff_overdue(asked, row.turns) {
+            if row.role == Role::Main {
+                if handoff_reask_due(asked, row.turns) {
+                    self.send_turn(agent, HANDOFF_REQUEST);
+                }
+            } else if handoff_overdue(asked, row.turns) {
                 self.refresh_soon(agent);
             }
             return Ok(());
@@ -88,14 +92,19 @@ impl Supervisor {
             .write(async |tx| agents::set_handoff_asked(tx, row.id, row.turns, now).await)
             .await?;
         if asked {
-            let input = lock(&self.inner.running)
-                .get(agent)
-                .map(|run| run.input.clone());
-            if let Some(input) = input {
-                let _ = input.send(Input::Turn(HANDOFF_REQUEST.to_owned()));
-            }
+            self.send_turn(agent, HANDOFF_REQUEST);
         }
         Ok(())
+    }
+
+    /// Sends `text` as the next user turn of the agent's running process, if it has one.
+    pub(super) fn send_turn(&self, agent: &AgentName, text: &str) {
+        let input = lock(&self.inner.running)
+            .get(agent)
+            .map(|run| run.input.clone());
+        if let Some(input) = input {
+            let _ = input.send(Input::Turn(text.to_owned()));
+        }
     }
 
     /// Starts the lead again in a new session on a task of its own, once at a time per lead. The task never runs inside the reader of the lead's output, because the refresh waits for that reader to see the process exit.

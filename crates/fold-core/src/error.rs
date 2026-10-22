@@ -183,6 +183,9 @@ define_codes! {
     ASK_CLOSE_DENIED = "ask_close_denied",
     PROJECT_WORKERS_RUNNING = "project_workers_running",
     RECIPIENT_NOT_READER = "recipient_not_reader",
+    MAIN_SUPERVISED = "main_supervised",
+    MAIN_INTERACTIVE = "main_interactive",
+    MAIN_NOT_SUPERVISED = "main_not_supervised",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

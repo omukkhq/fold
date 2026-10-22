@@ -11,7 +11,13 @@ import { RowErrorText, StatePill, StepText } from "./parts";
 import { RestartWorker } from "./RestartWorker";
 import { SessionLine } from "./SessionLine";
 import { StopWorker } from "./StopWorker";
-import { areaNote, type TeamGroup, type TeamRow } from "./team";
+import {
+  areaNote,
+  isSupervisedMain,
+  mainNote,
+  type TeamGroup,
+  type TeamRow,
+} from "./team";
 
 const HEADS = [
   "Worker",
@@ -173,8 +179,8 @@ function GroupHead({
       <>
         <span className="font-semibold text-text">Main agent</span>
         <span className="text-text-muted">
-          your terminal session ·{" "}
-          {human === null ? null : (
+          {mainNote(group)} ·{" "}
+          {human === null || isSupervisedMain(group) ? null : (
             <>
               <PersonName name={`human:${human}`} slot="teamNote" /> ·{" "}
             </>
