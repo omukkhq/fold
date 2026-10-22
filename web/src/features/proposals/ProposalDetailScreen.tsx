@@ -256,7 +256,7 @@ export function ProposalDetailScreen({
     pending,
     failure: shown?.place === "inline" ? shown.text : null,
     integrateBlock: queued === null ? integrateBlock(data, main) : QUEUED_BLOCK,
-    approveBlock: approveBlock(data),
+    approveBlock: approveBlock(data, human),
     onApprove: () => {
       review.mutate(humanVerdict(acted, "approve", APPROVE_BODY));
     },

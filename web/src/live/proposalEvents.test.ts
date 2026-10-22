@@ -148,4 +148,26 @@ describe("proposal keys and the event stream", () => {
     applyEvent(client, slug, event("checks.started", { data: {} }));
     expect(stale()).toEqual([`${slug}/proposals`, `${slug}/board`]);
   });
+
+  it("an integration run refreshes every proposal page, since a batch's run shows on each member", () => {
+    for (const type of ["checks.started", "checks.finished"]) {
+      client = new QueryClient();
+      for (const key of watched) client.setQueryData(key, { cached: true });
+      applyEvent(
+        client,
+        slug,
+        event(type, {
+          proposal: "P-5",
+          data: { run: "cr-9", stage: "integration", batch: "rb-2" },
+        }),
+      );
+      expect(stale(), type).toEqual(
+        expect.arrayContaining([
+          `${slug}/proposals`,
+          `${slug}/proposal/P-4`,
+          `${slug}/proposal/P-5`,
+        ]),
+      );
+    }
+  });
 });
