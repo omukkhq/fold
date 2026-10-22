@@ -64,7 +64,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** The Claude Code stop hook of an agent: how many messages the agent has not acknowledged. Socket only. A process under a worker names only that worker's own agent. */
+        /** The Claude Code stop hook of an agent: how many messages the agent has not acknowledged, and the text that carries those it has not seen yet, which marks them delivered as an inbox read does. Socket only. A process under a worker names only that worker's own agent. */
         post: operations["hook_stop"];
         delete?: never;
         options?: never;
@@ -4016,6 +4016,8 @@ export interface components {
             cwd: string;
         };
         StopUnread: {
+            /** @description The hook's reason to keep the turn going: the messages that no inbox, notice or wait has shown the agent yet, oldest first, up to 16 KB of text, then how many more there are. The messages in it count as delivered. `null` when there is none. */
+            reason: string | null;
             /**
              * Format: int64
              * @description The unacknowledged messages of every worker of the agent.
@@ -5068,7 +5070,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The agent's unread count */
+            /** @description The agent's unread count and the messages */
             200: {
                 headers: {
                     [name: string]: unknown;

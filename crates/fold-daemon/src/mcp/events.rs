@@ -13,7 +13,7 @@ use rmcp::service::RequestContext;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::error::{from_agent, from_events};
+use super::error::{from_agent, from_events, from_message};
 use super::parse;
 use super::{FoldServer, FooterPart, FooterSource};
 use crate::services::agents::{AgentService, SessionContext};
@@ -77,7 +77,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             WAIT_FOR_EVENTS,
-            "Block until a matching event arrives after your cursor, then return it with every match committed with it and move your cursor to the last one, past the events a filter left out. A new message to you also ends the wait, whatever the filter says; the result then names it, so call get_inbox. Use it instead of polling get_events.",
+            "Block until a matching event arrives after your cursor, then return it with every match committed with it and move your cursor to the last one, past the events a filter left out. A new message to you also ends the wait, whatever the filter says; the result then carries your new messages in `inbox`, so call get_inbox only when it says more wait. Use it instead of polling get_events.",
             schema_for_type::<WaitForEventsInput>(),
         ),
     ]
@@ -112,8 +112,8 @@ fn page_json(page: &EventPage) -> Value {
     })
 }
 
-/// The page of a wait, with the messages in it that wait for the worker and the call that reads them.
-fn wait_json(page: &EventPage, waiting: &[WaitingMessage]) -> Value {
+/// The page of a wait, with the messages in it that wait for the worker and, in `inbox`, the worker's messages that nothing had shown yet, as many as fit, which the wait has marked delivered. Without that text the hint names the call that reads them.
+fn wait_json(page: &EventPage, waiting: &[WaitingMessage], inbox: Option<String>) -> Value {
     let mut result = page_json(page);
     if waiting.is_empty() {
         return result;
@@ -123,6 +123,10 @@ fn wait_json(page: &EventPage, waiting: &[WaitingMessage]) -> Value {
         .map(|message| message.id.to_string())
         .collect();
     result["messages"] = json!(ids);
+    if let Some(inbox) = inbox {
+        result["inbox"] = json!(inbox);
+        return result;
+    }
     result["hint"] = json!(if waiting.iter().all(|message| message.own) {
         "a message waits for you; call get_inbox"
     } else {
@@ -208,7 +212,21 @@ pub async fn wait_for_events(
                     .waiting_messages(worker, &page)
                     .await
                     .map_err(from_events)?;
-                return Ok(wait_json(&page, &waiting));
+                let inbox = if waiting.is_empty() {
+                    None
+                } else {
+                    match server.messages.carry_for_wait(worker).await {
+                        Ok(inbox) => inbox,
+                        Err(error) => {
+                            tracing::warn!(
+                                code = from_message(error).code(),
+                                "could not carry the messages that ended a wait"
+                            );
+                            None
+                        }
+                    }
+                };
+                return Ok(wait_json(&page, &waiting, inbox));
             }
             WaitStep::TimedOut => return Ok(json!({"timed_out": true})),
             WaitStep::Tick(count) => {

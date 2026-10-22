@@ -589,9 +589,13 @@ async fn a_filtered_wait_ends_for_a_new_message_to_the_waiter_only() {
     assert_eq!(woke["events"][0]["type"], json!("message.sent"));
     assert_eq!(woke["messages"], json!([sent.to_string()]));
     assert_eq!(
-        woke["hint"],
-        json!("a message waits for you; call get_inbox")
+        woke["inbox"],
+        json!(format!(
+            "fold: 1 new message. [{sent} from human:ana] \"are you there?\""
+        )),
+        "the wait carries the message, so no get_inbox call is needed"
     );
+    assert_eq!(woke.get("hint"), None, "{woke}");
     let footer = reached.content.last().unwrap().as_text().unwrap();
     assert!(footer.text.starts_with("fold: 1 unread"), "{}", footer.text);
     assert_eq!(fx.cursor(&backend).await, woke["next"].as_u64().unwrap());
@@ -630,8 +634,10 @@ async fn a_main_worker_wakes_for_its_workers_and_a_child_only_for_itself() {
     let main = body(&tokio::time::timeout(WAIT, main).await.unwrap().unwrap());
     assert_eq!(main["messages"], json!([to_sub.to_string()]));
     assert_eq!(
-        main["hint"],
-        json!("a message waits for a worker of your agent; call get_inbox with include_workers")
+        main["inbox"],
+        json!(format!(
+            "fold: 1 new message. [{to_sub} to backend/sub from human:ana] \"are you there?\""
+        ))
     );
     let child = call(
         &backend,
@@ -640,9 +646,9 @@ async fn a_main_worker_wakes_for_its_workers_and_a_child_only_for_itself() {
     )
     .await;
     assert_eq!(
-        child["messages"],
-        json!([to_sub.to_string()]),
-        "the main worker's wait leaves the child's cursor alone"
+        child,
+        json!({"timed_out": true}),
+        "the main worker's wait carried the message to the child, as its inbox read with include_workers would"
     );
     let child = wait_in_background(
         &backend,
@@ -672,11 +678,20 @@ async fn a_main_worker_and_its_child_waiting_together_both_wake_for_the_childs_m
     let to_sub = send_as_human(&fx, "backend/sub").await;
     let main = body(&tokio::time::timeout(WAIT, main).await.unwrap().unwrap());
     let child = body(&tokio::time::timeout(WAIT, child).await.unwrap().unwrap());
-    assert_eq!(main["messages"], json!([to_sub.to_string()]), "{main}");
-    assert_eq!(child["messages"], json!([to_sub.to_string()]), "{child}");
+    let carried: Vec<&str> = [&main, &child]
+        .into_iter()
+        .filter_map(|result| result.get("inbox")?.as_str())
+        .collect();
     assert_eq!(
-        child["hint"],
-        json!("a message waits for you; call get_inbox")
+        carried.len(),
+        1,
+        "one of the two waits carries the message into the session: {main} {child}"
+    );
+    assert!(
+        carried[0].starts_with(&format!("fold: 1 new message. [{to_sub} "))
+            && carried[0].ends_with("from human:ana] \"are you there?\""),
+        "{}",
+        carried[0]
     );
 }
 
@@ -697,6 +712,13 @@ async fn concurrent_waits_of_a_main_worker_and_its_child_each_wake_for_their_own
     let to_sub = send_as_human(&fx, "backend/sub").await;
     let child = body(&tokio::time::timeout(WAIT, child).await.unwrap().unwrap());
     assert_eq!(child["messages"], json!([to_sub.to_string()]), "{child}");
+    assert_eq!(
+        child["inbox"],
+        json!(format!(
+            "fold: 1 new message. [{to_sub} from human:ana] \"are you there?\""
+        )),
+        "{child}"
+    );
     let again = call(
         &backend,
         "wait_for_events",
@@ -704,9 +726,9 @@ async fn concurrent_waits_of_a_main_worker_and_its_child_each_wake_for_their_own
     )
     .await;
     assert_eq!(
-        again["messages"],
-        json!([to_sub.to_string()]),
-        "the child's wait left the message to it for the main worker"
+        again,
+        json!({"timed_out": true}),
+        "the child's wait took the message to it, so the main worker's wait finds nothing new"
     );
 }
 
@@ -1275,7 +1297,10 @@ async fn a_wait_names_no_message_the_worker_has_read_or_sent() {
     let woke = call(&backend, "wait_for_events", unfiltered).await;
     assert_eq!(woke["messages"], json!([unread.to_string()]));
     assert_eq!(
-        woke["hint"],
-        json!("a message waits for you; call get_inbox")
+        woke["inbox"],
+        json!(format!(
+            "fold: 1 new message. [{unread} from human:ana] \"are you there?\""
+        )),
+        "the worker's own message to its child is never carried back to it"
     );
 }

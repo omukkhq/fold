@@ -188,7 +188,7 @@ impl Supervisor {
     /// A session got its turn about `owed`: the delivery line shows the message waiting for the worker, as for a running worker, until the worker reads its inbox.
     async fn record_told(&self, agent: &AgentName, owed: &OwedMessage) {
         let now = self.inner.clock.now();
-        match record_pushed(&self.inner.store, agent, owed.message, now).await {
+        match record_pushed(&self.inner.store, agent, Some(owed.message), &[], now).await {
             Ok(0) => {}
             Ok(_) => {
                 let event = LiveEvent::new(

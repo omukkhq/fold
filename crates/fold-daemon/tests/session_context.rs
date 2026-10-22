@@ -126,6 +126,10 @@ impl Fixture {
     }
 
     async fn send_to_frontend(&self) {
+        self.send_text_to_frontend("text").await;
+    }
+
+    async fn send_text_to_frontend(&self, body: &str) {
         let messages = MessageService::new(
             self.handle.store.clone(),
             self.project.registry().clone(),
@@ -137,7 +141,7 @@ impl Fixture {
                 &agent("backend"),
                 SendMessage {
                     to: Address::parse_all(&["frontend"]).unwrap(),
-                    body: MessageBody::parse("text").unwrap(),
+                    body: MessageBody::parse(body).unwrap(),
                     task: None,
                     proposal: None,
                     reply_to: None,
@@ -302,12 +306,20 @@ async fn the_stop_route_counts_unread_messages_and_refuses_a_directory_outside_t
     let body = json!({"cwd": fixture.root, "agent": "frontend"});
     assert_eq!(
         post(socket.clone(), path, &body).await,
-        (StatusCode::OK, json!({"unread": 0}))
+        (StatusCode::OK, json!({"unread": 0, "reason": null}))
     );
     fixture.send_to_frontend().await;
     assert_eq!(
         post(socket.clone(), path, &body).await,
-        (StatusCode::OK, json!({"unread": 1}))
+        (
+            StatusCode::OK,
+            json!({"unread": 1, "reason": "fold: 1 new message. [m-1 from backend] \"text\""})
+        )
+    );
+    assert_eq!(
+        post(socket.clone(), path, &body).await,
+        (StatusCode::OK, json!({"unread": 1, "reason": null})),
+        "the carried message counts as delivered and stays unread until acknowledged"
     );
     let (status, answer) = post(
         socket.clone(),
@@ -333,6 +345,46 @@ async fn the_stop_route_counts_unread_messages_and_refuses_a_directory_outside_t
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(answer["error"]["code"], codes::INVALID_NAME);
+}
+
+#[tokio::test]
+async fn the_stop_route_carries_what_fits_and_leaves_the_rest_undelivered() {
+    let fixture = Fixture::new().await;
+    let socket = socket_router(fixture.state.clone());
+    let path = "/api/v1/hooks/stop";
+    let body = json!({"cwd": fixture.root, "agent": "frontend"});
+    let long = "x".repeat(7000);
+    for _ in 0..3 {
+        fixture.send_text_to_frontend(&long).await;
+    }
+    let entry = |n: u32| format!(" [m-{n} from backend] \"{long}\"");
+
+    let (_, first) = post(socket.clone(), path, &body).await;
+    assert_eq!(
+        first["reason"],
+        json!(format!(
+            "fold: 3 new messages.{}{} 1 more message: call get_inbox.",
+            entry(1),
+            entry(2)
+        ))
+    );
+    let (_, second) = post(socket.clone(), path, &body).await;
+    assert_eq!(
+        second["reason"],
+        json!(format!("fold: 1 new message.{}", entry(3))),
+        "only the carried messages were marked delivered"
+    );
+    assert_eq!(second["unread"], json!(3));
+
+    fixture.send_text_to_frontend(&"y".repeat(20_000)).await;
+    let (_, cut) = post(socket, path, &body).await;
+    let reason = cut["reason"].as_str().unwrap();
+    assert!(reason.len() <= 16 * 1024, "{}", reason.len());
+    assert!(
+        reason.ends_with("y\" (cut: read m-4 whole with get_thread)"),
+        "{}",
+        &reason[reason.len() - 80..]
+    );
 }
 
 #[tokio::test]

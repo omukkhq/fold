@@ -155,11 +155,12 @@ fn stop(options: &HookOptions, agent: &str) -> Result<Option<Value>, String> {
     if unread == 0 {
         return Ok(None);
     }
+    let reason = match answer["reason"].as_str() {
+        Some(reason) => reason.to_owned(),
+        None => format!("{unread} unread fold messages. Call get_inbox."),
+    };
     // A Stop hook keeps the turn going only through a block decision; Claude Code then sets `stop_hook_active` on the next stop.
-    Ok(Some(json!({
-        "decision": "block",
-        "reason": format!("{unread} unread fold messages. Call get_inbox."),
-    })))
+    Ok(Some(json!({"decision": "block", "reason": reason})))
 }
 
 /// Claude Code reads a deny decision from this hook even where no permission rule could express it: its path rules cannot deny a folder but one folder below it, and they would bind the human's own sessions too, while this hook runs for agents only.

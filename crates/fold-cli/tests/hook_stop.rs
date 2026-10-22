@@ -115,9 +115,20 @@ async fn unread_messages_keep_the_turn_going_once() {
     let output = hook(&host, Some(&socket), Some("frontend"), &input).await;
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(text(&output.stderr), "");
+    let answer: serde_json::Value = serde_json::from_str(text(&output.stdout)).unwrap();
+    assert_eq!(
+        answer,
+        json!({
+            "decision": "block",
+            "reason": "fold: 2 new messages. [m-1 from backend] \"text\" [m-2 from backend] \"text\"",
+        }),
+        "the reason carries the messages, so the agent needs no get_inbox call"
+    );
+    let output = hook(&host, Some(&socket), Some("frontend"), &input).await;
     assert_eq!(
         text(&output.stdout),
-        "{\"decision\":\"block\",\"reason\":\"2 unread fold messages. Call get_inbox.\"}\n"
+        "{\"decision\":\"block\",\"reason\":\"2 unread fold messages. Call get_inbox.\"}\n",
+        "carried messages count as delivered; unacknowledged ones still keep the turn going"
     );
 
     let continued = stop_input(&host.root, true);

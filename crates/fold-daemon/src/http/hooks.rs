@@ -53,6 +53,9 @@ pub struct StopHook {
 pub struct StopUnread {
     /// The unacknowledged messages of every worker of the agent.
     pub unread: u64,
+    /// The hook's reason to keep the turn going: the messages that no inbox, notice or wait has shown the agent yet, oldest first, up to 16 KB of text, then how many more there are. The messages in it count as delivered. `null` when there is none.
+    #[schema(required = true)]
+    pub reason: Option<String>,
 }
 
 /// The Claude Code session-start hook of an agent: stores the session's inbox socket for the session push when `socket` and `token` are both present, and keeps it in the daemon's own file of the agent, outside the project folder, for a restarted daemon; the inbox of an agent the project does not know yet waits in the daemon's memory until a session's adapter registers the agent. Then it returns the session's context. Socket only. A process under a worker names only that worker's own agent.
@@ -90,14 +93,14 @@ pub async fn session_start(
     Ok(Json(SessionStartContext { context }))
 }
 
-/// The Claude Code stop hook of an agent: how many messages the agent has not acknowledged. Socket only. A process under a worker names only that worker's own agent.
+/// The Claude Code stop hook of an agent: how many messages the agent has not acknowledged, and the text that carries those it has not seen yet, which marks them delivered as an inbox read does. Socket only. A process under a worker names only that worker's own agent.
 #[utoipa::path(
     post,
     path = "/api/v1/hooks/stop",
     operation_id = "hook_stop",
     request_body = StopHook,
     responses(
-        (status = 200, description = "The agent's unread count", body = StopUnread),
+        (status = 200, description = "The agent's unread count and the messages", body = StopUnread),
         (status = 400, description = "The body or the agent name is not valid", body = ErrorEnvelope),
         (status = 403, description = "`worker_peer_refused`: a process under a worker, or under a check that fold runs, names an agent it may not act as", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, no registered project holds `cwd`, or the agent is not registered (`agent_not_registered`)", body = ErrorEnvelope),
@@ -115,7 +118,15 @@ pub async fn stop(
     let handle = projects::open_for_dir(&state, Path::new(&request.cwd)).await?;
     peers::require_peer_agent(&state.projects, pid(peer), &handle.slug, &agent).await?;
     let unread = handle.agents().unread_of(&agent).await?;
-    Ok(Json(StopUnread { unread }))
+    let reason = if unread == 0 {
+        None
+    } else {
+        handle
+            .messages(&state.registry)
+            .carry_for_stop(&agent)
+            .await?
+    };
+    Ok(Json(StopUnread { unread, reason }))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

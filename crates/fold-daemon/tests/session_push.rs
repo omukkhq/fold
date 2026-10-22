@@ -17,7 +17,7 @@ use fold_daemon::push::{
 };
 use fold_daemon::services::agents::{AgentError, AgentService, SessionContext};
 use fold_daemon::services::events::{BusMessage, EventBuffer, EventBus};
-use fold_daemon::services::messages::{MessageService, SendMessage};
+use fold_daemon::services::messages::{MessageService, RecipientView, SendMessage};
 use fold_daemon::services::tasks::{CreateTask, TaskService};
 use fold_store::testing::TestProject;
 use fold_store::{StoreError, projects};
@@ -69,14 +69,28 @@ impl Inbox {
 /// The bytes the session's inbox expects for one notice.
 #[cfg(test)]
 fn wire(token: &str, text: &str) -> String {
+    let content = serde_json::to_string(&format!(
+        "<cross-session-message from-name=\"fold\">\n{text}\n</cross-session-message>"
+    ))
+    .unwrap();
     format!(
-        "{{\"type\":\"auth\",\"token\":\"{token}\"}}\n{{\"type\":\"user\",\"priority\":\"next\",\"message\":{{\"role\":\"user\",\"content\":\"<cross-session-message from-name=\\\"fold\\\">\\n{text}\\n</cross-session-message>\"}}}}\n"
+        "{{\"type\":\"auth\",\"token\":\"{token}\"}}\n{{\"type\":\"user\",\"priority\":\"next\",\"message\":{{\"role\":\"user\",\"content\":{content}}}}}\n"
     )
 }
 
 #[cfg(test)]
 fn inbox_text(message: u32) -> String {
     format!("fold: message m-{message} arrived. Call get_inbox.")
+}
+
+/// The notice about message `message` that carries `messages`, each its number, sender and body.
+#[cfg(test)]
+fn carried(message: u32, messages: &[(u32, &str, &str)]) -> String {
+    let mut text = format!("fold: message m-{message} arrived.");
+    for (number, from, body) in messages {
+        text.push_str(&format!(" [m-{number} from {from}] \"{body}\""));
+    }
+    text
 }
 
 #[cfg(test)]
@@ -287,7 +301,35 @@ async fn a_committed_message_posts_the_auth_line_then_the_notice() {
         .send("frontend", &["backend"], "the API is ready")
         .await;
 
-    assert_eq!(backend.next().await, wire(TOKEN, &inbox_text(1)));
+    assert_eq!(
+        backend.next().await,
+        wire(TOKEN, &carried(1, &[(1, "frontend", "the API is ready")]))
+    );
+}
+
+#[tokio::test]
+async fn a_message_to_every_agent_is_carried_to_each_recipient() {
+    let fixture = Fixture::new().await;
+    let mut backend = fixture.inbox("backend", "backend.sock").await;
+    let mut docs = fixture.inbox("docs", "docs.sock").await;
+
+    fixture.send("lead", &["all"], "freeze main").await;
+
+    let text = carried(1, &[(1, "lead", "freeze main")]);
+    assert_eq!(backend.next().await, wire(TOKEN, &text));
+    assert_eq!(docs.next().await, wire(TOKEN, &text));
+    let times = delivered(
+        &fixture,
+        fold_core::MessageId::from_number(1).unwrap(),
+        |times| times.iter().filter(|(_, at)| at.is_some()).count() == 2,
+    )
+    .await;
+    let reached: Vec<&str> = times
+        .iter()
+        .filter(|(_, at)| at.is_some())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(reached, ["backend", "docs"], "{times:?}");
 }
 
 #[tokio::test]
@@ -298,7 +340,10 @@ async fn an_event_for_another_agent_posts_nothing() {
     fixture.send("frontend", &["backend"], "for backend").await;
     fixture.send("frontend", &["docs"], "for docs").await;
 
-    assert_eq!(docs.next().await, wire(TOKEN, &inbox_text(2)));
+    assert_eq!(
+        docs.next().await,
+        wire(TOKEN, &carried(2, &[(2, "frontend", "for docs")]))
+    );
 }
 
 #[tokio::test]
@@ -311,7 +356,20 @@ async fn the_actors_own_event_posts_nothing() {
         .await;
     fixture.send("backend", &["frontend"], "from backend").await;
 
-    assert_eq!(frontend.next().await, wire(TOKEN, &inbox_text(2)));
+    assert_eq!(
+        frontend.next().await,
+        wire(
+            TOKEN,
+            &carried(
+                2,
+                &[
+                    (1, "frontend/ui", "note to self"),
+                    (2, "backend", "from backend")
+                ]
+            )
+        ),
+        "the own message posts no notice and waits for the next one"
+    );
 }
 
 #[tokio::test]
@@ -405,7 +463,10 @@ async fn the_proposal_and_task_rules_read_their_context() {
         )
         .await;
     fixture.send("frontend", &["lead"], "sentinel").await;
-    assert_eq!(lead.next().await, wire(TOKEN, &inbox_text(1)));
+    assert_eq!(
+        lead.next().await,
+        wire(TOKEN, &carried(1, &[(1, "frontend", "sentinel")]))
+    );
 }
 
 #[tokio::test]
@@ -425,7 +486,10 @@ async fn a_refused_connection_drops_the_socket_and_the_notice_silently() {
 
     fixture.send("frontend", &["backend"], "first").await;
 
-    assert_eq!(live.next().await, wire(TOKEN, &inbox_text(1)));
+    assert_eq!(
+        live.next().await,
+        wire(TOKEN, &carried(1, &[(1, "frontend", "first")]))
+    );
     let targets = fixture.targets.clone();
     until(|| targets.sockets(&name("backend")) == vec![live.path.clone()]).await;
 }
@@ -444,7 +508,10 @@ async fn a_failed_post_keeps_the_socket_and_the_next_notice_is_attempted() {
         fixture.attempt(&backend.path).await,
         Some(std::io::ErrorKind::PermissionDenied)
     );
-    assert_eq!(watcher.next().await, wire(TOKEN, &inbox_text(1)));
+    assert_eq!(
+        watcher.next().await,
+        wire(TOKEN, &carried(1, &[(1, "frontend", "first")]))
+    );
     assert_eq!(
         fixture.targets.sockets(&name("backend")),
         vec![backend.path.clone()]
@@ -453,7 +520,14 @@ async fn a_failed_post_keeps_the_socket_and_the_next_notice_is_attempted() {
 
     fixture.send("frontend", &["backend"], "second").await;
 
-    assert_eq!(backend.next().await, wire(TOKEN, &inbox_text(2)));
+    assert_eq!(
+        backend.next().await,
+        wire(
+            TOKEN,
+            &carried(2, &[(1, "frontend", "first"), (2, "frontend", "second")])
+        ),
+        "a message whose notice failed stays undelivered and comes with the next one"
+    );
 }
 
 #[cfg(test)]
@@ -512,9 +586,22 @@ async fn the_same_path_twice_keeps_one_target_with_the_newer_token() {
 
     fixture.send("frontend", &["backend"], "once").await;
 
-    assert_eq!(backend.next().await, wire(newer, &inbox_text(1)));
+    assert_eq!(
+        backend.next().await,
+        wire(newer, &carried(1, &[(1, "frontend", "once")]))
+    );
+    delivered(
+        &fixture,
+        fold_core::MessageId::from_number(1).unwrap(),
+        |times| times.iter().all(|(_, at)| at.is_some()),
+    )
+    .await;
     fixture.send("frontend", &["backend"], "twice").await;
-    assert_eq!(backend.next().await, wire(newer, &inbox_text(2)));
+    assert_eq!(
+        backend.next().await,
+        wire(newer, &carried(2, &[(2, "frontend", "twice")])),
+        "a carried message is not carried again"
+    );
 }
 
 #[tokio::test]
@@ -892,7 +979,10 @@ async fn no_log_line_carries_the_token_or_a_message_body() {
     }
 
     fixture.send("frontend", &["backend", "docs"], body).await;
-    assert_eq!(backend.next().await, wire(token, &inbox_text(1)));
+    assert_eq!(
+        backend.next().await,
+        wire(token, &carried(1, &[(1, "frontend", body)]))
+    );
     let targets = fixture.targets.clone();
     until(|| targets.sockets(&name("docs")) == vec![blocked.path.clone()]).await;
     until(|| captured.text().contains("session push dropped a notice")).await;
@@ -969,7 +1059,10 @@ async fn a_session_that_started_before_its_agent_existed_gets_notices_once_the_a
     assert_eq!(mode_of(&file), 0o600);
     assert_eq!(mode_of(&files_dir(&fixture)), 0o700);
     fixture.send("backend", &["newcomer"], "welcome").await;
-    assert_eq!(inbox.next().await, wire(TOKEN, &inbox_text(1)));
+    assert_eq!(
+        inbox.next().await,
+        wire(TOKEN, &carried(1, &[(1, "backend", "welcome")]))
+    );
 
     // The target counts from the session's start, so the end of that session drops it and its file.
     fixture.agents.end_session(&ctx).await.unwrap();
@@ -1002,7 +1095,10 @@ async fn a_restart_restores_the_kept_inbox_and_a_gone_socket_drops_its_file() {
     fixture
         .send("frontend", &["backend"], "after the restart")
         .await;
-    assert_eq!(inbox.next().await, wire(TOKEN, &inbox_text(1)));
+    assert_eq!(
+        inbox.next().await,
+        wire(TOKEN, &carried(1, &[(1, "frontend", "after the restart")]))
+    );
     assert_eq!(fixture.attempt(&inbox.path).await, None);
 
     // The session ends: its socket goes, and the first post that finds it gone drops the target and the file.
@@ -1254,13 +1350,37 @@ async fn pushed(
     message: fold_core::MessageId,
     done: impl Fn(&[(String, Option<i64>)]) -> bool,
 ) -> Vec<(String, Option<i64>)> {
+    recipient_times(fixture, message, |r| r.pushed_at, done).await
+}
+
+/// [`pushed`] for the delivery times.
+#[cfg(test)]
+async fn delivered(
+    fixture: &Fixture,
+    message: fold_core::MessageId,
+    done: impl Fn(&[(String, Option<i64>)]) -> bool,
+) -> Vec<(String, Option<i64>)> {
+    recipient_times(fixture, message, |r| r.delivered_at, done).await
+}
+
+#[cfg(test)]
+async fn recipient_times(
+    fixture: &Fixture,
+    message: fold_core::MessageId,
+    time: impl Fn(&RecipientView) -> Option<fold_core::Timestamp>,
+    done: impl Fn(&[(String, Option<i64>)]) -> bool,
+) -> Vec<(String, Option<i64>)> {
     tokio::time::timeout(WAIT, async {
         loop {
             let thread = fixture.messages.thread_view(message).await.unwrap();
-            let times: Vec<(String, Option<i64>)> = thread.messages[0]
+            let times: Vec<(String, Option<i64>)> = thread
+                .messages
+                .iter()
+                .find(|m| m.id == message)
+                .unwrap()
                 .recipients
                 .iter()
-                .map(|r| (r.name.to_string(), r.pushed_at.map(|at| at.as_millis())))
+                .map(|r| (r.name.to_string(), time(r).map(|at| at.as_millis())))
                 .collect();
             if done(&times) {
                 return times;
@@ -1310,7 +1430,10 @@ async fn a_notice_that_gets_through_records_its_push_time_on_the_agents_rows() {
         )
         .await
         .unwrap();
-    assert_eq!(backend.next().await, wire(TOKEN, &inbox_text(1)));
+    assert_eq!(
+        backend.next().await,
+        wire(TOKEN, &carried(1, &[(1, "human:ana", "who hears this")]))
+    );
     let mut told = Vec::new();
     while told.len() < 2 {
         let message = tokio::time::timeout(WAIT, bus.recv())
@@ -1358,4 +1481,18 @@ async fn a_notice_that_gets_through_records_its_push_time_on_the_agents_rows() {
         "a socket post and a worker's stdin record it; a failed post and a gone process do not"
     );
     assert_eq!(posted.lock().unwrap().len(), 1);
+    let times = delivered(&fixture, sent.id, |times| {
+        times.iter().filter(|(_, at)| at.is_some()).count() == 2
+    })
+    .await;
+    assert_eq!(
+        times,
+        [
+            ("backend".to_owned(), Some(now)),
+            ("docs".to_owned(), Some(now)),
+            ("lead".to_owned(), None),
+            ("frontend/ui".to_owned(), None),
+        ],
+        "a carried message counts as delivered only where its notice got through"
+    );
 }

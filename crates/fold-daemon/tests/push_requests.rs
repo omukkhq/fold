@@ -17,7 +17,7 @@ async fn nothing_before_a_message(h: &Harness, inbox: &mut FakeInbox, agent: &st
         "review"
     };
     let message = h.send(from, &[agent], "ping").await;
-    expect(inbox, &message_notice(&message)).await;
+    expect(inbox, &message_notice(&message, from, "ping")).await;
 }
 
 #[cfg(test)]
@@ -62,7 +62,11 @@ async fn each_request_step_pushes_the_agent_that_acts_next() {
             json!({"to": ["frontend"], "body": "Which board?", "request": "RQ-1"}),
         )
         .await;
-    expect(&mut frontend, &message_notice(&asked)).await;
+    expect(
+        &mut frontend,
+        &message_notice(&asked, "backend on RQ-1", "Which board?"),
+    )
+    .await;
 
     h.call("backend", "submit_request_draft", draft("RQ-1"))
         .await;

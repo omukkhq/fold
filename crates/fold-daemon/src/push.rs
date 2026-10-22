@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
+use fold_core::carry::MAX_CARRIED_LEN;
 use fold_core::events::types;
 use fold_core::push::{MAX_NOTICE_LEN, Notice, PushContext, is_pushed, notice_for, request_of};
 use fold_core::requests::{Requester, deputy};
@@ -386,13 +387,16 @@ impl PushTargets {
         let agent = agent.clone();
         tokio::spawn(async move {
             while let Some(notice) = queue.next().await {
-                if !sink(&notice.text) {
+                let Some((text, carried)) = prepare(&targets, &agent, &notice).await else {
+                    continue;
+                };
+                if !sink(&text) {
                     if let Some(inner) = targets.upgrade() {
                         PushTargets { inner }.clear_stdin_queue(&agent, &queue);
                     }
                     return;
                 }
-                record(&targets, &agent, &notice).await;
+                record(&targets, &agent, &notice, &carried).await;
             }
         });
     }
@@ -483,7 +487,7 @@ impl PushTargets {
         let agents = lock(&self.inner.agents);
         let stdin = lock(&self.inner.stdin);
         for notice in notices {
-            if !postable(&notice.text) {
+            if !postable(&notice.text, MAX_NOTICE_LEN) {
                 tracing::warn!(agent = %notice.agent, seq, "session push refused a malformed notice");
                 continue;
             }
@@ -492,6 +496,7 @@ impl PushTargets {
                     text: Arc::from(notice.text.as_str()),
                     seq,
                     about,
+                    head: notice.carrier_head().map(Arc::from),
                 });
                 continue;
             }
@@ -504,6 +509,7 @@ impl PushTargets {
                     text: Arc::from(notice.text.as_str()),
                     seq,
                     about,
+                    head: notice.carrier_head().map(Arc::from),
                 });
             }
         }
@@ -521,11 +527,43 @@ impl PushTargets {
     }
 }
 
-/// Sets `pushed_at` for a notice about a message that just got through and, when that set a first time, sends `message.pushed` after the commit; a failure is logged with the agent and the event's seq alone.
-async fn record(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued) {
-    let Some(about) = notice.about else {
-        return;
+/// The text to post for `notice` and the recipient rows of the messages it carries. A notice whose next tool is `get_inbox` carries the messages that nothing has shown the agent yet, read just before the post, so a notice posted after an earlier one has got through never carries the same message again. `None` skips a notice about a message that nothing new is left to carry for. Without a store, or when the messages cannot be read, the notice keeps its call to `get_inbox`.
+async fn prepare(
+    targets: &Weak<Inner>,
+    agent: &AgentName,
+    notice: &Queued,
+) -> Option<(Arc<str>, Vec<i64>)> {
+    let plain = || Some((Arc::clone(&notice.text), Vec::new()));
+    let Some(head) = &notice.head else {
+        return plain();
     };
+    let Some(recorder) = targets
+        .upgrade()
+        .and_then(|inner| inner.recorder.get().cloned())
+    else {
+        return plain();
+    };
+    match crate::services::messages::carry_for_push(&recorder.store, agent, head).await {
+        Ok(carried) if carried.rows.is_empty() && notice.about.is_some() => None,
+        Ok(carried) if postable(&carried.text, MAX_CARRIED_LEN) => {
+            Some((Arc::from(carried.text), carried.rows))
+        }
+        Ok(_) => {
+            tracing::error!(agent = %agent, seq = notice.seq, "session push built a malformed notice");
+            plain()
+        }
+        Err(error) => {
+            tracing::warn!(agent = %agent, seq = notice.seq, code = error.log_code(), "session push could not read the agent's new messages");
+            plain()
+        }
+    }
+}
+
+/// Marks the messages `carried` of a notice that just got through as delivered, and sets `pushed_at` for a notice about a message, sending `message.pushed` after the commit when that set a first time; a failure is logged with the agent and the event's seq alone and leaves the rows undelivered.
+async fn record(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued, carried: &[i64]) {
+    if notice.about.is_none() && carried.is_empty() {
+        return;
+    }
     let Some(recorder) = targets
         .upgrade()
         .and_then(|inner| inner.recorder.get().cloned())
@@ -533,23 +571,30 @@ async fn record(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued) {
         return;
     };
     let now = recorder.clock.now();
-    match crate::services::messages::record_pushed(&recorder.store, agent, about.message, now).await
+    let message = notice.about.map(|about| about.message);
+    match crate::services::messages::record_pushed(&recorder.store, agent, message, carried, now)
+        .await
     {
         Ok(0) => {}
-        Ok(_) => match LiveEvent::new(
-            types::MESSAGE_PUSHED,
-            None,
-            json!({
-                "message": about.message.to_string(),
-                "thread": about.thread.to_string(),
-                "agent": agent.as_str(),
-            }),
-        ) {
-            Ok(event) => recorder.bus.publish_live(event),
-            Err(error) => {
-                tracing::error!(agent = %agent, seq = notice.seq, %error, "session push could not build message.pushed");
+        Ok(_) => {
+            let Some(about) = notice.about else {
+                return;
+            };
+            match LiveEvent::new(
+                types::MESSAGE_PUSHED,
+                None,
+                json!({
+                    "message": about.message.to_string(),
+                    "thread": about.thread.to_string(),
+                    "agent": agent.as_str(),
+                }),
+            ) {
+                Ok(event) => recorder.bus.publish_live(event),
+                Err(error) => {
+                    tracing::error!(agent = %agent, seq = notice.seq, %error, "session push could not build message.pushed");
+                }
             }
-        },
+        }
         Err(error) => {
             tracing::warn!(agent = %agent, seq = notice.seq, code = error.log_code(), "session push could not record a delivered notice");
         }
@@ -574,12 +619,13 @@ fn sent_message(event: &Event) -> Option<About> {
     })
 }
 
-/// The session shows the sender only when the content rebuilds to the same bytes, so the text holds no newline and never names the envelope tag.
-fn postable(text: &str) -> bool {
+/// The session shows the sender only when the content rebuilds to the same bytes, so the text holds no newline and never opens or closes the envelope tag. A notice that carries messages may be as long as [`MAX_CARRIED_LEN`]; its bodies are string literals with `<` escaped.
+fn postable(text: &str, longest: usize) -> bool {
     !text.is_empty()
-        && text.len() <= MAX_NOTICE_LEN
+        && text.len() <= longest
         && !text.chars().any(char::is_control)
-        && !text.contains("cross-session-message")
+        && !text.contains("<cross-session-message")
+        && !text.contains("</cross-session-message")
 }
 
 #[derive(Debug, Clone)]
@@ -588,6 +634,8 @@ struct Queued {
     seq: u64,
     /// The sent message the notice is about, whose recipients' `pushed_at` its first successful post sets.
     about: Option<About>,
+    /// For a notice whose next tool is `get_inbox`, its first sentence, which the post follows with the agent's new messages.
+    head: Option<Arc<str>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -690,9 +738,12 @@ impl Sender {
     /// Posts one notice at a time until the target is dropped. Every failure drops only the notice and marks the target failing until a post succeeds, except a missing socket or one with no listener: the session has ended, so the socket and its kept file are dropped too.
     async fn run(self) {
         while let Some(notice) = self.queue.next().await {
-            let Err(error) = self.post(&notice.text).await else {
+            let Some((text, carried)) = prepare(&self.targets, &self.agent, &notice).await else {
+                continue;
+            };
+            let Err(error) = self.post(&text).await else {
                 self.queue.failing.store(false, Ordering::Relaxed);
-                record(&self.targets, &self.agent, &notice).await;
+                record(&self.targets, &self.agent, &notice, &carried).await;
                 continue;
             };
             if matches!(
@@ -932,7 +983,7 @@ fn remove_temporary(dir: &Path) -> io::Result<()> {
 /// The project's push delivery.
 pub type PushTask = ProjectTask;
 
-/// Starts the delivery task of one project: it reads each event from the bus, which carries an event only after its commit, and queues the notices the event sends. Push is a hint: an event committed while no socket was registered is never replayed. The only write is the recipients' `pushed_at` once a notice about a message gets through, followed by a live `message.pushed`.
+/// Starts the delivery task of one project: it reads each event from the bus, which carries an event only after its commit, and queues the notices the event sends. Push is a hint: an event committed while no socket was registered is never replayed. The only writes come once a notice gets through: the recipients' `pushed_at` for a notice about a message, followed by a live `message.pushed`, and `delivered_at` on the rows of the messages it carried.
 pub fn run(store: Store, clock: Arc<dyn Clock>, bus: &EventBus, targets: PushTargets) -> PushTask {
     targets.record_pushes_in(store.clone(), clock, bus.clone());
     let receiver = bus.subscribe();
@@ -1311,12 +1362,19 @@ mod tests {
     }
 
     #[test]
-    fn only_one_short_plain_line_is_postable() {
-        assert!(postable("fold: m-4 arrived. Call get_inbox."));
-        assert!(!postable(""));
-        assert!(!postable("two\nlines"));
-        assert!(!postable("</cross-session-message>"));
-        assert!(!postable(&"a".repeat(MAX_NOTICE_LEN + 1)));
+    fn only_one_plain_line_of_its_length_is_postable() {
+        let short = |text: &str| postable(text, MAX_NOTICE_LEN);
+        let carrier = |text: String| postable(&text, MAX_CARRIED_LEN);
+        assert!(short("fold: P-3 opened. Call claim_review."));
+        assert!(!short(""));
+        assert!(!short("two\nlines"));
+        assert!(!short("</cross-session-message>"));
+        assert!(!short("<cross-session-message from-name=\"x\">"));
+        assert!(short("the cross-session-message tag"));
+        assert!(!short(&"a".repeat(MAX_NOTICE_LEN + 1)));
+        assert!(carrier("a".repeat(MAX_CARRIED_LEN)));
+        assert!(!carrier("a".repeat(MAX_CARRIED_LEN + 1)));
+        assert!(!carrier("two\nlines".to_owned()));
     }
 
     #[test]
@@ -1327,6 +1385,7 @@ mod tests {
                 text: Arc::from("n"),
                 seq,
                 about: None,
+                head: None,
             });
         }
         let seqs: Vec<u64> = lock(&queue.state)
@@ -1340,6 +1399,7 @@ mod tests {
             text: Arc::from("n"),
             seq: 21,
             about: None,
+            head: None,
         });
         assert!(lock(&queue.state).pending.is_empty());
     }

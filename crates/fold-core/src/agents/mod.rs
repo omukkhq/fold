@@ -4,6 +4,7 @@ use thiserror::Error;
 
 use crate::error::{FoldError, codes};
 
+pub mod carry;
 pub mod cost;
 pub mod presence;
 pub mod push;
