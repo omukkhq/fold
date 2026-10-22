@@ -785,6 +785,9 @@ pub struct ProposalDetail {
     pub totals: ComparisonTotals,
     /// The check runs of the selected version, newest first, without their logs: the proposal-stage runs of exactly its files, then its integration runs.
     pub checks: Vec<checks::CheckRun>,
+    /// The check run in progress of an update of the proposal, which makes the next version when its checks pass; null when no update runs. It has no version yet, so it is not among `checks`, and while it goes the current version is neither approved nor integrated (`update_checks_running`).
+    #[schema(required = true, example = "cr-4")]
+    pub update_run: Option<String>,
     /// The review plan the open proposal waits in; null when it waits in none.
     #[schema(required = true)]
     pub review_plan: Option<ReviewPlanWait>,
@@ -842,6 +845,7 @@ impl From<service::ProposalView> for ProposalDetail {
                 .into_iter()
                 .map(checks::CheckRun::from)
                 .collect(),
+            update_run: view.update_run.map(|run| run.to_string()),
             review_plan: view.review_plan.map(ReviewPlanWait::from),
         }
     }

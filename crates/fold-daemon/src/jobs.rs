@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fold_core::checkpoint_policy::quiet_checkpoint_due;
-use fold_core::events::{EventType, types};
+use fold_core::events::{Event, EventType, types};
+use fold_core::reviews::checks::Purpose;
 use fold_core::{Actor, NewEvent, Timestamp, WorkspaceId, codes};
 use fold_store::{StoreError, workspaces};
 use fold_vcs::git::Git;
@@ -470,7 +471,8 @@ async fn integrate_project(
             received = events.recv() => received,
         };
         match received {
-            Ok(BusMessage::Durable(event)) if can_make_ready(event.event_type) => {}
+            Ok(BusMessage::Durable(event))
+                if can_make_ready(event.event_type) || ends_an_update(&event) => {}
             Err(RecvError::Lagged(_)) => {}
             Ok(_) => continue,
             Err(RecvError::Closed) => break,
@@ -496,6 +498,16 @@ fn can_make_ready(event_type: EventType) -> bool {
         types::MAIN_ADVANCED,
     ]
     .contains(&event_type)
+}
+
+/// The end of an update's proposal checks: while the run went, the approved current version waited for it, and a run that made no version leaves that version ready again. The end of any other run makes nothing ready.
+fn ends_an_update(event: &Event) -> bool {
+    event.event_type == types::CHECKS_FINISHED
+        && event
+            .data
+            .get("purpose")
+            .and_then(serde_json::Value::as_str)
+            == Some(Purpose::UpdateProposal.as_str())
 }
 
 async fn integrate_ready(
@@ -982,6 +994,35 @@ mod tests {
         assert!(can_make_ready(types::MAIN_ADVANCED));
         assert!(!can_make_ready(types::CHECKS_FINISHED));
         assert!(!can_make_ready(types::INTEGRATION_HELD));
+    }
+
+    #[test]
+    fn only_the_end_of_an_update_run_lets_its_approved_version_integrate() {
+        let event = |event_type, purpose: &str| Event {
+            seq: 1,
+            event_type,
+            actor: fold_core::EventActor::fold(),
+            task: None,
+            proposal: None,
+            workspace: None,
+            revision: None,
+            data: json!({"stage": "proposal", "purpose": purpose}),
+            created_at: Timestamp::EPOCH,
+        };
+        assert!(ends_an_update(&event(
+            types::CHECKS_FINISHED,
+            "update_proposal"
+        )));
+        for purpose in ["check", "create_proposal", "integrate", "review_fix"] {
+            assert!(
+                !ends_an_update(&event(types::CHECKS_FINISHED, purpose)),
+                "{purpose}"
+            );
+        }
+        assert!(!ends_an_update(&event(
+            types::CHECKS_STARTED,
+            "update_proposal"
+        )));
     }
 
     #[test]

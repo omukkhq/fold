@@ -317,7 +317,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_PROPOSAL,
-            "Read one proposal: versions, the evidence size, the task and its prerequisites, the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again) and the changed files. The short form gives evidence_chars for the evidence, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the task description and every whole body, such as before a review or when the task description matters.",
+            "Read one proposal: versions, the evidence size, the task and its prerequisites, the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again), update_run when an update of the proposal runs the checks of its next version (approve and integrate wait for its checks.finished) and the changed files. The short form gives evidence_chars for the evidence, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the task description and every whole body, such as before a review or when the task description matters.",
             schema_for_type::<GetProposalInput>(),
         ),
         Tool::new(
@@ -352,7 +352,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             SUBMIT_REVIEW,
-            "Review the version of a proposal you read, the version of your review checkout, with a verdict, a text and line comments. request_changes gives the turn to the author; reject closes the proposal. A version that is no longer current is refused with stale_version; an approve of a version whose integration checks failed is refused with invalid_request and the reason checks_failed until the author sends a new version. On a task of the area main only a human approves or rejects, or the main agent while the task has no human review mark, its own proposal included; any other agent gets main_area. The review lead gives no verdict and gets review_lead_delegates.",
+            "Review the version of a proposal you read, the version of your review checkout, with a verdict, a text and line comments. request_changes gives the turn to the author; reject closes the proposal. A version that is no longer current is refused with stale_version; an approve of a version whose integration checks failed is refused with invalid_request and the reason checks_failed until the author sends a new version, and an approve while an update of the proposal runs the checks of its next version (update_run in get_proposal) with update_checks_running: wait for checks.finished with wait_for_events, then review the new version. On a task of the area main only a human approves or rejects, or the main agent while the task has no human review mark, its own proposal included; any other agent gets main_area. The review lead gives no verdict and gets review_lead_delegates.",
             schema_for_type::<SubmitReviewInput>(),
         ),
         Tool::new(
@@ -362,7 +362,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             INTEGRATE_PROPOSAL,
-            "Integrate the current version of a proposal onto main; only the main agent, the review lead and its reviewers may. Refusals: stale_version, changes_requested, not_approved, human_approval_missing, prerequisites_not_done (the gates are not met), author_cannot_integrate (your agent wrote it), integrator_required, and integration_conflicted (the version conflicts with main; details list the files and kinds). When fold-checks.toml has integration checks, the result is queued: fold integrates the queued proposals one at a time in the order asked, after the integration checks pass on the merge with main; failed checks (result checks_failed when it ran at once) send the proposal back to its author, and until a new version the call is refused with invalid_request and the reason checks_failed. A second call while the version waits in the queue is refused with invalid_request and the reason integration_queued; get_proposal shows integration_queued. When fold itself cannot run the checks, it answers workspace_io with the reason fold_failed: nothing is sent back, and you integrate again once the fault is fixed. When fold-checks.toml on main itself is not valid, the integration stays queued until a revision of main fixes it. fold sends each result as a message.",
+            "Integrate the current version of a proposal onto main; only the main agent, the review lead and its reviewers may. Refusals: stale_version, changes_requested, not_approved, human_approval_missing, prerequisites_not_done (the gates are not met), author_cannot_integrate (your agent wrote it), integrator_required, and integration_conflicted (the version conflicts with main; details list the files and kinds). When fold-checks.toml has integration checks, the result is queued: fold integrates the queued proposals one at a time in the order asked, after the integration checks pass on the merge with main; failed checks (result checks_failed when it ran at once) send the proposal back to its author, and until a new version the call is refused with invalid_request and the reason checks_failed. While an update of the proposal runs the checks of its next version, the call is refused with update_checks_running. A second call while the version waits in the queue is refused with invalid_request and the reason integration_queued; get_proposal shows integration_queued. When fold itself cannot run the checks, it answers workspace_io with the reason fold_failed: nothing is sent back, and you integrate again once the fault is fixed. When fold-checks.toml on main itself is not valid, the integration stays queued until a revision of main fixes it. fold sends each result as a message.",
             schema_for_type::<IntegrateProposalInput>(),
         ),
         Tool::new(
@@ -654,6 +654,10 @@ fn view_json(view: &ProposalView, full: bool) -> Value {
             "removed": view.totals.removed_lines,
         },
     });
+    // An update's run has no version until its checks pass, so it is not among the version's checks; approve and integrate wait for it.
+    if let Some(run) = view.update_run {
+        value["update_run"] = json!(run);
+    }
     if full {
         value["evidence"] = json!(selected.evidence);
         value["task"]["description"] = json!(view.task.description.as_str());

@@ -1283,3 +1283,49 @@ async fn create_proposal_answers_with_the_run_and_wait_for_events_wakes_on_its_e
     assert_eq!(proposal["version"], "v1");
     assert_eq!(proposal["human_review"]["set_by"], "fold");
 }
+
+#[tokio::test]
+async fn an_approve_waits_while_an_update_runs_the_checks_of_the_next_version() {
+    let fx = Fixture::new().await;
+    let review = reviewer(&fx).await;
+    let author = fx.agent("frontend").await;
+    let gate = tempfile::tempdir().unwrap();
+    let go = gate.path().join("go");
+    let update = fx.updating_proposal(&author, &go).await;
+    let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(view["update_run"], json!(update.to_string()));
+    let held = err(
+        &review,
+        "submit_review",
+        json!({"id": "P-1", "version": 1, "verdict": "approve", "body": "ok"}),
+    )
+    .await;
+    assert_eq!(held["code"], "update_checks_running");
+    assert_eq!(held["details"]["run"], json!(update.to_string()));
+    let hint = held["hint"].as_str().unwrap();
+    assert!(hint.contains("wait_for_events"), "{hint}");
+    assert!(hint.contains("checks.finished"), "{hint}");
+    ok(
+        &review,
+        "submit_review",
+        json!({"id": "P-1", "version": 1, "verdict": "comment", "body": "reading"}),
+    )
+    .await;
+    std::fs::write(&go, "").unwrap();
+    let view = fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
+        let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
+        if view["current_version"] == "v2" {
+            Ok(view)
+        } else {
+            Err(view)
+        }
+    })
+    .await;
+    assert_eq!(view.get("update_run"), None);
+    ok(
+        &review,
+        "submit_review",
+        json!({"id": "P-1", "version": 2, "verdict": "approve", "body": "ok"}),
+    )
+    .await;
+}

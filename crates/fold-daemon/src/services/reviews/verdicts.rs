@@ -2,13 +2,15 @@ use fold_core::events::types;
 use fold_core::policy::{AgentStanding, ReviewTask};
 use fold_core::reviews::{Reviewer, Verdict};
 use fold_core::{
-    Actor, CommentId, FoldError, IdKind, NewEvent, ProposalId, ReviewBatchId, TaskId, codes, policy,
+    Actor, CheckRunId, CommentId, FoldError, IdKind, NewEvent, ProposalId, ReviewBatchId, TaskId,
+    codes, policy,
 };
 use fold_store::agents;
 use fold_store::reviews::{self, NewComment, ProposalRow, ReviewerRef, batches};
 use fold_store::{SqliteConnection, StoreError, WriteTx, counters, workspaces};
 use serde_json::json;
 
+use super::checks::running_update;
 use super::comments::{CommentInput, MAX_BODY_CHARS, check_ranges, check_shape};
 use super::integrate::checks_failed_refusal;
 use super::proposals::{ProposalSummary, Retirement, require_open, retire_proposal};
@@ -46,8 +48,11 @@ impl ReviewService {
         let read = self.store.read();
         let row = require_open(reviews::get_proposal(read, proposal).await?, proposal)?;
         let standing = agents::standing_of(read, actor).await?;
-        let task = review_task(&mut *read.acquire().await.map_err(StoreError::from)?, &row).await?;
-        verdict_gate(actor, standing, verdict, &row, task)?;
+        let mut conn = read.acquire().await.map_err(StoreError::from)?;
+        let task = review_task(&mut conn, &row).await?;
+        let update = running_update(&mut conn, row.task, proposal).await?;
+        drop(conn);
+        verdict_gate(actor, standing, verdict, &row, task, update)?;
         let target = reviews::review_target(read, proposal)
             .await?
             .ok_or(StoreError::Corrupt("proposal_versions.version"))?;
@@ -138,7 +143,8 @@ pub(super) async fn record_review(
     let reviewer = actor.event_actor();
     let standing = agents::standing_of(tx.conn(), actor).await?;
     let task = review_task(tx.conn(), row).await?;
-    let (by, suggested) = match verdict_gate(actor, standing, verdict, row, task)? {
+    let update = running_update(tx.conn(), row.task, proposal).await?;
+    let (by, suggested) = match verdict_gate(actor, standing, verdict, row, task, update)? {
         Reviewer::Agent(agent) => (
             ReviewerRef::Worker(worker_row(tx, agent).await?.id),
             record.scope,
@@ -368,26 +374,42 @@ pub(super) async fn review_task(
     })
 }
 
-/// `standing` is the acting agent's and `task` the facts of [`review_task`], read by the caller. An approval of a version whose integration checks failed is refused, as its integration is, until the author sends a new version.
+/// `standing` is the acting agent's, `task` the facts of [`review_task`] and `update` the run of [`running_update`], read by the caller. An approval of a version whose integration checks failed is refused, as its integration is, until the author sends a new version; an approval while an update of the proposal runs its checks waits for that run to end.
 pub(super) fn verdict_gate<'a>(
     actor: &'a Actor,
     standing: AgentStanding,
     verdict: Verdict,
     row: &ProposalRow,
     task: ReviewTask,
+    update: Option<CheckRunId>,
 ) -> Result<Reviewer<'a>, ReviewError> {
     if verdict == Verdict::Approve && row.checks_failed {
         return Err(checks_failed_refusal(row.id, row.current_version).into());
     }
-    policy::can_submit_verdict(actor, standing, verdict, &row.author, task).map_err(|denied| {
-        FoldError::from(denied)
-            .with_details([
+    let reviewer = policy::can_submit_verdict(actor, standing, verdict, &row.author, task)
+        .map_err(|denied| {
+            FoldError::from(denied).with_details([
                 ("proposal", json!(row.id.to_string())),
                 ("author", json!(row.author.as_str())),
                 ("verdict", json!(verdict.as_str())),
             ])
-            .into()
-    })
+        })?;
+    policy::can_review_while_updating(verdict, update.is_some())
+        .map_err(|denied| update_refusal(denied, row, update))?;
+    Ok(reviewer)
+}
+
+/// The refusal of an approval or an integration of `row`'s current version while the update run `update` goes, with the run to wait for.
+pub(super) fn update_refusal(
+    denied: policy::PolicyDenied,
+    row: &ProposalRow,
+    update: Option<CheckRunId>,
+) -> FoldError {
+    FoldError::from(denied).with_details([
+        ("proposal", json!(row.id.to_string())),
+        ("version", json!(row.current_version)),
+        ("run", json!(update.map(|run| run.to_string()))),
+    ])
 }
 
 /// `stale_version` unless `expected` is the current version. A version added after the reviewer read `expected` has other trees, so neither its verdict nor its line comments can be filed on it.
