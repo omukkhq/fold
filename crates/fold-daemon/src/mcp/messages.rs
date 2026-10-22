@@ -161,7 +161,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             ACKNOWLEDGE_MESSAGE,
-            "Mark messages as handled, so they leave your inbox and the unread count. Give every message you handled in one call. A reply with send_message reply_to already acknowledges the message it answers. With up_to, also every earlier message of the same worker.",
+            "Mark messages as handled, so they leave your inbox and the unread count. Give every message you handled in one call. A reply with send_message reply_to already acknowledges the message it answers when it was sent to you. With up_to, also every earlier message of the same worker.",
             schema_for_type::<AcknowledgeMessageInput>(),
         ),
         Tool::new(

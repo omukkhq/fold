@@ -268,7 +268,7 @@ impl MessageService {
         let view = self
             .store
             .write(async |tx| {
-                require_sender(tx, actor).await?;
+                let sender_worker = require_sender(tx, actor).await?;
                 let parent = match input.reply_to {
                     Some(parent) => Some(
                         messages::find(tx.conn(), parent)
@@ -326,10 +326,7 @@ impl MessageService {
                 };
                 let view = write_message(tx, &mut buffer, draft).await?;
                 // A reply also acknowledges the message it answers for a sender that received it.
-                if let (Actor::Agent(agent), Some(parent)) = (actor, parent) {
-                    let worker = actor_worker(tx.conn(), agent)
-                        .await?
-                        .ok_or_else(worker_not_found)?;
+                if let (Some(worker), Some(parent)) = (&sender_worker, parent) {
                     let changed =
                         fold_store::messages::acknowledge(tx, worker.id, parent.id, false, now)
                             .await?
@@ -608,15 +605,18 @@ pub(crate) async fn ask_humans_in_tx(
     write_message(tx, buffer, draft).await
 }
 
-/// An agent sends through a registered worker; a human or the system needs no row.
-async fn require_sender(tx: &mut WriteTx, actor: &Actor) -> Result<(), MessageError> {
+/// The registered worker an agent sends through; a human or the system needs no row and gets `None`.
+async fn require_sender(
+    tx: &mut WriteTx,
+    actor: &Actor,
+) -> Result<Option<agents::WorkerRow>, MessageError> {
     let Actor::Agent(agent) = actor else {
-        return Ok(());
+        return Ok(None);
     };
-    if actor_worker(tx.conn(), agent).await?.is_none() {
-        return Err(worker_not_found().into());
+    match actor_worker(tx.conn(), agent).await? {
+        Some(worker) => Ok(Some(worker)),
+        None => Err(worker_not_found().into()),
     }
-    Ok(())
 }
 
 async fn require_task(tx: &mut WriteTx, task: TaskId) -> Result<(), MessageError> {
