@@ -3,7 +3,7 @@ import { DiffViewer, type DiffViewerProps } from "@/features/diff/DiffViewer";
 import type { ChangedFilesState } from "./changedFilesState";
 import { FileTree } from "./FileTree";
 import { changeTree, folderPaths, toggleFolder, treeFiles } from "./folderTree";
-import { viewedText } from "./viewed";
+import { shownPath, viewedText } from "./viewed";
 
 export type ChangedFilesProps = Omit<
   DiffViewerProps,
@@ -12,7 +12,7 @@ export type ChangedFilesProps = Omit<
   state: ChangedFilesState;
 };
 
-/** The changed files of one comparison: the folder tree with its filter and viewed marks beside the diff viewer. */
+/** The changed files of one comparison: the folder tree with its filter and viewed marks beside the diff viewer. Selecting a file in the tree marks it viewed. */
 export function ChangedFiles({ state, ...viewer }: ChangedFilesProps) {
   const tree = changeTree(viewer.comparison.files);
   const paths = treeFiles(tree).map((f) => f.path);
@@ -37,7 +37,10 @@ export function ChangedFiles({ state, ...viewer }: ChangedFilesProps) {
           onCollapseAll={() => {
             state.setClosed(() => new Set(folderPaths(tree)));
           }}
-          onSelect={viewer.onSelectFile}
+          onSelect={(path) => {
+            state.selectFile(shownPath(viewer.comparison, path));
+            viewer.onSelectFile(path);
+          }}
         />
       }
       headExtra={(path) => (

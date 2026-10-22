@@ -1490,7 +1490,7 @@ describe("Proposal tabs", () => {
     expect(within(v2).queryByText("The checks could not be read.")).toBeNull();
   });
 
-  it("lists the changed files as folders that close, open, filter and mark the viewed files", async () => {
+  it("lists the changed files as folders that close, open, filter and mark the files the reader opens as viewed", async () => {
     window.localStorage.clear();
     const user = userEvent.setup();
     const { container } = renderAt("/p/demo/proposals/P-4?tab=changes");
@@ -1525,17 +1525,22 @@ describe("Proposal tabs", () => {
     expect(within(tree).getByText("No file matches.")).toBeTruthy();
     await user.clear(within(tree).getByLabelText("Files"));
     await user.click(within(tree).getByRole("button", { name: "Expand all" }));
-    expect(within(tree).getByText("0 of 1 viewed")).toBeTruthy();
-    await user.click(screen.getByRole("checkbox", { name: "Viewed" }));
+    const row = within(tree).getByRole("button", {
+      name: /0004_reports\.sql/,
+    });
     expect(within(tree).getByText("1 of 1 viewed")).toBeTruthy();
-    expect(
-      within(tree)
-        .getByRole("button", { name: /0004_reports\.sql/ })
-        .getAttribute("data-viewed"),
-    ).toBe("true");
+    expect(row.getAttribute("data-viewed")).toBe("true");
     expect(window.localStorage.getItem("fold.viewed.demo.P-4.base..v2")).toBe(
       JSON.stringify([SCHEMA]),
     );
+    await user.click(screen.getByRole("checkbox", { name: "Viewed" }));
+    expect(within(tree).getByText("0 of 1 viewed")).toBeTruthy();
+    expect(row.getAttribute("data-viewed")).toBeNull();
+    expect(window.localStorage.getItem("fold.viewed.demo.P-4.base..v2")).toBe(
+      "[]",
+    );
+    await user.click(row);
+    expect(within(tree).getByText("1 of 1 viewed")).toBeTruthy();
   });
 
   it("says when the conversation left out older message threads", async () => {
