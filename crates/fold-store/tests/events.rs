@@ -570,15 +570,14 @@ async fn read_reaching_selects_a_message_to_the_waking_worker_past_the_filter() 
         types: vec![types::PROPOSAL_OPENED],
         ..EventFilter::default()
     };
-    let read = async |worker_id: i64, every_worker: bool| -> Vec<u64> {
+    let read = async |agent_id: i64, worker_id: i64| -> Vec<u64> {
         let reach = events::Reach {
             wake: Some(events::MessageWake {
                 event_type: types::MESSAGE_SENT,
                 worker_id,
-                every_worker,
                 since: Timestamp::from_millis(0).unwrap(),
             }),
-            ..reach(1)
+            ..reach(agent_id)
         };
         events::read_reaching(project.store().read(), 0, &filter, reach, 10)
             .await
@@ -587,13 +586,12 @@ async fn read_reaching_selects_a_message_to_the_waking_worker_past_the_filter() 
             .map(|event| event.seq)
             .collect()
     };
-    assert_eq!(read(1, false).await, [seqs[0]], "only the worker's own row");
     assert_eq!(
-        read(1, true).await,
-        [seqs[0], seqs[1]],
-        "every worker of the agent, never another agent's"
+        read(1, 1).await,
+        [seqs[0]],
+        "only the worker's own row, never one of another row of its agent"
     );
-    assert_eq!(read(2, false).await, [seqs[1]]);
+    assert_eq!(read(2, 3).await, [seqs[2]]);
     let unwoken = events::read_reaching(project.store().read(), 0, &filter, reach(1), 10)
         .await
         .unwrap();
@@ -635,12 +633,11 @@ async fn read_reaching_wakes_only_for_an_unread_message_the_worker_did_not_send(
         types: vec![types::PROPOSAL_OPENED],
         ..EventFilter::default()
     };
-    let read_since = async |worker_id: i64, every_worker: bool, since: i64| -> Vec<u64> {
+    let read_since = async |worker_id: i64, since: i64| -> Vec<u64> {
         let reach = events::Reach {
             wake: Some(events::MessageWake {
                 event_type: types::MESSAGE_SENT,
                 worker_id,
-                every_worker,
                 since: Timestamp::from_millis(since).unwrap(),
             }),
             ..reach(1)
@@ -652,20 +649,13 @@ async fn read_reaching_wakes_only_for_an_unread_message_the_worker_did_not_send(
             .map(|event| event.seq)
             .collect()
     };
-    let read =
-        async |worker_id: i64, every_worker: bool| read_since(worker_id, every_worker, 5).await;
     assert_eq!(
-        read(1, true).await,
+        read_since(1, 5).await,
         [seqs[4], seqs[5]],
-        "a read, an acknowledged and an own message never wake the main worker; its child's does"
+        "a read, an acknowledged, an own message and one to another row of the agent never wake the worker"
     );
     assert_eq!(
-        read(2, false).await,
-        [seqs[3]],
-        "the main worker's message wakes its child"
-    );
-    assert_eq!(
-        read_since(1, true, 4).await,
+        read_since(1, 4).await,
         [seqs[0], seqs[4], seqs[5]],
         "a message delivered after the wait started still wakes it"
     );

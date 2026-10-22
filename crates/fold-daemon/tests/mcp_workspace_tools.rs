@@ -393,26 +393,6 @@ async fn only_the_owning_worker_writes_in_a_workspace() {
     assert_eq!(got["worker"], "frontend");
     let listed = call(&backend, "list_checkpoints", json!({"ws": "ws-1"})).await;
     assert_eq!(listed["checkpoints"].as_array().unwrap().len(), 1);
-
-    call(&frontend, "register_worker", json!({"name": "ui"})).await;
-    let created = call(
-        &frontend,
-        "create_workspace",
-        json!({"task": "T-2", "as": "frontend/ui"}),
-    )
-    .await;
-    assert_eq!(created["workspace"], "ws-2");
-    let got = call(&frontend, "get_workspace", json!({"ws": "ws-2"})).await;
-    assert_eq!(got["worker"], "frontend/ui");
-    let error = call_err(&frontend, "record_checkpoint", json!({"ws": "ws-2"})).await;
-    assert_eq!(error["code"], "not_workspace_owner");
-    let checkpoint = call(
-        &frontend,
-        "record_checkpoint",
-        json!({"ws": "ws-2", "as": "frontend/ui"}),
-    )
-    .await;
-    assert_eq!(checkpoint, json!({"checkpoint": "ck-2"}));
 }
 
 #[tokio::test]
@@ -543,9 +523,14 @@ fn every_workspace_tool_field_has_a_description() {
     assert_eq!(tools.len(), 14);
     for tool in &tools {
         assert!(tool.description.is_some(), "{}", tool.name);
-        let properties = tool.input_schema["properties"].as_object().unwrap();
-        assert!(properties.contains_key("as"), "{}", tool.name);
-        for (field, schema) in properties {
+        let properties = tool
+            .input_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        assert!(!properties.contains_key("as"), "{}", tool.name);
+        for (field, schema) in &properties {
             assert!(
                 schema["description"]
                     .as_str()

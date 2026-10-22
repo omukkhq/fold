@@ -54,7 +54,7 @@ pub struct RevisionSummary {
     pub proposal: Option<ProposalId>,
     /// The title of the integrated proposal, or the first line of a direct change's commit message.
     pub title: Option<String>,
-    /// The agent whose proposal was integrated, the human who pulled, or the main worker that made a direct change.
+    /// The agent whose proposal was integrated, the human who pulled, or the main agent that made a direct change.
     pub author: Option<String>,
     /// The remote commit a pull brought in.
     pub pull: Option<String>,

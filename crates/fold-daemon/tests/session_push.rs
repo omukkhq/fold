@@ -170,7 +170,7 @@ fn recording(outcomes: mpsc::UnboundedSender<(PathBuf, Option<std::io::ErrorKind
 
 #[cfg(test)]
 impl Fixture {
-    /// Agents `frontend` (with the worker `frontend/ui`), `backend`, `docs` and `lead` (the review lead), and the human `ana`.
+    /// Agents `frontend`, `backend`, `docs` and `lead` (the review lead), and the human `ana`.
     async fn new() -> Self {
         Self::build(false).await
     }
@@ -199,9 +199,7 @@ impl Fixture {
             bus.clone(),
             clock,
         );
-        let frontend = register(&agents, "frontend", &[]).await;
-        agents.register_worker(&frontend, "ui", None).await.unwrap();
-        for agent in ["backend", "docs", "lead"] {
+        for agent in ["frontend", "backend", "docs", "lead"] {
             register(&agents, agent, &[]).await;
         }
         give_role(project.store(), "lead", Role::ReviewLead, None).await;
@@ -352,23 +350,14 @@ async fn the_actors_own_event_posts_nothing() {
     let mut frontend = fixture.inbox("frontend", "frontend.sock").await;
 
     fixture
-        .send("frontend/ui", &["frontend"], "note to self")
+        .send("frontend", &["frontend"], "note to self")
         .await;
     fixture.send("backend", &["frontend"], "from backend").await;
 
     assert_eq!(
         frontend.next().await,
-        wire(
-            TOKEN,
-            &carried(
-                2,
-                &[
-                    (1, "frontend/ui", "note to self"),
-                    (2, "backend", "from backend")
-                ]
-            )
-        ),
-        "the own message posts no notice and waits for the next one"
+        wire(TOKEN, &carried(2, &[(2, "backend", "from backend")])),
+        "the own message posts no notice and is never carried back"
     );
 }
 
@@ -1455,7 +1444,7 @@ async fn a_notice_that_gets_through_records_its_push_time_on_the_agents_rows() {
         .send(
             &Actor::human(HumanName::parse("ana").unwrap()),
             SendMessage {
-                to: Address::parse_all(&["backend", "docs", "lead", "frontend/ui"]).unwrap(),
+                to: Address::parse_all(&["backend", "docs", "lead", "frontend"]).unwrap(),
                 body: MessageBody::parse("who hears this").unwrap(),
                 task: None,
                 proposal: None,
@@ -1510,7 +1499,7 @@ async fn a_notice_that_gets_through_records_its_push_time_on_the_agents_rows() {
             ("backend".to_owned(), Some(now)),
             ("docs".to_owned(), Some(now)),
             ("lead".to_owned(), None),
-            ("frontend/ui".to_owned(), None),
+            ("frontend".to_owned(), None),
         ],
         "a socket post and a worker's stdin record it; a failed post and a gone process do not"
     );
@@ -1525,7 +1514,7 @@ async fn a_notice_that_gets_through_records_its_push_time_on_the_agents_rows() {
             ("backend".to_owned(), Some(now)),
             ("docs".to_owned(), Some(now)),
             ("lead".to_owned(), None),
-            ("frontend/ui".to_owned(), None),
+            ("frontend".to_owned(), None),
         ],
         "a carried message counts as delivered only where its notice got through"
     );

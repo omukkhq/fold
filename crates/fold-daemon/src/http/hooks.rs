@@ -52,7 +52,7 @@ pub struct StopHook {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct StopUnread {
-    /// The unacknowledged messages of every worker of the agent.
+    /// The unacknowledged messages of the agent's worker.
     pub unread: u64,
     /// The hook's reason to keep the turn going: the messages that no inbox, notice or wait has shown the agent yet, oldest first, up to 16 KB of text, then how many more there are. `null` when there is none.
     #[schema(required = true)]

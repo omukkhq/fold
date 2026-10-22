@@ -94,7 +94,7 @@ async fn until_removed(fx: &Fixture, workspace: u32, dir: &Path) {
 async fn reviewer(fx: &Fixture) -> Actor {
     give_role(fx.project.store(), "review", Role::Reviewer, None).await;
     give_review_claim(fx.project.store(), "review", p(1), fx.project.now()).await;
-    fx.agents.actor(&fx.review.ctx, None).await.unwrap()
+    fx.agents.actor(&fx.review.ctx).await.unwrap()
 }
 
 async fn handle(fx: &Fixture) -> ProjectHandle {

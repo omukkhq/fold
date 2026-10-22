@@ -1704,7 +1704,7 @@ export interface components {
             /** @example T-12 */
             task: string;
             title: string;
-            /** @description The worker holding the implementation claim, `agent` or `agent/worker`. */
+            /** @description The worker holding the implementation claim, named as its agent. */
             worker: string | null;
             /**
              * @description The live task workspace.
@@ -2284,7 +2284,7 @@ export interface components {
         };
         /** @description A stored event. The related ids are public ids. */
         DurableEvent: {
-            /** @description A worker (`frontend`, `frontend/ui`), a human (`human:ana`) or `fold`. */
+            /** @description A worker (`frontend`), a human (`human:ana`) or `fold`. */
             actor: string;
             /**
              * Format: int64
@@ -2420,7 +2420,7 @@ export interface components {
             request?: string | null;
             /** @description The task the feedback is about, such as `T-12`. Needed when neither `request` nor `reply_to` is given. */
             task?: string | null;
-            /** @description The recipients, as an agent, `agent/worker`, `tag:<tag>`, `all`, `human:<name>` or `humans`. Feedback on a task takes only the task's readers, and left out it goes to the first of them; left out, a request message to the request's drafter and a reply to the parent's sender. */
+            /** @description The recipients, as an agent, `tag:<tag>`, `all`, `human:<name>` or `humans`. Feedback on a task takes only the task's readers, and left out it goes to the first of them; left out, a request message to the request's drafter and a reply to the parent's sender. */
             to?: string[] | null;
         };
         /** @enum {string} */
@@ -2703,8 +2703,8 @@ export interface components {
              */
             task: string | null;
             /**
-             * @description The worker label, `agent` or `agent/worker`.
-             * @example frontend/ui
+             * @description The worker label, which is its agent's name.
+             * @example frontend
              */
             worker: string;
             /** @example ws-9 */
@@ -2806,7 +2806,7 @@ export interface components {
             request: string | null;
             /**
              * @description A worker, `human:<name>` or `fold`.
-             * @example frontend/ui
+             * @example frontend
              */
             sender: string;
             /**
@@ -3211,7 +3211,7 @@ export interface components {
          */
         ProposalStateView: "open" | "integrated" | "closed";
         ProposalSummary: {
-            /** @description The worker that opened the proposal, `agent` or `agent/worker`. */
+            /** @description The worker that opened the proposal, named as its agent. */
             author: string;
             /** @description The integration checks of the current version failed on its merge with main, so the proposal is with its author until a new version. */
             checks_failed: boolean;
@@ -3399,7 +3399,7 @@ export interface components {
              * @example web-lead
              */
             forwarded_to: string | null;
-            /** @example frontend/ui */
+            /** @example frontend */
             name: string;
             /**
              * Format: int64
@@ -3780,7 +3780,7 @@ export interface components {
              * @description UTC milliseconds.
              */
             claimed_at: number;
-            /** @description The worker, `agent` or `agent/worker`. */
+            /** @description The worker, named as its agent. */
             holder: string;
             /**
              * Format: int64
@@ -3848,7 +3848,7 @@ export interface components {
             revisions: components["schemas"]["RevisionView"][];
         };
         RevisionView: {
-            /** @description The agent whose proposal was integrated, the human who pulled, or the main worker that made a direct change. */
+            /** @description The agent whose proposal was integrated, the human who pulled, or the main agent that made a direct change. */
             author: string | null;
             /** @description The Git commit the revision became in the project folder's repository `.git`; null until it is written, just after the integration. */
             commit: string | null;
@@ -4054,7 +4054,7 @@ export interface components {
             reason: string | null;
             /**
              * Format: int64
-             * @description The unacknowledged messages of every worker of the agent.
+             * @description The unacknowledged messages of the agent's worker.
              */
             unread: number;
         };
@@ -4088,7 +4088,7 @@ export interface components {
              * @description UTC milliseconds.
              */
             claimed_at: number;
-            /** @description The worker, `agent` or `agent/worker`. */
+            /** @description The worker, named as its agent. */
             holder: string;
             kind: components["schemas"]["ClaimKind"];
             /**
@@ -4208,7 +4208,7 @@ export interface components {
         };
         TaskReader: {
             /**
-             * @description The worker, `agent` or `agent/worker`; feedback addressed to it by name reaches it.
+             * @description The worker, named as its agent; feedback addressed to it by name reaches it.
              * @example web-t12
              */
             name: string;
@@ -4550,10 +4550,8 @@ export interface components {
              * @description UTC milliseconds; null before the first call.
              */
             last_call_at: number | null;
-            /** @description `agent` or `agent/worker`. */
+            /** @description The worker's name, which is its agent's name. */
             name: string;
-            /** @description Null for the main worker. */
-            parent: string | null;
             /** @description Open proposals the worker wrote. */
             proposals: components["schemas"]["AuthoredProposal"][];
             /** @description Workspaces in state `active` or `missing`. */
@@ -4834,7 +4832,7 @@ export interface components {
              */
             last_activity_at: number | null;
             live: components["schemas"]["LiveWorkspace"] | null;
-            /** @description The worker that owns the workspace, such as `frontend/ui`. */
+            /** @description The worker that owns the workspace, such as `frontend`. */
             owner: string | null;
             /** @description Relative to the project root. */
             path: string;
@@ -7180,7 +7178,7 @@ export interface operations {
     list_messages: {
         parameters: {
             query?: {
-                /** @description Threads in which this agent (any of its workers) or this exact `agent/worker` sent or received a message. */
+                /** @description Threads in which this agent sent or received a message. */
                 agent?: string;
                 /** @description Threads with a message linked to this task, such as `T-12`. */
                 task?: string;

@@ -1,10 +1,11 @@
 use std::time::Duration;
 
+use fold_core::MessageId;
 use fold_core::events::types;
 use fold_core::roles::CacheTtl;
 use fold_core::{EventFilter, Timestamp};
 use fold_store::agents::WorkerRow;
-use fold_store::events::{self, MessageWake, WaitingMessage};
+use fold_store::events::{self, MessageWake};
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::watch;
 use tokio::time::{Instant, Interval, MissedTickBehavior};
@@ -80,7 +81,7 @@ impl EventService {
         self.start_wait(worker, None, query).await
     }
 
-    /// [`EventService::wait`] for `worker`, which a new message it receives and did not send itself also ends, whatever the filter says: a notice that fold pushes into a session waits there until the tool call returns. A main worker also wakes for the messages to its agent's other workers, because its session takes their notices and its inbox can read them.
+    /// [`EventService::wait`] for `worker`, which a new message it receives and did not send itself also ends, whatever the filter says: a notice that fold pushes into a session waits there until the tool call returns.
     pub async fn wait_as(
         &self,
         worker: &WorkerRow,
@@ -97,7 +98,7 @@ impl EventService {
         worker: &WorkerRow,
         page: &EventPage,
         started: Timestamp,
-    ) -> Result<Vec<WaitingMessage>, EventsError> {
+    ) -> Result<Vec<MessageId>, EventsError> {
         let seqs: Vec<u64> = page
             .events
             .iter()
@@ -107,13 +108,7 @@ impl EventService {
         if seqs.is_empty() {
             return Ok(Vec::new());
         }
-        Ok(events::waiting_messages(
-            self.store().read(),
-            &seqs,
-            worker.agent_id,
-            wake_of(worker, started),
-        )
-        .await?)
+        Ok(events::waiting_messages(self.store().read(), &seqs, wake_of(worker, started)).await?)
     }
 
     async fn start_wait(
@@ -169,12 +164,10 @@ impl EventService {
     }
 }
 
-/// A main worker also wakes for the messages to its agent's other workers, because its session takes their notices and its inbox can read them.
 fn wake_of(worker: &WorkerRow, since: Timestamp) -> MessageWake {
     MessageWake {
         event_type: types::MESSAGE_SENT,
         worker_id: worker.id,
-        every_worker: worker.name.is_main(),
         since,
     }
 }

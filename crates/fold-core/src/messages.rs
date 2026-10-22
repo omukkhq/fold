@@ -19,9 +19,8 @@ pub(crate) const HUMANS: &str = "humans";
 /// One `to[]` entry. `all` and `humans` are reserved agent names, so the bare words always mean the broadcast forms.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Address {
-    /// The agent's main worker.
+    /// The agent's worker.
     Agent(AgentName),
-    Worker(WorkerName),
     /// The main worker of every agent carrying the tag when the message is sent.
     Tag(Tag),
     /// The main worker of every agent.
@@ -44,8 +43,6 @@ impl Address {
             Address::Tag(Tag::parse(tag).map_err(|_| invalid())?)
         } else if let Some(name) = entry.strip_prefix(HUMAN_PREFIX) {
             Address::Human(HumanName::parse(name).map_err(|_| invalid())?)
-        } else if entry.contains('/') {
-            Address::Worker(WorkerName::parse(entry).map_err(|_| invalid())?)
         } else {
             Address::Agent(AgentName::parse(entry).map_err(|_| invalid())?)
         };
@@ -63,7 +60,6 @@ impl Address {
     pub fn addressed_as(&self) -> AddressedAs {
         match self {
             Address::Agent(_) => AddressedAs::Agent,
-            Address::Worker(_) => AddressedAs::Worker,
             Address::Tag(_) => AddressedAs::Tag,
             Address::All => AddressedAs::All,
             Address::Human(_) => AddressedAs::Human,
@@ -71,13 +67,9 @@ impl Address {
         }
     }
 
-    /// The address that reaches exactly `worker`: the agent form for a main worker, the worker form for a child.
+    /// The address that reaches `worker`'s agent.
     pub fn of_worker(worker: &WorkerName) -> Address {
-        if worker.is_main() {
-            Address::Agent(worker.agent())
-        } else {
-            Address::Worker(worker.clone())
-        }
+        Address::Agent(worker.agent())
     }
 }
 
@@ -85,7 +77,6 @@ impl fmt::Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Address::Agent(agent) => write!(f, "{agent}"),
-            Address::Worker(worker) => write!(f, "{worker}"),
             Address::Tag(tag) => write!(f, "{TAG_PREFIX}{tag}"),
             Address::All => f.write_str(ALL),
             Address::Human(name) => write!(f, "{HUMAN_PREFIX}{name}"),
@@ -96,7 +87,7 @@ impl fmt::Display for Address {
 
 /// A `to[]` entry that is not an address. The entry is a name, never message content, so the error details may carry it.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("a recipient is an agent, an agent/worker path, tag:<tag>, all, human:<name> or humans")]
+#[error("a recipient is an agent, tag:<tag>, all, human:<name> or humans")]
 pub struct AddressError {
     entry: String,
 }
@@ -111,7 +102,7 @@ impl From<AddressError> for FoldError {
     fn from(error: AddressError) -> Self {
         FoldError::new(codes::INVALID_NAME, error.to_string())
             .with_details([("to", json!([error.entry]))])
-            .with_hint("list the agents and their workers with list_agents")
+            .with_hint("list the agents with list_agents")
     }
 }
 
@@ -233,11 +224,10 @@ pub struct DirectoryAgent {
     pub tags: Vec<Tag>,
 }
 
-/// The agents, workers and registry humans at send time. `tag`, `all` and `humans` expand in the order of these lists.
+/// The agents and registry humans at send time. `tag`, `all` and `humans` expand in the order of these lists.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Directory {
     pub agents: Vec<DirectoryAgent>,
-    pub workers: Vec<WorkerName>,
     pub humans: Vec<HumanName>,
 }
 
@@ -260,7 +250,7 @@ impl From<ResolveError> for FoldError {
             ResolveError::UnknownRecipient { to } => {
                 FoldError::new(codes::RECIPIENT_NOT_FOUND, message)
                     .with_details([("to", json!([to]))])
-                    .with_hint("list the agents and their workers with list_agents")
+                    .with_hint("list the agents with list_agents")
             }
             ResolveError::UnknownHuman { to } => FoldError::new(codes::UNKNOWN_HUMAN, message)
                 .with_details([("to", json!([to]))])
@@ -289,14 +279,6 @@ pub fn resolve(
                     });
                 }
                 rows.add(Target::Worker(WorkerName::main(agent)), addressed_as);
-            }
-            Address::Worker(worker) => {
-                if !directory.workers.contains(worker) {
-                    return Err(ResolveError::UnknownRecipient {
-                        to: address.to_string(),
-                    });
-                }
-                rows.add(Target::Worker(worker.clone()), addressed_as);
             }
             Address::Tag(tag) => {
                 for agent in directory.agents.iter().filter(|a| a.tags.contains(tag)) {

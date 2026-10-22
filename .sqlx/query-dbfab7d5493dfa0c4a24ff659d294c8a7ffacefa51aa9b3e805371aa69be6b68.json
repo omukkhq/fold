@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!: i64\" FROM workers WHERE agent_id = ? ORDER BY id",
+  "query": "INSERT INTO workers (agent_id, name, created_at)\n           VALUES (?, ?, ?) RETURNING id AS \"id!: i64\"",
   "describe": {
     "columns": [
       {
@@ -16,11 +16,11 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 3
     },
     "nullable": [
-      false
+      null
     ]
   },
-  "hash": "37f531c1b6e7eebdbc6d39b13cfae7473894b874af4cde026246e47f517adeca"
+  "hash": "dbfab7d5493dfa0c4a24ff659d294c8a7ffacefa51aa9b3e805371aa69be6b68"
 }

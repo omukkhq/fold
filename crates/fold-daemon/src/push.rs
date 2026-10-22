@@ -536,7 +536,7 @@ struct Prepared {
     messages: Vec<(MessageId, MessageId)>,
 }
 
-/// The text to post for `notice`. A notice whose next tool is `get_inbox` carries the messages that nothing has shown the agent's main worker yet, read just before the post, so a notice posted after an earlier one has got through never carries the same message again. `None` skips a notice about a message that nothing new is left to carry for. Without a store, or when the messages cannot be read, the notice keeps its call to `get_inbox`.
+/// The text to post for `notice`. A notice whose next tool is `get_inbox` carries the messages that nothing has shown the agent's worker yet, read just before the post, so a notice posted after an earlier one has got through never carries the same message again. `None` skips a notice about a message that nothing new is left to carry for. Without a store, or when the messages cannot be read, the notice keeps its call to `get_inbox`.
 async fn prepare(targets: &Weak<Inner>, agent: &AgentName, notice: &Queued) -> Option<Prepared> {
     let about: Vec<(MessageId, MessageId)> = notice
         .about

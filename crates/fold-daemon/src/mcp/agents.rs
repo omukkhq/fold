@@ -3,9 +3,7 @@ use fold_core::roles::{
 };
 use fold_core::text::shorten;
 use fold_core::turn_errors;
-use fold_core::{
-    AgentName, AreaName, FoldError, LabelName, ProposalId, Role, Tag, TaskId, WorkerName, codes,
-};
+use fold_core::{AgentName, AreaName, FoldError, LabelName, ProposalId, Role, Tag, TaskId, codes};
 use fold_store::agents::{AreaRow, HandoffRow, PreviousSessionRow, WorkerProcessRow};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
@@ -36,11 +34,7 @@ pub const RESTART_WORKER: &str = "restart_worker";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
-pub struct PauseProjectInput {
-    /// The worker that makes this call. Leave it out: only the main agent's main worker pauses or resumes.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
-}
+pub struct PauseProjectInput {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -58,9 +52,6 @@ pub struct DefineAreaInput {
     /// The MCP servers the area's lead and task workers load, by name: fold and servers of the project's .mcp.json, such as ["fold", "pencil"]. Leave it out for the role's servers.
     #[serde(default)]
     pub mcp: Option<Vec<String>>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -86,9 +77,6 @@ pub struct UpdateAreaInput {
     /// True removes the area's MCP server list, so its workers get the role's servers again. Do not combine it with mcp.
     #[serde(default)]
     pub clear_mcp: bool,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -117,9 +105,6 @@ pub struct StartWorkerInput {
     /// What the worker should know beyond its role and its tasks; fold adds it to the worker's first turn.
     #[serde(default)]
     pub instructions: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -127,9 +112,6 @@ pub struct StartWorkerInput {
 pub struct StopWorkerInput {
     /// The worker's agent name, such as web-worker.
     pub name: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -140,18 +122,11 @@ pub struct RestartWorkerInput {
     /// What the user wants the worker to know in its new session; fold adds it to the first turn and never stores it.
     #[serde(default)]
     pub instructions: Option<String>,
-    /// The worker that makes this call. Leave it out: only the main agent's main worker restarts a worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
-pub struct ListWorkersInput {
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
-}
+pub struct ListWorkersInput {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -168,18 +143,11 @@ pub struct SetWorkerLimitsInput {
     /// True removes the limit of one area, so an area has no limit of its own. Do not combine it with max_per_area.
     #[serde(default)]
     pub clear_max_per_area: bool,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
-pub struct ListAgentsInput {
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
-}
+pub struct ListAgentsInput {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -187,9 +155,6 @@ pub struct GetActivityInput {
     /// Only the workers of this agent, such as backend. Leave it out for the workers of every agent.
     #[serde(default)]
     pub agent: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -197,9 +162,6 @@ pub struct GetActivityInput {
 pub struct WriteHandoffInput {
     /// The hand-off note for your next session, at most 8000 characters: what you are doing, your open decisions and what comes next. Tasks, proposals, reviews and messages stay in fold, so leave them out.
     pub text: String,
-    /// The worker that makes this call. Leave it out: only a lead's main worker writes its note.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {
@@ -318,16 +280,12 @@ fn ids<T: std::str::FromStr>(texts: &[String], what: &str) -> Result<Vec<T>, Fol
         .collect()
 }
 
-pub async fn define_area(
-    server: &FoldServer,
-    as_worker: Option<&WorkerName>,
-    arguments: &JsonObject,
-) -> Result<Value, FoldError> {
+pub async fn define_area(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let input: DefineAreaInput = parse(arguments)?;
     let name = AreaName::parse(&input.name)?;
     let label = LabelName::parse(&input.label)?;
     let profile = AreaProfile::from_request(input.instructions, input.model, input.mcp)?;
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let area = server
         .agents
         .define_area(&actor, &name, &label, &profile)
@@ -336,11 +294,7 @@ pub async fn define_area(
     Ok(json!({ "area": area_json(&area) }))
 }
 
-pub async fn update_area(
-    server: &FoldServer,
-    as_worker: Option<&WorkerName>,
-    arguments: &JsonObject,
-) -> Result<Value, FoldError> {
+pub async fn update_area(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let input: UpdateAreaInput = parse(arguments)?;
     let name = AreaName::parse(&input.name)?;
     let change = AreaProfileChange::from_request(AreaProfileRequest {
@@ -351,7 +305,7 @@ pub async fn update_area(
         clear_model: input.clear_model,
         clear_mcp: input.clear_mcp,
     })?;
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let area = server
         .agents
         .update_area(&actor, &name, &change)
@@ -363,11 +317,7 @@ pub async fn update_area(
     }))
 }
 
-pub async fn start_worker(
-    server: &FoldServer,
-    as_worker: Option<&WorkerName>,
-    arguments: &JsonObject,
-) -> Result<Value, FoldError> {
+pub async fn start_worker(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let input: StartWorkerInput = parse(arguments)?;
     let role = Role::parse(&input.role).ok_or_else(|| {
         FoldError::new(codes::INVALID_REQUEST, "role is not a worker role")
@@ -383,7 +333,7 @@ pub async fn start_worker(
         model: input.model,
         instructions: input.instructions,
     };
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let started = server
         .agents
         .start_worker(&actor, request)
@@ -416,12 +366,11 @@ fn started_json(started: &StartedWorker) -> Value {
 
 pub async fn restart_worker(
     server: &FoldServer,
-    as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let input: RestartWorkerInput = parse(arguments)?;
     let name = AgentName::parse(&input.name)?;
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let worker = server
         .agents
         .restart_worker(&actor, &name, input.instructions.as_deref())
@@ -439,14 +388,10 @@ pub async fn restart_worker(
     Ok(json!({ "worker": value }))
 }
 
-pub async fn stop_worker(
-    server: &FoldServer,
-    as_worker: Option<&WorkerName>,
-    arguments: &JsonObject,
-) -> Result<Value, FoldError> {
+pub async fn stop_worker(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let input: StopWorkerInput = parse(arguments)?;
     let name = AgentName::parse(&input.name)?;
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let worker = server
         .agents
         .stop_worker(&actor, &name)
@@ -465,7 +410,6 @@ fn limits_json(limits: WorkerLimits) -> Value {
 
 pub async fn set_worker_limits(
     server: &FoldServer,
-    as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let input: SetWorkerLimitsInput = parse(arguments)?;
@@ -475,7 +419,7 @@ pub async fn set_worker_limits(
         input.max_per_area,
         input.clear_max_per_area,
     )?;
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let changed = server
         .agents
         .set_worker_limits(&actor, change)
@@ -494,11 +438,10 @@ fn pause_json(state: &PauseState) -> Value {
 
 pub async fn pause_project(
     server: &FoldServer,
-    as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let _: PauseProjectInput = parse(arguments)?;
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let state = server
         .agents
         .pause_project(&actor)
@@ -509,11 +452,10 @@ pub async fn pause_project(
 
 pub async fn resume_project(
     server: &FoldServer,
-    as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let _: PauseProjectInput = parse(arguments)?;
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let state = server
         .agents
         .resume_project(&actor)
@@ -621,7 +563,6 @@ fn proposal_json(proposal: &ProposalSummary) -> Value {
 fn worker_json(worker: &WorkerOverview) -> Value {
     json!({
         "name": worker.name.as_str(),
-        "parent": worker.parent.as_ref().map(WorkerName::as_str),
         "last_call_at": worker.last_call_at,
         "activity": worker.activity,
         "claims": worker.claims.iter().map(claim_json).collect::<Vec<_>>(),
@@ -674,11 +615,10 @@ pub async fn get_activity(server: &FoldServer, arguments: &JsonObject) -> Result
 
 pub async fn write_handoff(
     server: &FoldServer,
-    as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Value, FoldError> {
     let input: WriteHandoffInput = parse(arguments)?;
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     server
         .agents
         .write_handoff(&actor, &input.text)

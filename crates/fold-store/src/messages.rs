@@ -298,7 +298,7 @@ pub async fn request_thread(
         .transpose()
 }
 
-/// The agents with their tags, every worker, and `humans` from the registry, as one snapshot for `fold_core::messages::resolve`. Pass the writer's connection so the snapshot matches the rows the send inserts.
+/// The agents with their tags and `humans` from the registry, as one snapshot for `fold_core::messages::resolve`. Pass the writer's connection so the snapshot matches the rows the send inserts.
 pub async fn directory(
     conn: &mut SqliteConnection,
     humans: Vec<HumanName>,
@@ -308,7 +308,6 @@ pub async fn directory(
     for (agent_id, tag) in agents::all_tags(&mut *conn).await? {
         tags_of.entry(agent_id).or_default().push(tag);
     }
-    let workers = agents::all_workers(&mut *conn).await?;
     Ok(Directory {
         agents: rows
             .into_iter()
@@ -317,7 +316,6 @@ pub async fn directory(
                 name: row.name,
             })
             .collect(),
-        workers: workers.into_iter().map(|worker| worker.name).collect(),
         humans,
     })
 }
@@ -586,7 +584,7 @@ pub async fn is_recipient(
     .await?)
 }
 
-/// How many rows of `agent`'s workers no inbox has returned yet.
+/// How many rows of `agent`'s worker no inbox has returned yet.
 pub async fn undelivered_count(
     executor: impl SqliteExecutor<'_>,
     agent: &AgentName,
@@ -597,7 +595,8 @@ pub async fn undelivered_count(
            FROM message_recipients r
            JOIN workers w ON w.id = r.worker_id
            JOIN agents a ON a.id = w.agent_id
-           WHERE a.name = ? AND r.delivered_at IS NULL AND r.acked_at IS NULL"#,
+           WHERE a.name = ? AND w.parent_worker_id IS NULL
+             AND r.delivered_at IS NULL AND r.acked_at IS NULL"#,
         agent
     )
     .fetch_one(executor)
@@ -654,7 +653,7 @@ pub async fn acknowledge(
         .map(Some)
 }
 
-/// The unacknowledged rows of every worker of the agent.
+/// The unacknowledged rows of the agent's worker.
 pub async fn unread_count(
     executor: impl SqliteExecutor<'_>,
     agent_id: i64,
@@ -663,7 +662,7 @@ pub async fn unread_count(
         r#"SELECT COUNT(*) AS "count!: i64"
            FROM workers w
            JOIN message_recipients r ON r.worker_id = w.id
-           WHERE w.agent_id = ? AND r.acked_at IS NULL"#,
+           WHERE w.agent_id = ? AND w.parent_worker_id IS NULL AND r.acked_at IS NULL"#,
         agent_id
     )
     .fetch_one(executor)
@@ -674,10 +673,8 @@ pub async fn unread_count(
 /// Which threads a listing returns. Every set field must match some message of the thread.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ThreadFilter {
-    /// A worker of this agent sent or received a message of the thread.
+    /// The agent sent or received a message of the thread.
     pub agent: Option<AgentName>,
-    /// This exact worker sent or received a message of the thread.
-    pub worker: Option<WorkerName>,
     pub task: Option<TaskId>,
     pub proposal: Option<ProposalId>,
     /// Only threads that concern this human: a message of the thread is from them, addressed to them by name or addressed to `humans`.
@@ -702,7 +699,6 @@ pub async fn thread_page(
     limit: u32,
 ) -> Result<Vec<ThreadHead>, StoreError> {
     let agent = filter.agent.as_ref().map(AgentName::as_str);
-    let worker = filter.worker.as_ref().map(WorkerName::as_str);
     let task = filter.task.map(TaskId::to_db);
     let proposal = filter.proposal.map(ProposalId::to_db);
     let awaiting = filter.awaiting_human;
@@ -729,36 +725,26 @@ pub async fn thread_page(
                      JOIN workers w ON w.id = r.worker_id
                      JOIN agents a ON a.id = w.agent_id
                      WHERE x.thread_id = m.thread_id AND a.name = ?3))
-             AND (?4 IS NULL OR EXISTS (
-                     SELECT 1 FROM messages x
-                     JOIN workers w ON w.id = x.sender_worker_id
-                     WHERE x.thread_id = m.thread_id AND w.name = ?4
-                     UNION ALL
-                     SELECT 1 FROM messages x
-                     JOIN message_recipients r ON r.message_id = x.id
-                     JOIN workers w ON w.id = r.worker_id
-                     WHERE x.thread_id = m.thread_id AND w.name = ?4))
-             AND (NOT ?5 OR EXISTS (
+             AND (NOT ?4 OR EXISTS (
                      SELECT 1 FROM open_human_questions q
                      JOIN message_recipients r ON r.message_id = q.id
                      WHERE q.thread_id = m.thread_id
-                       AND (?8 IS NULL OR r.human = ?8 OR r.addressed_as = 'humans')))
-             AND (?8 IS NULL OR EXISTS (
+                       AND (?7 IS NULL OR r.human = ?7 OR r.addressed_as = 'humans')))
+             AND (?7 IS NULL OR EXISTS (
                      SELECT 1 FROM messages x
-                     WHERE x.thread_id = m.thread_id AND x.sender_human = ?8
+                     WHERE x.thread_id = m.thread_id AND x.sender_human = ?7
                      UNION ALL
                      SELECT 1 FROM messages x
                      JOIN message_recipients r ON r.message_id = x.id
                      WHERE x.thread_id = m.thread_id
-                       AND (r.human = ?8 OR r.addressed_as = 'humans')))
+                       AND (r.human = ?7 OR r.addressed_as = 'humans')))
            GROUP BY m.thread_id
-           HAVING ?6 IS NULL OR MAX(m.number) < ?6
+           HAVING ?5 IS NULL OR MAX(m.number) < ?5
            ORDER BY MAX(m.number) DESC
-           LIMIT ?7"#,
+           LIMIT ?6"#,
         task,
         proposal,
         agent,
-        worker,
         awaiting,
         before,
         limit,

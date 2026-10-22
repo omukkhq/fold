@@ -58,9 +58,6 @@ pub struct CreateProposalInput {
     /// What shows the work is done, such as the tests you ran and their result. Leave it out for none. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub evidence: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -75,9 +72,6 @@ pub struct ListProposalsInput {
     /// The most proposals to return, the newest ones, in number order: 1 to 200, 50 when left out.
     #[serde(default)]
     pub limit: Option<u32>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -88,9 +82,6 @@ pub struct ProposalVersionInput {
     /// A version number, such as 2 for v2. Leave it out for the current version.
     #[serde(default)]
     pub version: Option<u32>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -107,9 +98,6 @@ pub struct GetProposalDiffInput {
     /// One changed file, such as src/lib.rs. With it the result holds that file's hunks; without it, the list of changed files.
     #[serde(default)]
     pub path: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -120,9 +108,6 @@ pub struct UpdateProposalInput {
     /// New evidence for the new version. Leave it out to keep the current evidence. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub evidence: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -132,9 +117,6 @@ pub struct CloseProposalInput {
     pub id: String,
     /// Why the proposal closes: 1 to 500 characters.
     pub reason: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -142,9 +124,6 @@ pub struct CloseProposalInput {
 pub struct ProposalIdInput {
     /// The proposal, such as P-3.
     pub id: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -158,9 +137,6 @@ pub struct ClaimReviewInput {
     /// Why the chosen scope fits, in one line, such as "the change renames a public API" or "only strings changed". Needed with scope.
     #[serde(default)]
     pub reason: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 /// One review scope that the review lead chooses when it assigns a review.
@@ -209,9 +185,6 @@ pub struct SetReviewScopeInput {
     pub scope: String,
     /// Why this scope fits, in one line, such as "the fix only adds a test".
     pub reason: String,
-    /// The worker that makes this call, such as review/scope. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -222,9 +195,6 @@ pub struct ReleaseReviewInput {
     /// Why you give the review up, at most 500 characters. Leave it out for none.
     #[serde(default)]
     pub reason: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -263,9 +233,6 @@ pub struct SubmitReviewInput {
     /// Line comments that come with the review.
     #[serde(default)]
     pub comments: Vec<ReviewCommentInput>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -276,9 +243,6 @@ pub struct IntegrateProposalInput {
     /// The version you reviewed, such as 2 for v2. When the current version is another one, nothing integrates and the error is stale_version.
     #[serde(default)]
     pub expected_version: Option<u32>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -291,9 +255,6 @@ pub struct RequireHumanReviewInput {
     pub reviewer: Option<String>,
     /// Why a human must look: 1 to 500 characters.
     pub reason: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -303,9 +264,6 @@ pub struct SubmitMainChangeInput {
     pub changeset: String,
     /// The Git commit message of the change, 1 to 5000 characters: a subject line, then a blank line and a body when one helps. Show it to the user with the diff.
     pub message: String,
-    /// The worker that makes this call. Only the main agent's main worker submits a direct change, so leave it out.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -328,9 +286,6 @@ pub struct SubmitReviewFixInput {
     pub fixes: Vec<ReviewFixInput>,
     /// The commands you ran on the fixed files, such as the narrow tests of each fix, the build and the required checks, with their results.
     pub checks: String,
-    /// The worker that makes this call, such as review/r1. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {
@@ -421,17 +376,16 @@ pub fn tools() -> Vec<Tool> {
     tools
 }
 
-/// Runs a proposal tool acting as `as_worker`. `None` when `tool` is not a proposal tool or the server has no review service.
+/// Runs a proposal tool as the session's worker. `None` when `tool` is not a proposal tool or the server has no review service.
 pub async fn call(
     server: &FoldServer,
     tool: &str,
-    as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Option<Value>, FoldError> {
     let Some(reviews) = &server.reviews else {
         return Ok(None);
     };
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     let value = match tool {
         CREATE_PROPOSAL => create_proposal(reviews, &actor, arguments).await?,
         LIST_PROPOSALS => list_proposals(reviews, arguments).await?,

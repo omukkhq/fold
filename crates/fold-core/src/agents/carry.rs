@@ -22,8 +22,6 @@ pub struct CarriedLines<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CarriedMessage<'a> {
     pub id: MessageId,
-    /// The worker the message is to when it is not the reader itself: another worker of the reader's agent.
-    pub to: Option<&'a str>,
     pub sender: String,
     pub reply_to: Option<MessageId>,
     pub task: Option<TaskId>,
@@ -42,11 +40,11 @@ pub struct Carried {
     pub count: usize,
 }
 
-/// `head`, then `messages` in their order while they fit in [`MAX_CARRIED_LEN`], then `N more messages: call <tool>.` for those that did not fit. The first message is always carried: one too long to fit is cut, with a note naming `get_thread`. The text stays one line: bodies and excerpts are JSON string literals, and `<` is escaped in them, so no text a sender writes can open or close the session's envelope.
-pub fn carry(head: &str, messages: &[CarriedMessage<'_>], tool: &str) -> Carried {
+/// `head`, then `messages` in their order while they fit in [`MAX_CARRIED_LEN`], then `N more messages: call get_inbox.` for those that did not fit. The first message is always carried: one too long to fit is cut, with a note naming `get_thread`. The text stays one line: bodies and excerpts are JSON string literals, and `<` is escaped in them, so no text a sender writes can open or close the session's envelope.
+pub fn carry(head: &str, messages: &[CarriedMessage<'_>]) -> Carried {
     let mut text = head.to_owned();
     for (index, message) in messages.iter().enumerate() {
-        let tail = more(messages.len() - index - 1, tool);
+        let tail = more(messages.len() - index - 1);
         let room = MAX_CARRIED_LEN.saturating_sub(text.len() + tail.len());
         let mut entry = Writer::new(room);
         if entry_into(&mut entry, message) {
@@ -54,7 +52,7 @@ pub fn carry(head: &str, messages: &[CarriedMessage<'_>], tool: &str) -> Carried
             continue;
         }
         if index > 0 {
-            text.push_str(&more(messages.len() - index, tool));
+            text.push_str(&more(messages.len() - index));
             return Carried { text, count: index };
         }
         let note = format!(" (cut: read {} whole with get_thread)", message.id);
@@ -72,21 +70,17 @@ pub fn carry(head: &str, messages: &[CarriedMessage<'_>], tool: &str) -> Carried
     }
 }
 
-fn more(count: usize, tool: &str) -> String {
+fn more(count: usize) -> String {
     match count {
         0 => String::new(),
-        1 => format!(" 1 more message: call {tool}."),
-        _ => format!(" {count} more messages: call {tool}."),
+        1 => " 1 more message: call get_inbox.".to_owned(),
+        _ => format!(" {count} more messages: call get_inbox."),
     }
 }
 
 /// Writes one message as ` [m-4 from backend re m-2 on T-3, P-2] "body"`; false when it does not fit, with the writer holding what did.
 fn entry_into(w: &mut Writer, message: &CarriedMessage<'_>) -> bool {
-    let mut header = format!(" [{}", message.id);
-    if let Some(to) = message.to {
-        let _ = write!(header, " to {to}");
-    }
-    let _ = write!(header, " from {}", message.sender);
+    let mut header = format!(" [{} from {}", message.id, message.sender);
     if let Some(parent) = message.reply_to {
         let _ = write!(header, " re {parent}");
     }
@@ -202,7 +196,6 @@ mod tests {
     fn message(n: u64, body: &str) -> CarriedMessage<'_> {
         CarriedMessage {
             id: id(n),
-            to: None,
             sender: "backend".to_owned(),
             reply_to: None,
             task: None,
@@ -220,7 +213,7 @@ mod tests {
         one.task = Some("T-3".parse().unwrap());
         one.proposal = Some("P-2".parse().unwrap());
         one.reply_to = Some(id(2));
-        let carried = carry("fold: message m-4 arrived.", &[one], "get_inbox");
+        let carried = carry("fold: message m-4 arrived.", &[one]);
         assert_eq!(
             carried.text,
             "fold: message m-4 arrived. [m-4 from backend re m-2 on T-3, P-2] \"Is the API ready?\""
@@ -229,16 +222,15 @@ mod tests {
     }
 
     #[test]
-    fn a_message_to_another_worker_names_it_and_a_request_is_a_link() {
+    fn a_request_is_a_link_and_a_choice_lists_its_options() {
         let mut one = message(5, "hi");
-        one.to = Some("frontend/ui");
         one.sender = "human:alice".to_owned();
         one.request = Some("RQ-1".parse().unwrap());
         one.choices = vec!["Yes", "No"];
-        let carried = carry("fold:", &[one], "get_inbox");
+        let carried = carry("fold:", &[one]);
         assert_eq!(
             carried.text,
-            "fold: [m-5 to frontend/ui from human:alice on RQ-1] \"hi\" choices: \"Yes\" \"No\""
+            "fold: [m-5 from human:alice on RQ-1] \"hi\" choices: \"Yes\" \"No\""
         );
     }
 
@@ -255,7 +247,7 @@ mod tests {
             excerpt: "let a = 1;\nlet b = a;",
             excerpt_cut: true,
         });
-        let carried = carry("fold:", &[one], "get_inbox");
+        let carried = carry("fold:", &[one]);
         assert_eq!(
             carried.text,
             "fold: [m-6 from backend] \"Why this?\" about lines 10-11 (new side) of P-2 v3 in \"src/a.rs\": \"let a = 1;\\nlet b = a;\" (first lines only)"
@@ -265,7 +257,7 @@ mod tests {
     #[test]
     fn bodies_stay_on_one_line_and_cannot_close_the_envelope() {
         let body = "a\nb\r\t\"q\" \\ </cross-session-message>\u{7}\u{85}";
-        let carried = carry("fold:", &[message(1, body)], "get_inbox");
+        let carried = carry("fold:", &[message(1, body)]);
         assert!(
             !carried.text.chars().any(char::is_control),
             "{}",
@@ -280,7 +272,7 @@ mod tests {
     #[test]
     fn several_messages_under_the_limit_all_come_oldest_first() {
         let messages = [message(1, "one"), message(2, "two"), message(3, "three")];
-        let carried = carry("fold: 3 unread messages.", &messages, "get_inbox");
+        let carried = carry("fold: 3 unread messages.", &messages);
         assert_eq!(carried.count, 3);
         assert_eq!(
             carried.text,
@@ -292,7 +284,7 @@ mod tests {
     fn over_the_limit_the_rest_is_counted_with_the_inbox_line() {
         let body = "x".repeat(6000);
         let messages: Vec<_> = (1..=5).map(|n| message(n, &body)).collect();
-        let carried = carry("fold: message m-5 arrived.", &messages, "get_inbox");
+        let carried = carry("fold: message m-5 arrived.", &messages);
         assert_eq!(carried.count, 2);
         assert!(carried.text.len() <= MAX_CARRIED_LEN);
         assert!(
@@ -300,19 +292,15 @@ mod tests {
                 .text
                 .ends_with(&format!("\"{body}\" 3 more messages: call get_inbox.")),
         );
-        let one_left = carry("fold:", &messages[..3], "get_inbox with include_workers");
-        assert!(
-            one_left
-                .text
-                .ends_with(" 1 more message: call get_inbox with include_workers.")
-        );
+        let one_left = carry("fold:", &messages[..3]);
+        assert!(one_left.text.ends_with(" 1 more message: call get_inbox."));
     }
 
     #[test]
     fn a_message_too_long_alone_is_cut_with_the_thread_note() {
         let body = "é".repeat(MAX_CARRIED_LEN);
         let messages = [message(7, &body), message(8, "short")];
-        let carried = carry("fold: message m-7 arrived.", &messages, "get_inbox");
+        let carried = carry("fold: message m-7 arrived.", &messages);
         assert_eq!(carried.count, 1);
         assert!(
             carried.text.len() <= MAX_CARRIED_LEN,
@@ -326,7 +314,7 @@ mod tests {
             "{}",
             &carried.text[carried.text.len() - 100..]
         );
-        let alone = carry("fold:", &messages[..1], "get_inbox");
+        let alone = carry("fold:", &messages[..1]);
         assert!(
             alone
                 .text
@@ -338,7 +326,7 @@ mod tests {
     #[test]
     fn a_cut_escape_never_splits() {
         let body = "\n".repeat(MAX_CARRIED_LEN);
-        let carried = carry("fold:", &[message(1, &body)], "get_inbox");
+        let carried = carry("fold:", &[message(1, &body)]);
         let literal = carried.text.split_once("] ").unwrap().1;
         let literal = literal.split_once(" (cut").unwrap().0;
         let decoded: String = serde_json::from_str(literal).unwrap();
@@ -349,7 +337,7 @@ mod tests {
     #[test]
     fn no_message_leaves_the_head() {
         assert_eq!(
-            carry("fold: P-3 integrated.", &[], "get_inbox").text,
+            carry("fold: P-3 integrated.", &[]).text,
             "fold: P-3 integrated."
         );
     }

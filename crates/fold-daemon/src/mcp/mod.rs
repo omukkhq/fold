@@ -12,7 +12,7 @@ pub mod workspaces;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
-use fold_core::{FoldError, WorkerName, codes};
+use fold_core::{FoldError, codes};
 use fold_store::agents::WorkerRow;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
@@ -113,31 +113,21 @@ impl FoldServer {
     ) -> Result<Option<Value>, FoldError> {
         let tool = request.name.as_ref();
         let arguments = request.arguments.clone().unwrap_or_default();
-        let as_worker = as_worker(&arguments)?;
         let before = self.session().await;
-        // Every tool but the identity tools needs an agent, so its worker is known before it runs. An identity tool on an unbound session has no agent to resolve `as` against: `register_agent` checks it as it binds, and the others need no worker.
-        let resolved = if !identity::is_identity_tool(tool)
-            || (before.agent.is_some() && as_worker.is_some())
-        {
-            Some(self.resolve(&before, as_worker.as_ref()).await?)
-        } else {
+        // Every tool but the identity tools needs an agent, so its worker is known before it runs.
+        let resolved = if identity::is_identity_tool(tool) {
             None
+        } else {
+            Some(self.resolve(&before).await?)
         };
         let call = Call {
-            as_worker: as_worker.clone(),
             worker: resolved.clone(),
             actor: Arc::default(),
         };
         let value = CALL
             .scope(
                 call,
-                self.dispatch(
-                    tool,
-                    as_worker.as_ref(),
-                    resolved.as_ref(),
-                    &arguments,
-                    context,
-                ),
+                self.dispatch(tool, resolved.as_ref(), &arguments, context),
             )
             .await?;
         let Some(value) = value else {
@@ -147,7 +137,7 @@ impl FoldServer {
         if after.agent.is_some() {
             let worker = match resolved {
                 Some(worker) => worker,
-                None => self.resolve(&after, as_worker.as_ref()).await?,
+                None => self.resolve(&after).await?,
             };
             if let Err(error) = self.agents.record_call(&after, &worker, tool, None).await {
                 tracing::warn!(
@@ -163,63 +153,39 @@ impl FoldServer {
     async fn dispatch(
         &self,
         tool: &str,
-        as_worker: Option<&WorkerName>,
         resolved: Option<&WorkerRow>,
         arguments: &JsonObject,
         context: &RequestContext<RoleServer>,
     ) -> Result<Option<Value>, FoldError> {
         let value = match (tool, resolved) {
             (identity::REGISTER_AGENT, _) => identity::register_agent(self, arguments).await?,
-            (identity::REGISTER_WORKER, _) => identity::register_worker(self, arguments).await?,
             (agents::LIST_AGENTS, _) => agents::list_agents(self, arguments).await?,
             (agents::GET_ACTIVITY, Some(_)) => agents::get_activity(self, arguments).await?,
-            (agents::DEFINE_AREA, Some(_)) => {
-                agents::define_area(self, as_worker, arguments).await?
-            }
-            (agents::UPDATE_AREA, Some(_)) => {
-                agents::update_area(self, as_worker, arguments).await?
-            }
-            (agents::START_WORKER, Some(_)) => {
-                agents::start_worker(self, as_worker, arguments).await?
-            }
-            (agents::STOP_WORKER, Some(_)) => {
-                agents::stop_worker(self, as_worker, arguments).await?
-            }
+            (agents::DEFINE_AREA, Some(_)) => agents::define_area(self, arguments).await?,
+            (agents::UPDATE_AREA, Some(_)) => agents::update_area(self, arguments).await?,
+            (agents::START_WORKER, Some(_)) => agents::start_worker(self, arguments).await?,
+            (agents::STOP_WORKER, Some(_)) => agents::stop_worker(self, arguments).await?,
             (agents::LIST_WORKERS, Some(_)) => agents::list_workers(self, arguments).await?,
             (agents::SET_WORKER_LIMITS, Some(_)) => {
-                agents::set_worker_limits(self, as_worker, arguments).await?
+                agents::set_worker_limits(self, arguments).await?
             }
-            (agents::PAUSE_PROJECT, Some(_)) => {
-                agents::pause_project(self, as_worker, arguments).await?
-            }
-            (agents::RESUME_PROJECT, Some(_)) => {
-                agents::resume_project(self, as_worker, arguments).await?
-            }
-            (agents::WRITE_HANDOFF, Some(_)) => {
-                agents::write_handoff(self, as_worker, arguments).await?
-            }
-            (agents::RESTART_WORKER, Some(_)) => {
-                agents::restart_worker(self, as_worker, arguments).await?
-            }
+            (agents::PAUSE_PROJECT, Some(_)) => agents::pause_project(self, arguments).await?,
+            (agents::RESUME_PROJECT, Some(_)) => agents::resume_project(self, arguments).await?,
+            (agents::WRITE_HANDOFF, Some(_)) => agents::write_handoff(self, arguments).await?,
+            (agents::RESTART_WORKER, Some(_)) => agents::restart_worker(self, arguments).await?,
             (events::GET_EVENTS, Some(worker)) => {
                 events::get_events(self, worker, arguments).await?
             }
             (events::WAIT_FOR_EVENTS, Some(worker)) => {
                 events::wait_for_events(self, worker, arguments, context).await?
             }
-            (messages::ACKNOWLEDGE_MESSAGE, Some(worker)) => {
-                messages::acknowledge_message(self, worker, arguments).await?
+            (messages::ACKNOWLEDGE_MESSAGE, Some(_)) => {
+                messages::acknowledge_message(self, arguments).await?
             }
-            (messages::GET_INBOX, Some(worker)) => {
-                messages::get_inbox(self, worker, arguments).await?
-            }
+            (messages::GET_INBOX, Some(_)) => messages::get_inbox(self, arguments).await?,
             (messages::GET_THREAD, Some(_)) => messages::get_thread(self, arguments).await?,
-            (messages::SEND_MESSAGE, Some(worker)) => {
-                messages::send_message(self, worker, arguments).await?
-            }
-            (messages::MARK_ANSWERED, Some(worker)) => {
-                messages::mark_answered(self, worker, arguments).await?
-            }
+            (messages::SEND_MESSAGE, Some(_)) => messages::send_message(self, arguments).await?,
+            (messages::MARK_ANSWERED, Some(_)) => messages::mark_answered(self, arguments).await?,
             (workspaces::GET_REPOSITORY_STATE, Some(_)) => {
                 workspaces::get_repository_state(self, arguments).await?
             }
@@ -231,13 +197,9 @@ impl FoldServer {
             }
             (_, Some(_)) => {
                 let value = match domain_of(tool) {
-                    Some(Domain::Workspaces) => {
-                        workspaces::call(self, tool, as_worker, arguments).await?
-                    }
-                    Some(Domain::Tasks) => tasks::call(self, tool, as_worker, arguments).await?,
-                    Some(Domain::Reviews) => {
-                        reviews::call(self, tool, as_worker, arguments).await?
-                    }
+                    Some(Domain::Workspaces) => workspaces::call(self, tool, arguments).await?,
+                    Some(Domain::Tasks) => tasks::call(self, tool, arguments).await?,
+                    Some(Domain::Reviews) => reviews::call(self, tool, arguments).await?,
                     None => None,
                 };
                 match value {
@@ -250,24 +212,19 @@ impl FoldServer {
         Ok(Some(value))
     }
 
-    /// The acting agent of the current call, its worker resolved from `as`. The call resolved its worker before the tool ran, so only the agent's tags are read here, once per call.
-    async fn actor(&self, as_worker: Option<&WorkerName>) -> Result<fold_core::Actor, FoldError> {
+    /// The acting agent of the current call. The call resolved its worker before the tool ran, so only the agent's tags are read here, once per call.
+    async fn actor(&self) -> Result<fold_core::Actor, FoldError> {
         let cached = CALL
             .try_with(|call| {
                 call.worker
                     .clone()
-                    .filter(|_| call.serves(as_worker))
                     .map(|worker| (worker, Arc::clone(&call.actor)))
             })
             .ok()
             .flatten();
         let Some((worker, actor)) = cached else {
             let session = self.session().await;
-            return self
-                .agents
-                .actor(&session, as_worker)
-                .await
-                .map_err(from_agent);
+            return self.agents.actor(&session).await.map_err(from_agent);
         };
         actor
             .get_or_try_init(async || self.agents.actor_of(&worker).await)
@@ -276,24 +233,15 @@ impl FoldServer {
             .map_err(from_agent)
     }
 
-    async fn resolve(
-        &self,
-        session: &SessionContext,
-        as_worker: Option<&WorkerName>,
-    ) -> Result<WorkerRow, FoldError> {
+    async fn resolve(&self, session: &SessionContext) -> Result<WorkerRow, FoldError> {
         self.agents
-            .resolve_worker(session, as_worker)
+            .resolve_worker(session)
             .await
             .map_err(from_agent)
     }
 
-    /// Adds to `counts` the sources taken before the call when `before_call` is true, the others when it is false, each for the worker that the call's `as` names.
-    async fn counts(
-        &self,
-        before_call: bool,
-        as_worker: Option<&WorkerName>,
-        mut counts: FooterCounts,
-    ) -> FooterCounts {
+    /// Adds to `counts` the sources taken before the call when `before_call` is true, the others when it is false.
+    async fn counts(&self, before_call: bool, mut counts: FooterCounts) -> FooterCounts {
         let session = self.session().await;
         for source in self
             .footer
@@ -301,7 +249,7 @@ impl FoldServer {
             .filter(|s| s.before_call() == before_call)
         {
             let part = source.part();
-            let count = source.count_as(&session, as_worker).await;
+            let count = source.count(&session).await;
             counts = counts.with(part, counts.get(part) + count);
         }
         counts
@@ -309,27 +257,15 @@ impl FoldServer {
 }
 
 tokio::task_local! {
-    /// The worker the current tool call acts as. The tool modules ask for their actor by `as`, so it is scoped to the call's task instead of passed through every tool's signature.
+    /// The worker the current tool call acts as, scoped to the call's task instead of passed through every tool's signature.
     static CALL: Call;
 }
 
 struct Call {
-    as_worker: Option<WorkerName>,
-    /// `None` for an identity tool on an unbound session.
+    /// `None` for an identity tool.
     worker: Option<WorkerRow>,
     /// The agent's tags are read the first time a tool asks for its actor.
     actor: Arc<tokio::sync::OnceCell<fold_core::Actor>>,
-}
-
-impl Call {
-    /// True when `as_worker` names the worker this call resolved: the same `as`, or that worker by its full name.
-    fn serves(&self, as_worker: Option<&WorkerName>) -> bool {
-        as_worker == self.as_worker.as_ref()
-            || self
-                .worker
-                .as_ref()
-                .is_some_and(|worker| as_worker == Some(&worker.name))
-    }
 }
 
 /// The module that serves a tool which the dispatch does not name itself.
@@ -368,17 +304,6 @@ pub(crate) fn parse<T: for<'de> Deserialize<'de>>(arguments: &JsonObject) -> Res
             "the arguments do not match the tool's input schema",
         )
     })
-}
-
-fn as_worker(arguments: &JsonObject) -> Result<Option<WorkerName>, FoldError> {
-    match arguments.get("as") {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(name)) => Ok(Some(WorkerName::parse(name)?)),
-        Some(_) => Err(FoldError::new(
-            codes::INVALID_REQUEST,
-            "as must be a worker name",
-        )),
-    }
 }
 
 /// The `initialize` instructions of [`OutsideProject`].
@@ -439,14 +364,7 @@ impl ServerHandler for FoldServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        // A call whose `as` is not a worker name fails with its own error; its footer counts for the main worker.
-        let footer_worker = request
-            .arguments
-            .as_ref()
-            .and_then(|arguments| as_worker(arguments).ok().flatten());
-        let arrived = self
-            .counts(true, footer_worker.as_ref(), FooterCounts::default())
-            .await;
+        let arrived = self.counts(true, FooterCounts::default()).await;
         let mut result = match self.run(&request, &context).await {
             Ok(Some(value)) => CallToolResult::success(vec![ContentBlock::text(value.to_string())]),
             // The specification answers an unknown tool with a JSON-RPC error; its data carries the hint a tool error would.
@@ -460,7 +378,7 @@ impl ServerHandler for FoldServer {
             }
             Err(error) => tool_error(&error),
         };
-        if let Some(line) = footer(&self.counts(false, footer_worker.as_ref(), arrived).await) {
+        if let Some(line) = footer(&self.counts(false, arrived).await) {
             result.content.push(ContentBlock::text(line));
         }
         Ok(result.into())

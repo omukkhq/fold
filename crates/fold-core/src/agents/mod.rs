@@ -125,7 +125,7 @@ impl AreaName {
     }
 }
 
-/// `frontend` for the main worker of agent `frontend`, `frontend/ui` for its child `ui`. Every segment follows the agent name pattern.
+/// The worker of an agent, named as the agent: `frontend` for agent `frontend`. fold never creates a second worker of an agent; a project may still hold rows named `frontend/ui`, which fold reads as workers of `frontend` but never resolves a call to. Every segment follows the agent name pattern.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WorkerName(String);
 
@@ -148,14 +148,6 @@ impl WorkerName {
         Self(agent.as_str().to_owned())
     }
 
-    /// The worker `<self>/<segment>`; it fails when the result is too long.
-    pub fn child(&self, segment: &str) -> Result<Self, NameError> {
-        if !valid_segment(segment) {
-            return Err(NameError::InvalidSegment);
-        }
-        Self::parse(&format!("{}/{segment}", self.0))
-    }
-
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -173,13 +165,6 @@ impl WorkerName {
     /// Whether this is a worker of `agent`, without building the agent's name.
     pub fn belongs_to(&self, agent: &AgentName) -> bool {
         self.0.split('/').next() == Some(agent.as_str())
-    }
-
-    /// The worker one level up, or `None` for a main worker.
-    pub fn parent(&self) -> Option<WorkerName> {
-        self.0
-            .rsplit_once('/')
-            .map(|(parent, _)| WorkerName(parent.to_owned()))
     }
 }
 

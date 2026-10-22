@@ -160,11 +160,8 @@ pub enum PresenceState {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct WorkerEntry {
-    /// `agent` or `agent/worker`.
+    /// The worker's name, which is its agent's name.
     pub name: String,
-    /// Null for the main worker.
-    #[schema(required = true)]
-    pub parent: Option<String>,
     /// UTC milliseconds; null before the first call.
     #[schema(value_type = Option<i64>, required = true)]
     pub last_call_at: Option<fold_core::Timestamp>,
@@ -285,7 +282,6 @@ impl From<WorkerOverview> for WorkerEntry {
     fn from(worker: WorkerOverview) -> Self {
         Self {
             name: worker.name.to_string(),
-            parent: worker.parent.map(|parent| parent.to_string()),
             last_call_at: worker.last_call_at,
             activity: worker.activity,
             claims: worker.claims.iter().map(HeldClaim::from).collect(),

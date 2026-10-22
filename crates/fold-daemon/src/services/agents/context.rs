@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use fold_core::text::shorten;
-use fold_core::{AgentName, FoldError, TaskId, Timestamp, WorkerName, codes};
+use fold_core::{AgentName, FoldError, TaskId, Timestamp, codes};
 use fold_store::agents::{self, ClaimKind};
 use fold_store::messages;
 
@@ -25,7 +25,6 @@ const CONTEXT_TITLE: usize = 100;
 pub struct ContextClaim {
     pub task: TaskId,
     pub kind: ClaimKind,
-    pub worker: WorkerName,
     /// Whole minutes until the lease runs out; zero once it has.
     pub minutes_left: u64,
 }
@@ -83,7 +82,6 @@ impl AgentService {
                     facts.claims.push(ContextClaim {
                         task: claim.task,
                         kind: claim.kind,
-                        worker: worker.name.clone(),
                         minutes_left: minutes_left(claim.renewed_at, now, lease_minutes),
                     });
                 }
@@ -107,8 +105,7 @@ pub fn render(facts: &SessionFacts) -> String {
     let agent = &facts.agent;
     let _ = writeln!(text, "fold project {}.", facts.project);
     if facts.registered {
-        let main = WorkerName::main(agent);
-        let _ = writeln!(text, "You are agent {agent}, main worker {main}.");
+        let _ = writeln!(text, "You are agent {agent}.");
         let _ = writeln!(
             text,
             "Unread messages: {}.{}",
@@ -130,22 +127,12 @@ pub fn render(facts: &SessionFacts) -> String {
     } else {
         text.push_str("Claims:\n");
         for claim in facts.claims.iter().take(CONTEXT_CLAIMS) {
-            let by = if claim.worker.is_main() {
-                String::new()
-            } else {
-                format!(" by {}", claim.worker)
-            };
             let lease = match claim.minutes_left {
                 0 => "lease expired".to_owned(),
                 1 => "1 minute left".to_owned(),
                 minutes => format!("{minutes} minutes left"),
             };
-            let _ = writeln!(
-                text,
-                "- {} {}{by}: {lease}",
-                claim.task,
-                claim.kind.as_str()
-            );
+            let _ = writeln!(text, "- {} {}: {lease}", claim.task, claim.kind.as_str());
         }
         let more = facts.claims.len().saturating_sub(CONTEXT_CLAIMS);
         if more > 0 {

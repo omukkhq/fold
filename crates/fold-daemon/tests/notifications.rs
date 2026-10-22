@@ -125,7 +125,7 @@ impl Notified {
     }
 
     async fn actor(&self, agent: &reviews_support::Agent) -> Actor {
-        self.fx.agents.actor(&agent.ctx, None).await.unwrap()
+        self.fx.agents.actor(&agent.ctx).await.unwrap()
     }
 
     fn register(&self, agent: &str, socket: PathBuf) {
@@ -304,8 +304,7 @@ async fn integration_messages_go_to_author_reviewer_and_owners_of_newly_todo_tas
 #[tokio::test]
 async fn an_agent_with_several_roles_gets_one_message() {
     let n = Notified::new().await;
-    let ui = n.fx.subagent(&n.fx.frontend, "ui").await;
-    n.dependent_task(&by(&ui)).await;
+    n.dependent_task(&by(&n.fx.frontend.worker)).await;
     n.fx.proposal().await;
     give_main_tag(n.fx.project.store(), "backend").await;
     let backend = n.actor(&n.fx.backend).await;

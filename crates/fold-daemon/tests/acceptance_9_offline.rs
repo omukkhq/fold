@@ -148,18 +148,12 @@ fn changes(body: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
-/// `worker` of `agent` claims `task` and creates its workspace.
-async fn start_work_as(harness: &Harness, agent: &str, worker: &str, task: &str) -> Work {
-    let claimed = harness
-        .call(agent, "claim_task", json!({"id": task, "as": worker}))
-        .await;
-    assert_eq!(claimed["holder"], worker);
+/// `agent` claims `task` and creates its workspace.
+async fn start_work_again(harness: &Harness, agent: &str, task: &str) -> Work {
+    let claimed = harness.call(agent, "claim_task", json!({"id": task})).await;
+    assert_eq!(claimed["holder"], agent);
     let created = harness
-        .call(
-            agent,
-            "create_workspace",
-            json!({"task": task, "as": worker}),
-        )
+        .call(agent, "create_workspace", json!({"task": task}))
         .await;
     Work {
         task: task.to_owned(),
@@ -168,26 +162,20 @@ async fn start_work_as(harness: &Harness, agent: &str, worker: &str, task: &str)
     }
 }
 
-/// `worker` of `agent` records the files of `work` and opens a proposal; returns its id.
-async fn propose_as(
-    harness: &Harness,
-    agent: &str,
-    worker: &str,
-    work: &Work,
-    title: &str,
-) -> String {
+/// `agent` records the files of `work` and opens a proposal; returns its id.
+async fn propose_again(harness: &Harness, agent: &str, work: &Work, title: &str) -> String {
     harness
         .call(
             agent,
             "record_changes",
-            json!({"ws": work.workspace, "message": title, "as": worker}),
+            json!({"ws": work.workspace, "message": title}),
         )
         .await;
     let created = harness
         .call(
             agent,
             "create_proposal",
-            json!({"task": work.task, "title": title, "evidence": "tests pass", "as": worker}),
+            json!({"task": work.task, "title": title, "evidence": "tests pass"}),
         )
         .await;
     assert_eq!(created["status"], "review", "{created}");
@@ -383,36 +371,17 @@ async fn flow() {
         [(ENDPOINT.0.to_owned(), "added".to_owned())]
     );
 
-    // 6. The merge path: a second pair of workers changes the same line, the second integration is refused with a conflict report.
-    for (agent, name) in [("frontend", "ui"), ("backend", "api")] {
-        let registered = harness
-            .call(agent, "register_worker", json!({"name": name}))
-            .await;
-        assert_eq!(registered["worker"], format!("{agent}/{name}"));
-    }
+    // 6. The merge path: the two workers change the same line in their next tasks, and the second integration is refused with a conflict report.
     let readme = harness
         .create_task_for("review", "backend", "Name the login endpoint in the readme")
         .await;
-    let first = start_work_as(&harness, "frontend", "frontend/ui", &screen).await;
-    let second = start_work_as(&harness, "backend", "backend/api", &readme).await;
+    let first = start_work_again(&harness, "frontend", &screen).await;
+    let second = start_work_again(&harness, "backend", &readme).await;
     first.write(&[("README.md", SCREEN_README)]);
     second.write(&[("README.md", ENDPOINT_README)]);
-    let first_proposal = propose_as(
-        &harness,
-        "frontend",
-        "frontend/ui",
-        &first,
-        "Name the login screen",
-    )
-    .await;
-    let second_proposal = propose_as(
-        &harness,
-        "backend",
-        "backend/api",
-        &second,
-        "Name the login endpoint",
-    )
-    .await;
+    let first_proposal = propose_again(&harness, "frontend", &first, "Name the login screen").await;
+    let second_proposal =
+        propose_again(&harness, "backend", &second, "Name the login endpoint").await;
     harness.approve(&first_proposal).await;
     harness.approve(&second_proposal).await;
     let integrated = harness

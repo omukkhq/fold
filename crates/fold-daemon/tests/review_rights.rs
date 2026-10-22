@@ -83,7 +83,7 @@ async fn register(fx: &Fixture, name: &str, tags: &[&str]) -> Actor {
         .register_agent(&mut session, &AgentName::parse(name).unwrap(), &tags)
         .await
         .unwrap();
-    agents.actor(&session, None).await.unwrap()
+    agents.actor(&session).await.unwrap()
 }
 
 #[cfg(test)]
@@ -155,7 +155,7 @@ async fn agent_actor(fx: &Fixture, name: &str) -> Actor {
         .register_agent(&mut session, &AgentName::parse(name).unwrap(), &[])
         .await
         .unwrap();
-    agents.actor(&session, None).await.unwrap()
+    agents.actor(&session).await.unwrap()
 }
 
 #[cfg(test)]
@@ -539,7 +539,7 @@ async fn a_stored_approval_of_the_review_lead_still_counts() {
 
 #[cfg(test)]
 /// Who removes `T-2` while `web-worker` holds it: the holder's agent through any of its workers, its area lead and a human.
-const REMOVERS: [(&str, bool); 9] = [
+const REMOVERS: [(&str, bool); 8] = [
     ("web-worker", true),
     ("web-lead", true),
     ("human", true),
@@ -548,32 +548,12 @@ const REMOVERS: [(&str, bool); 9] = [
     ("reviewer-1", false),
     ("web-worker-2", false),
     ("backend", false),
-    ("web-worker/tests", true),
 ];
 
 #[cfg(test)]
 async fn remover(fx: &Fixture, name: &str) -> Actor {
     match name {
         "human" => human("tanim"),
-        "web-worker/tests" => {
-            let agents = fx.agents();
-            let mut session = agents.start_session(1).await.unwrap();
-            agents
-                .register_agent(&mut session, &AgentName::parse("web-worker").unwrap(), &[])
-                .await
-                .unwrap();
-            agents
-                .register_worker(&session, "tests", None)
-                .await
-                .unwrap();
-            agents
-                .actor(
-                    &session,
-                    Some(&fold_core::WorkerName::parse("web-worker/tests").unwrap()),
-                )
-                .await
-                .unwrap()
-        }
         name => agent_actor(fx, name).await,
     }
 }

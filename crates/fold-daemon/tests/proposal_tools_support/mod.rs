@@ -130,7 +130,7 @@ impl Fixture {
             .register_agent(&mut session, &AgentName::parse(name).unwrap(), &[])
             .await
             .unwrap();
-        agents.actor(&session, None).await.unwrap()
+        agents.actor(&session).await.unwrap()
     }
 
     /// Writes `content` to `path` in the task workspace of `task`.

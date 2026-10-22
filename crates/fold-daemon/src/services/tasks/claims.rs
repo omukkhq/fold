@@ -202,7 +202,7 @@ impl TaskService {
     }
 }
 
-/// Renews every unreleased claim held by `worker_ids` inside the caller's transaction. The session touch calls it with every worker of the calling agent, so a lease and the agent's last call never disagree.
+/// Renews every unreleased claim held by `worker_ids` inside the caller's transaction. The session touch calls it with the calling agent's worker, so a lease and the agent's last call never disagree.
 pub async fn renew_leases(
     tx: &mut WriteTx,
     worker_ids: &[i64],

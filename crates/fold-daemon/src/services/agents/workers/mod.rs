@@ -494,7 +494,7 @@ impl AgentService {
                 };
                 let agent_id = agents::insert_agent(tx, &name, now).await?;
                 let main = WorkerName::main(&name);
-                let worker_id = agents::insert_worker(tx, agent_id, &main, None, now).await?;
+                let worker_id = agents::insert_worker(tx, agent_id, &main, now).await?;
                 for (kind, data) in [
                     (types::AGENT_REGISTERED, json!({"agent": name.as_str()})),
                     (
@@ -544,7 +544,6 @@ impl AgentService {
                     id: worker_id,
                     agent_id,
                     name: main,
-                    parent_id: None,
                     last_call_at: None,
                     activity: None,
                 };

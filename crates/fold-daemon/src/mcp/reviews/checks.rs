@@ -25,9 +25,6 @@ const RESULT_TAIL_CHARS: usize = 20_000;
 pub struct RunChecksInput {
     /// The task, such as T-12, whose active task workspace you own. fold checks the workspace's recorded files there.
     pub task: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -35,9 +32,6 @@ pub struct RunChecksInput {
 pub struct GetCheckRunInput {
     /// The check run, such as cr-4, from run_checks, a result message or get_proposal.
     pub run: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {

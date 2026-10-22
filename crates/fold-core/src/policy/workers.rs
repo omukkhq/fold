@@ -17,8 +17,6 @@ pub enum Starter {
     ReviewLead,
     /// A task worker or a reviewer.
     ShortLived,
-    /// A child worker of any agent.
-    Subagent,
     System,
 }
 
@@ -28,7 +26,6 @@ impl Starter {
         match actor {
             Actor::Human { .. } => Starter::Human,
             Actor::System => Starter::System,
-            Actor::Agent(agent) if !agent.worker.is_main() => Starter::Subagent,
             Actor::Agent(agent) => match supervised {
                 None if agent.tags.iter().any(Tag::is_main) => Starter::MainAgent,
                 None => Starter::Unsupervised,
@@ -135,7 +132,7 @@ pub fn can_stop_worker(
         Starter::Human | Starter::MainAgent | Starter::System => true,
         Starter::AreaLead(own) => role == Role::TaskWorker && area == Some(own),
         Starter::ReviewLead => role == Role::Reviewer,
-        Starter::Unsupervised | Starter::ShortLived | Starter::Subagent => false,
+        Starter::Unsupervised | Starter::ShortLived => false,
     };
     if allowed {
         Ok(())
@@ -355,12 +352,7 @@ mod tests {
                 .code(),
             codes::ORCHESTRATOR_REQUIRED
         );
-        for starter in [
-            Starter::ReviewLead,
-            Starter::ShortLived,
-            Starter::Subagent,
-            Starter::System,
-        ] {
+        for starter in [Starter::ReviewLead, Starter::ShortLived, Starter::System] {
             assert_eq!(
                 can_publish_task_plan(&starter, &[]).unwrap_err().code(),
                 codes::MAIN_AGENT_REQUIRED
@@ -383,7 +375,6 @@ mod tests {
             Starter::AreaLead(area("web")),
             Starter::ReviewLead,
             Starter::ShortLived,
-            Starter::Subagent,
             Starter::System,
         ] {
             assert_eq!(
@@ -409,7 +400,6 @@ mod tests {
             Starter::AreaLead(area("web")),
             Starter::ReviewLead,
             Starter::ShortLived,
-            Starter::Subagent,
             Starter::System,
         ] {
             let denied = can_change_main_directly(&starter).unwrap_err();
@@ -433,20 +423,12 @@ mod tests {
         assert_eq!(of(&human, None), Starter::Human);
         assert_eq!(of(&Actor::System, None), Starter::System);
         assert_eq!(of(&tagged("main", "main"), None), Starter::MainAgent);
-        assert_eq!(of(&tagged("main/ui", "main"), None), Starter::Subagent);
         assert_eq!(
             of(
                 &agent("web-lead"),
                 Some((Role::AreaLead, Some(area("web"))))
             ),
             Starter::AreaLead(area("web"))
-        );
-        assert_eq!(
-            of(
-                &agent("web-lead/x"),
-                Some((Role::AreaLead, Some(area("web"))))
-            ),
-            Starter::Subagent
         );
         assert_eq!(
             of(&agent("review-lead"), Some((Role::ReviewLead, None))),
@@ -470,10 +452,6 @@ mod tests {
         for untagged in [agent("frontend"), tagged("frontend", "review")] {
             assert_eq!(Starter::of(&untagged, None), Starter::Unsupervised);
         }
-        assert_eq!(
-            Starter::of(&tagged("lead/sub", "main"), None),
-            Starter::Subagent
-        );
         assert_eq!(
             Starter::of(&agent("web-lead"), Some((Role::ReviewLead, None))),
             Starter::ReviewLead
@@ -540,7 +518,6 @@ mod tests {
             Starter::AreaLead(area("web")),
             Starter::ReviewLead,
             Starter::ShortLived,
-            Starter::Subagent,
             Starter::System,
         ] {
             assert_eq!(
@@ -572,7 +549,7 @@ mod tests {
     fn task_workers_come_from_area_leads_and_reviewers_from_the_review_lead() {
         assert!(can_start_worker(&Starter::AreaLead(area("web")), Role::TaskWorker).is_ok());
         assert!(can_start_worker(&Starter::ReviewLead, Role::Reviewer).is_ok());
-        for starter in [Starter::ReviewLead, Starter::ShortLived, Starter::Subagent] {
+        for starter in [Starter::ReviewLead, Starter::ShortLived] {
             assert_eq!(
                 can_start_worker(&starter, Role::TaskWorker)
                     .unwrap_err()
@@ -607,7 +584,6 @@ mod tests {
                 .code(),
             codes::WORKER_STOP_DENIED
         );
-        assert!(can_stop_worker(&Starter::Subagent, Role::TaskWorker, None).is_err());
     }
 
     #[test]
@@ -626,7 +602,6 @@ mod tests {
             Starter::AreaLead(area("api")),
             Starter::ReviewLead,
             Starter::ShortLived,
-            Starter::Subagent,
             Starter::System,
         ] {
             assert_eq!(
@@ -669,7 +644,6 @@ mod tests {
             Starter::AreaLead(area("api")),
             Starter::ReviewLead,
             Starter::ShortLived,
-            Starter::Subagent,
             Starter::System,
         ] {
             let denied = can_set_hold(&starter, &areas).unwrap_err();
@@ -694,7 +668,6 @@ mod tests {
             Starter::AreaLead(area("web")),
             Starter::ReviewLead,
             Starter::ShortLived,
-            Starter::Subagent,
             Starter::System,
         ] {
             let clear = can_clear_hold(&starter).unwrap_err();
@@ -721,7 +694,6 @@ mod tests {
             Starter::MainAgent,
             Starter::Human,
             Starter::ShortLived,
-            Starter::Subagent,
             Starter::System,
         ] {
             assert_eq!(

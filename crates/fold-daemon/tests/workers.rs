@@ -1438,16 +1438,9 @@ async fn a_worker_claims_through_no_path_of_its_own() {
             .refused("backend", "claim_task", json!({"id": "T-3"}))
             .await,
     );
-    harness
-        .call("web-worker", "register_worker", json!({"name": "tests"}))
-        .await;
     denied(
         &harness
-            .refused(
-                "web-worker",
-                "claim_task",
-                json!({"id": "T-3", "as": "web-worker/tests"}),
-            )
+            .refused("web-worker", "claim_task", json!({"id": "T-3"}))
             .await,
     );
 

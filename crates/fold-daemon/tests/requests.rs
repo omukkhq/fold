@@ -279,7 +279,7 @@ async fn creation_checks_the_message_and_the_attachments() {
 }
 
 #[tokio::test]
-async fn only_a_main_worker_claims_and_the_claim_sorts_and_names_the_request() {
+async fn only_an_orchestrator_claims_and_the_claim_sorts_and_names_the_request() {
     let fx = Fixture::new().await;
     let id = fx
         .create(&human("tanim"), "The export button does nothing")
@@ -291,7 +291,7 @@ async fn only_a_main_worker_claims_and_the_claim_sorts_and_names_the_request() {
     )
     .await;
     // `docs` has neither the `main` tag nor a lead's role, as a session opened by hand.
-    for actor in [agent("frontend/ui"), agent("docs"), human("tanim")] {
+    for actor in [agent("docs"), human("tanim")] {
         let error = fx
             .tasks
             .claim_request(&actor, id, RequestKind::Bug, "Export")

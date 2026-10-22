@@ -28,9 +28,6 @@ pub struct CreateReviewBatchInput {
     /// For revised versions: the scope of your review of some proposals, each with its reason, when you do not follow fold's suggested_scope from get_proposal_diff. The other proposals follow the suggestion.
     #[serde(default)]
     pub scopes: Vec<ScopeChoiceInput>,
-    /// The worker that makes this call, such as review/batch. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -39,9 +36,6 @@ pub struct ListReviewBatchesInput {
     /// Only the batches that are not submitted yet.
     #[serde(default)]
     pub open: bool,
-    /// The worker that makes this call, such as review/batch. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -49,9 +43,6 @@ pub struct ListReviewBatchesInput {
 pub struct ReviewBatchIdInput {
     /// The review batch, such as rb-3.
     pub id: String,
-    /// The worker that makes this call, such as review/batch. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -61,9 +52,6 @@ pub struct RemoveFromBatchInput {
     pub id: String,
     /// The member to take out, such as P-4. Its review claim is released.
     pub proposal: String,
-    /// The worker that makes this call, such as review/batch. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -107,9 +95,6 @@ pub struct SubmitBatchReviewInput {
     /// Line comments on the batch checkout and comments on the batch.
     #[serde(default)]
     pub comments: Vec<BatchCommentInput>,
-    /// The worker that makes this call, such as review/batch. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {

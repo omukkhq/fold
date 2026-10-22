@@ -219,8 +219,6 @@ async fn concurrent_checkouts_keep_one_row_and_remove_the_other_directory() {
             .await,
         1
     );
-    let sub = fx.subagent(&fx.backend, "r1").await;
-    assert_eq!(fx.checkout_by(&sub).await.workspace.id, ws(3));
 }
 
 #[tokio::test]
@@ -399,60 +397,26 @@ async fn closing_the_proposal_archives_the_checkout_and_keeps_the_directory() {
 }
 
 #[tokio::test]
-async fn subagent_worker_gets_its_own_checkout_with_as() {
-    let fx = Fixture::with_reviewers().await;
-    fx.proposal().await;
-    fx.claimed().await;
-    let sub = fx.subagent(&fx.backend, "r1").await;
-    let main = fx.checkout_by(&fx.backend.worker).await;
-
-    let own = fx.checkout_by(&sub).await;
-
-    assert_ne!(own.workspace.id, main.workspace.id);
-    assert_eq!(own.workspace.path, ".fold/ws/review-p-1-2");
-    assert_eq!(own.workspace.worker, Some(sub.name.clone()));
-    assert_eq!(own.version, 1);
-    assert_eq!(fx.checkout_by(&sub).await, own);
-    assert_eq!(fx.checkout_by(&fx.backend.worker).await, main);
-    assert_eq!(
-        fx.read(&own.workspace.path, "src/new.rs"),
-        "pub fn z() {}\n"
-    );
-}
-
-#[tokio::test]
 async fn checkout_directory_name_never_uses_the_worker_name() {
     let fx = Fixture::with_reviewers().await;
     fx.proposal().await;
     fx.claimed().await;
     assert!(WorkerName::parse("backend/..").is_err());
     assert!(WorkerName::parse("../backend").is_err());
-    let nested = fx.subagent(&fx.backend, "a-b").await;
-    let deeper = fx
-        .agents
-        .register_worker(&fx.backend.ctx, "c_d", Some(&nested.name))
+    let first = fx.checkout_by(&fx.backend.worker).await.workspace.path;
+    fx.reviews
+        .release_review(&by(&fx.backend.worker), p(1), None)
         .await
-        .unwrap()
-        .worker;
-    assert_eq!(deeper.name.as_str(), "backend/a-b/c_d");
-
-    let mut paths = Vec::new();
-    for worker in [&deeper, &nested, &fx.backend.worker] {
-        paths.push(fx.checkout_by(worker).await.workspace.path);
-    }
+        .unwrap();
+    crate::common::roles::give_review_claim(fx.project.store(), "review", p(1), fx.project.now())
+        .await;
+    let second = fx.checkout_by(&fx.review.worker).await.workspace.path;
 
     assert_eq!(
-        paths,
-        [
-            ".fold/ws/review-p-1",
-            ".fold/ws/review-p-1-2",
-            ".fold/ws/review-p-1-3"
-        ]
+        [first, second],
+        [".fold/ws/review-p-1", ".fold/ws/review-p-1-2"]
     );
-    assert_eq!(
-        fx.ws_entries(),
-        ["review-p-1", "review-p-1-2", "review-p-1-3", "t-1"]
-    );
+    assert_eq!(fx.ws_entries(), ["review-p-1", "review-p-1-2", "t-1"]);
 }
 
 #[tokio::test]

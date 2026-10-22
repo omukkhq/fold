@@ -54,27 +54,17 @@ pub struct GetTaskGraphInput {
     /// Include Done tasks. Leave it out to see only the open work.
     #[serde(default)]
     pub include_done: bool,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
-pub struct AsOnlyInput {
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
-}
+pub struct NoInput {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct TaskIdInput {
     /// The task, such as T-12.
     pub id: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -97,9 +87,6 @@ pub struct CreateTaskInput {
     /// proposal (the default), no_proposal or human. A no_proposal task is for work that changes no project file, such as designs made through an MCP server: its task worker claims it, does the work without a workspace and calls report_task, and a lead check completes it. A human task is work only a person can do outside every agent, such as verifying an app with a provider: no agent claims it, and a human, or the main agent when the user says so, marks it Done with complete_task. Only the main agent, a human or the lead of the task's area creates a no_proposal or human task.
     #[serde(default)]
     pub kind: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -109,9 +96,6 @@ pub struct SetBlockerInput {
     pub id: String,
     /// Why the task waits for a person, such as "Wait until the Meta app review passes": plain text, not empty, at most 500 characters.
     pub reason: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -121,9 +105,6 @@ pub struct TaskNoteInput {
     pub id: String,
     /// What was done, or what to change: plain text, not empty.
     pub note: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -198,9 +179,6 @@ pub struct PlannedTaskInput {
 pub struct CreateTaskPlanInput {
     /// Between 1 and 100 tasks to publish together with their dependencies, parent links, human review marks and blockers. Only the main agent, a human or the lead of each task's area may publish them. Any refusal leaves the entire plan uncreated.
     pub tasks: Vec<PlannedTaskInput>,
-    /// The worker that makes this call. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -217,9 +195,6 @@ pub struct UpdateTaskInput {
     /// The whole new label set, by name. Leave it out to keep the labels; pass an empty list to remove them all. At most one may be the label of an area (two_areas); on a task that get_task marks with areas_conflict, a new label set must keep at most one.
     #[serde(default)]
     pub labels: Option<Vec<String>>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -229,9 +204,6 @@ pub struct DependencyInput {
     pub task: String,
     /// The task it needs, such as T-3.
     pub needs: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -248,9 +220,6 @@ pub struct AddChecklistItemInput {
     /// The checklist name. Leave it out for a plain step to use the task's only checklist, or Subtasks when it has none; with two or more checklists the call is refused with `checklist_ambiguous`, so name one. A name the task does not have creates that checklist.
     #[serde(default)]
     pub checklist: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -264,9 +233,6 @@ pub struct UpdateChecklistItemInput {
     /// Tick (true) or untick (false) a plain step. Linked items tick themselves.
     #[serde(default)]
     pub done: Option<bool>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -279,9 +245,6 @@ pub struct MoveChecklistItemInput {
     /// Another checklist of the same task to move the item into. Leave it out to stay in the item's checklist.
     #[serde(default)]
     pub checklist: Option<String>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -289,9 +252,6 @@ pub struct MoveChecklistItemInput {
 pub struct ChecklistItemIdInput {
     /// The checklist item, such as ci-4.
     pub id: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -301,9 +261,6 @@ pub struct CreateLabelInput {
     pub name: String,
     /// One of sage, slate, teal, ink, gold, moss, plum, stone.
     pub color: String,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {
@@ -316,7 +273,7 @@ pub fn tools() -> Vec<Tool> {
         Tool::new(
             GET_READY_TASKS,
             "List the Todo tasks nobody has claimed, the one that unblocks the most tasks first. Human tasks and tasks with a blocker are left out: no agent takes them.",
-            schema_for_type::<AsOnlyInput>(),
+            schema_for_type::<NoInput>(),
         ),
         Tool::new(
             GET_TASK,
@@ -574,14 +531,13 @@ fn detail_json(detail: &TaskDetail) -> Value {
     value
 }
 
-/// Runs a task or request tool acting as `as_worker`. `None` when `tool` is neither.
+/// Runs a task or request tool as the session's worker. `None` when `tool` is neither.
 pub async fn call(
     server: &FoldServer,
     tool: &str,
-    as_worker: Option<&WorkerName>,
     arguments: &JsonObject,
 ) -> Result<Option<Value>, FoldError> {
-    let actor = server.actor(as_worker).await?;
+    let actor = server.actor().await?;
     if let Some(value) = requests::run(server, tool, &actor, arguments).await? {
         return Ok(Some(value));
     }
@@ -651,7 +607,7 @@ async fn get_task_graph(server: &FoldServer, arguments: &JsonObject) -> Result<V
 
 async fn get_ready_tasks(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let tasks = &server.tasks;
-    let _: AsOnlyInput = parse(arguments)?;
+    let _: NoInput = parse(arguments)?;
     let ready = tasks.ready().await.map_err(from_task)?;
     let tasks: Vec<Value> = ready
         .iter()
@@ -974,7 +930,7 @@ async fn takeover_claim(
     Ok(claimed_json(&claimed))
 }
 
-/// The `claims near stale` part of the footer: the unreleased claims of every worker of the calling agent that are near the end of their lease. Every recorded call renews those claims, so the count is taken as the call arrives: it tells an agent that it went quiet long enough for its claims to near stale, even though the call itself renews them.
+/// The `claims near stale` part of the footer: the unreleased claims of the calling agent's worker that are near the end of their lease. Every recorded call renews those claims, so the count is taken as the call arrives: it tells an agent that it went quiet long enough for its claims to near stale, even though the call itself renews them.
 pub struct ClaimsNearStaleFooter {
     agents: AgentService,
     tasks: TaskService,

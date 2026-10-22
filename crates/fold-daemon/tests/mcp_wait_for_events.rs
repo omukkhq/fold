@@ -164,12 +164,7 @@ impl Fixture {
                 .unwrap()
                 .unwrap();
         session.context.agent = Some(agent.name);
-        session.main = Some(
-            self.agents
-                .resolve_worker(&session.context, None)
-                .await
-                .unwrap(),
-        );
+        session.main = Some(self.agents.resolve_worker(&session.context).await.unwrap());
         while !call(&session, "get_events", json!({"limit": 500})).await["events"]
             .as_array()
             .unwrap()
@@ -633,129 +628,11 @@ async fn a_filtered_wait_ends_for_a_new_message_to_the_waiter_only() {
     );
 }
 
-#[cfg(test)]
-fn filtered(types: &[&str], worker: Option<&str>) -> Value {
-    let mut arguments = json!({"types": types, "timeout_s": 2});
-    if let Some(worker) = worker {
-        arguments["as"] = json!(worker);
-    }
-    arguments
-}
-
-#[tokio::test]
-async fn a_main_worker_wakes_for_its_workers_and_a_child_only_for_itself() {
-    let fx = Fixture::new().await;
-    let backend = fx.connect("backend").await;
-    call(&backend, "register_worker", json!({"name": "sub"})).await;
-    let main = wait_in_background(&backend, filtered(&["proposal.opened"], None));
-    subscribed(&fx.bus, 1).await;
-    let to_sub = send_as_human(&fx, "backend/sub").await;
-    let main = body(&tokio::time::timeout(WAIT, main).await.unwrap().unwrap());
-    assert_eq!(main["messages"], json!([to_sub.to_string()]));
-    assert_eq!(
-        main["inbox"],
-        json!(format!(
-            "fold: 1 new message. [{to_sub} to backend/sub from human:ana] \"are you there?\""
-        ))
-    );
-    let child = call(
-        &backend,
-        "wait_for_events",
-        filtered(&["proposal.opened"], Some("backend/sub")),
-    )
-    .await;
-    assert_eq!(
-        child,
-        json!({"timed_out": true}),
-        "the main worker's wait carried the message to the child, as its inbox read with include_workers would"
-    );
-    let child = wait_in_background(
-        &backend,
-        filtered(&["proposal.opened"], Some("backend/sub")),
-    );
-    subscribed(&fx.bus, 1).await;
-    send_as_human(&fx, "backend").await;
-    let child = body(&tokio::time::timeout(WAIT, child).await.unwrap().unwrap());
-    assert_eq!(
-        child,
-        json!({"timed_out": true}),
-        "a message to the main worker"
-    );
-}
-
-#[tokio::test]
-async fn a_main_worker_and_its_child_waiting_together_both_wake_for_the_childs_message() {
-    let fx = Fixture::new().await;
-    let backend = fx.connect("backend").await;
-    call(&backend, "register_worker", json!({"name": "sub"})).await;
-    let main = wait_in_background(&backend, filtered(&["proposal.opened"], None));
-    let child = wait_in_background(
-        &backend,
-        filtered(&["proposal.opened"], Some("backend/sub")),
-    );
-    subscribed(&fx.bus, 2).await;
-    let to_sub = send_as_human(&fx, "backend/sub").await;
-    let main = body(&tokio::time::timeout(WAIT, main).await.unwrap().unwrap());
-    let child = body(&tokio::time::timeout(WAIT, child).await.unwrap().unwrap());
-    let carried: Vec<&str> = [&main, &child]
-        .into_iter()
-        .filter_map(|result| result.get("inbox")?.as_str())
-        .collect();
-    assert_eq!(
-        carried.len(),
-        1,
-        "one of the two waits carries the message into the session: {main} {child}"
-    );
-    assert!(
-        carried[0].starts_with(&format!("fold: 1 new message. [{to_sub} "))
-            && carried[0].ends_with("from human:ana] \"are you there?\""),
-        "{}",
-        carried[0]
-    );
-}
-
-#[tokio::test]
-async fn concurrent_waits_of_a_main_worker_and_its_child_each_wake_for_their_own_message() {
-    let fx = Fixture::new().await;
-    let backend = fx.connect("backend").await;
-    call(&backend, "register_worker", json!({"name": "sub"})).await;
-    let main = wait_in_background(&backend, filtered(&["worker.stopped"], None));
-    let child = wait_in_background(
-        &backend,
-        filtered(&["proposal.opened"], Some("backend/sub")),
-    );
-    subscribed(&fx.bus, 2).await;
-    let to_main = send_as_human(&fx, "backend").await;
-    let main = body(&tokio::time::timeout(WAIT, main).await.unwrap().unwrap());
-    assert_eq!(main["messages"], json!([to_main.to_string()]), "{main}");
-    let to_sub = send_as_human(&fx, "backend/sub").await;
-    let child = body(&tokio::time::timeout(WAIT, child).await.unwrap().unwrap());
-    assert_eq!(child["messages"], json!([to_sub.to_string()]), "{child}");
-    assert_eq!(
-        child["inbox"],
-        json!(format!(
-            "fold: 1 new message. [{to_sub} from human:ana] \"are you there?\""
-        )),
-        "{child}"
-    );
-    let again = call(
-        &backend,
-        "wait_for_events",
-        filtered(&["worker.stopped"], None),
-    )
-    .await;
-    assert_eq!(
-        again,
-        json!({"timed_out": true}),
-        "the child's wait took the message to it, so the main worker's wait finds nothing new"
-    );
-}
-
 #[tokio::test]
 async fn the_footer_counts_new_events_after_the_calling_workers_cursor() {
     let fx = Fixture::new().await;
     let backend = fx.connect("backend").await;
-    call(&backend, "register_worker", json!({"name": "sub"})).await;
+    call(&backend, "get_events", json!({})).await;
     let head = fx
         .commit(vec![new_event(types::MAIN_ADVANCED, "fold")])
         .await[0];
@@ -765,22 +642,19 @@ async fn the_footer_counts_new_events_after_the_calling_workers_cursor() {
             .get(1)
             .map(|line| line.as_text().unwrap().text.clone())
     };
-    let main = call_raw(&backend, "get_events", json!({})).await;
-    assert_eq!(footer(&main), None);
-    let peek = call_raw(
-        &backend,
-        "get_events",
-        json!({"after": head, "as": "backend/sub"}),
-    )
-    .await;
+    let peek = call_raw(&backend, "get_events", json!({"after": head})).await;
     assert_eq!(
         footer(&peek).as_deref(),
         Some("fold: 1 new events"),
-        "the main worker's read leaves the child's count"
+        "a read after a seq leaves the cursor and the count"
     );
-    let read = call_raw(&backend, "get_events", json!({"as": "backend/sub"})).await;
+    let read = call_raw(&backend, "get_events", json!({})).await;
     assert_eq!(returned_seqs(&body(&read)).last(), Some(&head));
-    assert_eq!(footer(&read), None, "the child's read clears its count");
+    assert_eq!(
+        footer(&read),
+        None,
+        "a read after the cursor clears the count"
+    );
 }
 
 #[tokio::test]
@@ -914,11 +788,7 @@ async fn a_wait_ticks_every_minute_renews_the_worker_and_times_out() {
     let fx = Fixture::new().await;
     fx.create_task().await;
     let mut session = fx.connect("frontend").await;
-    let main = fx
-        .agents
-        .resolve_worker(&session.context, None)
-        .await
-        .unwrap();
+    let main = fx.agents.resolve_worker(&session.context).await.unwrap();
     fx.tasks.claim_task(&by(&main), t(1)).await.unwrap();
     call(&session, "get_events", json!({})).await;
     let session_id = session.context.session_id;
@@ -1109,11 +979,7 @@ async fn the_footer_counts_new_events_that_concern_the_agent() {
     let fx = Fixture::new().await;
     fx.create_task().await;
     let session = fx.connect("frontend").await;
-    let main = fx
-        .agents
-        .resolve_worker(&session.context, None)
-        .await
-        .unwrap();
+    let main = fx.agents.resolve_worker(&session.context).await.unwrap();
     fx.tasks.claim_task(&by(&main), t(1)).await.unwrap();
     call(&session, "get_events", json!({})).await;
     let quiet = call_raw(&session, "list_agents", json!({})).await;
@@ -1242,11 +1108,7 @@ async fn a_claim_in_the_last_quarter_of_its_lease_shows_in_the_next_footer() {
     let fx = Fixture::new().await;
     fx.create_task().await;
     let session = fx.connect("frontend").await;
-    let main = fx
-        .agents
-        .resolve_worker(&session.context, None)
-        .await
-        .unwrap();
+    let main = fx.agents.resolve_worker(&session.context).await.unwrap();
     fx.tasks.claim_task(&by(&main), t(1)).await.unwrap();
     let footer = |result: &CallToolResult| {
         result
@@ -1302,43 +1164,36 @@ async fn a_message_the_agent_has_read_never_wakes_its_next_filtered_wait() {
 }
 
 #[tokio::test]
-async fn a_worker_never_wakes_for_its_own_message_and_a_main_worker_wakes_for_its_childs() {
+async fn a_worker_never_wakes_for_its_own_message() {
     let fx = Fixture::new().await;
     let backend = fx.connect("backend").await;
-    call(&backend, "register_worker", json!({"name": "sub"})).await;
     let filter = json!({"types": ["proposal.opened"], "timeout_s": 1});
     call(
         &backend,
         "send_message",
-        json!({"to": ["backend/sub"], "body": "take the parser"}),
+        json!({"to": ["backend"], "body": "note to self"}),
     )
     .await;
     assert_eq!(
         call(&backend, "wait_for_events", filter.clone()).await,
         json!({"timed_out": true}),
-        "the main worker's message to its child"
+        "the worker's message to itself"
     );
-    let report = call(
-        &backend,
-        "send_message",
-        json!({"to": ["backend"], "body": "the parser is done", "as": "backend/sub"}),
-    )
-    .await;
+    let unread = send_as_human(&fx, "backend").await;
     let woke = call(&backend, "wait_for_events", filter).await;
-    assert_eq!(woke["messages"], json!([report["id"]]), "{woke}");
+    assert_eq!(woke["messages"], json!([unread.to_string()]), "{woke}");
 }
 
 #[tokio::test]
 async fn a_wait_names_no_message_the_worker_has_read_or_sent() {
     let fx = Fixture::new().await;
     let backend = fx.connect("backend").await;
-    call(&backend, "register_worker", json!({"name": "sub"})).await;
     let read = send_as_human(&fx, "backend").await;
     call(&backend, "get_inbox", json!({})).await;
     let own = call(
         &backend,
         "send_message",
-        json!({"to": ["backend/sub"], "body": "take the parser"}),
+        json!({"to": ["backend"], "body": "note to self"}),
     )
     .await;
     let unfiltered = json!({"timeout_s": 1});
@@ -1361,6 +1216,6 @@ async fn a_wait_names_no_message_the_worker_has_read_or_sent() {
         json!(format!(
             "fold: 1 new message. [{unread} from human:ana] \"are you there?\""
         )),
-        "the worker's own message to its child is never carried back to it"
+        "the worker's own message is never carried back to it"
     );
 }

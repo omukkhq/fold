@@ -1,9 +1,8 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use fold_core::{Event, FoldError, WorkerName};
+use fold_core::{Event, FoldError, MessageId};
 use fold_store::agents::WorkerRow;
-use fold_store::events::WaitingMessage;
 use rmcp::RoleServer;
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, ProgressNotificationParam, Tool};
@@ -41,9 +40,6 @@ pub struct GetEventsInput {
     /// The most events to return: 1 to 500, 100 when left out.
     #[serde(default)]
     pub limit: Option<u32>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -61,9 +57,6 @@ pub struct WaitForEventsInput {
     /// The longest wait in seconds: 300 when left out, at most 1500. When fold started you with the five-minute prompt cache, it ends the wait after at most 270 whatever this says; call again when a wait returns with nothing new.
     #[serde(default)]
     pub timeout_s: Option<u64>,
-    /// The worker that makes this call, such as frontend/ui. Leave it out to act as the main worker.
-    #[serde(rename = "as", default)]
-    pub as_worker: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {
@@ -110,26 +103,29 @@ fn page_json(page: &EventPage) -> Value {
     })
 }
 
-/// The page of a wait, with the messages in it that wait for the worker and, in `inbox`, the worker's messages that nothing had shown yet, as many as fit, which the wait has marked delivered. Without that text the hint names the call that reads them.
-fn wait_json(page: &EventPage, waiting: &[WaitingMessage], inbox: Option<String>) -> Value {
+/// What a wait that messages ended tells about them besides their ids.
+enum Inbox {
+    /// The messages that nothing had shown the worker yet, which the wait has marked delivered.
+    Carried(String),
+    /// A notice or an inbox read showed every one of them already.
+    Shown,
+    /// They could not be read, so the worker reads its inbox itself.
+    Unread,
+}
+
+/// The page of a wait, with the messages in it that wait for the worker and, in `inbox`, those that nothing had shown it yet, as many as fit.
+fn wait_json(page: &EventPage, waiting: &[MessageId], inbox: Inbox) -> Value {
     let mut result = page_json(page);
     if waiting.is_empty() {
         return result;
     }
-    let ids: Vec<String> = waiting
-        .iter()
-        .map(|message| message.id.to_string())
-        .collect();
+    let ids: Vec<String> = waiting.iter().map(ToString::to_string).collect();
     result["messages"] = json!(ids);
-    if let Some(inbox) = inbox {
-        result["inbox"] = json!(inbox);
-        return result;
+    match inbox {
+        Inbox::Carried(text) => result["inbox"] = json!(text),
+        Inbox::Shown => {}
+        Inbox::Unread => result["hint"] = json!("a message waits for you; call get_inbox"),
     }
-    result["hint"] = json!(if waiting.iter().all(|message| message.own) {
-        "a message waits for you; call get_inbox"
-    } else {
-        "a message waits for a worker of your agent; call get_inbox with include_workers"
-    });
     result
 }
 
@@ -193,16 +189,17 @@ pub async fn wait_for_events(
                     .await
                     .map_err(from_events)?;
                 let inbox = if waiting.is_empty() {
-                    None
+                    Inbox::Shown
                 } else {
                     match server.messages.carry_for_wait(worker).await {
-                        Ok(inbox) => inbox,
+                        Ok(Some(text)) => Inbox::Carried(text),
+                        Ok(None) => Inbox::Shown,
                         Err(error) => {
                             tracing::warn!(
                                 code = from_message(error).code(),
                                 "could not carry the messages that ended a wait"
                             );
-                            None
+                            Inbox::Unread
                         }
                     }
                 };
@@ -253,35 +250,19 @@ impl FooterSource for NewEventsFooter {
         &'a self,
         session: &'a SessionContext,
     ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
-        self.count_as(session, None)
-    }
-
-    /// A call whose `as` names no worker of the agent fails with its own error, so its footer counts for the main worker.
-    fn count_as<'a>(
-        &'a self,
-        session: &'a SessionContext,
-        as_worker: Option<&'a WorkerName>,
-    ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>> {
         Box::pin(async move {
             let Some(agent) = session.agent.as_ref() else {
                 return 0;
             };
-            let named = match as_worker {
-                Some(name) => self.agents.resolve_worker(session, Some(name)).await.ok(),
-                None => None,
-            };
-            let worker = match named {
-                Some(worker) => worker,
-                None => match self.agents.resolve_worker(session, None).await {
-                    Ok(worker) => worker,
-                    Err(error) => {
-                        tracing::warn!(
-                            code = from_agent(error).code(),
-                            "could not count new events"
-                        );
-                        return 0;
-                    }
-                },
+            let worker = match self.agents.resolve_worker(session).await {
+                Ok(worker) => worker,
+                Err(error) => {
+                    tracing::warn!(
+                        code = from_agent(error).code(),
+                        "could not count new events"
+                    );
+                    return 0;
+                }
             };
             match self.events.new_event_count(&worker, agent).await {
                 Ok(count) => count,

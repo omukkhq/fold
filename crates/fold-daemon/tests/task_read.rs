@@ -63,7 +63,7 @@ async fn the_proposal_the_reviews_and_the_integration_follow_the_task_to_done() 
     let fx = Fixture::new().await;
     fx.proposal().await;
     give_role(fx.project.store(), "review", Role::Reviewer, None).await;
-    let review = fx.agents.actor(&fx.review.ctx, None).await.unwrap();
+    let review = fx.agents.actor(&fx.review.ctx).await.unwrap();
 
     let open = fx.tasks.get_view(t(1)).await.unwrap();
     assert_eq!(open.task.status, TaskStatus::Review);
@@ -188,7 +188,7 @@ async fn the_checkpoints_of_the_workspace_come_newest_first_and_stay_after_the_t
     );
 
     give_role(fx.project.store(), "review", Role::Reviewer, None).await;
-    let review = fx.agents.actor(&fx.review.ctx, None).await.unwrap();
+    let review = fx.agents.actor(&fx.review.ctx).await.unwrap();
     fx.reviews
         .submit_review(&review, p(1), 1, Verdict::Approve, "fine", Vec::new())
         .await
@@ -282,7 +282,7 @@ async fn the_proposal_of_the_task_read_names_its_title_files_and_review_claim() 
     let fx = Fixture::new().await;
     fx.proposal().await;
     give_role(fx.project.store(), "review", Role::Reviewer, None).await;
-    let review = fx.agents.actor(&fx.review.ctx, None).await.unwrap();
+    let review = fx.agents.actor(&fx.review.ctx).await.unwrap();
 
     let open = fx.tasks.get_view(t(1)).await.unwrap().proposal.unwrap();
     assert_eq!(

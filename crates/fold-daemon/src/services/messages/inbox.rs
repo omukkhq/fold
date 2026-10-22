@@ -8,7 +8,7 @@ use fold_core::{
 };
 use fold_store::agents::WorkerRow;
 use fold_store::messages::{self, InboxRow, MessageLines};
-use fold_store::{Store, StoreError, WriteTx, agents};
+use fold_store::{SqliteConnection, Store, StoreError, WriteTx, agents};
 use serde_json::json;
 
 use super::{MessageError, MessageService, message_not_found};
@@ -67,23 +67,14 @@ fn item(row: InboxRow, now: Timestamp) -> InboxItem {
 }
 
 impl MessageService {
-    /// The acting worker's unacknowledged rows in message number order, or with `include_workers` those of every worker of its agent. The same write transaction sets `delivered_at` on the rows that had none, so a returned row is always marked delivered and a marked row was always returned. Reading never acknowledges: the rows come back on every call until `acknowledge`.
-    pub async fn inbox(
-        &self,
-        actor: &Actor,
-        include_workers: bool,
-    ) -> Result<Vec<InboxItem>, MessageError> {
+    /// The acting worker's unacknowledged rows in message number order. The same write transaction sets `delivered_at` on the rows that had none, so a returned row is always marked delivered and a marked row was always returned. Reading never acknowledges: the rows come back on every call until `acknowledge`.
+    pub async fn inbox(&self, actor: &Actor) -> Result<Vec<InboxItem>, MessageError> {
         let agent = policy::can_use_inbox(actor).map_err(FoldError::from)?;
         let now = self.clock.now();
         self.store
             .write(async |tx| {
                 let worker = acting_worker(tx, agent).await?;
-                let workers = if include_workers {
-                    agents::worker_ids(tx.conn(), worker.agent_id).await?
-                } else {
-                    vec![worker.id]
-                };
-                let rows = messages::inbox(tx.conn(), &workers).await?;
+                let rows = messages::inbox(tx.conn(), &[worker.id]).await?;
                 let undelivered: Vec<i64> = rows
                     .iter()
                     .filter(|row| row.delivered_at.is_none())
@@ -139,7 +130,7 @@ impl MessageService {
         Ok(acknowledged)
     }
 
-    /// The Stop hook's text for `agent`: the messages to its workers that no inbox, notice or wait has shown yet, as many as fit, with the ids it carries, or `None` when there is none. Nothing is marked: the hook may not get the answer to its session in time, so it reports the ids it used with [`MessageService::mark_carried`].
+    /// The Stop hook's text for `agent`: the messages to its worker that no inbox, notice or wait has shown yet, as many as fit, with the ids it carries, or `None` when there is none. Nothing is marked: the hook may not get the answer to its session in time, so it reports the ids it used with [`MessageService::mark_carried`].
     pub async fn carry_for_stop(
         &self,
         agent: &AgentName,
@@ -150,16 +141,17 @@ impl MessageService {
             .acquire()
             .await
             .map_err(StoreError::from)?;
-        let Some(row) = agents::find_agent(&mut *conn, agent).await? else {
+        let Some(worker) = agent_worker(&mut conn, agent).await? else {
             return Ok(None);
         };
-        let workers = agents::worker_ids(&mut *conn, row.id).await?;
-        let reader = WorkerName::main(agent);
-        let rows = undelivered(messages::inbox(&mut conn, &workers).await?, &reader);
+        let rows = undelivered(
+            messages::inbox(&mut conn, &[worker.id]).await?,
+            &worker.name,
+        );
         let Some(head) = new_messages_head(&rows) else {
             return Ok(None);
         };
-        let carried = carry_rows(&head, &rows, &reader);
+        let carried = carry_rows(&head, &rows);
         Ok(Some(StopCarry {
             text: carried.text,
             messages: carried.messages.into_iter().map(|(id, _)| id).collect(),
@@ -175,11 +167,10 @@ impl MessageService {
         let now = self.clock.now();
         self.store
             .write(async |tx| {
-                let Some(row) = agents::find_agent(tx.conn(), agent).await? else {
+                let Some(worker) = agent_worker(tx.conn(), agent).await? else {
                     return Ok(0);
                 };
-                let workers = agents::worker_ids(tx.conn(), row.id).await?;
-                let rows: Vec<i64> = messages::inbox(tx.conn(), &workers)
+                let rows: Vec<i64> = messages::inbox(tx.conn(), &[worker.id])
                     .await?
                     .into_iter()
                     .filter(|row| row.delivered_at.is_none() && carried.contains(&row.message.id))
@@ -191,18 +182,11 @@ impl MessageService {
             .await
     }
 
-    /// The text of a wait that a message ended: the messages to `worker`, or to every worker of its agent for a main worker, which also wakes for them, that nothing has shown yet; `None` when there is none. The carried rows are marked delivered in the same transaction.
+    /// The text of a wait that a message ended: the messages to `worker` that nothing has shown yet, or `None` when there is none. The carried rows are marked delivered in the same transaction.
     pub async fn carry_for_wait(&self, worker: &WorkerRow) -> Result<Option<String>, MessageError> {
         let now = self.clock.now();
         self.store
-            .write(async |tx| {
-                let workers = if worker.name.is_main() {
-                    agents::worker_ids(tx.conn(), worker.agent_id).await?
-                } else {
-                    vec![worker.id]
-                };
-                carry_in_tx(tx, &workers, &worker.name, now).await
-            })
+            .write(async |tx| carry_in_tx(tx, worker, now).await)
             .await
     }
 
@@ -257,47 +241,61 @@ pub(crate) struct CarriedInbox {
     pub messages: Vec<(MessageId, MessageId)>,
 }
 
-/// The push notice `head` with the messages to every worker of `agent` that nothing has shown yet, as many as fit after it, read from the read pool. Nothing is marked: the push marks the rows once the notice gets through. An unknown agent has none.
+/// The push notice `head` with the messages to the worker of `agent` that nothing has shown yet, as many as fit after it, read from the read pool. Nothing is marked: the push marks the rows once the notice gets through. An unknown agent has none.
 pub(crate) async fn carry_for_push(
     store: &Store,
     agent: &AgentName,
     head: &str,
 ) -> Result<CarriedInbox, MessageError> {
     let mut conn = store.read().acquire().await.map_err(StoreError::from)?;
-    let Some(row) = agents::find_agent(&mut *conn, agent).await? else {
-        return Ok(carry_rows(head, &[], &WorkerName::main(agent)));
+    let Some(worker) = agent_worker(&mut conn, agent).await? else {
+        return Ok(carry_rows(head, &[]));
     };
-    let workers = agents::worker_ids(&mut *conn, row.id).await?;
-    let reader = WorkerName::main(agent);
-    let rows = undelivered(messages::inbox(&mut conn, &workers).await?, &reader);
-    Ok(carry_rows(head, &rows, &reader))
+    let rows = undelivered(
+        messages::inbox(&mut conn, &[worker.id]).await?,
+        &worker.name,
+    );
+    Ok(carry_rows(head, &rows))
+}
+
+/// The one worker of `agent`, or `None` for an agent the project does not know.
+async fn agent_worker(
+    conn: &mut SqliteConnection,
+    agent: &AgentName,
+) -> Result<Option<WorkerRow>, StoreError> {
+    let Some(row) = agents::find_agent(&mut *conn, agent).await? else {
+        return Ok(None);
+    };
+    agents::main_worker(&mut *conn, row.id).await
 }
 
 async fn carry_in_tx(
     tx: &mut WriteTx,
-    workers: &[i64],
-    reader: &WorkerName,
+    worker: &WorkerRow,
     now: Timestamp,
 ) -> Result<Option<String>, MessageError> {
-    let rows = undelivered(messages::inbox(tx.conn(), workers).await?, reader);
+    let rows = undelivered(
+        messages::inbox(tx.conn(), &[worker.id]).await?,
+        &worker.name,
+    );
     let Some(head) = new_messages_head(&rows) else {
         return Ok(None);
     };
-    let carried = carry_rows(&head, &rows, reader);
+    let carried = carry_rows(&head, &rows);
     messages::mark_delivered(tx, &carried.rows, now).await?;
     Ok(Some(carried.text))
 }
 
 /// The first sentence of a wake that has no event of its own, or `None` without a message.
 fn new_messages_head(rows: &[InboxRow]) -> Option<String> {
-    match distinct_messages(rows).len() {
+    match rows.len() {
         0 => None,
         1 => Some("fold: 1 new message.".to_owned()),
         count => Some(format!("fold: {count} new messages.")),
     }
 }
 
-/// A wake carries only the rows no inbox, notice or wait has shown: a delivered message that waits for its acknowledgement, such as fold's note of an integration, would fill the text before the message that caused the wake. A message `reader` sent, such as a main worker's message to its child, is never carried back to it.
+/// A wake carries only the rows no inbox, notice or wait has shown: a delivered message that waits for its acknowledgement, such as fold's note of an integration, would fill the text before the message that caused the wake. A message `reader` sent itself is never carried back to it.
 fn undelivered(rows: Vec<InboxRow>, reader: &WorkerName) -> Vec<InboxRow> {
     rows.into_iter()
         .filter(|row| {
@@ -307,22 +305,14 @@ fn undelivered(rows: Vec<InboxRow>, reader: &WorkerName) -> Vec<InboxRow> {
         .collect()
 }
 
-/// The rows grouped by message, in the inbox's order: one message to several workers of the agent has a row for each.
-fn distinct_messages(rows: &[InboxRow]) -> Vec<&[InboxRow]> {
-    rows.chunk_by(|a, b| a.message.id == b.message.id).collect()
-}
-
-/// One entry per message, which names its worker when it is not to `reader`; the rest is read with `include_workers` when any message is to another worker.
-fn carry_rows(head: &str, rows: &[InboxRow], reader: &WorkerName) -> CarriedInbox {
-    let groups = distinct_messages(rows);
-    let entries: Vec<CarriedMessage<'_>> = groups
+/// One entry per row of one worker's inbox, in its order.
+fn carry_rows(head: &str, rows: &[InboxRow]) -> CarriedInbox {
+    let entries: Vec<CarriedMessage<'_>> = rows
         .iter()
-        .map(|group| {
-            let message = &group[0].message;
+        .map(|row| {
+            let message = &row.message;
             CarriedMessage {
                 id: message.id,
-                to: (!group.iter().any(|row| &row.worker == reader))
-                    .then(|| group[0].worker.as_str()),
                 sender: message.sender.to_string(),
                 reply_to: message.reply_to,
                 task: message.task,
@@ -351,22 +341,14 @@ fn carry_rows(head: &str, rows: &[InboxRow], reader: &WorkerName) -> CarriedInbo
             }
         })
         .collect();
-    let tool = if entries.iter().any(|entry| entry.to.is_some()) {
-        "get_inbox with include_workers"
-    } else {
-        "get_inbox"
-    };
-    let carried = carry(head, &entries, tool);
-    let groups = &groups[..carried.count];
+    let carried = carry(head, &entries);
+    let rows = &rows[..carried.count];
     CarriedInbox {
         text: carried.text,
-        rows: groups
+        rows: rows.iter().map(|row| row.row).collect(),
+        messages: rows
             .iter()
-            .flat_map(|group| group.iter().map(|row| row.row))
-            .collect(),
-        messages: groups
-            .iter()
-            .map(|group| (group[0].message.id, group[0].message.thread))
+            .map(|row| (row.message.id, row.message.thread))
             .collect(),
     }
 }

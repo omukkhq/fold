@@ -19,7 +19,7 @@ export interface ItemMention {
   end: number;
 }
 
-/** `@tanim` or `@frontend/ui`: a human or an agent by a name the daemon knows. */
+/** `@tanim` or `@frontend`: a human or an agent by a name the daemon knows. */
 export interface PersonMention {
   mark: "@";
   person: PersonKind;
