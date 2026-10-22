@@ -93,7 +93,7 @@ export const api = createClient<paths>({
   fetch: (request) => fetch(request),
 });
 
-/** Calls `onAuthRequired` when the daemon answers `auth_required`: off loopback, the session cookie is missing or no longer valid. Other 401 answers, such as `invalid_token` from the sign-in itself, pass through. */
+/** Calls `onAuthRequired` when the daemon answers `auth_required`: the session cookie is missing or no longer valid. Other 401 answers, such as `invalid_token` from the sign-in itself, pass through. */
 export function authRequiredMiddleware(onAuthRequired: () => void): Middleware {
   return {
     async onResponse({ response }) {

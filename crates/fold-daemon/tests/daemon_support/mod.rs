@@ -12,7 +12,6 @@ use fold_core::{
 };
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
-use fold_daemon::http::router;
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::AgentService;
 use fold_daemon::services::projects::DEFAULT_SESSION_LIFETIME;
@@ -181,7 +180,11 @@ impl Opened {
             .uri(format!("/api/v1/projects/demo{path}"))
             .body(Body::empty())
             .unwrap();
-        let response = router(self.state.clone()).oneshot(request).await.unwrap();
+        let response = crate::common::signed_in_router(&self.state, "ana")
+            .await
+            .oneshot(request)
+            .await
+            .unwrap();
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&bytes).unwrap())

@@ -14,7 +14,8 @@ use fold_daemon::http::{openapi, router, socket_router};
 use fold_daemon::projects::Projects;
 use fold_daemon::services::agents::AgentService;
 use fold_daemon::services::projects::{
-    DEFAULT_SESSION_LIFETIME, create_web_token, list_web_tokens, revoke_web_token,
+    DEFAULT_SESSION_LIFETIME, SIGN_IN_LINK_LIFETIME, create_web_token, list_web_tokens,
+    revoke_web_token,
 };
 use fold_daemon::services::tasks::CreateTask;
 use fold_daemon::{Daemon, DaemonConfig};
@@ -32,7 +33,8 @@ const SESSION: &str = "/api/v1/session";
 /// A bodiless write that only a named human makes; it succeeds once, because `T-1` is then archived.
 const ARCHIVE: &str = "/api/v1/projects/demo/tasks/T-1/archive";
 const THIRTY_DAYS: &str = "Max-Age=2592000";
-const ONE_YEAR: &str = "Max-Age=31536000";
+const LINKS: &str = "/api/v1/sign-in-links";
+const TOKENS: &str = "/api/v1/tokens";
 
 #[cfg(test)]
 struct Fixture {
@@ -44,8 +46,13 @@ struct Fixture {
 
 #[cfg(test)]
 impl Fixture {
-    /// A daemon state with the project `demo`, its agent `review`, the task `T-1` and a web folder, listening off loopback when `auth_required`.
-    async fn new(auth_required: bool) -> Self {
+    /// A daemon state with the project `demo`, its agent `review`, the task `T-1` and a web folder, listening on loopback.
+    async fn new() -> Self {
+        Self::listening("127.0.0.1:0").await
+    }
+
+    /// [`Fixture::new`] listening on `listen`.
+    async fn listening(listen: &str) -> Self {
         let project = TestProject::new().await;
         let web = TempDir::new().unwrap();
         std::fs::write(web.path().join("index.html"), "<html>fold</html>").unwrap();
@@ -61,11 +68,7 @@ impl Fixture {
             projects: Projects::default(),
             clock: clock.clone(),
             assets: AssetSource::Dir(web.path().to_owned()),
-            listen: if auth_required {
-                "0.0.0.0:0".parse().unwrap()
-            } else {
-                "127.0.0.1:0".parse().unwrap()
-            },
+            listen: listen.parse().unwrap(),
             session_lifetime: DEFAULT_SESSION_LIFETIME,
         });
         let row = ProjectRow {
@@ -263,42 +266,44 @@ fn operations() -> Vec<(Method, String)> {
 
 /// Walks the OpenAPI document, so an operation that is declared but not served on the TCP router answers the fallback's `not_found` and fails here.
 #[tokio::test]
-async fn off_loopback_every_guarded_route_needs_the_cookie_and_accepts_a_valid_one() {
-    let fixture = Fixture::new(true).await;
-    let cookie = fixture.sign_in("ana").await;
-    let guarded: Vec<_> = operations()
-        .into_iter()
-        .filter(|(_, path)| path != SESSION)
-        .collect();
-    assert!(guarded.len() >= 4, "{guarded:?}");
-    for (method, path) in guarded {
-        let answer = send(fixture.http(), method.clone(), &path, None, None).await;
-        assert_eq!(
-            (answer.status, answer.code()),
-            (StatusCode::UNAUTHORIZED, "auth_required"),
-            "{method} {path} is in the OpenAPI document but not served behind the session check"
-        );
-        let answer = send(fixture.http(), method.clone(), &path, Some(&cookie), None).await;
-        assert!(
-            !matches!(answer.code(), "auth_required" | "human_name_required"),
-            "{method} {path}: {:?}",
-            answer.body
-        );
+async fn every_guarded_route_needs_the_cookie_on_loopback_and_on_every_address() {
+    for listen in ["127.0.0.1:0", "0.0.0.0:0"] {
+        let fixture = Fixture::listening(listen).await;
+        let cookie = fixture.sign_in("ana").await;
+        let guarded: Vec<_> = operations()
+            .into_iter()
+            .filter(|(_, path)| path != SESSION)
+            .collect();
+        assert!(guarded.len() >= 4, "{guarded:?}");
+        for (method, path) in guarded {
+            let answer = send(fixture.http(), method.clone(), &path, None, None).await;
+            assert_eq!(
+                (answer.status, answer.code()),
+                (StatusCode::UNAUTHORIZED, "auth_required"),
+                "{listen}: {method} {path} is in the OpenAPI document but not served behind the session check"
+            );
+            let answer = send(fixture.http(), method.clone(), &path, Some(&cookie), None).await;
+            assert!(
+                !matches!(answer.code(), "auth_required" | "human_name_required"),
+                "{listen}: {method} {path}: {:?}",
+                answer.body
+            );
+        }
+        let answer = send(
+            fixture.http(),
+            Method::GET,
+            "/api/v1/projects",
+            Some(&cookie),
+            None,
+        )
+        .await;
+        assert_eq!(answer.status, StatusCode::OK);
     }
-    let answer = send(
-        fixture.http(),
-        Method::GET,
-        "/api/v1/projects",
-        Some(&cookie),
-        None,
-    )
-    .await;
-    assert_eq!(answer.status, StatusCode::OK);
 }
 
 #[tokio::test]
-async fn off_loopback_the_session_routes_work_without_the_cookie() {
-    let fixture = Fixture::new(true).await;
+async fn the_session_routes_work_without_the_cookie() {
+    let fixture = Fixture::new().await;
     let token = fixture.token("ana").await;
 
     let answer = send(fixture.http(), Method::GET, SESSION, None, None).await;
@@ -348,16 +353,13 @@ async fn off_loopback_the_session_routes_work_without_the_cookie() {
     assert_eq!(answer.status, StatusCode::NO_CONTENT);
     assert_eq!(
         answer.cookies(),
-        vec![
-            "fold_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0".to_owned(),
-            "fold_human=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0".to_owned(),
-        ]
+        vec!["fold_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0".to_owned()]
     );
 }
 
 #[tokio::test]
-async fn off_loopback_a_wrong_token_is_invalid_token_and_a_wrong_session_auth_required() {
-    let fixture = Fixture::new(true).await;
+async fn a_wrong_token_is_invalid_token_and_a_wrong_session_auth_required() {
+    let fixture = Fixture::new().await;
     fixture.sign_in("ana").await;
     let wrong = "fold_session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     let answer = send(
@@ -391,8 +393,8 @@ async fn off_loopback_a_wrong_token_is_invalid_token_and_a_wrong_session_auth_re
 }
 
 #[tokio::test]
-async fn off_loopback_sign_out_ends_the_session_on_the_server() {
-    let fixture = Fixture::new(true).await;
+async fn sign_out_ends_the_session_on_the_server() {
+    let fixture = Fixture::new().await;
     let cookie = fixture.sign_in("ana").await;
     let other = fixture.sign_in("ana").await;
     let projects = "/api/v1/projects";
@@ -420,8 +422,8 @@ async fn off_loopback_sign_out_ends_the_session_on_the_server() {
 }
 
 #[tokio::test]
-async fn off_loopback_a_revoked_token_cannot_sign_in_and_its_sessions_end() {
-    let fixture = Fixture::new(true).await;
+async fn a_revoked_token_cannot_sign_in_and_its_sessions_end() {
+    let fixture = Fixture::new().await;
     let token = fixture.token("ana").await;
     let cookie = sign_in_with(fixture.http(), &token).await;
     let kept = fixture.sign_in("ana").await;
@@ -460,8 +462,8 @@ async fn off_loopback_a_revoked_token_cannot_sign_in_and_its_sessions_end() {
 }
 
 #[tokio::test]
-async fn off_loopback_a_session_expires_after_its_lifetime() {
-    let fixture = Fixture::new(true).await;
+async fn a_session_expires_after_its_lifetime() {
+    let fixture = Fixture::new().await;
     let cookie = fixture.sign_in("ana").await;
     let projects = "/api/v1/projects";
     let clock = fixture.project.clock();
@@ -492,7 +494,7 @@ async fn the_cookie_lasts_as_long_as_the_configured_lifetime() {
         projects: Projects::default(),
         clock: Arc::new(project.clock().clone()),
         assets: AssetSource::Embedded,
-        listen: "0.0.0.0:0".parse().unwrap(),
+        listen: "127.0.0.1:0".parse().unwrap(),
         session_lifetime: Duration::from_secs(7 * 24 * 60 * 60),
     });
     let token = create_web_token(
@@ -529,8 +531,8 @@ async fn the_cookie_lasts_as_long_as_the_configured_lifetime() {
 }
 
 #[tokio::test]
-async fn off_loopback_a_socket_request_passes_without_a_cookie() {
-    let fixture = Fixture::new(true).await;
+async fn a_socket_request_passes_without_a_cookie() {
+    let fixture = Fixture::new().await;
     let socket = socket_router(fixture.state.clone());
     let answer = send(socket.clone(), Method::GET, "/api/v1/projects", None, None).await;
     assert_eq!(answer.status, StatusCode::OK);
@@ -548,8 +550,8 @@ async fn off_loopback_a_socket_request_passes_without_a_cookie() {
 }
 
 #[tokio::test]
-async fn off_loopback_the_web_files_load_without_a_cookie() {
-    let fixture = Fixture::new(true).await;
+async fn the_web_files_load_without_a_cookie() {
+    let fixture = Fixture::new().await;
     for path in ["/", "/assets/app.js", "/board"] {
         let answer = send(fixture.http(), Method::GET, path, None, None).await;
         assert_eq!(answer.status, StatusCode::OK, "{path}");
@@ -569,8 +571,8 @@ async fn off_loopback_the_web_files_load_without_a_cookie() {
 }
 
 #[tokio::test]
-async fn off_loopback_a_write_acts_as_the_session_human_and_ignores_fold_human() {
-    let fixture = Fixture::new(true).await;
+async fn a_write_acts_as_the_session_human_and_ignores_fold_human() {
+    let fixture = Fixture::new().await;
     let session = fixture.sign_in("ana").await;
     let answer = send(
         fixture.http(),
@@ -588,167 +590,278 @@ async fn off_loopback_a_write_acts_as_the_session_human_and_ignores_fold_human()
 }
 
 #[tokio::test]
-async fn off_loopback_a_name_is_refused() {
-    let fixture = Fixture::new(true).await;
-    let answer = send(
-        fixture.http(),
-        Method::POST,
-        SESSION,
-        None,
-        Some(json!({"name": "tanim"})),
-    )
-    .await;
-    assert_eq!(
-        (answer.status, answer.code()),
-        (StatusCode::BAD_REQUEST, "invalid_request")
-    );
-    assert!(answer.cookies().is_empty());
-}
-
-#[tokio::test]
-async fn on_loopback_no_route_needs_a_cookie() {
-    let fixture = Fixture::new(false).await;
-    for (method, path) in operations() {
-        let answer = send(fixture.http(), method.clone(), &path, None, None).await;
-        assert!(
-            !matches!(answer.code(), "auth_required" | "invalid_token"),
-            "{method} {path}: {:?}",
-            answer.body
+async fn a_name_signs_nobody_in() {
+    let fixture = Fixture::new().await;
+    for body in [
+        json!({"name": "tanim"}),
+        json!({"name": "tanim", "token": "x"}),
+    ] {
+        let answer = send(fixture.http(), Method::POST, SESSION, None, Some(body)).await;
+        assert_eq!(
+            (answer.status, answer.code()),
+            (StatusCode::BAD_REQUEST, "invalid_request")
         );
+        assert!(answer.cookies().is_empty());
     }
-    let answer = send(fixture.http(), Method::GET, "/api/v1/projects", None, None).await;
-    assert_eq!(answer.status, StatusCode::OK);
-}
-
-#[tokio::test]
-async fn on_loopback_a_name_sets_fold_human_and_a_write_needs_it() {
-    let fixture = Fixture::new(false).await;
-    let answer = send(fixture.http(), Method::POST, ARCHIVE, None, None).await;
-    assert_eq!(
-        (answer.status, answer.code()),
-        (StatusCode::UNAUTHORIZED, "human_name_required")
-    );
-
-    let answer = send(
-        fixture.http(),
-        Method::POST,
-        SESSION,
-        None,
-        Some(json!({"name": "tanim"})),
-    )
-    .await;
-    assert_eq!(answer.status, StatusCode::NO_CONTENT);
-    assert_eq!(
-        answer.cookies(),
-        vec![format!(
-            "fold_human=tanim; HttpOnly; SameSite=Strict; Path=/; {ONE_YEAR}"
-        )]
-    );
-    let human = registry::find_human(
+    let tanim = registry::find_human(
         fixture.project.registry().read(),
         &HumanName::parse("tanim").unwrap(),
     )
     .await
     .unwrap();
-    assert!(human.is_some());
-
-    let answer = send(
-        fixture.http(),
-        Method::POST,
-        ARCHIVE,
-        Some("fold_human=tanim"),
-        None,
-    )
-    .await;
-    assert_eq!(answer.status, StatusCode::NO_CONTENT);
-    assert_eq!(
-        fixture.archive_actors().await,
-        vec!["human:tanim".to_owned()]
-    );
+    assert!(tanim.is_none());
 }
 
 #[tokio::test]
-async fn on_loopback_the_session_reports_the_name_and_is_always_authenticated() {
-    let fixture = Fixture::new(false).await;
+async fn on_loopback_a_request_without_a_session_gets_401() {
+    let fixture = Fixture::new().await;
+    for (method, path) in [
+        (Method::GET, "/api/v1/projects"),
+        (Method::GET, "/api/v1/projects/demo/board"),
+        (Method::POST, ARCHIVE),
+    ] {
+        let answer = send(fixture.http(), method.clone(), path, None, None).await;
+        assert_eq!(
+            (answer.status, answer.code()),
+            (StatusCode::UNAUTHORIZED, "auth_required"),
+            "{method} {path}"
+        );
+    }
     let answer = send(fixture.http(), Method::GET, SESSION, None, None).await;
-    assert_eq!(answer.body, json!({"human": null, "authenticated": true}));
-    let answer = send(
-        fixture.http(),
-        Method::GET,
-        SESSION,
-        Some("fold_human=tanim"),
+    assert_eq!(answer.body, json!({"human": null, "authenticated": false}));
+    assert!(fixture.archive_actors().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_forged_fold_human_cookie_acts_as_nobody() {
+    for listen in ["127.0.0.1:0", "0.0.0.0:0"] {
+        let fixture = Fixture::listening(listen).await;
+        for (method, path) in [(Method::POST, ARCHIVE), (Method::GET, "/api/v1/projects")] {
+            let answer = send(
+                fixture.http(),
+                method.clone(),
+                path,
+                Some("fold_human=tanim"),
+                None,
+            )
+            .await;
+            assert_eq!(
+                (answer.status, answer.code()),
+                (StatusCode::UNAUTHORIZED, "auth_required"),
+                "{listen}: {method} {path}"
+            );
+        }
+        let answer = send(
+            fixture.http(),
+            Method::GET,
+            SESSION,
+            Some("fold_human=tanim"),
+            None,
+        )
+        .await;
+        assert_eq!(answer.body, json!({"human": null, "authenticated": false}));
+        let answer = send(
+            fixture.http(),
+            Method::GET,
+            "/api/v1/projects",
+            Some("fold_session=tanim"),
+            None,
+        )
+        .await;
+        assert_eq!(answer.code(), "auth_required", "{listen}");
+        assert!(fixture.archive_actors().await.is_empty());
+    }
+}
+
+/// Asks the socket for a sign-in link for `human` and returns its secret.
+#[cfg(test)]
+async fn link_secret(fixture: &Fixture, human: &str) -> String {
+    let answer = send_with(
+        socket_router(fixture.state.clone()),
+        Method::POST,
+        LINKS,
+        None,
+        &[("x-fold-human", human)],
         None,
     )
     .await;
+    assert_eq!(answer.status, StatusCode::CREATED, "{:?}", answer.body);
+    let url = answer.body["url"].as_str().unwrap();
+    let secret = url
+        .strip_prefix("http://127.0.0.1:0/sign-in#link=")
+        .unwrap_or_else(|| panic!("{url}"));
+    assert_eq!(secret.len(), 43);
+    assert_eq!(
+        answer.body["expires_at"],
+        json!(
+            fixture
+                .project
+                .clock()
+                .now()
+                .checked_add(SIGN_IN_LINK_LIFETIME)
+                .unwrap()
+                .as_millis()
+        )
+    );
+    secret.to_owned()
+}
+
+#[tokio::test]
+async fn a_sign_in_link_opens_one_session_and_then_stops_working() {
+    let fixture = Fixture::new().await;
+    let secret = link_secret(&fixture, "tanim").await;
+    let answer = send(
+        fixture.http(),
+        Method::POST,
+        SESSION,
+        None,
+        Some(json!({ "link": secret })),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::NO_CONTENT, "{:?}", answer.body);
+    let cookies = answer.cookies();
+    let cookie = session_pair(&cookies[0]);
+    assert_eq!(
+        cookies,
+        vec![format!(
+            "{cookie}; HttpOnly; SameSite=Strict; Path=/; {THIRTY_DAYS}"
+        )]
+    );
+    assert!(!cookie.contains(&secret), "the cookie carries the link");
+    let answer = send(fixture.http(), Method::GET, SESSION, Some(&cookie), None).await;
     assert_eq!(
         answer.body,
         json!({"human": "tanim", "authenticated": true})
     );
-    let answer = send(
-        fixture.http(),
-        Method::GET,
-        SESSION,
-        Some("fold_human=Not%20A%20Name"),
-        None,
-    )
-    .await;
-    assert_eq!(answer.body, json!({"human": null, "authenticated": true}));
+    let answer = send(fixture.http(), Method::POST, ARCHIVE, Some(&cookie), None).await;
+    assert_eq!(answer.status, StatusCode::NO_CONTENT, "{:?}", answer.body);
+    assert_eq!(
+        fixture.archive_actors().await,
+        vec!["human:tanim".to_owned()]
+    );
 
+    for link in [
+        secret.as_str(),
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    ] {
+        let answer = send(
+            fixture.http(),
+            Method::POST,
+            SESSION,
+            None,
+            Some(json!({ "link": link })),
+        )
+        .await;
+        assert_eq!(
+            (answer.status, answer.code()),
+            (StatusCode::UNAUTHORIZED, "invalid_sign_in_link")
+        );
+        assert!(answer.cookies().is_empty());
+        assert!(!answer.body.to_string().contains(link));
+    }
+    let answer = send(fixture.http(), Method::GET, SESSION, Some(&cookie), None).await;
+    assert_eq!(
+        answer.body,
+        json!({"human": "tanim", "authenticated": true}),
+        "a second use of the link ended the first session"
+    );
     let answer = send(
         fixture.http(),
-        Method::DELETE,
+        Method::POST,
         SESSION,
-        Some("fold_human=tanim"),
         None,
+        Some(json!({ "token": secret })),
     )
     .await;
-    assert_eq!(answer.status, StatusCode::NO_CONTENT);
-    let cookies = answer.cookies();
-    assert_eq!(cookies.len(), 2);
-    assert!(cookies.iter().all(|c| c.ends_with("Max-Age=0")));
-    assert!(cookies[0].starts_with("fold_session=;"));
-    assert!(cookies[1].starts_with("fold_human=;"));
+    assert_eq!(answer.code(), "invalid_token", "a link is not a token");
 }
 
 #[tokio::test]
-async fn on_loopback_a_token_or_a_bad_name_is_refused() {
-    let fixture = Fixture::new(false).await;
-    let token = fixture.token("ana").await;
+async fn a_sign_in_link_works_only_within_its_lifetime() {
+    let fixture = Fixture::new().await;
+    let clock = fixture.project.clock();
+    let early = link_secret(&fixture, "ana").await;
+    let late = link_secret(&fixture, "ana").await;
+    clock
+        .advance(SIGN_IN_LINK_LIFETIME - Duration::from_millis(1))
+        .unwrap();
     let answer = send(
         fixture.http(),
         Method::POST,
         SESSION,
         None,
-        Some(json!({"token": token})),
+        Some(json!({ "link": early })),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::NO_CONTENT, "{:?}", answer.body);
+    clock.advance(Duration::from_millis(1)).unwrap();
+    let answer = send(
+        fixture.http(),
+        Method::POST,
+        SESSION,
+        None,
+        Some(json!({ "link": late })),
     )
     .await;
     assert_eq!(
         (answer.status, answer.code()),
-        (StatusCode::BAD_REQUEST, "invalid_request")
+        (StatusCode::UNAUTHORIZED, "invalid_sign_in_link")
     );
+    let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sign_in_links")
+        .fetch_one(fixture.project.registry().read())
+        .await
+        .unwrap();
+    assert_eq!(left, 0, "an expired link stays in the registry");
+}
+
+#[tokio::test]
+async fn only_the_socket_makes_a_token_or_a_sign_in_link() {
+    let fixture = Fixture::new().await;
+    let cookie = fixture.sign_in("ana").await;
+    for (path, body) in [(TOKENS, Some(json!({"human": "bo"}))), (LINKS, None)] {
+        let answer = send(fixture.http(), Method::POST, path, Some(&cookie), body).await;
+        assert_eq!(
+            (answer.status, answer.code()),
+            (StatusCode::NOT_FOUND, "not_found"),
+            "{path}"
+        );
+    }
+
+    let socket = socket_router(fixture.state.clone());
     let answer = send(
-        fixture.http(),
+        socket.clone(),
         Method::POST,
-        SESSION,
+        TOKENS,
         None,
-        Some(json!({"name": "Not A Name"})),
+        Some(json!({"human": "bo", "label": "phone"})),
     )
     .await;
-    assert_eq!(
-        (answer.status, answer.code()),
-        (StatusCode::BAD_REQUEST, "invalid_name")
-    );
+    assert_eq!(answer.status, StatusCode::CREATED, "{:?}", answer.body);
+    let token = answer.body["token"].as_str().unwrap();
+    assert_eq!(token.len(), 43);
+    let listed = list_web_tokens(fixture.project.registry()).await.unwrap();
+    let bo = listed
+        .iter()
+        .find(|entry| entry.human.as_str() == "bo")
+        .unwrap();
+    assert_eq!(bo.label.as_deref(), Some("phone"));
+    let bo = sign_in_with(fixture.http(), token).await;
+    let answer = send(fixture.http(), Method::GET, SESSION, Some(&bo), None).await;
+    assert_eq!(answer.body, json!({"human": "bo", "authenticated": true}));
+
     let answer = send(
-        fixture.http(),
+        socket.clone(),
         Method::POST,
-        SESSION,
+        TOKENS,
         None,
-        Some(json!({"name": "tanim", "token": token})),
+        Some(json!({"human": "Not A Name"})),
     )
     .await;
+    assert_eq!(answer.code(), "invalid_name");
+    let answer = send(socket, Method::POST, LINKS, None, None).await;
     assert_eq!(
         (answer.status, answer.code()),
-        (StatusCode::BAD_REQUEST, "invalid_request")
+        (StatusCode::UNAUTHORIZED, "human_name_required")
     );
 }
 
@@ -793,10 +906,17 @@ async fn raw_sign_in(addr: std::net::SocketAddr, token: &str) -> String {
 }
 
 #[tokio::test]
-async fn a_daemon_on_every_address_needs_a_token_even_from_127_0_0_1() {
+async fn a_daemon_on_loopback_or_on_every_address_needs_a_session_from_127_0_0_1() {
+    for listen in ["127.0.0.1:0", "0.0.0.0:0"] {
+        a_daemon_needs_a_session_from_127_0_0_1(listen).await;
+    }
+}
+
+#[cfg(test)]
+async fn a_daemon_needs_a_session_from_127_0_0_1(listen: &str) {
     let dir = TempDir::new().unwrap();
     let config = DaemonConfig {
-        listen: "0.0.0.0:0".parse().unwrap(),
+        listen: listen.parse().unwrap(),
         socket: dir.path().join("run").join("fold.sock"),
         data_dir: dir.path().join("data"),
         runtime_dir: dir.path().join("run"),
@@ -840,8 +960,9 @@ async fn a_daemon_on_every_address_needs_a_token_even_from_127_0_0_1() {
 
 #[tokio::test]
 async fn a_foreign_host_or_origin_cannot_reach_the_api() {
-    let fixture = Fixture::new(false).await;
-    let human = Some("fold_human=tanim");
+    let fixture = Fixture::new().await;
+    let tanim = fixture.sign_in("tanim").await;
+    let human = Some(tanim.as_str());
     let evil_host = [("host", "evil.example:7420")];
     let answer = send_with(
         fixture.http(),
@@ -876,7 +997,7 @@ async fn a_foreign_host_or_origin_cannot_reach_the_api() {
         SESSION,
         None,
         &evil_host,
-        Some(json!({"name": "mallory"})),
+        Some(json!({"token": fixture.token("mallory").await})),
     )
     .await;
     assert_eq!(answer.code(), "host_not_allowed");
@@ -910,8 +1031,8 @@ async fn a_foreign_host_or_origin_cannot_reach_the_api() {
 }
 
 #[tokio::test]
-async fn off_loopback_an_ip_host_passes_and_a_domain_name_is_refused() {
-    let fixture = Fixture::new(true).await;
+async fn on_every_address_an_ip_host_passes_and_a_domain_name_is_refused() {
+    let fixture = Fixture::listening("0.0.0.0:0").await;
     let cookie = fixture.sign_in("ana").await;
     let answer = send_with(
         fixture.http(),
@@ -940,29 +1061,28 @@ async fn off_loopback_an_ip_host_passes_and_a_domain_name_is_refused() {
 
 #[tokio::test]
 async fn the_humans_route_lists_the_registered_names_in_order() {
-    let fixture = Fixture::new(false).await;
-    let answer = send(fixture.http(), Method::GET, "/api/v1/humans", None, None).await;
+    let fixture = Fixture::new().await;
+    let socket = socket_router(fixture.state.clone());
+    let answer = send(socket.clone(), Method::GET, "/api/v1/humans", None, None).await;
     assert_eq!(answer.status, StatusCode::OK);
     assert_eq!(answer.body, json!({"humans": []}));
 
-    for name in ["tanim", "ana"] {
-        let answer = send(
-            fixture.http(),
-            Method::POST,
-            SESSION,
-            None,
-            Some(json!({ "name": name })),
-        )
-        .await;
-        assert_eq!(answer.status, StatusCode::NO_CONTENT);
-    }
-    let answer = send(fixture.http(), Method::GET, "/api/v1/humans", None, None).await;
+    let tanim = fixture.sign_in("tanim").await;
+    fixture.sign_in("ana").await;
+    let answer = send(
+        fixture.http(),
+        Method::GET,
+        "/api/v1/humans",
+        Some(&tanim),
+        None,
+    )
+    .await;
     assert_eq!(answer.body, json!({"humans": ["ana", "tanim"]}));
 }
 
 #[tokio::test]
 async fn a_cross_origin_bodiless_write_without_the_client_header_is_refused() {
-    let fixture = Fixture::new(false).await;
+    let fixture = Fixture::new().await;
     let page = Request::post(SESSION)
         .header(header::HOST, "127.0.0.1:7420")
         .header(header::ORIGIN, "http://localhost:3000")
@@ -996,7 +1116,7 @@ async fn a_cross_origin_bodiless_write_without_the_client_header_is_refused() {
         Method::POST,
         SESSION,
         None,
-        Some(json!({"name": "ana"})),
+        Some(json!({"token": fixture.token("ana").await})),
     )
     .await;
     assert_eq!(
@@ -1007,7 +1127,9 @@ async fn a_cross_origin_bodiless_write_without_the_client_header_is_refused() {
 
     let cli = Request::post(SESSION)
         .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(json!({"name": "ana"}).to_string()))
+        .body(Body::from(
+            json!({"token": fixture.token("ana").await}).to_string(),
+        ))
         .unwrap();
     let response = socket_router(fixture.state.clone())
         .oneshot(cli)
@@ -1052,7 +1174,7 @@ async fn open_stream(fixture: &Fixture, cookie: &str) -> Body {
 
 #[tokio::test]
 async fn signing_out_ends_an_open_event_stream() {
-    let fixture = Fixture::new(true).await;
+    let fixture = Fixture::new().await;
     let cookie = fixture.sign_in("ana").await;
     let mut body = open_stream(&fixture, &cookie).await;
     let answer = send(fixture.http(), Method::DELETE, SESSION, Some(&cookie), None).await;
@@ -1063,7 +1185,7 @@ async fn signing_out_ends_an_open_event_stream() {
 
 #[tokio::test]
 async fn an_expired_or_revoked_session_ends_its_event_stream() {
-    let fixture = Fixture::new(true).await;
+    let fixture = Fixture::new().await;
     let cookie = fixture.sign_in("ana").await;
     let mut expiring = open_stream(&fixture, &cookie).await;
     fixture
@@ -1075,7 +1197,7 @@ async fn an_expired_or_revoked_session_ends_its_event_stream() {
     assert!(stream_ends(&mut expiring).await);
     tokio::time::resume();
 
-    let fixture = Fixture::new(true).await;
+    let fixture = Fixture::new().await;
     let cookie = fixture.sign_in("tanim").await;
     let mut revoked = open_stream(&fixture, &cookie).await;
     let token = list_web_tokens(fixture.project.registry())

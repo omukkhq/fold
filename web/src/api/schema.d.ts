@@ -303,7 +303,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The project's events as Server-Sent Events: every stored event after `Last-Event-ID`, then one `snapshot` of the live workspaces, then each stored and live event as it happens. A stored event's frame carries its `seq` as the SSE `id`; live and snapshot frames carry none, so the browser keeps the last stored `seq`. Live frames a client has not read yet collapse to the newest per workspace and per agent. A client that falls more than the bus capacity behind has its stream ended and reconnects with its last id. Off loopback the stream ends at the first keep-alive period after its session is signed out, revoked or expired, and the reconnect gets `auth_required`. */
+        /** The project's events as Server-Sent Events: every stored event after `Last-Event-ID`, then one `snapshot` of the live workspaces, then each stored and live event as it happens. A stored event's frame carries its `seq` as the SSE `id`; live and snapshot frames carry none, so the browser keeps the last stored `seq`. Live frames a client has not read yet collapse to the newest per workspace and per agent. A client that falls more than the bus capacity behind has its stream ended and reconnects with its last id. Over TCP the stream ends at the first keep-alive period after its session is signed out, revoked or expired, and the reconnect gets `auth_required`. */
         get: operations["stream_events"];
         put?: never;
         post?: never;
@@ -1420,13 +1420,47 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Reports who the request acts as. It is the only way the web application learns the name, because `fold_human` is HttpOnly. */
+        /** Reports who the request acts as. It is the only way the web application learns the name, because `fold_session` is HttpOnly. */
         get: operations["get_session"];
         put?: never;
-        /** Signs in. Off loopback the body is `{ token }` and a valid token opens a session whose id `fold_session` carries; on loopback it is `{ name }`, which registers the human on first use and sets `fold_human`. */
+        /** Signs in with `{ token }`, a web token from `fld token create`, or `{ link }`, the secret of a sign-in link from `fld web`, which opens one session and then stops working. Either opens a session whose id `fold_session` carries. */
         post: operations["create_session"];
-        /** Signs out: deletes the session that `fold_session` names, so the cookie stops working even where the browser keeps it, and expires `fold_session` and `fold_human`. */
+        /** Signs out: deletes the session that `fold_session` names, so the cookie stops working even where the browser keeps it, and expires `fold_session`. */
         delete: operations["delete_session"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sign-in-links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Creates a one-time sign-in link for `fld web`, for the human that `x-fold-human` names. Only over the socket, where the `Human` extractor refuses a process in the tree of a worker that fold started or of a check command that fold runs. The link opens one session, within a few minutes. */
+        post: operations["create_sign_in_link"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Creates a web token for `fld token create`. Only over the socket, and never for a process in the tree of a worker that fold started or of a check command that fold runs: a token signs in as the human it names. */
+        post: operations["create_token"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2199,6 +2233,27 @@ export interface components {
             /** @description One line, not empty. */
             title: string;
         };
+        /** @description The human a new web token signs in. */
+        CreateToken: {
+            /** @description The human the token signs in; created when absent. */
+            human: string;
+            /** @description A note that tells this token apart from the human's other tokens. */
+            label?: string | null;
+        };
+        /** @description A new one-time sign-in link. */
+        CreatedLink: {
+            /**
+             * Format: int64
+             * @description UTC milliseconds after which the link no longer signs in.
+             */
+            expires_at: number;
+            /** @description The link to open in a browser on this machine. Its secret is in the fragment. */
+            url: string;
+        };
+        /** @description A new web token. The plaintext is in this answer only: the registry keeps its hash. */
+        CreatedToken: {
+            token: string;
+        };
         /**
          * @description What started the daemon process.
          * @enum {string}
@@ -2710,6 +2765,10 @@ export interface components {
              */
             task_worker: number;
         };
+        /** @description The secret of a one-time sign-in link from `fld web`, which the sign-in screen reads from the link. */
+        LinkSignIn: {
+            link: string;
+        };
         /** @description What an active workspace holds right now. These are working changes, never history. */
         LiveWorkspace: {
             /**
@@ -2870,10 +2929,6 @@ export interface components {
             turns: number;
             /** Format: int64 */
             workers: number;
-        };
-        /** @description On loopback, the name the person works under. */
-        NameSignIn: {
-            name: string;
         };
         /** @description One item that waits for a human. Only the ids its kind has are set. */
         NeedsYouEntry: {
@@ -4010,8 +4065,8 @@ export interface components {
          * @enum {string}
          */
         SessionEndReason: "handoff" | "lost" | "requested";
-        /** @description A token off loopback, a name on loopback. */
-        SessionRequest: components["schemas"]["TokenSignIn"] | components["schemas"]["NameSignIn"];
+        /** @description A token, or the secret of a sign-in link. */
+        SessionRequest: components["schemas"]["TokenSignIn"] | components["schemas"]["LinkSignIn"];
         SessionStartContext: {
             /** @description The text for the session's context, at most 1500 characters. */
             context: string;
@@ -4029,9 +4084,9 @@ export interface components {
         };
         /** @description What the sign-in screen needs to know. */
         SessionStatus: {
-            /** @description False only off loopback without the cookie of a live session: the sign-in screen then asks for a token. True with a null `human` asks for a name. */
+            /** @description False without the cookie of a live session: the sign-in screen then asks for a token. Over the socket it is always true. */
             authenticated: boolean;
-            /** @description The name the request acts under; null before a name or a token gives one. */
+            /** @description The name the request acts under; null before a sign-in gives one. */
             human: string | null;
         };
         /** @description A change of the worker limits; a limit left out stays as it is. */
@@ -4529,7 +4584,7 @@ export interface components {
              */
             total: number;
         };
-        /** @description Off loopback, a web token from `fld token create`. */
+        /** @description A web token from `fld token create`. */
         TokenSignIn: {
             token: string;
         };
@@ -4983,7 +5038,7 @@ export interface operations {
                     "application/json": components["schemas"]["DaemonView"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5052,7 +5107,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5130,7 +5185,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5208,7 +5263,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5273,7 +5328,7 @@ export interface operations {
                     "application/json": components["schemas"]["HumanList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5336,7 +5391,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5396,7 +5451,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5478,7 +5533,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5560,7 +5615,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5640,7 +5695,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5730,7 +5785,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5822,7 +5877,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5903,7 +5958,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5971,7 +6026,7 @@ export interface operations {
                     "application/json": components["schemas"]["BoardView"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6050,7 +6105,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6127,7 +6182,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6219,7 +6274,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6308,7 +6363,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6387,7 +6442,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6471,7 +6526,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6560,7 +6615,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6642,7 +6697,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6723,7 +6778,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6813,7 +6868,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6890,7 +6945,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProjectGit"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6971,7 +7026,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7048,7 +7103,7 @@ export interface operations {
                     "application/json": components["schemas"]["LabelList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7129,7 +7184,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7230,7 +7285,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: `mine` is set and the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: `mine` is set and the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7298,7 +7353,7 @@ export interface operations {
                     "application/json": components["schemas"]["NeedsYouList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7366,7 +7421,7 @@ export interface operations {
                     "application/json": components["schemas"]["PauseEntry"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7448,7 +7503,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7530,7 +7585,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7621,7 +7676,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7704,7 +7759,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7808,7 +7863,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7891,7 +7946,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -7993,7 +8048,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8076,7 +8131,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8168,7 +8223,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8260,7 +8315,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8352,7 +8407,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8450,7 +8505,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8548,7 +8603,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8643,7 +8698,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8729,7 +8784,7 @@ export interface operations {
                     "application/json": components["schemas"]["RepositoryView"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8813,7 +8868,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8894,7 +8949,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8980,7 +9035,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9063,7 +9118,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9153,7 +9208,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9236,7 +9291,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9328,7 +9383,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9420,7 +9475,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9511,7 +9566,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9579,7 +9634,7 @@ export interface operations {
                     "application/json": components["schemas"]["PauseEntry"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9659,7 +9714,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9738,7 +9793,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9817,7 +9872,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9894,7 +9949,7 @@ export interface operations {
                     "application/json": components["schemas"]["ReviewCheckoutList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9976,7 +10031,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10055,7 +10110,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10137,7 +10192,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10219,7 +10274,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10287,7 +10342,7 @@ export interface operations {
                     "application/json": components["schemas"]["StashList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10364,7 +10419,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10450,7 +10505,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10531,7 +10586,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10619,7 +10674,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10705,7 +10760,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10788,7 +10843,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10874,7 +10929,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10966,7 +11021,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11054,7 +11109,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11146,7 +11201,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11234,7 +11289,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11324,7 +11379,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11412,7 +11467,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11495,7 +11550,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11583,7 +11638,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11673,7 +11728,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11763,7 +11818,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11851,7 +11906,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11934,7 +11989,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12022,7 +12077,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12099,7 +12154,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`: the request names no human; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12198,7 +12253,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12275,7 +12330,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkerQuestionList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12358,7 +12413,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12435,7 +12490,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkerList"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12516,7 +12571,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12608,7 +12663,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12696,7 +12751,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `human_name_required`; `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12764,7 +12819,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkspaceListView"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12843,7 +12898,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12922,7 +12977,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13013,7 +13068,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13123,13 +13178,13 @@ export interface operations {
             /** @description Signed in */
             204: {
                 headers: {
-                    /** @description `fold_session` off loopback, `fold_human` on loopback */
+                    /** @description `fold_session` */
                     "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description `invalid_request`: a name off loopback, a token on loopback, or a malformed body; `invalid_name`: the name breaks the name pattern */
+            /** @description `invalid_request`: a malformed body */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -13138,7 +13193,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `invalid_token`: the registry holds no such token, or it is revoked */
+            /** @description `invalid_token`: the registry holds no such token, or it is revoked; `invalid_sign_in_link`: the registry holds no such link, or it was used or has expired */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13179,7 +13234,7 @@ export interface operations {
             /** @description Signed out */
             204: {
                 headers: {
-                    /** @description `fold_session` and `fold_human` with `Max-Age=0` */
+                    /** @description `fold_session` with `Max-Age=0` */
                     "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
@@ -13187,6 +13242,131 @@ export interface operations {
             };
             /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    create_sign_in_link: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new link */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedLink"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    create_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateToken"];
+            };
+        };
+        responses: {
+            /** @description The new token */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedToken"];
+                };
+            };
+            /** @description `invalid_name`: the human's name breaks the name pattern */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `worker_peer_refused`: the request comes from the process tree of a worker that fold started or of a check command that fold runs; `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13223,7 +13403,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkerEnvironmentView"];
                 };
             };
-            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
             401: {
                 headers: {
                     [name: string]: unknown;

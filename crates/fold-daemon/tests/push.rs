@@ -691,7 +691,11 @@ async fn the_push_route_is_socket_only_and_names_the_human() {
             (status, serde_json::from_slice::<Value>(&bytes).unwrap())
         }
     };
-    let (status, body) = call(fold_daemon::http::router(state.clone()), Some("ana")).await;
+    let (status, body) = call(
+        crate::common::signed_in_router(&state, "ana").await,
+        Some("ana"),
+    )
+    .await;
     assert_eq!(
         (status, &body["error"]["code"]),
         (StatusCode::NOT_FOUND, &Value::from("not_found"))

@@ -9,7 +9,7 @@ import { createAppRouter, type AppRouter } from "./router";
 const queryClient = createQueryClient();
 const router = createAppRouter(queryClient);
 
-// Off loopback every route answers `auth_required` once the session ends; whichever screen asked is sent to sign in.
+// Every route answers `auth_required` once the session ends; whichever screen asked is sent to sign in.
 api.use(
   authRequiredMiddleware(() => {
     redirectToSignIn(queryClient, router.state.location, (href) => {

@@ -71,7 +71,7 @@ impl ServeError {
 pub(crate) struct FileConfig {
     pub(crate) listen: Option<SocketAddr>,
     pub(crate) socket: Option<PathBuf>,
-    /// How many days a web sign-in lasts off loopback.
+    /// How many days a web sign-in lasts.
     pub(crate) session_days: Option<NonZeroU16>,
 }
 

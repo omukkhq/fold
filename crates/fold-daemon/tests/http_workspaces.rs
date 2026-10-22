@@ -10,7 +10,6 @@ use axum::http::{Request, StatusCode};
 use fold_core::object::ObjectKind;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{Clock, ManualClock, Timestamp};
-use fold_daemon::http::router;
 use fold_daemon::{Daemon, DaemonConfig, RunningDaemon};
 use fold_store::projects::{self, ProjectRow};
 use fold_store::testing::TestProject;
@@ -63,7 +62,8 @@ impl Host {
             .uri(format!("/api/v1/projects/alpha{path}"))
             .body(Body::empty())
             .unwrap();
-        let response = router(self.daemon.state().clone())
+        let response = crate::common::signed_in_router(self.daemon.state(), "ana")
+            .await
             .oneshot(request)
             .await
             .unwrap();

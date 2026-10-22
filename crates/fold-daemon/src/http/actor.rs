@@ -14,10 +14,8 @@ use crate::socket::SocketPeer;
 
 /// The header every CLI command sends over the Unix socket.
 pub const HUMAN_HEADER: &str = "x-fold-human";
-/// The loopback cookie that `POST /api/v1/session` sets. The web application never reads it in script.
-pub const HUMAN_COOKIE: &str = "fold_human";
 
-/// The named human behind a request, registered in the host registry on first use. Over the socket the name comes only from `x-fold-human`, and never from a process under a worker that fold started or under a check command that fold runs. Over HTTP off loopback it comes only from the session that `fold_session` names, and on loopback only from the `fold_human` cookie, so a browser page cannot claim a name with a header and a signed-in human cannot claim another name with a cookie. The loopback cookie is trusted because every `/api` route of the TCP listener refuses a `Host`, or a write's `Origin`, that names another host, and a write without `x-fold-client`, so neither a page under a foreign domain nor a page on another local port can act through it.
+/// The named human behind a request, registered in the host registry on first use. Over the socket the name comes only from `x-fold-human`, and never from a process under a worker that fold started or under a check command that fold runs. Over HTTP it comes only from the live session that `fold_session` names, on loopback too: an agent runs as the host's user and can reach a loopback port, so a name that a request states itself, in a header or a cookie, would let it act as any human.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Human(pub HumanName);
 
@@ -63,11 +61,10 @@ async fn named(parts: &Parts, state: &AppState) -> Result<Option<Human>, ApiErro
             }
             name
         }
-        None => match parts.extensions.get::<SessionHuman>() {
-            Some(SessionHuman(name)) => Some(name.to_string()),
-            None if state.auth_required() => None,
-            None => cookie(&parts.headers, HUMAN_COOKIE),
-        },
+        None => parts
+            .extensions
+            .get::<SessionHuman>()
+            .map(|SessionHuman(name)| name.to_string()),
     };
     let Some(raw) = raw else {
         return Ok(None);
@@ -78,7 +75,7 @@ async fn named(parts: &Parts, state: &AppState) -> Result<Option<Human>, ApiErro
 }
 
 /// A worker's Bash and a check command run as the host's user and can set `FOLD_HUMAN`, so the kernel's peer pid decides instead.
-async fn refuse_worker_peer(parts: &Parts, state: &AppState) -> Result<(), ApiError> {
+pub(crate) async fn refuse_worker_peer(parts: &Parts, state: &AppState) -> Result<(), ApiError> {
     let pid = parts
         .extensions
         .get::<SocketPeer>()

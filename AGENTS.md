@@ -86,7 +86,7 @@ To run the tests of one file in `crates/<crate>/tests/`, select its module: `car
 6. **Messages never change task state,** never stand in for a dependency and never stand in for a claim.
 7. **Every path from an agent or a tree is checked** to be relative, normalised and inside its workspace before it is read or written. Symlinks are recorded, never followed.
 8. **Log ids, never content.** No file content, diff text, message body, review body or token in a log line or an error detail.
-9. **Off loopback, every `/api` route needs the session cookie** except the `/api/v1/session` routes, through which a human signs in. The static web files load without it so the sign-in screen can open. Tokens are stored hashed and compared in constant time. The Unix socket is mode `0600` and never exposed on the network.
+9. **Every `/api` route over TCP needs the session cookie, on loopback too,** except the `/api/v1/session` routes, through which a human signs in with a token or a one-time sign-in link. The static web files load without it so the sign-in screen can open. The cookie holds a random session id, never a name. Tokens, session ids and sign-in links are stored hashed and compared in constant time. Only the socket makes a token or a sign-in link, and never for a process in a worker's or a check's process tree. `registry.db` is mode `0600` in a `0700` folder. The Unix socket is mode `0600` and never exposed on the network.
 
 ## Web
 

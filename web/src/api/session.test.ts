@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorReply, stubFetch } from "../test/stubFetch";
 import { isApiError } from "./errors";
-import { getSession, setName, signIn } from "./session";
+import { getSession, signIn, signInWithLink } from "./session";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -19,13 +19,22 @@ describe("getSession", () => {
   });
 });
 
-describe("setName", () => {
-  it("posts the name to the session route", async () => {
+describe("signInWithLink", () => {
+  it("posts the link's secret and nothing else", async () => {
     const calls = stubFetch({ "POST /api/v1/session": { status: 204 } });
-    await setName("tanim");
+    await signInWithLink("secret");
     expect(calls).toHaveLength(1);
     expect(calls[0]?.path).toBe("/api/v1/session");
-    expect(calls[0]?.body).toEqual({ name: "tanim" });
+    expect(calls[0]?.body).toEqual({ link: "secret" });
+  });
+
+  it("throws the daemon's code for a used link", async () => {
+    stubFetch({
+      "POST /api/v1/session": errorReply(401, "invalid_sign_in_link"),
+    });
+    await expect(signInWithLink("used")).rejects.toSatisfy((e: unknown) =>
+      isApiError(e, "invalid_sign_in_link"),
+    );
   });
 });
 

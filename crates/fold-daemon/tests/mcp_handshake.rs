@@ -455,7 +455,8 @@ async fn an_invalid_config_refuses_no_session_and_fails_only_the_commands_that_n
             "{tool}: {error}"
         );
     }
-    let response = fold_daemon::http::router(host.state())
+    let response = crate::common::signed_in_router(&host.state(), "ana")
+        .await
         .oneshot(
             axum::http::Request::get("/api/v1/projects/app/repository")
                 .body(axum::body::Body::empty())

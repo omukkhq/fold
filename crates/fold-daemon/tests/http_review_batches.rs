@@ -4,7 +4,6 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use fold_core::reviews::Verdict;
 use fold_core::{ProposalId, ReviewBatchId};
-use fold_daemon::http::router;
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -19,7 +18,11 @@ async fn get(fx: &Fixture, path: &str) -> (StatusCode, Value) {
         .uri(format!("/api/v1/projects/demo{path}"))
         .body(Body::empty())
         .unwrap();
-    let response = router(fx.state.clone()).oneshot(request).await.unwrap();
+    let response = crate::common::signed_in_router(&fx.state, "ana")
+        .await
+        .oneshot(request)
+        .await
+        .unwrap();
     let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     (status, serde_json::from_slice(&bytes).unwrap())

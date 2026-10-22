@@ -78,10 +78,10 @@ pub use stash::{
     StashEntry, StashOutcome, UnstashConflict, UnstashOutcome, stash, stash_list, unstash,
 };
 pub use web_auth::{
-    DEFAULT_SESSION_LIFETIME, SignedIn, WEB_TOUCH_INTERVAL, check_web_session, create_web_session,
-    create_web_token, create_web_token_on_host, end_web_session, list_humans, list_web_tokens,
-    list_web_tokens_on_host, purge_expired_web_sessions, revoke_web_token,
-    revoke_web_token_on_host,
+    DEFAULT_SESSION_LIFETIME, SIGN_IN_LINK_LIFETIME, SignInLink, SignedIn, WEB_TOUCH_INTERVAL,
+    check_web_session, create_sign_in_link, create_web_session, create_web_token, end_web_session,
+    list_humans, list_web_tokens, list_web_tokens_on_host, open_sign_in_link,
+    purge_expired_web_sessions, revoke_web_token, revoke_web_token_on_host,
 };
 
 #[derive(Debug, Error)]

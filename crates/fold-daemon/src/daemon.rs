@@ -31,17 +31,10 @@ pub struct DaemonState {
     pub projects: Projects,
     pub clock: Arc<dyn Clock>,
     pub assets: AssetSource,
-    /// The address the HTTP listener is bound to, with the port it got. Its IP address fixes the auth mode at start and names the hosts the `/api` routes answer.
+    /// The address the HTTP listener is bound to, with the port it got. Its IP address names the hosts the `/api` routes answer and the address of a sign-in link.
     pub listen: SocketAddr,
     /// How long a session that `POST /api/v1/session` opens lasts.
     pub session_lifetime: Duration,
-}
-
-impl DaemonState {
-    /// True off loopback, where every guarded `/api` route needs the `fold_session` cookie of a live session. `0.0.0.0` and `::` are off loopback, so they need it even for a request from `127.0.0.1`.
-    pub fn auth_required(&self) -> bool {
-        !self.listen.ip().is_loopback()
-    }
 }
 
 impl std::fmt::Debug for DaemonState {

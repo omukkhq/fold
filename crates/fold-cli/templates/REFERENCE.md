@@ -169,7 +169,9 @@ Work in the project folder:
 Maintenance and access:
 
 - `fld gc [--dry-run]`: delete unreferenced objects, prune automatic checkpoints beyond `auto_checkpoints_kept`, remove the closed workspace directories that are still there, and prune the checkpoints of workspaces closed longer than `closed_workspace_days`. fold removes a workspace's directory as soon as the workspace closes and its owning agent has no running worker process and no open session, after a final checkpoint of the tracked files it had not recorded (a review checkout takes none). That checkpoint is a record, not a restore point: a closed workspace is never restored. `fld gc` retries a removal that failed. `--dry-run` only counts.
-- `fld token create NAME [--label TEXT]`: create a sign-in token for the web app off localhost for the human `NAME` and print it once. `fld token list` shows the tokens without their secrets, and `fld token revoke ID` (such as `wt-3`) ends every session made from one.
+- `fld web`: print a one-time link that signs the user in to the web app in a browser on this machine. The link works once, within 5 minutes; fld starts the daemon when needed.
+- `fld token create NAME [--label TEXT]`: create a sign-in token for the web app for the human `NAME`, for a browser that cannot open a link from `fld web`, such as one on another machine, and print it once. The daemon makes the token and starts when needed. `fld token list` shows the tokens without their secrets, and `fld token revoke ID` (such as `wt-3`) ends every session made from one.
+- `fld web` and `fld token create` refuse a process that a fold worker or a fold check started, as fold refuses such a process that names a human. A process that left that process tree, and any process of the user, can still read and write the user's files, fold's own files too, because agents run as the user's OS user. For full isolation, run the agents as a separate OS user or in a sandbox.
 - `fld subscribe [EMAIL]`: subscribe an address to fold release news.
 
 Git remotes (with Git sync on):
@@ -178,11 +180,11 @@ Git remotes (with Git sync on):
 - `fld push [NAME]`: push main's history, one commit per revision, without force. The name can be left out when the project has one remote.
 - `fld pull [NAME]`: bring the remote's commits into main; a conflict becomes a sync task.
 
-Host config. `$XDG_CONFIG_HOME/fold/daemon.toml` (else `~/.config/fold/daemon.toml`) holds `listen` (the web address, `127.0.0.1:7420` by default), `socket` and `session_days` (how long a web sign-in lasts off loopback). The daemon reads it at its start, so an edit needs `fld restart`.
+Host config. `$XDG_CONFIG_HOME/fold/daemon.toml` (else `~/.config/fold/daemon.toml`) holds `listen` (the web address, `127.0.0.1:7420` by default), `socket` and `session_days` (how long a web sign-in lasts). The daemon reads it at its start, so an edit needs `fld restart`.
 
 ## Web app
 
-The daemon serves the web app at `http://127.0.0.1:7420` by default. On loopback a person only types a name once per browser; off loopback the sign-in asks for a token from `fld token create`. Each project has these tabs, and every write a person makes there goes through the same commands as an agent's:
+The daemon serves the web app at `http://127.0.0.1:7420` by default. Every browser signs in, on loopback too, so no local process can act as a person with one request: a person opens the link that `fld web` prints, or enters a token from `fld token create` on the sign-in screen. Each project has these tabs, and every write a person makes there goes through the same commands as an agent's:
 
 - Board: the five columns of the tasks, with search and the Attention and Blocked only filters. The board is read only; cards move when fold's state changes. A card with a question for you has Mark answered, for an answer you gave elsewhere. New task opens a form (title, description, area and labels, who does the work), which suggests a request first.
 - Task (a card): edit the title, description, area and labels; edit the checklist; add and remove dependencies; set, change and clear a blocker; require or turn off human review; Mark Done on a human task; Complete task or Send back on a reported `no_proposal` task; send feedback to the task's agents; archive the task. It also shows the workspace, checkpoints, changesets, the proposal and the working changes.

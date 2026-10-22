@@ -75,9 +75,10 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::INVALID_PUSH_TARGET
         | codes::INVALID_EVENT_FILTER
         | codes::INVALID_DRAFT => Some(StatusCode::BAD_REQUEST),
-        codes::HUMAN_NAME_REQUIRED | codes::AUTH_REQUIRED | codes::INVALID_TOKEN => {
-            Some(StatusCode::UNAUTHORIZED)
-        }
+        codes::HUMAN_NAME_REQUIRED
+        | codes::AUTH_REQUIRED
+        | codes::INVALID_TOKEN
+        | codes::INVALID_SIGN_IN_LINK => Some(StatusCode::UNAUTHORIZED),
         codes::HUMAN_REQUIRED
         | codes::ACTOR_CANNOT_CLAIM
         | codes::HOST_NOT_ALLOWED
@@ -328,6 +329,7 @@ mod tests {
             (codes::HUMAN_NAME_REQUIRED, StatusCode::UNAUTHORIZED),
             (codes::AUTH_REQUIRED, StatusCode::UNAUTHORIZED),
             (codes::INVALID_TOKEN, StatusCode::UNAUTHORIZED),
+            (codes::INVALID_SIGN_IN_LINK, StatusCode::UNAUTHORIZED),
             (codes::HOST_NOT_ALLOWED, StatusCode::FORBIDDEN),
             (codes::CLIENT_HEADER_REQUIRED, StatusCode::FORBIDDEN),
             (codes::WORKER_PEER_REFUSED, StatusCode::FORBIDDEN),

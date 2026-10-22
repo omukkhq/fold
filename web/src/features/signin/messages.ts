@@ -6,8 +6,8 @@ export function signInErrorMessage(error: unknown): string {
     case "invalid_token":
     case "auth_required":
       return "That token was not accepted. Check it and try again.";
-    case "invalid_name":
-      return "The daemon did not accept that name.";
+    case "invalid_sign_in_link":
+      return "That sign-in link was already used or has expired. Run fld web for a new one.";
     case "daemon_unavailable":
     case null:
       return "The daemon did not answer. Try again.";

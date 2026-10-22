@@ -53,8 +53,10 @@ enum Command {
     New(claude::NewArgs),
     /// Subscribe an email address to fold release news; the address goes once to Omukk and fld does not keep it
     Subscribe(news::SubscribeArgs),
-    /// Manage the tokens that sign humans in to the web interface off localhost
+    /// Manage the tokens that sign humans in to the web interface from any browser; fld web signs you in on this machine
     Token(token::TokenArgs),
+    /// Print a one-time link that signs you in to the web interface; it works once, within 5 minutes, starting the daemon when needed
+    Web(commands::web::WebArgs),
     /// Add, remove and list the remote Git repositories that fld push and fld pull sync main with
     Remote(commands::remote::RemoteArgs),
     /// Push main's Git history, one commit per revision, to a Git remote, without force; the remote's name can be left out when the project has only one
@@ -145,6 +147,7 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::Remote(args)) => {
             commands::remote::run_remote(&args, out).map_err(Failure::Remote)
         }
+        Some(Command::Web(args)) => commands::web::run(&args, out).map_err(Failure::Remote),
         Some(Command::Push(args)) => {
             commands::remote::run_push(&args, out).map_err(Failure::Remote)
         }
