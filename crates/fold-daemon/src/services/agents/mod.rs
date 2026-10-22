@@ -373,6 +373,33 @@ impl AgentService {
         }))
     }
 
+    /// The role whose steps the session's agent follows: the role fold started it in, or [`fold_core::Role::Main`] for an agent with the `main` tag that fold does not supervise, which is `fld claude`'s session. `None` for a session without an agent and for an agent with neither, such as a session opened by hand.
+    pub async fn session_role(
+        &self,
+        ctx: &SessionContext,
+    ) -> Result<Option<fold_core::Role>, AgentError> {
+        let Some(name) = &ctx.agent else {
+            return Ok(None);
+        };
+        let mut conn = self
+            .store
+            .read()
+            .acquire()
+            .await
+            .map_err(StoreError::from)?;
+        if let Some(process) = agents::find_worker_process(&mut conn, name).await? {
+            return Ok(Some(process.role));
+        }
+        let Some(agent) = agents::find_agent(&mut *conn, name).await? else {
+            return Ok(None);
+        };
+        let tags = agents::tags(&mut *conn, agent.id).await?;
+        Ok(tags
+            .iter()
+            .any(Tag::is_main)
+            .then_some(fold_core::Role::Main))
+    }
+
     /// The worker of the session's agent. A Claude Code subagent of the session acts as this worker too: fold knows no worker below an agent.
     pub async fn resolve_worker(&self, ctx: &SessionContext) -> Result<WorkerRow, AgentError> {
         let agent = self.require_agent(ctx).await?;

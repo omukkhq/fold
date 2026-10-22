@@ -126,6 +126,7 @@ mod mcp_requests;
 mod mcp_review_batches;
 mod mcp_reviews;
 mod mcp_tasks;
+mod mcp_tool_loading;
 mod mcp_wait_for_events;
 mod mcp_workspace_tools;
 mod mcp_workspaces;

@@ -135,9 +135,10 @@ impl Fixture {
                 .unwrap();
             store.close().await.unwrap();
         });
-        std::fs::create_dir_all(root.join(".claude/skills/fold")).unwrap();
         for file in SKILL_FILES {
-            std::fs::write(root.join(file), "# fold\n").unwrap();
+            let path = root.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "# fold\n").unwrap();
         }
         std::fs::write(root.join(AGENTS_FILE), good_agents()).unwrap();
         root
@@ -1185,7 +1186,13 @@ fn the_claude_files_warn_for_each_missing_fold_entry() {
         [
             "AGENTS.md is missing",
             ".claude/skills/fold/SKILL.md is missing",
-            ".claude/skills/fold/REFERENCE.md is missing"
+            ".claude/skills/fold/REFERENCE.md is missing",
+            ".claude/skills/fold-main/SKILL.md is missing",
+            ".claude/skills/fold-area-lead/SKILL.md is missing",
+            ".claude/skills/fold-review-lead/SKILL.md is missing",
+            ".claude/skills/fold-task-worker/SKILL.md is missing",
+            ".claude/skills/fold-reviewer/SKILL.md is missing",
+            ".claude/skills/fold/ERRORS.md is missing"
         ]
     );
     assert_eq!(
