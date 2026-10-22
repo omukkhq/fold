@@ -325,6 +325,17 @@ impl MessageService {
                     now,
                 };
                 let view = write_message(tx, &mut buffer, draft).await?;
+                // A reply also acknowledges the message it answers for a sender that received it.
+                if let (Actor::Agent(agent), Some(parent)) = (actor, parent) {
+                    let worker = actor_worker(tx.conn(), agent)
+                        .await?
+                        .ok_or_else(worker_not_found)?;
+                    let changed =
+                        fold_store::messages::acknowledge(tx, worker.id, parent.id, false, now)
+                            .await?
+                            .unwrap_or_default();
+                    inbox::append_acknowledged(tx, &mut buffer, actor, &changed, now).await?;
+                }
                 #[cfg(feature = "failpoints")]
                 fail::fail_point!("send_message_in_transaction", |_| Err(fired(
                     "send_message_in_transaction"

@@ -219,8 +219,8 @@ async fn send_then_inbox_returns_the_message_until_it_is_acknowledged() {
     )
     .await;
     assert_eq!(reply["thread"], "m-1");
-    let acknowledged = call(&backend, "acknowledge_message", json!({"id": "m-1"})).await;
-    assert_eq!(acknowledged, json!({"acknowledged": ["m-1"]}));
+    let acknowledged = call(&backend, "acknowledge_message", json!({"ids": ["m-1"]})).await;
+    assert_eq!(acknowledged, json!({"acknowledged": []}));
     let empty = call(&backend, "get_inbox", json!({})).await;
     assert_eq!(empty, json!({"messages": []}));
     let thread = call(&frontend, "get_thread", json!({"thread": "m-1"})).await;
@@ -242,6 +242,72 @@ async fn send_then_inbox_returns_the_message_until_it_is_acknowledged() {
 }
 
 #[tokio::test]
+async fn a_reply_acknowledges_the_message_it_answers_for_a_recipient_only() {
+    let fixture = Fixture::new().await;
+    let frontend = fixture.connect("frontend").await;
+    let backend = fixture.connect("backend").await;
+    let other = fixture.connect("other").await;
+    call(
+        &frontend,
+        "send_message",
+        json!({"to": ["backend"], "body": "ready?"}),
+    )
+    .await;
+    call(
+        &other,
+        "send_message",
+        json!({"to": ["frontend"], "body": "not for backend", "reply_to": "m-1"}),
+    )
+    .await;
+    let still = call(&backend, "get_inbox", json!({})).await;
+    assert_eq!(inbox_ids(&still), pairs(&[("m-1", "backend")]));
+    call(
+        &backend,
+        "send_message",
+        json!({"to": ["frontend"], "body": "yes", "reply_to": "m-1"}),
+    )
+    .await;
+    let cleared = call(&backend, "get_inbox", json!({})).await;
+    assert_eq!(cleared, json!({"messages": []}));
+}
+
+#[tokio::test]
+async fn acknowledge_takes_several_ids_and_a_wrong_id_acknowledges_nothing() {
+    let fixture = Fixture::new().await;
+    let frontend = fixture.connect("frontend").await;
+    let backend = fixture.connect("backend").await;
+    for _ in 0..3 {
+        call(
+            &frontend,
+            "send_message",
+            json!({"to": ["backend"], "body": "x"}),
+        )
+        .await;
+    }
+    let wrong = call_raw(
+        &backend,
+        "acknowledge_message",
+        json!({"ids": ["m-1", "m-9"]}),
+    )
+    .await;
+    assert_eq!(wrong.is_error, Some(true));
+    assert_eq!(body(&wrong)["error"]["code"], "message_not_found");
+    let unchanged = call(&backend, "get_inbox", json!({})).await;
+    assert_eq!(unchanged["messages"].as_array().map(Vec::len), Some(3));
+    let empty = call_raw(&backend, "acknowledge_message", json!({"ids": []})).await;
+    assert_eq!(empty.is_error, Some(true));
+    let done = call(
+        &backend,
+        "acknowledge_message",
+        json!({"ids": ["m-3", "m-1"]}),
+    )
+    .await;
+    assert_eq!(done, json!({"acknowledged": ["m-1", "m-3"]}));
+    let left = call(&backend, "get_inbox", json!({})).await;
+    assert_eq!(inbox_ids(&left), pairs(&[("m-2", "backend")]));
+}
+
+#[tokio::test]
 async fn acknowledge_with_up_to_clears_every_earlier_message() {
     let fixture = Fixture::new().await;
     let frontend = fixture.connect("frontend").await;
@@ -254,19 +320,19 @@ async fn acknowledge_with_up_to_clears_every_earlier_message() {
         )
         .await;
     }
-    let one = call(&backend, "acknowledge_message", json!({"id": "m-2"})).await;
+    let one = call(&backend, "acknowledge_message", json!({"ids": ["m-2"]})).await;
     assert_eq!(one, json!({"acknowledged": ["m-2"]}));
     let rest = call(
         &backend,
         "acknowledge_message",
-        json!({"id": "m-3", "up_to": true}),
+        json!({"ids": ["m-3"], "up_to": true}),
     )
     .await;
     assert_eq!(rest, json!({"acknowledged": ["m-1", "m-3"]}));
     let repeat = call(
         &backend,
         "acknowledge_message",
-        json!({"id": "m-3", "up_to": true}),
+        json!({"ids": ["m-3"], "up_to": true}),
     )
     .await;
     assert_eq!(repeat, json!({"acknowledged": []}));
@@ -317,12 +383,12 @@ async fn as_reads_one_worker_and_include_workers_reads_them_all() {
         inbox_ids(&all),
         pairs(&[("m-1", "frontend"), ("m-2", "frontend/ui")])
     );
-    let wrong = call_raw(&frontend, "acknowledge_message", json!({"id": "m-2"})).await;
+    let wrong = call_raw(&frontend, "acknowledge_message", json!({"ids": ["m-2"]})).await;
     assert_eq!(body(&wrong)["error"]["code"], "message_not_found");
     let acknowledged = call(
         &frontend,
         "acknowledge_message",
-        json!({"id": "m-2", "as": "frontend/ui"}),
+        json!({"ids": ["m-2"], "as": "frontend/ui"}),
     )
     .await;
     assert_eq!(acknowledged, json!({"acknowledged": ["m-2"]}));
@@ -340,13 +406,13 @@ async fn the_footer_counts_unread_messages_and_drops_the_part_once_acknowledged(
     let listed = call_raw(&frontend, "list_agents", json!({})).await;
     let line = footer(&listed).unwrap();
     assert!(line.starts_with("fold: 2 unread"), "{line}");
-    call(&frontend, "acknowledge_message", json!({"id": "m-1"})).await;
+    call(&frontend, "acknowledge_message", json!({"ids": ["m-1"]})).await;
     let line = footer(&call_raw(&frontend, "list_agents", json!({})).await).unwrap();
     assert!(line.starts_with("fold: 1 unread"), "{line}");
     let last = call_raw(
         &frontend,
         "acknowledge_message",
-        json!({"id": "m-2", "as": "frontend/ui"}),
+        json!({"ids": ["m-2"], "as": "frontend/ui"}),
     )
     .await;
     assert!(
@@ -380,7 +446,7 @@ async fn errors_carry_the_code_and_the_next_tool() {
         })
     );
     for (tool, arguments) in [
-        ("acknowledge_message", json!({"id": "m-9"})),
+        ("acknowledge_message", json!({"ids": ["m-9"]})),
         ("get_thread", json!({"thread": "m-9"})),
         (
             "send_message",
