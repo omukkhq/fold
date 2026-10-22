@@ -88,7 +88,7 @@ async fn stop(harness: &Harness) {
     until_state(harness, MAIN, WorkerState::Stopped).await;
 }
 
-/// A stop of the supervised main that fold makes itself, such as the stop once it has answered its messages: the row is not held.
+/// A stop of the supervised main that fold makes itself, such as the stop once it has answered its messages: the row is not held. It returns once the exit is recorded; work that waits can start the main again at once.
 async fn stop_by_fold(harness: &Harness) {
     harness
         .handle
@@ -96,7 +96,6 @@ async fn stop_by_fold(harness: &Harness) {
         .stop_worker(&fold_core::Actor::System, &AgentName::parse(MAIN).unwrap())
         .await
         .unwrap();
-    until_state(harness, MAIN, WorkerState::Stopped).await;
 }
 
 /// Whether a human's stop holds the supervised main.
@@ -225,7 +224,7 @@ async fn a_humans_stop_holds_the_supervised_main_until_a_human_starts_it_again()
     stop(&harness).await;
     assert!(held(&harness).await);
 
-    reply(&harness, &ask, "OK").await;
+    let answer = reply(&harness, &ask, "OK").await;
     let (status, created) = harness
         .create_request_form(&[("body", None, None, b"Search the board")], Some(HUMAN))
         .await;
@@ -252,11 +251,11 @@ async fn a_humans_stop_holds_the_supervised_main_until_a_human_starts_it_again()
 
     stop_by_fold(&harness).await;
     assert!(!held(&harness).await);
-    let message = harness
-        .send("frontend", &[MAIN], "The board needs a search box.")
-        .await;
-    let run = until_told(&fake, &message).await;
-    assert!(run.has("--resume"), "fold's own stop holds nothing");
+    let run = until_told(&fake, &format!("- {answer} from human:{HUMAN}")).await;
+    assert!(
+        run.has("--resume"),
+        "fold's own stop holds nothing: the reply the held main owed resumes it"
+    );
 }
 
 #[tokio::test]
@@ -467,4 +466,37 @@ async fn a_request_starts_the_supervised_main_and_never_while_the_setting_is_off
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"]["code"], "main_not_supervised", "{body}");
     assert_eq!(fake.runs_of(MAIN).len(), 1);
+}
+
+#[tokio::test]
+async fn a_closed_workspace_of_the_supervised_main_goes_once_its_turn_ends() {
+    let fake = FakeClaude::new("result");
+    let mut harness = supervised(&fake).await;
+    harness.connect(MAIN).await;
+    let opened = harness.call(MAIN, "open_main_workspace", json!({})).await;
+    let ws = opened["workspace"].as_str().unwrap().to_owned();
+    let dir = std::path::Path::new(harness.root()).join(opened["path"].as_str().unwrap());
+    assert!(dir.is_dir());
+    let row = worker(&harness, MAIN).await;
+    assert!(
+        harness
+            .handle
+            .store
+            .write(async |tx| fold_store::agents::mark_worker_working(tx, row.id).await)
+            .await
+            .unwrap()
+    );
+
+    harness
+        .call(
+            MAIN,
+            "abandon_workspace",
+            json!({"ws": ws, "reason": "The plan changed."}),
+        )
+        .await;
+    assert!(dir.is_dir(), "a working main keeps its closed workspace");
+    let message = harness.send("frontend", &[MAIN], "Done with T-1.").await;
+    until_told(&fake, &message).await;
+    eventually(WAIT, async || if dir.exists() { Err(()) } else { Ok(()) }).await;
+    assert_eq!(worker(&harness, MAIN).await.state, WorkerState::Idle);
 }

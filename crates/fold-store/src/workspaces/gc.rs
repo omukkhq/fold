@@ -67,7 +67,7 @@ pub struct ClosedWorkspace {
     pub removal_started: bool,
 }
 
-/// The archived or abandoned workspaces whose directory fold has not removed yet, by id, or only `workspace` when it is one of them. A workspace whose owning agent has a worker process that has not ended, or an open session such as the main agent's or one opened by hand, is left out until both have ended, so fold never removes the files a running worker or a connected session can still use.
+/// The archived or abandoned workspaces whose directory fold has not removed yet, by id, or only `workspace` when it is one of them. A workspace whose owning agent has a worker process that has not ended, or an open session such as the main agent's or one opened by hand, is left out until both have ended, so fold never removes the files a running worker or a connected session can still use. The supervised main is long-lived and works only in its turns, so while its process is idle between turns neither it nor its sessions hold its closed workspaces back; no other session binds as it while it runs.
 pub async fn closed_directories_due<'e>(
     db: impl SqliteExecutor<'e>,
     workspace: Option<WorkspaceId>,
@@ -82,10 +82,14 @@ pub async fn closed_directories_due<'e>(
              AND (?1 IS NULL OR w.number = ?1)
              AND NOT EXISTS (
                SELECT 1 FROM workers k JOIN worker_processes p ON p.agent_id = k.agent_id
-               WHERE k.id = w.worker_id AND p.state NOT IN ('stopped', 'failed'))
+               WHERE k.id = w.worker_id AND p.state NOT IN ('stopped', 'failed')
+                 AND NOT (p.role = 'main' AND p.state = 'idle'))
              AND NOT EXISTS (
                SELECT 1 FROM workers k JOIN sessions s ON s.agent_id = k.agent_id
-               WHERE k.id = w.worker_id AND s.ended_at IS NULL)
+               WHERE k.id = w.worker_id AND s.ended_at IS NULL
+                 AND NOT EXISTS (
+                   SELECT 1 FROM worker_processes p
+                   WHERE p.agent_id = k.agent_id AND p.role = 'main' AND p.state = 'idle'))
            ORDER BY w.number"#,
         only
     )

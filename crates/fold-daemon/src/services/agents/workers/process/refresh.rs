@@ -59,6 +59,12 @@ impl Supervisor {
         if !row.role.is_long_lived() || row.state == WorkerState::Stopping {
             return Ok(());
         }
+        if row.role == Role::Main && row.state == WorkerState::Idle {
+            let due = lock(&self.inner.cleanup_due).clone();
+            if let Some(due) = due {
+                due.notify_one();
+            }
+        }
         if agents::session_handoff(&mut *conn, &row.session_id)
             .await?
             .is_some()
