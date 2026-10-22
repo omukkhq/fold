@@ -34,9 +34,10 @@ INSERT INTO review_again_requests (version_id, requested_by_human, created_at) V
 INSERT INTO messages (id, number, thread_id, sender_kind, sender_worker_id, body, created_at, asks_human) VALUES (9, 9, 9, 'worker', 1, 'b', 0, 1);
 INSERT INTO message_recipients (message_id, human, addressed_as) VALUES (9, 'ana', 'human');
 INSERT INTO message_ask_closures (message_id, reason, closed_by, created_at) VALUES (9, 'dismissed', 'human:ana', 0);
+INSERT INTO worker_turns (worker_process_id, role, cost_micro_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, failed, interrupted, created_at) VALUES (1, 'review_lead', 10, 0, 0, 0, 0, 0, 0, 0);
 ";
 
-const APPEND_ONLY: [&str; 19] = [
+const APPEND_ONLY: [&str; 20] = [
     "completions",
     "revisions",
     "changesets",
@@ -56,6 +57,7 @@ const APPEND_ONLY: [&str; 19] = [
     "message_choices",
     "review_again_requests",
     "message_ask_closures",
+    "worker_turns",
 ];
 
 /// The append-only tables whose rows are derived in the transaction of a row that carries the time, so they have no `created_at` of their own.
@@ -154,6 +156,7 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "worker_proposals",
         "worker_question_messages",
         "worker_tasks",
+        "worker_turns",
         "workers",
         "workspace_conflicts",
         "workspaces",

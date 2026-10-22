@@ -550,17 +550,15 @@ async fn feedback_needs_a_task_or_a_reply_and_only_a_human_sends_it() {
             .unwrap_err(),
     );
     assert_eq!(error.code(), codes::MESSAGE_NOT_FOUND);
-    let error = refusal(
-        fixture
-            .messages
-            .feedback(&human("ana"), feedback(Some(t(1)), None))
-            .await
-            .unwrap_err(),
-    );
+    let lead = fixture
+        .messages
+        .feedback(&human("ana"), feedback(Some(t(1)), None))
+        .await
+        .unwrap();
     assert_eq!(
-        error.code(),
-        codes::RECIPIENT_NOT_FOUND,
-        "T-1 has no claim holder"
+        lead.recipients[0].name.to_string(),
+        "frontend",
+        "without a claim holder the area lead reads it"
     );
     fixture
         .tasks

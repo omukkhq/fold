@@ -23,8 +23,39 @@ const SUMMARY_TITLE: usize = 100;
 /// The turn fold sends a lead whose context passed its role's `handoff_at`.
 pub const HANDOFF_REQUEST: &str = "fold: your context is large, so fold will start you again with a fresh context. Call write_handoff now with a short hand-off note for your next session: what you are doing, your open decisions and what comes next. Tasks, proposals, reviews and messages stay in fold, so do not copy them. Then end your turn.";
 
-/// Whether a context of `context_tokens` has reached `percent` of a window of `context_window` tokens. An unknown window of 0 never does.
-pub fn handoff_due(context_tokens: u64, context_window: u64, percent: u64) -> bool {
+/// The smallest window, in tokens, for which a lead hands off by default at [`DEFAULT_HANDOFF_LARGE_PERCENT`] instead of [`DEFAULT_HANDOFF_SMALL_PERCENT`].
+pub const DEFAULT_HANDOFF_LARGE_WINDOW: u64 = 220_000;
+
+/// The default hand-off share, in percent, of a window below [`DEFAULT_HANDOFF_LARGE_WINDOW`].
+pub const DEFAULT_HANDOFF_SMALL_PERCENT: u64 = 85;
+
+/// The default hand-off share, in percent, of a window of [`DEFAULT_HANDOFF_LARGE_WINDOW`] or more.
+pub const DEFAULT_HANDOFF_LARGE_PERCENT: u64 = 60;
+
+/// When fold asks a long-lived worker for its hand-off note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandoffAt {
+    /// The role's own `handoff_at`: this percent of every window.
+    Percent(u64),
+    /// No `handoff_at`: the percent of [`default_handoff_percent`], which depends on the window.
+    Default,
+}
+
+/// The default hand-off share of a window of `context_window` tokens: 85% of the window below 220k tokens and 60% from 220k, so a 200k window hands off at 170k tokens and a 1M window at 600k.
+pub fn default_handoff_percent(context_window: u64) -> u64 {
+    if context_window < DEFAULT_HANDOFF_LARGE_WINDOW {
+        DEFAULT_HANDOFF_SMALL_PERCENT
+    } else {
+        DEFAULT_HANDOFF_LARGE_PERCENT
+    }
+}
+
+/// Whether a context of `context_tokens` has reached the hand-off share `at` of a window of `context_window` tokens. An unknown window of 0 never does.
+pub fn handoff_due(context_tokens: u64, context_window: u64, at: HandoffAt) -> bool {
+    let percent = match at {
+        HandoffAt::Percent(percent) => percent,
+        HandoffAt::Default => default_handoff_percent(context_window),
+    };
     context_window > 0
         && u128::from(context_tokens) * 100 >= u128::from(context_window) * u128::from(percent)
 }
@@ -179,12 +210,36 @@ mod tests {
 
     #[test]
     fn a_hand_off_is_due_at_the_share_of_the_window() {
-        assert!(!handoff_due(599_999, 1_000_000, 60));
-        assert!(handoff_due(600_000, 1_000_000, 60));
-        assert!(handoff_due(700_000, 1_000_000, 60));
-        assert!(!handoff_due(25_310, 1_000_000, 60));
-        assert!(!handoff_due(u64::MAX, 0, 60));
-        assert!(handoff_due(u64::MAX, u64::MAX, 99));
+        let at = HandoffAt::Percent(60);
+        assert!(!handoff_due(599_999, 1_000_000, at));
+        assert!(handoff_due(600_000, 1_000_000, at));
+        assert!(handoff_due(700_000, 1_000_000, at));
+        assert!(!handoff_due(25_310, 1_000_000, at));
+        assert!(!handoff_due(u64::MAX, 0, at));
+        assert!(handoff_due(u64::MAX, u64::MAX, HandoffAt::Percent(99)));
+    }
+
+    #[test]
+    fn by_default_a_hand_off_is_due_at_85_percent_below_220k_and_60_percent_from_220k() {
+        let at = HandoffAt::Default;
+        assert!(!handoff_due(169_999, 200_000, at));
+        assert!(handoff_due(170_000, 200_000, at));
+        assert!(!handoff_due(599_999, 1_000_000, at));
+        assert!(handoff_due(600_000, 1_000_000, at));
+        assert_eq!(default_handoff_percent(219_999), 85);
+        assert_eq!(default_handoff_percent(220_000), 60);
+        assert!(!handoff_due(131_999, 220_000, at));
+        assert!(handoff_due(132_000, 220_000, at));
+        assert!(!handoff_due(u64::MAX, 0, at));
+    }
+
+    #[test]
+    fn a_role_percent_wins_over_the_default_for_every_window() {
+        let at = HandoffAt::Percent(50);
+        assert!(handoff_due(100_000, 200_000, at));
+        assert!(!handoff_due(169_999, 400_000, at));
+        assert!(handoff_due(500_000, 1_000_000, at));
+        assert!(!handoff_due(700_000, 1_000_000, HandoffAt::Percent(80)));
     }
 
     #[test]

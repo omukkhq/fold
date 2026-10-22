@@ -5,10 +5,11 @@ use fold_core::claims::is_stale;
 use fold_core::events::types;
 use fold_core::reviews::ProposalStanding;
 use fold_core::status::status_reason;
-use fold_core::tasks::areas::areas_conflict;
+use fold_core::tasks::areas::{FeedbackReader, areas_conflict, feedback_readers};
 use fold_core::{
-    AreaName, ChangesetId, ChecklistName, DependencyOrigin, Event, HoldMark, LabelName, ProposalId,
-    RevisionId, TaskId, TaskKind, TaskStatus, TaskTitle, Timestamp, WorkerName, WorkspaceId,
+    AgentName, AreaName, ChangesetId, ChecklistName, DependencyOrigin, Event, HoldMark, LabelName,
+    ProposalId, RevisionId, TaskId, TaskKind, TaskStatus, TaskTitle, Timestamp, WorkerName,
+    WorkspaceId,
 };
 use fold_store::reviews::{self, ProposalSummary, ReviewEntry};
 use fold_store::tasks::checklists::{self, ItemContent};
@@ -16,7 +17,7 @@ use fold_store::tasks::claims;
 use fold_store::tasks::reports;
 use fold_store::tasks::{self, BoardSnapshot};
 use fold_store::workspaces::{self, Checkpoint};
-use fold_store::{StoreError, events};
+use fold_store::{SqliteConnection, StoreError, agents, events};
 
 pub use fold_store::tasks::{ChecklistCounts, TaskRef};
 
@@ -473,6 +474,17 @@ impl TaskService {
         live.view.edits_after_version
     }
 
+    /// The readers a human's feedback on the task goes to, the default first, as [`feedback_readers`] chooses them, read in one read transaction.
+    pub async fn readers(&self, id: TaskId) -> Result<Vec<FeedbackReader>, TaskError> {
+        let mut tx = self.store.read().begin().await.map_err(StoreError::from)?;
+        tasks::fetch(&mut tx, id)
+            .await?
+            .ok_or_else(|| task_not_found(id))?;
+        let readers = readers_in(&mut tx, id).await?;
+        tx.commit().await.map_err(StoreError::from)?;
+        Ok(readers)
+    }
+
     /// The tasks that are not archived, in number order, with their direct prerequisites and claim holders. Done tasks only when `include_done`.
     pub async fn graph(&self, include_done: bool) -> Result<Vec<GraphTask>, TaskError> {
         let mut snapshot = tasks::board_snapshot(self.store.read()).await?;
@@ -622,4 +634,42 @@ fn labels_of(snapshot: &mut BoardSnapshot, task: TaskId) -> Vec<LabelView> {
         .into_iter()
         .map(label_view)
         .collect()
+}
+
+/// The readers of a human's feedback on `task`, read on `conn`: the task listing and the feedback send choose them from the same rows.
+pub(crate) async fn readers_in(
+    conn: &mut SqliteConnection,
+    task: TaskId,
+) -> Result<Vec<FeedbackReader>, StoreError> {
+    let labels: Vec<LabelName> = tasks::labels_for_conn(conn, task)
+        .await?
+        .into_iter()
+        .map(|label| label.name)
+        .collect();
+    let areas: Vec<_> = agents::list_areas(&mut *conn)
+        .await?
+        .into_iter()
+        .map(|area| (area.name, area.label, area.lead))
+        .collect();
+    let holder = claims::unreleased_for_task(&mut *conn, task)
+        .await?
+        .map(|claim| claim.worker);
+    let main: BTreeSet<i64> = agents::all_tags(&mut *conn)
+        .await?
+        .into_iter()
+        .filter(|(_, tag)| tag.is_main())
+        .map(|(agent, _)| agent)
+        .collect();
+    let main_agents: Vec<AgentName> = agents::list_agents(&mut *conn)
+        .await?
+        .into_iter()
+        .filter(|agent| main.contains(&agent.id))
+        .map(|agent| agent.name)
+        .collect();
+    Ok(feedback_readers(
+        holder.as_ref(),
+        &labels,
+        &areas,
+        &main_agents,
+    ))
 }

@@ -77,6 +77,7 @@ impl Supervisor {
             .is_some_and(|run| run.generation != process.generation);
         if !newer {
             lock(&self.inner.replays).remove(&process.agent);
+            self.forget_answering(&process.agent);
         }
         self.forget(&process);
         self.forget_waiters(process.generation);
@@ -159,9 +160,12 @@ impl Supervisor {
             } => {
                 ended = Some(windows);
                 let totals = TurnTotals {
-                    cost_micro_usd: process.base_cost.saturating_add(micro_usd(total_cost_usd)),
+                    reported_micro_usd: micro_usd(total_cost_usd),
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
                     cache_read_tokens: usage.cache_read_input_tokens,
                     cache_write_tokens: usage.cache_creation_input_tokens,
+                    failed: error.is_some(),
                 };
                 self.end_turn(process, totals, error.as_ref()).await
             }
@@ -325,6 +329,7 @@ impl Supervisor {
         self.clone().resume_owed_send_backs().await;
         self.clone().resume_owed_gate_runs().await;
         self.clone().resume_owed_reviewers(None).await;
+        self.clone().resume_owed_messages().await;
         self.resume_pending().await;
     }
 }
@@ -396,6 +401,16 @@ pub(super) async fn watch_done(
             && let Some(proposal) = event.proposal
         {
             tokio::spawn(supervisor.clone().resume_owed_reviewers(Some(proposal)));
+        }
+        if let Some(agent) = super::message::answering_agent(&event) {
+            supervisor.stop_if_answered(&agent).await;
+        }
+        // A message to a stopped worker starts it; one sent while it was stopping waits for its stop.
+        if event.event_type == types::MESSAGE_SENT
+            || event.event_type == types::WORKER_STOPPED
+            || event.event_type == types::WORKER_FAILED
+        {
+            tokio::spawn(supervisor.clone().resume_owed_messages());
         }
         // A freed worker slot or a raised limit can serve a resume that the limits refused earlier.
         if event.event_type == types::WORKER_STOPPED

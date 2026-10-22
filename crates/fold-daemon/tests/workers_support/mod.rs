@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use fold_daemon::services::agents::Launcher;
 use tempfile::TempDir;
 
-/// A stand-in for `claude -p` in stream-json mode, so no test needs Claude Code. It records its arguments, environment, working directory and every stdin line under `FOLD_FAKE_CLAUDE_DIR`, answers `initialize` and `interrupt` as Claude Code does, replays the fixture `FOLD_FAKE_CLAUDE_TURN` for each user turn, waits after a `can_use_tool` request until fold answers it, and exits when stdin closes. With `FOLD_FAKE_CLAUDE_STUBBORN` set it ignores SIGINT and a closed stdin, so only SIGTERM or SIGKILL ends it. With `FOLD_FAKE_CLAUDE_LOST` naming a fixture, a run with `--resume` answers its first user turn with that fixture and exits with code 1, as Claude Code does for a session it cannot find. With `FOLD_FAKE_CLAUDE_STDERR` set it answers its first user turn by writing a line and that text in red to stderr and exits with code 1, as a process that cannot run does. With `FOLD_FAKE_CLAUDE_WARN` set it writes that text to stderr when it starts and runs on. With `FOLD_FAKE_CLAUDE_CHILD` set it starts a background `sleep` first, as a tool's command would, and records its pid; with `FOLD_FAKE_CLAUDE_NOISE` set it writes a line that is not UTF-8 and a line over the supervisor's length cap before each turn. Once its stdin closes it records that.
+/// A stand-in for `claude -p` in stream-json mode, so no test needs Claude Code. It records its arguments, environment, working directory and every stdin line under `FOLD_FAKE_CLAUDE_DIR`, answers `initialize` and `interrupt` as Claude Code does, replays the fixture `FOLD_FAKE_CLAUDE_TURN` for each user turn, waits after a `can_use_tool` request until fold answers it, and exits when stdin closes. With `FOLD_FAKE_CLAUDE_STUBBORN` set it ignores SIGINT and a closed stdin, so only SIGTERM or SIGKILL ends it. With `FOLD_FAKE_CLAUDE_RESUME_TURN` naming a fixture, a run with `--resume` replays that one for each user turn instead, so a resumed session can go on with the running total of the session. With `FOLD_FAKE_CLAUDE_LOST` naming a fixture, a run with `--resume` answers its first user turn with that fixture and exits with code 1, as Claude Code does for a session it cannot find. With `FOLD_FAKE_CLAUDE_STDERR` set it answers its first user turn by writing a line and that text in red to stderr and exits with code 1, as a process that cannot run does. With `FOLD_FAKE_CLAUDE_WARN` set it writes that text to stderr when it starts and runs on. With `FOLD_FAKE_CLAUDE_CHILD` set it starts a background `sleep` first, as a tool's command would, and records its pid; with `FOLD_FAKE_CLAUDE_NOISE` set it writes a line that is not UTF-8 and a line over the supervisor's length cap before each turn. Once its stdin closes it records that.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 dir="$FOLD_FAKE_CLAUDE_DIR"
 for arg in "$@"; do printf '%s\n' "$arg"; done > "$dir/$$.args"
@@ -18,9 +18,13 @@ if [ -n "$FOLD_FAKE_CLAUDE_CHILD" ]; then
   printf '%s\n' "$!" > "$dir/$$.child"
 fi
 lost=""
-if [ -n "$FOLD_FAKE_CLAUDE_LOST" ]; then
-  for arg in "$@"; do [ "$arg" = "--resume" ] && lost=1; done
-fi
+turn="$FOLD_FAKE_CLAUDE_TURN"
+for arg in "$@"; do
+  if [ "$arg" = "--resume" ]; then
+    [ -n "$FOLD_FAKE_CLAUDE_LOST" ] && lost=1
+    [ -n "$FOLD_FAKE_CLAUDE_RESUME_TURN" ] && turn="$FOLD_FAKE_CLAUDE_RESUME_TURN"
+  fi
+done
 while IFS= read -r line; do
   printf '%s\n' "$line" >> "$dir/$$.stdin"
   id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
@@ -51,7 +55,7 @@ while IFS= read -r line; do
               case "$reply" in *'"type":"control_response"'*) break ;; esac
             done ;;
         esac
-      done 3< "$FOLD_FAKE_CLAUDE_TURN" ;;
+      done 3< "$turn" ;;
   esac
 done
 : > "$dir/$$.eof"
@@ -133,6 +137,16 @@ impl FakeClaude {
         self.launcher
             .env
             .push(("FOLD_FAKE_CLAUDE_STUBBORN".to_owned(), "1".to_owned()));
+        self
+    }
+
+    /// Each user turn of a run with `--resume` replays the fixture `turn` instead, such as `resumed`, whose total goes on from the session's total, as Claude Code's does.
+    #[must_use]
+    pub fn resuming_with(mut self, turn: &str) -> Self {
+        self.launcher.env.push((
+            "FOLD_FAKE_CLAUDE_RESUME_TURN".to_owned(),
+            fixture(turn).to_string_lossy().into_owned(),
+        ));
         self
     }
 

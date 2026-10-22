@@ -58,6 +58,7 @@ pub use requests::{
     RequestAttachment, RequestComment, RequestDetail, RequestDraft, RequestFilter, RequestThread,
     RequestView, SubmitDraft,
 };
+pub(crate) use views::readers_in;
 /// Whether `actor` may clear the human review mark, read for a task view. Any agent or human may turn the mark on, but only an actor that may clear it may also change what it says, so this one rule decides whether the view offers the human-review controls.
 pub fn can_change_human_review(actor: &Actor) -> bool {
     fold_core::policy::can_clear_human_review(actor).is_ok()

@@ -33,11 +33,12 @@ fn context_window(windows: &[(String, u64)], model: Option<&str>) -> u64 {
 }
 
 impl Supervisor {
-    /// After each turn of a long-lived worker: a note of its session starts it fresh; otherwise a context past its role's `handoff_at` asks once for a note, and a lead that let [`fold_core::roles::HANDOFF_TURNS`] turns pass since the ask without one starts fresh with the fold summary alone.
+    /// After each turn of a long-lived worker: a note of its session starts it fresh; otherwise a context past its role's `handoff_at` asks once for a note, and a lead that let [`fold_core::roles::HANDOFF_TURNS`] turns pass since the ask without one starts fresh with the fold summary alone. A worker that fold started to answer a message stops once it has answered.
     pub(super) async fn after_turn(&self, agent: &AgentName, windows: &[(String, u64)]) {
         if let Err(error) = self.check_handoff(agent, windows).await {
             tracing::warn!(%agent, code = crate::services::agents::code_of(&error), "could not check a worker's context size");
         }
+        self.stop_if_answered(agent).await;
     }
 
     async fn check_handoff(
@@ -73,11 +74,11 @@ impl Supervisor {
         }
         drop(conn);
         let config = load_config(&self.inner.paths).await?;
-        let Some(percent) = config.role(row.role).handoff_at else {
+        let Some(at) = config.role(row.role).handoff_at else {
             return Ok(());
         };
         let window = context_window(windows, row.model.as_deref());
-        if !handoff_due(row.context_tokens, window, percent) {
+        if !handoff_due(row.context_tokens, window, at) {
             return Ok(());
         }
         let now = self.inner.clock.now();
@@ -247,6 +248,7 @@ impl Supervisor {
 mod tests {
     use super::*;
     use crate::services::agents::claude::ClaudeMessage;
+    use fold_core::roles::HandoffAt;
 
     #[test]
     fn the_window_is_the_one_of_the_workers_model() {
@@ -259,6 +261,20 @@ mod tests {
         assert_eq!(context_window(&windows, None), 200_000);
         assert_eq!(context_window(&[], Some("claude-opus-5-5")), 0);
         assert_eq!(context_window(&[("x".to_owned(), 0)], None), 0);
+    }
+
+    #[test]
+    fn an_unknown_model_hands_off_at_the_default_of_the_smallest_window() {
+        let windows = vec![
+            ("claude-haiku-5-5".to_owned(), 200_000),
+            ("claude-opus-5-5".to_owned(), 1_000_000),
+        ];
+        let unknown = context_window(&windows, None);
+        assert!(!handoff_due(169_999, unknown, HandoffAt::Default));
+        assert!(handoff_due(170_000, unknown, HandoffAt::Default));
+        let opus = context_window(&windows, Some("claude-opus-5-5"));
+        assert!(!handoff_due(599_999, opus, HandoffAt::Default));
+        assert!(handoff_due(600_000, opus, HandoffAt::Default));
     }
 
     #[test]

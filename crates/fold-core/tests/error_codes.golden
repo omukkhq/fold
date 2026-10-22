@@ -166,4 +166,5 @@ transcript_not_found
 ask_not_open
 ask_close_denied
 project_workers_running
+recipient_not_reader
 review_lead_delegates

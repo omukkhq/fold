@@ -4,17 +4,16 @@ import {
   claimNote,
   clockTime,
   collapse,
-  defaultRecipient,
   feedbackPlaceholder,
   historyText as historyTextSegments,
   humanReviewLines,
   integrationText as integrationTextSegments,
-  messageCountText,
   parseRecipient,
   proposalStateText,
   recipientValue,
   reviewText,
   statusLook,
+  threadCountText,
 } from "./text";
 import { segmentsText } from "@/people/segments";
 
@@ -193,29 +192,51 @@ describe("proposal texts", () => {
         commit: null,
       }),
     ).toBe("by @review · 13:40");
-    expect(messageCountText(2, "T-12")).toBe("2 linked to T-12");
+  });
+});
+
+describe("threadCountText", () => {
+  const thread = (awaiting_human: boolean) => ({ awaiting_human });
+
+  it("counts the human's threads and those that wait for the human", () => {
+    expect(threadCountText([])).toEqual({ count: "0 threads", waiting: null });
+    expect(threadCountText([thread(false)])).toEqual({
+      count: "1 thread",
+      waiting: null,
+    });
+    expect(threadCountText([thread(true), thread(false)])).toEqual({
+      count: "2 threads",
+      waiting: "1 waits for you",
+    });
+    expect(threadCountText([thread(true), thread(true)]).waiting).toBe(
+      "2 wait for you",
+    );
   });
 });
 
 describe("feedback recipients", () => {
-  it("default to the claim holder, and to nobody without one", () => {
-    expect(defaultRecipient("frontend/ui")).toEqual({ kind: "holder" });
-    expect(defaultRecipient(null)).toBeNull();
-  });
-
-  it("round-trip through the select value, keeping agents and tags apart", () => {
+  it("round-trip through the select value, keeping the holder and an agent named holder apart", () => {
     for (const to of [
       { kind: "holder" as const },
       { kind: "agent" as const, name: "frontend" },
-      { kind: "tag" as const, name: "frontend" },
+      { kind: "agent" as const, name: "holder" },
     ]) {
       expect(parseRecipient(recipientValue(to))).toEqual(to);
     }
-    expect(recipientValue({ kind: "tag", name: "ui" })).toBe("tag:ui");
+    expect(recipientValue({ kind: "agent", name: "holder" })).toBe(
+      "agent:holder",
+    );
   });
 
   it("refuse a malformed value", () => {
-    for (const value of ["", "agent:", ":x", "human:tanim", "frontend"]) {
+    for (const value of [
+      "",
+      "agent:",
+      ":x",
+      "human:tanim",
+      "tag:ui",
+      "frontend",
+    ]) {
       expect(parseRecipient(value), value).toBeNull();
     }
   });
@@ -229,9 +250,6 @@ describe("feedback recipients", () => {
     );
     expect(feedbackPlaceholder({ kind: "agent", name: "review" }, null)).toBe(
       "Write feedback to review…",
-    );
-    expect(feedbackPlaceholder({ kind: "tag", name: "ui" }, null)).toBe(
-      "Write feedback to every agent tagged ui…",
     );
     expect(feedbackPlaceholder(null, null)).toBe(
       "Choose who reads the feedback",

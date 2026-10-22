@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT cost_micro_usd AS \"cost!: i64\", session_cost_micro_usd AS \"session!: i64\"\n           FROM worker_processes WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "cost!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "cost_micro_usd"
+          }
+        }
+      },
+      {
+        "name": "session!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "worker_processes",
+            "name": "session_cost_micro_usd"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "a053e29e835b283fc9e13d76e57abc980af57aaed035819f6c2e8abca46e3c97"
+}

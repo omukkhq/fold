@@ -323,7 +323,7 @@ async fn a_task_worker_stops_when_its_last_proposal_opens_after_an_earlier_one_i
 
 #[tokio::test]
 async fn an_idle_task_worker_stops_after_its_idle_minutes_and_resumes_with_a_turn() {
-    let fake = FakeClaude::new("result");
+    let fake = FakeClaude::new("result").resuming_with("resumed");
     let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
     areas(&harness).await;
@@ -960,7 +960,7 @@ async fn a_human_defines_areas_and_starts_and_stops_leads_over_http() {
             {"role": "area_lead", "cache_ttl": "1h", "model": null},
             {"role": "review_lead", "cache_ttl": "1h", "model": null},
             {"role": "task_worker", "cache_ttl": "5m", "model": null},
-            {"role": "reviewer", "cache_ttl": "1h", "model": null},
+            {"role": "reviewer", "cache_ttl": "5m", "model": null},
         ])
     );
     let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
@@ -1045,7 +1045,7 @@ async fn a_reviewer_stops_once_its_batch_review_gives_every_proposal_a_verdict()
     assert_eq!(started["worker"]["name"], "reviewer");
     assert_eq!(started["worker"]["proposals"], json!(["P-1", "P-2"]));
     let run = until_runs(&fake, "reviewer", 1, 2).await.remove(0);
-    assert_eq!(run.env["CLAUDE_CODE_PROMPT_CACHE_TTL"], "1h");
+    assert_eq!(run.env["CLAUDE_CODE_PROMPT_CACHE_TTL"], "5m");
     assert!(run.stdin[1].contains("reviewer for P-1, P-2"));
     assert!(run.stdin[1].contains("in batch rb-1"), "{}", run.stdin[1]);
     let by_lead = harness
