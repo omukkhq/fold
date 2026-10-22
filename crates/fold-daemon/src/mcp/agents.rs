@@ -1,5 +1,6 @@
 use fold_core::roles::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, WorkerLimits, WorkerLimitsChange,
+    WorkerState,
 };
 use fold_core::text::shorten;
 use fold_core::turn_errors;
@@ -131,7 +132,14 @@ pub struct RestartWorkerInput {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
-pub struct ListWorkersInput {}
+pub struct ListWorkersInput {
+    /// True lists the stopped workers too. Leave it out to list only the workers that run or failed, with stopped_count, the number of stopped workers left out.
+    #[serde(default)]
+    pub include_stopped: bool,
+    /// True gives each area's instructions. Leave it out to give only instructions_chars, their length.
+    #[serde(default)]
+    pub include_instructions: bool,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -203,7 +211,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             LIST_WORKERS,
-            "List the areas with their leads and every worker fold runs, with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human.",
+            "List the areas with their leads, models and MCP servers, and the workers that run or failed, with its role, state, bound tasks or proposals, turns, cost, context size, newest hand-off note and, for a worker that had earlier sessions, the newest three of them and their count. A worker whose turns fail also has last_error, Claude Code's error text, and failed_turns, the turns in a row that reached no model; one that cannot reach the model has a hint for the human. stopped_count counts the stopped workers; pass include_stopped true to list them, such as to read a finished worker's sessions, and include_instructions true for each area's instructions.",
             schema_for_type::<ListWorkersInput>(),
         ),
         Tool::new(
@@ -473,7 +481,7 @@ pub async fn resume_project(
 }
 
 pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
-    let _: ListWorkersInput = parse(arguments)?;
+    let input: ListWorkersInput = parse(arguments)?;
     let areas = server.agents.list_areas().await.map_err(from_agent)?;
     let workers = server.agents.list_workers().await.map_err(from_agent)?;
     let mut notes = server.agents.latest_handoffs().await.map_err(from_agent)?;
@@ -485,7 +493,12 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
     let config = server.agents.worker_config().await;
     let pause = server.agents.pause_state().await.map_err(from_agent)?;
     let mut listed = Vec::with_capacity(workers.len());
+    let mut stopped_count = 0;
     for worker in &workers {
+        if worker.state == WorkerState::Stopped && !input.include_stopped {
+            stopped_count += 1;
+            continue;
+        }
         let mut value = worker_process_json(worker);
         value["cache_ttl"] = config.as_ref().map_or(Value::Null, |config| {
             json!(config.role(worker.role).cache_ttl.as_str())
@@ -499,8 +512,18 @@ pub async fn list_workers(server: &FoldServer, arguments: &JsonObject) -> Result
         listed.push(value);
     }
     Ok(json!({
-        "areas": areas.iter().map(area_json).collect::<Vec<_>>(),
+        "areas": areas.iter().map(|area| {
+            let mut value = area_json(area);
+            if !input.include_instructions {
+                value["instructions_chars"] = json!(area.profile.instructions.as_deref().map_or(0, |text| text.chars().count()));
+                if let Some(fields) = value.as_object_mut() {
+                    fields.remove("instructions");
+                }
+            }
+            value
+        }).collect::<Vec<_>>(),
         "workers": listed,
+        "stopped_count": stopped_count,
         "limits": config.as_ref().map_or(Value::Null, |config| limits_json(config.workers.limits())),
         "pause": pause_json(&pause),
     }))

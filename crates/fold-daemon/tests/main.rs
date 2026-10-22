@@ -117,6 +117,7 @@ mod lease_sweeper;
 mod live_state;
 mod main_area;
 mod mcp_activity;
+mod mcp_compact_reads;
 mod mcp_footer;
 mod mcp_handshake;
 mod mcp_identity;

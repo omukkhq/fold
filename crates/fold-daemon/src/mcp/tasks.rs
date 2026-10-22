@@ -5,7 +5,8 @@ use std::str::FromStr;
 use fold_core::tasks::{PlanRef, PlannedChecklistItem, PlannedReview, PlannedTask};
 use fold_core::{
     Actor, ChecklistItemId, ChecklistName, FoldError, HumanName, IdParseError, LabelColor,
-    LabelName, StepText, TaskDescription, TaskId, TaskKind, TaskTitle, WorkerName,
+    LabelName, StepText, TaskDescription, TaskId, TaskKind, TaskStatus, TaskTitle, WorkerName,
+    codes,
 };
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{JsonObject, Tool};
@@ -51,7 +52,7 @@ pub const CLEAR_BLOCKER: &str = "clear_blocker";
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct GetTaskGraphInput {
-    /// Include Done tasks. Leave it out to see only the open work.
+    /// True includes the Done tasks. Leave it out to see only the open work: a Done task then shows only as an id in the needs of the tasks that need it, and done_count counts the Done tasks.
     #[serde(default)]
     pub include_done: bool,
 }
@@ -65,6 +66,16 @@ pub struct NoInput {}
 pub struct TaskIdInput {
     /// The task, such as T-12.
     pub id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct GetTaskInput {
+    /// The task, such as T-12.
+    pub id: String,
+    /// all gives the newest 50 history entries. Leave it out for the newest 5, with history_count, the number of entries all would give.
+    #[serde(default)]
+    pub history: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -267,7 +278,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             GET_TASK_GRAPH,
-            "Read the task graph: every task that is not archived with its status, blocked flag, kind, labels, the tasks it needs and its claim holder, and the reason of its blocker when it has one. No agent takes a human task or a task with a blocker.",
+            "Read the task graph: every task that is not archived and not Done, or with include_done the Done tasks too, with its status, blocked flag, kind, labels, the tasks it needs and its claim holder, and the reason of its blocker when it has one, and done_count, the number of Done tasks. No agent takes a human task or a task with a blocker.",
             schema_for_type::<GetTaskGraphInput>(),
         ),
         Tool::new(
@@ -277,8 +288,8 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_TASK,
-            "Read one task: description, labels, checklists with progress, dependencies, dependents, claim, workspace, its blocker with the reason, and for a no_proposal task its reports and lead checks.",
-            schema_for_type::<TaskIdInput>(),
+            "Read one task: description, labels, checklists with progress, dependencies, dependents, claim, workspace, its blocker with the reason, and for a no_proposal task its reports and lead checks. history holds the newest 5 events of the task, newest first, and history_count the number that history all gives (at most 50); pass history all to read them, such as to see who changed the task and when.",
+            schema_for_type::<GetTaskInput>(),
         ),
         Tool::new(
             CREATE_TASK,
@@ -421,7 +432,11 @@ fn edge_json(edge: &DetailEdge) -> Value {
     })
 }
 
-fn detail_json(detail: &TaskDetail) -> Value {
+/// How many history entries `get_task` shows without `history: "all"`. The newest events tell what happened last; the rest is seldom needed on each read.
+const HISTORY_SHOWN: usize = 5;
+
+/// The answer of `get_task`, with the newest [`HISTORY_SHOWN`] history entries, or each entry the read holds when `all_history`.
+fn detail_json(detail: &TaskDetail, all_history: bool) -> Value {
     let task = &detail.task;
     let checklists: Vec<Value> = detail
         .checklists
@@ -504,7 +519,8 @@ fn detail_json(detail: &TaskDetail) -> Value {
             "proposal": integration.proposal,
             "by": integration.by,
         })),
-        "history": detail.history.iter().map(|event| json!({
+        "history_count": detail.history.len(),
+        "history": detail.history.iter().take(if all_history { usize::MAX } else { HISTORY_SHOWN }).map(|event| json!({
             "seq": event.seq,
             "type": event.event_type.as_str(),
             "actor": event.actor.to_string(),
@@ -582,9 +598,15 @@ async fn run(
 async fn get_task_graph(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let tasks = &server.tasks;
     let input: GetTaskGraphInput = parse(arguments)?;
-    let graph = tasks.graph(input.include_done).await.map_err(from_task)?;
+    // The whole graph, so the answer can count the Done tasks it leaves out.
+    let graph = tasks.graph(true).await.map_err(from_task)?;
+    let done_count = graph
+        .iter()
+        .filter(|task| task.status == TaskStatus::Done)
+        .count();
     let tasks: Vec<Value> = graph
         .iter()
+        .filter(|task| input.include_done || task.status != TaskStatus::Done)
         .map(|task| {
             let mut node = json!({
                 "id": task.id,
@@ -602,7 +624,7 @@ async fn get_task_graph(server: &FoldServer, arguments: &JsonObject) -> Result<V
             node
         })
         .collect();
-    Ok(json!({"tasks": tasks}))
+    Ok(json!({"tasks": tasks, "done_count": done_count}))
 }
 
 async fn get_ready_tasks(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
@@ -625,9 +647,20 @@ async fn get_ready_tasks(server: &FoldServer, arguments: &JsonObject) -> Result<
 
 async fn get_task(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let tasks = &server.tasks;
-    let input: TaskIdInput = parse(arguments)?;
+    let input: GetTaskInput = parse(arguments)?;
+    let all_history = match input.history.as_deref() {
+        None => false,
+        Some("all") => true,
+        Some(_) => {
+            return Err(
+                FoldError::new(codes::INVALID_REQUEST, "history is all or left out")
+                    .with_details([("field", json!("history"))])
+                    .with_hint("call get_task with history all, or leave history out for the newest entries"),
+            );
+        }
+    };
     let detail = tasks.get_view(id(&input.id)?).await.map_err(from_task)?;
-    Ok(detail_json(&detail))
+    Ok(detail_json(&detail, all_history))
 }
 
 async fn create_task(
