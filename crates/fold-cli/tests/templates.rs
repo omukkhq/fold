@@ -619,6 +619,16 @@ fn the_skill_uses_exactly_the_four_verdicts() {
     }
 }
 
+#[test]
+fn the_skill_sends_missing_work_back_and_new_work_to_a_request() {
+    for rule in [
+        "Send work that this task still misses, such as an unticked checklist step or an acceptance criterion with no work, back with `request_changes`.",
+        "Describe new work outside the task, such as a feature the task did not ask for, with `create_request`; the proposal can still be approved.",
+    ] {
+        assert!(SKILL.contains(rule), "{rule}");
+    }
+}
+
 const SUBCOMMANDS: [&str; 15] = [
     "init", "serve", "mcp", "doctor", "setup", "gc", "agent", "claude", "new", "token", "remote",
     "push", "pull", "hook", "dev",
