@@ -303,10 +303,11 @@ fn not_the_main_agent(hint: &'static str) -> PolicyDenied {
     }
 }
 
-/// Only a long-lived worker gets a fresh context: a short-lived one stops when its work is done, and the main agent is the user's own session, which clears its context itself.
-pub fn can_write_handoff(starter: &Starter) -> Result<(), PolicyDenied> {
+/// Only a long-lived worker gets a fresh context: a short-lived one stops when its work is done, and the interactive main agent is the user's own session, which clears its context itself. The supervised main, the worker of role `main` (`role`) that fold runs as the main agent, is long-lived and has no terminal to clear its context, so fold refreshes it from its note like a lead.
+pub fn can_write_handoff(starter: &Starter, role: Option<Role>) -> Result<(), PolicyDenied> {
     match starter {
         Starter::AreaLead(_) | Starter::ReviewLead => Ok(()),
+        Starter::MainAgent if role == Some(Role::Main) => Ok(()),
         Starter::MainAgent => Err(PolicyDenied {
             code: codes::HANDOFF_DENIED,
             message: "fold does not refresh the main agent's session",
@@ -549,7 +550,7 @@ mod tests {
         );
         assert!(can_stop_worker(&Starter::Unsupervised, Role::TaskWorker, None).is_err());
         assert_eq!(
-            can_write_handoff(&Starter::Unsupervised)
+            can_write_handoff(&Starter::Unsupervised, None)
                 .unwrap_err()
                 .code(),
             codes::HANDOFF_DENIED
@@ -745,18 +746,21 @@ mod tests {
     }
 
     #[test]
-    fn only_a_lead_writes_a_hand_off_note() {
-        assert!(can_write_handoff(&Starter::AreaLead(area("web"))).is_ok());
-        assert!(can_write_handoff(&Starter::ReviewLead).is_ok());
-        for starter in [
-            Starter::MainAgent,
-            Starter::Human,
-            Starter::ShortLived,
-            Starter::Subagent,
-            Starter::System,
+    fn only_a_lead_or_the_supervised_main_writes_a_hand_off_note() {
+        assert!(can_write_handoff(&Starter::AreaLead(area("web")), Some(Role::AreaLead)).is_ok());
+        assert!(can_write_handoff(&Starter::ReviewLead, Some(Role::ReviewLead)).is_ok());
+        assert!(can_write_handoff(&Starter::MainAgent, Some(Role::Main)).is_ok());
+        let interactive = can_write_handoff(&Starter::MainAgent, None).unwrap_err();
+        assert_eq!(interactive.code(), codes::HANDOFF_DENIED);
+        assert!(interactive.hint().contains("/clear"));
+        for (starter, role) in [
+            (Starter::Human, None),
+            (Starter::ShortLived, Some(Role::TaskWorker)),
+            (Starter::Subagent, Some(Role::Main)),
+            (Starter::System, None),
         ] {
             assert_eq!(
-                can_write_handoff(&starter).unwrap_err().code(),
+                can_write_handoff(&starter, role).unwrap_err().code(),
                 codes::HANDOFF_DENIED
             );
         }

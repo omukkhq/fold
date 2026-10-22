@@ -120,9 +120,15 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Forgets the interactive main session `session` once it ends.
+    /// Forgets the interactive main session `session` once it ends. When it was the last one, the supervised main may run again, so fold starts it when the setting says so (see [`Supervisor::catch_up_main`]).
     pub fn leave_interactive_main(&self, session: i64) {
-        lock(&self.inner.main_gate).interactive.remove(&session);
+        let last = {
+            let mut gate = lock(&self.inner.main_gate);
+            gate.interactive.remove(&session) && gate.interactive.is_empty()
+        };
+        if last {
+            tokio::spawn(self.clone().catch_up_main());
+        }
     }
 
     /// Forgets every interactive main session, when every session ends.
@@ -190,18 +196,18 @@ impl Supervisor {
         }
     }
 
-    /// The notices `event` sends the supervised main, `None` when its process runs, its row waits for the messages it owes, or the setting is off.
+    /// The notices `event` sends the supervised main, `None` when the setting is off, its process runs or its row waits for the messages it owes. The setting is read first, so a project with it off reads no row for an event.
     async fn notices_for_main(&self, event: &Event) -> Result<Option<Vec<String>>, AgentError> {
+        let config = load_config(&self.inner.paths).await?;
+        if !config.main.supervised {
+            return Ok(None);
+        }
         let agent = self.main_agent().await?;
         if self.is_running(&agent) {
             return Ok(None);
         }
         let row = self.main_row().await?;
         if event.event_type == types::MESSAGE_SENT && row.is_some() {
-            return Ok(None);
-        }
-        let config = load_config(&self.inner.paths).await?;
-        if !config.main.supervised {
             return Ok(None);
         }
         let mut ctx = crate::push::context(&self.inner.store, event).await?;
@@ -255,7 +261,14 @@ impl Supervisor {
                     Some(turn) => Some(turn),
                     None => return Ok(()),
                 },
-                None => None,
+                // The agent can hold messages from the time an interactive session was the main agent.
+                None => {
+                    let agent = self.main_agent().await?;
+                    let id = agents::find_agent(self.inner.store.read(), &agent)
+                        .await?
+                        .map(|found| found.id);
+                    self.main_waiting(id, &Default::default()).await?
+                }
             };
             self.ensure_main(turn).await
         };
@@ -310,7 +323,7 @@ impl Supervisor {
         // A start for messages alone also names the other work that waits, so the main does not stop after its answer with that work untold.
         let turn = match turn {
             Some(turn) => Some(turn),
-            None if !owed.is_empty() => self.main_waiting(&row, &Default::default(), false).await?,
+            None if !owed.is_empty() => self.main_waiting(None, &Default::default()).await?,
             None => None,
         };
         // Only a start for messages alone stops the main once it has answered, as the message turn says; with other work it stays, as the long-lived main it is.

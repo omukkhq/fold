@@ -291,7 +291,7 @@ impl Supervisor {
                 };
                 (ready_in_area(read, &area.label, &holds).await?, Vec::new())
             }
-            Role::Main => return self.main_waiting(row, kept, true).await,
+            Role::Main => return self.main_waiting(Some(row.agent_id), kept).await,
             Role::ReviewLead => {
                 let open = reviews::list_proposals(read, Some(ProposalState::Open), None).await?;
                 let owed: BTreeSet<ProposalId> =
@@ -329,12 +329,11 @@ impl Supervisor {
         }))
     }
 
-    /// The work that waits for the supervised main of `row`, see [`main_catch_up_turn`]: the ready tasks of main whose claim no running worker or one among `kept` holds, the open requests that nobody drafts, and with `unread` how many messages to it are unread. A start for the messages it owes leaves `unread` out, because its turn names them.
+    /// The work that waits for the supervised main, see [`main_catch_up_turn`]: the ready tasks of main whose claim no running worker or one among `kept` holds, the open requests that nobody drafts, and with `unread`, the row id of its agent, how many messages to it are unread. A start for the messages it owes leaves `unread` out, because its turn names them, and so does its first start, before which nothing could reach it.
     pub(super) async fn main_waiting(
         &self,
-        row: &WorkerProcessRow,
+        unread: Option<i64>,
         kept: &BTreeSet<AgentName>,
-        unread: bool,
     ) -> Result<Option<String>, AgentError> {
         let holds = |worker: &WorkerName| {
             let agent = worker.agent();
@@ -357,10 +356,9 @@ impl Supervisor {
             .map(|request| request.id)
             .collect();
         waiting.reverse();
-        let unread = if unread {
-            messages::unread_count(&mut *conn, row.agent_id).await?
-        } else {
-            0
+        let unread = match unread {
+            Some(agent_id) => messages::unread_count(&mut *conn, agent_id).await?,
+            None => 0,
         };
         Ok(main_catch_up_turn(&MainCatchUp {
             tasks: &tasks,

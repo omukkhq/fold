@@ -600,3 +600,80 @@ async fn work_that_reaches_the_main_while_it_answers_starts_it_again_after_its_s
     );
     assert!(again.has("--resume"));
 }
+
+#[tokio::test]
+async fn the_end_of_the_interactive_main_session_starts_the_supervised_main() {
+    let fake = FakeClaude::new("result");
+    let mut harness = Harness::start_with_launcher(fake.launcher.clone()).await;
+    harness.connect_tagged(MAIN, &["main"]).await;
+    supervise(&harness, true);
+    let (status, created) = harness
+        .create_request_form(&[("body", None, None, b"Search the board")], Some(HUMAN))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert!(
+        fake.runs_of(MAIN).is_empty(),
+        "the interactive main keeps fold from starting one"
+    );
+
+    harness.disconnect(MAIN).await;
+    let run = until_told(&fake, "RQ-1").await;
+    let first = &run.stdin[1];
+    assert!(first.contains("fold started you as main"), "{first}");
+    assert!(
+        first.contains("These open requests wait for a drafter: RQ-1."),
+        "{first}"
+    );
+}
+
+#[tokio::test]
+async fn the_supervised_main_hands_off_through_its_note_and_is_asked_again_without_one() {
+    let fake = FakeClaude::new("result");
+    let mut harness = supervised(&fake).await;
+    let row = worker(&harness, MAIN).await;
+    let first_session = row.session_id.clone();
+    harness
+        .handle
+        .store
+        .write(async |tx| {
+            fold_store::agents::set_handoff_asked(tx, row.id, row.turns, row.started_at).await
+        })
+        .await
+        .unwrap();
+    let asked = row.turns;
+    let run = fake.runs_of(MAIN).pop().unwrap();
+    for n in 1..=3 {
+        let message = harness
+            .send("frontend", &[MAIN], &format!("Status {n}?"))
+            .await;
+        until_told(&fake, &message).await;
+        eventually(WAIT, async || {
+            let turns = worker(&harness, MAIN).await.turns;
+            if turns >= asked + n {
+                Ok(())
+            } else {
+                Err(turns)
+            }
+        })
+        .await;
+    }
+    let reasked = until_told(&fake, "Call write_handoff now").await;
+    assert_eq!(
+        reasked.pid, run.pid,
+        "the ask comes again in the same session"
+    );
+    assert_eq!(worker(&harness, MAIN).await.session_id, first_session);
+
+    connect_main(&mut harness, &fake).await;
+    harness
+        .call(
+            MAIN,
+            "write_handoff",
+            json!({"text": "Waiting for the OK to the plan in m-1."}),
+        )
+        .await;
+    harness.disconnect(MAIN).await;
+    let fresh = until_told(&fake, "Waiting for the OK to the plan in m-1.").await;
+    assert!(!fresh.has("--resume"), "the note starts a fresh session");
+    assert_ne!(worker(&harness, MAIN).await.session_id, first_session);
+}
