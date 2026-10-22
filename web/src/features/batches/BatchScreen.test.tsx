@@ -425,15 +425,24 @@ describe("BatchScreen", () => {
     ).toBeTruthy();
     expect(screen.getByText("2 files · +3 −1")).toBeTruthy();
     expect(await screen.findByText("merged src/forms/login.ts")).toBeTruthy();
-    expect(screen.getByText("0 of 2 viewed")).toBeTruthy();
+    expect(screen.getByText("1 of 2 viewed")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /login\.tsx/ }));
     expect(await screen.findByText("merged src/pages/login.tsx")).toBeTruthy();
     expect(router.state.location.search).toEqual({
       tab: "changes",
       path: "src/pages/login.tsx",
     });
+    expect(screen.getByText("2 of 2 viewed")).toBeTruthy();
     await user.click(screen.getByRole("checkbox", { name: "Viewed" }));
     expect(screen.getByText("1 of 2 viewed")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /login\.ts(?!x)/ }));
+    expect(await screen.findByText("merged src/forms/login.ts")).toBeTruthy();
+    expect(screen.getByText("1 of 2 viewed")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: /login\.tsx/ })
+        .getAttribute("data-viewed"),
+    ).toBeNull();
     await user.click(screen.getByRole("tab", { name: "Members" }));
     expect(screen.getByRole("table", { name: "Members" })).toBeTruthy();
     expect(router.state.location.search).toEqual({});

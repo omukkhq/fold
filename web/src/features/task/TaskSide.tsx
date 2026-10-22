@@ -34,6 +34,7 @@ import { Button, IconButton } from "@/components/button/Button";
 import { Textarea, TextField } from "@/components/form/controls";
 import { CommitId } from "@/components/mono/CommitId";
 import { Mono } from "@/components/mono/Mono";
+import { textFlow } from "@/components/text/textFlow";
 import { taskPath } from "@/features/board/card";
 import { TaskCostSection } from "@/features/cost/TaskCostSection";
 import { formatAge } from "@/format/time";
@@ -424,7 +425,12 @@ function LeadCheck({
               personClassName="text-bar"
             />
           </p>
-          <p className="text-bar leading-normal whitespace-pre-wrap text-text">
+          <p
+            className={cn(
+              "text-bar leading-normal text-text",
+              textFlow("prose"),
+            )}
+          >
             {report.note}
           </p>
           {resolved ? (
@@ -433,7 +439,12 @@ function LeadCheck({
             </p>
           ) : null}
           {report.send_back_note === null ? null : (
-            <p className="text-bar leading-normal whitespace-pre-wrap text-text">
+            <p
+              className={cn(
+                "text-bar leading-normal text-text",
+                textFlow("prose"),
+              )}
+            >
               {report.send_back_note}
             </p>
           )}
@@ -750,7 +761,9 @@ function Blocker({
           <Hand aria-hidden="true" size={13} />
           No agent takes this task
         </p>
-        <p className="text-bar leading-normal whitespace-pre-wrap text-text">
+        <p
+          className={cn("text-bar leading-normal text-text", textFlow("prose"))}
+        >
           {view.reason}
         </p>
         <p className="text-meta text-text-muted">

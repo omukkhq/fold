@@ -14,6 +14,7 @@ import {
   actorAgent,
   areaLabel,
   areaNote,
+  instructionsSubject,
   areaProfile,
   askingRow,
   batchedProposals,
@@ -445,6 +446,7 @@ describe("teamGroups", () => {
       batch: "rb-3",
     });
     expect(web && areaNote(web)).toBe("area web · lead owns 2 tasks");
+    expect(web && instructionsSubject(web)).toBe("the web instructions");
     expect(hasNoLeads(groups)).toBe(false);
     expect(isEmptyTeam(groups)).toBe(false);
     expect(mainAgentName(groups)).toBe("main");
@@ -595,6 +597,9 @@ describe("teamGroups", () => {
     expect(unnamed?.area).toBeNull();
     expect(unnamed?.label).toBeNull();
     expect(unnamed && areaNote(unnamed)).toBe("area");
+    expect(unnamed && instructionsSubject(unnamed)).toBe(
+      "the area instructions",
+    );
     expect(unnamed?.rows.map((r) => r.child)).toEqual([true]);
   });
 

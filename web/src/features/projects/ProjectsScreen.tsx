@@ -48,8 +48,8 @@ export function ProjectsScreen() {
         <Wordmark />
         <ThemeToggle />
       </header>
-      <main className="flex flex-col px-16 py-24 md:px-40 md:py-40">
-        <div className="mx-auto flex w-content max-w-full flex-col gap-20">
+      <main className="flex flex-col px-16 py-24 md:px-24 md:py-40">
+        <div className="flex min-w-0 flex-col gap-20">
           <div className="flex flex-wrap items-end justify-between gap-16">
             <div className="flex flex-col gap-4">
               <h1 className="text-page leading-snug font-semibold text-text">

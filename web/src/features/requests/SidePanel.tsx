@@ -59,7 +59,7 @@ function FailureLine({ failure }: { failure: Failure | null }) {
     >
       {failure.text}
       {failure.code ? (
-        <span className="font-mono font-normal">code: {failure.code}</span>
+        <span className="font-mono font-regular">code: {failure.code}</span>
       ) : null}
     </p>
   );

@@ -431,9 +431,14 @@ function invalidationKeys(
           ];
     case "checks": {
       const run = typeof event.data.run === "string" ? event.data.run : null;
+      // A review batch's integration run shows on every member's page, but its events name only the member that stores it.
+      const pages =
+        event.data.stage === "integration"
+          ? [keys.proposalPages(slug)]
+          : proposalKey;
       return [
         keys.proposals(slug),
-        ...proposalKey,
+        ...pages,
         ...taskKey,
         board,
         ...(run === null ? [] : [keys.checkRun(slug, run)]),

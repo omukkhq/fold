@@ -41,7 +41,7 @@ export function FailurePanel({
           <CodeText text={text} />
         </p>
         {hint ? (
-          <p className="text-bar leading-snug break-words text-text">
+          <p className="text-bar leading-snug wrap-anywhere text-text">
             <CodeText text={hint} />
           </p>
         ) : null}

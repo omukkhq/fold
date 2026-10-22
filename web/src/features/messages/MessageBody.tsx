@@ -1,5 +1,7 @@
 import { Fragment } from "react";
 import { HrefLink } from "@/app/HrefLink";
+import { textFlow } from "@/components/text/textFlow";
+import { cn } from "@/lib/cn";
 import { MentionLink } from "@/mentions/MentionLink";
 import { mentionHref, splitMentions } from "@/mentions/parse";
 import { mentionTag } from "@/mentions/remark";
@@ -10,7 +12,7 @@ import { linkify } from "./linkify";
 export function MessageBody({ body, slug }: { body: string; slug: string }) {
   const people = usePeople(slug);
   return (
-    <p className="text-body leading-normal whitespace-pre-wrap text-text">
+    <p className={cn("text-body leading-normal text-text", textFlow("prose"))}>
       {splitMentions(body, undefined, people).map((part, index) => (
         <Fragment key={index}>
           {part.mention ? (
