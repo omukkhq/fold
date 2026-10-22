@@ -217,16 +217,33 @@ pub fn write(root: &Path) -> Result<(), ClaudeFileError> {
     if let Some((end, text)) = without_stale_section(&project, root, name)? {
         changes.push(Change::Write(end, text));
     }
-    for (relative, text) in SKILL_FILES.into_iter().zip(SKILL_TEXTS) {
-        changes.push(Change::Write(
-            link_end_of(&root.join(relative))?,
-            text.as_bytes().to_vec(),
-        ));
-    }
+    changes.extend(skill_changes(root)?);
     for change in &changes {
         change.apply()?;
     }
     Ok(())
+}
+
+/// Writes the files of fold's skills, which fold owns whole, and nothing else: `fld claude` and the daemon call it on every start, so a project that an older fold set up gets the skills its prompts name without a refresh, while the files that hold the user's text change only through [`write`]. A file whose content would not change is not written, and a file the user added next to the skills stays.
+pub fn write_skills(root: &Path) -> Result<(), ClaudeFileError> {
+    for change in skill_changes(root)? {
+        change.apply()?;
+    }
+    Ok(())
+}
+
+/// The writes of [`SKILL_FILES`], each to the end of any link at its path.
+fn skill_changes(root: &Path) -> Result<Vec<Change>, ClaudeFileError> {
+    SKILL_FILES
+        .into_iter()
+        .zip(SKILL_TEXTS)
+        .map(|(relative, text)| {
+            Ok(Change::Write(
+                link_end_of(&root.join(relative))?,
+                text.as_bytes().to_vec(),
+            ))
+        })
+        .collect()
 }
 
 /// One file change of [`write`], decided before any file changes.

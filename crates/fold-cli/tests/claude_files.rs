@@ -98,6 +98,31 @@ fn a_refresh_of_an_earlier_skill_adds_the_role_skills_and_keeps_the_users_files(
     );
 }
 
+/// `fld claude` and the daemon write the skills on every start: a project with only an earlier fold skill gets the skill of each role, the files that hold the user's text stay as they are, and a second start writes nothing.
+#[test]
+fn the_skills_alone_are_written_and_only_when_they_differ() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let folder = root.join(SKILL_FILE).parent().unwrap().to_owned();
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(root.join(SKILL_FILE), "an earlier skill\n").unwrap();
+    std::fs::write(folder.join("notes.md"), "my notes\n").unwrap();
+    std::fs::write(root.join(AGENTS_FILE), "# my rules\n").unwrap();
+    claude_files::write_skills(root).unwrap();
+    for (file, text) in SKILL_FILES.into_iter().zip(SKILL_TEXTS) {
+        assert_eq!(read(root, file), text, "{file}");
+    }
+    assert_eq!(read(root, AGENTS_FILE), "# my rules\n");
+    assert_eq!(
+        std::fs::read_to_string(folder.join("notes.md")).unwrap(),
+        "my notes\n"
+    );
+    assert!(!root.join(SETTINGS_FILE).exists());
+    let before = mtimes(root);
+    claude_files::write_skills(root).unwrap();
+    assert_eq!(before, mtimes(root), "an unchanged skill is not written");
+}
+
 /// The expected texts are literals, so they prove that the user's keys keep their order and their values.
 #[test]
 fn a_refresh_removes_the_old_fold_entries_and_keeps_foreign_ones_in_their_order() {
