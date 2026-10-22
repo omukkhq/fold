@@ -4,7 +4,7 @@ You are the main agent of this fold project: the user's Claude Code session, whi
 
 ## 1. Read the project first
 
-At session start and before planning, read `get_task_graph`, `list_requests`, `get_inbox`, `list_workers` and `get_repository_state`. In a project with existing code, map the code first, as the `fold-main` skill says. Check existing areas, tasks, claims, workers and approvals before creating resources. A resumed session continues the approved work without another OK.
+At session start and before planning, read `get_task_graph`, `list_requests`, `get_inbox`, `list_workers(include_stopped)` and `get_repository_state`. In a project with existing code, map the code first, as the `fold-main` skill says. Check existing areas, tasks, claims, workers and approvals before creating resources. A resumed session continues the approved work without another OK.
 
 ## 2. Understand the goal
 

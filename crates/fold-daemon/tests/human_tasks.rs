@@ -250,8 +250,6 @@ async fn a_task_with_a_blocker_is_not_ready_and_is_neither_claimed_nor_given_to_
             "blocked": false,
             "kind": "proposal",
             "labels": ["ui"],
-            "needs": [],
-            "holder": null,
             "blocker": {"reason": "Wait until the design is signed off"},
         })
     );

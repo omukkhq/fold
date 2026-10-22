@@ -895,6 +895,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/reviews/batches/{id}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The merged change of a batch, calculated on request: before the batch's integration, main's head against every member merged onto it in merge order, by the merge a batch checkout is made with, built in memory without a checkout and without writing objects; after it, the change of main across the revisions the batch published together. The members are those in the batch, or, once it is submitted, those its review covered, at the version each joined at, while the proposal is open. A member that conflicts stops the merge: the change holds the members before it and `conflict` names it. */
+        get: operations["get_review_batch_diff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/reviews/batches/{id}/diff/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The hunks of one file of the batch's merged change, from the same sides as `get_review_batch_diff`. */
+        get: operations["get_review_batch_file_diff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/reviews/batches/{id}/integrate": {
         parameters: {
             query?: never;
@@ -3715,6 +3749,54 @@ export interface components {
              * @description The comment's number in the batch, from 1.
              */
             number: number;
+        };
+        /** @description The change a batch's members make on main together, without hunks. */
+        ReviewBatchDiff: {
+            /**
+             * @description The old side: main's head for `merged`, the revision before the batch's revisions for `integrated`; null otherwise.
+             * @example r17
+             */
+            base: string | null;
+            basis: components["schemas"]["ReviewBatchDiffBasis"];
+            /** @example rb-3 */
+            batch: string;
+            conflict: components["schemas"]["ReviewBatchDiffConflict"] | null;
+            /** @description In path order. */
+            files: components["schemas"]["ComparedFile"][];
+            /**
+             * @description The last member's revision for `integrated`; null otherwise, as a merged tree is built only in memory.
+             * @example r19
+             */
+            head: string | null;
+            /** @description The members the new side holds, in merge order. */
+            members: components["schemas"]["ReviewBatchDiffMember"][];
+            totals: components["schemas"]["ComparisonTotals"];
+        };
+        /** @enum {string} */
+        ReviewBatchDiffBasis: "merged" | "integrated" | "no_members" | "closed" | "not_together";
+        /** @description The first member that does not merge onto main with the members before it. The change holds only the members before it. */
+        ReviewBatchDiffConflict: {
+            /** @description The conflicted paths, in path order. */
+            paths: string[];
+            /** @example P-4 */
+            proposal: string;
+            /**
+             * Format: int32
+             * @description The member version that conflicts.
+             */
+            version: number;
+            /**
+             * @description The earlier member it conflicts with; null when it conflicts with main itself.
+             * @example P-3
+             */
+            with: string | null;
+        };
+        /** @description A member version the merged tree holds. */
+        ReviewBatchDiffMember: {
+            /** @example P-3 */
+            proposal: string;
+            /** Format: int32 */
+            version: number;
         };
         /** @description Whether the approved members of a submitted batch integrate together now, wait for the others, or did. */
         ReviewBatchIntegration: {
@@ -9887,6 +9969,167 @@ export interface operations {
                 };
             };
             /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_review_batch_diff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The review batch id, such as rb-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The merged change's files */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewBatchDiff"];
+                };
+            };
+            /** @description `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `review_batch_not_found`, `revision_not_found`: main has no revision, or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_review_batch_file_diff: {
+        parameters: {
+            query: {
+                /** @description A changed file of the merged change, such as `src/lib.rs`: its new path for a rename, its old path for a deletion. */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The review batch id, such as rb-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file's hunks */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileDiffView"];
+                };
+            };
+            /** @description `invalid_id`, `invalid_path`, or `invalid_request`: the query string is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: off loopback, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `review_batch_not_found`, `path_not_in_comparison`, `revision_not_found`: main has no revision, or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
             503: {
                 headers: {
                     [name: string]: unknown;

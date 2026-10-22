@@ -538,13 +538,7 @@ impl ReviewService {
             FoldError::new(codes::REVISION_NOT_FOUND, "main has no revision")
                 .with_hint("run `fld init` to create the first revision")
         })?;
-        let inputs = members
-            .iter()
-            .map(|member| BatchMember {
-                base: member.base_tree,
-                tree: member.tree,
-            })
-            .collect();
+        let inputs = merge_inputs(&members);
         let locks = self.workspaces.lock_for_integration(None).await;
         let merged = self
             .workspaces
@@ -1096,6 +1090,17 @@ fn member_versions(members: &[MemberRow]) -> Vec<(ProposalId, u32)> {
     members
         .iter()
         .map(|member| (member.proposal, member.version))
+        .collect()
+}
+
+/// The merge inputs of `members` in their order: each member's batched version against its own base. A batch checkout and the batch's merged change both merge these, so they hold the same tree.
+pub(super) fn merge_inputs(members: &[MemberRow]) -> Vec<BatchMember> {
+    members
+        .iter()
+        .map(|member| BatchMember {
+            base: member.base_tree,
+            tree: member.tree,
+        })
         .collect()
 }
 

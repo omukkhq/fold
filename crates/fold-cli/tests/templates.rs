@@ -361,7 +361,7 @@ const INVALID_REQUEST_REASONS: [&str; 15] = [
     "batch_waiting",
 ];
 
-const NON_TOOL_NAMES: [&str; 43] = [
+const NON_TOOL_NAMES: [&str; 48] = [
     "human_review",
     "fold_failed",
     "left_out",
@@ -405,6 +405,11 @@ const NON_TOOL_NAMES: [&str; 43] = [
     "depends_on_member",
     "proposal_open",
     "area_leads",
+    "include_stopped",
+    "include_instructions",
+    "stopped_count",
+    "done_count",
+    "include_done",
 ];
 
 const SECTIONS: [&str; 3] = ["Skills", "Identity", "Sessions opened by hand"];

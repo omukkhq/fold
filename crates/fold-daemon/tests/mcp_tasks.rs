@@ -322,6 +322,11 @@ async fn every_task_tool_succeeds_and_ends_with_the_footer() {
     let graph = ok(&client, "get_task_graph", json!({})).await;
     assert_eq!(
         graph["tasks"][0],
+        json!({"id": "T-1", "title": "Schema v2", "status": "todo", "blocked": false, "kind": "proposal", "holder": "frontend"})
+    );
+    let full = ok(&client, "get_task_graph", json!({"detail": "full"})).await;
+    assert_eq!(
+        full["tasks"][0],
         json!({"id": "T-1", "title": "Schema v2", "status": "todo", "blocked": false, "kind": "proposal", "labels": [], "needs": [], "holder": "frontend"})
     );
     assert_eq!(graph["tasks"][1]["needs"], json!(["T-1", "T-3"]));
@@ -592,7 +597,7 @@ async fn a_plan_publishes_only_final_readiness_with_parent_links_and_review_mark
         }
     }
     assert_eq!(ready, [3]);
-    let graph = fx.tasks.graph(false).await.unwrap();
+    let graph = fx.tasks.graph(false).await.unwrap().tasks;
     assert_eq!(graph[0].needs.len(), 2);
     assert_eq!(graph[1].needs, [TaskId::from_number(3).unwrap()]);
 }
@@ -609,7 +614,7 @@ async fn a_plan_creates_checklist_items_before_the_ready_notice_and_refuses_a_ba
     assert_eq!(bad["code"], "invalid_step_text");
     assert_eq!(bad["details"]["position"], 2);
     assert_eq!(bad["details"]["item"], 2);
-    assert!(fx.tasks.graph(true).await.unwrap().is_empty());
+    assert!(fx.tasks.graph(true).await.unwrap().tasks.is_empty());
     let mut notices = fx.bus.subscribe();
     ok(&lead, "create_task_plan", json!({"tasks": [
         {"key": "a", "title": "A", "description": "Check A", "labels": ["work"], "checklist": [
@@ -723,7 +728,7 @@ async fn a_plan_chooses_the_checklist_of_an_unnamed_step_as_adding_one_by_one_do
     .await;
     assert_eq!(refused["code"], "checklist_ambiguous");
     assert_eq!(refused["details"]["checklists"], json!(["Subtasks", "QA"]));
-    assert_eq!(fx.tasks.graph(true).await.unwrap().len(), 2);
+    assert_eq!(fx.tasks.graph(true).await.unwrap().tasks.len(), 2);
 }
 
 #[tokio::test]
@@ -767,7 +772,7 @@ async fn a_refused_plan_rolls_back_tasks_events_and_task_numbers() {
             err(&lead, "create_task_plan", json!({"tasks": tasks})).await["code"],
             code
         );
-        assert!(fx.tasks.graph(true).await.unwrap().is_empty());
+        assert!(fx.tasks.graph(true).await.unwrap().tasks.is_empty());
         assert_eq!(
             fold_store::events::head_seq(fx.project.store().read())
                 .await
@@ -805,7 +810,7 @@ async fn task_content_cannot_grant_a_task_worker_plan_or_cross_area_authority() 
         err(&lead, "create_task_plan", input).await["code"],
         "task_outside_area"
     );
-    assert!(fx.tasks.graph(true).await.unwrap().is_empty());
+    assert!(fx.tasks.graph(true).await.unwrap().tasks.is_empty());
     ok(
         &task_worker,
         "create_task",
@@ -815,7 +820,7 @@ async fn task_content_cannot_grant_a_task_worker_plan_or_cross_area_authority() 
     assert_eq!(err(&lead, "create_task_plan", json!({"tasks": [{
         "key": "child", "title": "Child", "description": "Check", "labels": ["other"], "parent": "T-1"
     }]})).await["code"], "task_outside_area");
-    assert_eq!(fx.tasks.graph(true).await.unwrap().len(), 1);
+    assert_eq!(fx.tasks.graph(true).await.unwrap().tasks.len(), 1);
 }
 
 #[tokio::test]
@@ -833,7 +838,7 @@ async fn a_plan_refuses_misspelled_review_fields_instead_of_omitting_the_gate() 
     )
     .await;
     assert_eq!(error["code"], "invalid_request");
-    assert!(fx.tasks.graph(true).await.unwrap().is_empty());
+    assert!(fx.tasks.graph(true).await.unwrap().tasks.is_empty());
 }
 
 #[tokio::test]
@@ -1018,7 +1023,7 @@ async fn a_plan_that_fails_at_its_fiftieth_task_creates_none_of_them() {
             assert_eq!(error["details"]["position"], 50, "{error}");
             assert_eq!(error["details"]["item"], 3, "{error}");
         }
-        assert!(fx.tasks.graph(true).await.unwrap().is_empty());
+        assert!(fx.tasks.graph(true).await.unwrap().tasks.is_empty());
         assert_eq!(
             fold_store::events::head_seq(fx.project.store().read())
                 .await
@@ -1042,7 +1047,7 @@ async fn a_plan_that_fails_at_its_fiftieth_task_creates_none_of_them() {
         .await
         .unwrap();
     assert_eq!(lists[0].items[0].id.to_string(), "ci-1");
-    let graph = fx.tasks.graph(false).await.unwrap();
+    let graph = fx.tasks.graph(false).await.unwrap().tasks;
     assert_eq!(graph[1].needs, [TaskId::from_number(1).unwrap()]);
 }
 
@@ -1074,7 +1079,7 @@ async fn only_a_planner_publishes_a_plan_and_a_lead_only_for_its_own_area() {
             "{kind}"
         );
     }
-    assert!(fx.tasks.graph(true).await.unwrap().is_empty());
+    assert!(fx.tasks.graph(true).await.unwrap().tasks.is_empty());
 }
 
 #[tokio::test]
@@ -1256,7 +1261,7 @@ async fn reviewers_other_leads_and_the_system_change_no_checklist_and_a_parent_n
             .unwrap()
             .contains("leave out parent")
     );
-    assert_eq!(fx.tasks.graph(true).await.unwrap().len(), 1);
+    assert_eq!(fx.tasks.graph(true).await.unwrap().tasks.len(), 1);
 
     give_claim(
         fx.project.store(),
