@@ -51,18 +51,23 @@ export function visibleActions(
 export const CHECKS_FAILED =
   "The integration checks failed; the author sends a new version.";
 
-/** Whether the line under Approve shows. After failed integration checks Approve and Integrate share one line, which shows once under both buttons. */
+/** The line under a disabled Approve and Integrate while an update of the proposal runs the checks of its next version, `next`: the daemon refuses both with `update_checks_running` until that run ends. */
+export function updateRunsLine(next: number): string {
+  return `v${String(next)} is running its checks.`;
+}
+
+const UPDATE_RUNS_LINE = /^v\d+ is running its checks\.$/;
+
+/** Whether the line under Approve shows. After failed integration checks, and while an update runs its checks, Approve and Integrate share one line, which shows once under both buttons. */
 export function showsApproveLine(
   approveBlock: string | null,
   integrateBlock: string | null,
   integrateShown: boolean,
 ): boolean {
   if (approveBlock === null) return false;
-  return !(
-    integrateShown &&
-    approveBlock === CHECKS_FAILED &&
-    integrateBlock === CHECKS_FAILED
-  );
+  const shared =
+    approveBlock === CHECKS_FAILED || UPDATE_RUNS_LINE.test(approveBlock);
+  return !(integrateShown && shared && approveBlock === integrateBlock);
 }
 
 /** The line under a disabled Approve on a task with the human review mark: the human reviews after a reviewer agent. */
@@ -90,6 +95,13 @@ function currentRuns(proposal: ProposalDetail) {
     : [];
 }
 
+/** The line while an update of the proposal runs the checks of the version after the current one, which has no version until they pass; null when no update runs. */
+function updateBlock(proposal: ProposalDetail): string | null {
+  return proposal.update_run === null
+    ? null
+    : updateRunsLine(proposal.summary.current_version + 1);
+}
+
 function agentApprovesFirst(proposal: ProposalDetail): boolean {
   return (
     proposal.summary.human_review !== null &&
@@ -101,6 +113,7 @@ function agentApprovesFirst(proposal: ProposalDetail): boolean {
 /**
  * Why Approve cannot work for the signed-in human; null when it can.
  * An approval the human already holds on the current version would add nothing, and an approval given while a check run of that version runs, of either stage, would come before its result; a new version clears both.
+ * While an update of the proposal runs the checks of its next version, an approval of the current one would let it integrate before the update, so the daemon refuses it until the run ends.
  * On a task with the human review mark the daemon takes a human's approval only after an agent with review rights approved the current version, which it reports as `agent_approved`. A task of the main agent's own area (`main_task`) has no reviewer agent, so the human approves it first.
  */
 export function approveBlock(
@@ -109,6 +122,8 @@ export function approveBlock(
 ): string | null {
   const version = proposal.summary.current_version;
   if (proposal.summary.checks_failed) return CHECKS_FAILED;
+  const update = updateBlock(proposal);
+  if (update !== null) return update;
   const actor = reviewerActor(human);
   if (actor !== null && approvers(version, proposal.reviews).includes(actor)) {
     return ownApprovalLine(version);
@@ -123,12 +138,15 @@ export function approveBlock(
  * Why Integrate cannot work for the signed-in human, from the first unmet gate in the daemon's report; null when no gate stands in the way.
  * For a human only the human review mark and the prerequisites can be unmet: the caller and approval gates hold, because the integrating human approves in the same action. For the same reason a human integrates a marked task only after a reviewer agent approved it, as for Approve.
  * An integration run of the current version that fold started by itself or for a review batch has no queued request, so the daemon would queue the human's request behind it, to be refused once that integration ends or to run the checks a second time.
+ * While an update runs the checks of the next version, the daemon refuses to integrate the current one, as it refuses to approve it.
  */
 export function integrateBlock(
   proposal: ProposalDetail,
   main: string | null,
 ): string | null {
   if (proposal.summary.checks_failed) return CHECKS_FAILED;
+  const update = updateBlock(proposal);
+  if (update !== null) return update;
   if (agentApprovesFirst(proposal)) return AGENT_APPROVES_FIRST;
   if (
     currentRuns(proposal).some(
