@@ -224,8 +224,11 @@ async fn acceptance_22_a_daemon_start_resumes_the_reviewer_that_a_new_version_wa
         "a limit of 0 holds the resume"
     );
 
+    // The limit rises while the daemon is down, so only the next start can serve the version.
+    harness.stop().await;
     std::fs::write(&config, "[workers]\nreviewer = 3\n").unwrap();
-    harness.restart().await;
+    harness.start_again().await;
+    harness.connect(MAIN).await;
     let runs = until_runs(&fake, REVIEWER, 2).await;
     assert_eq!(runs[1].flag("--resume"), Some(stopped.session_id.as_str()));
     assert!(runs[1].stdin[1].contains("P-1 v2"), "{}", runs[1].stdin[1]);
@@ -291,4 +294,57 @@ async fn acceptance_22_a_reviewer_whose_session_is_gone_reviews_the_new_version_
         .await;
     submit(&harness, 2, "approve").await;
     until_state(&harness, REVIEWER, WorkerState::Stopped).await;
+}
+
+/// Acceptance 22: a message to a reviewer that a new version waits for never takes the place of that version. The reviewer resumes once, for the version; the message waits until the reviewer stops again and then starts it for the message.
+#[tokio::test]
+async fn acceptance_22_a_message_to_a_reviewer_owed_a_new_version_resumes_it_for_the_version() {
+    let fake = FakeClaude::new("result");
+    let (mut harness, work) = reviewed_by_a_started_reviewer(&fake).await;
+    let config = std::path::Path::new(harness.root()).join(".fold/config.toml");
+    std::fs::write(&config, "[workers]\nreviewer = 0\n").unwrap();
+    harness
+        .project
+        .clock()
+        .advance(Duration::from_secs(1))
+        .unwrap();
+    work.write(&[("page.html", "<h1>page</h1>\n")]);
+    post_next_version(&harness, &work).await;
+    until_state(&harness, TASK_WORKER, WorkerState::Stopped).await;
+    assert_eq!(
+        fake.runs_of(REVIEWER).len(),
+        1,
+        "a limit of 0 holds the resume"
+    );
+
+    // The limit rises without an event, so only the message serves the owed version. The reviewer's own session has ended, as it does when fold stops it.
+    std::fs::write(&config, "[workers]\nreviewer = 3\n").unwrap();
+    harness.disconnect(REVIEWER).await;
+    harness
+        .send(MAIN, &[REVIEWER], "Check the header too")
+        .await;
+    let runs = until_runs(&fake, REVIEWER, 2).await;
+    let turn = &runs[1].stdin[1];
+    assert!(turn.contains("P-1 v2"), "{turn}");
+    assert!(!turn.contains("for a message"), "{turn}");
+    let resumed = until_new_version_resumes(&harness, 1).await;
+    assert_eq!(resumed[0]["version"], 2);
+    until_state(&harness, REVIEWER, WorkerState::Idle).await;
+    assert_eq!(fake.runs_of(REVIEWER).len(), 2, "resumed once");
+    harness.connect(REVIEWER).await;
+
+    harness
+        .call(REVIEWER, "create_review_checkout", json!({"id": "P-1"}))
+        .await;
+    submit(&harness, 2, "approve").await;
+    until_state(&harness, REVIEWER, WorkerState::Stopped).await;
+    // Its session ends with its process; a second message starts it for both.
+    harness.disconnect(REVIEWER).await;
+    harness.send(MAIN, &[REVIEWER], "And the footer").await;
+    let runs = until_runs(&fake, REVIEWER, 3).await;
+    let turn = &runs[2].stdin[1];
+    assert!(
+        turn.contains("for a message") && turn.contains("m-1") && turn.contains("m-2"),
+        "{turn}"
+    );
 }
