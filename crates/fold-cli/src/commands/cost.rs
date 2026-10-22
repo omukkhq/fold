@@ -20,7 +20,7 @@ const TOP_TASKS: usize = 10;
 /// fold reads no local time zone, so the terminal's days are UTC days.
 const DAYS_NOTE: &str = "Today and the last 7 days start at midnight UTC.";
 
-/// The cost view's note: the main agent's session is outside fold's view, and fold guesses no number for it.
+/// The cost view's note: the main agent's session is outside fold's view, and fold guesses no number for it. A project whose `[main] supervised` setting is on has fold run the main agent as a worker, so its cost is in the numbers and the note is left out.
 const MAIN_NOTE: &str = "The main agent runs in your own Claude Code session, which fold does not supervise, so its cost is not in these numbers.";
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,7 +118,7 @@ pub fn run_cost(args: &CostArgs, out: &mut impl Write) -> Result<(), RemoteError
         if args.json {
             json_lines(&response)?
         } else {
-            task_lines(&response)?
+            task_lines(&response, main_supervised(&ask("workers")?)?)?
         }
     } else {
         let now = now();
@@ -129,7 +129,12 @@ pub fn run_cost(args: &CostArgs, out: &mut impl Write) -> Result<(), RemoteError
                 if args.json {
                     json_lines(&response)?
                 } else {
-                    range_lines(&response, start, args.by)?
+                    range_lines(
+                        &response,
+                        start,
+                        args.by,
+                        main_supervised(&ask("workers")?)?,
+                    )?
                 }
             }
             None => {
@@ -140,7 +145,13 @@ pub fn run_cost(args: &CostArgs, out: &mut impl Write) -> Result<(), RemoteError
                     let today = midnight(now);
                     let day = ask(&format!("cost?since={}", today.as_millis()))?;
                     let week = ask(&format!("cost?since={}", days_before(today, 6).as_millis()))?;
-                    summary_lines(&all, &day, &week, args.by)?
+                    summary_lines(
+                        &all,
+                        &day,
+                        &week,
+                        args.by,
+                        main_supervised(&ask("workers")?)?,
+                    )?
                 }
             }
         }
@@ -445,7 +456,11 @@ fn by_task(report: &Value, limit: Option<usize>) -> Result<Vec<String>, RemoteEr
 }
 
 /// The sections after the project lines: the summary of role, area and top tasks, or the one split of `--by`.
-fn sections(report: &Value, by: Option<Split>) -> Result<Vec<String>, RemoteError> {
+fn sections(
+    report: &Value,
+    by: Option<Split>,
+    main_supervised: bool,
+) -> Result<Vec<String>, RemoteError> {
     let mut lines = Vec::new();
     let mut section = |part: Vec<String>| {
         lines.push(String::new());
@@ -463,9 +478,24 @@ fn sections(report: &Value, by: Option<Split>) -> Result<Vec<String>, RemoteErro
         Some(Split::Worker) => section(by_worker(report)?),
         Some(Split::Task) => section(by_task(report, None)?),
     }
-    lines.push(String::new());
-    lines.push(MAIN_NOTE.to_owned());
+    main_note(&mut lines, main_supervised);
     Ok(lines)
+}
+
+/// Ends `lines` with the main agent's note when the main agent is the user's own session.
+fn main_note(lines: &mut Vec<String>, main_supervised: bool) {
+    if !main_supervised {
+        lines.push(String::new());
+        lines.push(MAIN_NOTE.to_owned());
+    }
+}
+
+/// Whether the project's workers list says that fold runs the main agent as a supervised worker.
+fn main_supervised(workers: &Response) -> Result<bool, RemoteError> {
+    refusal(workers)?;
+    workers.body["main_supervised"]
+        .as_bool()
+        .ok_or(RemoteError::Answer)
 }
 
 /// What `fld cost` prints without `--since`: the project's total of all time, today and the last 7 days, then the splits of all time.
@@ -474,6 +504,7 @@ fn summary_lines(
     today: &Response,
     week: &Response,
     by: Option<Split>,
+    main_supervised: bool,
 ) -> Result<Vec<String>, RemoteError> {
     for response in [all, today, week] {
         refusal(response)?;
@@ -489,7 +520,7 @@ fn summary_lines(
         since_line(&all.body)?,
         tokens_line(&all.body)?,
     ];
-    lines.extend(sections(&all.body, by)?);
+    lines.extend(sections(&all.body, by, main_supervised)?);
     lines.push(DAYS_NOTE.to_owned());
     Ok(lines)
 }
@@ -499,6 +530,7 @@ fn range_lines(
     response: &Response,
     start: Timestamp,
     by: Option<Split>,
+    main_supervised: bool,
 ) -> Result<Vec<String>, RemoteError> {
     refusal(response)?;
     let report = &response.body;
@@ -510,12 +542,12 @@ fn range_lines(
         since_line(report)?,
         tokens_line(report)?,
     ];
-    lines.extend(sections(report, by)?);
+    lines.extend(sections(report, by, main_supervised)?);
     Ok(lines)
 }
 
 /// What `fld cost --task` prints: the task's total with its build and review parts, then one line per worker.
-fn task_lines(response: &Response) -> Result<Vec<String>, RemoteError> {
+fn task_lines(response: &Response, main_supervised: bool) -> Result<Vec<String>, RemoteError> {
     refusal(response)?;
     let report = &response.body;
     let mut lines = vec![format!(
@@ -559,8 +591,7 @@ fn task_lines(response: &Response) -> Result<Vec<String>, RemoteError> {
         lines.push("  no worker has worked on it yet".to_owned());
     }
     lines.extend(table(&rows, &[2]));
-    lines.push(String::new());
-    lines.push(MAIN_NOTE.to_owned());
+    main_note(&mut lines, main_supervised);
     Ok(lines)
 }
 
@@ -679,6 +710,7 @@ mod tests {
             &ok(with(report(0), "total", amount(1_200_000, 1, 1))),
             &ok(with(report(0), "total", amount(5_670_000, 4, 2))),
             None,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -711,7 +743,8 @@ mod tests {
     #[test]
     fn a_range_prints_its_own_total_and_one_split_in_full() {
         let start = at("2026-10-20T00:00:00Z");
-        let lines = range_lines(&ok(report(10_000_000)), start, Some(Split::Worker)).unwrap();
+        let lines =
+            range_lines(&ok(report(10_000_000)), start, Some(Split::Worker), false).unwrap();
         assert_eq!(
             lines,
             [
@@ -727,13 +760,13 @@ mod tests {
                 MAIN_NOTE,
             ]
         );
-        let model = range_lines(&ok(report(10_000_000)), start, Some(Split::Model)).unwrap();
+        let model = range_lines(&ok(report(10_000_000)), start, Some(Split::Model), false).unwrap();
         assert_eq!(model[5], "  claude-sonnet-5   12 turns   $10.00   100%");
-        let area = range_lines(&ok(report(10_000_000)), start, Some(Split::Area)).unwrap();
+        let area = range_lines(&ok(report(10_000_000)), start, Some(Split::Area), false).unwrap();
         assert_eq!(area[4], "BY AREA");
-        let role = range_lines(&ok(report(10_000_000)), start, Some(Split::Role)).unwrap();
+        let role = range_lines(&ok(report(10_000_000)), start, Some(Split::Role), false).unwrap();
         assert_eq!(role[4], "BY ROLE");
-        let tasks = range_lines(&ok(report(10_000_000)), start, Some(Split::Task)).unwrap();
+        let tasks = range_lines(&ok(report(10_000_000)), start, Some(Split::Task), false).unwrap();
         assert!(tasks[4].starts_with("TASKS"));
     }
 
@@ -746,18 +779,19 @@ mod tests {
             empty[key] = json!([]);
         }
         let start = at(NOW);
-        let lines = range_lines(&ok(empty.clone()), start, None).unwrap();
+        let lines = range_lines(&ok(empty.clone()), start, None, false).unwrap();
         assert_eq!(lines[1], "0 workers · 0 turns");
         assert!(lines.contains(&"  no turns".to_owned()));
         assert!(lines.contains(&"  no task has a turn yet".to_owned()));
-        let workers = range_lines(&ok(empty.clone()), start, Some(Split::Worker)).unwrap();
+        let workers = range_lines(&ok(empty.clone()), start, Some(Split::Worker), false).unwrap();
         assert!(workers.contains(&"  no turns".to_owned()));
-        let models = range_lines(&ok(empty), start, Some(Split::Model)).unwrap();
+        let models = range_lines(&ok(empty), start, Some(Split::Model), false).unwrap();
         assert!(models.contains(&"  no turns".to_owned()));
 
         let task = json!({"task": "T-1", "title": "t", "area": null, "build_micro_usd": 1, "review_micro_usd": 0, "total_micro_usd": 1, "tokens": tokens(1), "turns": 1});
         let many = with(report(1), "tasks", json!(vec![task; TOP_TASKS + 2]));
-        let lines = summary_lines(&ok(many.clone()), &ok(many.clone()), &ok(many), None).unwrap();
+        let lines =
+            summary_lines(&ok(many.clone()), &ok(many.clone()), &ok(many), None, false).unwrap();
         assert!(lines.contains(&"  2 more; fld cost --by task lists every task".to_owned()));
     }
 
@@ -773,7 +807,7 @@ mod tests {
             ],
         });
         assert_eq!(
-            task_lines(&ok(body.clone())).unwrap(),
+            task_lines(&ok(body.clone()), false).unwrap(),
             [
                 "T-12  $1.50  build $1.20 · review $0.30 · 12 turns",
                 "  web-worker   task worker · claude-sonnet-5 · 8 turns · build           $1.20",
@@ -785,7 +819,7 @@ mod tests {
         );
         let none = with(body.clone(), "workers", json!([]));
         assert_eq!(
-            task_lines(&ok(none)).unwrap()[1],
+            task_lines(&ok(none), false).unwrap()[1],
             "  no worker has worked on it yet"
         );
         let strange = with(
@@ -793,7 +827,10 @@ mod tests {
             "workers",
             json!([{"name": "x", "role": "reviewer", "part": "lead", "proposals": [], "turns": 1, "cost_micro_usd": 1}]),
         );
-        assert!(matches!(task_lines(&ok(strange)), Err(RemoteError::Answer)));
+        assert!(matches!(
+            task_lines(&ok(strange), false),
+            Err(RemoteError::Answer)
+        ));
     }
 
     #[test]
@@ -803,7 +840,7 @@ mod tests {
             body: json!({"error": {"code": "task_not_found", "message": "T-9 does not exist"}}),
         };
         assert!(matches!(
-            task_lines(&refused),
+            task_lines(&refused, false),
             Err(RemoteError::Refused { code, .. }) if code == "task_not_found"
         ));
         assert!(matches!(
@@ -811,13 +848,68 @@ mod tests {
             Err(RemoteError::Refused { .. })
         ));
         assert!(matches!(
-            summary_lines(&ok(json!({})), &ok(json!({})), &ok(json!({})), None),
+            summary_lines(&ok(json!({})), &ok(json!({})), &ok(json!({})), None, false),
             Err(RemoteError::Answer)
         ));
         assert_eq!(
             json_lines(&ok(json!({"total": 1}))).unwrap(),
             ["{\n  \"total\": 1\n}"]
         );
+    }
+
+    #[test]
+    fn a_supervised_main_is_counted_so_no_note_leaves_it_out() {
+        let note = MAIN_NOTE.to_owned();
+        let summary = |supervised| {
+            summary_lines(
+                &ok(report(10_000_000)),
+                &ok(report(0)),
+                &ok(report(0)),
+                None,
+                supervised,
+            )
+            .unwrap()
+        };
+        assert!(summary(false).contains(&note));
+        let counted = summary(true);
+        assert!(!counted.contains(&note));
+        assert_eq!(counted.last().map(String::as_str), Some(DAYS_NOTE));
+        let start = at("2026-10-20T00:00:00Z");
+        let range = range_lines(&ok(report(10_000_000)), start, Some(Split::Model), true).unwrap();
+        assert_eq!(
+            range.last().map(String::as_str),
+            Some("  claude-sonnet-5   12 turns   $10.00   100%")
+        );
+        let task = json!({
+            "task": "T-12", "build_micro_usd": 1, "review_micro_usd": 0,
+            "total_micro_usd": 1, "turns": 1, "workers": [],
+        });
+        assert_eq!(
+            task_lines(&ok(task.clone()), false).unwrap().last(),
+            Some(&note)
+        );
+        assert_eq!(
+            task_lines(&ok(task), true).unwrap(),
+            [
+                "T-12  $0.00  build $0.00 · review $0.00 · 1 turn",
+                "  no worker has worked on it yet"
+            ]
+        );
+
+        assert!(main_supervised(&ok(json!({"main_supervised": true}))).unwrap());
+        assert!(!main_supervised(&ok(json!({"main_supervised": false}))).unwrap());
+        assert!(matches!(
+            main_supervised(&ok(json!({}))),
+            Err(RemoteError::Answer)
+        ));
+        let refused = Response {
+            status: 404,
+            body: json!({"error": {"code": "project_not_found", "message": "no project"}}),
+        };
+        assert!(matches!(
+            main_supervised(&refused),
+            Err(RemoteError::Refused { .. })
+        ));
     }
 
     #[derive(Parser)]

@@ -4,6 +4,7 @@ import { CircleDollarSign, Info, RefreshCw } from "lucide-react";
 import { Fragment, useState } from "react";
 import { projectCostQuery, type ProjectCost } from "@/api/cost";
 import { apiErrorCode } from "@/api/errors";
+import { workersQuery } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
 import { Mono } from "@/components/mono/Mono";
@@ -42,6 +43,7 @@ import {
   tokensText,
   workerRows,
 } from "./cost";
+import { mainAgentNote } from "./note";
 
 /** The tasks the table shows before the viewer asks for all of them. */
 const TOP_TASKS = 8;
@@ -51,14 +53,12 @@ const PANEL =
 
 const PANEL_TITLE = "text-section leading-snug font-semibold text-text";
 
-/** The main agent's session is outside fold's view, and fold guesses no number for it. */
-export const MAIN_AGENT_NOTE =
-  "The main agent runs in your own Claude Code session, which fold does not supervise, so its cost is not in these numbers.";
-
 export function CostTab({ slug, range }: { slug: string; range: CostRange }) {
   // The range starts at the viewer's midnight, which the display clock moves past once a day.
   const now = useNow(true, 60_000);
   const query = useQuery(projectCostQuery(slug, range, rangeSince(range, now)));
+  const workers = useQuery(workersQuery(slug));
+  const note = mainAgentNote(workers.data?.main_supervised);
   if (query.isError) {
     return (
       <FailurePanel
@@ -95,10 +95,12 @@ export function CostTab({ slug, range }: { slug: string; range: CostRange }) {
       ) : (
         <CostContent slug={slug} view={view} range={range} now={now} />
       )}
-      <p className="flex items-start gap-8 text-bar text-text-muted">
-        <Info aria-hidden="true" size={15} className="mt-2 shrink-0" />
-        {MAIN_AGENT_NOTE}
-      </p>
+      {note === null ? null : (
+        <p className="flex items-start gap-8 text-bar text-text-muted">
+          <Info aria-hidden="true" size={15} className="mt-2 shrink-0" />
+          {note}
+        </p>
+      )}
     </div>
   );
 }

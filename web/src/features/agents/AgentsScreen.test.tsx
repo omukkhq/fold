@@ -575,6 +575,17 @@ describe("AgentsScreen", () => {
     expect(searches.at(-1)).toEqual({});
   });
 
+  it("leaves out the main agent's note when fold runs the main agent and counts its cost", async () => {
+    stubFetch(
+      routes({
+        [`GET ${BASE}/cost`]: { body: projectCost(localDayStart(Date.now())) },
+      }),
+    );
+    await setup([], { ...team, main_supervised: true }, { tab: "cost" });
+    await screen.findByRole("list", { name: "Totals" });
+    expect(screen.queryByText(/does not supervise/)).toBeNull();
+  });
+
   it("shows the Tokens panel's empty state while no turn reported its tokens", async () => {
     const view = projectCost(localDayStart(Date.now()));
     stubFetch(
