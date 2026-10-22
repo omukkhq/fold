@@ -1186,11 +1186,11 @@ fn the_claude_files_warn_for_each_missing_fold_entry() {
             "AGENTS.md is missing",
             ".claude/skills/fold/SKILL.md is missing",
             ".claude/skills/fold/REFERENCE.md is missing",
-            ".claude/skills/fold/MAIN.md is missing",
-            ".claude/skills/fold/AREA_LEAD.md is missing",
-            ".claude/skills/fold/REVIEW_LEAD.md is missing",
-            ".claude/skills/fold/TASK_WORKER.md is missing",
-            ".claude/skills/fold/REVIEWER.md is missing",
+            ".claude/skills/fold-main/SKILL.md is missing",
+            ".claude/skills/fold-area-lead/SKILL.md is missing",
+            ".claude/skills/fold-review-lead/SKILL.md is missing",
+            ".claude/skills/fold-task-worker/SKILL.md is missing",
+            ".claude/skills/fold-reviewer/SKILL.md is missing",
             ".claude/skills/fold/ERRORS.md is missing"
         ]
     );

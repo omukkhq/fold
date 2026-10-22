@@ -1,6 +1,6 @@
 ## Reference
 
-`REFERENCE.md` next to this file holds what surrounds this workflow, with exact formats and examples: `fold-checks.toml`, `.fold/config.toml` and role prompts, area profiles and the area `main`, ignore files, the human's `fld` commands, the web app's screens and an index of the tools by purpose. A check that must run in both stages takes `stage = ["proposal", "integration"]` and keeps one name. Read its section before you write or review checks, plan config or an area profile, or tell the user what to run.
+`REFERENCE.md` of the `fold` skill, `.claude/skills/fold/REFERENCE.md`, holds what surrounds this workflow, with exact formats and examples: `fold-checks.toml`, `.fold/config.toml` and role prompts, area profiles and the area `main`, ignore files, the human's `fld` commands, the web app's screens and an index of the tools by purpose. A check that must run in both stages takes `stage = ["proposal", "integration"]` and keeps one name. Read its section before you write or review checks, plan config or an area profile, or tell the user what to run.
 
 ## Rights
 
@@ -65,7 +65,7 @@ A worker may spawn Claude Code subagents for small, atomic tasks inside its own 
 
 ## Recovery
 
-When the hint of a refusal does not settle the next step, read `ERRORS.md` next to this file: every error code with what to do.
+When the hint of a refusal does not settle the next step, read `.claude/skills/fold/ERRORS.md` of the `fold` skill: every error code with what to do.
 
 When Claude Code's auto mode is not sure about a tool call of a worker, fold asks a human and the worker waits for the answer. A worker that uses `AskUserQuestion` asks the humans a question with choices, and the human's reply is its answer.
 

@@ -1,6 +1,11 @@
+---
+name: fold-area-lead
+description: The steps of a fold area lead: planning its area's tasks and starting task workers. Load it only when fold started you as an area lead.
+---
+
 # fold: area lead
 
-This part of the fold skill holds the steps of an area lead: its own steps, the task graph and its task template, requests, task kinds and the worker agents. The shared rules of every role end it, and `SKILL.md` next to this file is the index of the parts.
+This skill holds the steps of an area lead: its own steps, the task graph and its task template, requests, task kinds and the worker agents. The shared rules of every role end it, and the `fold` skill is the index of the skills of every role.
 
 ## Area lead
 

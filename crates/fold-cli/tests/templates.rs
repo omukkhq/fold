@@ -7,10 +7,21 @@ const SKILL: &str = include_str!("../templates/SKILL.md");
 const AGENTS_SECTION: &str = include_str!("../templates/agents_section.md");
 const REFERENCE: &str = include_str!("../templates/REFERENCE.md");
 
-/// The file name of a skill file, such as `MAIN.md`.
+/// The name of a skill file: the skill's name for a `SKILL.md`, such as `fold-main`, else the file name, such as `ERRORS.md`.
 #[cfg(test)]
-fn file_name(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
+fn skill_name(path: &str) -> &str {
+    match path.strip_suffix("/SKILL.md") {
+        Some(folder) => folder.rsplit('/').next().unwrap_or(folder),
+        None => path.rsplit('/').next().unwrap_or(path),
+    }
+}
+
+/// The frontmatter of a skill without its fences, and the text after it.
+#[cfg(test)]
+fn frontmatter(text: &str) -> (&str, &str) {
+    let rest = text.strip_prefix("---\n").expect("frontmatter");
+    let (frontmatter, body) = rest.split_once("\n---\n").expect("frontmatter end");
+    (frontmatter, body)
 }
 
 /// The text fold writes into the skill file `path`.
@@ -37,7 +48,7 @@ fn skill_files() -> Vec<(&'static str, &'static str)> {
         .into_iter()
         .zip(SKILL_TEXTS)
         .filter(|(path, _)| *path != claude_files::REFERENCE_FILE)
-        .map(|(path, text)| (file_name(path), text))
+        .map(|(path, text)| (skill_name(path), text))
         .collect()
 }
 
@@ -396,7 +407,7 @@ const NON_TOOL_NAMES: [&str; 43] = [
     "area_leads",
 ];
 
-const SECTIONS: [&str; 3] = ["Parts", "Identity", "Sessions opened by hand"];
+const SECTIONS: [&str; 3] = ["Skills", "Identity", "Sessions opened by hand"];
 
 /// The rules every role shares, which end each part of the skill.
 const SHARED_SECTIONS: [&str; 9] = [
@@ -806,10 +817,24 @@ fn the_skill_has_the_frontmatter_keys_and_every_section() {
 }
 
 #[test]
-fn each_part_of_the_skill_has_its_role_sections_then_the_shared_ones() {
+fn each_role_skill_has_its_frontmatter_its_sections_then_the_shared_ones() {
     for role in Role::ALL {
         let text = part(role);
-        let headings: Vec<&str> = text
+        let name = skill_name(part_file(role));
+        let (frontmatter, body) = frontmatter(text);
+        let keys: Vec<&str> = frontmatter
+            .lines()
+            .filter_map(|line| line.split_once(": ").map(|(key, _)| key))
+            .collect();
+        assert_eq!(keys, ["name", "description"], "{role}");
+        assert!(
+            frontmatter.starts_with(&format!("name: {name}\n")),
+            "{role}"
+        );
+        let description = frontmatter.lines().nth(1).unwrap();
+        assert!(description.contains("Load it only"), "{role}");
+        assert!(description.split_whitespace().count() < 45, "{role}");
+        let headings: Vec<&str> = body
             .lines()
             .filter_map(|line| line.strip_prefix("## "))
             .collect();
@@ -819,12 +844,16 @@ fn each_part_of_the_skill_has_its_role_sections_then_the_shared_ones() {
             .chain(SHARED_SECTIONS)
             .collect();
         assert_eq!(headings, expected, "{role}");
-        assert!(text.starts_with("# fold: "), "{role}");
+        assert!(body.starts_with("\n# fold: "), "{role}");
+        assert_eq!(body.matches("\n# ").count(), 1, "{role}: one title");
         assert!(
-            text.contains("read `ERRORS.md` next to this file"),
+            body.contains("read `.claude/skills/fold/ERRORS.md` of the `fold` skill"),
             "{role}"
         );
-        assert_eq!(text.matches("\n# ").count(), 0, "{role}: one title");
+        assert!(
+            body.contains("`REFERENCE.md` of the `fold` skill, `.claude/skills/fold/REFERENCE.md`"),
+            "{role}"
+        );
     }
     let errors = skill_text(claude_files::ERRORS_FILE);
     assert!(errors.starts_with("# fold errors\n"));
@@ -838,22 +867,33 @@ fn each_part_of_the_skill_has_its_role_sections_then_the_shared_ones() {
 }
 
 #[test]
-fn the_skill_index_names_every_part() {
-    for path in SKILL_FILES
-        .into_iter()
-        .filter(|path| *path != claude_files::SKILL_FILE)
-    {
-        let name = file_name(path);
+fn the_skill_index_names_every_skill_and_file() {
+    let index_folder = std::path::Path::new(claude_files::SKILL_FILE).parent();
+    for role in Role::ALL {
+        let path = part_file(role);
+        let name = skill_name(path);
         assert!(
             SKILL.contains(&format!("- `{name}`: ")),
             "SKILL.md does not list `{name}`"
         );
+        assert!(path.ends_with(&format!("/{name}/SKILL.md")), "{path}");
         assert_eq!(
-            std::path::Path::new(path).parent(),
-            std::path::Path::new(claude_files::SKILL_FILE).parent(),
-            "{path} sits next to the index"
+            std::path::Path::new(path)
+                .parent()
+                .and_then(std::path::Path::parent),
+            index_folder.and_then(std::path::Path::parent),
+            "{path} sits next to the fold skill"
         );
     }
+    for path in [claude_files::ERRORS_FILE, claude_files::REFERENCE_FILE] {
+        let name = skill_name(path);
+        assert!(
+            SKILL.contains(&format!("- `{name}`, next to this file: ")),
+            "SKILL.md does not list `{name}`"
+        );
+        assert_eq!(std::path::Path::new(path).parent(), index_folder, "{path}");
+    }
+    assert_eq!(SKILL_FILES.len(), Role::ALL.len() + 3);
     assert!(
         SKILL.split_whitespace().count() < 1000,
         "the index stays short"
@@ -861,22 +901,28 @@ fn the_skill_index_names_every_part() {
 }
 
 #[test]
-fn every_role_prompt_points_to_the_part_of_its_role() {
+fn every_role_prompt_loads_only_the_skill_of_its_role() {
     for role in Role::ALL {
-        let name = file_name(part_file(role));
-        assert!(
-            role.prompt().contains(&format!("read its `{name}`")),
-            "{role} does not point to {name}"
-        );
+        let name = skill_name(part_file(role));
+        let load = format!("Load the `{name}` skill");
+        assert!(role.prompt().contains(&load), "{role} does not load {name}");
+        assert!(!role.prompt().contains("Load the `fold` skill"), "{role}");
         for other in Role::ALL.into_iter().filter(|other| *other != role) {
-            let other_name = file_name(part_file(other));
+            let other_name = skill_name(part_file(other));
             assert!(
                 !role.prompt().contains(&format!("`{other_name}`")),
                 "{role} names {other_name}"
             );
         }
     }
-    assert!(fold_core::main_prompt().contains("read its `MAIN.md`"));
+    assert!(fold_core::main_prompt().contains("Load the `fold-main` skill"));
+    for role in Role::ALL {
+        let name = skill_name(part_file(role));
+        assert!(
+            fold_daemon::mcp::INSTRUCTIONS.contains(name),
+            "INSTRUCTIONS do not name {name}"
+        );
+    }
 }
 
 #[test]

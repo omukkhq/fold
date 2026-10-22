@@ -981,18 +981,19 @@ mod tests {
     }
 
     #[test]
-    fn every_prompt_reads_the_part_of_its_role_once_from_the_skill() {
-        for (prompt, part) in [
-            (Role::Main.prompt(), "MAIN.md"),
-            (main_prompt(), "MAIN.md"),
-            (Role::AreaLead.prompt(), "AREA_LEAD.md"),
-            (Role::ReviewLead.prompt(), "REVIEW_LEAD.md"),
-            (Role::TaskWorker.prompt(), "TASK_WORKER.md"),
-            (Role::Reviewer.prompt(), "REVIEWER.md"),
+    fn every_prompt_loads_the_skill_of_its_role_once() {
+        for (prompt, skill) in [
+            (Role::Main.prompt(), "fold-main"),
+            (main_prompt(), "fold-main"),
+            (Role::AreaLead.prompt(), "fold-area-lead"),
+            (Role::ReviewLead.prompt(), "fold-review-lead"),
+            (Role::TaskWorker.prompt(), "fold-task-worker"),
+            (Role::Reviewer.prompt(), "fold-reviewer"),
         ] {
-            let read = format!("Load the `fold` skill and read its `{part}`");
-            assert_eq!(prompt.matches(&read).count(), 1, "{part}");
-            assert!(!prompt.contains("Orchestrating section"), "{part}");
+            let load = format!("Load the `{skill}` skill, the steps of your role.");
+            assert_eq!(prompt.matches(&load).count(), 1, "{skill}");
+            assert!(!prompt.contains("Load the `fold` skill"), "{skill}");
+            assert!(!prompt.contains("Orchestrating section"), "{skill}");
         }
     }
 

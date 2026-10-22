@@ -1,6 +1,11 @@
+---
+name: fold-task-worker
+description: The steps of a fold task worker: building its tasks in a workspace and sending proposals. Load it only when fold started you as a task worker.
+---
+
 # fold: task worker
 
-This part of the fold skill holds the steps of a task worker: its own steps, building a task and the task kinds. The shared rules of every role end it, and `SKILL.md` next to this file is the index of the parts.
+This skill holds the steps of a task worker: its own steps, building a task and the task kinds. The shared rules of every role end it, and the `fold` skill is the index of the skills of every role.
 
 ## Task worker
 

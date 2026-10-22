@@ -1,6 +1,11 @@
+---
+name: fold-main
+description: The steps of the main agent of a fold project, the session that `fld claude` starts: orchestrating areas, plans, requests and leads, and its own tasks of `main`. Load it only as the main agent.
+---
+
 # fold: main agent
 
-This part of the fold skill holds the steps of the main agent: orchestrating the team, the task graph and its task template, requests, the worker agents, the tasks of `main` that it builds, and the reviews and integrations it makes when the user asks. The shared rules of every role end it, and `SKILL.md` next to this file is the index of the parts.
+This skill holds the steps of the main agent: orchestrating the team, the task graph and its task template, requests, the worker agents, the tasks of `main` that it builds, and the reviews and integrations it makes when the user asks. The shared rules of every role end it, and the `fold` skill is the index of the skills of every role.
 
 ## Orchestrating
 

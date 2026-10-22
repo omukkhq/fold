@@ -1,6 +1,11 @@
+---
+name: fold-review-lead
+description: The steps of the fold review lead: grouping proposals and starting reviewers. Load it only when fold started you as the review lead.
+---
+
 # fold: review lead
 
-This part of the fold skill holds the steps of the review lead: its own steps, the review scope, integration and the worker agents. The shared rules of every role end it, and `SKILL.md` next to this file is the index of the parts.
+This skill holds the steps of the review lead: its own steps, the review scope, integration and the worker agents. The shared rules of every role end it, and the `fold` skill is the index of the skills of every role.
 
 ## Review lead
 

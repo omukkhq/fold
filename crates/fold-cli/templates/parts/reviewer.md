@@ -1,6 +1,11 @@
+---
+name: fold-reviewer
+description: The steps of a fold reviewer: reviewing, fixing and approving the proposals it was given. Load it only when fold started you as a reviewer.
+---
+
 # fold: reviewer
 
-This part of the fold skill holds the steps of a reviewer: its own steps, reviewing, the review scope and integration. The shared rules of every role end it, and `SKILL.md` next to this file is the index of the parts.
+This skill holds the steps of a reviewer: its own steps, reviewing, the review scope and integration. The shared rules of every role end it, and the `fold` skill is the index of the skills of every role.
 
 ## Reviewer
 

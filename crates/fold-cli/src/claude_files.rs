@@ -14,7 +14,16 @@ pub use fold_core::layout::{
 };
 
 /// The folders of Claude Code files that fold's files sit in, each one inside the one before.
-pub const FOLDERS: [&str; 3] = [".claude", ".claude/skills", ".claude/skills/fold"];
+pub const FOLDERS: [&str; 8] = [
+    ".claude",
+    ".claude/skills",
+    ".claude/skills/fold",
+    ".claude/skills/fold-main",
+    ".claude/skills/fold-area-lead",
+    ".claude/skills/fold-review-lead",
+    ".claude/skills/fold-task-worker",
+    ".claude/skills/fold-reviewer",
+];
 
 /// The project's Claude Code settings. A folder whose settings allow tools makes Claude Code warn when the folder is first trusted, so fold keeps its permission and hooks in the user's settings and a refresh removes the ones an earlier fold wrote here.
 pub const SETTINGS_FILE: &str = ".claude/settings.json";
@@ -33,11 +42,12 @@ pub const AGENTS_END: &str = "<!-- fold:end -->";
 pub const SKILL_FILE: &str = ".claude/skills/fold/SKILL.md";
 /// The reference beside the skill: fold's file formats, the human's commands and the web app's screens, which a session reads when its task needs them instead of holding them in every context.
 pub const REFERENCE_FILE: &str = ".claude/skills/fold/REFERENCE.md";
-pub const MAIN_PART_FILE: &str = ".claude/skills/fold/MAIN.md";
-pub const AREA_LEAD_PART_FILE: &str = ".claude/skills/fold/AREA_LEAD.md";
-pub const REVIEW_LEAD_PART_FILE: &str = ".claude/skills/fold/REVIEW_LEAD.md";
-pub const TASK_WORKER_PART_FILE: &str = ".claude/skills/fold/TASK_WORKER.md";
-pub const REVIEWER_PART_FILE: &str = ".claude/skills/fold/REVIEWER.md";
+/// The skill of each role is a skill of its own, so that one Skill call loads the steps of the role and nothing else.
+pub const MAIN_PART_FILE: &str = ".claude/skills/fold-main/SKILL.md";
+pub const AREA_LEAD_PART_FILE: &str = ".claude/skills/fold-area-lead/SKILL.md";
+pub const REVIEW_LEAD_PART_FILE: &str = ".claude/skills/fold-review-lead/SKILL.md";
+pub const TASK_WORKER_PART_FILE: &str = ".claude/skills/fold-task-worker/SKILL.md";
+pub const REVIEWER_PART_FILE: &str = ".claude/skills/fold-reviewer/SKILL.md";
 /// Every error code with what to do, which an agent reads only when a refusal's hint does not settle its next step.
 pub const ERRORS_FILE: &str = ".claude/skills/fold/ERRORS.md";
 /// The files of the fold skill, which fold owns whole.
@@ -58,7 +68,7 @@ const SKILL: &str = include_str!("../templates/SKILL.md");
 const REFERENCE: &str = include_str!("../templates/REFERENCE.md");
 const ERRORS: &str = include_str!("../templates/ERRORS.md");
 
-/// Joins the sections of one role's part of the skill, so that an agent reads one file for its role while each section has one source that several parts share. The shared rules always come last.
+/// Joins the sections of one role's skill, so that an agent loads one skill for its role while each section has one source that several roles share. The first section holds the skill's frontmatter, and the shared rules always come last.
 macro_rules! part {
     ($($section:literal),+) => {
         concat!(
@@ -68,7 +78,7 @@ macro_rules! part {
     };
 }
 
-/// The skill's part for each role: every step of that role and the shared rules, so that a worker loads only what its role needs.
+/// The skill of each role: every step of that role and the shared rules, so that a worker loads only what its role needs.
 const MAIN_PART: &str = part!(
     "main",
     "planning",
@@ -95,7 +105,7 @@ pub const SKILL_TEXTS: [&str; 8] = [
     ERRORS,
 ];
 
-/// The file of the skill that holds the steps of `role`. The supervised main reads the interactive main agent's part.
+/// The skill file that holds the steps of `role`. The supervised main loads the interactive main agent's skill.
 pub fn part_file(role: Role) -> &'static str {
     match role {
         Role::Main => MAIN_PART_FILE,
@@ -181,7 +191,7 @@ pub fn stale_section(root: &Path) -> Option<&'static str> {
     }
 }
 
-/// Writes or refreshes fold's Claude Code files in the project root, keeping everything in them that fold does not own: the marked section in [`instructions_file`], the fold skill and its reference. The other root instructions file loses a section an earlier write left there, so the project holds one, and [`MCP_FILE`] and [`SETTINGS_FILE`] lose the entries an earlier fold wrote; a file that held nothing else goes. Every file is checked and every symbolic link followed before the first file changes, so a refusal leaves all of them untouched. A file whose content would not change is not written, so its modification time stays.
+/// Writes or refreshes fold's Claude Code files in the project root, keeping everything in them that fold does not own: the marked section in [`instructions_file`], the fold skill with its reference and the skill of each role. The other root instructions file loses a section an earlier write left there, so the project holds one, and [`MCP_FILE`] and [`SETTINGS_FILE`] lose the entries an earlier fold wrote; a file that held nothing else goes. Every file is checked and every symbolic link followed before the first file changes, so a refusal leaves all of them untouched. A file whose content would not change is not written, so its modification time stays.
 pub fn write(root: &Path) -> Result<(), ClaudeFileError> {
     let project = std::fs::canonicalize(root).map_err(|source| ClaudeFileError::Io {
         path: root.to_owned(),
@@ -804,9 +814,12 @@ mod tests {
         let parent = |file: &str| Path::new(file).parent().map(Path::to_owned);
         assert_eq!(parent(SETTINGS_FILE), Some(PathBuf::from(FOLDERS[0])));
         for file in SKILL_FILES {
-            assert_eq!(parent(file), Some(PathBuf::from(FOLDERS[2])), "{file}");
+            let folder = parent(file).unwrap();
+            assert!(FOLDERS[2..].contains(&folder.to_str().unwrap()), "{file}");
         }
-        assert_eq!(parent(FOLDERS[2]), Some(PathBuf::from(FOLDERS[1])));
+        for folder in &FOLDERS[2..] {
+            assert_eq!(parent(folder), Some(PathBuf::from(FOLDERS[1])), "{folder}");
+        }
         assert_eq!(parent(FOLDERS[1]), Some(PathBuf::from(FOLDERS[0])));
     }
 
