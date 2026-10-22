@@ -139,6 +139,14 @@ impl Supervisor {
             .find(|row| row.role == Role::Main))
     }
 
+    /// Whether a human stopped the supervised main of `row`, so fold starts it for nothing until a human starts it again.
+    pub(super) async fn is_held(&self, row: &WorkerProcessRow) -> Result<bool, StoreError> {
+        if row.role != Role::Main {
+            return Ok(false);
+        }
+        agents::worker_held(self.inner.store.read(), row.id).await
+    }
+
     /// The agent that is or would be the supervised main: the agent that holds the `main` tag, else `main`.
     async fn main_agent(&self) -> Result<AgentName, AgentError> {
         let read = self.inner.store.read();
@@ -218,6 +226,7 @@ impl Supervisor {
             }
             let turn = match self.main_row().await? {
                 Some(row) if self.is_running(&row.agent) => return Ok(()),
+                Some(row) if self.is_held(&row).await? => return Ok(()),
                 Some(row) => match self.catch_up(&row, &Default::default()).await {
                     Some(turn) => Some(turn),
                     None => return Ok(()),
@@ -267,6 +276,9 @@ impl Supervisor {
             if let Some(turn) = turn {
                 self.send_turn(&row.agent, &turn);
             }
+            return Ok(());
+        }
+        if self.is_held(&row).await? {
             return Ok(());
         }
         // The start for these messages finds the main running and leaves them, so this start tells of them.

@@ -81,10 +81,30 @@ async fn ask_for_the_plan(harness: &mut Harness) -> String {
     ask
 }
 
+/// A human's stop of the supervised main on the Agents screen, which holds it.
 async fn stop(harness: &Harness) {
     let (status, body) = http(harness, Method::POST, "/workers/main/stop", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     until_state(harness, MAIN, WorkerState::Stopped).await;
+}
+
+/// A stop of the supervised main that fold makes itself, such as the stop once it has answered its messages: the row is not held.
+async fn stop_by_fold(harness: &Harness) {
+    harness
+        .handle
+        .agents()
+        .stop_worker(&fold_core::Actor::System, &AgentName::parse(MAIN).unwrap())
+        .await
+        .unwrap();
+    until_state(harness, MAIN, WorkerState::Stopped).await;
+}
+
+/// Whether a human's stop holds the supervised main.
+async fn held(harness: &Harness) -> bool {
+    let row = worker(harness, MAIN).await;
+    fold_store::agents::worker_held(harness.handle.store.read(), row.id)
+        .await
+        .unwrap()
 }
 
 /// One handshake of `agent` with `tags` and the daemon's answer; an accepted session is closed again.
@@ -183,7 +203,7 @@ async fn a_message_to_the_stopped_supervised_main_resumes_it_once() {
     let mut harness = supervised(&fake).await;
     let session = worker(&harness, MAIN).await.session_id;
     let ask = ask_for_the_plan(&mut harness).await;
-    stop(&harness).await;
+    stop_by_fold(&harness).await;
 
     let answer = reply(&harness, &ask, "OK").await;
     let runs = until_runs(&fake, MAIN, 2).await;
@@ -198,11 +218,53 @@ async fn a_message_to_the_stopped_supervised_main_resumes_it_once() {
 }
 
 #[tokio::test]
-async fn a_paused_project_holds_the_supervised_main_until_its_resume() {
+async fn a_humans_stop_holds_the_supervised_main_until_a_human_starts_it_again() {
     let fake = FakeClaude::new("result");
     let mut harness = supervised(&fake).await;
     let ask = ask_for_the_plan(&mut harness).await;
     stop(&harness).await;
+    assert!(held(&harness).await);
+
+    reply(&harness, &ask, "OK").await;
+    let (status, created) = harness
+        .create_request_form(&[("body", None, None, b"Search the board")], Some(HUMAN))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    harness.restart().await;
+    assert_eq!(worker(&harness, MAIN).await.state, WorkerState::Stopped);
+    assert!(held(&harness).await, "a daemon start keeps the hold");
+
+    let (status, body) = http(
+        &harness,
+        Method::POST,
+        "/workers/main/restart",
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let runs = until_runs(&fake, MAIN, 2).await;
+    assert!(
+        !runs[1].has("--resume"),
+        "no reply, request or daemon start resumed the held main before the human's new session"
+    );
+    until_state(&harness, MAIN, WorkerState::Idle).await;
+    assert!(!held(&harness).await, "the human's start clears the hold");
+
+    stop_by_fold(&harness).await;
+    assert!(!held(&harness).await);
+    let message = harness
+        .send("frontend", &[MAIN], "The board needs a search box.")
+        .await;
+    let run = until_told(&fake, &message).await;
+    assert!(run.has("--resume"), "fold's own stop holds nothing");
+}
+
+#[tokio::test]
+async fn a_paused_project_holds_the_supervised_main_until_its_resume() {
+    let fake = FakeClaude::new("result");
+    let mut harness = supervised(&fake).await;
+    let ask = ask_for_the_plan(&mut harness).await;
+    stop_by_fold(&harness).await;
     let (status, body) = http(&harness, Method::POST, "/pause", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 

@@ -652,7 +652,7 @@ impl AgentService {
         }
     }
 
-    /// Stops a running worker on request: see [`Supervisor`] for the steps. Whoever may start a worker of its role may stop it. A worker that is not running is returned as it is.
+    /// Stops a running worker on request: see [`Supervisor`] for the steps. Whoever may start a worker of its role may stop it. A worker that is not running is returned as it is. A human's stop of the supervised main holds it: fold starts it for no work of its own until a human starts it again.
     pub async fn stop_worker(
         &self,
         actor: &Actor,
@@ -662,7 +662,11 @@ impl AgentService {
         let row = self.get_worker(agent).await?;
         let starter = self.starter(actor).await?;
         policy::can_stop_worker(&starter, row.role, row.area.as_ref()).map_err(FoldError::from)?;
-        supervisor.stop(agent).await?;
+        if row.role == Role::Main && matches!(actor, Actor::Human { .. }) {
+            supervisor.stop_and_hold(agent).await?;
+        } else {
+            supervisor.stop(agent).await?;
+        }
         self.get_worker(agent).await
     }
 

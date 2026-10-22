@@ -70,6 +70,10 @@ impl Supervisor {
         if !ENDED.contains(&row.state) {
             return Ok(());
         }
+        // A supervised main that a human stopped keeps the messages owed for the session a human starts.
+        if self.is_held(&row).await? {
+            return Ok(());
+        }
         let owed = messages::owed_to_stopped(read, Some(agent)).await?;
         if owed.is_empty() {
             return Ok(());

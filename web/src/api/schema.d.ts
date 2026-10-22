@@ -1320,7 +1320,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** A named human stops a worker. Its turn is interrupted and its process ends; it keeps its session. */
+        /** A named human stops a worker. Its turn is interrupted and its process ends; it keeps its session. The supervised main stays stopped: fold starts it for no message, request, task or review until a human starts it again with a new session. */
         post: operations["stop_worker"];
         delete?: never;
         options?: never;
@@ -12425,7 +12425,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `worker_exists`, `worker_busy` (a stop came first), `worker_limit_reached`, `project_paused` or `invalid_config` */
+            /** @description `worker_exists`, `worker_busy` (a stop came first), `worker_limit_reached`, `project_paused`, `invalid_config`, or for the supervised main `main_interactive` or `main_not_supervised` */
             409: {
                 headers: {
                     [name: string]: unknown;

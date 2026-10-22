@@ -183,6 +183,8 @@ export interface TeamRow {
   step: Step;
   error: RowError | null;
   stop: StopControl;
+  /** What the stop control says of what follows a stop; null when the worker is stopped like any other. */
+  stopNote: string | null;
   /** A named human may start the worker again in a new session. */
   restart: boolean;
   /** The ids of the sessions the worker had before its current one, oldest first. */
@@ -469,6 +471,7 @@ function runningRow(
     ),
     error: rowError(worker),
     stop: stopControl(worker.state),
+    stopNote: worker.role === "main" ? MAIN_STOP_NOTE : null,
     restart: canRestart(worker.state),
     previousSessions: worker.previous_sessions.map((s) => s.session_id),
     session: sessionView(worker),
@@ -508,12 +511,16 @@ function mainRow(agent: AgentView, human: string | null): TeamRow {
     step: noticeStep(agent) ?? faint(NONE),
     error: null,
     stop: null,
+    stopNote: null,
     restart: false,
     previousSessions: [],
     session: null,
     supervised: false,
   };
 }
+
+/** A human's stop of the supervised main holds: fold starts it for no work until a human starts it in a new session. */
+export const MAIN_STOP_NOTE = "Stays stopped until you start a new session";
 
 /** The model `[roles.<role>] model` sets; null when the role sets none or the daemon could not read the config. */
 export function roleModel(

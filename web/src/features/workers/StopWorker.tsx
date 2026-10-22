@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Square } from "lucide-react";
+import { useId } from "react";
 import { keys } from "@/api/keys";
 import { stopWorker } from "@/api/workers";
 import { Button } from "@/components/button/Button";
@@ -21,6 +22,8 @@ interface StopWorkerProps {
   ariaBusyLabel?: string;
   /** The alignment of the button and its refusal in the column the control sits in. */
   className?: string;
+  /** What follows the stop, shown under the button, such as the supervised main staying stopped. */
+  note?: string | null;
 }
 
 /** The stop button of one worker and the refusal below it. The button stays pending until the worker list shows the daemon's new state. */
@@ -34,7 +37,9 @@ export function StopWorker({
   ariaLabel,
   ariaBusyLabel,
   className,
+  note,
 }: StopWorkerProps) {
+  const noteId = useId();
   const queryClient = useQueryClient();
   const stop = useMutation({
     mutationFn: () => stopWorker(slug, name),
@@ -50,12 +55,18 @@ export function StopWorker({
         pendingLabel={busyLabel}
         icon={<Square aria-hidden="true" size={size === "sm" ? 13 : 15} />}
         aria-label={pending ? ariaBusyLabel : ariaLabel}
+        aria-describedby={note ? noteId : undefined}
         onClick={() => {
           stop.mutate();
         }}
       >
         {idleLabel}
       </Button>
+      {note ? (
+        <p id={noteId} className="text-meta text-text-faint">
+          {note}
+        </p>
+      ) : null}
       {stop.isError ? <ErrorNote failure={stopFailure(stop.error)} /> : null}
     </div>
   );

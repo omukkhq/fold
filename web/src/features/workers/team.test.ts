@@ -24,6 +24,7 @@ import {
   isPausedWorker,
   isEmptyTeam,
   isSupervisedMain,
+  MAIN_STOP_NOTE,
   mainAgentName,
   mainNote,
   mainPill,
@@ -484,11 +485,13 @@ describe("teamGroups", () => {
       pill: { label: "idle", tone: "idle" },
       bound: { kind: "text", text: "-" },
       stop: "stop",
+      stopNote: MAIN_STOP_NOTE,
       restart: true,
       supervised: true,
       session: { short: "0f8e2c1a" },
     });
     expect(web?.rows.map((r) => r.name)).toEqual(["web-lead"]);
+    expect(web?.rows[0]?.stopNote).toBeNull();
     expect(main && isSupervisedMain(main)).toBe(true);
     expect(main && mainNote(main)).toBe(
       "supervised by fold · answers in the web app",

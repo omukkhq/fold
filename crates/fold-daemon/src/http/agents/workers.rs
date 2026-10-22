@@ -525,7 +525,7 @@ pub async fn start_worker(
     Ok((StatusCode::CREATED, Json(entry(&agents, worker).await?)))
 }
 
-/// A named human stops a worker. Its turn is interrupted and its process ends; it keeps its session.
+/// A named human stops a worker. Its turn is interrupted and its process ends; it keeps its session. The supervised main stays stopped: fold starts it for no message, request, task or review until a human starts it again with a new session.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/workers/{name}/stop",
@@ -601,7 +601,7 @@ pub struct RestartWorkerBody {
         (status = 400, description = "`invalid_request` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`worker_process_not_found` or `project_not_found`", body = ErrorEnvelope),
-        (status = 409, description = "`worker_exists`, `worker_busy` (a stop came first), `worker_limit_reached`, `project_paused` or `invalid_config`", body = ErrorEnvelope),
+        (status = 409, description = "`worker_exists`, `worker_busy` (a stop came first), `worker_limit_reached`, `project_paused`, `invalid_config`, or for the supervised main `main_interactive` or `main_not_supervised`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )

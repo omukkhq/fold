@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT held_at IS NOT NULL AS \"held!: bool\" FROM worker_processes WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "held!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5b11be70d63e56c449ddadf5afd8f2ec7b1fb6d48ee5c9a6ad25acca9f9e94ee"
+}

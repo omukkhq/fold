@@ -89,6 +89,7 @@ function StopCell({
           ariaLabel={`Stop ${row.name}`}
           ariaBusyLabel={`Stopping ${row.name}…`}
           className="items-start"
+          note={row.stopNote}
         />
       )}
       {row.restart ? (
