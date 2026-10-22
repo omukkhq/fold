@@ -595,3 +595,46 @@ async fn an_area_without_instructions_lists_zero_instructions_chars() {
     assert_eq!(short["workers"], json!([]));
     assert_eq!(short["stopped_count"], 0);
 }
+
+#[tokio::test]
+async fn a_graph_task_leaves_out_its_empty_fields_unless_asked_for_the_full_form() {
+    let harness = Harness::start().await;
+    harness
+        .call("backend", "create_task", json!({"title": "Notes"}))
+        .await;
+    harness
+        .call(
+            "backend",
+            "create_task",
+            json!({"title": "Schema", "labels": Harness::work_labels_of("backend"), "needs": ["T-1"]}),
+        )
+        .await;
+    harness.start_work("backend", "T-2").await;
+
+    let short = harness.call("backend", "get_task_graph", json!({})).await;
+    let full = harness
+        .call("backend", "get_task_graph", json!({"detail": "full"}))
+        .await;
+    let bare = &short["tasks"][0];
+    assert_eq!(bare["id"], "T-1");
+    for field in ["labels", "needs", "holder"] {
+        assert_eq!(bare.get(field), None, "{field}: {bare}");
+    }
+    assert_eq!(full["tasks"][0]["labels"], json!([]));
+    assert_eq!(full["tasks"][0]["needs"], json!([]));
+    assert_eq!(full["tasks"][0]["holder"], Value::Null);
+    let held = &short["tasks"][1];
+    assert_eq!(held["needs"], json!(["T-1"]));
+    assert_eq!(held["holder"], "backend");
+    assert!(!held["labels"].as_array().unwrap().is_empty(), "{held}");
+    assert_eq!(
+        held, &full["tasks"][1],
+        "a task with every field keeps them"
+    );
+    assert_eq!(short["done_count"], full["done_count"]);
+
+    let error = harness
+        .refused("backend", "get_task_graph", json!({"detail": "all"}))
+        .await;
+    assert_eq!(error["code"], "invalid_request");
+}

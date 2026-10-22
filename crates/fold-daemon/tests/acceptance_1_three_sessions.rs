@@ -89,7 +89,7 @@ async fn acceptance_1_three_sessions_share_one_view_of_agents_tasks_and_reposito
     assert_eq!(
         graph,
         vec![
-            (api, "Add the login endpoint", &json!([])),
+            (api, "Add the login endpoint", &Value::Null),
             (screen, "Build the login screen", &json!([api])),
         ]
     );

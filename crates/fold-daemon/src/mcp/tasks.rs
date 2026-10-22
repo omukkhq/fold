@@ -54,6 +54,9 @@ pub struct GetTaskGraphInput {
     /// True includes the Done tasks. Leave it out to see only the open work: a Done task then shows only as an id in the needs of the tasks that need it, and done_count counts the Done tasks.
     #[serde(default)]
     pub include_done: bool,
+    /// full gives every field on each task, also a null holder and empty labels and needs. Leave it out for the short form, which leaves those empty fields out.
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -277,7 +280,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new(
             GET_TASK_GRAPH,
-            "Read the task graph: every task that is not archived and not Done, or with include_done the Done tasks too, with its status, blocked flag, kind, labels, the tasks it needs and its claim holder, and the reason of its blocker when it has one, and done_count, the number of Done tasks. No agent takes a human task or a task with a blocker.",
+            "Read the task graph: every task that is not archived and not Done, or with include_done the Done tasks too, with its status, blocked flag, kind, labels, the tasks it needs and its claim holder, and the reason of its blocker when it has one, and done_count, the number of Done tasks. A task without labels, needs or holder leaves that field out; pass detail full for every field on each task. No agent takes a human task or a task with a blocker.",
             schema_for_type::<GetTaskGraphInput>(),
         ),
         Tool::new(
@@ -597,6 +600,19 @@ async fn run(
 async fn get_task_graph(server: &FoldServer, arguments: &JsonObject) -> Result<Value, FoldError> {
     let tasks = &server.tasks;
     let input: GetTaskGraphInput = parse(arguments)?;
+    let full = match input.detail.as_deref() {
+        None => false,
+        Some("full") => true,
+        Some(_) => {
+            return Err(
+                FoldError::new(codes::INVALID_REQUEST, "detail is full or left out")
+                    .with_details([("field", json!("detail"))])
+                    .with_hint(
+                        "call get_task_graph with detail full, or leave detail out for the short form",
+                    ),
+            );
+        }
+    };
     let graph = tasks.graph(input.include_done).await.map_err(from_task)?;
     let tasks: Vec<Value> = graph
         .tasks
@@ -614,6 +630,9 @@ async fn get_task_graph(server: &FoldServer, arguments: &JsonObject) -> Result<V
             });
             if let Some(hold) = &task.hold {
                 node["blocker"] = json!({"reason": hold.reason.as_str()});
+            }
+            if !full && let Some(fields) = node.as_object_mut() {
+                fields.retain(|_, value| !is_empty(value));
             }
             node
         })
@@ -1078,4 +1097,9 @@ async fn send_back_task(
         .await
         .map_err(from_task)?;
     Ok(json!({"id": view.id, "status": view.status.as_str()}))
+}
+
+/// A null or an empty list, which the short form of `get_task_graph` leaves out of a task.
+fn is_empty(value: &Value) -> bool {
+    value.is_null() || value.as_array().is_some_and(Vec::is_empty)
 }

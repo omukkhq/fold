@@ -322,6 +322,11 @@ async fn every_task_tool_succeeds_and_ends_with_the_footer() {
     let graph = ok(&client, "get_task_graph", json!({})).await;
     assert_eq!(
         graph["tasks"][0],
+        json!({"id": "T-1", "title": "Schema v2", "status": "todo", "blocked": false, "kind": "proposal", "holder": "frontend"})
+    );
+    let full = ok(&client, "get_task_graph", json!({"detail": "full"})).await;
+    assert_eq!(
+        full["tasks"][0],
         json!({"id": "T-1", "title": "Schema v2", "status": "todo", "blocked": false, "kind": "proposal", "labels": [], "needs": [], "holder": "frontend"})
     );
     assert_eq!(graph["tasks"][1]["needs"], json!(["T-1", "T-3"]));
