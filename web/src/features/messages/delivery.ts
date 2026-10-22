@@ -3,7 +3,7 @@ import type { MessageView, RecipientView } from "@/api/messages";
 import { atName, isHumanName } from "@/people/names";
 import { actorSegment, seg, type Segment } from "@/people/segments";
 
-/** One recipient's delivery: `acknowledged by` / `read by` (a human) / `delivered to` (the agent read its inbox) / `waiting for` (the notice reached the agent's session, which takes it when its current step ends) / `not delivered to`, the recipient, the time the daemon recorded, if any, and a note that says why the message waits. A stopped task worker that could not start for the message has no lead word, and its note names the lead the daemon sent the message on to. */
+/** One recipient's delivery: `acknowledged by` / `read by` (a human) / `sent to` (a human, whose read the daemon has not recorded) / `delivered to` (the agent read its inbox) / `waiting for` (the notice reached the agent's session, which takes it when its current step ends) / `not delivered to`, the recipient, the time the daemon recorded, if any, and a note that says why the message waits. A stopped task worker that could not start for the message has no lead word, and its note names the lead the daemon sent the message on to. */
 export interface Delivery {
   lead: string;
   actor: string;
@@ -23,6 +23,10 @@ export function recipientState(
       at: formatAsOf(now, r.acknowledged_at),
       note: null,
     };
+  }
+  // A human's message shows in their Messages screen as soon as it is sent; no inbox read or notice applies to them.
+  if (isHumanName(r.name) && r.delivered_at === null) {
+    return { lead: "sent to", actor: r.name, at: null, note: null };
   }
   if (r.delivered_at !== null) {
     return {
