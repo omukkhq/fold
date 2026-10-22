@@ -11,19 +11,61 @@ use super::comments::CommentLocation;
 use super::proposals::{proposal_not_found, version_not_found};
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
-use crate::services::messages::{LineQuestion, MessageView, ask_about_lines_in_tx};
+use crate::services::messages::{AuthorQuestion, MessageView, ask_author_in_tx};
 
 impl ReviewService {
-    /// A named human's question about a run of lines of `version` of the proposal, sent to its author: the worker holding the implementation claim on the proposal's task, else the proposal's author. It is a message linked to the task and the proposal that carries the lines and their excerpt; it writes no review, verdict or comment, so the proposal's turn stays as it was. Any version of a proposal in any state takes a question.
+    /// A named human's question about a run of lines of `version` of the proposal, or about the whole proposal when `location` is `None`, sent to its author: the worker holding the implementation claim on the proposal's task, else the proposal's author. It is a message linked to the task and the proposal that carries the lines and their excerpt when it names lines; it writes no review, verdict or comment, so the proposal's turn stays as it was. Any version of a proposal in any state takes a question.
     pub async fn ask_author(
         &self,
         actor: &Actor,
         proposal: ProposalId,
         version: u32,
-        location: CommentLocation,
+        location: Option<CommentLocation>,
         body: MessageBody,
     ) -> Result<MessageView, ReviewError> {
         policy::can_send_feedback(actor).map_err(FoldError::from)?;
+        let read = self.store.read();
+        let row = reviews::get_proposal(read, proposal)
+            .await?
+            .ok_or_else(|| proposal_not_found(proposal))?;
+        let target = reviews::version_target(read, proposal, version)
+            .await?
+            .ok_or_else(|| version_not_found(proposal, version, row.current_version))?;
+        let lines = match location {
+            Some(location) => Some(self.question_lines(target, version, location).await?),
+            None => None,
+        };
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        let sent = self
+            .store
+            .write(async |tx| {
+                let author = match claims::unreleased_for_task(tx.conn(), row.task).await? {
+                    Some(claim) => claim.worker,
+                    None => row.author.clone(),
+                };
+                let question = AuthorQuestion {
+                    actor,
+                    to: author,
+                    links: (row.task, proposal),
+                    body: &body,
+                    lines,
+                    now,
+                };
+                Ok::<_, ReviewError>(ask_author_in_tx(tx, &mut buffer, question).await?)
+            })
+            .await?;
+        self.bus.publish(buffer);
+        Ok(sent)
+    }
+
+    /// The lines a question names, with their excerpt from the side of the version they belong to.
+    async fn question_lines(
+        &self,
+        target: reviews::ReviewTarget,
+        version: u32,
+        location: CommentLocation,
+    ) -> Result<MessageLines, ReviewError> {
         if location.start_line == 0 || location.start_line > location.end_line {
             return Err(range_refusal(&location, None));
         }
@@ -35,13 +77,6 @@ impl ReviewService {
             .with_details([("field", json!("path"))])
             .with_hint("name the file the lines belong to")
         })?;
-        let read = self.store.read();
-        let row = reviews::get_proposal(read, proposal)
-            .await?
-            .ok_or_else(|| proposal_not_found(proposal))?;
-        let target = reviews::version_target(read, proposal, version)
-            .await?
-            .ok_or_else(|| version_not_found(proposal, version, row.current_version))?;
         let tree = match location.side {
             Side::Old => target.base_tree,
             Side::New => target.tree,
@@ -56,7 +91,7 @@ impl ReviewService {
                 let count = u32::try_from(text_lines(&text).len()).unwrap_or(u32::MAX);
                 range_refusal(&location, Some(count))
             })?;
-        let lines = MessageLines {
+        Ok(MessageLines {
             version,
             path: location.path,
             side: location.side,
@@ -64,29 +99,7 @@ impl ReviewService {
             end_line: location.end_line,
             excerpt,
             excerpt_cut,
-        };
-        let now = self.clock.now();
-        let mut buffer = EventBuffer::new();
-        let sent = self
-            .store
-            .write(async |tx| {
-                let author = match claims::unreleased_for_task(tx.conn(), row.task).await? {
-                    Some(claim) => claim.worker,
-                    None => row.author.clone(),
-                };
-                let question = LineQuestion {
-                    actor,
-                    to: author,
-                    links: (row.task, proposal),
-                    body: &body,
-                    lines,
-                    now,
-                };
-                Ok::<_, ReviewError>(ask_about_lines_in_tx(tx, &mut buffer, question).await?)
-            })
-            .await?;
-        self.bus.publish(buffer);
-        Ok(sent)
+        })
     }
 }
 

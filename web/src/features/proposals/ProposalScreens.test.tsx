@@ -319,15 +319,21 @@ function routes(): void {
         body: body.body,
         task: "T-4",
         proposal: id,
-        lines: {
-          version: body.version,
-          path: body.path,
-          side: body.side,
-          start_line: body.start_line,
-          end_line: body.end_line,
-          excerpt: "x",
-          excerpt_cut: false,
-        },
+        lines:
+          body.path == null ||
+          body.side == null ||
+          body.start_line == null ||
+          body.end_line == null
+            ? null
+            : {
+                version: body.version,
+                path: body.path,
+                side: body.side,
+                start_line: body.start_line,
+                end_line: body.end_line,
+                excerpt: "x",
+                excerpt_cut: false,
+              },
       });
       questions.set(id, [
         ...list,

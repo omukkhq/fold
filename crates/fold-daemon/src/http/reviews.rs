@@ -1288,24 +1288,28 @@ pub async fn add_review_comment(
     Ok((StatusCode::CREATED, Json(comment.into())))
 }
 
-/// A human's question to a proposal's author about a run of lines of one file of a version.
+/// A human's question to a proposal's author: about a run of lines of one file of a version when `path`, `side`, `start_line` and `end_line` are all given, about the whole proposal when none is.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct AskAuthorBody {
-    /// The version whose lines the question is about; any version of the proposal.
+    /// The version the question is about; any version of the proposal.
     pub version: u32,
     /// The file the lines belong to, relative to the project root.
+    #[serde(default)]
     #[schema(example = "web/src/board.ts")]
-    pub path: String,
-    pub side: CommentSide,
+    pub path: Option<String>,
+    #[serde(default)]
+    pub side: Option<CommentSide>,
     /// From 1.
-    pub start_line: u32,
+    #[serde(default)]
+    pub start_line: Option<u32>,
     /// Inclusive.
-    pub end_line: u32,
+    #[serde(default)]
+    pub end_line: Option<u32>,
     /// The question, plain text with some visible character. In message text `#` names a fold item and `@` names a file; the daemon parses nothing.
     pub body: String,
 }
 
-/// Asks the proposal's author about a run of lines of a version: one message from the named human to the worker holding the task's implementation claim, else the proposal's author, linked to the task and the proposal and carrying the lines and their text. It waits for the author's answer in its thread. It writes no review, verdict or comment and never changes whose turn it is, and it changes no task state.
+/// Asks the proposal's author about a run of lines of a version, or about the whole proposal: one message from the named human to the worker holding the task's implementation claim, else the proposal's author, linked to the task and the proposal and carrying the lines and their text when it names lines. It waits for the author's answer in its thread. It writes no review, verdict or comment and never changes whose turn it is, and it changes no task state.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/proposals/{id}/questions",
@@ -1317,7 +1321,7 @@ pub struct AskAuthorBody {
     request_body = AskAuthorBody,
     responses(
         (status = 201, description = "The stored question", body = MessageView),
-        (status = 400, description = "`invalid_request`: an empty body or a malformed request; `invalid_path` or `invalid_id`", body = ErrorEnvelope),
+        (status = 400, description = "`invalid_request`: an empty body, some but not all of the four line fields, or a malformed request; `invalid_path` or `invalid_id`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`proposal_not_found`: no such proposal or version, or `project_not_found`", body = ErrorEnvelope),
         (status = 422, description = "`unknown_comment_path` or `invalid_comment_range`: the lines are not in the file on that side", body = ErrorEnvelope),
@@ -1333,12 +1337,13 @@ pub async fn ask_proposal_author(
     ApiJson(body): ApiJson<AskAuthorBody>,
 ) -> Result<(StatusCode, Json<MessageView>), ApiError> {
     let proposal = proposal(&id)?;
-    let location = CommentLocation {
-        path: body.path,
-        side: body.side.into(),
-        start_line: body.start_line,
-        end_line: body.end_line,
-    };
+    let location = CommentLocation::from_parts(
+        "question",
+        body.path,
+        body.side.map(Side::from),
+        body.start_line,
+        body.end_line,
+    )?;
     let question = service(&state, &project)
         .ask_author(
             &human.actor(),
