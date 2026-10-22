@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::common::roles::give_role;
+use crate::common::roles::{give_review_claim, give_role};
 use crate::reviews_support::{Fixture, by, p, t, ws};
 use fold_core::events::types;
 use fold_core::reviews::Verdict;
@@ -90,8 +90,10 @@ async fn until_removed(fx: &Fixture, workspace: u32, dir: &Path) {
     .await;
 }
 
-async fn review_lead(fx: &Fixture) -> Actor {
-    give_role(fx.project.store(), "review", Role::ReviewLead, None).await;
+/// `review` as a reviewer that the review lead started for `P-1`, with the review claim its start gives it.
+async fn reviewer(fx: &Fixture) -> Actor {
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
+    give_review_claim(fx.project.store(), "review", p(1), fx.project.now()).await;
     fx.agents.actor(&fx.review.ctx, None).await.unwrap()
 }
 
@@ -111,12 +113,11 @@ async fn an_integrated_workspace_and_its_review_checkout_lose_their_directories(
     let fx = Fixture::new().await;
     let _follower = follow(&fx);
     fx.proposal().await;
-    let review = review_lead(&fx).await;
+    let review = reviewer(&fx).await;
     fx.reviews
         .submit_review(&review, p(1), 1, Verdict::Approve, "fine", Vec::new())
         .await
         .unwrap();
-    fx.reviews.claim_review(&review, p(1)).await.unwrap();
     let checkout = fx
         .reviews
         .create_review_checkout(&review, p(1))
