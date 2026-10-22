@@ -171,7 +171,7 @@ pub struct Reach<'a> {
     pub wake: Option<MessageWake>,
 }
 
-/// An event of `event_type` is selected past the filter when the worker row `worker_id` receives the message it names, on a row that no acknowledgement has reached and that nothing delivered up to `since`, and only when that worker did not send it: a wait wakes for a new message, never for one the agent has seen or its own. A row delivered after `since` still wakes the wait that started then, because a notice that carried it waits in the session until the wait returns.
+/// An event of `event_type` is selected past the filter when the worker row `worker_id` receives the message it names, on a row that no acknowledgement has reached and that nothing delivered before `since`, and only when that worker did not send it: a wait wakes for a new message, never for one the agent has seen or its own. A row delivered at or after `since` still wakes the wait that started then, because a notice that carried it waits in the session until the wait returns; times are milliseconds, so a notice in the wait's first millisecond counts too.
 #[derive(Debug, Clone, Copy)]
 pub struct MessageWake {
     pub event_type: EventType,
@@ -196,7 +196,7 @@ pub async fn waiting_messages(
            WHERE e.seq IN (SELECT value FROM json_each(?1))
              AND e.type = ?3
              AND e.actor <> (SELECT s.name FROM workers s WHERE s.id = ?2)
-             AND (r.delivered_at IS NULL OR r.delivered_at > ?4) AND r.acked_at IS NULL
+             AND (r.delivered_at IS NULL OR r.delivered_at >= ?4) AND r.acked_at IS NULL
              AND r.worker_id = ?2
            GROUP BY m.number
            ORDER BY MIN(e.seq)"#,
@@ -247,7 +247,7 @@ pub async fn read_reaching(
                           SELECT 1 FROM messages m
                           JOIN message_recipients r ON r.message_id = m.id
                           WHERE m.number = e.message_id
-                            AND (r.delivered_at IS NULL OR r.delivered_at > ?11)
+                            AND (r.delivered_at IS NULL OR r.delivered_at >= ?11)
                             AND r.acked_at IS NULL
                             AND r.worker_id = ?10)))
              AND (e.type NOT IN (SELECT value FROM json_each(?6))

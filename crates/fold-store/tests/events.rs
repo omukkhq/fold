@@ -650,9 +650,14 @@ async fn read_reaching_wakes_only_for_an_unread_message_the_worker_did_not_send(
             .collect()
     };
     assert_eq!(
-        read_since(1, 5).await,
+        read_since(1, 6).await,
         [seqs[4], seqs[5]],
         "a read, an acknowledged, an own message and one to another row of the agent never wake the worker"
+    );
+    assert_eq!(
+        read_since(1, 5).await,
+        [seqs[0], seqs[4], seqs[5]],
+        "a message delivered in the millisecond the wait started wakes it"
     );
     assert_eq!(
         read_since(1, 4).await,
