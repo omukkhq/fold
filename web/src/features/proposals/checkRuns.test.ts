@@ -3,12 +3,10 @@ import type { CheckResult, CheckRun } from "@/api/proposals";
 import { proposalSummary } from "@/test/proposals";
 import {
   checksFailedNote,
-  logTail,
   outcomeText,
   queuedNote,
   reasonText,
   resultOf,
-  runViews,
 } from "./checkRuns";
 
 function result(fields: Partial<CheckResult> = {}): CheckResult {
@@ -66,36 +64,7 @@ describe("outcomeText", () => {
   });
 });
 
-describe("runViews", () => {
-  it("titles each run by its stage and names why a run failed", () => {
-    const views = runViews([
-      run({
-        id: "cr-9",
-        stage: "integration",
-        purpose: "integrate",
-        version: 2,
-        base: "r9",
-        state: "failed",
-        reason: "check_failed",
-        results: [result({ name: "e2e", outcome: "failed", exit_code: 1 })],
-      }),
-      run({ results: [result({ name: "lint", log_bytes: 0, log: "" })] }),
-    ]);
-    expect(views.map((view) => view.title)).toEqual([
-      "Integration checks of v2 on r9",
-      "Proposal checks on r7",
-    ]);
-    expect(views[0]?.note).toBe("a required check failed");
-    expect(views[0]?.lines[0]).toEqual({
-      name: "e2e",
-      outcome: "failed",
-      text: "failed · exit 1 · 1.2 s",
-      hasLog: true,
-    });
-    expect(views[1]?.note).toBeNull();
-    expect(views[1]?.lines[0]?.hasLog).toBe(false);
-  });
-
+describe("reasonText", () => {
   it("has a sentence for every reason", () => {
     for (const reason of [
       "check_failed",
@@ -114,16 +83,7 @@ describe("runViews", () => {
   });
 });
 
-describe("logTail and resultOf", () => {
-  it("keeps the last lines and marks a cut start", () => {
-    const log = Array.from({ length: 5 }, (_, i) => `line ${String(i)}`).join(
-      "\n",
-    );
-    expect(logTail(result({ log: `${log}\n` }), 2)).toBe("…\nline 3\nline 4");
-    expect(logTail(result({ log: "one\n" }))).toBe("one");
-    expect(logTail(result({ log: "end\n", truncated: true }))).toBe("…\nend");
-  });
-
+describe("resultOf", () => {
   it("finds a result by its name in a run read with its logs", () => {
     const read = run({ results: [result(), result({ name: "e2e" })] });
     expect(resultOf(read, "e2e")?.name).toBe("e2e");

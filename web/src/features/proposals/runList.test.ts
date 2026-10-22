@@ -8,7 +8,8 @@ import {
   logLines,
   openingStep,
   runTitle,
-} from "./checksTab";
+  stepMeta,
+} from "./runList";
 
 const failedV1 = checkRun(82, {
   state: "failed",
@@ -114,5 +115,23 @@ describe("log lines", () => {
     expect(isErrorLine("test result: FAILED. 1 passed")).toBe(true);
     expect(isErrorLine("no errors found")).toBe(false);
     expect(isErrorLine("compiling errorless")).toBe(false);
+  });
+});
+
+describe("stepMeta", () => {
+  it("says how a step ended in a few words", () => {
+    expect(stepMeta(checkResult("a"))).toBe("1.2 s");
+    expect(stepMeta(checkResult("a", { duration_ms: 290 }))).toBe("290 ms");
+    expect(
+      stepMeta(checkResult("a", { outcome: "failed", exit_code: 2 })),
+    ).toBe("exit 2 · 1.2 s");
+    expect(
+      stepMeta(checkResult("a", { outcome: "failed", exit_code: null })),
+    ).toBe("1.2 s");
+    expect(stepMeta(checkResult("a", { outcome: "timed_out" }))).toBe(
+      "timed out · 1.2 s",
+    );
+    expect(stepMeta(checkResult("a", { outcome: "skipped" }))).toBe("skipped");
+    expect(stepMeta(checkResult("a", { outcome: "not_run" }))).toBe("not run");
   });
 });

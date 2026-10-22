@@ -193,3 +193,14 @@ export function pathParts(path: string): { folder: string; name: string } {
   const cut = path.lastIndexOf("/") + 1;
   return { folder: path.slice(0, cut), name: path.slice(cut) };
 }
+
+/** Opens a closed folder and closes an open one. */
+export function toggleFolder(
+  closed: ReadonlySet<string>,
+  path: string,
+): Set<string> {
+  const next = new Set(closed);
+  if (next.has(path)) next.delete(path);
+  else next.add(path);
+  return next;
+}

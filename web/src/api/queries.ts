@@ -138,6 +138,18 @@ export const proposalQuery = (slug: string, id: string) =>
     staleTime: Infinity,
   });
 
+/** The proposal as `version` shows it, which carries that version's check runs. */
+export const proposalVersionQuery = (
+  slug: string,
+  id: string,
+  version: number,
+) =>
+  queryOptions({
+    queryKey: keys.proposalVersion(slug, id, version),
+    queryFn: () => getProposal(slug, id, version),
+    staleTime: Infinity,
+  });
+
 /** A check run with its logs; the event stream refreshes it when the run ends. */
 export const checkRunQuery = (slug: string, run: string) =>
   queryOptions({

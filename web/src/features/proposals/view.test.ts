@@ -14,6 +14,7 @@ import {
   emptyChangeText,
   changesSearch,
   detailTab,
+  isDetailTab,
   parseDetailSearch,
   resolveView,
   shownVersion,
@@ -74,6 +75,8 @@ describe("detailTab", () => {
     expect(detailTab({ since: 1 })).toBe("changes");
     expect(detailTab({ version: 1 })).toBe("overview");
     expect(detailTab({})).toBe("overview");
+    expect(isDetailTab("checks")).toBe(true);
+    expect(isDetailTab("files")).toBe(false);
   });
 });
 

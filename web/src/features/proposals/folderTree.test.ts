@@ -8,11 +8,12 @@ import {
   foldersOf,
   matchesFilter,
   pathParts,
+  toggleFolder,
   treeFiles,
   treeRows,
   type ChangeNode,
   type TreeRow,
-} from "./fileTree";
+} from "./folderTree";
 
 const files = [
   comparedFile("backend/app/main.py", "modified", {
@@ -208,6 +209,13 @@ describe("changedFolders", () => {
 
   it("is empty for no files", () => {
     expect(changedFolders(changeTree([]))).toEqual([]);
+  });
+});
+
+describe("toggleFolder", () => {
+  it("opens a closed folder and closes an open one", () => {
+    expect(toggleFolder(new Set(["a"]), "a")).toEqual(new Set());
+    expect(toggleFolder(new Set(), "a")).toEqual(new Set(["a"]));
   });
 });
 

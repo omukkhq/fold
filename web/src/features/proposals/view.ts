@@ -36,7 +36,7 @@ function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function isTab(value: unknown): value is DetailTab {
+export function isDetailTab(value: unknown): value is DetailTab {
   return TABS.some((tab) => tab === value);
 }
 
@@ -49,7 +49,7 @@ export function parseDetailSearch(
   const run = text(search.run);
   const step = text(search.step);
   return {
-    ...(isTab(search.tab) ? { tab: search.tab } : {}),
+    ...(isDetailTab(search.tab) ? { tab: search.tab } : {}),
     ...(version === undefined ? {} : { version }),
     ...(since === undefined ? {} : { since }),
     ...(path === "" ? {} : { path }),

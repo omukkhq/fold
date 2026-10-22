@@ -150,6 +150,7 @@
   --width-file-list: var(--width-file-list);
   --width-side-panel: var(--width-side-panel);
   --width-content: var(--width-content);
+  --width-page: var(--width-page);
   --width-history: var(--width-history);
   --width-sign-in: var(--width-sign-in);
   --width-thread-list: var(--width-thread-list);

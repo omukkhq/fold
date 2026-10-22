@@ -53,16 +53,21 @@ describe("proposal reads", () => {
 
   it("reads a proposal, and answers null for one the project does not have", async () => {
     const detail = proposalDetail(proposalSummary("P-4"));
-    stubFetch({
+    const calls = stubFetch({
       [`GET ${P}/P-4`]: { body: detail },
       [`GET ${P}/P-99`]: errorReply(404, "proposal_not_found"),
       [`GET ${P}/P-5`]: errorReply(401, "human_name_required"),
     });
     await expect(getProposal("demo", "P-4")).resolves.toEqual(detail);
+    await expect(getProposal("demo", "P-4", 1)).resolves.toEqual(detail);
     await expect(getProposal("demo", "P-99")).resolves.toBeNull();
     await expect(getProposal("demo", "P-5")).rejects.toSatisfy((e: unknown) =>
       isApiError(e, "human_name_required"),
     );
+    expect(calls.slice(0, 2).map((c) => c.search.toString())).toEqual([
+      "",
+      "version=1",
+    ]);
   });
 
   it("reads every comment of every version", async () => {

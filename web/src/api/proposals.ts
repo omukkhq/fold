@@ -60,15 +60,19 @@ export async function listProposals(slug: string): Promise<ProposalList> {
   );
 }
 
-/** The proposal with the gate report for the signed-in human and the current version; null for a proposal the project does not have. */
+/** The proposal with the gate report for the signed-in human and `version`, else the current version; null for a proposal the project does not have. */
 export async function getProposal(
   slug: string,
   id: string,
+  version?: number,
 ): Promise<ProposalDetail | null> {
   try {
     return await unwrap(
       api.GET("/api/v1/projects/{slug}/proposals/{id}", {
-        params: base(slug, id),
+        params:
+          version === undefined
+            ? base(slug, id)
+            : { ...base(slug, id), query: { version } },
       }),
     );
   } catch (error) {

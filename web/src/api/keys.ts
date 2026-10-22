@@ -29,6 +29,9 @@ export const keys = {
     [slug, "proposal", proposal] as const,
   /** The prefix of every proposal page, for an event that changes several proposals at once. */
   proposalPages: (slug: string) => [slug, "proposal"] as const,
+  /** One version of the proposal, for its check runs; under the proposal prefix, so the events that refresh the proposal refresh it too. */
+  proposalVersion: (slug: string, proposal: string, version: number) =>
+    [slug, "proposal", proposal, "version", version] as const,
   /** Under the proposal prefix, so every event and write that refreshes the proposal also refreshes its comments. */
   proposalComments: (slug: string, proposal: string) =>
     [slug, "proposal", proposal, "comments"] as const,

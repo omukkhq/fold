@@ -100,3 +100,25 @@ export function logLines(log: string): LogLine[] {
 export function firstError(lines: readonly LogLine[]): number | null {
   return lines.find((line) => line.error)?.n ?? null;
 }
+
+function seconds(ms: number): string {
+  return ms < 1000 ? `${String(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+}
+
+/** A step's short note in the run list: `1.2 s`, `exit 2 · 1.3 s`, `not run`. */
+export function stepMeta(result: CheckResult): string {
+  switch (result.outcome) {
+    case "passed":
+      return seconds(result.duration_ms);
+    case "failed":
+      return result.exit_code === null
+        ? seconds(result.duration_ms)
+        : `exit ${String(result.exit_code)} · ${seconds(result.duration_ms)}`;
+    case "timed_out":
+      return `timed out · ${seconds(result.duration_ms)}`;
+    case "skipped":
+      return "skipped";
+    case "not_run":
+      return "not run";
+  }
+}

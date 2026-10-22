@@ -295,7 +295,14 @@ function routes(): void {
   );
   daemon.on("GET /api/v1/projects/:slug/proposals/:id", (call) => {
     const found = proposals.get(call.params.id ?? "");
-    return found ? ok(found) : refuse(404, "proposal_not_found");
+    if (!found) return refuse(404, "proposal_not_found");
+    // An earlier version's read carries that version's check runs, which these tests leave empty.
+    const asked = new URLSearchParams(call.path.split("?")[1] ?? "").get(
+      "version",
+    );
+    return asked === null || Number(asked) === found.summary.current_version
+      ? ok(found)
+      : ok({ ...found, checks: [] });
   });
   daemon.on("GET /api/v1/projects/:slug/proposals/:id/comments", (call) =>
     ok({ comments: comments.get(call.params.id ?? "") ?? [] }),
@@ -628,27 +635,27 @@ describe("Proposals list", () => {
 describe("Proposal detail", () => {
   it("compares each version with its base and two versions by their changesets; a v1 comment is outdated on v2 and current on v1", async () => {
     const user = userEvent.setup();
-    renderAt("/p/demo/proposals/P-4");
+    renderAt("/p/demo/proposals/P-4?tab=changes");
     const thread = await screen.findByRole("list", { name: "Thread rc-1" });
     expect(within(thread).getByText("on v1 · line 3 · outdated")).toBeTruthy();
     expect(within(thread).getByText("reply · v2")).toBeTruthy();
     expect(diffReads.refs).toContain("base..v2");
     expect(
-      screen
-        .getByRole("link", { name: "v2 · approved" })
-        .getAttribute("aria-current"),
-    ).toBe("page");
+      screen.getByRole("button", { name: "Version: v2 · approved" }),
+    ).toBeTruthy();
     expect(await screen.findByText("base r8 → main r8")).toBeTruthy();
 
     await user.click(
-      screen.getByRole("link", { name: "v1 · changes requested" }),
+      screen.getByRole("button", { name: "Version: v2 · approved" }),
+    );
+    await user.click(
+      await screen.findByRole("menuitem", { name: "v1 · changes requested" }),
     );
     expect(await screen.findByText("on v1 · line 3")).toBeTruthy();
     expect(diffReads.refs).toContain("base..v1");
     expect(screen.queryByText(/outdated/)).toBeNull();
     expect(screen.getByText(/v1 is an earlier version/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Approve v2" })).toBeNull();
-    expect(screen.getByText(/46 passed/)).toBeTruthy();
 
     expect(screen.queryByRole("navigation", { name: "Change" })).toBeNull();
   });
@@ -663,7 +670,7 @@ describe("Proposal detail", () => {
         body: "This line is not in the diff.",
       }),
     ]);
-    renderAt("/p/demo/proposals/P-4");
+    renderAt("/p/demo/proposals/P-4?tab=changes");
     const other = await screen.findByRole("region", { name: "Other comments" });
     expect(
       within(other).getByText("This line is not in the diff."),
@@ -672,7 +679,7 @@ describe("Proposal detail", () => {
 
   it("switches to the change since the version the review asked changes on, where a new-side comment lands on the current version", async () => {
     const user = userEvent.setup();
-    const { container } = renderAt("/p/demo/proposals/P-4");
+    const { container } = renderAt("/p/demo/proposals/P-4?tab=changes");
     const change = await screen.findByRole("navigation", { name: "Change" });
     expect(
       within(change)
@@ -684,10 +691,8 @@ describe("Proposal detail", () => {
       expect(diffReads.refs).toContain("v1..v2");
     });
     expect(
-      screen
-        .getByRole("link", { name: "v2 · approved" })
-        .getAttribute("aria-current"),
-    ).toBe("page");
+      screen.getByRole("button", { name: "Version: v2 · approved" }),
+    ).toBeTruthy();
     await user.click(await lineCell(container, "new:4"));
     await choose(user, "Review comment");
     const form = await screen.findByRole("form", {
@@ -711,7 +716,7 @@ describe("Proposal detail", () => {
 
   it("posts a comment on one line and on a run of lines with the range the selection gives, showing it after the server answers", async () => {
     const user = userEvent.setup();
-    const { container } = renderAt("/p/demo/proposals/P-4");
+    const { container } = renderAt("/p/demo/proposals/P-4?tab=changes");
     await user.click(await lineCell(container, "new:4"));
     await choose(user, "Review comment");
     let form = await screen.findByRole("form", {
@@ -772,7 +777,9 @@ describe("Proposal detail", () => {
 
   it("says at the selection why an older version takes no comment, and links to the current version", async () => {
     const user = userEvent.setup();
-    const { container } = renderAt("/p/demo/proposals/P-4?version=1");
+    const { container } = renderAt(
+      "/p/demo/proposals/P-4?tab=changes&version=1",
+    );
     await user.click(await lineCell(container, "new:3"));
     const note = await screen.findByText(
       /This is v1\. Comments go on the current version, v2\./,
@@ -790,14 +797,14 @@ describe("Proposal detail", () => {
   it("suggests items and files in the line comment and the request-changes box", async () => {
     mentionRoutes();
     const user = userEvent.setup();
-    const { container } = renderAt("/p/demo/proposals/P-4");
+    const { container } = renderAt("/p/demo/proposals/P-4?tab=changes");
     await user.click(await lineCell(container, "new:4"));
     await choose(user, "Review comment");
     const form = await screen.findByRole("form", {
       name: "Comment on line 4 · new side · tanim",
     });
     await expectMentionPopover(within(form).getByLabelText("Comment"));
-    const panel = await integration();
+    const panel = screen.getByRole("group", { name: "Your review" });
     await user.click(
       within(panel).getByRole("button", { name: "Request changes" }),
     );
@@ -817,7 +824,7 @@ describe("Proposal detail", () => {
       }),
     ]);
     const user = userEvent.setup();
-    const { container } = renderAt("/p/demo/proposals/P-4");
+    const { container } = renderAt("/p/demo/proposals/P-4?tab=changes");
     const thread = await screen.findByRole("list", { name: "Thread rc-1" });
     expect(
       within(thread).getByRole("link", { name: "T-9" }).getAttribute("href"),
@@ -828,8 +835,9 @@ describe("Proposal detail", () => {
         .getAttribute("href"),
     ).toBe("/p/demo/repository?path=web%2Freport.tsx");
     expect(container).toBeTruthy();
-    const evidence = screen.getByRole("region", {
-      name: "Evidence from the author",
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    const evidence = await screen.findByRole("article", {
+      name: "Version v2",
     });
     expect(
       within(evidence).getByRole("link", { name: "T-9" }).getAttribute("href"),
@@ -850,10 +858,12 @@ describe("Proposal detail", () => {
     await user.click(
       within(panel).getByRole("button", { name: "Send request" }),
     );
-    const reviews = screen.getByRole("region", { name: "Reviews" });
-    expect(
-      await within(reviews).findByRole("link", { name: "T-9" }),
-    ).toBeTruthy();
+    const reviews = screen.getByRole("article", { name: "Version v2" });
+    await waitFor(() => {
+      expect(
+        within(reviews).getAllByRole("link", { name: "T-9" }),
+      ).toHaveLength(2);
+    });
   });
 
   it("shows a comment refusal on the form", async () => {
@@ -862,7 +872,7 @@ describe("Proposal detail", () => {
       refuse(422, "invalid_comment_range"),
     );
     const user = userEvent.setup();
-    const { container } = renderAt("/p/demo/proposals/P-4");
+    const { container } = renderAt("/p/demo/proposals/P-4?tab=changes");
     await user.click(await lineCell(container, "new:3"));
     await choose(user, "Review comment");
     const form = await screen.findByRole("form", { name: /Comment on line 3/ });
@@ -879,7 +889,7 @@ describe("Proposal detail", () => {
 
   it("asks the author about selected lines, pending until the daemon answers, then marks the lines with a link to the thread and writes no review", async () => {
     const user = userEvent.setup();
-    const { container } = renderAt("/p/demo/proposals/P-4");
+    const { container } = renderAt("/p/demo/proposals/P-4?tab=changes");
     await user.click(await lineCell(container, "new:2"));
     fireEvent.click(await lineCell(container, "new:3"), { shiftKey: true });
     await choose(user, "Ask the author");
@@ -960,13 +970,15 @@ describe("Proposal detail", () => {
       }),
     ]);
     const user = userEvent.setup();
-    const current = renderAt("/p/demo/proposals/P-4");
+    const current = renderAt("/p/demo/proposals/P-4?tab=changes");
     await lineCell(current.container, "new:4");
     expect(
       screen.queryByRole("link", { name: /^Question m-24 to/ }),
     ).toBeNull();
     cleanup();
-    const { container, router } = renderAt("/p/demo/proposals/P-4?version=1");
+    const { container, router } = renderAt(
+      "/p/demo/proposals/P-4?tab=changes&version=1",
+    );
     const marker = await screen.findByRole("link", {
       name: "Question m-24 to backend/db about line 4, answered",
     });
@@ -984,7 +996,9 @@ describe("Proposal detail", () => {
       refuse(422, "invalid_comment_range"),
     );
     const user = userEvent.setup();
-    const { container } = renderAt("/p/demo/proposals/P-4?version=1");
+    const { container } = renderAt(
+      "/p/demo/proposals/P-4?tab=changes&version=1",
+    );
     await user.click(await lineCell(container, "new:3"));
     const menu = await screen.findByRole("group", { name: "Selected lines" });
     expect(
@@ -1033,8 +1047,9 @@ describe("Proposal detail", () => {
     expect(
       within(panel).getByText(byContent(/Waiting for @tanim/)),
     ).toBeTruthy();
-    const reviews = screen.getByRole("region", { name: "Reviews" });
-    const before = within(reviews).getAllByRole("listitem").length;
+    const reviews = screen.getByRole("article", { name: "Version v2" });
+    const verdicts = () => reviews.querySelectorAll("[data-verdict]").length;
+    const before = verdicts();
     const release = hold();
     await user.click(within(panel).getByRole("button", { name: "Approve v2" }));
     expect(
@@ -1042,14 +1057,14 @@ describe("Proposal detail", () => {
         .getByRole("button", { name: "Approving v2…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
-    expect(within(reviews).getAllByRole("listitem")).toHaveLength(before);
+    expect(verdicts()).toBe(before);
     release();
     await waitFor(() => {
-      expect(within(reviews).getAllByRole("listitem")).toHaveLength(before + 1);
+      expect(verdicts()).toBe(before + 1);
     });
     expect(
       within(reviews).getByText("@tanim").closest("p")?.textContent,
-    ).toMatch(/^@tanim · v2/);
+    ).toMatch(/^Approved@tanim/);
     expect(
       within(panel).getByText(byContent(/Approved by @tanim/)),
     ).toBeTruthy();
@@ -1089,11 +1104,12 @@ describe("Proposal detail", () => {
         .getByRole("button", { name: "Sending request…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
-    const reviews = screen.getByRole("region", { name: "Reviews" });
+    const reviews = screen.getByRole("article", { name: "Version v2" });
     release();
+    expect(await within(reviews).findByText("Rename the index")).toBeTruthy();
     expect(
-      await within(reviews).findByText("Requested changes: Rename the index"),
-    ).toBeTruthy();
+      reviews.querySelectorAll('[data-verdict="request_changes"]'),
+    ).toHaveLength(1);
     expect(
       screen.getByText("Changes requested · back with the author"),
     ).toBeTruthy();
@@ -1184,10 +1200,7 @@ describe("Proposal detail", () => {
       ),
     ).toBeTruthy();
     expect(
-      await screen.findByRole("link", {
-        name: "v3 · no verdict yet",
-        current: "page",
-      }),
+      await screen.findByRole("article", { name: "Version v3" }),
     ).toBeTruthy();
     expect(
       within(panel).getByRole("button", { name: "Approve v3" }),
@@ -1224,7 +1237,9 @@ describe("Proposal detail", () => {
     deliver(queryClient, "main.advanced", { revision: "r9" });
     const link = await within(panel).findByRole("link", { name: "r9" });
     expect(link.getAttribute("href")).toBe("/p/demo/repository?revision=r9");
-    expect(within(panel).getByText(/^v2 · /)).toBeTruthy();
+    expect(
+      within(panel).getByText(byContent(/^v2 integrated as r9/)),
+    ).toBeTruthy();
     expect(
       within(panel).queryByRole("button", { name: "Approve v2" }),
     ).toBeNull();
@@ -1351,6 +1366,179 @@ describe("Proposal detail", () => {
   });
 });
 
+describe("Proposal tabs", () => {
+  it("opens the overview by default, keeps the tab in the address, and opens the change for an address with a file", async () => {
+    const user = userEvent.setup();
+    const { router } = renderAt("/p/demo/proposals/P-4");
+    expect(
+      (await screen.findByRole("tab", { name: "Overview" })).getAttribute(
+        "aria-selected",
+      ),
+    ).toBe("true");
+    await user.click(screen.getByRole("tab", { name: /^Changes/ }));
+    await waitFor(() => {
+      expect(router.state.location.search).toEqual({ tab: "changes" });
+    });
+    expect(
+      await screen.findByRole("navigation", { name: "Changed files" }),
+    ).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: /^Conversation/ }));
+    await waitFor(() => {
+      expect(router.state.location.search).toEqual({ tab: "conversation" });
+    });
+    cleanup();
+    renderAt(`/p/demo/proposals/P-4?path=${encodeURIComponent(SCHEMA)}`);
+    expect(
+      (await screen.findByRole("tab", { name: /^Changes/ })).getAttribute(
+        "aria-selected",
+      ),
+    ).toBe("true");
+  });
+
+  it("lists the changed files as folders that close, open, filter and mark the viewed files", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const { container } = renderAt("/p/demo/proposals/P-4?tab=changes");
+    await lineCell(container, "new:1");
+    const tree = screen.getByRole("navigation", { name: "Changed files" });
+    const folder = within(tree).getByRole("button", { name: /migrations/ });
+    expect(folder.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      within(tree).getByRole("button", { name: /0004_reports\.sql/ }),
+    ).toBeTruthy();
+    await user.click(folder);
+    expect(folder.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      within(tree).queryByRole("button", { name: /0004_reports\.sql/ }),
+    ).toBeNull();
+    await user.click(within(tree).getByRole("button", { name: "Expand all" }));
+    expect(
+      within(tree).getByRole("button", { name: /0004_reports\.sql/ }),
+    ).toBeTruthy();
+    await user.click(
+      within(tree).getByRole("button", { name: "Collapse all" }),
+    );
+    expect(
+      within(tree).queryByRole("button", { name: /0004_reports\.sql/ }),
+    ).toBeNull();
+    await user.type(within(tree).getByLabelText("Files"), "reports");
+    expect(
+      within(tree).getByRole("button", { name: /0004_reports\.sql/ }),
+    ).toBeTruthy();
+    await user.clear(within(tree).getByLabelText("Files"));
+    await user.type(within(tree).getByLabelText("Files"), "nothing");
+    expect(within(tree).getByText("No file matches.")).toBeTruthy();
+    await user.clear(within(tree).getByLabelText("Files"));
+    await user.click(within(tree).getByRole("button", { name: "Expand all" }));
+    expect(within(tree).getByText("0 of 1 viewed")).toBeTruthy();
+    await user.click(screen.getByRole("checkbox", { name: "Viewed" }));
+    expect(within(tree).getByText("1 of 1 viewed")).toBeTruthy();
+    expect(
+      within(tree)
+        .getByRole("button", { name: /0004_reports\.sql/ })
+        .getAttribute("data-viewed"),
+    ).toBe("true");
+    expect(window.localStorage.getItem("fold.viewed.demo.P-4.base..v2")).toBe(
+      JSON.stringify([SCHEMA]),
+    );
+  });
+
+  it("asks the author about the whole proposal from the conversation, pending until the daemon answers", async () => {
+    const user = userEvent.setup();
+    renderAt("/p/demo/proposals/P-4?tab=conversation");
+    const form = await screen.findByRole("form", { name: "Ask the author" });
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    await user.type(
+      within(form).getByLabelText("Question to the author"),
+      "Why one table?",
+    );
+    const release = hold();
+    await user.click(
+      within(form).getByRole("button", { name: "Ask @backend/db" }),
+    );
+    expect(
+      within(form)
+        .getByRole("button", { name: "Asking…" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    release();
+    const asked = await screen.findByRole("article", {
+      name: "Question to the author m-40",
+    });
+    expect(within(asked).getByText("whole proposal")).toBeTruthy();
+    expect(within(asked).getByText("Why one table?")).toBeTruthy();
+    expect(
+      writes("POST /api/v1/projects/demo/proposals/P-4/questions")[0]?.body,
+    ).toEqual({ version: 2, body: "Why one table?" });
+  });
+
+  it("filters the conversation by state, kind and version, and shows a forward to the area lead only", async () => {
+    questions.set("P-4", [
+      thread("m-24", {
+        proposal: "P-4",
+        awaiting_human: true,
+        last_at: 5,
+        messages: [
+          message("m-24", {
+            sender: "backend/db",
+            proposal: "P-4",
+            asks_human: true,
+            recipients: [recipient("human:tanim", { addressed_as: "human" })],
+            body: "Keep the old column?",
+            sent_at: Date.now(),
+          }),
+        ],
+      }),
+      thread("m-32", {
+        proposal: "P-4",
+        last_at: 4,
+        messages: [
+          message("m-32", {
+            sender: "human:tanim",
+            proposal: "P-4",
+            recipients: [recipient("backend/db", { forwarded_to: "db-lead" })],
+            body: "Why TEXT dates?",
+            sent_at: Date.now(),
+          }),
+        ],
+      }),
+    ]);
+    const user = userEvent.setup();
+    renderAt("/p/demo/proposals/P-4?tab=conversation");
+    expect(
+      await screen.findByRole("article", { name: "Question to you m-24" }),
+    ).toBeTruthy();
+    const waiting = screen.getByRole("article", {
+      name: "Question to the author m-32",
+    });
+    expect(
+      within(waiting).getByText(byContent(/fold sent it on to @db-lead/)),
+    ).toBeTruthy();
+    expect(screen.getAllByRole("article")).toHaveLength(3);
+    const filters = screen.getByRole("complementary", { name: "Filters" });
+    await user.click(
+      within(filters).getByRole("button", { name: /^Needs your answer/ }),
+    );
+    expect(
+      screen.getAllByRole("article").map((a) => a.getAttribute("aria-label")),
+    ).toEqual(["Question to you m-24"]);
+    await user.click(within(filters).getByRole("button", { name: /^All ?\d/ }));
+    await user.click(
+      within(filters).getByRole("button", { name: /^Review comments/ }),
+    );
+    expect(
+      screen.getAllByRole("article").map((a) => a.getAttribute("aria-label")),
+    ).toEqual(["Review comment rc-1"]);
+    await user.click(
+      within(filters).getByRole("button", { name: /^Review comments/ }),
+    );
+    await user.click(within(filters).getByRole("button", { name: /^v1 ?\d/ }));
+    expect(
+      screen.getAllByRole("article").map((a) => a.getAttribute("aria-label")),
+    ).toEqual(["Review comment rc-1"]);
+  });
+});
+
 describe("Human edit", () => {
   const EDITS = "POST /api/v1/projects/demo/proposals/P-4/edits";
   const AGAIN = "POST /api/v1/projects/demo/proposals/P-4/review-again";
@@ -1408,7 +1596,7 @@ describe("Human edit", () => {
   it("edits a file of the current version in a human review: pending, then the new version with its kept approval", async () => {
     editRoutes();
     const user = userEvent.setup();
-    renderAt("/p/demo/proposals/P-4");
+    renderAt("/p/demo/proposals/P-4?tab=changes");
     await user.click(
       await screen.findByRole("button", { name: `Edit ${SCHEMA}` }),
     );
@@ -1443,13 +1631,17 @@ describe("Human edit", () => {
         screen.queryByRole("region", { name: `Edit ${SCHEMA}` }),
       ).toBeNull();
     });
-    expect(await screen.findByText("Approved (kept from v2)")).toBeTruthy();
-    const panel = await integration();
+    const panel = await screen.findByRole("group", { name: "Your review" });
+    expect(
+      await within(panel).findByRole("button", { name: "Approve v3" }),
+    ).toBeTruthy();
     expect(
       within(panel).getByText(
         "v3 is a human edit. It keeps the agent approvals of v2 until it is sent for review again.",
       ),
     ).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(await screen.findByText("Approved (kept from v2)")).toBeTruthy();
     expect(writes(EDITS)[0]?.body).toEqual({
       version: 2,
       path: SCHEMA,
@@ -1499,7 +1691,7 @@ describe("Human edit", () => {
       refuse(409, "worker_busy", { reason: "working" }),
     );
     const user = userEvent.setup();
-    renderAt("/p/demo/proposals/P-4");
+    renderAt("/p/demo/proposals/P-4?tab=changes");
     await user.click(
       await screen.findByRole("button", { name: `Edit ${SCHEMA}` }),
     );
@@ -1522,8 +1714,8 @@ describe("Human edit", () => {
   });
 
   it("offers no edit box outside a human review", async () => {
-    renderAt("/p/demo/proposals/P-3");
-    await integration();
+    const { container } = renderAt("/p/demo/proposals/P-3?tab=changes");
+    await lineCell(container, "new:1");
     expect(screen.queryByRole("button", { name: /^Edit / })).toBeNull();
   });
 });
@@ -1600,20 +1792,43 @@ describe("Checks", () => {
       ),
     );
     const user = userEvent.setup();
-    renderAt("/p/demo/proposals/P-4");
-    const checks = await screen.findByRole("region", { name: "Checks" });
+    const { router } = renderAt("/p/demo/proposals/P-4?tab=checks");
+    const checks = await screen.findByRole("navigation", {
+      name: "Check runs",
+    });
     expect(
-      within(checks).getByText("Integration checks of v2 on r8"),
+      within(checks).getByText("v2 integration checks on r8"),
     ).toBeTruthy();
-    expect(within(checks).getByText("Proposal checks on r8")).toBeTruthy();
+    expect(within(checks).getByText("v2 proposal checks")).toBeTruthy();
     expect(within(checks).getByText("a required check failed")).toBeTruthy();
-    expect(within(checks).getByText("failed · exit 1 · 1.2 s")).toBeTruthy();
-    expect(await within(checks).findByText(/assertion failed/)).toBeTruthy();
+    expect(within(checks).getByText("exit 1 · 1.2 s")).toBeTruthy();
+    const log = await screen.findByRole("region", { name: "Log of e2e" });
+    const error = await within(log).findByText("assertion failed");
+    expect(error.closest("li")?.getAttribute("data-error")).toBe("true");
+    expect(
+      within(log)
+        .getByText("step one")
+        .closest("li")
+        ?.hasAttribute("data-error"),
+    ).toBe(false);
+    expect(within(log).getByText(/failed · exit 1 · 1\.2 s/)).toBeTruthy();
     expect(
       daemon.made("GET /api/v1/projects/demo/check-runs/cr-9"),
     ).toHaveLength(1);
-    await user.click(within(checks).getByRole("button", { name: "Hide log" }));
-    expect(within(checks).queryByText(/assertion failed/)).toBeNull();
+    await user.click(within(checks).getByRole("link", { name: /unit/ }));
+    await waitFor(() => {
+      expect(router.state.location.search).toEqual({
+        tab: "checks",
+        run: "cr-7",
+        step: "unit",
+      });
+    });
+    expect(
+      await screen.findByRole("region", { name: "Log of unit" }),
+    ).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    const history = await screen.findByRole("article", { name: "Version v2" });
+    expect(within(history).getByText(/e2e failed \(exit 1\)/)).toBeTruthy();
     const panel = await integration();
     expect(
       within(panel).getByText(
@@ -1638,9 +1853,14 @@ describe("Checks", () => {
 
   it("says when fold ran no check on the version", async () => {
     renderAt("/p/demo/proposals/P-3");
-    const checks = await screen.findByRole("region", { name: "Checks" });
+    const history = await screen.findByRole("article", { name: "Version v1" });
     expect(
-      within(checks).getByText("fold ran no check on this version."),
+      within(history).getByText("fold ran no check on this version."),
+    ).toBeTruthy();
+    cleanup();
+    renderAt("/p/demo/proposals/P-3?tab=checks");
+    expect(
+      await screen.findByRole("region", { name: "No check runs" }),
     ).toBeTruthy();
   });
 
