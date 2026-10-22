@@ -95,7 +95,7 @@ export function MessageItem({
             </span>
           </p>
           {lines}
-          <div className="max-w-full rounded-chip rounded-br-s bg-primary/12 px-14 py-10 inset-ring inset-ring-primary/20">
+          <div className="max-w-full rounded-chip rounded-br-s bg-primary-soft px-14 py-10 inset-ring inset-ring-primary-muted">
             {chosen ? (
               <ChosenAnswer body={message.body} own />
             ) : (
