@@ -20,7 +20,7 @@ export function SignedInName() {
           type="button"
           aria-label={`Signed in as ${atName(actor)}`}
           className={cn(
-            "flex shrink-0 items-center gap-6 rounded-m px-8 py-5 text-text-muted hover:bg-sunken",
+            "flex shrink-0 items-center gap-6 rounded-m px-8 py-5 text-text-muted hover:bg-sunken max-md:size-44 max-md:justify-center max-md:p-0",
             focusRing,
           )}
         >

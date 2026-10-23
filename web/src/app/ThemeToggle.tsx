@@ -17,7 +17,7 @@ export function ThemeToggle() {
         setChoice(toggledTheme(choice, systemDark));
       }}
       className={cn(
-        "flex items-center gap-6 rounded-m px-10 py-7 text-text-muted hover:bg-sunken",
+        "flex shrink-0 items-center gap-6 rounded-m px-10 py-7 text-text-muted hover:bg-sunken max-md:size-44 max-md:justify-center max-md:p-0",
         focusRing,
       )}
     >

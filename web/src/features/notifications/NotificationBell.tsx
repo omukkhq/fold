@@ -159,7 +159,7 @@ export function NotificationBell({ slug }: { slug: string }) {
             type="button"
             aria-label={bellLabel(unread)}
             className={cn(
-              "relative flex items-center rounded-m px-10 py-7 text-text-muted hover:bg-sunken",
+              "relative flex shrink-0 items-center rounded-m px-10 py-7 text-text-muted hover:bg-sunken max-md:size-44 max-md:justify-center max-md:p-0",
               focusRing,
             )}
           >
@@ -167,7 +167,7 @@ export function NotificationBell({ slug }: { slug: string }) {
             {unread > 0 ? (
               <span
                 aria-hidden="true"
-                className="absolute top-2 right-2 flex h-16 min-w-16 items-center justify-center rounded-chip bg-primary px-4 text-micro font-semibold text-on-primary"
+                className="absolute top-2 right-2 flex h-16 max-md:top-4 max-md:right-4 min-w-16 items-center justify-center rounded-chip bg-primary px-4 text-micro font-semibold text-on-primary"
               >
                 {unread}
               </span>
