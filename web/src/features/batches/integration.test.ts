@@ -53,6 +53,24 @@ describe("integrationNote", () => {
     });
   });
 
+  it("holds the integrate action while a member's next version runs its checks", () => {
+    const updating = [
+      {
+        proposal: "P-3",
+        run: { run: "cr-4", purpose: "update_proposal" as const },
+      },
+      { proposal: "P-5", run: { run: "cr-5", purpose: "review_fix" as const } },
+    ];
+    expect(
+      integrationNote(
+        at({ state: "ready", members: ["P-3", "P-5"], queued: true, updating }),
+      ),
+    ).toEqual({
+      text: "Waiting for the checks of an update of P-3, a reviewer's fix of P-5 to end. Then fold integrates the approved members together.",
+      canIntegrate: false,
+    });
+  });
+
   it("says how the integration ended", () => {
     expect(
       integrationNote(
@@ -108,6 +126,21 @@ describe("integrateFailure", () => {
     );
     expect(integrateFailure(new ApiError("checks_file_invalid", "bad"))).toBe(
       "fold-checks.toml on main is not valid. Integrate again once it is fixed.",
+    );
+    const running = (details: Record<string, unknown>) =>
+      new ApiError("update_checks_running", "running", details);
+    expect(
+      integrateFailure(running({ proposal: "P-5", purpose: "review_fix" })),
+    ).toBe(
+      "A reviewer's fix of P-5 is running its checks. Integrate when they end.",
+    );
+    expect(
+      integrateFailure(
+        running({ proposal: "P-3", purpose: "update_proposal" }),
+      ),
+    ).toBe("An update of P-3 is running its checks. Integrate when they end.");
+    expect(integrateFailure(running({}))).toBe(
+      "An update of a member is running its checks. Integrate when they end.",
     );
     expect(integrateFailure(new Error("offline"))).toBe(
       "The request did not reach the daemon. Try again.",

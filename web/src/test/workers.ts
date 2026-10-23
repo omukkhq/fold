@@ -152,6 +152,7 @@ export function batch(fields: Partial<ReviewBatch> = {}): ReviewBatch {
       pending: [],
       members: [],
       queued: false,
+      updating: [],
       outcome: null,
       run: null,
       revisions: [],

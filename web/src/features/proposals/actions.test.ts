@@ -216,7 +216,10 @@ describe("approveBlock", () => {
   it("blocks Approve and Integrate while an update runs the checks of the next version", () => {
     const updating = proposalDetail(
       proposalSummary("P-4", { current_version: 2, human_review: mark }),
-      { agent_approved: false, update_run: "cr-7" },
+      {
+        agent_approved: false,
+        update_run: { run: "cr-7", purpose: "update_proposal" },
+      },
     );
     expect(updateRunsLine(3)).toBe("v3 is running its checks.");
     expect(approveBlock(updating, "tanim")).toBe("v3 is running its checks.");
@@ -225,7 +228,7 @@ describe("approveBlock", () => {
       proposalSummary("P-4", { current_version: 2 }),
       {
         reviews: [review(2, "human:tanim", "approve")],
-        update_run: "cr-7",
+        update_run: { run: "cr-7", purpose: "update_proposal" },
       },
     );
     expect(approveBlock(approved, "tanim")).toBe(updateRunsLine(3));
@@ -236,6 +239,18 @@ describe("approveBlock", () => {
       summary: { ...updating.summary, checks_failed: true },
     };
     expect(approveBlock(failed, "tanim")).toBe(CHECKS_FAILED);
+  });
+
+  it("names a reviewer's fix that runs the checks of the next version", () => {
+    const fixing = proposalDetail(
+      proposalSummary("P-4", { current_version: 2 }),
+      { update_run: { run: "cr-8", purpose: "review_fix" } },
+    );
+    expect(updateRunsLine(3, true)).toBe(
+      "v3, a reviewer's fix, is running its checks.",
+    );
+    expect(approveBlock(fixing, "tanim")).toBe(updateRunsLine(3, true));
+    expect(integrateBlock(fixing, "r8")).toBe(updateRunsLine(3, true));
   });
 
   it("blocks a human's Approve on a marked task until a reviewer agent approved the current version", () => {
@@ -389,6 +404,8 @@ describe("showsApproveLine", () => {
     expect(showsApproveLine(line, line, true)).toBe(false);
     expect(showsApproveLine(line, line, false)).toBe(true);
     expect(showsApproveLine(line, CHECKS_FAILED, true)).toBe(true);
+    const fix = updateRunsLine(3, true);
+    expect(showsApproveLine(fix, fix, true)).toBe(false);
   });
 
   it("keeps every other line under Approve", () => {

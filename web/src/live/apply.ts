@@ -436,12 +436,17 @@ function invalidationKeys(
         event.data.stage === "integration"
           ? [keys.proposalPages(slug)]
           : proposalKey;
+      // The batch screen holds a member's integration while its update or a reviewer's fix runs the checks of its next version.
+      const nextVersion =
+        event.data.purpose === "update_proposal" ||
+        event.data.purpose === "review_fix";
       return [
         keys.proposals(slug),
         ...pages,
         ...taskKey,
         board,
         ...(run === null ? [] : [keys.checkRun(slug, run)]),
+        ...(nextVersion ? [keys.reviewBatches(slug)] : []),
       ];
     }
     case "integration":
