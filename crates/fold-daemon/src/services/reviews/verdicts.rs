@@ -395,19 +395,20 @@ pub(super) fn verdict_gate<'a>(
             ])
         })?;
     policy::can_review_while_updating(verdict, update.is_some())
-        .map_err(|denied| update_refusal(denied, row, update))?;
+        .map_err(|denied| update_refusal(denied, row.id, row.current_version, update))?;
     Ok(reviewer)
 }
 
-/// The refusal of an approval or an integration of `row`'s current version while the update run `update` goes, with the run to wait for.
+/// The refusal of an approval or an integration of `version`, the current version of `proposal`, while the update run `update` goes, with the run to wait for.
 pub(super) fn update_refusal(
     denied: policy::PolicyDenied,
-    row: &ProposalRow,
+    proposal: ProposalId,
+    version: u32,
     update: Option<CheckRunId>,
 ) -> FoldError {
     FoldError::from(denied).with_details([
-        ("proposal", json!(row.id.to_string())),
-        ("version", json!(row.current_version)),
+        ("proposal", json!(proposal.to_string())),
+        ("version", json!(version)),
         ("run", json!(update.map(|run| run.to_string()))),
     ])
 }

@@ -293,7 +293,7 @@ impl ReviewService {
             let update = running_update(&mut conn, row.task, proposal).await?;
             drop(conn);
             policy::can_integrate_while_updating(update.is_some())
-                .map_err(|denied| update_refusal(denied, &row, update))?;
+                .map_err(|denied| update_refusal(denied, proposal, row.current_version, update))?;
         }
         if self.integration_checks_may_run(proposal).await?
             && self.gates_pass(actor, proposal, expected_version).await?
@@ -579,7 +579,7 @@ impl ReviewService {
         )
     }
 
-    /// Integrates, as fold, every open proposal whose current version is ready: an agent that decides reviews or a human approved it, the latest verdict asks for no changes, a marked task has a human approval the mark accepts, and every prerequisite is Done. Each integration is the same procedure a deciding agent runs. A submitted review batch whose members all have their final state takes its turn first, its ready members together; the members a batch holds back, while it is open or waits for a member, are left to it. The open proposals are looked at in number order and looked at again after each integration, so a prerequisite's integration lets the proposals that need it follow in the same call. A proposal flagged with a conflict waits for its next version, which clears the flag. A failed attempt is logged by its code and left for the next call. Returns the integrations in the order they ran; a conflicted one recorded `integration.conflicted` and left its proposal open.
+    /// Integrates, as fold, every open proposal whose current version is ready: an agent that decides reviews or a human approved it, the latest verdict asks for no changes, a marked task has a human approval the mark accepts, and every prerequisite is Done. Each integration is the same procedure a deciding agent runs. A submitted review batch whose members all have their final state takes its turn first, its ready members together; the members a batch holds back, while it is open or waits for a member, are left to it. The open proposals are looked at in number order and looked at again after each integration, so a prerequisite's integration lets the proposals that need it follow in the same call. A proposal flagged with a conflict waits for its next version, which clears the flag, and one whose update runs the checks of its next version waits for that run to end. A failed attempt is logged by its code and left for the next call. Returns the integrations in the order they ran; a conflicted one recorded `integration.conflicted` and left its proposal open.
     pub async fn integrate_ready(&self) -> Result<Vec<AutomaticIntegration>, ReviewError> {
         let mut done = Vec::new();
         let mut passed = HashSet::new();
@@ -910,7 +910,7 @@ impl ReviewService {
                 return Err(checks_failed_refusal(proposal, facts.target.version).into());
             }
             policy::can_integrate_while_updating(update.is_some())
-                .map_err(|denied| update_refusal(denied, &row, update))?;
+                .map_err(|denied| update_refusal(denied, proposal, row.current_version, update))?;
         }
         if let Err(refusal) = decide(&facts, &caller, expected_version) {
             if automatic {
