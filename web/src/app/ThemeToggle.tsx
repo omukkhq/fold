@@ -4,7 +4,12 @@ import { SunMoon } from "lucide-react";
 import { useTheme } from "../theme/ThemeProvider";
 import { toggledTheme } from "./toggledTheme";
 
-export function ThemeToggle() {
+/** `row` is the labelled full-width row of the top bar's More popover; elsewhere the switch is an icon button. */
+export function ThemeToggle({
+  variant = "icon",
+}: {
+  variant?: "icon" | "row";
+}) {
   const { choice, setChoice } = useTheme();
   return (
     <button
@@ -17,11 +22,14 @@ export function ThemeToggle() {
         setChoice(toggledTheme(choice, systemDark));
       }}
       className={cn(
-        "flex shrink-0 items-center gap-6 rounded-m px-10 py-7 text-text-muted hover:bg-sunken max-md:size-44 max-md:justify-center max-md:p-0",
+        variant === "row"
+          ? "flex min-h-44 items-center gap-8 rounded-m px-14 text-bar text-text hover:bg-sunken"
+          : "flex shrink-0 items-center gap-6 rounded-m px-10 py-7 text-text-muted hover:bg-sunken max-lg:size-44 max-lg:justify-center max-lg:p-0",
         focusRing,
       )}
     >
       <SunMoon size={15} aria-hidden />
+      {variant === "row" ? "Toggle theme" : null}
     </button>
   );
 }

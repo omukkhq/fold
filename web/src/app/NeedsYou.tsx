@@ -145,13 +145,13 @@ export function NeedsYou({ slug }: { slug: string }) {
         <button
           type="button"
           className={cn(
-            "inline-flex shrink-0 items-center rounded-chip max-md:min-h-44",
+            "inline-flex shrink-0 items-center rounded-chip max-lg:min-h-44",
             focusRing,
           )}
         >
           <span className="inline-flex items-center gap-6 rounded-chip bg-warning-soft px-9 py-3 inset-ring inset-ring-border">
             <ListTodo aria-hidden="true" size={13} className="text-warning" />
-            <span className="text-code font-medium text-text max-md:sr-only">
+            <span className="text-code font-medium text-text max-lg:sr-only">
               Needs you
             </span>
             <span className="text-code font-semibold text-warning">

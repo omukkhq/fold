@@ -19,7 +19,12 @@ import {
   type TopBarItem,
 } from "./topBarLayout";
 
-function part(item: TopBarItem, slug: string, onOpen?: () => void): ReactNode {
+/** An item of the top bar; `more` is given when the item sits in the More popover, with the way to close it. */
+function part(
+  item: TopBarItem,
+  slug: string,
+  more?: { close: () => void },
+): ReactNode {
   switch (item) {
     case "stream":
       return <StreamStatus />;
@@ -28,34 +33,34 @@ function part(item: TopBarItem, slug: string, onOpen?: () => void): ReactNode {
     case "needsYou":
       return <NeedsYou slug={slug} />;
     case "agents":
-      return <AgentChips slug={slug} onOpen={onOpen} />;
+      return <AgentChips slug={slug} onOpen={more?.close} />;
     case "bell":
       return <NotificationBell slug={slug} />;
     case "name":
       return <SignedInName />;
     case "theme":
-      return <ThemeToggle />;
+      return <ThemeToggle variant={more === undefined ? "icon" : "row"} />;
   }
 }
 
 export function TopBar({ slug }: { slug: string }) {
   return (
-    <header className="flex h-bar shrink-0 items-center justify-between gap-8 overflow-x-auto border-b border-border-subtle bg-surface px-16 md:gap-16 md:px-24">
-      <div className="flex shrink-0 items-center gap-14 max-md:contents">
+    <header className="flex h-bar shrink-0 items-center justify-between gap-8 overflow-x-auto border-b border-border-subtle bg-surface px-16 md:px-24 lg:gap-16">
+      <div className="flex shrink-0 items-center gap-14 max-lg:contents">
         <HrefLink
           href="/projects"
           aria-label="fold, all projects"
           className={cn(
-            "shrink-0 rounded-s max-md:flex max-md:min-h-44 max-md:items-center",
+            "shrink-0 rounded-s max-lg:flex max-lg:min-h-44 max-lg:items-center",
             focusRing,
           )}
         >
           <Wordmark />
         </HrefLink>
-        <span className="h-20 w-px bg-border max-md:hidden" aria-hidden />
+        <span className="h-20 w-px bg-border max-lg:hidden" aria-hidden />
         <ProjectSwitcher slug={slug} />
       </div>
-      <div className="flex shrink-0 items-center md:gap-16">
+      <div className="flex shrink-0 items-center lg:gap-16">
         {TOP_BAR_ITEMS.map((item) => (
           <div key={item} className={cn("contents", rowItemClass(item))}>
             {part(item, slug)}
@@ -64,7 +69,7 @@ export function TopBar({ slug }: { slug: string }) {
         <TopBarMore slug={slug}>
           {(close) =>
             moreItems().map((item) => (
-              <Fragment key={item}>{part(item, slug, close)}</Fragment>
+              <Fragment key={item}>{part(item, slug, { close })}</Fragment>
             ))
           }
         </TopBarMore>

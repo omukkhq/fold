@@ -9,7 +9,7 @@ import { useLiveStatus } from "@/live/status";
 import { isPaused } from "./agentChipsModel";
 import { MORE_TRIGGER_CLASS, moreAlert, moreLabel } from "./topBarLayout";
 
-/** The phone top bar's More button: the items that leave the row, in a popover so the pause keeps its pending state and error after the press. */
+/** The compact top bar's More button, below `lg`: the items that leave the row, in a popover so the pause keeps its pending state and error after the press. */
 export function TopBarMore({
   slug,
   children,

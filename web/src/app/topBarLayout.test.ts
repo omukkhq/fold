@@ -10,24 +10,24 @@ import {
 } from "./topBarLayout";
 
 describe("the top bar layout", () => {
-  it("keeps Needs you, the bell, the name and the theme switch in the phone row", () => {
+  it("keeps Needs you, the bell and the name in the compact row", () => {
     expect(TOP_BAR_ITEMS.filter((item) => !inMore(item))).toEqual([
       "needsYou",
       "bell",
       "name",
-      "theme",
     ]);
   });
 
-  it("puts the live state, the pause control and the agents behind More, in row order", () => {
-    expect(moreItems()).toEqual(["stream", "pause", "agents"]);
+  it("puts the live state, the pause control, the agents and the theme switch behind More, in row order", () => {
+    expect(moreItems()).toEqual(["stream", "pause", "agents", "theme"]);
   });
 
-  it("hides only the More items below md, and the More button from md", () => {
-    expect(rowItemClass("stream")).toBe("max-md:hidden");
-    expect(rowItemClass("agents")).toBe("max-md:hidden");
+  it("hides only the More items below lg, and the More button from lg", () => {
+    expect(rowItemClass("stream")).toBe("max-lg:hidden");
+    expect(rowItemClass("agents")).toBe("max-lg:hidden");
+    expect(rowItemClass("theme")).toBe("max-lg:hidden");
     expect(rowItemClass("bell")).toBe("");
-    expect(MORE_TRIGGER_CLASS).toBe("md:hidden");
+    expect(MORE_TRIGGER_CLASS).toBe("lg:hidden");
   });
 });
 

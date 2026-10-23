@@ -7,7 +7,7 @@ import { focusRing } from "@/lib/focus";
 import { PersonName } from "@/people/PersonName";
 import { atName, humanActor } from "@/people/names";
 
-/** The signed-in human's name; at phone width only the icon shows, and the name opens from it. */
+/** The signed-in human's name; below `lg` only the icon shows, and the name opens from it. */
 export function SignedInName() {
   const human = useQuery(sessionQuery()).data?.human ?? null;
   if (human === null) return null;
@@ -20,12 +20,12 @@ export function SignedInName() {
           type="button"
           aria-label={`Signed in as ${atName(actor)}`}
           className={cn(
-            "flex shrink-0 items-center gap-6 rounded-m px-8 py-5 text-text-muted hover:bg-sunken max-md:size-44 max-md:justify-center max-md:p-0",
+            "flex shrink-0 items-center gap-6 rounded-m px-8 py-5 text-text-muted hover:bg-sunken max-lg:size-44 max-lg:justify-center max-lg:p-0",
             focusRing,
           )}
         >
           <UserRound size={15} aria-hidden />
-          <PersonName name={actor} className="hidden text-bar md:inline" />
+          <PersonName name={actor} className="hidden text-bar lg:inline" />
         </button>
       }
     >

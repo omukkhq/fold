@@ -30,7 +30,7 @@ export function PauseControl({ slug }: { slug: string }) {
   }
   const Icon = view.paused ? Play : Pause;
   return (
-    <div className="flex items-center gap-8 max-md:flex-col max-md:items-stretch">
+    <div className="flex items-center gap-8 max-lg:flex-col max-lg:items-stretch">
       <Button
         size="sm"
         pending={view.pending}
@@ -43,7 +43,7 @@ export function PauseControl({ slug }: { slug: string }) {
           />
         }
         className={cn(
-          "max-md:min-h-44 max-md:px-14",
+          "max-lg:min-h-44 max-lg:px-14",
           view.paused && "bg-warning-soft inset-ring-warning",
         )}
         onClick={() => {
