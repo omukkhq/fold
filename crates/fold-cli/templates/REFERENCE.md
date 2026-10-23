@@ -152,7 +152,7 @@ Start and set up:
 - `fld claude [--name NAME] [-- ARGS]`: start the daemon when needed and continue the main agent's last session, or start one. `fld new` (also `fld new claude`) starts a new main session. A project with `supervised = true` under `[main]` refuses it with `main_supervised`.
 - `fld serve [--listen ADDR] [--socket PATH] [--web-dir DIR]`: run the daemon in the foreground; the service runs it the same way.
 - `fld mcp`: the stdio connection of a Claude Code session to the daemon, which Claude Code starts itself.
-- `fld restart`: restart the daemon, so a newly installed fld takes over; supervised workers stop and continue in their sessions. A session keeps the skill it loaded, so the next turn of a worker whose session began under another fld starts with a note to load its role skill again.
+- `fld restart`: restart the daemon, so a newly installed fld takes over; supervised workers stop and continue in their sessions. A session keeps the skill it loaded, so the next turn of a worker whose session loaded another fld's skill text starts with a note to load its role skill again; a new fld with the same skill text sends no note.
 - `fld doctor [--project DIR]`: check the host, the daemon and each project, and name the fix for each problem.
 
 Work in the project folder:

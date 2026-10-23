@@ -109,7 +109,7 @@ impl ProjectPaths {
         self.fold_dir().join("sessions").join(agent.as_str())
     }
 
-    /// The session that `fld claude` last started or resumed as `agent`, with the fingerprint of the role text that session read (see [`crate::roles::session_fingerprint`]), so a resume by another fld tells the session to load its skill again. Its `.` keeps it apart from the session records, as no agent name holds one.
+    /// The session that `fld claude` last started or resumed as `agent`, with the fingerprint of the skill texts that session read (see [`crate::roles::session_fingerprint`]), so a resume by an fld with other skill text tells the session to load its skill again. Its `.` keeps it apart from the session records, as no agent name holds one.
     pub fn main_session_fingerprint(&self, agent: &AgentName) -> PathBuf {
         self.fold_dir()
             .join("sessions")

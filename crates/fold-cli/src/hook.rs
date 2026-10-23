@@ -153,7 +153,7 @@ fn session_start(options: &HookOptions, agent: &str) -> Result<Option<Value>, St
     })))
 }
 
-/// Claude Code starts a new session in the same process on `/clear` and opens another one on its own `/resume`, and each start runs this hook with the session's id, so the record that `fld claude` resumes follows the conversation the user has open. It writes the id only, and only for an agent that already has a record. A failure leaves the old record, which `fld claude` resumes or replaces, so it never holds the session's context back.
+/// Claude Code starts a new session in the same process on `/clear` and opens another one on its own `/resume`, and each start runs this hook with the session's id, so the record that `fld claude` resumes follows the conversation the user has open. It writes the id only, and only for an agent that already has a record; after a `/clear` or a compaction the session's fingerprint record follows too. A failure leaves the old record, which `fld claude` resumes or replaces, so it never holds the session's context back.
 fn follow_session(input: &Value, agent: &str) {
     let (Some(id), Some(cwd), Ok(agent)) = (
         input["session_id"].as_str(),
@@ -166,7 +166,8 @@ fn follow_session(input: &Value, agent: &str) {
         return;
     };
     if let Some(root) = project_root_at_or_above(&cwd) {
-        let _ = claude::follow_record(&ProjectPaths::new(&root), &agent, id);
+        let continues = matches!(input["source"].as_str(), Some("clear" | "compact"));
+        let _ = claude::follow_record(&ProjectPaths::new(&root), &agent, id, continues);
     }
 }
 

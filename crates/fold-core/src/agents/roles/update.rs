@@ -1,17 +1,16 @@
 use super::Role;
 
-/// How many hex digits of the text hash a fingerprint keeps after the version. Two releases of one version differ in their texts, never by chance in these digits.
+/// How many hex digits of the hash a fingerprint keeps. Two skill texts differ, never by chance in these digits.
 const HASH_DIGITS: usize = 16;
 
-/// What a fold session of one role read from the installed fld: the version, then a hash of the role's shipped prompt and of its skill, such as `0.5.0+3f2a9c0b1d4e5f60`. A session keeps the skill text it loaded for as long as it lives, so a resumed session whose recorded fingerprint differs from the installed one works by an older skill until it loads the skill again. The hash covers the texts as well as the version, because a build between two releases changes them under one version.
-pub fn session_fingerprint(version: &str, prompt: &str, skill: &str) -> String {
+/// What a fold session of one role read from the installed fld: a hash of the skill texts the role reads, such as `3f2a9c0b1d4e5f60`. A session keeps the skill text it loaded for as long as it lives, so a resumed session whose recorded fingerprint differs from the installed one works by an older skill until it loads the skill again. Only the skill texts count: every start passes the role's prompt again, and a release that leaves the skills as they are changes nothing a session holds.
+pub fn session_fingerprint(skills: &[&str]) -> String {
     let mut hasher = blake3::Hasher::new();
-    for text in [prompt, skill] {
+    for text in skills {
         hasher.update(&(text.len() as u64).to_le_bytes());
         hasher.update(text.as_bytes());
     }
-    let hash = hasher.finalize().to_hex();
-    format!("{version}+{}", &hash[..HASH_DIGITS])
+    hasher.finalize().to_hex()[..HASH_DIGITS].to_owned()
 }
 
 /// Whether a session that recorded `recorded` gets [`update_note`] before its next turn: the installed fld has a fingerprint, and it is not the recorded one. A session with no record was started by a fold that recorded none, which is an older one. Without a `current` fingerprint fold cannot compare, and says nothing.
@@ -37,27 +36,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_fingerprint_starts_with_the_version_and_changes_with_each_text() {
-        let base = session_fingerprint("0.5.0", "prompt", "skill");
-        assert!(base.starts_with("0.5.0+"), "{base}");
-        assert_eq!(base.len(), "0.5.0+".len() + HASH_DIGITS);
-        assert_eq!(base, session_fingerprint("0.5.0", "prompt", "skill"));
-        assert_ne!(base, session_fingerprint("0.6.0", "prompt", "skill"));
-        assert_ne!(base, session_fingerprint("0.5.0", "prompt.", "skill"));
-        assert_ne!(base, session_fingerprint("0.5.0", "prompt", "skill."));
+    fn a_fingerprint_changes_with_each_skill_text_and_only_with_them() {
+        let base = session_fingerprint(&["skill", "shared"]);
+        assert_eq!(base.len(), HASH_DIGITS);
+        assert!(base.bytes().all(|byte| byte.is_ascii_hexdigit()), "{base}");
+        assert_eq!(base, session_fingerprint(&["skill", "shared"]));
+        assert_ne!(base, session_fingerprint(&["skill.", "shared"]));
+        assert_ne!(base, session_fingerprint(&["skill", "shared."]));
+        assert_ne!(base, session_fingerprint(&["skill"]));
         assert_ne!(
-            session_fingerprint("0.5.0", "ab", "c"),
-            session_fingerprint("0.5.0", "a", "bc"),
+            session_fingerprint(&["ab", "c"]),
+            session_fingerprint(&["a", "bc"]),
             "the texts are kept apart"
         );
     }
 
     #[test]
     fn only_a_session_of_another_fingerprint_gets_the_note() {
-        assert!(!needs_update_note(Some("0.5.0+a"), Some("0.5.0+a")));
-        assert!(needs_update_note(Some("0.4.0+b"), Some("0.5.0+a")));
-        assert!(needs_update_note(None, Some("0.5.0+a")));
-        assert!(!needs_update_note(Some("0.4.0+b"), None));
+        assert!(!needs_update_note(Some("aaaa"), Some("aaaa")));
+        assert!(needs_update_note(Some("bbbb"), Some("aaaa")));
+        assert!(needs_update_note(None, Some("aaaa")));
+        assert!(!needs_update_note(Some("bbbb"), None));
         assert!(!needs_update_note(None, None));
     }
 

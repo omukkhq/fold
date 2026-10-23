@@ -51,7 +51,7 @@ pub struct WorkerProcessRow {
     pub last_error_at: Option<Timestamp>,
     /// The turns in a row that failed before any token reached the model.
     pub failed_turns: u64,
-    /// The fingerprint of the role text that the current session last read; `None` for a session that a fold without fingerprints started. See [`fold_core::roles::session_fingerprint`].
+    /// The fingerprint of the skill texts that the current session last read; `None` for a session that a fold without fingerprints started. See [`fold_core::roles::session_fingerprint`].
     pub fold_fingerprint: Option<String>,
     pub tasks: Vec<TaskId>,
     pub proposals: Vec<ProposalId>,
