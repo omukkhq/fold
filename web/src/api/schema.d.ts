@@ -3598,6 +3598,7 @@ export interface components {
             revision: string;
             skipped: components["schemas"]["RecordSkipped"][];
             touched: components["schemas"]["RecordTouched"][];
+            unstash: components["schemas"]["UnstashResult"] | null;
         };
         /** @description A file of the project folder that fold leaves out, as an import does. */
         RecordSkipped: {
@@ -4316,6 +4317,7 @@ export interface components {
             revision: string;
             /** @description New files the read of the folder left out, such as one over the size limit: they stay in the folder and are not in the entry. */
             skipped: components["schemas"]["RecordSkipped"][];
+            unstash: components["schemas"]["UnstashResult"] | null;
         };
         /** @enum {string} */
         StashState: "nothing" | "stashed";
@@ -10816,7 +10818,7 @@ export interface operations {
                     "application/json": components["schemas"]["StashResult"];
                 };
             };
-            /** @description The human name is not valid; the branch or HEAD shows a change fold did not make (`reason` `head_moved`); the human's Git commits wait for the main agent (`reason` `git_commits_wait`); an unstash conflict waits, or a stop left an unstash's markers in the files, which keeps its entry as conflicted (`reason` `stash_conflicted`); a file fold tracks is too large or unreadable to stash (`reason` `skipped_tracked`, the files in `paths`); or files changed while fold stashed them (`reason` `changed_during_stash`) */
+            /** @description The human name is not valid; the branch or HEAD shows a change fold did not make (`reason` `head_moved`); the human's Git commits wait for the main agent (`reason` `git_commits_wait`); an unstash conflict waits (`reason` `stash_conflicted`); files still hold the conflict of `fld unstash` (`reason` `stash_markers`, the files in `paths`); a file fold tracks is too large or unreadable to stash (`reason` `skipped_tracked`, the files in `paths`); or files changed while fold stashed them (`reason` `changed_during_stash`) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -12630,7 +12632,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnstashResult"];
                 };
             };
-            /** @description The human name is not valid; the stash is empty (`reason` `stash_empty`); an unstash conflict waits (`reason` `stash_conflicted`); files still hold the markers of an earlier unstash (`reason` `stash_markers`), which keeps the entry as conflicted; the folder holds a file fold leaves out, such as an ignored one, where the unstash writes (`reason` `unstash_path_occupied`, the files in `paths`); files changed while fold read them (`reason` `changed_during_unstash`); the branch or HEAD shows a change fold did not make (`reason` `head_moved`); or the human's Git commits wait (`reason` `git_commits_wait`) */
+            /** @description The human name is not valid; the stash is empty (`reason` `stash_empty`); an unstash conflict waits (`reason` `stash_conflicted`); files still hold the markers of an earlier unstash (`reason` `stash_markers`); the folder holds a file fold leaves out, such as an ignored one, where the unstash writes (`reason` `unstash_path_occupied`, the files in `paths`); files changed while fold read them (`reason` `changed_during_unstash`); the branch or HEAD shows a change fold did not make (`reason` `head_moved`); or the human's Git commits wait (`reason` `git_commits_wait`) */
             400: {
                 headers: {
                     [name: string]: unknown;

@@ -916,6 +916,9 @@ pub struct RecordResult {
     pub skipped: Vec<RecordSkipped>,
     /// False when the same conflicted change waited already and nothing was written.
     pub created: bool,
+    /// The unstash that a stop had left part-way, which this command finished first; null when none was finished.
+    #[schema(required = true)]
+    pub unstash: Option<UnstashResult>,
 }
 
 impl From<RecordOutcome> for RecordResult {
@@ -948,6 +951,7 @@ impl From<RecordOutcome> for RecordResult {
                 touched: Vec::new(),
                 skipped: Vec::new(),
                 created: false,
+                unstash: None,
             },
             RecordOutcome::Recorded {
                 commit,
@@ -964,6 +968,7 @@ impl From<RecordOutcome> for RecordResult {
                 touched: touched(found),
                 skipped: skipped(left),
                 created: true,
+                unstash: None,
             },
             RecordOutcome::Conflicted {
                 head,
@@ -986,6 +991,7 @@ impl From<RecordOutcome> for RecordResult {
                 touched: touched(found),
                 skipped: skipped(left),
                 created,
+                unstash: None,
             },
         }
     }
@@ -1013,8 +1019,10 @@ pub async fn record(
     human: Human,
     Project(handle): Project,
 ) -> Result<Json<RecordResult>, ApiError> {
-    let outcome = projects::record(&handle, &human.actor(), &Git::default()).await?;
-    Ok(Json(outcome.into()))
+    let done = projects::record(&handle, &human.actor(), &Git::default()).await?;
+    let mut result = RecordResult::from(done.outcome);
+    result.unstash = done.unstash.map(UnstashResult::from);
+    Ok(Json(result))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1038,6 +1046,9 @@ pub struct StashResult {
     pub entries: u32,
     /// New files the read of the folder left out, such as one over the size limit: they stay in the folder and are not in the entry.
     pub skipped: Vec<RecordSkipped>,
+    /// The unstash that a stop had left part-way, which this command finished first; null when none was finished.
+    #[schema(required = true)]
+    pub unstash: Option<UnstashResult>,
 }
 
 impl From<StashOutcome> for StashResult {
@@ -1062,6 +1073,7 @@ impl From<StashOutcome> for StashResult {
                 files: Vec::new(),
                 entries: u32::try_from(entries).unwrap_or(u32::MAX),
                 skipped: skipped(left),
+                unstash: None,
             },
             StashOutcome::Stashed {
                 revision,
@@ -1074,6 +1086,7 @@ impl From<StashOutcome> for StashResult {
                 files,
                 entries: u32::try_from(entries).unwrap_or(u32::MAX),
                 skipped: skipped(left),
+                unstash: None,
             },
         }
     }
@@ -1087,7 +1100,7 @@ impl From<StashOutcome> for StashResult {
     params(("slug" = String, Path, description = "The project slug")),
     responses(
         (status = 200, description = "The changes are stashed, or there were none", body = StashResult),
-        (status = 400, description = "The human name is not valid; the branch or HEAD shows a change fold did not make (`reason` `head_moved`); the human's Git commits wait for the main agent (`reason` `git_commits_wait`); an unstash conflict waits, or a stop left an unstash's markers in the files, which keeps its entry as conflicted (`reason` `stash_conflicted`); a file fold tracks is too large or unreadable to stash (`reason` `skipped_tracked`, the files in `paths`); or files changed while fold stashed them (`reason` `changed_during_stash`)", body = ErrorEnvelope),
+        (status = 400, description = "The human name is not valid; the branch or HEAD shows a change fold did not make (`reason` `head_moved`); the human's Git commits wait for the main agent (`reason` `git_commits_wait`); an unstash conflict waits (`reason` `stash_conflicted`); files still hold the conflict of `fld unstash` (`reason` `stash_markers`, the files in `paths`); a file fold tracks is too large or unreadable to stash (`reason` `skipped_tracked`, the files in `paths`); or files changed while fold stashed them (`reason` `changed_during_stash`)", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
         (status = 409, description = "The config or sync map is invalid", body = ErrorEnvelope),
@@ -1101,8 +1114,10 @@ pub async fn stash(
     human: Human,
     Project(handle): Project,
 ) -> Result<Json<StashResult>, ApiError> {
-    let outcome = projects::stash(&handle, &human.actor(), &Git::default()).await?;
-    Ok(Json(outcome.into()))
+    let done = projects::stash(&handle, &human.actor(), &Git::default()).await?;
+    let mut result = StashResult::from(done.outcome);
+    result.unstash = done.unstash.map(UnstashResult::from);
+    Ok(Json(result))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1181,7 +1196,7 @@ impl From<UnstashOutcome> for UnstashResult {
     params(("slug" = String, Path, description = "The project slug")),
     responses(
         (status = 200, description = "The entry is applied, or it conflicted and stays", body = UnstashResult),
-        (status = 400, description = "The human name is not valid; the stash is empty (`reason` `stash_empty`); an unstash conflict waits (`reason` `stash_conflicted`); files still hold the markers of an earlier unstash (`reason` `stash_markers`), which keeps the entry as conflicted; the folder holds a file fold leaves out, such as an ignored one, where the unstash writes (`reason` `unstash_path_occupied`, the files in `paths`); files changed while fold read them (`reason` `changed_during_unstash`); the branch or HEAD shows a change fold did not make (`reason` `head_moved`); or the human's Git commits wait (`reason` `git_commits_wait`)", body = ErrorEnvelope),
+        (status = 400, description = "The human name is not valid; the stash is empty (`reason` `stash_empty`); an unstash conflict waits (`reason` `stash_conflicted`); files still hold the markers of an earlier unstash (`reason` `stash_markers`); the folder holds a file fold leaves out, such as an ignored one, where the unstash writes (`reason` `unstash_path_occupied`, the files in `paths`); files changed while fold read them (`reason` `changed_during_unstash`); the branch or HEAD shows a change fold did not make (`reason` `head_moved`); or the human's Git commits wait (`reason` `git_commits_wait`)", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
         (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
         (status = 409, description = "The config or sync map is invalid", body = ErrorEnvelope),

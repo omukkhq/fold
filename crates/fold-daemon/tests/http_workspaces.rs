@@ -268,7 +268,8 @@ async fn the_revision_pages_reach_the_genesis_r0_and_end_there() {
     let recorded =
         fold_daemon::services::projects::record(&h.handle, &human, &fold_vcs::git::Git::default())
             .await
-            .unwrap();
+            .unwrap()
+            .outcome;
     assert!(
         matches!(
             &recorded,

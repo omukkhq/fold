@@ -6,7 +6,9 @@ use std::process::Command;
 use fold_core::events::types;
 use fold_core::{Actor, EventFilter, HumanName, codes};
 use fold_daemon::services::agents::{NeedsYouKind, needs_you};
-use fold_daemon::services::projects::{ProjectError, PullOutcome, RecordOutcome, pull, record};
+use fold_daemon::services::projects::{
+    AfterUnstash, ProjectError, PullOutcome, RecordOutcome, pull, record,
+};
 use fold_store::testing::eventually;
 use fold_vcs::git::Git;
 use serde_json::{Value, json};
@@ -104,6 +106,13 @@ pub async fn notice_with(inbox: &mut crate::common::acceptance::FakeInbox, needl
 }
 
 pub async fn record_as_ana(h: &Harness) -> Result<RecordOutcome, ProjectError> {
+    Ok(record_finishing_as_ana(h).await?.outcome)
+}
+
+/// `fld record` with the outcome of an unstash it finished first.
+pub async fn record_finishing_as_ana(
+    h: &Harness,
+) -> Result<AfterUnstash<RecordOutcome>, ProjectError> {
     record(&h.handle, &ana(), &Git::default()).await
 }
 

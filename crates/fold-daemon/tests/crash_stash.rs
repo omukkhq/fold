@@ -10,8 +10,10 @@ use fold_daemon::services::projects::{
 use fold_vcs::git::Git;
 
 use crate::common::acceptance::Harness;
-use crate::folder_stash::{entries, refusal, stash_as_ana, unstash_as_ana, wait_for};
-use crate::human_changes::{branch_born, integrate, record_as_ana};
+use crate::folder_stash::{
+    entries, refusal, stash_as_ana, stash_finishing_as_ana, unstash_as_ana, wait_for,
+};
+use crate::human_changes::{branch_born, integrate, record_as_ana, record_finishing_as_ana};
 
 fn failed_at<T: std::fmt::Debug>(
     result: Result<T, fold_daemon::services::projects::ProjectError>,
@@ -230,6 +232,34 @@ async fn stored(h: &Harness, kind: fold_core::EventType) -> usize {
         .len()
 }
 
+/// The main revision the checkout record says the project folder holds.
+async fn folder_revision(h: &Harness) -> fold_core::RevisionId {
+    fold_store::workspaces::checkout(h.handle.store.read())
+        .await
+        .unwrap()
+        .unwrap()
+        .revision
+}
+
+/// True while an unstash's journal row is open.
+async fn journal_open(h: &Harness) -> bool {
+    let mut conn = h.handle.store.read().acquire().await.unwrap();
+    fold_store::workspaces::open_unstash(&mut conn)
+        .await
+        .unwrap()
+        .is_some()
+}
+
+/// The stashed `README.md` and the new `plan.md` merge cleanly into the folder, which an unstash writes in that order.
+async fn clean_stash(h: &Harness) -> PathBuf {
+    let dir = PathBuf::from(h.root());
+    std::fs::write(dir.join("README.md"), "# demo\nmine\n").unwrap();
+    std::fs::write(dir.join("plan.md"), "the plan\n").unwrap();
+    stash_as_ana(h).await.unwrap();
+    assert_eq!(read(&dir, "README.md"), "# demo\n");
+    dir
+}
+
 /// The stashed `README.md` conflicts with main and the stashed `plan.md` is new, so an unstash writes `plan.md` first and then the markers of `README.md`.
 async fn conflicting_stash(h: &Harness) -> PathBuf {
     let dir = PathBuf::from(h.root());
@@ -255,15 +285,21 @@ async fn a_stop_before_the_first_write_leaves_the_folder_and_the_entry(with_git:
     stop_unstash_at(&h, "unstash_after_journal").await;
     assert_eq!(read(&dir, "README.md"), "# fold\n");
     assert!(!dir.join("plan.md").exists());
+    integrate(&h, "frontend", &[("notes.md", "notes\n")]).await;
 
     h.restart().await;
     // While the journal row is open the folder waits on the paths the unstash writes.
     assert_eq!(held(&h).await, ["README.md", "plan.md"]);
-    // Nothing of the unstash reached the folder, so the record finds nothing and the entry stays stashed.
-    assert!(matches!(
-        record_as_ana(&h).await.unwrap(),
-        RecordOutcome::UpToDate { .. }
-    ));
+    assert!(!dir.join("notes.md").exists());
+    // Nothing of the unstash reached the folder, so the record finds nothing, the entry stays stashed and the folder follows main again.
+    let done = record_finishing_as_ana(&h).await.unwrap();
+    assert!(done.unstash.is_none());
+    let RecordOutcome::UpToDate { revision } = done.outcome else {
+        panic!("nothing to record: {:?}", done.outcome);
+    };
+    assert_eq!(folder_revision(&h).await, revision);
+    assert_eq!(read(&dir, "notes.md"), "notes\n");
+    assert!(!journal_open(&h).await);
     let listed = entries(&h).await;
     assert_eq!(listed.len(), 1);
     assert!(listed[0].conflicted.is_empty());
@@ -401,4 +437,149 @@ async fn a_stop_after_all_writes_of_an_unstash_is_finished_by_the_next_unstash()
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn with_git_sync_a_stop_after_all_writes_of_an_unstash_is_finished_by_the_next_unstash() {
     a_stop_after_all_writes_is_finished_by_the_next_unstash(true).await;
+}
+
+/// A file changed after a stop before the first write: nothing of the unstash reached the folder, so it is abandoned and the next unstash merges the entry with the human's change, which keeps both sides.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_file_changed_after_a_stop_before_the_first_write_is_merged_with_the_entry() {
+    let scenario = fail::FailScenario::setup();
+    let mut h = Harness::start_plain().await;
+    let dir = conflicting_stash(&h).await;
+    stop_unstash_at(&h, "unstash_after_journal").await;
+    std::fs::write(dir.join("README.md"), "# fold, edited\n").unwrap();
+
+    h.restart().await;
+    let UnstashOutcome::Conflicted { conflicted, .. } = unstash_as_ana(&h).await.unwrap() else {
+        panic!("README.md conflicts with the human's change");
+    };
+    assert_eq!(conflicted.len(), 1);
+    let marked = read(&dir, "README.md");
+    assert!(
+        marked.contains("# fold, edited") && marked.contains("# mine"),
+        "{marked}"
+    );
+    assert_eq!(read(&dir, "plan.md"), "the plan\n");
+    assert_eq!(stored(&h, types::STASH_CONFLICTED).await, 1);
+    assert!(!journal_open(&h).await);
+    scenario.teardown();
+}
+
+/// A stop inside the finish, after its writes and before the entry's row: the next finish writes nothing again, so the markers are never nested.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stop_inside_the_finish_of_an_unstash_finishes_it_once() {
+    let scenario = fail::FailScenario::setup();
+    let mut h = Harness::start_plain().await;
+    let dir = conflicting_stash(&h).await;
+    stop_unstash_at(&h, "merge_after_first_write").await;
+
+    h.restart().await;
+    stop_unstash_at(&h, "unstash_finish_after_write").await;
+    let marked = read(&dir, "README.md");
+    assert_eq!(marked.matches(">>>>>>> stash@{0}").count(), 1, "{marked}");
+    assert!(journal_open(&h).await);
+    assert!(entries(&h).await[0].conflicted.is_empty());
+    let UnstashOutcome::Conflicted { conflicted, .. } = unstash_as_ana(&h).await.unwrap() else {
+        panic!("the unstash that stopped is finished as conflicted");
+    };
+    assert_eq!(conflicted[0].path, "README.md");
+    assert_eq!(read(&dir, "README.md"), marked);
+    assert_eq!(stored(&h, types::STASH_CONFLICTED).await, 1);
+    scenario.teardown();
+}
+
+/// A stop part-way through a clean unstash, then `fld stash`: the stash finishes the unstash, answers with its outcome, and stashes the applied files again as one entry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stash_after_a_stop_part_way_finishes_the_unstash_and_names_it() {
+    let scenario = fail::FailScenario::setup();
+    let mut h = Harness::start_plain().await;
+    let dir = clean_stash(&h).await;
+    stop_unstash_at(&h, "merge_after_first_write").await;
+    assert_eq!(read(&dir, "README.md"), "# demo\nmine\n");
+    assert!(!dir.join("plan.md").exists());
+
+    h.restart().await;
+    let done = stash_finishing_as_ana(&h).await.unwrap();
+    assert!(
+        matches!(
+            done.unstash,
+            Some(UnstashOutcome::Applied { entries: 0, .. })
+        ),
+        "{:?}",
+        done.unstash
+    );
+    let StashOutcome::Stashed {
+        files,
+        entries: count,
+        ..
+    } = done.outcome
+    else {
+        panic!("the applied files are stashed again: {:?}", done.outcome);
+    };
+    assert_eq!(
+        (files.as_slice(), count),
+        (&["README.md".to_owned(), "plan.md".to_owned()][..], 1)
+    );
+    assert_eq!(read(&dir, "README.md"), "# demo\n");
+    assert!(!dir.join("plan.md").exists());
+    assert!(!journal_open(&h).await);
+    assert!(matches!(
+        unstash_as_ana(&h).await.unwrap(),
+        UnstashOutcome::Applied { entries: 0, .. }
+    ));
+    assert_eq!(read(&dir, "README.md"), "# demo\nmine\n");
+    assert_eq!(read(&dir, "plan.md"), "the plan\n");
+    scenario.teardown();
+}
+
+/// A stop part-way through a clean unstash: the unstash after the restart writes the rest and applies the entry once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stop_part_way_through_a_clean_unstash_applies_the_entry_once() {
+    let scenario = fail::FailScenario::setup();
+    let mut h = Harness::start_plain().await;
+    let dir = clean_stash(&h).await;
+    stop_unstash_at(&h, "merge_after_first_write").await;
+
+    h.restart().await;
+    assert!(matches!(
+        unstash_as_ana(&h).await.unwrap(),
+        UnstashOutcome::Applied { entries: 0, .. }
+    ));
+    assert_eq!(read(&dir, "README.md"), "# demo\nmine\n");
+    assert_eq!(read(&dir, "plan.md"), "the plan\n");
+    assert_eq!(stored(&h, types::STASH_APPLIED).await, 1);
+    assert_eq!(
+        refusal(unstash_as_ana(&h).await.unwrap_err()).0,
+        "stash_empty"
+    );
+    scenario.teardown();
+}
+
+/// A file that changes after the journal row and before the first write: the check before the writes refuses, nothing is written, and the row is abandoned, so the next unstash merges the entry with the changed file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_file_changed_before_the_first_write_abandons_the_unstash() {
+    let scenario = fail::FailScenario::setup();
+    let h = Harness::start_plain().await;
+    let dir = conflicting_stash(&h).await;
+    let readme = dir.join("README.md");
+    fail::cfg_callback("unstash_after_journal", move || {
+        std::fs::write(&readme, "# changed\n").unwrap();
+    })
+    .unwrap();
+    let refused = unstash_as_ana(&h).await.unwrap_err();
+    fail::remove("unstash_after_journal");
+    assert_eq!(refusal(refused).0, "changed_during_unstash");
+    assert!(!journal_open(&h).await);
+    assert!(entries(&h).await[0].conflicted.is_empty());
+    assert_eq!(read(&dir, "README.md"), "# changed\n");
+    assert!(!dir.join("plan.md").exists());
+
+    let UnstashOutcome::Conflicted { .. } = unstash_as_ana(&h).await.unwrap() else {
+        panic!("README.md conflicts with the changed file");
+    };
+    let marked = read(&dir, "README.md");
+    assert!(
+        marked.contains("# changed") && marked.contains("# mine"),
+        "{marked}"
+    );
+    scenario.teardown();
 }
