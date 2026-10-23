@@ -585,7 +585,7 @@ async fn an_approval_of_the_current_version_waits_while_an_update_runs_its_check
         .view_proposal(&human(), p(1), None)
         .await
         .unwrap();
-    assert_eq!(view.update_run, Some(update));
+    assert_eq!(view.update_run.map(|run| run.run), Some(update));
     assert_eq!(view.detail.summary.current_version, 1);
     let reviewer = by(&fx.review.worker);
     for actor in [&reviewer, &human()] {

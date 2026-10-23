@@ -128,12 +128,12 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             SUBMIT_BATCH_REVIEW,
-            "Give every member of your batch its own verdict in one call, with line comments on the batch checkout and comments on the batch. A member that got a new version is left out.",
+            "Give every member of your batch its own verdict in one call, with line comments on the batch checkout and comments on the batch. A member that got a new version is left out. An approve of a member while its author's update or a reviewer's fix runs the checks of its next version refuses the whole call with update_checks_running (details name the member and the run): give that member another verdict, or wait for checks.finished with wait_for_events.",
             schema_for_type::<SubmitBatchReviewInput>(),
         ),
         Tool::new(
             INTEGRATE_REVIEW_BATCH,
-            "Integrate the approved members of a submitted batch together; only the main agent, the review lead, a reviewer that wrote none of them, or a human may. fold integrates a ready batch by itself when the project integrates automatically; call this when it does not. A batch is ready when every member has its final state: approved, or out (changes requested, rejected, closed, removed, or waiting for a human or for a member that is out). The ready members merge onto main in dependency order, the integration checks run once on the whole merge, and one transaction publishes one revision per member (result together). A member that conflicts goes back to its author alone; when the one check run fails, fold integrates the members one at a time, each with its own run, and sends back only the member whose run fails (result one_at_a_time). With integration checks the call is queued and fold sends each member's result as a message. Refusals: invalid_request with the reason batch_not_submitted, batch_waiting (details name the pending members), batch_integrated or integration_queued, update_checks_running while an update of a member runs its checks, and the caller gates of integrate_proposal. A member can still be integrated alone with integrate_proposal.",
+            "Integrate the approved members of a submitted batch together; only the main agent, the review lead, a reviewer that wrote none of them, or a human may. fold integrates a ready batch by itself when the project integrates automatically; call this when it does not. A batch is ready when every member has its final state: approved, or out (changes requested, rejected, closed, removed, or waiting for a human or for a member that is out). The ready members merge onto main in dependency order, the integration checks run once on the whole merge, and one transaction publishes one revision per member (result together). A member that conflicts goes back to its author alone; when the one check run fails, fold integrates the members one at a time, each with its own run, and sends back only the member whose run fails (result one_at_a_time). With integration checks the call is queued and fold sends each member's result as a message. Refusals: invalid_request with the reason batch_not_submitted, batch_waiting (details name the pending members), batch_integrated or integration_queued, update_checks_running while the author's update or a reviewer's fix of a member runs its checks, and the caller gates of integrate_proposal. A member can still be integrated alone with integrate_proposal.",
             schema_for_type::<ReviewBatchIdInput>(),
         ),
     ]
@@ -227,11 +227,31 @@ fn integration_json(view: &BatchIntegrationView) -> Value {
             "state": "waiting",
             "pending": pending,
         }),
-        BatchIntegrationView::Ready { members, queued } => json!({
-            "state": "ready",
-            "members": members,
-            "queued": queued,
-        }),
+        BatchIntegrationView::Ready {
+            members,
+            queued,
+            updating,
+        } => {
+            let mut value = json!({
+                "state": "ready",
+                "members": members,
+                "queued": queued,
+            });
+            // The batch waits for these runs; a member's next version starts without the batch's approval.
+            if !updating.is_empty() {
+                value["updating"] = updating
+                    .iter()
+                    .map(|(proposal, update)| {
+                        json!({
+                            "proposal": proposal,
+                            "run": update.run,
+                            "purpose": update.purpose.as_str(),
+                        })
+                    })
+                    .collect();
+            }
+            value
+        }
         BatchIntegrationView::Ended {
             outcome,
             run,

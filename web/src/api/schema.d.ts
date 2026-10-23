@@ -3104,6 +3104,13 @@ export interface components {
             /** @description The text of a plain step. */
             text?: string | null;
         };
+        /** @description The run in progress that makes a proposal's next version when its checks pass. While it goes, the current version is neither approved nor integrated (`update_checks_running`). */
+        NextVersionRun: {
+            /** @description `update_proposal` for the author's update, `review_fix` for a reviewer's fix in a review checkout. */
+            purpose: components["schemas"]["CheckPurpose"];
+            /** @example cr-4 */
+            run: string;
+        };
         /** @enum {string} */
         NoticeReach: "stdin" | "socket" | "failing" | "unreachable";
         OpenProject: {
@@ -3303,11 +3310,7 @@ export interface components {
             /** @description The task's status on the board. */
             task_status: components["schemas"]["TaskStatus"];
             totals: components["schemas"]["ComparisonTotals"];
-            /**
-             * @description The check run in progress of an update of the proposal, which makes the next version when its checks pass; null when no update runs. It has no version yet, so it is not among `checks`, and while it goes the current version is neither approved nor integrated (`update_checks_running`).
-             * @example cr-4
-             */
-            update_run: string | null;
+            update_run: components["schemas"]["NextVersionRun"] | null;
             /** @description Oldest first. */
             versions: components["schemas"]["ProposalVersion"][];
         };
@@ -3908,6 +3911,8 @@ export interface components {
              */
             run: string | null;
             state: components["schemas"]["ReviewBatchIntegrationState"];
+            /** @description While `ready`: the members of `members` whose author's update or reviewer's fix runs the checks of their next version. The batch integrates only once these runs end (`update_checks_running`). */
+            updating: components["schemas"]["ReviewBatchUpdating"][];
         };
         /** @enum {string} */
         ReviewBatchIntegrationState: "not_submitted" | "waiting" | "ready" | "ended";
@@ -3963,6 +3968,12 @@ export interface components {
         };
         /** @enum {string} */
         ReviewBatchState: "open" | "submitted" | "closed";
+        /** @description A member whose next version runs its checks. */
+        ReviewBatchUpdating: {
+            /** @example P-3 */
+            proposal: string;
+            run: components["schemas"]["NextVersionRun"];
+        };
         /** @description A verdict the batch gave. */
         ReviewBatchVerdict: {
             /** @example P-3 */
@@ -8392,7 +8403,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description A gate refusal: `stale_version` (`details.expected_version`, `details.current_version`), `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`); or `proposal_not_open`, `integration_conflicted` (`details.files`: path and kind), `head_moved` */
+            /** @description A gate refusal: `stale_version` (`details.expected_version`, `details.current_version`), `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`); or `proposal_not_open`, `integration_conflicted` (`details.files`: path and kind), `head_moved`, or `update_checks_running` while the author's update or a reviewer's fix runs the checks of the next version (`details.run`, `details.purpose`) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8668,7 +8679,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `stale_version` (`details.expected_version`, `details.current_version`), `agent_approval_required` (a human's approve on a task with the human review mark before a reviewer agent approved the version; a task of the area main needs no reviewer agent first), `proposal_not_open` or `task_closed` */
+            /** @description `stale_version` (`details.expected_version`, `details.current_version`), `agent_approval_required` (a human's approve on a task with the human review mark before a reviewer agent approved the version; a task of the area main needs no reviewer agent first), `update_checks_running` (an approve while the author's update or a reviewer's fix runs the checks of the next version; `details.run`, `details.purpose`), `proposal_not_open` or `task_closed` */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -10294,7 +10305,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description A gate refusal for a member, with `details.batch` and `details.proposal`: `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`) or `proposal_not_open`; or `head_moved` */
+            /** @description A gate refusal for a member, with `details.batch` and `details.proposal`: `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`), `proposal_not_open`, or `update_checks_running` while the author's update or a reviewer's fix of a member runs the checks of its next version (`details.run`, `details.purpose`); or `head_moved` */
             409: {
                 headers: {
                     [name: string]: unknown;

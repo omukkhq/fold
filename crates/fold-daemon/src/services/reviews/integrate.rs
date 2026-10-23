@@ -28,7 +28,7 @@ use serde_json::json;
 use super::batch_integration::BatchIntegration;
 use super::checks::{
     HeldRequest, Integrating, IntegrationChecks, PassedRun, Verdict as RunVerdict, end_run_in_tx,
-    fold_failed_refusal, running_update,
+    fold_failed_refusal, next_version_run,
 };
 use super::conflicts::FoundConflict;
 use super::notify;
@@ -290,7 +290,7 @@ impl ReviewService {
                 .acquire()
                 .await
                 .map_err(StoreError::from)?;
-            let update = running_update(&mut conn, row.task, proposal).await?;
+            let update = next_version_run(&mut conn, row.task, proposal).await?;
             drop(conn);
             policy::can_integrate_while_updating(update.is_some())
                 .map_err(|denied| update_refusal(denied, proposal, row.current_version, update))?;
@@ -579,7 +579,7 @@ impl ReviewService {
         )
     }
 
-    /// Integrates, as fold, every open proposal whose current version is ready: an agent that decides reviews or a human approved it, the latest verdict asks for no changes, a marked task has a human approval the mark accepts, and every prerequisite is Done. Each integration is the same procedure a deciding agent runs. A submitted review batch whose members all have their final state takes its turn first, its ready members together; the members a batch holds back, while it is open or waits for a member, are left to it. The open proposals are looked at in number order and looked at again after each integration, so a prerequisite's integration lets the proposals that need it follow in the same call. A proposal flagged with a conflict waits for its next version, which clears the flag, and one whose update runs the checks of its next version waits for that run to end. A failed attempt is logged by its code and left for the next call. Returns the integrations in the order they ran; a conflicted one recorded `integration.conflicted` and left its proposal open.
+    /// Integrates, as fold, every open proposal whose current version is ready: an agent that decides reviews or a human approved it, the latest verdict asks for no changes, a marked task has a human approval the mark accepts, and every prerequisite is Done. Each integration is the same procedure a deciding agent runs. A submitted review batch whose members all have their final state takes its turn first, its ready members together; the members a batch holds back, while it is open or waits for a member, are left to it. The open proposals are looked at in number order and looked at again after each integration, so a prerequisite's integration lets the proposals that need it follow in the same call. A proposal flagged with a conflict waits for its next version, which clears the flag, and one whose update or reviewer's fix runs the checks of its next version waits for that run to end. A failed attempt is logged by its code and left for the next call. Returns the integrations in the order they ran; a conflicted one recorded `integration.conflicted` and left its proposal open.
     pub async fn integrate_ready(&self) -> Result<Vec<AutomaticIntegration>, ReviewError> {
         let mut done = Vec::new();
         let mut passed = HashSet::new();
@@ -661,8 +661,11 @@ impl ReviewService {
             {
                 continue;
             }
-            // An approval from before an update of the proposal started its checks waits for that run: integrating the older version would end it as workspace_changed.
-            if running_update(&mut read, row.task, row.id).await?.is_some() {
+            // An approval from before an update or a reviewer's fix started the checks of the next version waits for that run: integrating the older version would end it as workspace_changed.
+            if next_version_run(&mut read, row.task, row.id)
+                .await?
+                .is_some()
+            {
                 continue;
             }
             let Some(facts) = reviews::integration_facts(&mut read, row.id).await? else {
@@ -736,6 +739,8 @@ impl ReviewService {
             IntegrationRequest::Direct(change) => self.direct_plan(actor, change).await?,
             IntegrationRequest::Record(record) => record_plan(actor, record)?,
         };
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("integration_after_plan");
         let locks = self.workspaces.lock_for_integration(plan.workspace).await;
         let merged = self
             .workspaces
@@ -903,7 +908,7 @@ impl ReviewService {
             .await?
             .ok_or_else(|| proposal_not_found(proposal))?;
         let row = reviews::get_proposal(&mut *read, proposal).await?;
-        let update = running_update(&mut read, facts.proposal.task, proposal).await?;
+        let update = next_version_run(&mut read, facts.proposal.task, proposal).await?;
         read.commit().await.map_err(StoreError::from)?;
         if let Some(row) = row.filter(|_| facts.proposal.state == ProposalState::Open) {
             if row.checks_failed {
@@ -1600,7 +1605,7 @@ impl Commit<'_> {
         Ok(())
     }
 
-    /// The gates again on the writer's connection, because reviews, versions and prerequisites change without the integration mutex. A gate that fails now starts the attempt again, whose gate step then reports it.
+    /// The gates again on the writer's connection, because reviews, versions and prerequisites change without the integration mutex. A gate that fails now starts the attempt again, whose gate step then reports it. A run of the next version that started after the gate step, such as an update whose snapshot came before this attempt took the workspace lock, also starts it again, so the older version never integrates under it.
     async fn recheck(
         &self,
         tx: &mut WriteTx,
@@ -1617,6 +1622,9 @@ impl Commit<'_> {
         if facts.target.version_id != version_id
             || facts.live_workspace != self.plan.workspace
             || decide(&facts, &caller, expected_version).is_err()
+            || next_version_run(tx.conn(), facts.proposal.task, proposal)
+                .await?
+                .is_some()
         {
             return Err(Step::Retry);
         }

@@ -389,6 +389,25 @@ pub async fn running_in_workspace(
     Ok(rows(raw)?.pop())
 }
 
+/// The running proposal-stage run of `proposal` that makes its next version when its checks pass: the author's update in the task workspace or a reviewer's fix in a review checkout. The newest one when both go.
+pub async fn running_version_run(
+    executor: impl SqliteExecutor<'_>,
+    task: TaskId,
+    proposal: ProposalId,
+) -> Result<Option<CheckRunRow>, StoreError> {
+    let (task, proposal) = (task.to_db(), proposal.to_db());
+    let raw = select_runs!(
+        "WHERE t.number = ?1 AND p.number = ?2 AND c.state = 'running'
+           AND c.purpose IN ('update_proposal', 'review_fix')
+         ORDER BY c.id DESC LIMIT 1",
+        task,
+        proposal
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows(raw)?.pop())
+}
+
 /// The runs of one proposal version, newest first: the ended proposal-stage runs of its task on its base and tree, which checked exactly its files, the integration runs of the version, and the integration runs of a review batch that checked the version together with other members.
 pub async fn runs_of_version(
     executor: impl SqliteExecutor<'_>,

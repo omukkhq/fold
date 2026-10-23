@@ -174,6 +174,8 @@ mod takeover;
 mod task_read;
 mod task_views;
 mod tasks_service;
+#[cfg(feature = "failpoints")]
+mod version_run_race;
 mod web_tokens;
 mod worker_cost;
 mod worker_limits;

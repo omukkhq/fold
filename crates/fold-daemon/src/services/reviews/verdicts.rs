@@ -2,15 +2,14 @@ use fold_core::events::types;
 use fold_core::policy::{AgentStanding, ReviewTask};
 use fold_core::reviews::{Reviewer, Verdict};
 use fold_core::{
-    Actor, CheckRunId, CommentId, FoldError, IdKind, NewEvent, ProposalId, ReviewBatchId, TaskId,
-    codes, policy,
+    Actor, CommentId, FoldError, IdKind, NewEvent, ProposalId, ReviewBatchId, TaskId, codes, policy,
 };
 use fold_store::agents;
 use fold_store::reviews::{self, NewComment, ProposalRow, ReviewerRef, batches};
 use fold_store::{SqliteConnection, StoreError, WriteTx, counters, workspaces};
 use serde_json::json;
 
-use super::checks::running_update;
+use super::checks::{VersionRun, next_version_run};
 use super::comments::{CommentInput, MAX_BODY_CHARS, check_ranges, check_shape};
 use super::integrate::checks_failed_refusal;
 use super::proposals::{ProposalSummary, Retirement, require_open, retire_proposal};
@@ -50,7 +49,7 @@ impl ReviewService {
         let standing = agents::standing_of(read, actor).await?;
         let mut conn = read.acquire().await.map_err(StoreError::from)?;
         let task = review_task(&mut conn, &row).await?;
-        let update = running_update(&mut conn, row.task, proposal).await?;
+        let update = next_version_run(&mut conn, row.task, proposal).await?;
         drop(conn);
         verdict_gate(actor, standing, verdict, &row, task, update)?;
         let target = reviews::review_target(read, proposal)
@@ -143,7 +142,7 @@ pub(super) async fn record_review(
     let reviewer = actor.event_actor();
     let standing = agents::standing_of(tx.conn(), actor).await?;
     let task = review_task(tx.conn(), row).await?;
-    let update = running_update(tx.conn(), row.task, proposal).await?;
+    let update = next_version_run(tx.conn(), row.task, proposal).await?;
     let (by, suggested) = match verdict_gate(actor, standing, verdict, row, task, update)? {
         Reviewer::Agent(agent) => (
             ReviewerRef::Worker(worker_row(tx, agent).await?.id),
@@ -374,14 +373,14 @@ pub(super) async fn review_task(
     })
 }
 
-/// `standing` is the acting agent's, `task` the facts of [`review_task`] and `update` the run of [`running_update`], read by the caller. An approval of a version whose integration checks failed is refused, as its integration is, until the author sends a new version; an approval while an update of the proposal runs its checks waits for that run to end.
+/// `standing` is the acting agent's, `task` the facts of [`review_task`] and `update` the run of [`next_version_run`], read by the caller. An approval of a version whose integration checks failed is refused, as its integration is, until the author sends a new version; an approval while the author's update or a reviewer's fix runs the checks of the next version waits for that run to end.
 pub(super) fn verdict_gate<'a>(
     actor: &'a Actor,
     standing: AgentStanding,
     verdict: Verdict,
     row: &ProposalRow,
     task: ReviewTask,
-    update: Option<CheckRunId>,
+    update: Option<VersionRun>,
 ) -> Result<Reviewer<'a>, ReviewError> {
     if verdict == Verdict::Approve && row.checks_failed {
         return Err(checks_failed_refusal(row.id, row.current_version).into());
@@ -399,17 +398,21 @@ pub(super) fn verdict_gate<'a>(
     Ok(reviewer)
 }
 
-/// The refusal of an approval or an integration of `version`, the current version of `proposal`, while the update run `update` goes, with the run to wait for.
+/// The refusal of an approval or an integration of `version`, the current version of `proposal`, while the run `update` of the next version goes, with the run to wait for and its purpose.
 pub(super) fn update_refusal(
     denied: policy::PolicyDenied,
     proposal: ProposalId,
     version: u32,
-    update: Option<CheckRunId>,
+    update: Option<VersionRun>,
 ) -> FoldError {
     FoldError::from(denied).with_details([
         ("proposal", json!(proposal.to_string())),
         ("version", json!(version)),
-        ("run", json!(update.map(|run| run.to_string()))),
+        ("run", json!(update.map(|update| update.run.to_string()))),
+        (
+            "purpose",
+            json!(update.map(|update| update.purpose.as_str())),
+        ),
     ])
 }
 

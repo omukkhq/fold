@@ -725,8 +725,20 @@ async fn a_ready_batch_waits_while_an_update_of_a_member_runs_its_checks() {
         panic!("expected a run");
     };
     assert!(reviews.integrate_ready().await.unwrap().is_empty());
+    let updating = vec![(
+        p(2),
+        fold_daemon::services::reviews::checks::VersionRun {
+            run,
+            purpose: fold_core::reviews::checks::Purpose::UpdateProposal,
+        },
+    )];
+    assert!(matches!(
+        reviews.batch_integration_view(batch).await.unwrap(),
+        BatchIntegrationView::Ready { updating: found, .. } if found == updating
+    ));
     let held = refusal(reviews.integrate_review_batch(&scene.review, batch).await);
     assert_eq!(held.code(), codes::UPDATE_CHECKS_RUNNING);
+    assert_eq!(held.details().unwrap()["purpose"], "update_proposal");
     assert_eq!(held.details().unwrap()["proposal"], "P-2");
     assert_eq!(held.details().unwrap()["run"], run.to_string());
     assert_eq!(scene.integrations().await, []);

@@ -431,7 +431,7 @@ pub fn can_submit_verdict<'a>(
     }
 }
 
-/// An update of a proposal whose files have proposal checks runs them before fold makes the next version, which starts unapproved. An approval of the current version while that run is in progress would let the older version integrate first, which ends the update's run as `workspace_changed`, so `approve` waits for the run to end (`update_running`). `comment`, `request_changes` and `reject` stay open: none of them lets a version integrate.
+/// The author's update of a proposal, or a reviewer's fix of it, whose files have proposal checks runs them before fold makes the next version, which starts unapproved. An approval of the current version while that run is in progress would let the older version integrate first, which ends the run as `workspace_changed`, so `approve` waits for the run to end (`update_running`). `comment`, `request_changes` and `reject` stay open: none of them lets a version integrate.
 pub fn can_review_while_updating(
     verdict: Verdict,
     update_running: bool,
@@ -439,20 +439,20 @@ pub fn can_review_while_updating(
     if verdict == Verdict::Approve && update_running {
         return Err(PolicyDenied {
             code: codes::UPDATE_CHECKS_RUNNING,
-            message: "an update of the proposal runs the checks of its next version, so the current version cannot be approved",
-            hint: "wait for checks.finished with wait_for_events, then call get_proposal and review the new version",
+            message: "an update or a reviewer's fix of the proposal runs the checks of its next version, so the current version cannot be approved",
+            hint: "wait for checks.finished with wait_for_events, then call get_proposal: review the new version, or the current one again when the checks failed",
         });
     }
     Ok(())
 }
 
-/// An integration of the current version while an update of the proposal runs its checks (`update_running`) would end that run as `workspace_changed`, and a human's integration approves the version too, so no caller integrates it until the run ends, as [`can_review_while_updating`] holds back an approval.
+/// An integration of the current version while an update or a reviewer's fix of the proposal runs the checks of its next version (`update_running`) would end that run as `workspace_changed`, and a human's integration approves the version too, so no caller integrates it until the run ends, as [`can_review_while_updating`] holds back an approval.
 pub fn can_integrate_while_updating(update_running: bool) -> Result<(), PolicyDenied> {
     if update_running {
         return Err(PolicyDenied {
             code: codes::UPDATE_CHECKS_RUNNING,
-            message: "an update of the proposal runs the checks of its next version, so the current version cannot be integrated",
-            hint: "wait for checks.finished with wait_for_events, then call get_proposal and review or integrate the new version",
+            message: "an update or a reviewer's fix of the proposal runs the checks of its next version, so the current version cannot be integrated",
+            hint: "wait for checks.finished with wait_for_events, then call get_proposal: review the new version, or integrate the current one again when the checks failed",
         });
     }
     Ok(())

@@ -1090,7 +1090,10 @@ describe("Proposal detail", () => {
   });
 
   it("disables Approve and Integrate while an update runs the checks of the next version, and enables them when the stream reports the end", async () => {
-    update("P-4", (p) => ({ ...p, update_run: "cr-18" }));
+    update("P-4", (p) => ({
+      ...p,
+      update_run: { run: "cr-18", purpose: "update_proposal" },
+    }));
     const { queryClient } = renderAt("/p/demo/proposals/P-4");
     const panel = await integration();
     const approve = within(panel).getByRole("button", { name: "Approve v2" });
