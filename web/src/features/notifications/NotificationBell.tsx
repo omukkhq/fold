@@ -180,7 +180,7 @@ export function NotificationBell({ slug }: { slug: string }) {
             sideOffset={6}
             collisionPadding={16}
             aria-label="Notifications"
-            className="z-10 flex w-notifications max-w-full flex-col rounded-m border border-border bg-raised shadow-card outline-none"
+            className="z-10 flex w-notifications max-w-(--width-popover-max) flex-col rounded-m border border-border bg-raised shadow-card outline-none"
           >
             <div className="flex items-center gap-8 border-b border-border-subtle px-16 py-12">
               <h2 className="flex-1 text-card font-semibold text-text">

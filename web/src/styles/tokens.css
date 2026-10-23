@@ -95,6 +95,7 @@
   --width-fact-label: 70px;
   --width-filter-column: 260px;
   --width-group-head: calc(100cqw - 2 * var(--space-16));
+  --width-popover-max: calc(100vw - 2 * var(--space-16));
 }
 
 :root {

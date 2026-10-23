@@ -55,7 +55,7 @@ export function TopBarMore({
           sideOffset={6}
           collisionPadding={16}
           aria-label="More"
-          className="z-10 flex w-notifications max-w-full flex-col gap-12 rounded-m border border-border bg-raised p-12 shadow-card outline-none"
+          className="z-10 flex w-notifications max-w-(--width-popover-max) flex-col gap-12 rounded-m border border-border bg-raised p-12 shadow-card outline-none"
         >
           {children(() => {
             setOpen(false);
