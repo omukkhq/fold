@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useMutationState,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { Pause, Play } from "lucide-react";
 import { keys } from "@/api/keys";
 import { pauseProject, resumeProject } from "@/api/projects";
@@ -6,7 +11,12 @@ import { projectQuery, sessionQuery } from "@/api/queries";
 import { Button } from "@/components/button/Button";
 import { failureText } from "@/format/failure";
 import { cn } from "@/lib/cn";
-import { pauseControl, type PauseAction } from "./pause";
+import {
+  lastPauseWrite,
+  pauseControl,
+  pauseWrites,
+  type PauseAction,
+} from "./pause";
 
 /** The top bar's pause and resume of every agent of the project. Only a named human pauses, so the control waits for a name; it stays pending until the project shows the daemon's new state. */
 export function PauseControl({ slug }: { slug: string }) {
@@ -14,16 +24,21 @@ export function PauseControl({ slug }: { slug: string }) {
   const session = useQuery(sessionQuery());
   const queryClient = useQueryClient();
   // The write stays pending until the project is read again, so the control never shows success before the daemon's state does.
+  const mutationKey = pauseWrites(slug);
   const write = useMutation({
+    mutationKey,
     mutationFn: (action: PauseAction) =>
       action === "pause" ? pauseProject(slug) : resumeProject(slug),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: keys.project(slug) }),
   });
+  const last = lastPauseWrite(
+    useMutationState({ filters: { mutationKey }, select: (m) => m.state }),
+  );
   const overview = project.data?.overview ?? null;
   const view = pauseControl(
     overview === null ? undefined : overview.paused_since,
-    write.isPending ? write.variables : null,
+    last.sent,
   );
   if (view === null || (session.data?.human ?? null) === null) {
     return null;
@@ -52,11 +67,11 @@ export function PauseControl({ slug }: { slug: string }) {
       >
         {view.label}
       </Button>
-      {write.isError ? (
+      {last.error === null ? null : (
         <span role="alert" className="text-meta text-danger">
-          {failureText(write.error)}
+          {failureText(last.error)}
         </span>
-      ) : null}
+      )}
     </div>
   );
 }
