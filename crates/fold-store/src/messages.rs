@@ -653,6 +653,46 @@ pub async fn acknowledge(
         .map(Some)
 }
 
+/// Acknowledges `human`'s unacknowledged rows of the messages of `thread`, only those numbered below `before` when it is given, and returns the numbers it changed in order. A row acknowledged before keeps its time.
+pub async fn acknowledge_human(
+    tx: &mut WriteTx,
+    human: &HumanName,
+    thread: MessageId,
+    before: Option<MessageId>,
+    now: Timestamp,
+) -> Result<Vec<MessageId>, StoreError> {
+    let name = human.as_str();
+    let thread = thread.to_db();
+    let before = before.map(MessageId::to_db);
+    let rows = sqlx::query!(
+        r#"SELECT r.id AS "row!: i64", m.number
+           FROM message_recipients r JOIN messages m ON m.id = r.message_id
+           WHERE r.human = ?1 AND r.acked_at IS NULL AND m.thread_id = ?2
+             AND (?3 IS NULL OR m.number < ?3)
+           ORDER BY m.number"#,
+        name,
+        thread,
+        before
+    )
+    .fetch_all(tx.conn())
+    .await?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids = id_list(&rows.iter().map(|row| row.row).collect::<Vec<_>>())?;
+    let millis = now.as_millis();
+    sqlx::query!(
+        "UPDATE message_recipients SET acked_at = ?1 WHERE id IN (SELECT value FROM json_each(?2))",
+        millis,
+        ids
+    )
+    .execute(tx.conn())
+    .await?;
+    rows.into_iter()
+        .map(|row| message_id(row.number, "messages.number"))
+        .collect()
+}
+
 /// The unacknowledged rows of the agent's worker.
 pub async fn unread_count(
     executor: impl SqliteExecutor<'_>,

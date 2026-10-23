@@ -25,3 +25,17 @@ export const feedbackSchema = z.object({ task, body });
 
 export type ReplyValues = z.infer<typeof replySchema>;
 export type FeedbackValues = z.infer<typeof feedbackSchema>;
+
+/** The text with `@` written at the caret, after a space when the caret follows a word, so the box suggests people and files at once; and the caret behind the `@`. */
+export function insertMention(
+  text: string,
+  caret: number,
+): { text: string; caret: number } {
+  const at = Math.min(Math.max(caret, 0), text.length);
+  const before = text.slice(0, at);
+  const mark = before === "" || /\s$/.test(before) ? "@" : " @";
+  return {
+    text: `${before}${mark}${text.slice(at)}`,
+    caret: at + mark.length,
+  };
+}

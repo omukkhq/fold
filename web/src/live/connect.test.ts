@@ -133,6 +133,53 @@ describe("connectProject", () => {
     handle.stop();
   });
 
+  it("marks the stored events before each connection's snapshot as a replay", async () => {
+    const seen: [string, boolean][] = [];
+    let connection = 0;
+    const transport: Transport = () => {
+      connection += 1;
+      const first = connection === 1;
+      return Promise.resolve(
+        (async function* () {
+          await Promise.resolve();
+          yield stored(first ? 1 : 3, "task.created");
+          yield `data: ${JSON.stringify({ kind: "snapshot", seq: first ? 1 : 3, workspaces: [] })}\n\n`;
+          yield stored(first ? 2 : 4, "task.updated");
+          if (!first) {
+            await new Promise<void>(() => undefined);
+          }
+        })(),
+      );
+    };
+    const handle = connectProject(
+      new QueryClient(),
+      "demo",
+      transport,
+      createLiveStatusStore(),
+      () => 42,
+      undefined,
+      undefined,
+      (event, replay) => {
+        seen.push([
+          event.kind === "event" ? String(event.seq) : event.kind,
+          replay,
+        ]);
+      },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    handle.retry();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(seen).toEqual([
+      ["1", true],
+      ["snapshot", false],
+      ["2", false],
+      ["3", true],
+      ["snapshot", false],
+      ["4", false],
+    ]);
+    handle.stop();
+  });
+
   it("resumes after the last stored event when the project opens again", async () => {
     const client = new QueryClient();
     const cursors: (number | null)[] = [];

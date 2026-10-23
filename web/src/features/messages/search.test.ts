@@ -33,6 +33,10 @@ describe("normalizeSearch", () => {
     for (const waiting of ["1", 1, true]) {
       expect(normalizeSearch({ waiting })).toEqual({ waiting: true });
     }
+    expect(normalizeSearch({ questions: "1", mine: true })).toEqual({
+      questions: true,
+      mine: true,
+    });
   });
 });
 
@@ -44,6 +48,9 @@ describe("messagesHref", () => {
     );
     expect(messagesHref("demo", { waiting: true })).toBe(
       "/p/demo/messages?waiting=1",
+    );
+    expect(messagesHref("demo", { questions: true, mine: true })).toBe(
+      "/p/demo/messages?questions=1&mine=1",
     );
   });
 });

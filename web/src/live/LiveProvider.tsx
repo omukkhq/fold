@@ -4,6 +4,11 @@ import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { openEventStream } from "../api/events";
 import { redirectToSignIn } from "../app/authRedirect";
 import { forgetProject } from "../app/projectGone";
+import { listEventPage } from "../api/events";
+import { keys } from "../api/keys";
+import { cardTitle } from "../features/notifications/moves";
+import { HISTORY_PAGE } from "../features/notifications/history";
+import { notificationStore } from "../features/notifications/store";
 import { connectProject } from "./connect";
 import { LiveRetryContext } from "./retry";
 import { liveStatusStore } from "./status";
@@ -21,6 +26,8 @@ export function LiveProvider({
   const router = useRouter();
   const stream = useRef<StreamHandle | null>(null);
   useEffect(() => {
+    const title = (task: string) =>
+      cardTitle(queryClient.getQueryData(keys.board(slug)), task);
     const handle = connectProject(
       queryClient,
       slug,
@@ -35,10 +42,18 @@ export function LiveProvider({
       () => {
         forgetProject(queryClient, slug, () => void router.invalidate());
       },
+      (event, replay) => {
+        notificationStore.receive(slug, event, { replay, title });
+      },
     );
+    void notificationStore.fill(slug, {
+      read: (before) => listEventPage(slug, before, HISTORY_PAGE),
+      title,
+    });
     stream.current = handle;
     return () => {
       handle.stop();
+      notificationStore.leave(slug);
       if (stream.current === handle) {
         stream.current = null;
       }

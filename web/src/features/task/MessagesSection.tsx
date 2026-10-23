@@ -31,7 +31,7 @@ import { MessageBody } from "@/features/messages/MessageBody";
 import { QuotedLines } from "@/features/messages/QuotedLines";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
-import { MentionTextarea } from "@/mentions/MentionTextarea";
+import { MessageComposer } from "@/mentions/MessageComposer";
 import { threadPath } from "./links";
 import { keptChoice, recipientOptions } from "./recipients";
 import { submit, WriteError } from "./parts";
@@ -141,7 +141,7 @@ function FeedbackBox({
         }),
       )}
     >
-      <div className="flex flex-col gap-8 md:flex-row md:items-start">
+      <div className="flex flex-col gap-8 md:flex-row md:items-end">
         <label className="sr-only" htmlFor={`${id}-to`}>
           Send to
         </label>
@@ -172,14 +172,13 @@ function FeedbackBox({
           control={form.control}
           name="body"
           render={({ field }) => (
-            <MentionTextarea
+            <MessageComposer
               slug={slug}
               id={`${id}-body`}
-              rows={1}
-              disabled={write.isPending}
+              pending={write.isPending}
               placeholder={feedbackPlaceholder(to, holder)}
               aria-invalid={errors.body ? true : undefined}
-              className="min-w-0 resize-none py-9 md:flex-1"
+              className="min-w-0 md:flex-1"
               ref={field.ref}
               value={field.value}
               onValueChange={field.onChange}

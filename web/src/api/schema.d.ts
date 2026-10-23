@@ -1276,6 +1276,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/threads/{id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The signed-in human marks a thread read: their recipient rows of its messages that have no acknowledgement take the current time, and `message.acknowledged` names those messages. Rows of other recipients never change, and a repeat changes nothing and appends no event. */
+        post: operations["mark_thread_read"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/unstash": {
         parameters: {
             query?: never;
@@ -3531,14 +3548,14 @@ export interface components {
         RecipientView: {
             /**
              * Format: int64
-             * @description UTC milliseconds; null until the recipient acknowledged it.
+             * @description UTC milliseconds; null until the recipient acknowledged it. A human acknowledges by opening the thread, which marks it read, or by writing in it.
              */
             acknowledged_at: number | null;
             /** @description How the sender reached this recipient: `agent`, `worker`, `tag`, `all`, `human` or `humans`. */
             addressed_as: string;
             /**
              * Format: int64
-             * @description UTC milliseconds; null until an inbox returned the row.
+             * @description UTC milliseconds; null until an inbox returned the row. Always null for a human, whose Messages screen shows the message as soon as it is stored.
              */
             delivered_at: number | null;
             /**
@@ -4652,6 +4669,17 @@ export interface components {
              * @description How many threads hold an open ask, whatever the other filters: in the whole project, or with `mine` the threads with an open ask that waits for the signed-in human, which are the threads the listing marks `awaiting_human`. The navigation badge reads it with `mine=true&limit=1`.
              */
             total_awaiting_human: number;
+        };
+        /** @description The messages a mark-read call acknowledged. */
+        ThreadRead: {
+            /**
+             * @description In number order; empty when the signed-in human had nothing unread in the thread.
+             * @example [
+             *       "m-31",
+             *       "m-33"
+             *     ]
+             */
+            read: string[];
         };
         /** @description A thread with every message in number order. */
         ThreadView: {
@@ -12449,6 +12477,85 @@ export interface operations {
                 };
             };
             /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `message_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    mark_thread_read: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The id of the thread's first message, or of any message of the thread */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The messages this call marked read */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThreadRead"];
+                };
+            };
+            /** @description `invalid_id`: the id is not a message id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
             403: {
                 headers: {
                     [name: string]: unknown;
