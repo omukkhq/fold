@@ -175,7 +175,7 @@ export interface TeamRow {
   pill: StatePill;
   /** The worker waits for a human to answer a permission question. */
   asks: boolean;
-  /** The worker's session last read the role text of an older fold; its next turn tells it to load its role skill again. */
+  /** The worker's session last read the skill text of an older fold; its next turn tells it to load its role skill again. */
   olderFold: boolean;
   bound: Bound;
   model: string;

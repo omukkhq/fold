@@ -277,7 +277,7 @@ pub struct WorkerEntry {
         example = "/home/tanim/.claude/projects/-home-tanim-ledger/0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a13.jsonl"
     )]
     pub transcript: Option<String>,
-    /// The worker runs in a session that last read the role prompt and skill of another fld than the one that runs the daemon. Its next turn starts with a note to load its role skill again, and once fold writes that turn this is false; false for a worker that does not run or is starting.
+    /// The worker is idle or working in a session that last read other skill text than the fld that runs the daemon writes for its role. Its next turn starts with a note to load its role skill again, and once fold writes that turn this is false; false for a worker that is starting or stopping or does not run.
     pub older_fold: bool,
 }
 

@@ -23,6 +23,8 @@ const BEFORE_SPAWN: &str = "worker_launch_before_spawn";
 const BEFORE_STOP: &str = "worker_sweep_before_stop";
 const BEFORE_WAITER: &str = "worker_question_before_waiter";
 const MAIN: &str = "frontend";
+/// The fingerprint of the installed fld's skill texts in these tests.
+const FINGERPRINT: &str = "1111111111111111";
 
 /// Holds the code that reaches failpoint `name` until the returned sender sends; the receiver reports the arrival.
 fn hold(name: &str) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
@@ -130,7 +132,7 @@ async fn a_stop_before_the_process_starts_leaves_no_process_running() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_pause_before_the_process_starts_keeps_the_row_for_the_resume() {
     let scenario = fail::FailScenario::setup();
-    let fake = FakeClaude::new("init");
+    let fake = FakeClaude::new("init").with_fingerprint(FINGERPRINT);
     let harness = Harness::start_with_launcher(fake.launcher.clone()).await;
     harness.make_main(MAIN).await;
     let human = Actor::human(HumanName::parse("ana").unwrap());
@@ -170,6 +172,11 @@ async fn a_pause_before_the_process_starts_keeps_the_row_for_the_resume() {
     let kept = harness.handle.agents().get_worker(&lead).await.unwrap();
     assert_eq!(kept.state, WorkerState::Starting);
     assert_eq!(kept.pid, None);
+    assert_eq!(
+        kept.fold_fingerprint.as_deref(),
+        Some(FINGERPRINT),
+        "the new session records the skill texts it reads at the resume"
+    );
     let runs = fake.runs_of(lead.as_str());
     assert_eq!(runs.len(), 1, "the launch started its process and ended it");
     assert!(
@@ -212,6 +219,7 @@ async fn a_pause_before_the_process_starts_keeps_the_row_for_the_resume() {
         turn.contains("fold started you as review-lead, the review lead."),
         "the first turn the pause kept from the process follows the pause note: {turn}"
     );
+    assert!(!turn.contains("fold was updated"), "{turn}");
     scenario.teardown();
 }
 

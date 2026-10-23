@@ -4982,7 +4982,7 @@ export interface components {
              * @example web-worker
              */
             name: string;
-            /** @description The worker runs in a session that last read the role prompt and skill of another fld than the one that runs the daemon. Its next turn starts with a note to load its role skill again, and once fold writes that turn this is false; false for a worker that does not run or is starting. */
+            /** @description The worker is idle or working in a session that last read other skill text than the fld that runs the daemon writes for its role. Its next turn starts with a note to load its role skill again, and once fold writes that turn this is false; false for a worker that is starting or stopping or does not run. */
             older_fold: boolean;
             /** @description The sessions the worker had before its current one, oldest first. */
             previous_sessions: components["schemas"]["PreviousSessionEntry"][];

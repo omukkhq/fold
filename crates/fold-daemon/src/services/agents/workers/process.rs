@@ -53,7 +53,7 @@ pub struct Launcher {
     pub fold: Option<PathBuf>,
     /// Extra environment for every worker process.
     pub env: Vec<(String, String)>,
-    /// The fingerprint of the role text that the fld which runs the daemon gives a session of each role (see [`fold_core::roles::session_fingerprint`]): the role's prompt ships in this crate, its skill only in the binary that writes the skill files. A worker records it with its session, and a resume under another one tells the worker to load its role skill again. A role without one is never told.
+    /// The fingerprint of the skill texts that the fld which runs the daemon writes for a session of each role (see [`fold_core::roles::session_fingerprint`]), given by the caller because the skills ship only in the binary that writes the skill files. A worker records it with its session, and a resume under another one tells the worker to load its role skill again. A role without one is never told.
     pub fingerprints: BTreeMap<Role, String>,
 }
 
@@ -269,7 +269,7 @@ impl Supervisor {
         supervisor
     }
 
-    /// The fingerprint of the role text the installed fld gives a session of `role`; see [`Launcher::fingerprints`].
+    /// The fingerprint of the skill texts the installed fld writes for a session of `role`; see [`Launcher::fingerprints`].
     pub fn fingerprint(&self, role: Role) -> Option<String> {
         lock(&self.inner.launcher).fingerprints.get(&role).cloned()
     }
