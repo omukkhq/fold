@@ -19,7 +19,15 @@ import { HrefLink } from "./HrefLink";
 
 const MINUTE_MS = 60_000;
 
-export function AgentChips({ slug }: { slug: string }) {
+/** Below `md` the chips show only in the top bar's More popover, so there they stack as full-width 44px rows. */
+export function AgentChips({
+  slug,
+  onOpen,
+}: {
+  slug: string;
+  /** Called when a chip opens the board, so a popover that holds the chips can close. */
+  onOpen?: () => void;
+}) {
   const agents = useQuery(agentBarQuery(slug));
   const project = useQuery(projectQuery(slug));
   const paused = isPaused(project.data?.overview?.paused_since);
@@ -29,14 +37,18 @@ export function AgentChips({ slug }: { slug: string }) {
     return null;
   }
   return (
-    <ul aria-label="Agents" className="flex items-center gap-6">
+    <ul
+      aria-label="Agents"
+      className="flex items-center gap-6 max-md:flex-col max-md:items-stretch"
+    >
       {chipAgents(agents.data, paused).map((agent) => (
         <li key={agent.name}>
           <HrefLink
             href={agentBoardPath(slug, agent.name)}
             title={chipErrorTitle(agent)}
+            onClick={onOpen}
             className={cn(
-              "inline-flex items-center gap-6 rounded-chip bg-surface px-9 py-3 text-meta inset-ring inset-ring-border hover:bg-sunken",
+              "inline-flex items-center gap-6 rounded-chip bg-surface px-9 py-3 text-meta inset-ring inset-ring-border hover:bg-sunken max-md:flex max-md:min-h-44 max-md:px-14",
               focusRing,
             )}
           >
