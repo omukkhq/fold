@@ -11,7 +11,7 @@ use fold_store::workspaces::{
     close_unstash, conflict_stash, drop_stash, insert_stash, insert_unstash, open_unstash,
     stash_stack,
 };
-use fold_vcs::checkout::{folder_changes, follow, follow_unchanged};
+use fold_vcs::checkout::{folder_changes, follow};
 use fold_vcs::compare::load_flat;
 use fold_vcs::git::Git;
 use fold_vcs::git_remote::{BranchState, reset_index_paths};
@@ -91,6 +91,14 @@ pub enum UnstashOutcome {
     },
 }
 
+/// What `fld stash` or `fld record` did, with the outcome of the unstash that a stop had left part-way, which the command finished first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AfterUnstash<T> {
+    pub outcome: T,
+    /// None when no unstash waited to be finished, or when the one that waited had written nothing.
+    pub unstash: Option<UnstashOutcome>,
+}
+
 /// One entry of the stack as `fld stash list` shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StashEntry {
@@ -109,12 +117,12 @@ pub struct StashEntry {
 
 /// Puts the human's unrecorded changes in the project folder aside, for the named human who runs `fld stash`, so the folder follows main without them and nothing is lost. fold's own stack keeps them, the same with Git sync on or off; it is never a Git stash, which fold's Git watch reads as a change fold did not make.
 ///
-/// Under the project's remote lock and folder lock, the folder first follows main as `fld record` makes it, and a branch or `HEAD` that shows a change fold did not make is refused with the command that undoes it. An unstash that a stop left part-way is finished first, as its journal row says. The folder is then read as a record reads it. Its difference from the checkout record, files changed, added and removed, is the entry, with the record's tree as its base: its objects are stored, then one transaction pushes the entry and appends `stash.pushed`. Only then do those paths go back: while Git sync is on their index entries first go back to the branch's, so a staged change of them does not keep the branch where it is, and no Git stash is made; then the files go back to the record's entries, each only while it still holds what fold read, so a stop never leaves the changes in neither place. A conflicted human change from an earlier `fld record` that waits for the main agent is then closed with `human_change.withdrawn`, as a record that finds the folder clean closes it: the entry holds its changes. The folder then follows main. Nothing is stashed while an unstash's conflict markers wait in the folder, or while a file of the checkout record is too large or unreadable for the read, since its removal could not be put back.
+/// Under the project's remote lock and folder lock, the folder first follows main as `fld record` makes it, and a branch or `HEAD` that shows a change fold did not make is refused with the command that undoes it. An unstash that a stop left part-way is finished first, as [`finish_open_unstash`] describes, and the answer carries its outcome; the folder then follows main again. The folder is then read as a record reads it. Its difference from the checkout record, files changed, added and removed, is the entry, with the record's tree as its base: its objects are stored, then one transaction pushes the entry and appends `stash.pushed`. Only then do those paths go back: while Git sync is on their index entries first go back to the branch's, so a staged change of them does not keep the branch where it is, and no Git stash is made; then the files go back to the record's entries, each only while it still holds what fold read, so a stop never leaves the changes in neither place. A conflicted human change from an earlier `fld record` that waits for the main agent is then closed with `human_change.withdrawn`, as a record that finds the folder clean closes it: the entry holds its changes. The folder then follows main. Nothing is stashed while an unstash's conflict markers wait in the folder, or while a file of the checkout record is too large or unreadable for the read, since its removal could not be put back.
 pub async fn stash(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
     git: &Git,
-) -> Result<StashOutcome, ProjectError> {
+) -> Result<AfterUnstash<StashOutcome>, ProjectError> {
     policy::can_stash(actor).map_err(FoldError::from)?;
     let (handle, actor, git) = (Arc::clone(handle), actor.clone(), git.clone());
     spawned(async move { run_stash(&handle, &actor, &git).await }).await
@@ -122,7 +130,7 @@ pub async fn stash(
 
 /// Merges the newest entry of the stash into the project folder as it is now, for the named human who runs `fld unstash`: the entry's change from its base to its tree, merged three-way with the folder's files, including changes the human made since that no revision records.
 ///
-/// Under the remote lock and folder lock the folder follows main first, with the same refusal as `fld stash`. An unstash that a stop left part-way is finished first, as its journal row says, and its outcome is this command's. A folder that holds conflict markers or `.fold-stash` sides on a path of the entry is refused, so markers never nest; so is a write where the folder holds a file the read leaves out, such as an ignored one. A clean merge writes the merged files, each only while it still holds what fold read, and one transaction then closes the entry with `stash.applied`; the files are changes that no revision records, which `fld record` records. A conflict writes markers labelled `main (r<n>)` and `stash@{0}` into each text file, and the stash's side of any other conflict as `<path>.fold-stash`, then keeps the entry as conflicted with its paths and `stash.conflicted`: the folder stays where it is until the human fixes them and `fld record` finds no marker left, which drops the entry. Before the first file is written, one transaction opens the unstash's journal row with the folder's tree as fold read it, the tree the folder holds once every write is done and the conflicted paths, and the entry's own transaction closes it; so a stop between leaves the row open, and the next `fld stash`, `fld unstash` or `fld record` finishes the unstash by the row, not by what the files hold. While the row is open the folder does not follow main.
+/// Under the remote lock and folder lock the folder follows main first, with the same refusal as `fld stash`. An unstash that a stop left part-way is finished first, as [`finish_open_unstash`] describes, and its outcome is this command's; when it had written nothing its row is abandoned, and the folder follows main again before this unstash merges. A folder that holds conflict markers or `.fold-stash` sides on a path of the entry is refused, so markers never nest; so is a write where the folder holds a file the read leaves out, such as an ignored one. A clean merge writes the merged files, each only while it still holds what fold read, and one transaction then closes the entry with `stash.applied`; the files are changes that no revision records, which `fld record` records. A conflict writes markers labelled `main (r<n>)` and `stash@{0}` into each text file, and the stash's side of any other conflict as `<path>.fold-stash`, then keeps the entry as conflicted with its paths and `stash.conflicted`: the folder stays where it is until the human fixes them and `fld record` finds no marker left, which drops the entry. Before the first file is written, one transaction opens the unstash's journal row with the folder's tree as fold read it, the tree the folder holds once every write is done and the conflicted paths, and the entry's own transaction closes it; so a stop between leaves the row open, and the next `fld stash`, `fld unstash` or `fld record` finishes the unstash by the row, not by what the files hold. While the row is open the folder does not follow main.
 pub async fn unstash(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
@@ -171,13 +179,31 @@ async fn run_stash(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
     git: &Git,
-) -> Result<StashOutcome, ProjectError> {
+) -> Result<AfterUnstash<StashOutcome>, ProjectError> {
     let config = load_config(&handle.paths).await?;
     let _remote = handle.remote_lock.clone().lock_owned().await;
     let _folder = handle.folder_lock.clone().lock_owned().await;
-    let (followed, _) = sync(handle, git, false).await?;
-    refuse_branch(&config.git.branch, &followed)?;
-    finish_open_unstash(handle, config.max_file_bytes).await?;
+    let mut unstash = None;
+    loop {
+        let (followed, _) = sync(handle, git, false).await?;
+        refuse_branch(&config.git.branch, &followed)?;
+        match finish_open_unstash(handle, config.max_file_bytes).await? {
+            Finish::Nothing => break,
+            Finish::Abandoned => {}
+            Finish::Finished(outcome) => unstash = Some(outcome),
+        }
+    }
+    let outcome = stash_folder(handle, actor, git, config.max_file_bytes).await?;
+    Ok(AfterUnstash { outcome, unstash })
+}
+
+/// The part of `fld stash` after the folder followed main, under the caller's locks.
+async fn stash_folder(
+    handle: &Arc<ProjectHandle>,
+    actor: &Actor,
+    git: &Git,
+    max_file_bytes: u64,
+) -> Result<StashOutcome, ProjectError> {
     let stack = stack(handle).await?;
     if let Some(entry) = stack
         .first()
@@ -188,7 +214,7 @@ async fn run_stash(
     let record = workspaces::checkout(handle.store.read())
         .await?
         .ok_or(StoreError::Corrupt("checkout"))?;
-    let (tree, skipped) = snapshot_folder(handle, config.max_file_bytes).await?;
+    let (tree, skipped) = snapshot_folder(handle, max_file_bytes).await?;
     let newest = stack.first().map(|entry| (entry.base_tree, entry.tree));
     let open = refuse_unstashable(handle, record.tree, tree, &skipped, newest).await?;
     if !open.is_empty() {
@@ -247,7 +273,7 @@ async fn run_stash(
         })
         .await?;
     }
-    put_back(handle, record.tree, tree, config.max_file_bytes).await?;
+    put_back(handle, record.tree, tree, max_file_bytes).await?;
     // The folder holds none of the human's changes now and the stash holds them, so a conflicted human change that waits for the main agent is closed as a record that finds the folder clean closes it.
     withdraw_waiting(handle, actor).await?;
     let (followed, _) = sync(handle, git, false).await?;
@@ -383,12 +409,19 @@ async fn run_unstash(
     let config = load_config(&handle.paths).await?;
     let _remote = handle.remote_lock.clone().lock_owned().await;
     let _folder = handle.folder_lock.clone().lock_owned().await;
-    let (followed, _) = sync(handle, git, false).await?;
-    refuse_branch(&config.git.branch, &followed)?;
-    // The unstash that a stop left part-way is the one the human runs again, so its outcome is this command's.
-    if let Some(outcome) = finish_open_unstash(handle, config.max_file_bytes).await? {
-        sync(handle, git, true).await?;
-        return Ok(outcome);
+    loop {
+        let (followed, _) = sync(handle, git, false).await?;
+        refuse_branch(&config.git.branch, &followed)?;
+        match finish_open_unstash(handle, config.max_file_bytes).await? {
+            Finish::Nothing => break,
+            // The folder follows main again before the unstash merges into it.
+            Finish::Abandoned => {}
+            // The unstash that a stop left part-way is the one the human runs again, so its outcome is this command's.
+            Finish::Finished(outcome) => {
+                sync(handle, git, true).await?;
+                return Ok(outcome);
+            }
+        }
     }
     let stack = stack(handle).await?;
     let Some(entry) = stack.first() else {
@@ -472,8 +505,10 @@ async fn run_unstash(
         "unstash_after_journal"
     )
     .into()));
+    let objects_guard = handle.objects.clone().read_owned().await;
     let paths = handle.paths.clone();
     let written = blocking(move || {
+        let _objects = objects_guard;
         let fold_dir = paths.fold_dir();
         let objects = ObjectStore::open_existing(&fold_dir)?;
         let caps = probe(&fold_dir)?;
@@ -616,11 +651,21 @@ async fn close_entry(
     })
 }
 
-/// Finishes the unstash whose journal row a stop left open, which the next `fld stash`, `fld unstash` or `fld record` does before anything else, under the folder lock. When every path the unstash writes still holds what fold read before it, nothing of it reached the folder: the row closes as `abandoned` and the entry stays stashed, for the next unstash to merge again. Otherwise each such path that still holds what fold read gets the unstash's entry, a path that holds the unstash's entry or a change of the human's is left as it is, and the entry is applied or conflicted as the row says, with the row's conflicted paths: the human may have fixed the markers already, which the next `fld record` then finds and drops the entry. Returns the outcome of a finished unstash.
+/// What [`finish_open_unstash`] did.
+pub(super) enum Finish {
+    /// No unstash waited to be finished.
+    Nothing,
+    /// The unstash had written nothing, so its row closed as `abandoned` and the entry stays stashed.
+    Abandoned,
+    /// The unstash is finished as its row says.
+    Finished(UnstashOutcome),
+}
+
+/// Finishes the unstash whose journal row a stop left open, which the next `fld stash`, `fld unstash` or `fld record` does before anything else, under the folder lock; the caller then follows main again. When no path the unstash writes holds the unstash's entry, nothing of it reached the folder: the row closes as `abandoned` and the entry stays stashed, and the next unstash merges it three-way with whatever the human changed since. Otherwise each path that still holds what fold read gets the unstash's entry, a path that holds the unstash's entry or a change of the human's is left as it is, and the entry is applied or conflicted as the row says, with the row's conflicted paths: the human may have fixed the markers already, which the next `fld record` then finds and drops the entry.
 pub(super) async fn finish_open_unstash(
     handle: &ProjectHandle,
     max_file_bytes: u64,
-) -> Result<Option<UnstashOutcome>, ProjectError> {
+) -> Result<Finish, ProjectError> {
     let journal = {
         let mut conn = handle
             .store
@@ -631,7 +676,7 @@ pub(super) async fn finish_open_unstash(
         open_unstash(&mut conn).await?
     };
     let Some(journal) = journal else {
-        return Ok(None);
+        return Ok(Finish::Nothing);
     };
     let stack = stack(handle).await?;
     let Some(entry) = stack
@@ -651,21 +696,30 @@ pub(super) async fn finish_open_unstash(
         let (from, to) = (load_flat(&objects, &from)?, load_flat(&objects, &to)?);
         let root = paths.root();
         let changes = folder_changes(root, &from, &to, max_file_bytes, &caps)?;
-        if changes
+        if !changes
             .iter()
-            .all(|(path, found)| found.holds(from.get(path.as_bytes())))
+            .any(|(path, found)| found.holds(to.get(path.as_bytes())))
         {
             return Ok(false);
         }
-        follow_unchanged(&objects, root, &from, &to, &changes, caps)?;
+        let unwritten: Vec<_> = changes
+            .into_iter()
+            .filter(|(path, found)| found.holds(from.get(path.as_bytes())))
+            .collect();
+        follow(&objects, root, &from, &to, &unwritten, caps)?;
         Ok(true)
     })
     .await?;
     if !reached {
         abandon_unstash(handle, journal.id).await?;
         tracing::info!("an unstash stopped before it wrote a file; the entry stays stashed");
-        return Ok(None);
+        return Ok(Finish::Abandoned);
     }
+    #[cfg(feature = "failpoints")]
+    fail::fail_point!("unstash_finish_after_write", |_| Err(fired(
+        "unstash_finish_after_write"
+    )
+    .into()));
     let name = journal
         .actor
         .strip_prefix("human:")
@@ -684,7 +738,7 @@ pub(super) async fn finish_open_unstash(
     )
     .await?;
     tracing::info!("an unstash that stopped part-way is finished");
-    Ok(Some(outcome))
+    Ok(Finish::Finished(outcome))
 }
 
 /// Closes the unstash journal row `id` as `abandoned`: the unstash wrote nothing, so its entry stays stashed.
