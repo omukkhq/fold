@@ -1,4 +1,10 @@
-import { CornerDownRight, ShieldAlert, UserPlus, Users } from "lucide-react";
+import {
+  CornerDownRight,
+  History,
+  ShieldAlert,
+  UserPlus,
+  Users,
+} from "lucide-react";
 import { Fragment, type ReactNode } from "react";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
@@ -150,6 +156,7 @@ function Row({
               className="shrink-0 text-warning"
             />
           ) : null}
+          {row.olderFold ? <OlderFoldMark /> : null}
         </span>
       </td>
       <td className={CELL}>
@@ -167,6 +174,16 @@ function Row({
         <StopCell slug={slug} row={row} human={human} />
       </td>
     </tr>
+  );
+}
+
+/** The worker's session still holds the skill of an older fold, until its next turn tells it to load the skill again. */
+function OlderFoldMark() {
+  return (
+    <span className="flex shrink-0 items-center gap-4 whitespace-nowrap text-meta text-text-muted">
+      <History aria-hidden="true" size={12} />
+      older fold
+    </span>
   );
 }
 

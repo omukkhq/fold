@@ -936,6 +936,7 @@ async fn a_daemon_start_resumes_a_working_task_worker_once_its_socket_is_bound()
                 probe.to_string_lossy().into_owned(),
             ),
         ],
+        ..Launcher::default()
     };
     let clock = Arc::new(harness.project.clock().clone());
     let daemon = Daemon::start_with(config, clock, launcher).await.unwrap();
@@ -1035,6 +1036,7 @@ async fn a_daemon_stop_ends_the_workers_of_every_project_at_the_same_time() {
             "FOLD_TEST_DIR".to_owned(),
             marks.to_string_lossy().into_owned(),
         )],
+        ..Launcher::default()
     };
     let daemon = Daemon::start_with(config, Arc::new(SystemClock), launcher)
         .await

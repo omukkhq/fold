@@ -51,6 +51,8 @@ pub struct WorkerProcessRow {
     pub last_error_at: Option<Timestamp>,
     /// The turns in a row that failed before any token reached the model.
     pub failed_turns: u64,
+    /// The fingerprint of the role text that the current session last read; `None` for a session that a fold without fingerprints started. See [`fold_core::roles::session_fingerprint`].
+    pub fold_fingerprint: Option<String>,
     pub tasks: Vec<TaskId>,
     pub proposals: Vec<ProposalId>,
 }
@@ -347,6 +349,7 @@ struct RawProcess {
     last_error: Option<String>,
     last_error_at: Option<i64>,
     failed_turns: i64,
+    fold_fingerprint: Option<String>,
 }
 
 impl RawProcess {
@@ -383,6 +386,7 @@ impl RawProcess {
             last_error: self.last_error,
             last_error_at: optional_time(self.last_error_at, "worker_processes.last_error_at")?,
             failed_turns: count(self.failed_turns, "worker_processes.failed_turns")?,
+            fold_fingerprint: self.fold_fingerprint,
             tasks: Vec::new(),
             proposals: Vec::new(),
         })
@@ -398,7 +402,7 @@ macro_rules! select_processes {
                       w.model, w.session_id, w.pid, w.state, w.started_by, w.started_at, w.stopped_at,
                       w.idle_since, w.turns, w.cost_micro_usd, w.cache_read_tokens, w.cache_write_tokens,
                       w.context_tokens, w.exit_code, w.failed_reason, w.last_error, w.last_error_at,
-                      w.failed_turns
+                      w.failed_turns, w.fold_fingerprint
                FROM worker_processes w JOIN agents g ON g.id = w.agent_id LEFT JOIN areas a ON a.id = w.area_id
                "# + $tail
             $(, $arg)*
@@ -548,6 +552,22 @@ pub async fn mark_worker_working(tx: &mut WriteTx, id: i64) -> Result<bool, Stor
     .execute(tx.conn())
     .await?;
     Ok(result.rows_affected() == 1)
+}
+
+/// Records that the row's current session read the role text of `fingerprint`.
+pub async fn set_fold_fingerprint(
+    tx: &mut WriteTx,
+    id: i64,
+    fingerprint: &str,
+) -> Result<(), StoreError> {
+    sqlx::query!(
+        "UPDATE worker_processes SET fold_fingerprint = ? WHERE id = ?",
+        fingerprint,
+        id
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(())
 }
 
 pub async fn set_worker_pid(tx: &mut WriteTx, id: i64, pid: Option<u32>) -> Result<(), StoreError> {

@@ -659,6 +659,7 @@ async fn the_worker_environment_answers_only_on_the_socket_and_names_no_value() 
         claude: claude.clone(),
         fold: None,
         env: vec![("ANTHROPIC_API_KEY".to_owned(), SECRET.to_owned())],
+        ..Launcher::default()
     };
     let environment = WorkerEnvironment {
         source: EnvSource::Shell,

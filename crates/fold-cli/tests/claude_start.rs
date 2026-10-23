@@ -4,8 +4,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use fold_cli::claude_files::{SETTINGS_FILE, SKILL_FILES, SKILL_TEXTS};
+use fold_cli::claude_files::{SETTINGS_FILE, SKILL_FILES, SKILL_TEXTS, main_fingerprint};
 use fold_cli::claude_user::{self, UserFiles};
+use fold_core::roles::{Role, update_note};
 use fold_core::{AgentName, ProjectPaths};
 
 use crate::common::{DaemonGuard, Host, adapter, daemons, list_agents};
@@ -335,6 +336,52 @@ async fn fld_claude_resumes_the_main_session_fld_started_last_and_fld_new_starts
     assert!(taken.stdout.is_empty(), "claude did not run");
     assert!(text(&taken.stderr).contains("main_tag_denied"));
     assert_eq!(recorded(&host), w, "a refused start records nothing");
+    guard.stop().await;
+}
+
+#[tokio::test]
+async fn a_main_session_that_an_older_fold_started_is_told_to_load_its_skill_again() {
+    let host = Host::new().await;
+    let first = fld_claude(&host, &[], &host.root).await;
+    let guard = DaemonGuard(daemons(&host.default_socket()));
+    let x = recorded(&host);
+    assert_eq!(claude_args(&first), ["--name", "main", "--session-id", &x]);
+    let record =
+        ProjectPaths::new(&host.root).main_session_fingerprint(&AgentName::parse("main").unwrap());
+    let current = format!("{x} {}\n", main_fingerprint());
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), current);
+    let same = fld_claude(&host, &[], &host.root).await;
+    assert_eq!(claude_args(&same), ["--name", "main", "--resume", &x]);
+
+    let note = update_note(Role::Main);
+    std::fs::write(&record, format!("{x} 0.4.0+0000000000000000\n")).unwrap();
+    let updated = fld_claude(&host, &[], &host.root).await;
+    assert_eq!(
+        claude_args(&updated),
+        ["--name", "main", "--resume", &x, note.as_str()],
+        "the note is the session's first message"
+    );
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), current);
+    let again = fld_claude(&host, &[], &host.root).await;
+    assert_eq!(
+        claude_args(&again),
+        ["--name", "main", "--resume", &x],
+        "once"
+    );
+
+    std::fs::remove_file(&record).unwrap();
+    let unrecorded = fld_claude(&host, &["--", "--model", "opus"], &host.root).await;
+    assert_eq!(
+        claude_args(&unrecorded),
+        ["--name", "main", "--resume", &x, "--model", "opus"],
+        "the user's own arguments get no prompt beside them"
+    );
+    assert!(
+        text(&unrecorded.stdout).contains("ask the agent to load the `fold-main` skill again"),
+        "{}",
+        text(&unrecorded.stdout)
+    );
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), current);
     guard.stop().await;
 }
 

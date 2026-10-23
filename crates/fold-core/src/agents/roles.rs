@@ -8,6 +8,7 @@ use crate::tasks::{LabelName, define_names};
 mod answers;
 mod handoff;
 mod profile;
+mod update;
 
 pub use answers::{PermissionBehavior, ask_answer_turn, permission_answer_turn};
 pub use handoff::{
@@ -20,6 +21,7 @@ pub use profile::{
     AreaProfile, AreaProfileChange, AreaProfileRequest, FieldChange, MAX_AREA_INSTRUCTIONS_CHARS,
     area_prompt,
 };
+pub use update::{needs_update_note, session_fingerprint, update_note, with_update_note};
 
 define_names!(
     /// The kinds of worker agent fold starts and supervises. The main agent is usually the user's own interactive session, which has no role; a project whose `[main] supervised` setting is on has fold run it as the worker of role `main` instead, so it works with nobody at a terminal.
@@ -45,6 +47,17 @@ impl Role {
         match self {
             Role::TaskWorker | Role::Reviewer => CacheTtl::FiveMinutes,
             Role::AreaLead | Role::ReviewLead | Role::Main => CacheTtl::OneHour,
+        }
+    }
+
+    /// The name of the skill that holds the steps of the role, which the role's prompt tells it to load. The supervised main loads the skill of the interactive main agent.
+    pub fn skill(self) -> &'static str {
+        match self {
+            Role::AreaLead => "fold-area-lead",
+            Role::ReviewLead => "fold-review-lead",
+            Role::TaskWorker => "fold-task-worker",
+            Role::Reviewer => "fold-reviewer",
+            Role::Main => "fold-main",
         }
     }
 
@@ -982,14 +995,11 @@ mod tests {
 
     #[test]
     fn every_prompt_loads_the_skill_of_its_role_once() {
-        for (prompt, skill) in [
-            (Role::Main.prompt(), "fold-main"),
-            (main_prompt(), "fold-main"),
-            (Role::AreaLead.prompt(), "fold-area-lead"),
-            (Role::ReviewLead.prompt(), "fold-review-lead"),
-            (Role::TaskWorker.prompt(), "fold-task-worker"),
-            (Role::Reviewer.prompt(), "fold-reviewer"),
-        ] {
+        for (prompt, skill) in Role::ALL
+            .into_iter()
+            .map(|role| (role.prompt(), role.skill()))
+            .chain([(main_prompt(), Role::Main.skill())])
+        {
             let load = format!("Load the `{skill}` skill, the steps of your role.");
             assert_eq!(prompt.matches(&load).count(), 1, "{skill}");
             assert!(!prompt.contains("Load the `fold` skill"), "{skill}");

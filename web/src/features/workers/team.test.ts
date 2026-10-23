@@ -263,6 +263,18 @@ describe("steps", () => {
     expect(running?.rows[0]?.pill).toEqual(workerPill("working"));
   });
 
+  it("marks a worker whose session still holds an older fold's skill, and never the main agent", () => {
+    const older = workerProcess("web-lead", { older_fold: true });
+    const [group] = teamGroups(
+      input({ workers: workerList({ workers: [older] }) }),
+    );
+    expect(group?.rows[0]?.olderFold).toBe(true);
+    const [current] = teamGroups(
+      input({ workers: workerList({ workers: [workerProcess("web-lead")] }) }),
+    );
+    expect(current?.rows[0]?.olderFold).toBe(false);
+  });
+
   it("shows a worker's last error under its step, and what to check once it cannot reach the model", () => {
     expect(rowError(workerProcess("web-lead"))).toBeNull();
     expect(
@@ -407,6 +419,7 @@ describe("teamGroups", () => {
       name: "main",
       roleLine: "Main agent · your terminal session",
       bound: { kind: "person", name: "human:tanim" },
+      olderFold: false,
       stop: null,
       model: "-",
       session: null,
