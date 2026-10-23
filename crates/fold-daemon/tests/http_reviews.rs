@@ -1080,7 +1080,10 @@ async fn approve_and_integrate_wait_while_an_update_runs_its_checks() {
     let go = gate.path().join("go");
     let update = fx.updating_proposal(&author, &go).await;
     let detail = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
-    assert_eq!(detail.body["update_run"], json!(update.to_string()));
+    assert_eq!(
+        detail.body["update_run"],
+        json!({"run": update.to_string(), "purpose": "update_proposal"})
+    );
     let approve = send(
         &fx,
         Method::POST,
@@ -1126,6 +1129,60 @@ async fn approve_and_integrate_wait_while_an_update_runs_its_checks() {
     )
     .await;
     assert_eq!(changes.status, StatusCode::CREATED, "{}", changes.body);
+    std::fs::write(&go, "").unwrap();
+    let detail = fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
+        let detail = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
+        if detail.body["summary"]["current_version"] == 2 {
+            Ok(detail)
+        } else {
+            Err(detail.body)
+        }
+    })
+    .await;
+    assert_eq!(detail.body["update_run"], Value::Null);
+}
+
+#[tokio::test]
+async fn approve_and_integrate_wait_while_a_reviewer_fix_runs_its_checks() {
+    let fx = Fixture::new().await;
+    let author = fx.agent("frontend").await;
+    let review = fx.agent("review").await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
+    let gate = tempfile::tempdir().unwrap();
+    let go = gate.path().join("go");
+    let fix = fx.fixing_proposal(&author, &review, &go).await;
+    let detail = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;
+    assert_eq!(
+        detail.body["update_run"],
+        json!({"run": fix.to_string(), "purpose": "review_fix"})
+    );
+    let approve = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/reviews",
+        Some(json!({"version": 1, "verdict": "approve", "body": "fine"})),
+        Some(TANIM),
+    )
+    .await;
+    assert_eq!(
+        (approve.status, approve.code()),
+        (StatusCode::CONFLICT, "update_checks_running"),
+        "{}",
+        approve.body
+    );
+    assert_eq!(approve.body["error"]["details"]["purpose"], "review_fix");
+    let integrate = send(
+        &fx,
+        Method::POST,
+        "/proposals/P-1/integrate",
+        Some(json!({"expected_version": 1})),
+        Some(TANIM),
+    )
+    .await;
+    assert_eq!(
+        (integrate.status, integrate.code()),
+        (StatusCode::CONFLICT, "update_checks_running")
+    );
     std::fs::write(&go, "").unwrap();
     let detail = fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
         let detail = send(&fx, Method::GET, "/proposals/P-1", None, Some(TANIM)).await;

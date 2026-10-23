@@ -1293,7 +1293,10 @@ async fn an_approve_waits_while_an_update_runs_the_checks_of_the_next_version() 
     let go = gate.path().join("go");
     let update = fx.updating_proposal(&author, &go).await;
     let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
-    assert_eq!(view["update_run"], json!(update.to_string()));
+    assert_eq!(
+        view["update_run"],
+        json!({"run": update.to_string(), "purpose": "update_proposal"})
+    );
     let held = err(
         &review,
         "submit_review",
@@ -1326,6 +1329,68 @@ async fn an_approve_waits_while_an_update_runs_the_checks_of_the_next_version() 
         &review,
         "submit_review",
         json!({"id": "P-1", "version": 2, "verdict": "approve", "body": "ok"}),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn an_approve_waits_while_the_reviewers_fix_runs_and_the_reviewer_approves_the_fix_version() {
+    let fx = Fixture::new().await;
+    let review = reviewer(&fx).await;
+    let author = fx.agent("frontend").await;
+    let gate = tempfile::tempdir().unwrap();
+    let go = gate.path().join("go");
+    fx.gated_proposal(&author, &go).await;
+    give_p1(&fx).await;
+    let checkout = ok(&review, "create_review_checkout", json!({"id": "P-1"})).await;
+    let dir = fx
+        .project
+        .paths()
+        .root()
+        .join(checkout["path"].as_str().unwrap());
+    std::fs::write(dir.join("src/lib.rs"), "pub fn y() -> u8 { 1 }\n").unwrap();
+    let fixing = ok(
+        &review,
+        "submit_review_fix",
+        json!({
+            "id": "P-1",
+            "version": 1,
+            "fixes": [{"path": "src/lib.rs", "reason": "y returned nothing"}],
+            "checks": "cargo test: ok",
+        }),
+    )
+    .await;
+    assert_eq!(fixing["checks"], "running");
+    let run = fixing["run"].clone();
+    let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
+    assert_eq!(
+        view["update_run"],
+        json!({"run": run, "purpose": "review_fix"})
+    );
+    let held = err(
+        &review,
+        "submit_review",
+        json!({"id": "P-1", "version": 1, "verdict": "approve", "body": "ok"}),
+    )
+    .await;
+    assert_eq!(held["code"], "update_checks_running");
+    assert_eq!(held["details"]["purpose"], "review_fix");
+    let hint = held["hint"].as_str().unwrap();
+    assert!(hint.contains("wait_for_events"), "{hint}");
+    std::fs::write(&go, "").unwrap();
+    fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
+        let view = ok(&review, "get_proposal", json!({"id": "P-1"})).await;
+        if view["current_version"] == "v2" && view.get("update_run").is_none() {
+            Ok(())
+        } else {
+            Err(view)
+        }
+    })
+    .await;
+    ok(
+        &review,
+        "submit_review",
+        json!({"id": "P-1", "version": 2, "verdict": "approve", "body": "Fixes: src/lib.rs (y returns 1). cargo test: ok"}),
     )
     .await;
 }

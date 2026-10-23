@@ -12,7 +12,7 @@ use super::super::error::{ApiError, ErrorEnvelope};
 use super::super::tasks::id;
 use super::service;
 use crate::daemon::AppState;
-use crate::services::reviews::checks::CheckRunView;
+use crate::services::reviews::checks::{CheckRunView, VersionRun};
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(get_check_run))
@@ -56,6 +56,24 @@ impl From<Purpose> for CheckPurpose {
             Purpose::UpdateProposal => Self::UpdateProposal,
             Purpose::Integrate => Self::Integrate,
             Purpose::ReviewFix => Self::ReviewFix,
+        }
+    }
+}
+
+/// The run in progress that makes a proposal's next version when its checks pass. While it goes, the current version is neither approved nor integrated (`update_checks_running`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct NextVersionRun {
+    #[schema(example = "cr-4")]
+    pub run: String,
+    /// `update_proposal` for the author's update, `review_fix` for a reviewer's fix in a review checkout.
+    pub purpose: CheckPurpose,
+}
+
+impl From<VersionRun> for NextVersionRun {
+    fn from(run: VersionRun) -> Self {
+        Self {
+            run: run.run.to_string(),
+            purpose: run.purpose.into(),
         }
     }
 }

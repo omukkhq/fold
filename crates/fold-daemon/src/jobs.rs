@@ -472,7 +472,7 @@ async fn integrate_project(
         };
         match received {
             Ok(BusMessage::Durable(event))
-                if can_make_ready(event.event_type) || ends_an_update(&event) => {}
+                if can_make_ready(event.event_type) || ends_a_version_run(&event) => {}
             Err(RecvError::Lagged(_)) => {}
             Ok(_) => continue,
             Err(RecvError::Closed) => break,
@@ -500,14 +500,16 @@ fn can_make_ready(event_type: EventType) -> bool {
     .contains(&event_type)
 }
 
-/// The end of an update's proposal checks: while the run went, the approved current version waited for it, and a run that made no version leaves that version ready again. The end of any other run makes nothing ready.
-fn ends_an_update(event: &Event) -> bool {
+/// The end of the checks of a proposal's next version, an author's update or a reviewer's fix: while the run went, the approved current version waited for it, and a run that made no version leaves that version ready again. The end of any other run makes nothing ready.
+fn ends_a_version_run(event: &Event) -> bool {
+    let purpose = event
+        .data
+        .get("purpose")
+        .and_then(serde_json::Value::as_str);
     event.event_type == types::CHECKS_FINISHED
-        && event
-            .data
-            .get("purpose")
-            .and_then(serde_json::Value::as_str)
-            == Some(Purpose::UpdateProposal.as_str())
+        && [Purpose::UpdateProposal, Purpose::ReviewFix]
+            .iter()
+            .any(|version| purpose == Some(version.as_str()))
 }
 
 async fn integrate_ready(
@@ -997,7 +999,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_end_of_an_update_run_lets_its_approved_version_integrate() {
+    fn only_the_end_of_a_next_version_run_lets_its_approved_version_integrate() {
         let event = |event_type, purpose: &str| Event {
             seq: 1,
             event_type,
@@ -1009,20 +1011,22 @@ mod tests {
             data: json!({"stage": "proposal", "purpose": purpose}),
             created_at: Timestamp::EPOCH,
         };
-        assert!(ends_an_update(&event(
-            types::CHECKS_FINISHED,
-            "update_proposal"
-        )));
-        for purpose in ["check", "create_proposal", "integrate", "review_fix"] {
+        for purpose in ["update_proposal", "review_fix"] {
             assert!(
-                !ends_an_update(&event(types::CHECKS_FINISHED, purpose)),
+                ends_a_version_run(&event(types::CHECKS_FINISHED, purpose)),
+                "{purpose}"
+            );
+            assert!(
+                !ends_a_version_run(&event(types::CHECKS_STARTED, purpose)),
                 "{purpose}"
             );
         }
-        assert!(!ends_an_update(&event(
-            types::CHECKS_STARTED,
-            "update_proposal"
-        )));
+        for purpose in ["check", "create_proposal", "integrate"] {
+            assert!(
+                !ends_a_version_run(&event(types::CHECKS_FINISHED, purpose)),
+                "{purpose}"
+            );
+        }
     }
 
     #[test]

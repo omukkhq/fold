@@ -10,10 +10,12 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use fold_core::policy::{Gate, GateStatus};
 use fold_core::reviews::Verdict;
+use fold_core::reviews::checks::{Purpose, RunReason, RunState};
 use fold_core::roles::Role;
 use fold_core::{Actor, EventFilter, FoldError, ProposalId, TaskStatus, WorkspaceId, codes};
 use fold_daemon::http::host::CLIENT_HEADER;
 use fold_daemon::http::socket_router;
+use fold_daemon::services::reviews::checks::VersionRun;
 use fold_daemon::services::reviews::{
     BatchVerdict, CheckoutTarget, FixedVersion, IntegrationOutcome, LeftOutReason, ReviewError,
     ReviewFix,
@@ -795,4 +797,167 @@ async fn a_red_fix_adds_no_version_and_tells_the_reviewer() {
         "{message}"
     );
     assert!(message.contains("submit_review_fix again"), "{message}");
+}
+
+/// `frontend` opens `P-1` behind a check that waits until `go` exists; `review` has the reviewer role.
+#[cfg(test)]
+async fn gated_scene(go: &std::path::Path) -> (Fixture, Actor) {
+    let fx = Fixture::new().await;
+    let frontend = fx.agent("frontend").await;
+    let review = fx.agent("review").await;
+    give_role(&fx.handle.store, "review", Role::Reviewer, None).await;
+    fx.gated_proposal(&frontend, go).await;
+    (fx, review)
+}
+
+#[tokio::test]
+async fn a_running_fix_holds_approve_and_integrate_of_the_fixed_version_and_the_reviewer_approves_its_fix()
+ {
+    let gate = tempfile::tempdir().unwrap();
+    let go = gate.path().join("go");
+    let (fx, review) = gated_scene(&go).await;
+    let (run, _) = fx.fix_p1(&review).await;
+    let reviews = fx.reviews();
+    let view = reviews.view_proposal(&review, p(1), None).await.unwrap();
+    assert_eq!(
+        view.update_run,
+        Some(VersionRun {
+            run,
+            purpose: Purpose::ReviewFix
+        })
+    );
+    for actor in [&review, &human("tanim")] {
+        let held = refusal(
+            reviews
+                .submit_review(actor, p(1), 1, Verdict::Approve, "ok", Vec::new())
+                .await,
+        );
+        assert_eq!(held.code(), codes::UPDATE_CHECKS_RUNNING);
+        assert_eq!(details(&held)["run"], json!(run.to_string()));
+        assert_eq!(details(&held)["purpose"], "review_fix");
+        assert!(held.message().contains("reviewer's fix"), "{held:?}");
+    }
+    let integrate = refusal(
+        reviews
+            .integrate_proposal(&human("tanim"), p(1), Some(1))
+            .await,
+    );
+    assert_eq!(integrate.code(), codes::UPDATE_CHECKS_RUNNING);
+    assert_eq!(details(&integrate)["purpose"], "review_fix");
+    reviews
+        .submit_review(
+            &human("tanim"),
+            p(1),
+            1,
+            Verdict::Comment,
+            "waiting",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+
+    std::fs::write(&go, "").unwrap();
+    let view = fold_store::testing::eventually(std::time::Duration::from_secs(30), async || {
+        let view = reviews.view_proposal(&review, p(1), None).await.unwrap();
+        if view.detail.summary.current_version == 2 {
+            Ok(view)
+        } else {
+            Err(view.detail.summary.current_version)
+        }
+    })
+    .await;
+    assert_eq!(view.update_run, None);
+    reviews
+        .submit_review(
+            &review,
+            p(1),
+            2,
+            Verdict::Approve,
+            "Fixes: src/lib.rs (y returns 1). cargo test: ok",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    // The checks file the proposal adds gives the task the human review mark, so the human integrates after the reviewer's approval.
+    let outcome = reviews
+        .integrate_proposal(&human("tanim"), p(1), Some(2))
+        .await
+        .unwrap();
+    assert!(matches!(outcome, IntegrationOutcome::Succeeded { .. }));
+}
+
+#[tokio::test]
+async fn a_version_approved_before_a_fix_integrates_on_its_own_once_the_fix_run_ends_without_a_version()
+ {
+    let gate = tempfile::tempdir().unwrap();
+    let go = gate.path().join("go");
+    let (fx, review) = gated_scene(&go).await;
+    let reviews = fx.reviews();
+    for actor in [&review, &human("tanim")] {
+        reviews
+            .submit_review(actor, p(1), 1, Verdict::Approve, "ok", Vec::new())
+            .await
+            .unwrap();
+    }
+    let (run, file) = fx.fix_p1(&review).await;
+    assert!(reviews.integrate_ready().await.unwrap().is_empty());
+    std::fs::write(&file, "pub fn y() -> u8 { 2 }\n").unwrap();
+    std::fs::write(&go, "").unwrap();
+    let ended = crate::checks::ended(&reviews, run).await;
+    assert_eq!(ended.run.state, RunState::Failed);
+    assert_eq!(ended.run.reason, Some(RunReason::FilesChanged));
+    let view = reviews.view_proposal(&review, p(1), None).await.unwrap();
+    assert_eq!(view.update_run, None);
+    assert_eq!(view.detail.summary.current_version, 1);
+    let done = reviews.integrate_ready().await.unwrap();
+    assert_eq!(
+        done.iter().map(|done| done.proposal).collect::<Vec<_>>(),
+        [p(1)]
+    );
+}
+
+#[tokio::test]
+async fn a_batch_approval_of_a_member_waits_while_a_fix_of_it_runs_its_checks() {
+    let gate = tempfile::tempdir().unwrap();
+    let go = gate.path().join("go");
+    let (fx, review) = gated_scene(&go).await;
+    let reviews = fx.reviews();
+    let backend = fx.agent("backend").await;
+    fx.workspaces()
+        .create_workspace(&backend, t(2))
+        .await
+        .unwrap();
+    fx.write(2, "README.md", "# demo\nmore\n");
+    reviews
+        .create_proposal(&backend, t(2), "Extend the readme", Some("read it"))
+        .await
+        .unwrap();
+    let (run, _) = fx.fix_p1(&review).await;
+    let batch = crate::common::roles::give_batch(
+        &fx.handle.store,
+        "review",
+        &[p(1), p(2)],
+        fx.handle.clock.now(),
+    )
+    .await;
+    let approve = |proposal| BatchVerdict {
+        proposal,
+        verdict: Verdict::Approve,
+        body: String::new(),
+    };
+    let held = refusal(
+        reviews
+            .submit_batch_review(
+                &review,
+                batch,
+                vec![approve(p(1)), approve(p(2))],
+                Vec::new(),
+            )
+            .await,
+    );
+    assert_eq!(held.code(), codes::UPDATE_CHECKS_RUNNING);
+    assert_eq!(details(&held)["proposal"], "P-1");
+    assert_eq!(details(&held)["purpose"], "review_fix");
+    std::fs::write(&go, "").unwrap();
+    crate::checks::ended(&reviews, run).await;
 }

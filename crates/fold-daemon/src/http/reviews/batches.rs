@@ -16,6 +16,7 @@ use super::super::diff::{FileDiffView, file_view};
 use super::super::error::{ApiError, ApiQuery, ErrorEnvelope};
 use super::super::tasks::id;
 use super::super::workspaces::{ChangeSource, ComparedFile, ComparisonTotals};
+use super::checks::NextVersionRun;
 use super::{ProposalStateView, ReviewVerdict, service};
 use crate::daemon::AppState;
 use crate::services::reviews::{
@@ -173,6 +174,14 @@ pub struct ReviewBatchRevision {
     pub revision: RevisionId,
 }
 
+/// A member whose next version runs its checks.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewBatchUpdating {
+    #[schema(value_type = String, example = "P-3")]
+    pub proposal: ProposalId,
+    pub run: NextVersionRun,
+}
+
 /// Whether the approved members of a submitted batch integrate together now, wait for the others, or did.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ReviewBatchIntegration {
@@ -185,6 +194,8 @@ pub struct ReviewBatchIntegration {
     pub members: Vec<ProposalId>,
     /// While `ready`: a request to integrate the batch waits in the integration queue.
     pub queued: bool,
+    /// While `ready`: the members of `members` whose author's update or reviewer's fix runs the checks of their next version. The batch integrates only once these runs end (`update_checks_running`).
+    pub updating: Vec<ReviewBatchUpdating>,
     /// Once `ended`.
     #[schema(required = true)]
     pub outcome: Option<ReviewBatchOutcome>,
@@ -202,6 +213,7 @@ impl From<BatchIntegrationView> for ReviewBatchIntegration {
             pending: Vec::new(),
             members: Vec::new(),
             queued: false,
+            updating: Vec::new(),
             outcome: None,
             run: None,
             revisions: Vec::new(),
@@ -212,10 +224,21 @@ impl From<BatchIntegrationView> for ReviewBatchIntegration {
                 out.state = ReviewBatchIntegrationState::Waiting;
                 out.pending = pending;
             }
-            BatchIntegrationView::Ready { members, queued } => {
+            BatchIntegrationView::Ready {
+                members,
+                queued,
+                updating,
+            } => {
                 out.state = ReviewBatchIntegrationState::Ready;
                 out.members = members;
                 out.queued = queued;
+                out.updating = updating
+                    .into_iter()
+                    .map(|(proposal, run)| ReviewBatchUpdating {
+                        proposal,
+                        run: run.into(),
+                    })
+                    .collect();
             }
             BatchIntegrationView::Ended {
                 outcome,
@@ -457,7 +480,7 @@ fn member_result(member: MemberIntegration) -> Option<BatchMemberResult> {
         (status = 400, description = "`invalid_request` (`details.reason` is `batch_not_submitted`, `batch_waiting` with `details.pending`, `batch_integrated`, or `integration_queued`), `invalid_id` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`review_batch_not_found` or `project_not_found`", body = ErrorEnvelope),
-        (status = 409, description = "A gate refusal for a member, with `details.batch` and `details.proposal`: `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`) or `proposal_not_open`; or `head_moved`", body = ErrorEnvelope),
+        (status = 409, description = "A gate refusal for a member, with `details.batch` and `details.proposal`: `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`), `proposal_not_open`, or `update_checks_running` while the author's update or a reviewer's fix of a member runs the checks of its next version (`details.run`, `details.purpose`); or `head_moved`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`, or `integration_failed` (`details.cause`)", body = ErrorEnvelope),
         (status = 500, description = "Internal error, or `workspace_io` with `details.reason` `fold_failed` when fold itself could not run the integration checks", body = ErrorEnvelope),
     )
