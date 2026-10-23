@@ -13,6 +13,15 @@ function list(ids: readonly string[]): string {
   return ids.join(", ");
 }
 
+type Updating = ReviewBatch["integration"]["updating"][number];
+
+/** A member's run of its next version, as the note names it. */
+function updateName(member: Updating): string {
+  return member.run.purpose === "review_fix"
+    ? `a reviewer's fix of ${member.proposal}`
+    : `an update of ${member.proposal}`;
+}
+
 /** What the screen says about the batch's integration. The approved members of a submitted batch integrate together, with one run of the integration checks, once every member has its final state. */
 export function integrationNote(batch: ReviewBatch): IntegrationNote {
   const i = batch.integration;
@@ -34,6 +43,12 @@ export function integrationNote(batch: ReviewBatch): IntegrationNote {
       if (i.members.length === 0) {
         return {
           text: "No member can integrate with the batch. Each member integrates on its own.",
+          canIntegrate: false,
+        };
+      }
+      if (i.updating.length > 0) {
+        return {
+          text: `Waiting for the checks of ${list(i.updating.map(updateName))} to end. Then fold integrates the approved members together.`,
           canIntegrate: false,
         };
       }
@@ -90,6 +105,16 @@ export function integrateFailure(error: unknown): string {
   switch (apiErrorCode(error)) {
     case "head_moved":
       return "main moved during each attempt. Try again.";
+    case "update_checks_running": {
+      const details = error instanceof ApiError ? error.details : {};
+      const member =
+        typeof details.proposal === "string" ? details.proposal : "a member";
+      const run =
+        details.purpose === "review_fix"
+          ? `A reviewer's fix of ${member}`
+          : `An update of ${member}`;
+      return `${run} is running its checks. Integrate when they end.`;
+    }
     case "checks_file_invalid":
       return "fold-checks.toml on main is not valid. Integrate again once it is fixed.";
     default:

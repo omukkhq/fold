@@ -1,8 +1,9 @@
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use fold_core::layout::{HOOKS, hook_group};
-use fold_core::roles::Role;
+use fold_core::roles::{Role, session_fingerprint};
 use fold_core::{FoldError, codes};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
@@ -121,6 +122,30 @@ pub fn role_skill_file(role: Role) -> &'static str {
         Role::TaskWorker => TASK_WORKER_SKILL_FILE,
         Role::Reviewer => REVIEWER_SKILL_FILE,
     }
+}
+
+/// The text of the skill that holds the steps of `role`, which [`role_skill_file`] names.
+pub fn role_skill(role: Role) -> &'static str {
+    match role {
+        Role::Main => MAIN_SKILL,
+        Role::AreaLead => AREA_LEAD_SKILL,
+        Role::ReviewLead => REVIEW_LEAD_SKILL,
+        Role::TaskWorker => TASK_WORKER_SKILL,
+        Role::Reviewer => REVIEWER_SKILL,
+    }
+}
+
+/// The fingerprint of the skill texts this fld writes for a session of each role (see [`role_fingerprint`]).
+pub fn worker_fingerprints() -> BTreeMap<Role, String> {
+    Role::ALL
+        .into_iter()
+        .map(|role| (role, role_fingerprint(role)))
+        .collect()
+}
+
+/// The fingerprint of the skill texts a session of `role` reads: its role skill, whose sections include the shared rules, and the shared `fold` skill, reference and error list. The main agent's own session that `fld claude` starts reads the skills of [`Role::Main`].
+pub fn role_fingerprint(role: Role) -> String {
+    session_fingerprint(&[role_skill(role), SKILL, REFERENCE, ERRORS])
 }
 
 /// `details.reason` of a Claude Code file that fold cannot merge into.
@@ -780,6 +805,22 @@ pub fn shadowing_warning(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_role_has_a_fingerprint_of_its_own_skill_and_the_shared_ones() {
+        let fingerprints = worker_fingerprints();
+        assert_eq!(fingerprints.len(), Role::ALL.len());
+        for role in Role::ALL {
+            assert_eq!(
+                fingerprints[&role],
+                session_fingerprint(&[role_skill(role), SKILL, REFERENCE, ERRORS]),
+                "{role}"
+            );
+            assert_eq!(fingerprints[&role], role_fingerprint(role), "{role}");
+        }
+        assert_eq!(role_skill(Role::Main), MAIN_SKILL);
+        assert_ne!(fingerprints[&Role::AreaLead], fingerprints[&Role::Reviewer]);
+    }
 
     #[test]
     fn a_symlinked_file_stays_a_link_and_its_target_changes() {

@@ -70,7 +70,7 @@ async fn acceptance_17_the_human_stashes_unfinished_changes_while_agents_integra
     let stashed = fld_ok(&h, Method::POST, "stash").await;
     assert_eq!(
         stashed,
-        json!({"outcome": "stashed", "revision": revision, "files": ["docs.md", "notes.md"], "entries": 1, "skipped": []})
+        json!({"outcome": "stashed", "revision": revision, "files": ["docs.md", "notes.md"], "entries": 1, "skipped": [], "unstash": null})
     );
     assert_eq!(read(&root, "docs.md"), "main\nb\nc\n");
     assert!(!root.join("notes.md").exists());

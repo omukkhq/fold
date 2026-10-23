@@ -50,7 +50,9 @@ pub use workers::{
     OwedReview, PendingResume, pending_resumes, reviews_owed_to_ended_reviewers,
     unreviewed_claims_of_ended_reviewer,
 };
-pub use workers::{clear_turn_error, forget_made_up_model, record_turn_error, set_exit_error};
+pub use workers::{
+    clear_turn_error, forget_made_up_model, record_turn_error, set_exit_error, set_fold_fingerprint,
+};
 
 /// Row ids of these tables stay inside the daemon; the public handles are the names.
 #[derive(Debug, Clone, PartialEq, Eq)]

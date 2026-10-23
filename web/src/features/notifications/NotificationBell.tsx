@@ -159,7 +159,7 @@ export function NotificationBell({ slug }: { slug: string }) {
             type="button"
             aria-label={bellLabel(unread)}
             className={cn(
-              "relative flex items-center rounded-m px-10 py-7 text-text-muted hover:bg-sunken",
+              "relative flex shrink-0 items-center rounded-m px-10 py-7 text-text-muted hover:bg-sunken max-lg:size-44 max-lg:justify-center max-lg:p-0",
               focusRing,
             )}
           >
@@ -167,7 +167,7 @@ export function NotificationBell({ slug }: { slug: string }) {
             {unread > 0 ? (
               <span
                 aria-hidden="true"
-                className="absolute top-2 right-2 flex h-16 min-w-16 items-center justify-center rounded-chip bg-primary px-4 text-micro font-semibold text-on-primary"
+                className="absolute top-2 right-2 flex h-16 max-lg:top-4 max-lg:right-4 min-w-16 items-center justify-center rounded-chip bg-primary px-4 text-micro font-semibold text-on-primary"
               >
                 {unread}
               </span>
@@ -180,7 +180,7 @@ export function NotificationBell({ slug }: { slug: string }) {
             sideOffset={6}
             collisionPadding={16}
             aria-label="Notifications"
-            className="z-10 flex w-notifications max-w-full flex-col rounded-m border border-border bg-raised shadow-card outline-none"
+            className="z-10 flex w-notifications max-w-(--width-popover-max) flex-col rounded-m border border-border bg-raised shadow-card outline-none"
           >
             <div className="flex items-center gap-8 border-b border-border-subtle px-16 py-12">
               <h2 className="flex-1 text-card font-semibold text-text">

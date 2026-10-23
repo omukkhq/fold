@@ -54,3 +54,4 @@ Every error has a stable `code`, a message and a hint that names the next tool. 
 | `review_plan_not_open` | The plan started or ended, or its wait ended so it takes no more tasks. Read it with `get_review_plan`. |
 | `review_plan_not_found` | Call `list_review_plans` to see the plans. |
 | `review_plan_denied` | Only the review lead makes and adds to a review plan; the main agent only removes members or closes it, when the user tells it to. Tell the review lead with `send_message` which proposals belong together. |
+| `update_checks_running` | The author's update or a reviewer's fix of the proposal runs the checks of its next version (`details.purpose` says which), so its current version is not approved or integrated now. Wait for `checks.finished` with `wait_for_events`, then call `get_proposal` and review the new version. When the checks failed, no new version exists, and the current version can be approved and integrated again. |

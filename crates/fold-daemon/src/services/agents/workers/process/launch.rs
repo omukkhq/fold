@@ -8,7 +8,9 @@ use fold_core::events::types;
 use fold_core::layout::{
     AGENT_ENV, AGENT_TAGS_ENV, MCP_COMMAND, MCP_SERVER_NAME, MCP_SERVERS_KEY, session_settings,
 };
-use fold_core::roles::{CLAUDE_NOT_FOUND, FLD_MISSING, area_prompt, needs_restart};
+use fold_core::roles::{
+    CLAUDE_NOT_FOUND, FLD_MISSING, area_prompt, needs_restart, needs_update_note, with_update_note,
+};
 use fold_core::{
     AgentName, AreaName, EventActor, NewEvent, ProjectPaths, Role, WorkerState, codes,
 };
@@ -32,7 +34,7 @@ use crate::services::projects::load_config;
 use crate::support::SESSION_ENV;
 
 impl Supervisor {
-    /// Runs Claude Code for the row, which a committed command left in state `starting`: a new session, or `--resume` of the row's session. `turn` is the first user turn; without one a resumed worker waits idle for its next notice. A process that cannot start, for an unreadable configuration, files that cannot be written, a failed spawn or a process that cannot be recorded, leaves the row `failed` with `worker.failed` and gives no [`StartWatch`], so no `starting` row holds a place under the limits.
+    /// Runs Claude Code for the row, which a committed command left in state `starting`: a new session, or `--resume` of the row's session. `turn` is the first user turn; without one a resumed worker waits idle for its next notice. A new session records the installed fld's fingerprint of the role's skill text, also when a pause ends its start; a resumed one whose recorded fingerprint differs gets the update note before its first turn, whichever turn that is, and records the new fingerprint once that turn is written. A process that cannot start, for an unreadable configuration, files that cannot be written, a failed spawn or a process that cannot be recorded, leaves the row `failed` with `worker.failed` and gives no [`StartWatch`], so no `starting` row holds a place under the limits.
     pub(in crate::services::agents::workers) async fn launch(
         &self,
         row: &WorkerProcessRow,
@@ -77,6 +79,7 @@ impl Supervisor {
             }
         }
         let launcher = lock(&self.inner.launcher).clone();
+        let fingerprint = launcher.fingerprints.get(&row.role).cloned();
         let files = write_files(
             &self.inner.paths,
             &launcher,
@@ -221,23 +224,39 @@ impl Supervisor {
             .inner
             .store
             .write(async |tx| {
-                let starting = agents::find_worker_process(tx.conn(), &row.agent)
+                let found = agents::find_worker_process(tx.conn(), &row.agent)
                     .await?
-                    .is_some_and(|current| {
+                    .filter(|current| {
                         current.id == row.id && current.state == WorkerState::Starting
                     });
                 let paused = agents::pause_state(tx.conn()).await?.is_paused();
-                if starting && !paused {
+                let mut update = None;
+                // A new session whose start a pause ends records its fingerprint all the same, as the resume of the pause continues that session.
+                if let (Some(_), Some(fingerprint)) = (&found, &fingerprint)
+                    && !resume
+                {
+                    agents::set_fold_fingerprint(tx, row.id, fingerprint).await?;
+                }
+                if let Some(found) = found.as_ref().filter(|_| !paused) {
                     agents::set_worker_pid(tx, row.id, pid).await?;
                     agents::forget_made_up_model(tx, row.id).await?;
                     if idle {
                         agents::set_worker_state(tx, row.id, WorkerState::Idle, now).await?;
                     }
+                    if let Some(fingerprint) = &fingerprint
+                        && resume
+                        && needs_update_note(found.fold_fingerprint.as_deref(), Some(fingerprint))
+                    {
+                        update = Some(Update {
+                            role: row.role,
+                            fingerprint: fingerprint.clone(),
+                        });
+                    }
                 }
-                Ok::<_, StoreError>((starting, paused))
+                Ok::<_, StoreError>((found.is_some(), paused, update))
             })
             .await;
-        let (starting, paused) = match current {
+        let (starting, paused, update) = match current {
             Ok(found) => found,
             Err(error) => {
                 self.forget(&process);
@@ -252,7 +271,7 @@ impl Supervisor {
             detached.store(true, Ordering::SeqCst);
         }
         if !starting || paused {
-            tokio::spawn(self.clone().feed(stdin, inputs, process.clone()));
+            tokio::spawn(self.clone().feed(stdin, inputs, process.clone(), None));
             tokio::spawn(
                 self.clone()
                     .drive(child, stdout, process, exit, detached, reaped),
@@ -275,7 +294,7 @@ impl Supervisor {
         let sink: StdinSink =
             Arc::new(move |text: &str| sink_input.send(Input::Turn(text.to_owned())).is_ok());
         self.inner.push.register_stdin(&row.agent, sink);
-        tokio::spawn(self.clone().feed(stdin, inputs, process.clone()));
+        tokio::spawn(self.clone().feed(stdin, inputs, process.clone(), update));
         tokio::spawn(
             self.clone()
                 .drive(child, stdout, process, exit, detached, reaped),
@@ -340,31 +359,45 @@ impl Supervisor {
         .unwrap_or(false)
     }
 
-    /// Writes the lines of the input channel to the process's stdin until the channel closes or a `Close` arrives, which closes stdin so Claude Code exits after its turn. Each user turn makes the worker `working`.
+    /// Writes the lines of the input channel to the process's stdin until the channel closes or a `Close` arrives, which closes stdin so Claude Code exits after its turn. Each user turn makes the worker `working`. With `update`, the first user turn starts with the update note, and the write that marks it working records the update's fingerprint.
     async fn feed(
         self,
         mut stdin: ChildStdin,
         mut inputs: mpsc::UnboundedReceiver<Input>,
         process: Process,
+        mut update: Option<Update>,
     ) {
         while let Some(input) = inputs.recv().await {
             let (line, turn) = match input {
-                Input::Line(line) => (line, false),
-                Input::Turn(text) => match ClaudeInput::user(text).to_line() {
-                    Ok(line) => (line, true),
-                    Err(_) => continue,
-                },
+                Input::Line(line) => (line, None),
+                Input::Turn(text) => {
+                    let noted = update.take();
+                    let text = match &noted {
+                        Some(noted) => with_update_note(noted.role, &text),
+                        None => text,
+                    };
+                    match ClaudeInput::user(text).to_line() {
+                        Ok(line) => (line, Some(noted)),
+                        Err(_) => continue,
+                    }
+                }
                 Input::Close => break,
             };
             if stdin.write_all(line.as_bytes()).await.is_err() || stdin.flush().await.is_err() {
                 break;
             }
-            if turn {
+            if let Some(noted) = turn {
                 process.open_turns.fetch_add(1, Ordering::SeqCst);
                 let marked = self
                     .inner
                     .store
-                    .write(async |tx| agents::mark_worker_working(tx, process.id).await)
+                    .write(async |tx| {
+                        if let Some(noted) = &noted {
+                            agents::set_fold_fingerprint(tx, process.id, &noted.fingerprint)
+                                .await?;
+                        }
+                        agents::mark_worker_working(tx, process.id).await
+                    })
                     .await;
                 if let Err(error) = marked {
                     tracing::warn!(agent = %process.agent, code = error.log_code(), "could not mark a worker working");
@@ -379,6 +412,12 @@ fn claude_missing(error: &std::io::Error, program: &Path, launcher: &Launcher) -
     error.kind() == std::io::ErrorKind::NotFound
         && program == launcher.claude
         && !(program.is_absolute() && program.is_file())
+}
+
+/// The fingerprint a resumed worker's first turn records, with the role whose update note starts that turn.
+struct Update {
+    role: Role,
+    fingerprint: String,
 }
 
 /// Why a worker's files were not written.

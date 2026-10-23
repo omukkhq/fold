@@ -34,6 +34,27 @@ describe("describeFailure", () => {
     });
   });
 
+  it("names the run of the next version that holds Approve and Integrate", () => {
+    const text = (details: Record<string, unknown>) =>
+      describeFailure(refusal("update_checks_running", details));
+    expect(
+      text({ version: 2, run: "cr-4", purpose: "update_proposal" }),
+    ).toEqual({
+      place: "inline",
+      text: "v3 is running its checks. Try again when they end.",
+      mapped: true,
+    });
+    expect(text({ version: 2, purpose: "review_fix" }).text).toBe(
+      "v3, a reviewer's fix, is running its checks. Try again when they end.",
+    );
+    expect(text({ purpose: "review_fix" }).text).toBe(
+      "A reviewer's fix is running its checks. Try again when they end.",
+    );
+    expect(text({}).text).toBe(
+      "The next version is running its checks. Try again when they end.",
+    );
+  });
+
   it("has an entry for every integrate gate code", () => {
     for (const code of [
       "not_approved",
@@ -189,6 +210,7 @@ describe("reloadsProposal", () => {
     expect(reloadsProposal(refusal("integration_conflicted"))).toBe(true);
     expect(reloadsProposal(refusal("proposal_not_open"))).toBe(true);
     expect(reloadsProposal(refusal("invalid_request"))).toBe(true);
+    expect(reloadsProposal(refusal("update_checks_running"))).toBe(true);
     expect(reloadsProposal(refusal("not_approved"))).toBe(false);
     expect(reloadsProposal(new Error("x"))).toBe(false);
   });

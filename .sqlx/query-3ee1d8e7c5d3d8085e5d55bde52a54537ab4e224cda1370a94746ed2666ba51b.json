@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE folder_unstashes SET state = ?, closed_at = ? WHERE id = ? AND state = 'open'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "3ee1d8e7c5d3d8085e5d55bde52a54537ab4e224cda1370a94746ed2666ba51b"
+}

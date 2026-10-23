@@ -145,14 +145,18 @@ export function NeedsYou({ slug }: { slug: string }) {
         <button
           type="button"
           className={cn(
-            "inline-flex items-center gap-6 rounded-chip bg-warning-soft px-9 py-3 inset-ring inset-ring-border",
+            "inline-flex shrink-0 items-center rounded-chip max-lg:min-h-44",
             focusRing,
           )}
         >
-          <ListTodo aria-hidden="true" size={13} className="text-warning" />
-          <span className="text-code font-medium text-text">Needs you</span>
-          <span className="text-code font-semibold text-warning">
-            {items.length}
+          <span className="inline-flex items-center gap-6 rounded-chip bg-warning-soft px-9 py-3 inset-ring inset-ring-border">
+            <ListTodo aria-hidden="true" size={13} className="text-warning" />
+            <span className="text-code font-medium text-text max-lg:sr-only">
+              Needs you
+            </span>
+            <span className="text-code font-semibold text-warning">
+              {items.length}
+            </span>
           </span>
         </button>
       </RadixPopover.Trigger>
@@ -160,8 +164,9 @@ export function NeedsYou({ slug }: { slug: string }) {
         <RadixPopover.Content
           align="end"
           sideOffset={6}
+          collisionPadding={16}
           aria-label="Needs you"
-          className="z-10 flex w-needs-you max-w-full flex-col rounded-m border border-border bg-raised shadow-card outline-none"
+          className="z-10 flex w-needs-you max-w-(--width-popover-max) flex-col rounded-m border border-border bg-raised shadow-card outline-none"
         >
           <div className="flex items-center gap-8 border-b border-border-subtle px-16 py-12">
             <h2 className="text-card font-semibold text-text">Needs you</h2>

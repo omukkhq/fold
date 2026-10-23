@@ -327,6 +327,20 @@ impl AgentService {
             .collect()
     }
 
+    /// Whether the worker is idle or working in a session that last read other skill text than the fld that runs the daemon gives its role, so its next turn starts with the update note; `false` for a worker that is starting, whose new session records the fingerprint only once its process is in place, for one that is stopping and takes no more turns, for one that does not run, and for a service that runs no worker processes.
+    pub fn on_older_fold(&self, row: &WorkerProcessRow) -> bool {
+        let Some(supervisor) = &self.workers else {
+            return false;
+        };
+        matches!(
+            row.state,
+            fold_core::WorkerState::Idle | fold_core::WorkerState::Working
+        ) && fold_core::roles::needs_update_note(
+            row.fold_fingerprint.as_deref(),
+            supervisor.fingerprint(row.role).as_deref(),
+        )
+    }
+
     pub async fn list_workers(&self) -> Result<Vec<WorkerProcessRow>, AgentError> {
         let mut conn = self
             .store

@@ -1089,6 +1089,46 @@ describe("Proposal detail", () => {
     ).toBeNull();
   });
 
+  it("disables Approve and Integrate while an update runs the checks of the next version, and enables them when the stream reports the end", async () => {
+    update("P-4", (p) => ({
+      ...p,
+      update_run: { run: "cr-18", purpose: "update_proposal" },
+    }));
+    const { queryClient } = renderAt("/p/demo/proposals/P-4");
+    const panel = await integration();
+    const approve = within(panel).getByRole("button", { name: "Approve v2" });
+    const integrate = within(panel).getByRole("button", { name: "Integrate" });
+    expect(approve).toHaveProperty("disabled", true);
+    expect(integrate).toHaveProperty("disabled", true);
+    expect(
+      within(panel).getAllByText("v3 is running its checks."),
+    ).toHaveLength(1);
+    expect(
+      document.getElementById(approve.getAttribute("aria-describedby") ?? "")
+        ?.textContent,
+    ).toBe("v3 is running its checks.");
+    expect(
+      within(panel).getByRole("button", { name: "Request changes" }),
+    ).toHaveProperty("disabled", false);
+    update("P-4", (p) => ({ ...p, update_run: null }));
+    deliver(queryClient, "checks.finished", {
+      proposal: "P-4",
+      task: "T-3",
+      data: {
+        run: "cr-18",
+        stage: "proposal",
+        purpose: "update_proposal",
+        state: "failed",
+      },
+    });
+    await waitFor(() => {
+      expect(
+        within(panel).getByRole("button", { name: "Approve v2" }),
+      ).toHaveProperty("disabled", false);
+    });
+    expect(within(panel).queryByText("v3 is running its checks.")).toBeNull();
+  });
+
   it("disables Integrate while an integration check of the current version runs that no queued request of it started", async () => {
     update("P-4", (p) => ({
       ...p,

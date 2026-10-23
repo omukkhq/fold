@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE worker_processes SET fold_fingerprint = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "240a04d78e772d8b0dbe5bb275ada703362513b250a9806a71d3c43dc716c9a1"
+}

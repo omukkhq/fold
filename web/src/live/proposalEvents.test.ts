@@ -149,6 +149,44 @@ describe("proposal keys and the event stream", () => {
     expect(stale()).toEqual([`${slug}/proposals`, `${slug}/board`]);
   });
 
+  it("the start and the end of an update's run refresh its proposal page, whose Approve waits for the run", () => {
+    for (const type of ["checks.started", "checks.finished"]) {
+      client = new QueryClient();
+      for (const key of watched) client.setQueryData(key, { cached: true });
+      applyEvent(
+        client,
+        slug,
+        event(type, {
+          proposal: "P-4",
+          data: { run: "cr-9", stage: "proposal", purpose: "update_proposal" },
+        }),
+      );
+      expect(stale(), type).toContain(`${slug}/proposal/P-4`);
+      expect(stale(), type).not.toContain(`${slug}/proposal/P-5`);
+    }
+  });
+
+  it("the start and the end of a run of a next version refresh the review batches, which hold a member's integration for it", () => {
+    const batches = keys.reviewBatches(slug);
+    const refreshed = (purpose: string) => {
+      client = new QueryClient();
+      client.setQueryData(batches, { cached: true });
+      applyEvent(
+        client,
+        slug,
+        event("checks.finished", {
+          proposal: "P-4",
+          data: { run: "cr-9", stage: "proposal", purpose },
+        }),
+      );
+      return client.getQueryState(batches)?.isInvalidated === true;
+    };
+    expect(refreshed("update_proposal")).toBe(true);
+    expect(refreshed("review_fix")).toBe(true);
+    expect(refreshed("create_proposal")).toBe(false);
+    expect(refreshed("check")).toBe(false);
+  });
+
   it("an integration run refreshes every proposal page, since a batch's run shows on each member", () => {
     for (const type of ["checks.started", "checks.finished"]) {
       client = new QueryClient();

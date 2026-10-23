@@ -271,6 +271,7 @@ pub fn run(args: &ServeArgs) -> Result<(), ServeError> {
             .unwrap_or_else(|| PathBuf::from("claude")),
         fold: None,
         env: chosen.workers,
+        fingerprints: claude_files::worker_fingerprints(),
     }
     .with_claude_location(|name| std::env::var_os(name));
     let runtime = tokio::runtime::Builder::new_multi_thread()

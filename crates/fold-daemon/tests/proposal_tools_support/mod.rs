@@ -1,26 +1,35 @@
 use std::sync::Arc;
 
 use fold_core::object::ObjectKind;
+use fold_core::reviews::checks::RunState;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
-use fold_core::{Actor, AgentName, HumanName, TaskDescription, TaskId, TaskTitle};
+use fold_core::{
+    Actor, AgentName, CheckRunId, HumanName, ProposalId, TaskDescription, TaskId, TaskTitle,
+};
 use fold_daemon::daemon::{AppState, DaemonState};
 use fold_daemon::http::assets::AssetSource;
 use fold_daemon::projects::{ProjectHandle, Projects};
 use fold_daemon::services::agents::AgentService;
 use fold_daemon::services::projects::{DEFAULT_SESSION_LIFETIME, ensure_human};
-use fold_daemon::services::reviews::ReviewService;
+use fold_daemon::services::reviews::{FixOutcome, Proposed, ReviewFix, ReviewService};
 use fold_daemon::services::tasks::CreateTask;
 use fold_daemon::services::workspaces::WorkspaceService;
 use fold_store::projects::ProjectRow;
-use fold_store::testing::TestProject;
+use fold_store::testing::{TestProject, eventually};
 use fold_store::workspaces::{create_initial_revision, initial_revision};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::revision_store::{write_initial_tree, write_revision};
 
 pub const LIB: &str = "pub fn x() {}\n";
 
+const WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub fn t(number: u32) -> TaskId {
     TaskId::from_number(number).unwrap()
+}
+
+fn p1() -> ProposalId {
+    ProposalId::from_number(1).unwrap()
 }
 
 pub fn human(name: &str) -> Actor {
@@ -158,6 +167,115 @@ impl Fixture {
             .unwrap()
             .detail()
             .unwrap();
+    }
+
+    /// `author` opens `P-1` on `T-1` behind a proposal check that waits until `go` exists, then removes `go`. A later run of that check waits until the caller writes `go` again.
+    pub async fn gated_proposal(&self, author: &Actor, go: &std::path::Path) {
+        std::fs::write(go, "").unwrap();
+        self.workspaces()
+            .create_workspace(author, t(1))
+            .await
+            .unwrap();
+        self.write(1, "src/lib.rs", "pub fn y() {}\n");
+        self.write(
+            1,
+            "fold-checks.toml",
+            &format!(
+                "[[check]]\nname = \"slow\"\nrun = \"until [ -e '{}' ]; do sleep 0.05; done\"\n",
+                go.display()
+            ),
+        );
+        let reviews = self.reviews();
+        let Proposed::Checking { run, .. } = reviews
+            .create_proposal(author, t(1), "Add checks", None)
+            .await
+            .unwrap()
+        else {
+            panic!("expected a run");
+        };
+        eventually(WAIT, async || {
+            match reviews.get_check_run(run, false).await.unwrap().run.state {
+                RunState::Running => Err("the first run goes"),
+                _ => reviews
+                    .get_proposal(p1(), None)
+                    .await
+                    .map(|_| ())
+                    .map_err(|_| "no proposal"),
+            }
+        })
+        .await;
+        std::fs::remove_file(go).unwrap();
+    }
+
+    /// [`Fixture::gated_proposal`], then `author` changes `src/lib.rs` and updates the proposal. Returns the update's run, which waits until the caller writes `go` again.
+    pub async fn updating_proposal(&self, author: &Actor, go: &std::path::Path) -> CheckRunId {
+        self.gated_proposal(author, go).await;
+        self.write(1, "src/lib.rs", "pub fn z() {}\n");
+        let Proposed::Checking { run, .. } = self
+            .reviews()
+            .update_proposal(author, p1(), None)
+            .await
+            .unwrap()
+        else {
+            panic!("expected a run");
+        };
+        run
+    }
+
+    /// [`Fixture::gated_proposal`], then [`Fixture::fix_p1`]. Returns the fix's run, which waits until the caller writes `go` again.
+    pub async fn fixing_proposal(
+        &self,
+        author: &Actor,
+        reviewer: &Actor,
+        go: &std::path::Path,
+    ) -> CheckRunId {
+        self.gated_proposal(author, go).await;
+        self.fix_p1(reviewer).await.0
+    }
+
+    /// `reviewer`, an agent with the reviewer role, gets the review claim of `P-1`, checks out v1, changes `src/lib.rs` there and sends the fix, whose proposal checks run. Returns the fix's run and the changed file in the checkout.
+    pub async fn fix_p1(&self, reviewer: &Actor) -> (CheckRunId, std::path::PathBuf) {
+        let file = self.fix_p1_checkout(reviewer).await;
+        let fix = ReviewFix {
+            path: "src/lib.rs".to_owned(),
+            reason: "y returned nothing".to_owned(),
+        };
+        let FixOutcome::Checking { run, .. } = self
+            .reviews()
+            .submit_review_fix(reviewer, p1(), 1, &[fix], "cargo test: ok")
+            .await
+            .unwrap()
+        else {
+            panic!("expected a run");
+        };
+        (run, file)
+    }
+
+    /// The first half of [`Fixture::fix_p1`]: the claim, the checkout of v1 and the changed `src/lib.rs` in it, whose path it returns.
+    pub async fn fix_p1_checkout(&self, reviewer: &Actor) -> std::path::PathBuf {
+        let Actor::Agent(agent) = reviewer else {
+            panic!("the reviewer is an agent");
+        };
+        crate::common::roles::give_review_claim(
+            &self.handle.store,
+            agent.agent.as_str(),
+            p1(),
+            self.handle.clock.now(),
+        )
+        .await;
+        let checkout = self
+            .reviews()
+            .create_review_checkout(reviewer, p1())
+            .await
+            .unwrap();
+        let file = self
+            .project
+            .paths()
+            .root()
+            .join(&checkout.workspace.path)
+            .join("src/lib.rs");
+        std::fs::write(&file, "pub fn y() -> u8 { 1 }\n").unwrap();
+        file
     }
 }
 

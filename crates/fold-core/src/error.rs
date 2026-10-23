@@ -195,6 +195,7 @@ define_codes! {
     MAIN_INTERACTIVE = "main_interactive",
     MAIN_NOT_SUPERVISED = "main_not_supervised",
     INVALID_SIGN_IN_LINK = "invalid_sign_in_link",
+    UPDATE_CHECKS_RUNNING = "update_checks_running",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

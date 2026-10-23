@@ -24,6 +24,7 @@ use super::commits::commit_main;
 use super::folder::follow_folder;
 use super::pull::{PulledConflict, map_fast_forward, project_error};
 use super::remote::blocking;
+use super::stash::{AfterUnstash, Finish};
 use super::{FolderFollowed, FolderSync, ProjectError, load_config};
 use crate::projects::ProjectHandle;
 use crate::services::events::EventBuffer;
@@ -69,12 +70,12 @@ pub enum RecordOutcome {
 
 /// Records the human's changes in the project folder on main, for the named human who runs `fld record`. Nothing else records them, so an unfinished edit never reaches a worker.
 ///
-/// The project's remote lock and folder lock are held to the end, so the folder's follow, a push and a pull never run at the same time. While Git sync is on, commits of the human on the branch are recorded first, as the Git job records them; while they conflict and wait for the main agent the record answers with that change. The folder then follows main, so the checkout record is fresh, and main's missing commits are written; a branch or `HEAD` that shows a change fold did not make is refused with the command that undoes it. The folder is then read as an import reads it: its ignore rules and the size limit apply, and `.fold` and `.git` never count. A file that still holds the conflict of `fld unstash` is refused, named; once none does, the entry of that unstash is dropped. When it matches the checkout record, a conflicted human change that waits is closed with `human_change.withdrawn`. When it differs, the difference is the human change, based on the record, and merges onto main under the integration mutex: a clean merge is an integration of kind `record` with no review, which records the human change and `human_change.recorded` in its transaction, and the folder then follows main; a conflict writes the human change, its conflicted paths and `human_change.conflicted` under the integration mutex and leaves main as it is, for the main agent to resolve with the human. A stop before the integration commits leaves main and the folder as they were, so the next record finds the same changes.
+/// The project's remote lock and folder lock are held to the end, so the folder's follow, a push and a pull never run at the same time. While Git sync is on, commits of the human on the branch are recorded first, as the Git job records them; while they conflict and wait for the main agent the record answers with that change. The folder then follows main, so the checkout record is fresh, and main's missing commits are written; a branch or `HEAD` that shows a change fold did not make is refused with the command that undoes it. An unstash that a stop left part-way is finished first, as `finish_open_unstash` describes, and the answer carries its outcome; the folder then follows main again. The folder is then read as an import reads it: its ignore rules and the size limit apply, and `.fold` and `.git` never count. A file that still holds the conflict of `fld unstash` is refused, named; once none does, the entry of that unstash is dropped. When it matches the checkout record, a conflicted human change that waits is closed with `human_change.withdrawn`. When it differs, the difference is the human change, based on the record, and merges onto main under the integration mutex: a clean merge is an integration of kind `record` with no review, which records the human change and `human_change.recorded` in its transaction, and the folder then follows main; a conflict writes the human change, its conflicted paths and `human_change.conflicted` under the integration mutex and leaves main as it is, for the main agent to resolve with the human. A stop before the integration commits leaves main and the folder as they were, so the next record finds the same changes.
 pub async fn record(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
     git: &Git,
-) -> Result<RecordOutcome, ProjectError> {
+) -> Result<AfterUnstash<RecordOutcome>, ProjectError> {
     policy::can_record(actor).map_err(FoldError::from)?;
     let (handle, actor, git) = (Arc::clone(handle), actor.clone(), git.clone());
     tokio::spawn(async move { run(&handle, &actor, &git).await })
@@ -92,7 +93,7 @@ async fn run(
     handle: &Arc<ProjectHandle>,
     actor: &Actor,
     git: &Git,
-) -> Result<RecordOutcome, ProjectError> {
+) -> Result<AfterUnstash<RecordOutcome>, ProjectError> {
     let Actor::Human { name: human } = actor else {
         return Err(FoldError::new(
             codes::HUMAN_REQUIRED,
@@ -104,28 +105,48 @@ async fn run(
     let config = load_config(&handle.paths).await?;
     let _remote = handle.remote_lock.clone().lock_owned().await;
     let _folder = handle.folder_lock.clone().lock_owned().await;
-    let (followed, from_branch) = sync(handle, git, false).await?;
-    if let Some(BranchState::Moved(moved)) = &followed.branch {
-        return Err(head_moved(&config.git.branch, moved).into());
+    let mut unstash = None;
+    loop {
+        let (followed, from_branch) = sync(handle, git, false).await?;
+        if let Some(BranchState::Moved(moved)) = &followed.branch {
+            return Err(head_moved(&config.git.branch, moved).into());
+        }
+        if let Some(BranchState::Ahead { tip, .. }) = &followed.branch {
+            // The human's commits conflict with main and wait for the main agent, so the folder holds them on top of nothing fold knows.
+            let outcome = match from_branch {
+                Some(outcome @ RecordOutcome::Conflicted { .. }) => outcome,
+                _ => waiting_commit(handle, tip).await?.ok_or_else(|| {
+                    FoldError::new(
+                        codes::INTERNAL_ERROR,
+                        "the human's Git commits were neither recorded nor waiting",
+                    )
+                })?,
+            };
+            return Ok(AfterUnstash { outcome, unstash });
+        }
+        match super::stash::finish_open_unstash(handle, config.max_file_bytes).await? {
+            Finish::Nothing => break,
+            Finish::Abandoned => {}
+            Finish::Finished(outcome) => unstash = Some(outcome),
+        }
     }
-    if let Some(BranchState::Ahead { tip, .. }) = &followed.branch {
-        // The human's commits conflict with main and wait for the main agent, so the folder holds them on top of nothing fold knows.
-        return match from_branch {
-            Some(outcome @ RecordOutcome::Conflicted { .. }) => Ok(outcome),
-            _ => waiting_commit(handle, tip).await?.ok_or_else(|| {
-                FoldError::new(
-                    codes::INTERNAL_ERROR,
-                    "the human's Git commits were neither recorded nor waiting",
-                )
-                .into()
-            }),
-        };
-    }
+    let outcome = record_folder(handle, actor, human, git, config.max_file_bytes).await?;
+    Ok(AfterUnstash { outcome, unstash })
+}
+
+/// The part of `fld record` after the folder followed main, under the caller's locks.
+async fn record_folder(
+    handle: &Arc<ProjectHandle>,
+    actor: &Actor,
+    human: &HumanName,
+    git: &Git,
+    max_file_bytes: u64,
+) -> Result<RecordOutcome, ProjectError> {
     let record_tree = workspaces::checkout(handle.store.read())
         .await?
         .ok_or(StoreError::Corrupt("checkout"))?
         .tree;
-    let (human_tree, skipped) = snapshot_folder(handle, config.max_file_bytes).await?;
+    let (human_tree, skipped) = snapshot_folder(handle, max_file_bytes).await?;
     #[cfg(feature = "failpoints")]
     fail::fail_point!("record_after_snapshot", |_| Err(fired(
         "record_after_snapshot"
@@ -137,7 +158,6 @@ async fn run(
         .ok_or(StoreError::Corrupt("refs.main"))?;
     if human_tree == record_tree {
         withdraw_waiting(handle, actor).await?;
-        super::stash::apply_held_stash(handle, actor, human_tree).await?;
         return Ok(RecordOutcome::UpToDate {
             revision: head.number,
         });
@@ -168,7 +188,6 @@ async fn run(
     else {
         return Ok(recorded);
     };
-    super::stash::apply_held_stash(handle, actor, human_tree).await?;
     // The folder follows main now rather than at the Git job's next run, so it holds main when the command returns.
     sync(handle, git, false).await?;
     let fold_dir = handle.paths.fold_dir();
@@ -186,7 +205,7 @@ async fn run(
     })
 }
 
-/// Refuses a folder whose `human_tree` still holds the conflict of an unstash on a path the newest stash entry changes: a line that starts a stash marker, or the `.fold-stash` side beside a file. A stashed entry whose conflict a stop between an unstash's files and its row left there is kept as conflicted first, so the record after the fix drops it. Otherwise an entry whose unstash conflicted is dropped, in its own transaction with `stash.dropped`, before the record goes on: the folder holds the fixed files, which this record or the next brings onto main, or the human took the change back.
+/// Refuses a folder whose `human_tree` still holds the conflict of an unstash on a path the newest stash entry changes: a line that starts a stash marker, or the `.fold-stash` side beside a file. Otherwise an entry whose unstash conflicted is dropped, in its own transaction with `stash.dropped`, before the record goes on: the folder holds the fixed files, which this record or the next brings onto main, or the human took the change back.
 async fn settle_stash(
     handle: &ProjectHandle,
     actor: &Actor,
@@ -214,11 +233,6 @@ async fn settle_stash(
     })
     .await?;
     if !open.is_empty() {
-        if entry.state == workspaces::StashState::Stashed {
-            let open = open.iter().map(|path| path.as_bytes().to_vec()).collect();
-            super::stash::hold_left_markers(handle, actor, entry, human_tree, open, stack.len())
-                .await?;
-        }
         return Err(super::stash::markers_left(&open).into());
     }
     if entry.state != workspaces::StashState::Conflicted {

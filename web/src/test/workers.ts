@@ -40,6 +40,7 @@ export function workerProcess(
     model_unreachable: false,
     hint: null,
     cache_ttl: "1h",
+    older_fold: false,
     session_id: "0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a13",
     previous_sessions: [],
     transcript:
@@ -151,6 +152,7 @@ export function batch(fields: Partial<ReviewBatch> = {}): ReviewBatch {
       pending: [],
       members: [],
       queued: false,
+      updating: [],
       outcome: null,
       run: null,
       revisions: [],

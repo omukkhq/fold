@@ -7,8 +7,8 @@ use fold_core::events::types;
 use fold_core::{Actor, EventFilter, HumanName};
 use fold_daemon::services::agents::{NeedsYouKind, needs_you};
 use fold_daemon::services::projects::{
-    ProjectAttention, ProjectError, RecordOutcome, RemoteContext, StashEntry, StashOutcome,
-    UnstashOutcome, stash, stash_list, sync_folder, unstash,
+    AfterUnstash, ProjectAttention, ProjectError, RecordOutcome, RemoteContext, StashEntry,
+    StashOutcome, UnstashOutcome, stash, stash_list, sync_folder, unstash,
 };
 use fold_vcs::git::Git;
 use serde_json::{Value, json};
@@ -48,6 +48,13 @@ pub async fn wait_for(dir: &Path, path: &str, text: &str) {
 }
 
 pub async fn stash_as_ana(h: &Harness) -> Result<StashOutcome, ProjectError> {
+    Ok(stash_finishing_as_ana(h).await?.outcome)
+}
+
+/// `fld stash` with the outcome of an unstash it finished first.
+pub async fn stash_finishing_as_ana(
+    h: &Harness,
+) -> Result<AfterUnstash<StashOutcome>, ProjectError> {
     stash(&h.handle, &ana(), &Git::default()).await
 }
 
@@ -446,7 +453,7 @@ async fn the_socket_routes_stash_list_and_unstash_for_the_named_human() {
     assert_eq!(status, axum::http::StatusCode::OK, "{body}");
     assert_eq!(
         body,
-        json!({"outcome": "stashed", "revision": "r1", "files": ["plan.md"], "entries": 1, "skipped": []})
+        json!({"outcome": "stashed", "revision": "r1", "files": ["plan.md"], "entries": 1, "skipped": [], "unstash": null})
     );
     let (status, body): (_, Value) = h
         .socket(axum::http::Method::GET, "/api/v1/projects/demo/stash", None)

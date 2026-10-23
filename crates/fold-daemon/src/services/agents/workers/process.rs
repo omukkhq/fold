@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fold_core::transcript::claude_config_dir;
-use fold_core::{AgentName, Clock, ProjectPaths};
+use fold_core::{AgentName, Clock, ProjectPaths, Role};
 use fold_store::Store;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -53,6 +53,8 @@ pub struct Launcher {
     pub fold: Option<PathBuf>,
     /// Extra environment for every worker process.
     pub env: Vec<(String, String)>,
+    /// The fingerprint of the skill texts that the fld which runs the daemon writes for a session of each role (see [`fold_core::roles::session_fingerprint`]), given by the caller because the skills ship only in the binary that writes the skill files. A worker records it with its session, and a resume under another one tells the worker to load its role skill again. A role without one is never told.
+    pub fingerprints: BTreeMap<Role, String>,
 }
 
 impl Default for Launcher {
@@ -61,6 +63,7 @@ impl Default for Launcher {
             claude: PathBuf::from("claude"),
             fold: None,
             env: Vec::new(),
+            fingerprints: BTreeMap::new(),
         }
     }
 }
@@ -264,6 +267,11 @@ impl Supervisor {
         let task = tokio::spawn(watch_done(Arc::downgrade(&supervisor.inner), receiver));
         *lock(&supervisor.inner.watch) = Some(task);
         supervisor
+    }
+
+    /// The fingerprint of the skill texts the installed fld writes for a session of `role`; see [`Launcher::fingerprints`].
+    pub fn fingerprint(&self, role: Role) -> Option<String> {
+        lock(&self.inner.launcher).fingerprints.get(&role).cloned()
     }
 
     pub fn set_launcher(&self, launcher: Launcher) {

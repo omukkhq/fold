@@ -564,7 +564,7 @@ describe("The signed-in name", () => {
     const button = await screen.findByRole("button", {
       name: "Signed in as @tanim",
     });
-    expect(within(button).getByText("@tanim").className).toContain("md:inline");
+    expect(within(button).getByText("@tanim").className).toContain("lg:inline");
     await userEvent.click(button);
     expect((await screen.findByRole("dialog")).textContent).toBe(
       "Signed in as @tanim",

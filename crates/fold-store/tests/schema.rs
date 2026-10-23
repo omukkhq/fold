@@ -114,6 +114,8 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "events",
         "folder_stash_conflicts",
         "folder_stashes",
+        "folder_unstash_conflicts",
+        "folder_unstashes",
         "git_sync",
         "handoffs",
         "human_change_conflicts",

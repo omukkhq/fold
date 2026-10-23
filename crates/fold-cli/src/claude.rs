@@ -9,6 +9,7 @@ use fold_cli::claude_files;
 use fold_cli::claude_user::{self, UserFiles};
 use fold_cli::daemon_client::{self, ClientError, DaemonClient, Response};
 use fold_core::layout::{MCP_COMMAND, session_settings};
+use fold_core::roles::{Role, needs_update_note, update_note};
 use fold_core::transcript::{claude_config_dir, is_session_id};
 use fold_core::{AgentName, FoldError, MAIN_TAG, ProjectConfig, ProjectPaths, codes};
 use fold_daemon::services::agents::claude::transcript_path;
@@ -206,6 +207,26 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
             || Ok(new_session_id()?),
         )?)
     };
+    let fingerprint_record = paths.main_session_fingerprint(&agent);
+    let previous = std::fs::read_to_string(&fingerprint_record).ok();
+    let fingerprint = claude_files::role_fingerprint(Role::Main);
+    let stale = start
+        .as_ref()
+        .is_some_and(|start| stale_session(previous.as_deref(), start, &fingerprint));
+    let first_turn = (stale && takes_prompt(&args.claude_args)).then(|| update_note(Role::Main));
+    if stale && first_turn.is_none() {
+        let _ = crate::output::line(
+            &mut io::stdout(),
+            &format!(
+                "fold was updated since this session last loaded its skill: ask the agent to load the `{}` skill again",
+                Role::Main.skill()
+            ),
+        );
+    }
+    // A note that cannot go in keeps the old record, so a later start sends it.
+    if let Some(start) = start.as_ref().filter(|_| !stale || first_turn.is_some()) {
+        record_fingerprint(&fingerprint_record, start, &fingerprint);
+    }
     let files = UserFiles::from_env();
     let set_up = crate::claude_setup::offer_on_terminal(
         dirs,
@@ -226,10 +247,18 @@ pub fn run(args: &ClaudeArgs, session: Session, dirs: &Dirs) -> Result<(), Claud
         start.as_ref(),
         prompt.as_deref(),
         &args.claude_args,
+        first_turn.as_deref(),
         socket.as_deref(),
         own.as_ref(),
     )
     .exec();
+    // The session never took the note, so the next start sends it again.
+    if first_turn.is_some() {
+        let _ = match &previous {
+            Some(text) => fold_vcs::atomic::write_atomic(&fingerprint_record, text.as_bytes()),
+            None => std::fs::remove_file(&fingerprint_record),
+        };
+    }
     Err(ClaudeError::Exec(error))
 }
 
@@ -292,18 +321,73 @@ fn start(
     Ok(Start::New(id))
 }
 
+/// Whether the session of `start` last read the role text of another fld than `fingerprint`, by `previous`, the text of the fingerprint record; a new session never did. A session the record does not name is one that a fold without the record started, or one the user changed to inside Claude Code with its own `/resume`; both load the skill again.
+fn stale_session(previous: Option<&str>, start: &Start, fingerprint: &str) -> bool {
+    match start {
+        Start::New(_) => false,
+        Start::Resume(id) => {
+            let recorded = previous
+                .and_then(|text| text.trim().split_once(' '))
+                .filter(|(session, _)| session == id)
+                .map(|(_, recorded)| recorded);
+            needs_update_note(recorded, Some(fingerprint))
+        }
+    }
+}
+
+/// Records that the session of `start` reads the role text of `fingerprint`. A record that cannot be written only means that a later start tells the session again.
+fn record_fingerprint(path: &Path, start: &Start, fingerprint: &str) {
+    let (Start::New(id) | Start::Resume(id)) = start;
+    let _ = fold_vcs::atomic::write_atomic(path, format!("{id} {fingerprint}\n").as_bytes());
+}
+
+/// Whether `claude` can take the update note as its prompt beside the user's own arguments: they hold no prompt of their own, no `--` and no `-p`. A word right after a flag without `=` counts as that flag's value and any other word as a prompt, so a flag of several values reads as a prompt too and the note waits for a later start.
+fn takes_prompt(extra: &[OsString]) -> bool {
+    let mut value = false;
+    for arg in extra {
+        let arg = arg.to_string_lossy();
+        if matches!(arg.as_ref(), "--" | "-p" | "--print") || arg.starts_with("--print=") {
+            return false;
+        }
+        if arg.len() > 1 && arg.starts_with('-') {
+            value = !arg.contains('=');
+        } else if value {
+            value = false;
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
 /// Writes the record through `write_atomic`, so a reader never sees half an id and two starts of one agent never share a temporary file.
 fn write_record(path: &Path, id: &str) -> io::Result<()> {
     fold_vcs::atomic::write_atomic(path, format!("{id}\n").as_bytes())
 }
 
-/// Replaces the recorded session of `agent` with `id` when `agent` has a record that names another session. Only `fld claude` and `fld new` create a record, so an agent they never started, such as a worker, keeps having none.
-pub(crate) fn follow_record(paths: &ProjectPaths, agent: &AgentName, id: &str) -> io::Result<()> {
+/// Replaces the recorded session of `agent` with `id` when `agent` has a record that names another session. Only `fld claude` and `fld new` create a record, so an agent they never started, such as a worker, keeps having none. With `continues`, `id` goes on in the `claude` process of the session it replaces, after a `/clear` or a compaction, under the same `fld claude` start and its skill files, so the fingerprint record of the old session moves to `id` too. A session the user opens with `/resume` gets no fingerprint, as fold cannot know which skill text it read.
+pub(crate) fn follow_record(
+    paths: &ProjectPaths,
+    agent: &AgentName,
+    id: &str,
+    continues: bool,
+) -> io::Result<()> {
     let path = paths.main_session(agent);
-    if !is_session_id(id) || !path.is_file() || recorded(paths, agent).as_deref() == Some(id) {
+    let old = recorded(paths, agent);
+    if !is_session_id(id) || !path.is_file() || old.as_deref() == Some(id) {
         return Ok(());
     }
-    write_record(&path, id)
+    write_record(&path, id)?;
+    if continues && let Some(old) = old {
+        let record = paths.main_session_fingerprint(agent);
+        let text = std::fs::read_to_string(&record).unwrap_or_default();
+        if let Some((session, fingerprint)) = text.trim().split_once(' ')
+            && session == old
+        {
+            fold_vcs::atomic::write_atomic(&record, format!("{id} {fingerprint}\n").as_bytes())?;
+        }
+    }
+    Ok(())
 }
 
 /// The recorded session id of `agent`, when the record holds one.
@@ -323,7 +407,7 @@ fn transcript_exists(config_dir: &Path, root: &Path, id: &str) -> bool {
     transcript_path(config_dir, root, id).is_some_and(|path| path.is_file())
 }
 
-/// The `claude` run of `fld claude`: its own arguments come after `--name`, the session and the main agent prompt, each `None` when they choose it themselves. `socket` is the socket the user chose with `--socket` or `FOLD_SOCKET`; the session's `fld mcp` and hooks read it from `FOLD_SOCKET`, as they have no flag of their own to carry it.
+/// The `claude` run of `fld claude`: `--name`, the session and the main agent prompt, each `None` when they choose it themselves, then `first_turn`, the prompt that the session takes as its first message, and the user's own arguments last. `first_turn` comes before them so that a flag of the user's that takes several values never takes it. `socket` is the socket the user chose with `--socket` or `FOLD_SOCKET`; the session's `fld mcp` and hooks read it from `FOLD_SOCKET`, as they have no flag of their own to carry it.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is one part of the claude command line"
@@ -335,6 +419,7 @@ fn command(
     start: Option<&Start>,
     prompt: Option<&Path>,
     extra: &[OsString],
+    first_turn: Option<&str>,
     socket: Option<&Path>,
     own: Option<&OwnSetup>,
 ) -> Command {
@@ -358,6 +443,7 @@ fn command(
         command.arg("--append-system-prompt-file").arg(prompt);
     }
     command
+        .args(first_turn)
         .args(extra)
         .current_dir(root)
         .env(claude_files::AGENT_ENV, agent.as_str())
@@ -726,26 +812,155 @@ mod tests {
     }
 
     #[test]
+    fn only_a_resumed_session_of_another_fingerprint_is_stale() {
+        let other = "11111111-2222-4333-8444-555555555555";
+        let new = Start::New(ID.to_owned());
+        let resume = Start::Resume(ID.to_owned());
+        let recorded = format!("{ID} aaaa\n");
+        assert!(!stale_session(Some(&recorded), &new, "bbbb"));
+        assert!(!stale_session(None, &new, "bbbb"));
+        assert!(!stale_session(Some(&recorded), &resume, "aaaa"));
+        assert!(stale_session(Some(&recorded), &resume, "bbbb"));
+        assert!(
+            stale_session(Some(&recorded), &Start::Resume(other.to_owned()), "aaaa"),
+            "a record of another session says nothing of this one"
+        );
+        assert!(stale_session(None, &resume, "aaaa"));
+        assert!(stale_session(Some("garbage"), &resume, "aaaa"));
+    }
+
+    #[test]
+    fn each_start_records_its_session_with_its_fingerprint() {
+        let project = tempfile::tempdir().unwrap();
+        let paths = ProjectPaths::new(project.path());
+        std::fs::create_dir_all(paths.fold_dir().join("sessions")).unwrap();
+        let record = paths.main_session_fingerprint(&AgentName::parse("main").unwrap());
+        record_fingerprint(&record, &Start::New(ID.to_owned()), "aaaa");
+        assert_eq!(
+            std::fs::read_to_string(&record).unwrap(),
+            format!("{ID} aaaa\n")
+        );
+        record_fingerprint(&record, &Start::Resume(ID.to_owned()), "bbbb");
+        assert_eq!(
+            std::fs::read_to_string(&record).unwrap(),
+            format!("{ID} bbbb\n")
+        );
+        std::fs::remove_dir_all(paths.fold_dir()).unwrap();
+        std::fs::write(paths.fold_dir(), "a file where the folder goes").unwrap();
+        record_fingerprint(&record, &Start::Resume(ID.to_owned()), "bbbb");
+        assert!(
+            !record.exists(),
+            "a record that cannot be written stops nothing"
+        );
+    }
+
+    #[test]
+    fn the_note_goes_beside_flags_and_their_values_only() {
+        let args = |args: &[&str]| args.iter().map(OsString::from).collect::<Vec<_>>();
+        assert!(takes_prompt(&[]));
+        assert!(takes_prompt(&args(&["--model", "opus"])));
+        assert!(takes_prompt(&args(&["--model=opus", "--verbose"])));
+        assert!(takes_prompt(&args(&["--verbose", "--model", "opus", "-d"])));
+        for refused in [
+            &["hello"][..],
+            &["--model", "opus", "hello"],
+            &["--model=opus", "hello"],
+            &["-p"],
+            &["--print"],
+            &["--print=yes"],
+            &["--", "--model"],
+            &["--add-dir", "a", "b"],
+        ] {
+            assert!(!takes_prompt(&args(refused)), "{refused:?}");
+        }
+    }
+
+    #[test]
+    fn a_first_turn_comes_before_the_users_own_arguments() {
+        let agent = AgentName::parse("main").unwrap();
+        let extra = [OsString::from("--add-dir"), OsString::from("/srv/docs")];
+        let args: Vec<_> = command(
+            Path::new("claude"),
+            Path::new("/src/app"),
+            &agent,
+            Some(&Start::Resume(ID.to_owned())),
+            Some(Path::new("/src/app/.fold/main.md")),
+            &extra,
+            Some("Load the skill."),
+            None,
+            None,
+        )
+        .get_args()
+        .map(ToOwned::to_owned)
+        .collect();
+        assert_eq!(
+            args,
+            [
+                "--name",
+                "main",
+                "--resume",
+                ID,
+                "--append-system-prompt-file",
+                "/src/app/.fold/main.md",
+                "Load the skill.",
+                "--add-dir",
+                "/srv/docs"
+            ]
+        );
+    }
+
+    #[test]
     fn a_record_follows_the_session_only_for_an_agent_that_has_one() {
         let project = tempfile::tempdir().unwrap();
         let paths = ProjectPaths::new(project.path());
         let main = AgentName::parse("main").unwrap();
         let worker = AgentName::parse("web-worker").unwrap();
         let other = "11111111-2222-4333-8444-555555555555";
-        follow_record(&paths, &worker, other).unwrap();
+        follow_record(&paths, &worker, other, true).unwrap();
         assert!(
             !paths.main_session(&worker).exists(),
             "a worker gets no record"
         );
         write_record(&paths.main_session(&main), ID).unwrap();
-        follow_record(&paths, &main, "not an id").unwrap();
+        follow_record(&paths, &main, "not an id", true).unwrap();
         assert_eq!(recorded(&paths, &main).as_deref(), Some(ID));
-        follow_record(&paths, &main, other).unwrap();
+        follow_record(&paths, &main, other, false).unwrap();
         assert_eq!(recorded(&paths, &main).as_deref(), Some(other));
-        follow_record(&paths, &main, other).unwrap();
+        follow_record(&paths, &main, other, false).unwrap();
         assert_eq!(
             std::fs::read_to_string(paths.main_session(&main)).unwrap(),
             format!("{other}\n")
+        );
+    }
+
+    #[test]
+    fn a_cleared_session_takes_the_fingerprint_and_a_resumed_one_does_not() {
+        let project = tempfile::tempdir().unwrap();
+        let paths = ProjectPaths::new(project.path());
+        let main = AgentName::parse("main").unwrap();
+        let record = paths.main_session_fingerprint(&main);
+        let cleared = "11111111-2222-4333-8444-555555555555";
+        let resumed = "22222222-3333-4444-8555-666666666666";
+        write_record(&paths.main_session(&main), ID).unwrap();
+        std::fs::write(&record, format!("{ID} aaaa\n")).unwrap();
+        follow_record(&paths, &main, cleared, true).unwrap();
+        assert_eq!(recorded(&paths, &main).as_deref(), Some(cleared));
+        assert_eq!(
+            std::fs::read_to_string(&record).unwrap(),
+            format!("{cleared} aaaa\n")
+        );
+        follow_record(&paths, &main, resumed, false).unwrap();
+        assert_eq!(recorded(&paths, &main).as_deref(), Some(resumed));
+        assert_eq!(
+            std::fs::read_to_string(&record).unwrap(),
+            format!("{cleared} aaaa\n"),
+            "a session opened with /resume keeps no fingerprint"
+        );
+        follow_record(&paths, &main, ID, true).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&record).unwrap(),
+            format!("{cleared} aaaa\n"),
+            "a fingerprint of another session never moves"
         );
     }
 
@@ -776,6 +991,7 @@ mod tests {
             None,
             &[OsString::from("hello")],
             None,
+            None,
             Some(&own),
         );
         let args: Vec<_> = command.get_args().collect();
@@ -805,6 +1021,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
             None,
             Some(&settings_held),
         )
@@ -844,6 +1061,7 @@ mod tests {
             &extra,
             None,
             None,
+            None,
         );
         let args: Vec<_> = resumed.get_args().collect();
         assert_eq!(
@@ -868,6 +1086,7 @@ mod tests {
             &[OsString::from("-c")],
             None,
             None,
+            None,
         );
         let args: Vec<_> = own.get_args().collect();
         assert_eq!(args, ["--name", "main", "-c"]);
@@ -878,6 +1097,7 @@ mod tests {
             Some(&Start::New(ID.to_owned())),
             Some(Path::new("/src/app/.fold/roles/main.md")),
             &extra,
+            None,
             Some(Path::new("/run/by-hand.sock")),
             None,
         );

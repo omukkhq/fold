@@ -277,6 +277,8 @@ pub struct WorkerEntry {
         example = "/home/tanim/.claude/projects/-home-tanim-ledger/0f8e2c1a-5b7d-4c3e-9a1f-2d4b6c8e0a13.jsonl"
     )]
     pub transcript: Option<String>,
+    /// The worker is idle or working in a session that last read other skill text than the fld that runs the daemon writes for its role. Its next turn starts with a note to load its role skill again, and once fold writes that turn this is false; false for a worker that is starting or stopping or does not run.
+    pub older_fold: bool,
 }
 
 /// Why a worker left a session for a new one: `handoff` (a fresh context after its hand-off note), `lost` (Claude Code no longer had the session) or `requested` (a human or the main agent asked for a new session).
@@ -326,6 +328,7 @@ impl WorkerEntry {
         config: Option<&ProjectConfig>,
         previous: Vec<PreviousSessionRow>,
         transcript: Option<String>,
+        older_fold: bool,
     ) -> Self {
         let cache_ttl = config.map(|config| config.role(row.role).cache_ttl.as_str().to_owned());
         let model_unreachable =
@@ -358,6 +361,7 @@ impl WorkerEntry {
             session_id: row.session_id,
             previous_sessions: previous.into_iter().map(Into::into).collect(),
             transcript,
+            older_fold,
         }
     }
 }
@@ -472,7 +476,8 @@ pub async fn list_workers(project: Project) -> Result<Json<WorkerList>, ApiError
             .zip(transcripts)
             .map(|(row, transcript)| {
                 let sessions = previous.remove(&row.agent).unwrap_or_default();
-                WorkerEntry::new(row, config.as_ref(), sessions, transcript)
+                let older_fold = agents.on_older_fold(&row);
+                WorkerEntry::new(row, config.as_ref(), sessions, transcript, older_fold)
             })
             .collect(),
         roles,
@@ -573,11 +578,13 @@ async fn entry(
         .await
         .pop()
         .flatten();
+    let older_fold = agents.on_older_fold(&worker);
     Ok(WorkerEntry::new(
         worker,
         config.as_ref(),
         previous,
         transcript,
+        older_fold,
     ))
 }
 

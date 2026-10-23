@@ -22,13 +22,23 @@ export function ProjectSwitcher({ slug }: { slug: string }) {
       <Menu.Trigger
         aria-label={`Project ${slug}, switch project`}
         className={cn(
-          "flex items-center gap-6 rounded-m px-8 py-5 hover:bg-sunken",
+          "flex min-w-0 items-center gap-6 rounded-m px-8 py-5 hover:bg-sunken max-lg:mr-auto max-lg:min-h-44 max-lg:min-w-44 max-lg:px-6",
           focusRing,
         )}
       >
-        <FolderGit2 size={15} className="text-text-muted" aria-hidden />
-        <span className="text-card font-semibold text-text">{slug}</span>
-        <ChevronDown size={14} className="text-text-muted" aria-hidden />
+        <FolderGit2
+          size={15}
+          className="shrink-0 text-text-muted max-lg:hidden"
+          aria-hidden
+        />
+        <span className="truncate text-card font-semibold text-text">
+          {slug}
+        </span>
+        <ChevronDown
+          size={14}
+          className="shrink-0 text-text-muted"
+          aria-hidden
+        />
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Content align="start" sideOffset={6} className={menuContent}>
