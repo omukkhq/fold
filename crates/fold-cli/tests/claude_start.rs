@@ -4,7 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use fold_cli::claude_files::{SETTINGS_FILE, SKILL_FILES, SKILL_TEXTS, main_fingerprint};
+use fold_cli::claude_files::{SETTINGS_FILE, SKILL_FILES, SKILL_TEXTS, role_fingerprint};
 use fold_cli::claude_user::{self, UserFiles};
 use fold_core::roles::{Role, update_note};
 use fold_core::{AgentName, ProjectPaths};
@@ -348,13 +348,13 @@ async fn a_main_session_that_an_older_fold_started_is_told_to_load_its_skill_aga
     assert_eq!(claude_args(&first), ["--name", "main", "--session-id", &x]);
     let record =
         ProjectPaths::new(&host.root).main_session_fingerprint(&AgentName::parse("main").unwrap());
-    let current = format!("{x} {}\n", main_fingerprint());
+    let current = format!("{x} {}\n", role_fingerprint(Role::Main));
     assert_eq!(std::fs::read_to_string(&record).unwrap(), current);
     let same = fld_claude(&host, &[], &host.root).await;
     assert_eq!(claude_args(&same), ["--name", "main", "--resume", &x]);
 
     let note = update_note(Role::Main);
-    std::fs::write(&record, format!("{x} 0.4.0+0000000000000000\n")).unwrap();
+    std::fs::write(&record, format!("{x} 0000000000000000\n")).unwrap();
     let updated = fld_claude(&host, &[], &host.root).await;
     assert_eq!(
         claude_args(&updated),
@@ -370,16 +370,44 @@ async fn a_main_session_that_an_older_fold_started_is_told_to_load_its_skill_aga
     );
 
     std::fs::remove_file(&record).unwrap();
-    let unrecorded = fld_claude(&host, &["--", "--model", "opus"], &host.root).await;
+    let flags = fld_claude(&host, &["--", "--model", "opus"], &host.root).await;
     assert_eq!(
-        claude_args(&unrecorded),
-        ["--name", "main", "--resume", &x, "--model", "opus"],
-        "the user's own arguments get no prompt beside them"
+        claude_args(&flags),
+        [
+            "--name",
+            "main",
+            "--resume",
+            &x,
+            note.as_str(),
+            "--model",
+            "opus"
+        ],
+        "the note goes before the user's own flags"
+    );
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), current);
+
+    let older = format!("{x} 0000000000000000\n");
+    std::fs::write(&record, &older).unwrap();
+    let prompted = fld_claude(&host, &["--", "--model", "opus", "hello"], &host.root).await;
+    assert_eq!(
+        claude_args(&prompted),
+        ["--name", "main", "--resume", &x, "--model", "opus", "hello"],
+        "the user's own prompt gets no other beside it"
     );
     assert!(
-        text(&unrecorded.stdout).contains("ask the agent to load the `fold-main` skill again"),
+        text(&prompted.stdout).contains("ask the agent to load the `fold-main` skill again"),
         "{}",
-        text(&unrecorded.stdout)
+        text(&prompted.stdout)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&record).unwrap(),
+        older,
+        "an untold note waits for a later start"
+    );
+    let later = fld_claude(&host, &[], &host.root).await;
+    assert_eq!(
+        claude_args(&later),
+        ["--name", "main", "--resume", &x, note.as_str()]
     );
     assert_eq!(std::fs::read_to_string(&record).unwrap(), current);
     guard.stop().await;

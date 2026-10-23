@@ -135,24 +135,18 @@ pub fn role_skill(role: Role) -> &'static str {
     }
 }
 
-/// The fingerprint of the role text this fld gives a worker of each role: its version, the role's shipped prompt and its skill.
+/// The fingerprint of the skill texts this fld writes for a session of each role (see [`role_fingerprint`]).
 pub fn worker_fingerprints() -> BTreeMap<Role, String> {
     Role::ALL
         .into_iter()
-        .map(|role| {
-            let fingerprint = session_fingerprint(VERSION, role.prompt(), role_skill(role));
-            (role, fingerprint)
-        })
+        .map(|role| (role, role_fingerprint(role)))
         .collect()
 }
 
-/// The fingerprint of the role text this fld gives the main agent's own session that `fld claude` starts, whose prompt is the interactive main agent's.
-pub fn main_fingerprint() -> String {
-    session_fingerprint(VERSION, fold_core::main_prompt(), role_skill(Role::Main))
+/// The fingerprint of the skill texts a session of `role` reads: its role skill, whose sections include the shared rules, and the shared `fold` skill, reference and error list. The main agent's own session that `fld claude` starts reads the skills of [`Role::Main`].
+pub fn role_fingerprint(role: Role) -> String {
+    session_fingerprint(&[role_skill(role), SKILL, REFERENCE, ERRORS])
 }
-
-/// The version of the fld that holds these skills.
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// `details.reason` of a Claude Code file that fold cannot merge into.
 pub const MALFORMED_REASON: &str = "malformed_claude_file";
@@ -813,24 +807,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn each_role_has_a_fingerprint_of_this_version_and_its_own_texts() {
+    fn each_role_has_a_fingerprint_of_its_own_skill_and_the_shared_ones() {
         let fingerprints = worker_fingerprints();
         assert_eq!(fingerprints.len(), Role::ALL.len());
         for role in Role::ALL {
-            let fingerprint = &fingerprints[&role];
-            assert!(fingerprint.starts_with(&format!("{VERSION}+")), "{role}");
             assert_eq!(
-                *fingerprint,
-                session_fingerprint(VERSION, role.prompt(), role_skill(role))
+                fingerprints[&role],
+                session_fingerprint(&[role_skill(role), SKILL, REFERENCE, ERRORS]),
+                "{role}"
             );
+            assert_eq!(fingerprints[&role], role_fingerprint(role), "{role}");
         }
         assert_eq!(role_skill(Role::Main), MAIN_SKILL);
-        assert_ne!(
-            main_fingerprint(),
-            fingerprints[&Role::Main],
-            "the supervised main's prompt is not the interactive one's"
-        );
-        assert_eq!(main_fingerprint(), main_fingerprint());
+        assert_ne!(fingerprints[&Role::AreaLead], fingerprints[&Role::Reviewer]);
     }
 
     #[test]

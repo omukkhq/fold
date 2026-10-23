@@ -34,7 +34,7 @@ use crate::services::projects::load_config;
 use crate::support::SESSION_ENV;
 
 impl Supervisor {
-    /// Runs Claude Code for the row, which a committed command left in state `starting`: a new session, or `--resume` of the row's session. `turn` is the first user turn; without one a resumed worker waits idle for its next notice. A new session records the installed fld's fingerprint of the role text; a resumed one whose recorded fingerprint differs gets the update note before its first turn, whichever turn that is, and records the new fingerprint once that turn is written. A process that cannot start, for an unreadable configuration, files that cannot be written, a failed spawn or a process that cannot be recorded, leaves the row `failed` with `worker.failed` and gives no [`StartWatch`], so no `starting` row holds a place under the limits.
+    /// Runs Claude Code for the row, which a committed command left in state `starting`: a new session, or `--resume` of the row's session. `turn` is the first user turn; without one a resumed worker waits idle for its next notice. A new session records the installed fld's fingerprint of the role's skill text, also when a pause ends its start; a resumed one whose recorded fingerprint differs gets the update note before its first turn, whichever turn that is, and records the new fingerprint once that turn is written. A process that cannot start, for an unreadable configuration, files that cannot be written, a failed spawn or a process that cannot be recorded, leaves the row `failed` with `worker.failed` and gives no [`StartWatch`], so no `starting` row holds a place under the limits.
     pub(in crate::services::agents::workers) async fn launch(
         &self,
         row: &WorkerProcessRow,
@@ -231,24 +231,26 @@ impl Supervisor {
                     });
                 let paused = agents::pause_state(tx.conn()).await?.is_paused();
                 let mut update = None;
+                // A new session whose start a pause ends records its fingerprint all the same, as the resume of the pause continues that session.
+                if let (Some(_), Some(fingerprint)) = (&found, &fingerprint)
+                    && !resume
+                {
+                    agents::set_fold_fingerprint(tx, row.id, fingerprint).await?;
+                }
                 if let Some(found) = found.as_ref().filter(|_| !paused) {
                     agents::set_worker_pid(tx, row.id, pid).await?;
                     agents::forget_made_up_model(tx, row.id).await?;
                     if idle {
                         agents::set_worker_state(tx, row.id, WorkerState::Idle, now).await?;
                     }
-                    if let Some(fingerprint) = &fingerprint {
-                        if !resume {
-                            agents::set_fold_fingerprint(tx, row.id, fingerprint).await?;
-                        } else if needs_update_note(
-                            found.fold_fingerprint.as_deref(),
-                            Some(fingerprint),
-                        ) {
-                            update = Some(Update {
-                                role: row.role,
-                                fingerprint: fingerprint.clone(),
-                            });
-                        }
+                    if let Some(fingerprint) = &fingerprint
+                        && resume
+                        && needs_update_note(found.fold_fingerprint.as_deref(), Some(fingerprint))
+                    {
+                        update = Some(Update {
+                            role: row.role,
+                            fingerprint: fingerprint.clone(),
+                        });
                     }
                 }
                 Ok::<_, StoreError>((found.is_some(), paused, update))

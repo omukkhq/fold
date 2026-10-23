@@ -1,8 +1,10 @@
 #![cfg(test)]
 
+use std::time::Duration;
+
 use axum::http::{Method, StatusCode};
-use fold_core::WorkerState;
 use fold_core::roles::{Role, update_note};
+use fold_core::{Actor, AgentName, Clock, HumanName, WorkerState};
 use fold_daemon::services::agents::{PAUSE_TURN, RESTART_TURN};
 use fold_store::testing::eventually;
 use serde_json::{Value, json};
@@ -14,10 +16,10 @@ use crate::worker_resume::{
 };
 use crate::workers_support::{FakeClaude, Run};
 
-/// The fingerprint of the installed fld in these tests.
-const CURRENT: &str = "0.5.0+1111111111111111";
-/// A fingerprint of an older fld, which a session recorded before the update.
-const OLDER: &str = "0.4.0+0000000000000000";
+/// The fingerprint of the installed fld's skill texts in these tests.
+const CURRENT: &str = "1111111111111111";
+/// The fingerprint of an older fld's skill texts, which a session recorded before the update.
+const OLDER: &str = "0000000000000000";
 
 /// The text of each user turn that `run` read, in order.
 fn user_turns(run: &Run) -> Vec<String> {
@@ -29,7 +31,7 @@ fn user_turns(run: &Run) -> Vec<String> {
         .collect()
 }
 
-/// Records that the current session of `agent` read the role text of [`OLDER`], as a session that an older fld started.
+/// Records that the current session of `agent` read the skill texts of [`OLDER`], as a session that an older fld started.
 async fn read_by_older_fold(harness: &Harness, agent: &str) {
     let row = worker(harness, agent).await;
     harness
@@ -271,4 +273,31 @@ async fn a_new_session_records_the_fingerprint_without_a_note() {
     let turns = user_turns(&runs[1]);
     assert!(!turns[0].contains("fold was updated"), "{}", turns[0]);
     until_fingerprint(&harness, LEAD, CURRENT).await;
+}
+
+#[tokio::test]
+async fn a_stopping_worker_takes_no_more_turns_and_shows_no_mark() {
+    let fake = FakeClaude::new("result")
+        .stubborn()
+        .with_fingerprint(CURRENT);
+    let harness = lead_running(&fake, WorkerState::Idle).await;
+    read_by_older_fold(&harness, LEAD).await;
+    assert_eq!(older_fold(&harness, LEAD).await, true);
+
+    let agents = harness.handle.agents();
+    let human = Actor::human(HumanName::parse(HUMAN).unwrap());
+    let lead = AgentName::parse(LEAD).unwrap();
+    let stop = tokio::spawn(async move { agents.stop_worker(&human, &lead).await });
+    until_state(&harness, LEAD, WorkerState::Stopping).await;
+    assert_eq!(older_fold(&harness, LEAD).await, false);
+    let clock = harness.project.clock().clone();
+    eventually(WAIT, async || {
+        if stop.is_finished() {
+            Ok(())
+        } else {
+            clock.advance(Duration::from_secs(6)).unwrap();
+            Err(clock.now())
+        }
+    })
+    .await;
 }
