@@ -3,8 +3,8 @@ use fold_core::merge::{Conflict, ReportFile};
 use fold_core::policy::{GateState, IntegrateInput, ProposalFacts, gate_report};
 use fold_core::reviews::{deciding_approval, last_verdict_version};
 use fold_core::{
-    Actor, ChangesetId, FoldError, ProposalId, ReviewBatchId, RevisionId, TaskDescription, TaskId,
-    TaskStatus, TaskTitle, codes,
+    Actor, ChangesetId, CheckRunId, FoldError, ProposalId, ReviewBatchId, RevisionId,
+    TaskDescription, TaskId, TaskStatus, TaskTitle, codes,
 };
 use fold_store::reviews::{self, ProposalState, ScopeChoiceRow};
 use fold_store::tasks::{self, TaskRef};
@@ -14,7 +14,7 @@ use serde_json::json;
 
 pub use fold_store::reviews::ReviewRow as ReviewView;
 
-use super::checks::CheckRunView;
+use super::checks::{CheckRunView, running_update};
 use super::claims::ReviewClaimView;
 use super::integrate::caller_facts;
 use super::plans::{ProposalPlan, proposal_plan};
@@ -67,6 +67,8 @@ pub struct ProposalView {
     pub totals: Totals,
     /// The check runs of the selected version, newest first, without logs: the proposal-stage runs of its exact files and its integration runs.
     pub checks: Vec<CheckRunView>,
+    /// The run in progress of an update of the proposal, which makes the next version when its checks pass and has no version until then, so it is not among `checks`. While it goes, the current version is neither approved nor integrated.
+    pub update_run: Option<CheckRunId>,
     /// The review plan the open proposal waits in for related tasks, to be reviewed with them as one batch.
     pub review_plan: Option<ProposalPlan>,
     /// The revision an integrated proposal became, and the review batch it integrated with, if any.
@@ -103,6 +105,7 @@ impl ReviewService {
             detail.selected.version,
         )
         .await?;
+        let update_run = running_update(&mut read, facts.proposal.task, proposal).await?;
         let scope_choice =
             reviews::latest_scope_choice(&mut *read, proposal, detail.selected.version).await?;
         let review_plan = proposal_plan(&mut read, proposal).await?;
@@ -175,6 +178,7 @@ impl ReviewService {
             files: comparison.files,
             totals: comparison.totals,
             checks,
+            update_run,
             review_plan,
             integrated,
         })

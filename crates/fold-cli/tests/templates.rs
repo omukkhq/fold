@@ -171,7 +171,7 @@ const FOLD_TOOLS: [&str; 96] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 172] = [
+const FOLD_ERROR_CODES: [&str; 173] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -344,6 +344,7 @@ const FOLD_ERROR_CODES: [&str; 172] = [
     "main_supervised",
     "main_interactive",
     "main_not_supervised",
+    "update_checks_running",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.

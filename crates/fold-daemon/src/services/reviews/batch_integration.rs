@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
@@ -12,7 +12,7 @@ use fold_core::revision::{Revision, StoredRevision};
 use fold_core::{
     Actor, AddressedAs, CheckRunId, EventActor, FoldError, IdKind, IntegrationId, MessageBody,
     NewEvent, ProposalId, Recipient, ReviewBatchId, RevisionId, Target, TaskId, Timestamp,
-    WorkspaceId, codes,
+    WorkspaceId, codes, policy,
 };
 use fold_store::reviews::batches::{self, BatchRevisionRow, BatchState, MemberRelease};
 use fold_store::reviews::{self, IntegrationFacts, ProposalState, checks};
@@ -21,11 +21,14 @@ use fold_vcs::integrate::MergeOutcome;
 use serde_json::{Value, json};
 
 use super::batches::batch_not_found;
-use super::checks::{Integrating, IntegrationChecks, PassedRun, fold_failed_refusal};
+use super::checks::{
+    Integrating, IntegrationChecks, PassedRun, fold_failed_refusal, running_update,
+};
 use super::integrate::{
     ATTEMPTS, Commit, HumanResolution, Integrated, IntegrationOutcome, IntegrationRequest, Plan,
     Step, Subject, caller_facts, decide, queued_actor,
 };
+use super::verdicts::update_refusal;
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
 #[cfg(feature = "failpoints")]
@@ -220,6 +223,21 @@ async fn read_members(
     Ok(read)
 }
 
+/// The run of each member whose update runs the checks of its next version, by member.
+async fn running_updates(
+    conn: &mut SqliteConnection,
+    members: &[ReadMember],
+) -> Result<HashMap<ProposalId, CheckRunId>, ReviewError> {
+    let mut found = HashMap::new();
+    for member in members {
+        let (proposal, task) = (member.standing.proposal, member.standing.task);
+        if let Some(run) = running_update(&mut *conn, task, proposal).await? {
+            found.insert(proposal, run);
+        }
+    }
+    Ok(found)
+}
+
 async fn standing_on(
     conn: &mut SqliteConnection,
     batch: ReviewBatchId,
@@ -336,7 +354,7 @@ impl ReviewService {
         Ok(standing.view(revisions))
     }
 
-    /// The proposals that batches hold back from integrating on their own: every member of an open batch, whose review is not submitted yet, and every member of a submitted batch whose turn has not ended that waits for the others or integrates with them. A submitted batch whose members all have their final state is ready for its turn, unless fold failed to run its checks on the same version and main, which only a caller's integrate or a move of main tries again.
+    /// The proposals that batches hold back from integrating on their own: every member of an open batch, whose review is not submitted yet, and every member of a submitted batch whose turn has not ended that waits for the others or integrates with them. A submitted batch whose members all have their final state is ready for its turn, unless fold failed to run its checks on the same version and main, which only a caller's integrate or a move of main tries again, or an update of a member that integrates runs the checks of its next version, whose end tries again.
     pub(super) async fn batch_holds(&self) -> Result<BatchHolds, ReviewError> {
         let head = workspaces::head(self.store.read())
             .await?
@@ -364,6 +382,14 @@ impl ReviewService {
             let BatchReadiness::Final { members: ready } = readiness else {
                 continue;
             };
+            // A ready member whose update runs its checks would end that run as workspace_changed; the batch takes its turn once the run ends.
+            if running_updates(&mut read, &members)
+                .await?
+                .keys()
+                .any(|proposal| ready.contains(proposal))
+            {
+                continue;
+            }
             // The run is stored on the last member that merged, which is not the last ready member when that one conflicts, so the batch's own newest run decides.
             if let Some(newest) = checks::newest_batch_run(&mut *read, batch).await?
                 && newest.reason == Some(RunReason::FoldFailed)
@@ -476,7 +502,7 @@ impl ReviewService {
 
     /// Integrates the approved members of a submitted batch together, by an agent that decides reviews or a named human, once every member has its final state for the batch. A member that went back to its author, was taken out, ended, or waits for a human or for a member that is not in the integration is left out and integrates later on its own rules. The integration is one turn of the project's integration mutex: the members merge onto main in dependency order, the integration checks run once on the whole merge, and on a pass one transaction publishes one revision per member and completes each task. A member that conflicts integrates on its own after the others, which sends it back alone; a failed check run integrates the members one at a time, each with its own run. When the project has integration checks, the batch waits in the integration queue and the answer is `Queued`. Integrating one member alone with `integrate_proposal` stays possible.
     ///
-    /// Refusals: `review_batch_not_found`; `invalid_request` with the reason `batch_not_submitted` for an open or closed batch, `batch_waiting` while a member has no final state (details list them), `batch_integrated` once the batch's turn ended, and `integration_queued` while a request of the batch waits; and the caller gates of `integrate_proposal` for each member, such as `author_cannot_integrate` for the agent that wrote a member's current version.
+    /// Refusals: `review_batch_not_found`; `invalid_request` with the reason `batch_not_submitted` for an open or closed batch, `batch_waiting` while a member has no final state (details list them), `batch_integrated` once the batch's turn ended, and `integration_queued` while a request of the batch waits; `update_checks_running` while an update of a member that integrates runs the checks of its next version; and the caller gates of `integrate_proposal` for each member, such as `author_cannot_integrate` for the agent that wrote a member's current version.
     pub async fn integrate_review_batch(
         &self,
         actor: &Actor,
@@ -523,6 +549,7 @@ impl ReviewService {
         let standing = agents::standing_of(&mut *read, actor).await?;
         let caller = caller_facts(actor, standing, automatic)?;
         let (standing, mut members) = standing_on(&mut read, batch).await?;
+        let updates = running_updates(&mut read, &members).await?;
         read.commit().await.map_err(StoreError::from)?;
         if let Some(ended) = &standing.ended {
             return Err(FoldError::new(
@@ -591,6 +618,9 @@ impl ReviewService {
                         .into());
                 }
             }
+            let update = updates.get(&proposal).copied();
+            policy::can_integrate_while_updating(update.is_some())
+                .map_err(|denied| update_refusal(denied, proposal, facts.target.version, update))?;
             plans.push(MemberPlan {
                 proposal,
                 task: facts.proposal.task,

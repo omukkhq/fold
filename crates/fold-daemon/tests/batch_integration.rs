@@ -702,6 +702,48 @@ async fn a_deciding_agent_or_a_human_integrates_a_batch_with_one_command() {
 }
 
 #[tokio::test]
+async fn a_ready_batch_waits_while_an_update_of_a_member_runs_its_checks() {
+    let scene = Scene::new().await;
+    let batch = scene.batch(&[1, 2]).await;
+    scene.review(batch, &[1, 2], &[]).await;
+    let gate = tempfile::tempdir().unwrap();
+    let go = gate.path().join("go");
+    scene.fx.write(
+        2,
+        "fold-checks.toml",
+        &format!(
+            "[[check]]\nname = \"slow\"\nrun = \"until [ -e '{}' ]; do sleep 0.05; done; false\"\n",
+            go.display()
+        ),
+    );
+    let reviews = scene.fx.reviews();
+    let fold_daemon::services::reviews::Proposed::Checking { run, .. } = reviews
+        .update_proposal(&scene.authors[1], p(2), None)
+        .await
+        .unwrap()
+    else {
+        panic!("expected a run");
+    };
+    assert!(reviews.integrate_ready().await.unwrap().is_empty());
+    let held = refusal(reviews.integrate_review_batch(&scene.review, batch).await);
+    assert_eq!(held.code(), codes::UPDATE_CHECKS_RUNNING);
+    assert_eq!(held.details().unwrap()["proposal"], "P-2");
+    assert_eq!(held.details().unwrap()["run"], run.to_string());
+    assert_eq!(scene.integrations().await, []);
+    std::fs::write(&go, "").unwrap();
+    crate::checks::ended(&reviews, run).await;
+    let done = reviews.integrate_ready().await.unwrap();
+    assert_eq!(
+        done.iter().map(|done| done.proposal).collect::<Vec<_>>(),
+        [p(1), p(2)]
+    );
+    assert_eq!(
+        scene.integrations().await,
+        [(1, 2, Some(1)), (2, 3, Some(1))]
+    );
+}
+
+#[tokio::test]
 async fn a_batch_waits_in_the_queue_when_the_project_has_integration_checks() {
     let scene = Scene::with_checks("test -f src/lib.rs", |_, _| {}).await;
     let batch = scene.batch(&[1, 2]).await;

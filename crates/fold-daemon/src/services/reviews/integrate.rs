@@ -28,11 +28,12 @@ use serde_json::json;
 use super::batch_integration::BatchIntegration;
 use super::checks::{
     HeldRequest, Integrating, IntegrationChecks, PassedRun, Verdict as RunVerdict, end_run_in_tx,
-    fold_failed_refusal,
+    fold_failed_refusal, running_update,
 };
 use super::conflicts::FoundConflict;
 use super::notify;
 use super::proposals::{Retirement, proposal_not_found, retire_proposal};
+use super::verdicts::update_refusal;
 use super::views::integration_conflicted;
 use super::{ReviewError, ReviewService};
 use crate::services::events::EventBuffer;
@@ -283,6 +284,16 @@ impl ReviewService {
             if row.integration_queued {
                 return Err(already_queued_refusal(proposal, row.current_version).into());
             }
+            let mut conn = self
+                .store
+                .read()
+                .acquire()
+                .await
+                .map_err(StoreError::from)?;
+            let update = running_update(&mut conn, row.task, proposal).await?;
+            drop(conn);
+            policy::can_integrate_while_updating(update.is_some())
+                .map_err(|denied| update_refusal(denied, proposal, row.current_version, update))?;
         }
         if self.integration_checks_may_run(proposal).await?
             && self.gates_pass(actor, proposal, expected_version).await?
@@ -568,7 +579,7 @@ impl ReviewService {
         )
     }
 
-    /// Integrates, as fold, every open proposal whose current version is ready: an agent that decides reviews or a human approved it, the latest verdict asks for no changes, a marked task has a human approval the mark accepts, and every prerequisite is Done. Each integration is the same procedure a deciding agent runs. A submitted review batch whose members all have their final state takes its turn first, its ready members together; the members a batch holds back, while it is open or waits for a member, are left to it. The open proposals are looked at in number order and looked at again after each integration, so a prerequisite's integration lets the proposals that need it follow in the same call. A proposal flagged with a conflict waits for its next version, which clears the flag. A failed attempt is logged by its code and left for the next call. Returns the integrations in the order they ran; a conflicted one recorded `integration.conflicted` and left its proposal open.
+    /// Integrates, as fold, every open proposal whose current version is ready: an agent that decides reviews or a human approved it, the latest verdict asks for no changes, a marked task has a human approval the mark accepts, and every prerequisite is Done. Each integration is the same procedure a deciding agent runs. A submitted review batch whose members all have their final state takes its turn first, its ready members together; the members a batch holds back, while it is open or waits for a member, are left to it. The open proposals are looked at in number order and looked at again after each integration, so a prerequisite's integration lets the proposals that need it follow in the same call. A proposal flagged with a conflict waits for its next version, which clears the flag, and one whose update runs the checks of its next version waits for that run to end. A failed attempt is logged by its code and left for the next call. Returns the integrations in the order they ran; a conflicted one recorded `integration.conflicted` and left its proposal open.
     pub async fn integrate_ready(&self) -> Result<Vec<AutomaticIntegration>, ReviewError> {
         let mut done = Vec::new();
         let mut passed = HashSet::new();
@@ -648,6 +659,10 @@ impl ReviewService {
             if newest
                 .is_some_and(|run| run.reason == Some(RunReason::FoldFailed) && run.base == head)
             {
+                continue;
+            }
+            // An approval from before an update of the proposal started its checks waits for that run: integrating the older version would end it as workspace_changed.
+            if running_update(&mut read, row.task, row.id).await?.is_some() {
                 continue;
             }
             let Some(facts) = reviews::integration_facts(&mut read, row.id).await? else {
@@ -887,12 +902,15 @@ impl ReviewService {
         let facts = reviews::integration_facts(&mut read, proposal)
             .await?
             .ok_or_else(|| proposal_not_found(proposal))?;
-        let checks_failed = reviews::get_proposal(&mut *read, proposal)
-            .await?
-            .is_some_and(|row| row.checks_failed);
+        let row = reviews::get_proposal(&mut *read, proposal).await?;
+        let update = running_update(&mut read, facts.proposal.task, proposal).await?;
         read.commit().await.map_err(StoreError::from)?;
-        if checks_failed && facts.proposal.state == ProposalState::Open {
-            return Err(checks_failed_refusal(proposal, facts.target.version).into());
+        if let Some(row) = row.filter(|_| facts.proposal.state == ProposalState::Open) {
+            if row.checks_failed {
+                return Err(checks_failed_refusal(proposal, facts.target.version).into());
+            }
+            policy::can_integrate_while_updating(update.is_some())
+                .map_err(|denied| update_refusal(denied, proposal, row.current_version, update))?;
         }
         if let Err(refusal) = decide(&facts, &caller, expected_version) {
             if automatic {

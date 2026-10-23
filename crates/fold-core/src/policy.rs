@@ -431,6 +431,33 @@ pub fn can_submit_verdict<'a>(
     }
 }
 
+/// An update of a proposal whose files have proposal checks runs them before fold makes the next version, which starts unapproved. An approval of the current version while that run is in progress would let the older version integrate first, which ends the update's run as `workspace_changed`, so `approve` waits for the run to end (`update_running`). `comment`, `request_changes` and `reject` stay open: none of them lets a version integrate.
+pub fn can_review_while_updating(
+    verdict: Verdict,
+    update_running: bool,
+) -> Result<(), PolicyDenied> {
+    if verdict == Verdict::Approve && update_running {
+        return Err(PolicyDenied {
+            code: codes::UPDATE_CHECKS_RUNNING,
+            message: "an update of the proposal runs the checks of its next version, so the current version cannot be approved",
+            hint: "wait for checks.finished with wait_for_events, then call get_proposal and review the new version",
+        });
+    }
+    Ok(())
+}
+
+/// An integration of the current version while an update of the proposal runs its checks (`update_running`) would end that run as `workspace_changed`, and a human's integration approves the version too, so no caller integrates it until the run ends, as [`can_review_while_updating`] holds back an approval.
+pub fn can_integrate_while_updating(update_running: bool) -> Result<(), PolicyDenied> {
+    if update_running {
+        return Err(PolicyDenied {
+            code: codes::UPDATE_CHECKS_RUNNING,
+            message: "an update of the proposal runs the checks of its next version, so the current version cannot be integrated",
+            hint: "wait for checks.finished with wait_for_events, then call get_proposal and review or integrate the new version",
+        });
+    }
+    Ok(())
+}
+
 /// A review is a second agent's look at the work, so the author's agent never claims its own proposal. A claim lets its holder check out, fix and verdict the proposal for the user, so only the main agent claims one, for a review of its own. The review lead gives a reviewer its claims when it starts it and never claims ([`can_review`]), and the reviewer never claims. An area lead or a task worker asks the review lead instead. Nobody claims the review of a task of Main (`main_task`), as [`can_assign_review`] says. Only an agent's worker holds a claim. `standing` is the acting agent's. It returns the admitted agent, which becomes the reviewer.
 pub fn can_claim_review<'a>(
     actor: &'a Actor,
@@ -861,6 +888,27 @@ mod tests {
         )
         .unwrap_err();
         assert!(denied.hint().contains("review lead"));
+    }
+
+    #[test]
+    fn a_running_update_holds_back_only_the_approval_and_the_integration() {
+        for verdict in Verdict::ALL {
+            let expected = (verdict == Verdict::Approve).then_some(codes::UPDATE_CHECKS_RUNNING);
+            assert_eq!(
+                outcome(can_review_while_updating(verdict, true)),
+                expected,
+                "{verdict}"
+            );
+            assert_eq!(outcome(can_review_while_updating(verdict, false)), None);
+        }
+        let denied = can_review_while_updating(Verdict::Approve, true).unwrap_err();
+        assert!(denied.hint().contains("checks.finished"));
+        assert!(denied.hint().contains("wait_for_events"));
+        assert_eq!(
+            outcome(can_integrate_while_updating(true)),
+            Some(codes::UPDATE_CHECKS_RUNNING)
+        );
+        assert_eq!(outcome(can_integrate_while_updating(false)), None);
     }
 
     #[test]

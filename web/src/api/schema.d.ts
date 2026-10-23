@@ -3303,6 +3303,11 @@ export interface components {
             /** @description The task's status on the board. */
             task_status: components["schemas"]["TaskStatus"];
             totals: components["schemas"]["ComparisonTotals"];
+            /**
+             * @description The check run in progress of an update of the proposal, which makes the next version when its checks pass; null when no update runs. It has no version yet, so it is not among `checks`, and while it goes the current version is neither approved nor integrated (`update_checks_running`).
+             * @example cr-4
+             */
+            update_run: string | null;
             /** @description Oldest first. */
             versions: components["schemas"]["ProposalVersion"][];
         };

@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 use super::batch_integration::{BatchIntegrationView, mark_ready_at_submission};
 use super::changes::ChangeRange;
 use super::checkouts::remove_unnamed_dir;
+use super::checks::running_update;
 use super::claims::{TAKEN_OVER, already_claimed, take_review_claim};
 use super::comments::{CommentInput, CommentLocation, MAX_BODY_CHARS, check_ranges, check_shape};
 use super::proposals::require_open;
@@ -655,7 +656,8 @@ impl ReviewService {
         for verdict in &verdicts {
             if let Some(proposal) = reviews::get_proposal(&mut *conn, verdict.proposal).await? {
                 let task = review_task(&mut conn, &proposal).await?;
-                verdict_gate(actor, standing, verdict.verdict, &proposal, task)?;
+                let update = running_update(&mut conn, proposal.task, proposal.id).await?;
+                verdict_gate(actor, standing, verdict.verdict, &proposal, task, update)?;
             }
         }
         drop(conn);
