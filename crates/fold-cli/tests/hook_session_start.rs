@@ -183,11 +183,24 @@ async fn every_session_start_moves_an_existing_record_to_its_session() {
 
     std::fs::create_dir_all(record.parent().unwrap()).unwrap();
     std::fs::write(&record, format!("{first}\n")).unwrap();
-    for (id, source) in [(cleared, "clear"), (other, "resume"), (other, "compact")] {
+    let fingerprint = ProjectPaths::new(&host.root)
+        .main_session_fingerprint(&AgentName::parse("frontend").unwrap());
+    std::fs::write(&fingerprint, format!("{first} aaaa\n")).unwrap();
+    // A cleared session goes on in the same process and takes the fingerprint; one opened with /resume does not.
+    for (id, source, fingerprinted) in [
+        (cleared, "clear", cleared),
+        (other, "resume", cleared),
+        (other, "compact", cleared),
+    ] {
         let output = hook(&host, &socket, &host.root, &agent, &started(id, source)).await;
         assert_eq!(output.status.code(), Some(0), "{source}");
         assert!(!output.stdout.is_empty(), "{source}");
         assert_eq!(read(), format!("{id}\n"), "{source}");
+        assert_eq!(
+            std::fs::read_to_string(&fingerprint).unwrap(),
+            format!("{fingerprinted} aaaa\n"),
+            "{source}"
+        );
     }
     let output = hook(&host, &socket, &host.root, &agent, &started("s", "startup")).await;
     assert_eq!(output.status.code(), Some(0));

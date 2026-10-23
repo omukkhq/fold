@@ -130,6 +130,30 @@ impl MessageService {
         Ok(acknowledged)
     }
 
+    /// Marks the thread that `message` belongs to read for the acting human: their unacknowledged recipient rows of its messages take this time, and `message.acknowledged` names them. Returns the ids this call changed; a repeat changes nothing and appends no event. Another recipient's rows never change.
+    pub async fn mark_read(
+        &self,
+        actor: &Actor,
+        message: MessageId,
+    ) -> Result<Vec<MessageId>, MessageError> {
+        let human = policy::can_mark_read(actor).map_err(FoldError::from)?;
+        let now = self.clock.now();
+        let mut buffer = EventBuffer::new();
+        let read = self
+            .store
+            .write(async |tx| {
+                let head = messages::find(tx.conn(), message)
+                    .await?
+                    .ok_or_else(|| message_not_found(message))?;
+                let ids = messages::acknowledge_human(tx, human, head.thread, None, now).await?;
+                append_acknowledged(tx, &mut buffer, actor, &ids, now).await?;
+                Ok::<_, MessageError>(ids)
+            })
+            .await?;
+        self.bus.publish(buffer);
+        Ok(read)
+    }
+
     /// The Stop hook's text for `agent`: the messages to its worker that no inbox, notice or wait has shown yet, as many as fit, with the ids it carries, or `None` when there is none. Nothing is marked: the hook may not get the answer to its session in time, so it reports the ids it used with [`MessageService::mark_carried`].
     pub async fn carry_for_stop(
         &self,

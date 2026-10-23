@@ -204,7 +204,7 @@ export function NewRequestDialog({
               <div className="flex flex-col gap-8">
                 <p className="text-bar leading-snug font-semibold text-text">
                   Attachments{" "}
-                  <span className="font-normal text-text-muted">optional</span>
+                  <span className="font-regular text-text-muted">optional</span>
                 </p>
                 <button
                   type="button"

@@ -49,6 +49,7 @@ const DESIGN_COLOURS = [
   "secondary-text",
   "success",
   "success-soft",
+  "success-text",
   "danger",
   "danger-soft",
   "status-backlog",
@@ -125,6 +126,7 @@ const DESIGN_OTHER = [
   "width-event-stream",
   ...[
     0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 16, 18, 20, 22, 24, 28, 32, 40,
+    44,
   ].map((n) => `space-${String(n)}`),
 ];
 
@@ -235,6 +237,11 @@ describe("contrast", () => {
     ["secondary-text", "secondary-soft"],
     ["on-ink", "ink"],
     ["warning", "warning-soft"],
+    ["success-text", "surface"],
+    ["success-text", "success-soft"],
+    ["warning", "surface"],
+    ["danger", "surface"],
+    ["danger", "danger-soft"],
     ["text-muted", "warning-soft"],
     ["text-muted", "ink-soft"],
     ["text-muted", "diff-context"],

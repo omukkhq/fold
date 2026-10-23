@@ -14,6 +14,7 @@ import {
   actorAgent,
   areaLabel,
   areaNote,
+  instructionsSubject,
   areaProfile,
   askingRow,
   batchedProposals,
@@ -262,6 +263,18 @@ describe("steps", () => {
     expect(running?.rows[0]?.pill).toEqual(workerPill("working"));
   });
 
+  it("marks a worker whose session still holds an older fold's skill, and never the main agent", () => {
+    const older = workerProcess("web-lead", { older_fold: true });
+    const [group] = teamGroups(
+      input({ workers: workerList({ workers: [older] }) }),
+    );
+    expect(group?.rows[0]?.olderFold).toBe(true);
+    const [current] = teamGroups(
+      input({ workers: workerList({ workers: [workerProcess("web-lead")] }) }),
+    );
+    expect(current?.rows[0]?.olderFold).toBe(false);
+  });
+
   it("shows a worker's last error under its step, and what to check once it cannot reach the model", () => {
     expect(rowError(workerProcess("web-lead"))).toBeNull();
     expect(
@@ -406,6 +419,7 @@ describe("teamGroups", () => {
       name: "main",
       roleLine: "Main agent · your terminal session",
       bound: { kind: "person", name: "human:tanim" },
+      olderFold: false,
       stop: null,
       model: "-",
       session: null,
@@ -445,6 +459,7 @@ describe("teamGroups", () => {
       batch: "rb-3",
     });
     expect(web && areaNote(web)).toBe("area web · lead owns 2 tasks");
+    expect(web && instructionsSubject(web)).toBe("the web instructions");
     expect(hasNoLeads(groups)).toBe(false);
     expect(isEmptyTeam(groups)).toBe(false);
     expect(mainAgentName(groups)).toBe("main");
@@ -595,6 +610,9 @@ describe("teamGroups", () => {
     expect(unnamed?.area).toBeNull();
     expect(unnamed?.label).toBeNull();
     expect(unnamed && areaNote(unnamed)).toBe("area");
+    expect(unnamed && instructionsSubject(unnamed)).toBe(
+      "the area instructions",
+    );
     expect(unnamed?.rows.map((r) => r.child)).toEqual([true]);
   });
 

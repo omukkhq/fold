@@ -47,6 +47,7 @@ impl Host {
                 env("XDG_CONFIG_HOME", dir.path().join("config")),
                 env("XDG_RUNTIME_DIR", runtime.clone()),
             ],
+            ..Launcher::default()
         };
         let daemon = Daemon::start_with(
             DaemonConfig {

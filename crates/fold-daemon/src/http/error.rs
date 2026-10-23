@@ -157,7 +157,9 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::TASK_NEEDS_HUMAN => Some(StatusCode::CONFLICT),
         codes::CHECK_RUN_NOT_FOUND => Some(StatusCode::NOT_FOUND),
         codes::CHECKS_FILE_INVALID => Some(StatusCode::UNPROCESSABLE_ENTITY),
-        codes::CHECKS_RUNNING | codes::PROJECT_WORKERS_RUNNING => Some(StatusCode::CONFLICT),
+        codes::CHECKS_RUNNING | codes::PROJECT_WORKERS_RUNNING | codes::UPDATE_CHECKS_RUNNING => {
+            Some(StatusCode::CONFLICT)
+        }
         codes::ASK_NOT_OPEN => Some(StatusCode::CONFLICT),
         codes::ASK_CLOSE_DENIED => Some(StatusCode::FORBIDDEN),
         codes::RECIPIENT_NOT_READER => Some(StatusCode::CONFLICT),
@@ -305,6 +307,7 @@ mod tests {
             (codes::CHECK_RUN_NOT_FOUND, StatusCode::NOT_FOUND),
             (codes::CHECKS_FILE_INVALID, StatusCode::UNPROCESSABLE_ENTITY),
             (codes::CHECKS_RUNNING, StatusCode::CONFLICT),
+            (codes::UPDATE_CHECKS_RUNNING, StatusCode::CONFLICT),
             (codes::INVALID_TASK_KIND, StatusCode::BAD_REQUEST),
             (codes::TASK_CHECK_DENIED, StatusCode::FORBIDDEN),
             (codes::TASK_KIND_DENIED, StatusCode::FORBIDDEN),

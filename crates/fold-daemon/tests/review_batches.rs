@@ -648,6 +648,61 @@ async fn a_member_that_gets_a_new_version_keeps_no_approval_from_the_batch() {
 }
 
 #[tokio::test]
+async fn a_batch_approval_of_a_member_waits_while_its_update_runs_checks() {
+    let scene = Scene::new().await;
+    let reviews = scene.fx.reviews();
+    let batch = scene.batch(&[2, 3]).await;
+    let gate = tempfile::tempdir().unwrap();
+    let go = gate.path().join("go");
+    scene.fx.write(
+        2,
+        "fold-checks.toml",
+        &format!(
+            "[[check]]\nname = \"slow\"\nrun = \"until [ -e '{}' ]; do sleep 0.05; done\"\n",
+            go.display()
+        ),
+    );
+    let fold_daemon::services::reviews::Proposed::Checking { run, .. } = reviews
+        .update_proposal(&scene.authors[1], p(2), None)
+        .await
+        .unwrap()
+    else {
+        panic!("expected a run");
+    };
+    let held = refusal(
+        reviews
+            .submit_batch_review(
+                &scene.review,
+                batch,
+                vec![
+                    verdict(2, Verdict::Approve, ""),
+                    verdict(3, Verdict::Approve, ""),
+                ],
+                Vec::new(),
+            )
+            .await,
+    );
+    assert_eq!(held.code(), codes::UPDATE_CHECKS_RUNNING);
+    assert_eq!(details(&held)["run"], json!(run.to_string()));
+    assert_eq!(scene.summary(p(3)).await.latest_verdict, None);
+    let submitted = reviews
+        .submit_batch_review(
+            &scene.review,
+            batch,
+            vec![
+                verdict(2, Verdict::RequestChanges, "and a test"),
+                verdict(3, Verdict::Approve, ""),
+            ],
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(submitted.reviewed.len(), 2);
+    std::fs::write(&go, "").unwrap();
+    crate::checks::ended(&reviews, run).await;
+}
+
+#[tokio::test]
 async fn a_member_that_closed_or_lost_its_claim_is_left_out() {
     let scene = Scene::new().await;
     let reviews = scene.fx.reviews();

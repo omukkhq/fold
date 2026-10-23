@@ -553,6 +553,25 @@ describe("The top bar", () => {
   });
 });
 
+describe("The signed-in name", () => {
+  it("names the signed-in human in the top bar and opens the name from the icon", async () => {
+    stubFetch({
+      ...shellRoutes(["f"]),
+      "GET /api/v1/projects/f/workers": { body: workerList() },
+      "GET /api/v1/projects/f/events": () => new Promise<StubReply>(() => {}),
+    });
+    renderAt("/p/f/agents");
+    const button = await screen.findByRole("button", {
+      name: "Signed in as @tanim",
+    });
+    expect(within(button).getByText("@tanim").className).toContain("lg:inline");
+    await userEvent.click(button);
+    expect((await screen.findByRole("dialog")).textContent).toBe(
+      "Signed in as @tanim",
+    );
+  });
+});
+
 describe("Repository screen", () => {
   it("opens a mentioned folder as the tree at that folder and a mentioned file as a file", async () => {
     renderRepository(undefined, REVISIONS, "assets");

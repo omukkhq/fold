@@ -785,6 +785,9 @@ pub struct ProposalDetail {
     pub totals: ComparisonTotals,
     /// The check runs of the selected version, newest first, without their logs: the proposal-stage runs of exactly its files, then its integration runs.
     pub checks: Vec<checks::CheckRun>,
+    /// The check run in progress of the author's update or a reviewer's fix, which makes the next version when its checks pass; null when none runs. It has no version yet, so it is not among `checks`, and while it goes the current version is neither approved nor integrated (`update_checks_running`).
+    #[schema(required = true)]
+    pub update_run: Option<checks::NextVersionRun>,
     /// The review plan the open proposal waits in; null when it waits in none.
     #[schema(required = true)]
     pub review_plan: Option<ReviewPlanWait>,
@@ -842,6 +845,7 @@ impl From<service::ProposalView> for ProposalDetail {
                 .into_iter()
                 .map(checks::CheckRun::from)
                 .collect(),
+            update_run: view.update_run.map(checks::NextVersionRun::from),
             review_plan: view.review_plan.map(ReviewPlanWait::from),
         }
     }
@@ -1370,7 +1374,7 @@ pub async fn ask_proposal_author(
         (status = 400, description = "`invalid_request` (`details.field` names the field, or `details.reason` is `checks_failed` for an approve of a version whose integration checks failed), `invalid_path`, `invalid_id` or `invalid_name`", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
-        (status = 409, description = "`stale_version` (`details.expected_version`, `details.current_version`), `agent_approval_required` (a human's approve on a task with the human review mark before a reviewer agent approved the version; a task of the area main needs no reviewer agent first), `proposal_not_open` or `task_closed`", body = ErrorEnvelope),
+        (status = 409, description = "`stale_version` (`details.expected_version`, `details.current_version`), `agent_approval_required` (a human's approve on a task with the human review mark before a reviewer agent approved the version; a task of the area main needs no reviewer agent first), `update_checks_running` (an approve while the author's update or a reviewer's fix runs the checks of the next version; `details.run`, `details.purpose`), `proposal_not_open` or `task_closed`", body = ErrorEnvelope),
         (status = 422, description = "`empty_review`, `unknown_comment_path` or `invalid_comment_range`", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "Internal error", body = ErrorEnvelope),
@@ -1419,7 +1423,7 @@ pub async fn submit_review(
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
         (status = 403, description = "`author_cannot_integrate`: the caller's agent wrote the proposal", body = ErrorEnvelope),
         (status = 404, description = "`proposal_not_found` or `project_not_found`", body = ErrorEnvelope),
-        (status = 409, description = "A gate refusal: `stale_version` (`details.expected_version`, `details.current_version`), `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`); or `proposal_not_open`, `integration_conflicted` (`details.files`: path and kind), `head_moved`", body = ErrorEnvelope),
+        (status = 409, description = "A gate refusal: `stale_version` (`details.expected_version`, `details.current_version`), `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`); or `proposal_not_open`, `integration_conflicted` (`details.files`: path and kind), `head_moved`, or `update_checks_running` while the author's update or a reviewer's fix runs the checks of the next version (`details.run`, `details.purpose`)", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`, or `integration_failed` (`details.cause`)", body = ErrorEnvelope),
         (status = 500, description = "Internal error, or `workspace_io` with `details.reason` `fold_failed` when fold itself could not run the integration checks: the version is not sent back, so integrate again once the fault is fixed", body = ErrorEnvelope),
     )

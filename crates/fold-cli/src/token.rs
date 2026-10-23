@@ -35,7 +35,8 @@ enum TokenCommand {
 
 #[derive(Args, Debug)]
 struct CreateArgs {
-    /// The human the token signs in
+    /// The username of the person the token signs in
+    #[arg(value_name = "USERNAME")]
     human: String,
     /// A note that tells this token apart from the human's other tokens
     #[arg(long)]

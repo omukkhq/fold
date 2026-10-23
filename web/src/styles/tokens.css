@@ -7,6 +7,7 @@
   --radius-m: 8px;
   --radius-l: 12px;
   --radius-chip: 14px;
+  --radius-xl: 20px;
 
   --size-page: 28px;
   --size-screen: 24px;
@@ -59,6 +60,7 @@
   --space-28: 28px;
   --space-32: 32px;
   --space-40: 40px;
+  --space-44: 44px;
 
   --height-bar: 52px;
   --height-chart: 140px;
@@ -70,10 +72,11 @@
   --width-file-list: 280px;
   --width-side-panel: 300px;
   --width-content: 1120px;
-  --width-page: 1280px;
   --width-history: 440px;
   --width-sign-in: 400px;
   --width-thread-list: 420px;
+  --width-measure: 72ch;
+  --width-thread-column: 980px;
   --width-dialog: 1060px;
   --width-review-panel: 330px;
   --width-event-stream: 360px;
@@ -85,10 +88,14 @@
   --width-project-agents: 260px;
   --width-project-state: 170px;
   --width-needs-you: 400px;
+  --width-notifications: 360px;
+  --width-toast: 360px;
   --width-transcript: 280px;
   --width-column: 224px;
   --width-fact-label: 70px;
   --width-filter-column: 260px;
+  --width-group-head: calc(100cqw - 2 * var(--space-16));
+  --width-popover-max: calc(100vw - 2 * var(--space-16));
 }
 
 :root {
@@ -115,6 +122,7 @@
   --secondary-soft: #faf6ee;
   --success: #6a9e7a;
   --success-soft: #f0f7f2;
+  --success-text: #477556;
   --danger: #b8433b;
   --danger-soft: #fcf0ef;
   --status-backlog: #c4c2bb;
@@ -189,6 +197,7 @@
   --secondary-soft: #c9a96612;
   --success: #7dba8e;
   --success-soft: #7dba8e0f;
+  --success-text: #7dba8e;
   --danger: #ef6b6b;
   --danger-soft: #ef6b6b14;
   --status-backlog: #4a4945;
@@ -264,6 +273,7 @@
     --secondary-soft: #c9a96612;
     --success: #7dba8e;
     --success-soft: #7dba8e0f;
+    --success-text: #7dba8e;
     --danger: #ef6b6b;
     --danger-soft: #ef6b6b14;
     --status-backlog: #4a4945;

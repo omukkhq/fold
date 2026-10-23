@@ -171,7 +171,7 @@ const FOLD_TOOLS: [&str; 96] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 172] = [
+const FOLD_ERROR_CODES: [&str; 173] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -344,6 +344,7 @@ const FOLD_ERROR_CODES: [&str; 172] = [
     "main_supervised",
     "main_interactive",
     "main_not_supervised",
+    "update_checks_running",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
@@ -368,7 +369,7 @@ const INVALID_REQUEST_REASONS: [&str; 15] = [
     "batch_waiting",
 ];
 
-const NON_TOOL_NAMES: [&str; 48] = [
+const NON_TOOL_NAMES: [&str; 49] = [
     "human_review",
     "fold_failed",
     "left_out",
@@ -417,6 +418,7 @@ const NON_TOOL_NAMES: [&str; 48] = [
     "stopped_count",
     "done_count",
     "include_done",
+    "update_run",
 ];
 
 /// The sections of the index before the shared ones.
@@ -851,6 +853,12 @@ fn each_role_skill_has_its_frontmatter_its_sections_then_the_shared_ones() {
     for role in Role::ALL {
         let text = role_skill(role);
         let name = skill_name(role_skill_file(role));
+        assert_eq!(
+            name,
+            role.skill(),
+            "the update note names the skill of {role}"
+        );
+        assert_eq!(text, claude_files::role_skill(role), "{role}");
         let (frontmatter, body) = frontmatter(text);
         let keys: Vec<&str> = frontmatter
             .lines()

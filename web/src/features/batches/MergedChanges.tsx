@@ -15,6 +15,7 @@ import { currentFile, fileBody, listedFiles } from "@/features/diff/layout";
 import { ChangedFiles } from "@/features/proposals/ChangedFiles";
 import { useChangedFiles } from "@/features/proposals/changedFilesState";
 import { detailHref } from "@/features/proposals/view";
+import { shownPath } from "@/features/proposals/viewed";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import {
@@ -40,9 +41,15 @@ function MergedBody({
   onPath: (path: string) => void;
 }) {
   const id = batch.id;
-  const tree = useChangedFiles(mergedViewedKey(slug, id, diff));
   const files = listedFiles(diff.files);
   const file = currentFile(files, path);
+  const empty = mergedEmpty(diff);
+  const tree = useChangedFiles(
+    mergedViewedKey(slug, id, diff),
+    empty === null
+      ? shownPath({ files: diff.files, warnings: [] }, file?.path)
+      : null,
+  );
   const fileDiff = useFileDiff(
     reviewBatchFileDiffQuery(slug, id, file?.path ?? ""),
     file !== null && fileBody(file) === "text",
@@ -50,7 +57,6 @@ function MergedBody({
   const line = mergedLine(diff);
   const integrates = integratesLine(batch, diff);
   const conflict = conflictNote(diff);
-  const empty = mergedEmpty(diff);
   return (
     <div className="flex min-w-0 flex-col gap-16">
       {line === null ? null : (
@@ -81,7 +87,7 @@ function MergedBody({
             <p className="text-body font-semibold text-danger">
               {conflict.title}
             </p>
-            <p className="text-bar break-words text-text-muted">
+            <p className="text-bar wrap-anywhere text-text-muted">
               {conflict.text}
             </p>
           </div>

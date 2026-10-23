@@ -126,6 +126,17 @@ fn only_an_agents_worker_has_an_inbox() {
 }
 
 #[test]
+fn only_a_human_marks_a_thread_read() {
+    use fold_core::policy::can_mark_read;
+    assert_eq!(can_mark_read(&human("tanim")).unwrap().as_str(), "tanim");
+    for actor in [agent("design", &[]), Actor::System] {
+        let denied = can_mark_read(&actor).unwrap_err();
+        assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
+        assert!(denied.hint().contains("acknowledge_message"));
+    }
+}
+
+#[test]
 fn only_a_human_or_the_daemon_pushes() {
     use fold_core::policy::can_push;
     assert!(can_push(&human("tanim")).is_ok());

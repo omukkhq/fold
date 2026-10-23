@@ -13,6 +13,30 @@ const PENDING_LABEL: Record<PauseAction, string> = {
   resume: "Resuming…",
 };
 
+/** Every pause and resume write of one project shares this key, so a control mounted again, such as in a reopened More popover, finds the write in flight and its error. */
+export function pauseWrites(slug: string) {
+  return ["pause-write", slug] as const;
+}
+
+function isPauseAction(value: unknown): value is PauseAction {
+  return value === "pause" || value === "resume";
+}
+
+/** The newest pause or resume write of the project, as the mutation cache keeps it: the action in flight, else the error of a write that failed. */
+export function lastPauseWrite(
+  writes: readonly { status: string; variables: unknown; error: unknown }[],
+): { sent: PauseAction | null; error: unknown } {
+  const last = writes.at(-1);
+  if (last === undefined) return { sent: null, error: null };
+  return {
+    sent:
+      last.status === "pending" && isPauseAction(last.variables)
+        ? last.variables
+        : null,
+    error: last.status === "error" ? last.error : null,
+  };
+}
+
 export interface PauseControlView {
   /** What a press asks the daemon for. */
   action: PauseAction;

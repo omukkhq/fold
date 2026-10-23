@@ -37,12 +37,11 @@ fn summary(response: &Response) -> Result<Vec<String>, RemoteError> {
     let list = |key: &str| body[key].as_array().ok_or(RemoteError::Answer);
     let short = |commit: &str| commit.get(..7).unwrap_or(commit).to_owned();
     let revision = text("revision")?;
-    let mut lines = match text("outcome")? {
-        "up_to_date" => {
-            return Ok(vec![format!(
-                "nothing to record: the project folder has no change that main does not hold (main is {revision})"
-            )]);
-        }
+    let mut lines = super::stash::finished_unstash_lines(body)?;
+    lines.extend(match text("outcome")? {
+        "up_to_date" => vec![format!(
+            "nothing to record: the project folder has no change that main does not hold (main is {revision})"
+        )],
         "recorded" => {
             let files = list("files")?;
             let commit = body["commit"]
@@ -86,7 +85,7 @@ fn summary(response: &Response) -> Result<Vec<String>, RemoteError> {
             lines
         }
         _ => return Err(RemoteError::Answer),
-    };
+    });
     for touched in list("touched")? {
         let (Some(task), Some(workspace)) =
             (touched["task"].as_str(), touched["workspace"].as_str())
@@ -188,6 +187,21 @@ mod tests {
         assert_eq!(
             waiting[0],
             "your changes wait for the main agent already (1 path conflicted); nothing new was recorded"
+        );
+    }
+
+    #[test]
+    fn a_record_names_the_unstash_it_finished_first() {
+        assert_eq!(
+            lines(json!({
+                "outcome": "up_to_date", "commit": null, "revision": "r3", "files": [], "conflicted": [], "touched": [], "skipped": [], "created": false,
+                "unstash": {"outcome": "conflicted", "revision": "r2", "files": ["a.txt"], "conflicted": [{"path": "a.txt", "kind": "both_modified_text", "sidecar": null}], "entries": 1},
+            })),
+            [
+                "first finished the unstash that stopped part-way: stash@{0} conflicts with the project folder (r2) in 1 path. fold wrote conflict markers and keeps the entry; the project folder does not follow main until you fix the files and run fld record",
+                "  a.txt (both_modified_text)",
+                "nothing to record: the project folder has no change that main does not hold (main is r3)",
+            ]
         );
     }
 

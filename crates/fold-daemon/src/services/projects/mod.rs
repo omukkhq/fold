@@ -75,7 +75,8 @@ pub use record::{RecordOutcome, TouchedTask, record};
 pub(crate) use remote::push_with;
 pub use remote::{PushOutcome, RemoteContext, push};
 pub use stash::{
-    StashEntry, StashOutcome, UnstashConflict, UnstashOutcome, stash, stash_list, unstash,
+    AfterUnstash, StashEntry, StashOutcome, UnstashConflict, UnstashOutcome, stash, stash_list,
+    unstash,
 };
 pub use web_auth::{
     DEFAULT_SESSION_LIFETIME, SIGN_IN_LINK_LIFETIME, SignInLink, SignedIn, WEB_TOUCH_INTERVAL,

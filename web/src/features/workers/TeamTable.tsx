@@ -1,8 +1,15 @@
-import { CornerDownRight, ShieldAlert, UserPlus, Users } from "lucide-react";
+import {
+  CornerDownRight,
+  History,
+  ShieldAlert,
+  UserPlus,
+  Users,
+} from "lucide-react";
 import { Fragment, type ReactNode } from "react";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
 import { Label } from "@/components/label/Label";
+import { ClampText } from "@/components/text/ClampText";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { PersonName } from "@/people/PersonName";
@@ -13,6 +20,7 @@ import { SessionLine } from "./SessionLine";
 import { StopWorker } from "./StopWorker";
 import {
   areaNote,
+  instructionsSubject,
   isSupervisedMain,
   mainNote,
   type TeamGroup,
@@ -35,6 +43,7 @@ const HEAD =
   "px-6 py-9 text-left text-label leading-snug font-semibold tracking-overline whitespace-nowrap text-text-muted uppercase first:pl-16 last:pr-16";
 const CELL = "px-6 py-10 align-middle first:pl-16 last:pr-16";
 const NUMBER = "text-code whitespace-nowrap text-text-muted";
+const HEAD_LINE = "flex min-w-0 flex-wrap items-center gap-x-12 gap-y-4";
 
 function BoundCell({ slug, row }: { slug: string; row: TeamRow }) {
   const { bound } = row;
@@ -147,6 +156,7 @@ function Row({
               className="shrink-0 text-warning"
             />
           ) : null}
+          {row.olderFold ? <OlderFoldMark /> : null}
         </span>
       </td>
       <td className={CELL}>
@@ -167,6 +177,16 @@ function Row({
   );
 }
 
+/** The worker's session still holds the skill of an older fold, until its next turn tells it to load the skill again. */
+function OlderFoldMark() {
+  return (
+    <span className="flex shrink-0 items-center gap-4 whitespace-nowrap text-meta text-text-muted">
+      <History aria-hidden="true" size={12} />
+      older fold
+    </span>
+  );
+}
+
 function GroupHead({
   group,
   human,
@@ -177,7 +197,7 @@ function GroupHead({
   let content: ReactNode;
   if (group.kind === "main") {
     content = (
-      <>
+      <span className={HEAD_LINE}>
         <span className="font-semibold text-text">Main agent</span>
         <span className="text-text-muted">
           {mainNote(group)} ·{" "}
@@ -188,36 +208,39 @@ function GroupHead({
           )}
           talks, plans tasks, starts the leads
         </span>
-      </>
+      </span>
     );
   } else if (group.kind === "review") {
     content = (
-      <>
+      <span className={HEAD_LINE}>
         <span className="font-semibold text-text">Review</span>
         <span className="text-text-muted">
           review lead · gives open proposals to reviewers
         </span>
-      </>
+      </span>
     );
   } else {
     content = (
       <>
-        {group.label ? (
-          <Label color={group.label.color}>{group.label.name}</Label>
-        ) : null}
-        <span className="text-text-muted">{areaNote(group)}</span>
-        {group.profile.facts.map((fact) => (
-          <span key={fact} className="whitespace-nowrap text-text-muted">
-            {fact}
-          </span>
-        ))}
+        <span className={HEAD_LINE}>
+          {group.label ? (
+            <Label color={group.label.color}>{group.label.name}</Label>
+          ) : null}
+          <span className="text-text-muted">{areaNote(group)}</span>
+          {group.profile.facts.map((fact) => (
+            <span key={fact} className="whitespace-nowrap text-text-muted">
+              {fact}
+            </span>
+          ))}
+        </span>
         {group.profile.instructions === null ? null : (
-          <span
-            className="min-w-0 truncate text-text-faint"
-            title={group.profile.instructions}
+          <ClampText
+            lines={2}
+            subject={instructionsSubject(group)}
+            className="text-text-faint"
           >
             {group.profile.instructions}
-          </span>
+          </ClampText>
         )}
       </>
     );
@@ -227,11 +250,11 @@ function GroupHead({
       <th
         colSpan={COLUMNS}
         scope="colgroup"
-        className="px-16 py-7 text-left font-normal"
+        className="max-w-0 px-16 py-7 text-left font-regular"
       >
-        <span className="flex min-w-0 items-center gap-12 text-code">
+        <div className="sticky left-16 flex w-group-head flex-col gap-4 text-code">
           {content}
-        </span>
+        </div>
       </th>
     </tr>
   );
@@ -255,7 +278,7 @@ export function TeamTable({
   onStartLead: (() => void) | null;
 }) {
   return (
-    <div className="min-w-0 flex-1 overflow-x-auto rounded-l border border-border-subtle bg-surface">
+    <div className="@container min-w-0 flex-1 overflow-x-auto rounded-l border border-border-subtle bg-surface">
       <table className="w-full border-collapse" aria-label="Team">
         <thead className="bg-bg">
           <tr className="border-b border-border-subtle">

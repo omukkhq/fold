@@ -137,8 +137,19 @@ impl FakeClaude {
                     fixture(turn).to_string_lossy().into_owned(),
                 ),
             ],
+            ..Launcher::default()
         };
         Self { dir, launcher }
+    }
+
+    /// Every role's sessions read the role text of `fingerprint`, as the launcher of an installed fld gives them.
+    #[must_use]
+    pub fn with_fingerprint(mut self, fingerprint: &str) -> Self {
+        self.launcher.fingerprints = fold_core::roles::Role::ALL
+            .into_iter()
+            .map(|role| (role, fingerprint.to_owned()))
+            .collect();
+        self
     }
 
     #[must_use]

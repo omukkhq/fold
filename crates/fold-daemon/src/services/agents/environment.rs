@@ -288,6 +288,7 @@ mod tests {
                 ("FAKE_VERSION".to_owned(), "2.1.301".to_owned()),
                 ("FAKE_SIGNED_IN".to_owned(), "true".to_owned()),
             ],
+            ..Launcher::default()
         };
         assert_eq!(
             ask_claude(&launcher).await,

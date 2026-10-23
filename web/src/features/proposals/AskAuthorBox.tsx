@@ -3,7 +3,7 @@ import { MessageCircleQuestion } from "lucide-react";
 import { Controller, useForm } from "react-hook-form";
 import { Button } from "@/components/button/Button";
 import type { DiffSelection } from "@/features/diff/selection";
-import { MentionTextarea } from "@/mentions/MentionTextarea";
+import { MessageComposer } from "@/mentions/MessageComposer";
 import { questionSchema, type QuestionValues } from "./compose";
 import { askTitle } from "./lineQuestions";
 
@@ -62,14 +62,12 @@ export function AskAuthorBox({
         control={control}
         name="body"
         render={({ field }) => (
-          <MentionTextarea
+          <MessageComposer
             slug={slug}
-            rows={2}
             aria-label="Question"
             autoFocus
-            readOnly={isSubmitting}
+            pending={isSubmitting}
             aria-invalid={errors.body ? true : undefined}
-            className="resize-y py-9"
             ref={field.ref}
             value={field.value}
             onValueChange={field.onChange}

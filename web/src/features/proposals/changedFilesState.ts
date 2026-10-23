@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   readViewed,
+  selectFile,
+  showFile,
   toggleViewed,
   writeViewed,
   type MarkStore,
+  type OpenMarks,
 } from "./viewed";
 
 function browserStore(): MarkStore | null {
@@ -25,15 +28,27 @@ export interface ChangedFilesState {
   /** The files marked viewed in this browser. */
   viewed: ReadonlySet<string>;
   toggleViewed: (path: string) => void;
+  /** The reader selects a file; null for one without a viewed mark. */
+  selectFile: (path: string | null) => void;
 }
 
-/** The folders closed, the filter and the viewed marks of one change; the marks are kept in this browser under `viewedKey`. It lives with the screen, so the tree keeps its folders and filter while the screen shows something else in its place. */
-export function useChangedFiles(viewedKey: string): ChangedFilesState {
+/** The folders closed, the filter and the viewed marks of one change; the marks are kept in this browser under `viewedKey`. `shown` is the file whose diff the screen shows, which is marked viewed when it opens. It lives with the screen, so the tree keeps its folders and filter, and an open file stays open, while the screen shows something else in its place. */
+export function useChangedFiles(
+  viewedKey: string,
+  shown: string | null,
+): ChangedFilesState {
   const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
   const [filter, setFilter] = useState("");
-  const [viewed, setViewed] = useState(() =>
-    readViewed(browserStore(), viewedKey),
-  );
+  const [marks, setMarks] = useState<OpenMarks>(() => ({
+    opened: null,
+    viewed: readViewed(browserStore(), viewedKey),
+  }));
+  const next = showFile(marks, shown);
+  if (next !== marks) setMarks(next);
+  const viewed = next.viewed;
+  useEffect(() => {
+    writeViewed(browserStore(), viewedKey, viewed);
+  }, [viewedKey, viewed]);
   return {
     closed,
     setClosed,
@@ -41,9 +56,10 @@ export function useChangedFiles(viewedKey: string): ChangedFilesState {
     setFilter,
     viewed,
     toggleViewed: (path) => {
-      const next = toggleViewed(viewed, path);
-      writeViewed(browserStore(), viewedKey, next);
-      setViewed(next);
+      setMarks((old) => ({ ...old, viewed: toggleViewed(old.viewed, path) }));
+    },
+    selectFile: (path) => {
+      setMarks((old) => selectFile(old, path));
     },
   };
 }

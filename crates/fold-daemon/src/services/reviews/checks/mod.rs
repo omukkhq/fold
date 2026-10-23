@@ -531,6 +531,27 @@ impl ReviewService {
     }
 }
 
+/// A running run that makes the next version of a proposal when its checks pass: the author's update (`update_proposal`) or a reviewer's fix (`review_fix`). It has no version until then.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VersionRun {
+    pub run: CheckRunId,
+    pub purpose: Purpose,
+}
+
+/// The run of [`VersionRun`] of `proposal` of the task `task`, if one goes. An approval or integration of the current version waits for it: the older version's integration would end it as `workspace_changed`.
+pub(super) async fn next_version_run(
+    conn: &mut SqliteConnection,
+    task: TaskId,
+    proposal: ProposalId,
+) -> Result<Option<VersionRun>, StoreError> {
+    Ok(checks::running_version_run(&mut *conn, task, proposal)
+        .await?
+        .map(|run| VersionRun {
+            run: run.id,
+            purpose: run.purpose,
+        }))
+}
+
 /// A proposal-stage run to write as running.
 pub(super) struct NewProposalRun<'a> {
     pub purpose: Purpose,

@@ -44,6 +44,26 @@ function renderBar() {
   );
 }
 
+/** The control alone, mounted again with `remount`, as the More popover does when it closes and opens. */
+function renderRemountable() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const ui = (key: number) => (
+    <QueryClientProvider client={client}>
+      <PauseControl key={key} slug="demo" />
+    </QueryClientProvider>
+  );
+  render(ui(0));
+  let mounted = 1;
+  return {
+    remount: () => {
+      cleanup();
+      render(ui(mounted++));
+    },
+  };
+}
+
 describe("PauseControl", () => {
   it("pauses, waits for the daemon's state, then offers the resume and shows the banner", async () => {
     // The banner gives only the clock time for a pause of the same day.
@@ -77,6 +97,37 @@ describe("PauseControl", () => {
     const name = screen.getByText("@tanim");
     expect(name.getAttribute("data-person")).toBe("human");
     expect(name.className).toContain("text-primary-text");
+  });
+
+  it("keeps the write in flight and its refusal when the control mounts again", async () => {
+    let release = () => {};
+    const answered = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    stubFetch({
+      "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+      "GET /api/v1/projects/demo": { body: project(null) },
+      "POST /api/v1/projects/demo/pause": async () => {
+        await answered;
+        return errorReply(503, "project_unavailable");
+      },
+    });
+    const bar = renderRemountable();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Pause agents" }),
+    );
+    await screen.findByRole("button", { name: "Pausing…" });
+    bar.remount();
+    const pending = await screen.findByRole("button", { name: "Pausing…" });
+    expect(pending.hasAttribute("disabled")).toBe(true);
+    release();
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The project is not available now.",
+    );
+    bar.remount();
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The project is not available now.",
+    );
   });
 
   it("shows the refusal of a resume", async () => {

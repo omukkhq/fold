@@ -431,12 +431,22 @@ function invalidationKeys(
           ];
     case "checks": {
       const run = typeof event.data.run === "string" ? event.data.run : null;
+      // A review batch's integration run shows on every member's page, but its events name only the member that stores it.
+      const pages =
+        event.data.stage === "integration"
+          ? [keys.proposalPages(slug)]
+          : proposalKey;
+      // The batch screen holds a member's integration while its update or a reviewer's fix runs the checks of its next version.
+      const nextVersion =
+        event.data.purpose === "update_proposal" ||
+        event.data.purpose === "review_fix";
       return [
         keys.proposals(slug),
-        ...proposalKey,
+        ...pages,
         ...taskKey,
         board,
         ...(run === null ? [] : [keys.checkRun(slug, run)]),
+        ...(nextVersion ? [keys.reviewBatches(slug)] : []),
       ];
     }
     case "integration":

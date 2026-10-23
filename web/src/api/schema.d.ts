@@ -1276,6 +1276,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/threads/{id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The signed-in human marks a thread read: their recipient rows of its messages that have no acknowledgement take the current time, and `message.acknowledged` names those messages. Rows of other recipients never change, and a repeat changes nothing and appends no event. */
+        post: operations["mark_thread_read"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/unstash": {
         parameters: {
             query?: never;
@@ -3087,6 +3104,13 @@ export interface components {
             /** @description The text of a plain step. */
             text?: string | null;
         };
+        /** @description The run in progress that makes a proposal's next version when its checks pass. While it goes, the current version is neither approved nor integrated (`update_checks_running`). */
+        NextVersionRun: {
+            /** @description `update_proposal` for the author's update, `review_fix` for a reviewer's fix in a review checkout. */
+            purpose: components["schemas"]["CheckPurpose"];
+            /** @example cr-4 */
+            run: string;
+        };
         /** @enum {string} */
         NoticeReach: "stdin" | "socket" | "failing" | "unreachable";
         OpenProject: {
@@ -3286,6 +3310,7 @@ export interface components {
             /** @description The task's status on the board. */
             task_status: components["schemas"]["TaskStatus"];
             totals: components["schemas"]["ComparisonTotals"];
+            update_run: components["schemas"]["NextVersionRun"] | null;
             /** @description Oldest first. */
             versions: components["schemas"]["ProposalVersion"][];
         };
@@ -3531,14 +3556,14 @@ export interface components {
         RecipientView: {
             /**
              * Format: int64
-             * @description UTC milliseconds; null until the recipient acknowledged it.
+             * @description UTC milliseconds; null until the recipient acknowledged it. A human acknowledges by opening the thread, which marks it read, or by writing in it.
              */
             acknowledged_at: number | null;
             /** @description How the sender reached this recipient: `agent`, `worker`, `tag`, `all`, `human` or `humans`. */
             addressed_as: string;
             /**
              * Format: int64
-             * @description UTC milliseconds; null until an inbox returned the row.
+             * @description UTC milliseconds; null until an inbox returned the row. Always null for a human, whose Messages screen shows the message as soon as it is stored.
              */
             delivered_at: number | null;
             /**
@@ -3573,6 +3598,7 @@ export interface components {
             revision: string;
             skipped: components["schemas"]["RecordSkipped"][];
             touched: components["schemas"]["RecordTouched"][];
+            unstash: components["schemas"]["UnstashResult"] | null;
         };
         /** @description A file of the project folder that fold leaves out, as an import does. */
         RecordSkipped: {
@@ -3886,6 +3912,8 @@ export interface components {
              */
             run: string | null;
             state: components["schemas"]["ReviewBatchIntegrationState"];
+            /** @description While `ready`: the members of `members` whose author's update or reviewer's fix runs the checks of their next version. The batch integrates only once these runs end (`update_checks_running`). */
+            updating: components["schemas"]["ReviewBatchUpdating"][];
         };
         /** @enum {string} */
         ReviewBatchIntegrationState: "not_submitted" | "waiting" | "ready" | "ended";
@@ -3941,6 +3969,12 @@ export interface components {
         };
         /** @enum {string} */
         ReviewBatchState: "open" | "submitted" | "closed";
+        /** @description A member whose next version runs its checks. */
+        ReviewBatchUpdating: {
+            /** @example P-3 */
+            proposal: string;
+            run: components["schemas"]["NextVersionRun"];
+        };
         /** @description A verdict the batch gave. */
         ReviewBatchVerdict: {
             /** @example P-3 */
@@ -4283,6 +4317,7 @@ export interface components {
             revision: string;
             /** @description New files the read of the folder left out, such as one over the size limit: they stay in the folder and are not in the entry. */
             skipped: components["schemas"]["RecordSkipped"][];
+            unstash: components["schemas"]["UnstashResult"] | null;
         };
         /** @enum {string} */
         StashState: "nothing" | "stashed";
@@ -4653,6 +4688,17 @@ export interface components {
              */
             total_awaiting_human: number;
         };
+        /** @description The messages a mark-read call acknowledged. */
+        ThreadRead: {
+            /**
+             * @description In number order; empty when the signed-in human had nothing unread in the thread.
+             * @example [
+             *       "m-31",
+             *       "m-33"
+             *     ]
+             */
+            read: string[];
+        };
         /** @description A thread with every message in number order. */
         ThreadView: {
             /** @description True while the thread holds an open ask: a message an agent marked as asking a human, a question with choices or a worker's `AskUserQuestion`, with no human reply after it and not marked answered. In a `mine` listing, only an ask that waits for the signed-in human: addressed to them by name or to `humans`. */
@@ -4949,6 +4995,8 @@ export interface components {
              * @example web-worker
              */
             name: string;
+            /** @description The worker is idle or working in a session that last read other skill text than the fld that runs the daemon writes for its role. Its next turn starts with a note to load its role skill again, and once fold writes that turn this is false; false for a worker that is starting or stopping or does not run. */
+            older_fold: boolean;
             /** @description The sessions the worker had before its current one, oldest first. */
             previous_sessions: components["schemas"]["PreviousSessionEntry"][];
             /** @description The proposals a reviewer is bound to. */
@@ -8357,7 +8405,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description A gate refusal: `stale_version` (`details.expected_version`, `details.current_version`), `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`); or `proposal_not_open`, `integration_conflicted` (`details.files`: path and kind), `head_moved` */
+            /** @description A gate refusal: `stale_version` (`details.expected_version`, `details.current_version`), `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`); or `proposal_not_open`, `integration_conflicted` (`details.files`: path and kind), `head_moved`, or `update_checks_running` while the author's update or a reviewer's fix runs the checks of the next version (`details.run`, `details.purpose`) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8633,7 +8681,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `stale_version` (`details.expected_version`, `details.current_version`), `agent_approval_required` (a human's approve on a task with the human review mark before a reviewer agent approved the version; a task of the area main needs no reviewer agent first), `proposal_not_open` or `task_closed` */
+            /** @description `stale_version` (`details.expected_version`, `details.current_version`), `agent_approval_required` (a human's approve on a task with the human review mark before a reviewer agent approved the version; a task of the area main needs no reviewer agent first), `update_checks_running` (an approve while the author's update or a reviewer's fix runs the checks of the next version; `details.run`, `details.purpose`), `proposal_not_open` or `task_closed` */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -10259,7 +10307,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description A gate refusal for a member, with `details.batch` and `details.proposal`: `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`) or `proposal_not_open`; or `head_moved` */
+            /** @description A gate refusal for a member, with `details.batch` and `details.proposal`: `changes_requested`, `not_approved`, `human_approval_missing` (`details.reviewer`), `agent_approval_required` (a marked task whose version no reviewer agent approved), `prerequisites_not_done` (`details.prerequisites`), `proposal_not_open`, or `update_checks_running` while the author's update or a reviewer's fix of a member runs the checks of its next version (`details.run`, `details.purpose`); or `head_moved` */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -10770,7 +10818,7 @@ export interface operations {
                     "application/json": components["schemas"]["StashResult"];
                 };
             };
-            /** @description The human name is not valid; the branch or HEAD shows a change fold did not make (`reason` `head_moved`); the human's Git commits wait for the main agent (`reason` `git_commits_wait`); an unstash conflict waits, or a stop left an unstash's markers in the files, which keeps its entry as conflicted (`reason` `stash_conflicted`); a file fold tracks is too large or unreadable to stash (`reason` `skipped_tracked`, the files in `paths`); or files changed while fold stashed them (`reason` `changed_during_stash`) */
+            /** @description The human name is not valid; the branch or HEAD shows a change fold did not make (`reason` `head_moved`); the human's Git commits wait for the main agent (`reason` `git_commits_wait`); an unstash conflict waits (`reason` `stash_conflicted`); files still hold the conflict of `fld unstash` (`reason` `stash_markers`, the files in `paths`); a file fold tracks is too large or unreadable to stash (`reason` `skipped_tracked`, the files in `paths`); or files changed while fold stashed them (`reason` `changed_during_stash`) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -12484,6 +12532,85 @@ export interface operations {
             };
         };
     };
+    mark_thread_read: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The id of the thread's first message, or of any message of the thread */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The messages this call marked read */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThreadRead"];
+                };
+            };
+            /** @description `invalid_id`: the id is not a message id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `message_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     unstash_project: {
         parameters: {
             query?: never;
@@ -12505,7 +12632,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnstashResult"];
                 };
             };
-            /** @description The human name is not valid; the stash is empty (`reason` `stash_empty`); an unstash conflict waits (`reason` `stash_conflicted`); files still hold the markers of an earlier unstash (`reason` `stash_markers`), which keeps the entry as conflicted; the folder holds a file fold leaves out, such as an ignored one, where the unstash writes (`reason` `unstash_path_occupied`, the files in `paths`); files changed while fold read them (`reason` `changed_during_unstash`); the branch or HEAD shows a change fold did not make (`reason` `head_moved`); or the human's Git commits wait (`reason` `git_commits_wait`) */
+            /** @description The human name is not valid; the stash is empty (`reason` `stash_empty`); an unstash conflict waits (`reason` `stash_conflicted`); files still hold the markers of an earlier unstash (`reason` `stash_markers`); the folder holds a file fold leaves out, such as an ignored one, where the unstash writes (`reason` `unstash_path_occupied`, the files in `paths`); files changed while fold read them (`reason` `changed_during_unstash`); the branch or HEAD shows a change fold did not make (`reason` `head_moved`); or the human's Git commits wait (`reason` `git_commits_wait`) */
             400: {
                 headers: {
                     [name: string]: unknown;

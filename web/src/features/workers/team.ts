@@ -175,6 +175,8 @@ export interface TeamRow {
   pill: StatePill;
   /** The worker waits for a human to answer a permission question. */
   asks: boolean;
+  /** The worker's session last read the skill text of an older fold; its next turn tells it to load its role skill again. */
+  olderFold: boolean;
   bound: Bound;
   model: string;
   turns: string;
@@ -459,6 +461,7 @@ function runningRow(
     asks: input.questions.some(
       (q) => q.worker === worker.name && q.answer === null,
     ),
+    olderFold: worker.older_fold,
     bound: boundOf(worker, input, input.workers.areas),
     model: worker.model ?? roleModel(input.workers.roles, worker.role) ?? NONE,
     turns: String(worker.turns),
@@ -500,6 +503,7 @@ function mainRow(agent: AgentView, human: string | null): TeamRow {
     roleLine: "Main agent · your terminal session",
     pill: mainPill(agent.presence),
     asks: false,
+    olderFold: false,
     bound:
       human === null
         ? { kind: "text", text: NONE }
@@ -672,6 +676,13 @@ export function mainNote(group: TeamGroup): string {
 }
 
 /** `area · lead owns 4 tasks`; an area named apart from its label says its name. */
+/** The area's instructions as the group head's More and Less buttons name them. */
+export function instructionsSubject(group: TeamGroup): string {
+  return group.area === null
+    ? "the area instructions"
+    : `the ${group.area} instructions`;
+}
+
 export function areaNote(group: TeamGroup): string {
   const name =
     group.area === null || group.area === group.label?.name

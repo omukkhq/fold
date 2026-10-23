@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO folder_unstashes (stash_id, folder_tree_hash, target_tree_hash, revision_id, actor, state, started_at)\n           SELECT ?1, ?2, ?3, r.id, ?5, 'open', ?6\n           FROM revisions r WHERE r.number = ?4\n           RETURNING id AS \"id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "folder_unstashes",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d948f4d7344309858676d63d767cadb6ea3e47d37583861e31372be5c5452706"
+}

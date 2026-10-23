@@ -154,6 +154,37 @@ impl Fixture {
         .unwrap();
         (row.get(0), row.get(1))
     }
+
+    /// `acked_at` of the row of `message` for the human `human`.
+    async fn human_row(&self, message: MessageId, human: &str) -> Option<i64> {
+        sqlx::query_scalar(
+            "SELECT r.acked_at FROM message_recipients r JOIN messages m ON m.id = r.message_id
+             WHERE m.number = ? AND r.human = ?",
+        )
+        .bind(message.to_db())
+        .bind(human)
+        .fetch_one(self.project.store().read())
+        .await
+        .unwrap()
+    }
+
+    /// The `message.acknowledged` events as `(actor, ids)`.
+    async fn acknowledged(&self) -> Vec<(String, serde_json::Value)> {
+        events::read_after(
+            self.project.store().read(),
+            0,
+            &EventFilter {
+                types: vec![types::MESSAGE_ACKNOWLEDGED],
+                ..EventFilter::default()
+            },
+            100,
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|event| (event.actor.as_str().to_owned(), event.data["ids"].clone()))
+        .collect()
+    }
 }
 
 #[cfg(test)]
@@ -778,4 +809,155 @@ async fn messages_never_change_task_state() {
             .await
             .unwrap();
     assert_eq!(before, after);
+}
+
+#[tokio::test]
+async fn a_human_who_writes_in_a_thread_has_read_the_earlier_messages_of_it() {
+    let fixture = Fixture::new().await;
+    let question = fixture
+        .send("frontend", &["human:tanim", "human:ana", "backend"])
+        .await;
+    let follow = fixture
+        .messages
+        .send(
+            &agent("frontend"),
+            SendMessage {
+                reply_to: Some(question),
+                ..message(&["human:tanim"], "one more thing")
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+    let at = fixture.project.now().as_millis();
+    let reply = fixture
+        .messages
+        .send(
+            &human("tanim"),
+            SendMessage {
+                reply_to: Some(question),
+                ..message(&["frontend"], "the first")
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+    assert_eq!(fixture.human_row(question, "tanim").await, Some(at));
+    assert_eq!(fixture.human_row(follow, "tanim").await, Some(at));
+    assert_eq!(
+        fixture.human_row(question, "ana").await,
+        None,
+        "another human's row is untouched"
+    );
+    assert_eq!(
+        fixture.row(question, "backend").await.1,
+        None,
+        "a worker's row is untouched"
+    );
+    assert_eq!(
+        fixture.acknowledged().await,
+        vec![(
+            "human:tanim".to_owned(),
+            serde_json::json!([question.to_string(), follow.to_string()])
+        )]
+    );
+    let later = fixture
+        .messages
+        .send(
+            &agent("frontend"),
+            SendMessage {
+                reply_to: Some(reply),
+                ..message(&["human:tanim"], "thanks")
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+    assert_eq!(
+        fixture.human_row(later, "tanim").await,
+        None,
+        "a message after the reply waits to be read"
+    );
+}
+
+#[tokio::test]
+async fn a_human_marks_a_thread_read_once_and_only_their_own_rows() {
+    let fixture = Fixture::new().await;
+    let question = fixture
+        .send("frontend", &["human:tanim", "human:ana", "backend"])
+        .await;
+    let follow = fixture
+        .messages
+        .send(
+            &agent("design"),
+            SendMessage {
+                reply_to: Some(question),
+                ..message(&["humans"], "me too")
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+    let other = fixture.send("frontend", &["human:tanim"]).await;
+    let at = fixture.project.now().as_millis();
+    assert_eq!(
+        fixture
+            .messages
+            .mark_read(&human("tanim"), follow)
+            .await
+            .unwrap(),
+        vec![question, follow]
+    );
+    assert_eq!(fixture.human_row(question, "tanim").await, Some(at));
+    assert_eq!(fixture.human_row(follow, "tanim").await, Some(at));
+    assert_eq!(fixture.human_row(question, "ana").await, None);
+    assert_eq!(fixture.human_row(follow, "ana").await, None);
+    assert_eq!(fixture.row(question, "backend").await.1, None);
+    assert_eq!(
+        fixture.human_row(other, "tanim").await,
+        None,
+        "another thread stays unread"
+    );
+    fixture
+        .project
+        .clock()
+        .advance(Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(
+        fixture
+            .messages
+            .mark_read(&human("tanim"), question)
+            .await
+            .unwrap(),
+        Vec::<MessageId>::new()
+    );
+    assert_eq!(
+        fixture.human_row(question, "tanim").await,
+        Some(at),
+        "a read row keeps its time"
+    );
+    assert_eq!(
+        fixture.acknowledged().await,
+        vec![(
+            "human:tanim".to_owned(),
+            serde_json::json!([question.to_string(), follow.to_string()])
+        )],
+        "a repeat appends nothing"
+    );
+    let error = refusal(
+        fixture
+            .messages
+            .mark_read(&agent("backend"), question)
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(error.code(), codes::HUMAN_REQUIRED);
+    let error = refusal(
+        fixture
+            .messages
+            .mark_read(&human("tanim"), m(99))
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(error.code(), codes::MESSAGE_NOT_FOUND);
 }

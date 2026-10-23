@@ -91,6 +91,19 @@ export async function markAnswered(
   return result.answered;
 }
 
+/** Marks the thread read for the signed-in human, their own recipient rows only, and answers with the ids it marked, none on a repeat. */
+export async function markThreadRead(
+  slug: string,
+  thread: string,
+): Promise<string[]> {
+  const result = await unwrap(
+    api.POST("/api/v1/projects/{slug}/threads/{id}/read", {
+      params: { path: { slug, id: thread } },
+    }),
+  );
+  return result.read;
+}
+
 /** How many threads hold an ask that waits for the signed-in human: the threads the Messages screen marks. One request for a page of a single thread carries the count. */
 export async function countAwaitingHuman(slug: string): Promise<number> {
   const page = await unwrap(

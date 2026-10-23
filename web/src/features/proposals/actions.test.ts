@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ProposalSummary } from "@/api/proposals";
 import {
+  checkRun,
   humanGates,
   proposalDetail,
   proposalSummary,
@@ -13,8 +14,12 @@ import {
   APPROVE_BODY,
   approveBlock,
   CHECKS_FAILED,
+  checkRunsLine,
   humanVerdict,
   integrateBlock,
+  integrationRunsLine,
+  ownApprovalLine,
+  updateRunsLine,
   showsApproveLine,
   visibleActions,
 } from "./actions";
@@ -126,6 +131,41 @@ describe("integrateBlock", () => {
     });
     expect(integrateBlock(p, null)).toBeNull();
   });
+
+  it("waits while an integration check run of the current version runs, and not for a proposal-stage run", () => {
+    const running = (stage: "proposal" | "integration") =>
+      proposalDetail(proposalSummary("P-46", { current_version: 5 }), {
+        checks: [
+          checkRun(163, {
+            stage,
+            state: "running",
+            finished_at: null,
+            version: stage === "integration" ? 5 : null,
+          }),
+          checkRun(152),
+        ],
+      });
+    expect(integrateBlock(running("integration"), "r76")).toBe(
+      "fold runs the integration checks of v5. Integrate when they end.",
+    );
+    expect(integrationRunsLine(5)).toBe(
+      integrateBlock(running("integration"), "r76"),
+    );
+    expect(integrateBlock(running("proposal"), "r76")).toBeNull();
+    const ended = proposalDetail(
+      proposalSummary("P-46", { current_version: 5 }),
+      { checks: [checkRun(163, { stage: "integration", state: "passed" })] },
+    );
+    expect(integrateBlock(ended, "r76")).toBeNull();
+    const failed = {
+      ...running("integration"),
+      summary: proposalSummary("P-46", {
+        current_version: 5,
+        checks_failed: true,
+      }),
+    };
+    expect(integrateBlock(failed, "r76")).toBe(CHECKS_FAILED);
+  });
 });
 
 describe("actedVersion and humanVerdict", () => {
@@ -164,13 +204,53 @@ describe("approveBlock", () => {
     expect(CHECKS_FAILED).toBe(
       "The integration checks failed; the author sends a new version.",
     );
-    expect(approveBlock(failed)).toBe(CHECKS_FAILED);
+    expect(approveBlock(failed, "tanim")).toBe(CHECKS_FAILED);
     expect(integrateBlock(failed, "r8")).toBe(CHECKS_FAILED);
     const marked = proposalDetail(
       proposalSummary("P-4", { checks_failed: true, human_review: mark }),
       { agent_approved: false },
     );
-    expect(approveBlock(marked)).toBe(CHECKS_FAILED);
+    expect(approveBlock(marked, "tanim")).toBe(CHECKS_FAILED);
+  });
+
+  it("blocks Approve and Integrate while an update runs the checks of the next version", () => {
+    const updating = proposalDetail(
+      proposalSummary("P-4", { current_version: 2, human_review: mark }),
+      {
+        agent_approved: false,
+        update_run: { run: "cr-7", purpose: "update_proposal" },
+      },
+    );
+    expect(updateRunsLine(3)).toBe("v3 is running its checks.");
+    expect(approveBlock(updating, "tanim")).toBe("v3 is running its checks.");
+    expect(integrateBlock(updating, "r8")).toBe("v3 is running its checks.");
+    const approved = proposalDetail(
+      proposalSummary("P-4", { current_version: 2 }),
+      {
+        reviews: [review(2, "human:tanim", "approve")],
+        update_run: { run: "cr-7", purpose: "update_proposal" },
+      },
+    );
+    expect(approveBlock(approved, "tanim")).toBe(updateRunsLine(3));
+    const ended = { ...updating, update_run: null };
+    expect(approveBlock(ended, "tanim")).toBe(AGENT_APPROVES_FIRST);
+    const failed = {
+      ...updating,
+      summary: { ...updating.summary, checks_failed: true },
+    };
+    expect(approveBlock(failed, "tanim")).toBe(CHECKS_FAILED);
+  });
+
+  it("names a reviewer's fix that runs the checks of the next version", () => {
+    const fixing = proposalDetail(
+      proposalSummary("P-4", { current_version: 2 }),
+      { update_run: { run: "cr-8", purpose: "review_fix" } },
+    );
+    expect(updateRunsLine(3, true)).toBe(
+      "v3, a reviewer's fix, is running its checks.",
+    );
+    expect(approveBlock(fixing, "tanim")).toBe(updateRunsLine(3, true));
+    expect(integrateBlock(fixing, "r8")).toBe(updateRunsLine(3, true));
   });
 
   it("blocks a human's Approve on a marked task until a reviewer agent approved the current version", () => {
@@ -178,13 +258,13 @@ describe("approveBlock", () => {
       proposalSummary("P-4", { human_review: mark }),
       { agent_approved: false },
     );
-    expect(approveBlock(waiting)).toBe(AGENT_APPROVES_FIRST);
+    expect(approveBlock(waiting, "tanim")).toBe(AGENT_APPROVES_FIRST);
     expect(AGENT_APPROVES_FIRST).toBe("A reviewer agent approves first.");
     const approved = proposalDetail(
       proposalSummary("P-4", { human_review: mark }),
       { agent_approved: true },
     );
-    expect(approveBlock(approved)).toBeNull();
+    expect(approveBlock(approved, "tanim")).toBeNull();
   });
 
   it("lets a human approve a task of the main agent's area first, since no reviewer agent reviews it", () => {
@@ -192,7 +272,7 @@ describe("approveBlock", () => {
       proposalSummary("P-4", { human_review: mark }),
       { agent_approved: false, main_task: true },
     );
-    expect(approveBlock(main)).toBeNull();
+    expect(approveBlock(main, "tanim")).toBeNull();
     expect(integrateBlock(main, "r8")).not.toBe(AGENT_APPROVES_FIRST);
   });
 
@@ -210,7 +290,105 @@ describe("approveBlock", () => {
   });
 
   it("never blocks Approve on a task without the mark", () => {
-    expect(approveBlock(proposal())).toBeNull();
+    expect(approveBlock(proposal(), "tanim")).toBeNull();
+  });
+
+  it("blocks Approve while the signed-in human's latest verdict on the current version is an approval", () => {
+    const approved = proposalDetail(
+      proposalSummary("P-4", { current_version: 5 }),
+      {
+        reviews: [
+          review(5, "review/security", "approve"),
+          review(5, "human:tanim", "approve"),
+        ],
+      },
+    );
+    expect(approveBlock(approved, "tanim")).toBe("You approved v5.");
+    expect(ownApprovalLine(5)).toBe("You approved v5.");
+    expect(approveBlock(approved, "pptx704")).toBeNull();
+    expect(approveBlock(approved, null)).toBeNull();
+    expect(integrateBlock(approved, "r8")).toBeNull();
+  });
+
+  it("lets the human approve again after their own request for changes, and on a new version", () => {
+    const first = review(5, "human:tanim", "approve");
+    const changed = proposalDetail(
+      proposalSummary("P-4", { current_version: 5 }),
+      {
+        reviews: [
+          first,
+          review(5, "human:tanim", "request_changes", {
+            created_at: first.created_at + 1,
+          }),
+        ],
+      },
+    );
+    expect(approveBlock(changed, "tanim")).toBeNull();
+    const newer = proposalDetail(
+      proposalSummary("P-4", { current_version: 6 }),
+      {
+        reviews: [first],
+      },
+    );
+    expect(approveBlock(newer, "tanim")).toBeNull();
+  });
+
+  it("blocks Approve while a check run of either stage runs on the current version", () => {
+    const running = (stage: "proposal" | "integration") =>
+      proposalDetail(proposalSummary("P-4", { current_version: 5 }), {
+        checks: [
+          checkRun(163, { stage, state: "running", finished_at: null }),
+          checkRun(152),
+        ],
+      });
+    expect(approveBlock(running("proposal"), "tanim")).toBe(
+      "A check runs on v5. Approve when it ends.",
+    );
+    expect(approveBlock(running("integration"), "tanim")).toBe(
+      checkRunsLine(5),
+    );
+    const ended = proposalDetail(
+      proposalSummary("P-4", { current_version: 5 }),
+      {
+        checks: [checkRun(163, { stage: "integration", state: "stopped" })],
+      },
+    );
+    expect(approveBlock(ended, "tanim")).toBeNull();
+  });
+
+  it("reads the runs only of a read that selected the current version", () => {
+    const earlier = proposalDetail(
+      proposalSummary("P-4", { current_version: 5 }),
+      {
+        selected: proposalVersion(4),
+        checks: [checkRun(9, { state: "running", finished_at: null })],
+      },
+    );
+    expect(approveBlock(earlier, "tanim")).toBeNull();
+  });
+
+  it("names the failed checks first, then the human's own approval, then a running check, then the agent", () => {
+    const all = (fields: Partial<ProposalSummary>, runs = true) =>
+      proposalDetail(
+        proposalSummary("P-4", {
+          current_version: 5,
+          human_review: mark,
+          ...fields,
+        }),
+        {
+          agent_approved: false,
+          reviews: [review(5, "human:tanim", "approve")],
+          checks: runs
+            ? [checkRun(163, { state: "running", finished_at: null })]
+            : [],
+        },
+      );
+    expect(approveBlock(all({ checks_failed: true }), "tanim")).toBe(
+      CHECKS_FAILED,
+    );
+    expect(approveBlock(all({}), "tanim")).toBe(ownApprovalLine(5));
+    expect(approveBlock(all({}), "pptx704")).toBe(checkRunsLine(5));
+    expect(approveBlock(all({}, false), "pptx704")).toBe(AGENT_APPROVES_FIRST);
   });
 });
 
@@ -219,6 +397,15 @@ describe("showsApproveLine", () => {
     expect(showsApproveLine(CHECKS_FAILED, CHECKS_FAILED, true)).toBe(false);
     expect(showsApproveLine(CHECKS_FAILED, CHECKS_FAILED, false)).toBe(true);
     expect(showsApproveLine(CHECKS_FAILED, null, true)).toBe(true);
+  });
+
+  it("shows the line of a running update once, under both buttons, while Integrate shows", () => {
+    const line = updateRunsLine(3);
+    expect(showsApproveLine(line, line, true)).toBe(false);
+    expect(showsApproveLine(line, line, false)).toBe(true);
+    expect(showsApproveLine(line, CHECKS_FAILED, true)).toBe(true);
+    const fix = updateRunsLine(3, true);
+    expect(showsApproveLine(fix, fix, true)).toBe(false);
   });
 
   it("keeps every other line under Approve", () => {

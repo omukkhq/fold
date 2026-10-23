@@ -1,3 +1,5 @@
+import { CODE_BOX, textFlow } from "@/components/text/textFlow";
+import { cn } from "@/lib/cn";
 import { ActorText } from "@/people/ActorText";
 import type { ConflictReport, ProposalDetail } from "@/api/proposals";
 import {
@@ -57,13 +59,19 @@ export function ConflictBlock({
             {file.hunks.map((hunk, index) => (
               <div
                 key={index}
-                className="flex flex-col gap-4 overflow-x-auto rounded-s bg-surface px-8 py-6 font-mono text-caption"
+                className={cn(
+                  CODE_BOX,
+                  "flex flex-col gap-4 rounded-s bg-surface px-8 py-6 font-mono text-caption",
+                )}
               >
                 {hunkSides(hunk, ref).map(({ label, lines }) => (
                   <div key={label} className="flex flex-col">
                     <span className="text-text-faint">{label}</span>
                     {lines.map((text, n) => (
-                      <code key={n} className="whitespace-pre text-text">
+                      <code
+                        key={n}
+                        className={cn("text-text", textFlow("code"))}
+                      >
                         {text}
                       </code>
                     ))}

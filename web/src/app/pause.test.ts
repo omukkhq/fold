@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { segmentsText } from "@/people/segments";
-import { pauseControl, pausedBanner } from "./pause";
+import { lastPauseWrite, pauseControl, pausedBanner } from "./pause";
 
 const AT = new Date(2026, 9, 17, 23, 40).getTime();
 
@@ -64,5 +64,36 @@ describe("pausedBanner", () => {
     expect(pausedBanner(AT, AT, "frontend")?.detail).toContain(
       "Claims keep their leases.",
     );
+  });
+});
+
+describe("lastPauseWrite", () => {
+  it("is idle before any write", () => {
+    expect(lastPauseWrite([])).toEqual({ sent: null, error: null });
+  });
+
+  it("reads the action in flight and the error of the newest write only", () => {
+    const failed = new Error("refused");
+    expect(
+      lastPauseWrite([
+        { status: "error", variables: "pause", error: failed },
+        { status: "pending", variables: "resume", error: null },
+      ]),
+    ).toEqual({ sent: "resume", error: null });
+    expect(
+      lastPauseWrite([
+        { status: "success", variables: "pause", error: null },
+        { status: "error", variables: "resume", error: failed },
+      ]),
+    ).toEqual({ sent: null, error: failed });
+    expect(
+      lastPauseWrite([{ status: "success", variables: "pause", error: null }]),
+    ).toEqual({ sent: null, error: null });
+  });
+
+  it("takes no action from a write it does not know", () => {
+    expect(
+      lastPauseWrite([{ status: "pending", variables: "stop", error: null }]),
+    ).toEqual({ sent: null, error: null });
   });
 });

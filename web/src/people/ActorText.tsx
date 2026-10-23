@@ -8,10 +8,13 @@ export function ActorText({
   segments,
   personClassName,
   slot,
+  you = null,
 }: {
   segments: Segments;
   personClassName?: string;
   slot?: PersonSlot;
+  /** The signed-in human's bare name: their own name reads as the word `you`. */
+  you?: string | null;
 }) {
   return (
     <>
@@ -24,6 +27,8 @@ export function ActorText({
               name={part.actor}
               className={personClassName}
               slot={slot}
+              you={you}
+              youWord
             />
           )}
         </Fragment>

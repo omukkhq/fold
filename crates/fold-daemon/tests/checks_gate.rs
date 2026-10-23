@@ -535,3 +535,149 @@ async fn a_marked_task_keeps_its_own_mark() {
         Some(("touches auth".to_owned(), "review".to_owned()))
     );
 }
+
+/// `frontend` opens `P-1` through green checks of `fold-checks.toml`, whose one check waits until `go` exists and then needs `src/lib.rs`; `go` exists until the call returns.
+#[cfg(test)]
+async fn proposal_behind_a_gate(fx: &Fixture, go: &std::path::Path) {
+    give_role(fx.project.store(), "review", Role::Reviewer, None).await;
+    std::fs::write(go, "").unwrap();
+    workspace_with_checks(
+        fx,
+        &format!(
+            "[[check]]\nname = \"slow\"\nrun = \"until [ -e '{}' ]; do sleep 0.05; done; test -f src/lib.rs\"\n",
+            go.display()
+        ),
+    )
+    .await;
+    let run = checking(
+        fx.reviews
+            .create_proposal(&by(&fx.frontend.worker), t(1), "Add checks", None)
+            .await
+            .unwrap(),
+    );
+    ended(&fx.reviews, run).await;
+    eventually(WAIT, async || {
+        fx.reviews
+            .get_proposal(p(1), None)
+            .await
+            .map(|_| ())
+            .map_err(|_| "no proposal")
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_approval_of_the_current_version_waits_while_an_update_runs_its_checks() {
+    let fx = Fixture::new().await;
+    let gate = tempfile::tempdir().unwrap();
+    let go = gate.path().join("go");
+    proposal_behind_a_gate(&fx, &go).await;
+    std::fs::remove_file(&go).unwrap();
+    fx.write("src/lib.rs", "pub fn z() {}\n");
+    let update = checking(
+        fx.reviews
+            .update_proposal(&by(&fx.frontend.worker), p(1), None)
+            .await
+            .unwrap(),
+    );
+    let view = fx
+        .reviews
+        .view_proposal(&human(), p(1), None)
+        .await
+        .unwrap();
+    assert_eq!(view.update_run.map(|run| run.run), Some(update));
+    assert_eq!(view.detail.summary.current_version, 1);
+    let reviewer = by(&fx.review.worker);
+    for actor in [&reviewer, &human()] {
+        let held = refusal(
+            fx.reviews
+                .submit_review(actor, p(1), 1, Verdict::Approve, "ok", Vec::new())
+                .await,
+        );
+        assert_eq!(held.code(), codes::UPDATE_CHECKS_RUNNING);
+        assert_eq!(
+            held.details().unwrap()["run"],
+            serde_json::json!(update.to_string())
+        );
+        assert!(held.hint().unwrap().contains("wait_for_events"));
+    }
+    let integrate = refusal(fx.reviews.integrate_proposal(&human(), p(1), Some(1)).await);
+    assert_eq!(integrate.code(), codes::UPDATE_CHECKS_RUNNING);
+    assert_eq!(
+        fx.count("SELECT COUNT(*) FROM reviews WHERE verdict = 'approve'")
+            .await,
+        0
+    );
+    fx.reviews
+        .submit_review(&reviewer, p(1), 1, Verdict::Comment, "looking", Vec::new())
+        .await
+        .unwrap();
+    fx.reviews
+        .submit_review(
+            &reviewer,
+            p(1),
+            1,
+            Verdict::RequestChanges,
+            "more",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    std::fs::write(&go, "").unwrap();
+    assert_eq!(ended(&fx.reviews, update).await.run.state, RunState::Passed);
+    let view = eventually(WAIT, async || {
+        let view = fx
+            .reviews
+            .view_proposal(&human(), p(1), None)
+            .await
+            .unwrap();
+        if view.detail.summary.current_version == 2 {
+            Ok(view)
+        } else {
+            Err("no v2")
+        }
+    })
+    .await;
+    assert_eq!(view.update_run, None);
+    fx.reviews
+        .submit_review(&reviewer, p(1), 2, Verdict::Approve, "ok", Vec::new())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn an_approved_version_integrates_on_its_own_only_after_a_red_update_run_ends() {
+    let fx = Fixture::new().await;
+    let gate = tempfile::tempdir().unwrap();
+    let go = gate.path().join("go");
+    proposal_behind_a_gate(&fx, &go).await;
+    for actor in [by(&fx.review.worker), human()] {
+        fx.reviews
+            .submit_review(&actor, p(1), 1, Verdict::Approve, "ok", Vec::new())
+            .await
+            .unwrap();
+    }
+    std::fs::remove_file(&go).unwrap();
+    std::fs::remove_file(fx.task_dir().join("src/lib.rs")).unwrap();
+    let update = checking(
+        fx.reviews
+            .update_proposal(&by(&fx.frontend.worker), p(1), None)
+            .await
+            .unwrap(),
+    );
+    assert!(fx.reviews.integrate_ready().await.unwrap().is_empty());
+    std::fs::write(&go, "").unwrap();
+    assert_eq!(ended(&fx.reviews, update).await.run.state, RunState::Failed);
+    let view = fx
+        .reviews
+        .view_proposal(&human(), p(1), None)
+        .await
+        .unwrap();
+    assert_eq!(view.update_run, None);
+    assert_eq!(view.detail.summary.current_version, 1);
+    let done = fx.reviews.integrate_ready().await.unwrap();
+    assert_eq!(
+        done.iter().map(|done| done.proposal).collect::<Vec<_>>(),
+        [p(1)]
+    );
+}

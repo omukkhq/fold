@@ -1,6 +1,7 @@
 import { ApiError, apiErrorCode } from "@/api/errors";
 import { commonText } from "@/format/failure";
 import { atName } from "@/people/names";
+import { updateRunsLine } from "./actions";
 
 /** `inline` shows on the control whose write failed: the actions or the form. `banner` shows above the screen. */
 export type FailurePlace = "inline" | "banner";
@@ -153,6 +154,19 @@ const ENTRIES: Record<string, Entry> = {
           ? "The file is too large to edit here."
           : "Only a text file can be edited here.",
   },
+  update_checks_running: {
+    place: "inline",
+    text: (d) => {
+      const fix = d.purpose === "review_fix";
+      const running =
+        typeof d.version === "number"
+          ? updateRunsLine(d.version + 1, fix)
+          : fix
+            ? "A reviewer's fix is running its checks."
+            : "The next version is running its checks.";
+      return `${running} Try again when they end.`;
+    },
+  },
   version_unchanged: {
     place: "inline",
     text: "The file has no change yet. Change it, then save.",
@@ -192,6 +206,7 @@ export function reloadsProposal(error: unknown): boolean {
     code === "stale_version" ||
     code === "integration_conflicted" ||
     code === "proposal_not_open" ||
-    code === "invalid_request"
+    code === "invalid_request" ||
+    code === "update_checks_running"
   );
 }

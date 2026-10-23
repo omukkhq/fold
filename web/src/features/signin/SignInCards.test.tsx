@@ -15,6 +15,9 @@ describe("TokenCard", () => {
     expect(field.getAttribute("placeholder")).toBe(
       "43 characters from fld token create",
     );
+    expect(
+      screen.getByText("fld web · fld token create <username>"),
+    ).toBeTruthy();
     await userEvent.type(field, " Qm9sZF9leGFtcGxlX3Rva2VuX2Zvcl90ZXN0cw ");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(onSubmit).toHaveBeenCalledExactlyOnceWith(

@@ -83,7 +83,7 @@ export function TokenCard({ pending, error, onSubmit }: CardProps) {
         </Button>
       </form>
       <Mono className="text-meta text-text-muted">
-        fld web · fld token create &lt;name&gt;
+        fld web · fld token create &lt;username&gt;
       </Mono>
     </Card>
   );

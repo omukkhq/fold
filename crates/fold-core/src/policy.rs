@@ -1,8 +1,8 @@
 use thiserror::Error;
 
 use crate::actor::{Actor, AgentActor};
-use crate::agents::WorkerName;
 use crate::agents::roles::Role;
+use crate::agents::{HumanName, WorkerName};
 use crate::error::{FoldError, codes};
 use crate::reviews::{Reviewer, Verdict};
 use crate::tasks::LabelName;
@@ -359,6 +359,18 @@ pub fn can_use_inbox(actor: &Actor) -> Result<&AgentActor, PolicyDenied> {
     }
 }
 
+/// A human marks only their own recipient rows read, because a row's read time states what that one human has seen. An agent acknowledges through its worker's inbox, and the system reads nothing. It returns the human whose rows change.
+pub fn can_mark_read(actor: &Actor) -> Result<&HumanName, PolicyDenied> {
+    match actor {
+        Actor::Human { name } => Ok(name),
+        Actor::Agent(_) | Actor::System => Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only a human marks a thread read",
+            hint: "call acknowledge_message to acknowledge a message of the inbox",
+        }),
+    }
+}
+
 /// Messages are how agents and humans coordinate, so every registered agent sends them, a worker that fold started and an agent that a session registered with `fld mcp` alike; so does a named human, and fold itself as `fold`. The service checks that the agent's worker exists.
 pub fn can_send_message(actor: &Actor) -> Result<(), PolicyDenied> {
     match actor {
@@ -417,6 +429,33 @@ pub fn can_submit_verdict<'a>(
             hint: "submit comment or request_changes, or ask the review lead",
         }),
     }
+}
+
+/// The author's update of a proposal, or a reviewer's fix of it, whose files have proposal checks runs them before fold makes the next version, which starts unapproved. An approval of the current version while that run is in progress would let the older version integrate first, which ends the run as `workspace_changed`, so `approve` waits for the run to end (`update_running`). `comment`, `request_changes` and `reject` stay open: none of them lets a version integrate.
+pub fn can_review_while_updating(
+    verdict: Verdict,
+    update_running: bool,
+) -> Result<(), PolicyDenied> {
+    if verdict == Verdict::Approve && update_running {
+        return Err(PolicyDenied {
+            code: codes::UPDATE_CHECKS_RUNNING,
+            message: "an update or a reviewer's fix of the proposal runs the checks of its next version, so the current version cannot be approved",
+            hint: "wait for checks.finished with wait_for_events, then call get_proposal: review the new version, or the current one again when the checks failed",
+        });
+    }
+    Ok(())
+}
+
+/// An integration of the current version while an update or a reviewer's fix of the proposal runs the checks of its next version (`update_running`) would end that run as `workspace_changed`, and a human's integration approves the version too, so no caller integrates it until the run ends, as [`can_review_while_updating`] holds back an approval.
+pub fn can_integrate_while_updating(update_running: bool) -> Result<(), PolicyDenied> {
+    if update_running {
+        return Err(PolicyDenied {
+            code: codes::UPDATE_CHECKS_RUNNING,
+            message: "an update or a reviewer's fix of the proposal runs the checks of its next version, so the current version cannot be integrated",
+            hint: "wait for checks.finished with wait_for_events, then call get_proposal: review the new version, or integrate the current one again when the checks failed",
+        });
+    }
+    Ok(())
 }
 
 /// A review is a second agent's look at the work, so the author's agent never claims its own proposal. A claim lets its holder check out, fix and verdict the proposal for the user, so only the main agent claims one, for a review of its own. The review lead gives a reviewer its claims when it starts it and never claims ([`can_review`]), and the reviewer never claims. An area lead or a task worker asks the review lead instead. Nobody claims the review of a task of Main (`main_task`), as [`can_assign_review`] says. Only an agent's worker holds a claim. `standing` is the acting agent's. It returns the admitted agent, which becomes the reviewer.
@@ -849,6 +888,27 @@ mod tests {
         )
         .unwrap_err();
         assert!(denied.hint().contains("review lead"));
+    }
+
+    #[test]
+    fn a_running_update_holds_back_only_the_approval_and_the_integration() {
+        for verdict in Verdict::ALL {
+            let expected = (verdict == Verdict::Approve).then_some(codes::UPDATE_CHECKS_RUNNING);
+            assert_eq!(
+                outcome(can_review_while_updating(verdict, true)),
+                expected,
+                "{verdict}"
+            );
+            assert_eq!(outcome(can_review_while_updating(verdict, false)), None);
+        }
+        let denied = can_review_while_updating(Verdict::Approve, true).unwrap_err();
+        assert!(denied.hint().contains("checks.finished"));
+        assert!(denied.hint().contains("wait_for_events"));
+        assert_eq!(
+            outcome(can_integrate_while_updating(true)),
+            Some(codes::UPDATE_CHECKS_RUNNING)
+        );
+        assert_eq!(outcome(can_integrate_while_updating(false)), None);
     }
 
     #[test]

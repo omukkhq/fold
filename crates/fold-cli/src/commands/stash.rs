@@ -103,7 +103,8 @@ fn stash_lines(response: &Response) -> Result<Vec<String>, RemoteError> {
     refusal(response)?;
     let body = &response.body;
     let revision = text(body, "revision")?;
-    let mut lines = match text(body, "outcome")? {
+    let mut lines = finished_unstash_lines(body)?;
+    lines.extend(match text(body, "outcome")? {
         "nothing" => vec![format!(
             "nothing to stash: the project folder has no change that is not recorded (it holds {revision})"
         )],
@@ -117,7 +118,7 @@ fn stash_lines(response: &Response) -> Result<Vec<String>, RemoteError> {
             lines
         }
         _ => return Err(RemoteError::Answer),
-    };
+    });
     for skipped in list(body, "skipped")? {
         let (path, reason) = (text(skipped, "path")?, text(skipped, "reason")?);
         lines.push(format!(
@@ -140,7 +141,24 @@ fn skipped_reason(reason: &str) -> &str {
 
 fn unstash_lines(response: &Response) -> Result<Vec<String>, RemoteError> {
     refusal(response)?;
-    let body = &response.body;
+    outcome_lines(&response.body)
+}
+
+/// The lines of an answer's `unstash`, the unstash a stop had left part-way that `fld stash` or `fld record` finished first; none when the answer has none.
+pub(super) fn finished_unstash_lines(body: &Value) -> Result<Vec<String>, RemoteError> {
+    let unstash = &body["unstash"];
+    if unstash.is_null() {
+        return Ok(Vec::new());
+    }
+    let mut lines = outcome_lines(unstash)?;
+    if let Some(first) = lines.first_mut() {
+        *first = format!("first finished the unstash that stopped part-way: {first}");
+    }
+    Ok(lines)
+}
+
+/// The lines of an unstash's outcome.
+fn outcome_lines(body: &Value) -> Result<Vec<String>, RemoteError> {
     let files = list(body, "files")?;
     match text(body, "outcome")? {
         "applied" => {
@@ -245,6 +263,29 @@ mod tests {
         );
         assert!(matches!(
             stash_lines(&reply(json!({"outcome": "strange", "revision": "r1"}))),
+            Err(RemoteError::Answer)
+        ));
+    }
+
+    #[test]
+    fn a_stash_names_the_unstash_it_finished_first() {
+        assert_eq!(
+            stash_lines(&reply(json!({
+                "outcome": "nothing", "revision": "r3", "files": [], "entries": 0, "skipped": [],
+                "unstash": {"outcome": "applied", "revision": null, "files": ["a.txt"], "conflicted": [], "entries": 0},
+            })))
+            .unwrap(),
+            [
+                "first finished the unstash that stopped part-way: applied stash@{0} to the project folder: 1 file, which are your changes that no revision records again; fld record records them",
+                "  a.txt",
+                "nothing to stash: the project folder has no change that is not recorded (it holds r3)",
+            ]
+        );
+        assert!(matches!(
+            stash_lines(&reply(json!({
+                "outcome": "nothing", "revision": "r3", "files": [], "entries": 0, "skipped": [],
+                "unstash": {"outcome": "strange"},
+            }))),
             Err(RemoteError::Answer)
         ));
     }
