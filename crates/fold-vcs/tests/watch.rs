@@ -783,3 +783,57 @@ fn a_tracked_file_below_an_ignored_directory_is_watched_and_the_rest_is_not() {
     );
     quiet(&rx, Duration::from_millis(300));
 }
+
+#[test]
+fn a_moved_tracked_set_picks_the_watches_below_an_ignored_directory_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join(".gitignore"), b"build/\n").unwrap();
+    fs::create_dir_all(root.join("build/keep")).unwrap();
+    fs::create_dir_all(root.join("build/cache")).unwrap();
+    fs::write(root.join("build/keep/version.txt"), b"1").unwrap();
+    let tracked = Arc::new(fold_vcs::ignore::TrackedSet::default());
+    let (hub, rx) = native(config(100, 2_000));
+    hub.add_workspace(ws(1), root, rules(root), Arc::clone(&tracked));
+    assert_eq!(hub.watched_dirs(ws(1)), vec![root.to_path_buf()]);
+
+    // A sync brings a tracked file below the ignored directory: its directories get watches, and its edit is seen at once.
+    let before = tracked.get();
+    tracked.set(
+        [(
+            b"build/keep/version.txt".to_vec(),
+            fold_core::tree::FlatEntry {
+                kind: fold_core::tree::EntryKind::File,
+                hash: fold_core::object::hash_object(fold_core::object::ObjectKind::Blob, b"1"),
+            },
+        )]
+        .into(),
+    );
+    hub.retrack(ws(1), before);
+    assert_eq!(
+        hub.watched_dirs(ws(1)),
+        vec![
+            root.to_path_buf(),
+            root.join("build"),
+            root.join("build/keep")
+        ]
+    );
+    settle(&rx, ws(1), root);
+    fs::write(root.join("build/cache/out.o"), b"o").unwrap();
+    fs::write(root.join("build/keep/version.txt"), b"2").unwrap();
+    assert_eq!(
+        next(&rx),
+        WatchEvent::Changed {
+            workspace: ws(1),
+            paths: paths(&["build/keep/version.txt"]),
+        }
+    );
+
+    // Once nothing below it is tracked, the ignored directory loses its watches again.
+    let before = tracked.get();
+    tracked.set(fold_core::tree::FlatTree::new());
+    hub.retrack(ws(1), before);
+    assert_eq!(hub.watched_dirs(ws(1)), vec![root.to_path_buf()]);
+    // An id the hub does not hold is left alone, and the call still returns.
+    hub.retrack(ws(2), tracked.get());
+}

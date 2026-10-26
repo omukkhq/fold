@@ -495,13 +495,16 @@ impl LiveState {
         let watching = {
             let shared = Arc::clone(shared);
             tokio::task::spawn_blocking(move || {
-                shared.hub().add_workspace(workspace, &root, rules, tracked)
+                let hub = shared.hub();
+                hub.add_workspace(workspace, &root, rules, tracked);
+                hub
             })
             .await
         };
         if watching.is_err() {
             tracing::warn!(workspace = %workspace, "the watcher did not take the workspace; the rescan tick still covers it");
         }
+        let hub = watching.ok();
         let pipeline = Pipeline {
             workspace,
             task,
@@ -513,6 +516,7 @@ impl LiveState {
             paths: shared.paths.clone(),
             caps,
             seed,
+            hub,
             scanner: Some(opened),
             rebased: None,
             reversioned: None,
@@ -836,6 +840,8 @@ struct Pipeline {
     paths: ProjectPaths,
     caps: Capabilities,
     seed: Seed,
+    /// The watcher that took the workspace, which picks its watches again when the scanner's tracked set moves.
+    hub: Option<Arc<WatchHub>>,
     /// Moved into each scan's blocking work and back.
     scanner: Option<Scanner>,
     /// A base tree the open scanner has not loaded yet.
@@ -980,7 +986,9 @@ impl Pipeline {
         let rebased = self.rebased.take();
         let reversioned = self.reversioned.take();
         let (paths, caps, seed) = (self.paths.clone(), self.caps, self.seed.clone());
+        let hub = self.hub.clone();
         let done = tokio::task::spawn_blocking(move || {
+            let tracked = seed.tracked.get();
             let mut scanner = match scanner {
                 Some(mut scanner) => {
                     if let Some(tree) = rebased {
@@ -993,6 +1001,11 @@ impl Pipeline {
                 }
                 None => Scanner::open(&paths, caps, &seed)?,
             };
+            if let Some(hub) = &hub
+                && !Arc::ptr_eq(&tracked, &seed.tracked.get())
+            {
+                hub.retrack(seed.workspace, tracked);
+            }
             let outcome = scanner.scan(touched.as_deref());
             Ok::<_, FoldError>((scanner, outcome))
         })

@@ -7,6 +7,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use fold_core::WorkspaceId;
+use fold_core::tree::FlatTree;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::ignore::{Cover, FOLDIGNORE, GITIGNORE, IgnoreRules, TrackedSet, tracked_names};
@@ -107,6 +108,11 @@ enum Msg {
     },
     Remove {
         id: WorkspaceId,
+        done: Sender<()>,
+    },
+    Retrack {
+        id: WorkspaceId,
+        old: Arc<FlatTree>,
         done: Sender<()>,
     },
     Watched {
@@ -290,6 +296,14 @@ impl WatchHub {
         }
     }
 
+    /// Picks the watches of the workspace again after its tracked set moved from `old` to what it holds now, so an edit below an ignored directory that now holds a tracked path is seen at once, and a directory that holds none any more loses its watch. Returns once the watches are in place.
+    pub fn retrack(&self, id: WorkspaceId, old: Arc<FlatTree>) {
+        let (done, wait) = mpsc::channel();
+        if self.tx.send(Msg::Retrack { id, old, done }).is_ok() {
+            let _ = wait.recv();
+        }
+    }
+
     /// Returns once the watches are gone and the unsent batch is dropped; no event for the workspace follows.
     pub fn remove_workspace(&self, id: WorkspaceId) {
         let (done, wait) = mpsc::channel();
@@ -372,6 +386,23 @@ impl Hub {
                     if let Some(mut workspace) = self.workspaces.remove(&id) {
                         workspace.unwatch_below(self.backend.as_mut(), b"");
                     }
+                    let _ = done.send(());
+                }
+                Msg::Retrack { id, old, done } => {
+                    if let Some(workspace) = self
+                        .workspaces
+                        .get_mut(&id)
+                        .filter(|workspace| !workspace.missing && workspace.root_exists())
+                    {
+                        let mut ctx = Ctx {
+                            backend: self.backend.as_mut(),
+                            config: &self.config,
+                            out: &mut self.outbox,
+                            now,
+                        };
+                        workspace.retrack(&mut ctx, &old);
+                    }
+                    self.send_out();
                     let _ = done.send(());
                 }
                 Msg::Watched { id, reply } => {
@@ -700,6 +731,37 @@ impl Workspace {
         }
         if !ignored {
             self.batch.record(path, ctx.now);
+        }
+    }
+
+    /// Brings the watches in line with the tracked set after it moved from `old`. A tracked path decides only whether a directory an ignore rule covers counts, so for each path that came or went, the topmost directory above it that a rule covers is looked at again: it keeps its watch and walks its tracked names while a tracked path is below it, and loses every watch below it otherwise.
+    fn retrack(&mut self, ctx: &mut Ctx<'_>, old: &FlatTree) {
+        let tracked = self.tracked.get();
+        let came = tracked.keys().filter(|path| !old.contains_key(*path));
+        let went = old.keys().filter(|path| !tracked.contains_key(*path));
+        let mut tops: BTreeSet<RepoPath> = BTreeSet::new();
+        for path in came.chain(went) {
+            let Ok(path) = RepoPath::parse(path) else {
+                continue;
+            };
+            let mut dir: Option<RepoPath> = None;
+            for name in path.parents_and_name().0 {
+                let Ok(next) = RepoPath::child(dir.as_ref(), name) else {
+                    break;
+                };
+                if self.rules.is_ignored(&next, true) {
+                    tops.insert(next);
+                    break;
+                }
+                dir = Some(next);
+            }
+        }
+        for top in tops {
+            if Cover::of(true, Some(&tracked), &top, true) == Cover::Ignored {
+                self.unwatch_below(ctx.backend, top.as_bytes());
+            } else {
+                self.sync_tree(ctx, Some(top), false);
+            }
         }
     }
 
