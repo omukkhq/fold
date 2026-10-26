@@ -36,7 +36,7 @@ Install fold on **Linux AMD64 (x86_64)**, **Linux ARM64 (aarch64)**, or **macOS 
 curl -fsSL https://omukk.dev/fold/install.sh | sh
 ```
 
-The script installs `fld` into `~/.local/bin`. Run it again to update fold, then run `fld restart` so a running daemon uses the new version. When an update changes fold's skills, each agent that still holds the older skill is told on its next turn to load it again, and the **Agents** screen marks such a worker **older fold** until then. To choose another folder or a specific release, set `FOLD_INSTALL_DIR` or `FOLD_VERSION`, for example `FOLD_VERSION=v0.5.1`.
+The script installs `fld` into `~/.local/bin`. Run it again to update fold, then run `fld restart` so a running daemon uses the new version. When an update changes fold's skills, each agent that still holds the older skill is told on its next turn to load it again, and the **Agents** screen marks such a worker **older fold** until then. To choose another folder or a specific release, set `FOLD_INSTALL_DIR` or `FOLD_VERSION`, for example `FOLD_VERSION=v0.5.2`.
 
 To uninstall fold, run:
 
