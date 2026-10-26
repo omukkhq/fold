@@ -7,9 +7,10 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use fold_core::WorkspaceId;
+use fold_core::tree::FlatTree;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
-use crate::ignore::{FOLDIGNORE, GITIGNORE, IgnoreRules};
+use crate::ignore::{Cover, FOLDIGNORE, GITIGNORE, IgnoreRules, TrackedSet, tracked_names};
 use crate::paths::{RepoPath, entries_at_or_below, is_reserved_name, os_bytes, os_path};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,10 +103,16 @@ enum Msg {
         id: WorkspaceId,
         root: PathBuf,
         rules: Arc<IgnoreRules>,
+        tracked: Arc<TrackedSet>,
         done: Sender<()>,
     },
     Remove {
         id: WorkspaceId,
+        done: Sender<()>,
+    },
+    Retrack {
+        id: WorkspaceId,
+        old: Arc<FlatTree>,
         done: Sender<()>,
     },
     Watched {
@@ -268,16 +275,31 @@ impl WatchHub {
         Notifier(self.tx.clone())
     }
 
-    /// Returns once every tracked directory has its watch, so no change made after the call is missed. Adding an id again replaces the earlier workspace.
-    pub fn add_workspace(&self, id: WorkspaceId, root: &Path, rules: Arc<IgnoreRules>) {
+    /// Returns once every tracked directory has its watch, so no change made after the call is missed. Adding an id again replaces the earlier workspace. `tracked` holds the paths that count although an ignore rule matches them.
+    pub fn add_workspace(
+        &self,
+        id: WorkspaceId,
+        root: &Path,
+        rules: Arc<IgnoreRules>,
+        tracked: Arc<TrackedSet>,
+    ) {
         let (done, wait) = mpsc::channel();
         let sent = self.tx.send(Msg::Add {
             id,
             root: root.to_path_buf(),
             rules,
+            tracked,
             done,
         });
         if sent.is_ok() {
+            let _ = wait.recv();
+        }
+    }
+
+    /// Picks the watches of the workspace again after its tracked set moved from `old` to what it holds now, so an edit below an ignored directory that now holds a tracked path is seen at once, and a directory that holds none any more loses its watch. Returns once the watches are in place.
+    pub fn retrack(&self, id: WorkspaceId, old: Arc<FlatTree>) {
+        let (done, wait) = mpsc::channel();
+        if self.tx.send(Msg::Retrack { id, old, done }).is_ok() {
             let _ = wait.recv();
         }
     }
@@ -353,9 +375,10 @@ impl Hub {
                     id,
                     root,
                     rules,
+                    tracked,
                     done,
                 } => {
-                    self.add(id, root, rules, now);
+                    self.add(id, root, rules, tracked, now);
                     self.send_out();
                     let _ = done.send(());
                 }
@@ -363,6 +386,23 @@ impl Hub {
                     if let Some(mut workspace) = self.workspaces.remove(&id) {
                         workspace.unwatch_below(self.backend.as_mut(), b"");
                     }
+                    let _ = done.send(());
+                }
+                Msg::Retrack { id, old, done } => {
+                    if let Some(workspace) = self
+                        .workspaces
+                        .get_mut(&id)
+                        .filter(|workspace| !workspace.missing && workspace.root_exists())
+                    {
+                        let mut ctx = Ctx {
+                            backend: self.backend.as_mut(),
+                            config: &self.config,
+                            out: &mut self.outbox,
+                            now,
+                        };
+                        workspace.retrack(&mut ctx, &old);
+                    }
+                    self.send_out();
                     let _ = done.send(());
                 }
                 Msg::Watched { id, reply } => {
@@ -422,7 +462,14 @@ impl Hub {
         }
     }
 
-    fn add(&mut self, id: WorkspaceId, root: PathBuf, rules: Arc<IgnoreRules>, now: Instant) {
+    fn add(
+        &mut self,
+        id: WorkspaceId,
+        root: PathBuf,
+        rules: Arc<IgnoreRules>,
+        tracked: Arc<TrackedSet>,
+        now: Instant,
+    ) {
         if let Some(mut old) = self.workspaces.remove(&id) {
             old.unwatch_below(self.backend.as_mut(), b"");
         }
@@ -433,6 +480,7 @@ impl Hub {
             root,
             real_root,
             rules,
+            tracked,
             watched: BTreeMap::new(),
             batch: Batch::default(),
             degraded: None,
@@ -608,6 +656,7 @@ struct Workspace {
     /// The canonical root when it differs; some platforms report canonical paths whatever path was watched.
     real_root: Option<PathBuf>,
     rules: Arc<IgnoreRules>,
+    tracked: Arc<TrackedSet>,
     /// Keyed by the workspace-relative directory bytes, empty for the root. The path is the exact one given to the backend, which keys its watches by it.
     watched: BTreeMap<Vec<u8>, (PathBuf, DirIdentity)>,
     batch: Batch,
@@ -667,9 +716,11 @@ impl Workspace {
             .filter(Metadata::is_dir)
             .map(|meta| dir_identity(&meta));
         let known = self.watched.get(path.as_bytes()).map(|(_, known)| *known);
-        let ignored = self
-            .rules
-            .is_ignored(&path, identity.is_some() || known.is_some());
+        let tracked = self.tracked.get();
+        let ignored =
+            self.rules
+                .cover(Some(&tracked), &path, identity.is_some() || known.is_some())
+                == Cover::Ignored;
         if let Some(identity) = identity.filter(|_| !ignored) {
             // The directory path stands for everything below it; only a directory new to the hub is walked.
             if known != Some(identity) {
@@ -683,10 +734,45 @@ impl Workspace {
         }
     }
 
-    /// Watches `dir` and every tracked directory below it that has no live watch, and drops the watches of directories below it that are gone or now ignored. With `report`, every tracked path found goes into the batch, so files made before the watch existed are not missed. A workspace in timer mode adds no watch, so without `report` the walk stops there.
+    /// Brings the watches in line with the tracked set after it moved from `old`. A tracked path decides only whether a directory an ignore rule covers counts, so for each path that came or went, the topmost directory above it that a rule covers is looked at again: it keeps its watch and walks its tracked names while a tracked path is below it, and loses every watch below it otherwise.
+    fn retrack(&mut self, ctx: &mut Ctx<'_>, old: &FlatTree) {
+        let tracked = self.tracked.get();
+        let came = tracked.keys().filter(|path| !old.contains_key(*path));
+        let went = old.keys().filter(|path| !tracked.contains_key(*path));
+        let mut tops: BTreeSet<RepoPath> = BTreeSet::new();
+        for path in came.chain(went) {
+            let Ok(path) = RepoPath::parse(path) else {
+                continue;
+            };
+            let mut dir: Option<RepoPath> = None;
+            for name in path.parents_and_name().0 {
+                let Ok(next) = RepoPath::child(dir.as_ref(), name) else {
+                    break;
+                };
+                if self.rules.is_ignored(&next, true) {
+                    tops.insert(next);
+                    break;
+                }
+                dir = Some(next);
+            }
+        }
+        for top in tops {
+            if Cover::of(true, Some(&tracked), &top, true) == Cover::Ignored {
+                self.unwatch_below(ctx.backend, top.as_bytes());
+            } else {
+                self.sync_tree(ctx, Some(top), false);
+            }
+        }
+    }
+
+    /// Watches `dir` and every tracked directory below it that has no live watch, and drops the watches of directories below it that are gone or now ignored. A directory an ignore rule covers counts only as far as tracked paths are below it, and only their names are looked at there. With `report`, every tracked path found goes into the batch, so files made before the watch existed are not missed. A workspace in timer mode adds no watch, so without `report` the walk stops there.
     fn sync_tree(&mut self, ctx: &mut Ctx<'_>, dir: Option<RepoPath>, report: bool) {
-        let mut stack = vec![dir];
-        while let Some(dir) = stack.pop() {
+        let tracked = self.tracked.get();
+        let covered = dir
+            .as_ref()
+            .is_some_and(|dir| self.rules.is_ignored(dir, true));
+        let mut stack = vec![(dir, covered)];
+        while let Some((dir, covered)) = stack.pop() {
             if self.degraded.is_some() && !report {
                 return;
             }
@@ -705,23 +791,38 @@ impl Workspace {
                 }
             };
             self.watch(ctx, key.clone(), full.clone(), dir_identity(&meta));
-            let Ok(reader) = fs::read_dir(&full) else {
-                continue;
+            let children: Vec<(RepoPath, bool, Cover)> = if covered {
+                tracked_names(Some(&tracked), dir.as_ref())
+                    .into_iter()
+                    .filter_map(|name| {
+                        let child = RepoPath::child(dir.as_ref(), &name).ok()?;
+                        let is_dir = fs::symlink_metadata(self.full(&child)).ok()?.is_dir();
+                        let cover = Cover::of(true, Some(&tracked), &child, is_dir);
+                        Some((child, is_dir, cover))
+                    })
+                    .collect()
+            } else {
+                let Ok(reader) = fs::read_dir(&full) else {
+                    continue;
+                };
+                let rules = self.rules.dir_rules(dir.as_ref());
+                reader
+                    .flatten()
+                    .filter_map(|entry| {
+                        let name = os_bytes(&entry.file_name())?;
+                        if is_reserved_name(&name) {
+                            return None;
+                        }
+                        let child = RepoPath::child(dir.as_ref(), &name).ok()?;
+                        let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
+                        let cover = rules.cover(Some(&tracked), &child, is_dir);
+                        Some((child, is_dir, cover))
+                    })
+                    .collect()
             };
             let mut listed: BTreeSet<Vec<u8>> = BTreeSet::new();
-            let rules = self.rules.dir_rules(dir.as_ref());
-            for entry in reader.flatten() {
-                let Some(name) = os_bytes(&entry.file_name()) else {
-                    continue;
-                };
-                if is_reserved_name(&name) {
-                    continue;
-                }
-                let Ok(child) = RepoPath::child(dir.as_ref(), &name) else {
-                    continue;
-                };
-                let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
-                if rules.is_ignored(&child, is_dir) {
+            for (child, is_dir, cover) in children {
+                if cover == Cover::Ignored {
                     if is_dir {
                         self.unwatch_below(ctx.backend, child.as_bytes());
                     }
@@ -732,7 +833,7 @@ impl Workspace {
                 }
                 if is_dir {
                     listed.insert(child.as_bytes().to_vec());
-                    stack.push(Some(child));
+                    stack.push((Some(child), cover.is_covered()));
                 }
             }
             // A watched directory the listing no longer shows as a tracked directory went while no notification said so.

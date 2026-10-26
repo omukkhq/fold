@@ -2,6 +2,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use chrono::{DateTime, Days, LocalResult, NaiveDate, TimeZone};
 use clap::{Args, ValueEnum};
 use fold_cli::daemon_client::Response;
 use fold_core::{TaskId, Timestamp};
@@ -11,14 +12,13 @@ use serde_json::Value;
 use super::remote::{RemoteError, refusal, request_project};
 use crate::output;
 
-const DAY_MILLIS: i64 = 24 * 60 * 60 * 1000;
 const HOUR_MILLIS: i64 = 60 * 60 * 1000;
 
 /// How many tasks the summary lists.
 const TOP_TASKS: usize = 10;
 
-/// fold reads no local time zone, so the terminal's days are UTC days.
-const DAYS_NOTE: &str = "Today and the last 7 days start at midnight UTC.";
+/// `fld cost` counts its days in the terminal's time zone, as the web app counts them in the viewer's.
+const DAYS_NOTE: &str = "Today and the last 7 days start at midnight in your time zone.";
 
 /// The cost view's note: the main agent's session is outside fold's view, and fold guesses no number for it. A project whose `[main] supervised` setting is on has fold run the main agent as a worker, so its cost is in the numbers and the note is left out.
 const MAIN_NOTE: &str = "The main agent runs in your own Claude Code session, which fold does not supervise, so its cost is not in these numbers.";
@@ -34,7 +34,7 @@ pub enum Split {
 
 #[derive(Args, Debug)]
 pub struct CostArgs {
-    /// Count only the turns since a time: today, 12h, 7d, a UTC date such as 2026-10-01, or an RFC 3339 time
+    /// Count only the turns since a time: today, 12h, 7d, a local date such as 2026-10-01, or an RFC 3339 time; days start at local midnight
     #[arg(long, value_name = "WHEN")]
     since: Option<String>,
     /// Print one split in full instead of the summary: role, area, model, worker or task
@@ -58,17 +58,38 @@ fn now() -> Timestamp {
     Timestamp::from_system_time(SystemTime::now()).unwrap_or(Timestamp::EPOCH)
 }
 
-fn midnight(at: Timestamp) -> Timestamp {
-    let millis = at.as_millis();
-    Timestamp::from_millis(millis - millis.rem_euclid(DAY_MILLIS)).unwrap_or(at)
+/// The date that holds `at` in `zone`.
+fn local_date<Zone: TimeZone>(at: Timestamp, zone: &Zone) -> Option<NaiveDate> {
+    DateTime::from_timestamp_millis(at.as_millis())
+        .map(|time| time.with_timezone(zone).date_naive())
 }
 
-fn days_before(day: Timestamp, days: i64) -> Timestamp {
-    Timestamp::from_millis(day.as_millis().saturating_sub(days * DAY_MILLIS)).unwrap_or(day)
+/// The first instant of `date` in `zone`: its midnight, the earlier one when a clock change repeats it, or the first minute after the gap when a clock change skips it.
+fn day_start<Zone: TimeZone>(date: NaiveDate, zone: &Zone) -> Option<Timestamp> {
+    (0..24 * 60).find_map(|minute| {
+        let local = date.and_hms_opt(minute / 60, minute % 60, 0)?;
+        // `chrono::Local` gives a repeated time with its later instant first, so `earliest` would take the second midnight.
+        let start = match zone.from_local_datetime(&local) {
+            LocalResult::Single(start) => start,
+            LocalResult::Ambiguous(one, other) => one.min(other),
+            LocalResult::None => return None,
+        };
+        Timestamp::from_millis(start.timestamp_millis()).ok()
+    })
 }
 
-/// The start of `--since`: `today` is midnight UTC, `Nd` midnight UTC of the day N-1 days ago so `7d` is the last 7 days as the web app counts them, `Nh` N hours ago, a date its midnight UTC, and an RFC 3339 time itself.
-fn since(text: &str, now: Timestamp) -> Result<Timestamp, RemoteError> {
+/// The first instant in `zone` of the day `days` days before the one that holds `now`.
+fn days_ago<Zone: TimeZone>(now: Timestamp, days: u64, zone: &Zone) -> Option<Timestamp> {
+    let date = local_date(now, zone)?.checked_sub_days(Days::new(days))?;
+    day_start(date, zone)
+}
+
+/// The start of `--since` in `zone`: `today` is local midnight, `Nd` local midnight of the day N-1 days ago so `7d` is the last 7 days as the web app counts them, `Nh` N hours ago, a date its local midnight, and an RFC 3339 time itself.
+fn since<Zone: TimeZone>(
+    text: &str,
+    now: Timestamp,
+    zone: &Zone,
+) -> Result<Timestamp, RemoteError> {
     let invalid = || {
         RemoteError::Fold(
             fold_core::FoldError::new(
@@ -82,22 +103,28 @@ fn since(text: &str, now: Timestamp) -> Result<Timestamp, RemoteError> {
         )
     };
     if text == "today" {
-        return Ok(midnight(now));
+        return days_ago(now, 0, zone).ok_or_else(invalid);
     }
     let count = |suffix: char| {
         text.strip_suffix(suffix)
-            .and_then(|digits| digits.parse::<i64>().ok())
+            .and_then(|digits| digits.parse::<u32>().ok())
             .filter(|count| (1..=100_000).contains(count))
     };
     if let Some(days) = count('d') {
-        return Ok(days_before(midnight(now), days - 1));
+        return days_ago(now, u64::from(days - 1), zone).ok_or_else(invalid);
     }
     if let Some(hours) = count('h') {
-        return Timestamp::from_millis(now.as_millis().saturating_sub(hours * HOUR_MILLIS))
-            .map_err(|_| invalid());
+        return Timestamp::from_millis(
+            now.as_millis()
+                .saturating_sub(i64::from(hours) * HOUR_MILLIS),
+        )
+        .map_err(|_| invalid());
     }
     if text.len() == 10 {
-        return Timestamp::parse_rfc3339(&format!("{text}T00:00:00Z")).map_err(|_| invalid());
+        return NaiveDate::parse_from_str(text, "%Y-%m-%d")
+            .ok()
+            .and_then(|date| day_start(date, zone))
+            .ok_or_else(invalid);
     }
     Timestamp::parse_rfc3339(text).map_err(|_| invalid())
 }
@@ -124,7 +151,7 @@ pub fn run_cost(args: &CostArgs, out: &mut impl Write) -> Result<(), RemoteError
         let now = now();
         match &args.since {
             Some(text) => {
-                let start = since(text, now)?;
+                let start = since(text, now, &chrono::Local)?;
                 let response = ask(&format!("cost?since={}", start.as_millis()))?;
                 if args.json {
                     json_lines(&response)?
@@ -134,6 +161,7 @@ pub fn run_cost(args: &CostArgs, out: &mut impl Write) -> Result<(), RemoteError
                         start,
                         args.by,
                         main_supervised(&ask("workers")?)?,
+                        &output::local_time,
                     )?
                 }
             }
@@ -142,15 +170,19 @@ pub fn run_cost(args: &CostArgs, out: &mut impl Write) -> Result<(), RemoteError
                 if args.json {
                     json_lines(&all)?
                 } else {
-                    let today = midnight(now);
-                    let day = ask(&format!("cost?since={}", today.as_millis()))?;
-                    let week = ask(&format!("cost?since={}", days_before(today, 6).as_millis()))?;
+                    let range = |days| {
+                        let start = days_ago(now, days, &chrono::Local).unwrap_or(now);
+                        ask(&format!("cost?since={}", start.as_millis()))
+                    };
+                    let day = range(0)?;
+                    let week = range(6)?;
                     summary_lines(
                         &all,
                         &day,
                         &week,
                         args.by,
                         main_supervised(&ask("workers")?)?,
+                        &output::local_time,
                     )?
                 }
             }
@@ -310,8 +342,8 @@ fn turns_text(count: u64) -> String {
     )
 }
 
-/// The line under the project line: when the first turn in the range ended, how many workers ran turns and how many turns there were.
-fn since_line(report: &Value) -> Result<String, RemoteError> {
+/// The line under the project line: when the first turn in the range ended, as `time` reads it, how many workers ran turns and how many turns there were.
+fn since_line(report: &Value, time: &dyn Fn(Timestamp) -> String) -> Result<String, RemoteError> {
     let total = &report["total"];
     let counts = format!(
         "{} · {}",
@@ -321,7 +353,7 @@ fn since_line(report: &Value) -> Result<String, RemoteError> {
     Ok(match report["first_turn_at"].as_i64() {
         Some(first) => {
             let first = Timestamp::from_millis(first).map_err(|_| RemoteError::Answer)?;
-            format!("since {first} · {counts}")
+            format!("since {} · {counts}", time(first))
         }
         None => counts,
     })
@@ -505,6 +537,7 @@ fn summary_lines(
     week: &Response,
     by: Option<Split>,
     main_supervised: bool,
+    time: &dyn Fn(Timestamp) -> String,
 ) -> Result<Vec<String>, RemoteError> {
     for response in [all, today, week] {
         refusal(response)?;
@@ -517,7 +550,7 @@ fn summary_lines(
             dollars(cost(today)?),
             dollars(cost(week)?)
         ),
-        since_line(&all.body)?,
+        since_line(&all.body, time)?,
         tokens_line(&all.body)?,
     ];
     lines.extend(sections(&all.body, by, main_supervised)?);
@@ -525,21 +558,23 @@ fn summary_lines(
     Ok(lines)
 }
 
-/// What `fld cost --since` prints: the total since `start`, then the splits of that range.
+/// What `fld cost --since` prints: the total since `start`, then the splits of that range; `time` writes the times.
 fn range_lines(
     response: &Response,
     start: Timestamp,
     by: Option<Split>,
     main_supervised: bool,
+    time: &dyn Fn(Timestamp) -> String,
 ) -> Result<Vec<String>, RemoteError> {
     refusal(response)?;
     let report = &response.body;
     let mut lines = vec![
         format!(
-            "COST  {} since {start}",
-            dollars(number(&report["total"], "cost_micro_usd")?)
+            "COST  {} since {}",
+            dollars(number(&report["total"], "cost_micro_usd")?),
+            time(start)
         ),
-        since_line(report)?,
+        since_line(report, time)?,
         tokens_line(report)?,
     ];
     lines.extend(sections(report, by, main_supervised)?);
@@ -597,12 +632,17 @@ fn task_lines(response: &Response, main_supervised: bool) -> Result<Vec<String>,
 
 #[cfg(test)]
 mod tests {
+    use chrono::{FixedOffset, LocalResult, NaiveDateTime, Utc};
     use clap::Parser;
     use serde_json::json;
 
     use super::*;
 
     const NOW: &str = "2026-10-21T15:30:00.000Z";
+
+    fn utc(at: Timestamp) -> String {
+        output::readable_time(at, &chrono::Utc)
+    }
 
     fn at(text: &str) -> Timestamp {
         Timestamp::parse_rfc3339(text).unwrap()
@@ -680,27 +720,190 @@ mod tests {
         assert_eq!(tokens_text(12_345_678), "12.3M");
     }
 
+    fn east(hours: i32) -> FixedOffset {
+        FixedOffset::east_opt(hours * 3600).unwrap()
+    }
+
     #[test]
-    fn since_reads_days_hours_dates_and_times_in_utc() {
+    fn days_start_at_local_midnight_and_hours_and_times_are_exact() {
         let now = at(NOW);
-        assert_eq!(since("today", now).unwrap(), at("2026-10-21T00:00:00Z"));
-        assert_eq!(since("1d", now).unwrap(), at("2026-10-21T00:00:00Z"));
-        assert_eq!(since("7d", now).unwrap(), at("2026-10-15T00:00:00Z"));
-        assert_eq!(since("12h", now).unwrap(), at("2026-10-21T03:30:00Z"));
+        let dhaka = east(6);
         assert_eq!(
-            since("2026-10-01", now).unwrap(),
-            at("2026-10-01T00:00:00Z")
+            since("today", now, &dhaka).unwrap(),
+            at("2026-10-20T18:00:00Z")
         );
         assert_eq!(
-            since("2026-10-20T10:00:00+06:00", now).unwrap(),
-            at("2026-10-20T04:00:00Z")
+            since("1d", now, &dhaka).unwrap(),
+            at("2026-10-20T18:00:00Z")
         );
+        assert_eq!(
+            since("7d", now, &dhaka).unwrap(),
+            at("2026-10-14T18:00:00Z")
+        );
+        assert_eq!(
+            since("2026-10-01", now, &dhaka).unwrap(),
+            at("2026-09-30T18:00:00Z")
+        );
+        let west = east(-9);
+        assert_eq!(
+            since("today", now, &west).unwrap(),
+            at("2026-10-21T09:00:00Z")
+        );
+        assert_eq!(since("7d", now, &west).unwrap(), at("2026-10-15T09:00:00Z"));
+        assert_eq!(
+            since("2026-10-01", now, &west).unwrap(),
+            at("2026-10-01T09:00:00Z")
+        );
+        assert_eq!(
+            since("today", now, &Utc).unwrap(),
+            at("2026-10-21T00:00:00Z")
+        );
+        for zone in [dhaka, west, east(0)] {
+            assert_eq!(
+                since("12h", now, &zone).unwrap(),
+                at("2026-10-21T03:30:00Z")
+            );
+            assert_eq!(
+                since("2026-10-20T10:00:00+06:00", now, &zone).unwrap(),
+                at("2026-10-20T04:00:00Z")
+            );
+        }
         for wrong in ["0d", "yesterday", "-3h", "2026-13-01", "7 d", ""] {
-            let Err(RemoteError::Fold(error)) = since(wrong, now) else {
+            let Err(RemoteError::Fold(error)) = since(wrong, now, &dhaka) else {
                 panic!("{wrong} is not a time");
             };
             assert_eq!(error.code(), "invalid_request");
         }
+    }
+
+    #[test]
+    fn the_local_day_is_the_one_the_terminal_is_in_across_the_utc_day_boundary() {
+        let late = at("2026-10-21T20:00:00Z");
+        assert_eq!(
+            since("today", late, &east(6)).unwrap(),
+            at("2026-10-21T18:00:00Z")
+        );
+        assert_eq!(
+            days_ago(late, 6, &east(6)).unwrap(),
+            at("2026-10-15T18:00:00Z")
+        );
+        let early = at("2026-10-21T03:00:00Z");
+        assert_eq!(
+            since("today", early, &east(-5)).unwrap(),
+            at("2026-10-20T05:00:00Z")
+        );
+        assert_eq!(
+            days_ago(early, 6, &east(-5)).unwrap(),
+            at("2026-10-14T05:00:00Z")
+        );
+    }
+
+    /// A zone whose clock moves from `before` to `after` at the instant `change`. It gives a repeated local time with its later instant first, as `chrono::Local` does.
+    #[derive(Clone, Copy)]
+    struct Shifting {
+        change: Timestamp,
+        before: FixedOffset,
+        after: FixedOffset,
+    }
+
+    impl TimeZone for Shifting {
+        type Offset = FixedOffset;
+
+        fn from_offset(offset: &FixedOffset) -> Self {
+            Self {
+                change: Timestamp::EPOCH,
+                before: *offset,
+                after: *offset,
+            }
+        }
+
+        fn offset_from_local_date(&self, local: &NaiveDate) -> LocalResult<FixedOffset> {
+            self.offset_from_local_datetime(&local.and_hms_opt(0, 0, 0).unwrap())
+        }
+
+        fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<FixedOffset> {
+            let instant = |offset: FixedOffset| (*local - offset).and_utc().timestamp_millis();
+            let change = self.change.as_millis();
+            match (instant(self.before) < change, instant(self.after) >= change) {
+                (true, true) => LocalResult::Ambiguous(self.after, self.before),
+                (true, false) => LocalResult::Single(self.before),
+                (false, true) => LocalResult::Single(self.after),
+                (false, false) => LocalResult::None,
+            }
+        }
+
+        fn offset_from_utc_date(&self, utc: &NaiveDate) -> FixedOffset {
+            self.offset_from_utc_datetime(&utc.and_hms_opt(0, 0, 0).unwrap())
+        }
+
+        fn offset_from_utc_datetime(&self, utc: &NaiveDateTime) -> FixedOffset {
+            if utc.and_utc().timestamp_millis() < self.change.as_millis() {
+                self.before
+            } else {
+                self.after
+            }
+        }
+    }
+
+    #[test]
+    fn a_clock_change_at_midnight_starts_the_day_at_its_first_instant() {
+        let skipped = Shifting {
+            change: at("2026-09-06T04:00:00Z"),
+            before: east(-4),
+            after: east(-3),
+        };
+        let date = NaiveDate::from_ymd_opt(2026, 9, 6).unwrap();
+        assert_eq!(
+            day_start(date, &skipped).unwrap(),
+            at("2026-09-06T04:00:00Z")
+        );
+        let noon = at("2026-09-06T15:00:00Z");
+        assert_eq!(
+            since("today", noon, &skipped).unwrap(),
+            at("2026-09-06T04:00:00Z")
+        );
+        assert_eq!(
+            since("2026-09-06", noon, &skipped).unwrap(),
+            at("2026-09-06T04:00:00Z")
+        );
+        assert_eq!(
+            since("2d", noon, &skipped).unwrap(),
+            at("2026-09-05T04:00:00Z")
+        );
+
+        let half_past = Shifting {
+            change: at("2026-09-06T03:30:00Z"),
+            before: east(-4),
+            after: east(-3),
+        };
+        assert_eq!(
+            day_start(date, &half_past).unwrap(),
+            at("2026-09-06T03:30:00Z")
+        );
+
+        let repeated = Shifting {
+            change: at("2026-04-05T04:00:00Z"),
+            before: east(-3),
+            after: east(-4),
+        };
+        let date = NaiveDate::from_ymd_opt(2026, 4, 5).unwrap();
+        assert_eq!(
+            day_start(date, &repeated).unwrap(),
+            at("2026-04-05T03:00:00Z")
+        );
+        let noon = at("2026-04-05T16:00:00Z");
+        assert_eq!(
+            since("today", noon, &repeated).unwrap(),
+            at("2026-04-05T03:00:00Z")
+        );
+        assert_eq!(
+            since("2d", noon, &repeated).unwrap(),
+            at("2026-04-04T03:00:00Z")
+        );
+        assert_eq!(
+            since("2026-04-06", noon, &repeated).unwrap(),
+            at("2026-04-06T04:00:00Z")
+        );
     }
 
     #[test]
@@ -711,13 +914,14 @@ mod tests {
             &ok(with(report(0), "total", amount(5_670_000, 4, 2))),
             None,
             false,
+            &utc,
         )
         .unwrap();
         assert_eq!(
             lines,
             [
                 "COST  $10.00 all time · $1.20 today · $5.67 last 7 days",
-                "since 2026-10-14T08:00:00.000Z · 4 workers · 12 turns",
+                "since 14 Oct 2026, 08:00 · 4 workers · 12 turns",
                 "TOKENS  13.3k · 12.0k cache read · 1.2k cache write · 120 output · 12 input",
                 "",
                 "BY ROLE",
@@ -743,13 +947,19 @@ mod tests {
     #[test]
     fn a_range_prints_its_own_total_and_one_split_in_full() {
         let start = at("2026-10-20T00:00:00Z");
-        let lines =
-            range_lines(&ok(report(10_000_000)), start, Some(Split::Worker), false).unwrap();
+        let lines = range_lines(
+            &ok(report(10_000_000)),
+            start,
+            Some(Split::Worker),
+            false,
+            &utc,
+        )
+        .unwrap();
         assert_eq!(
             lines,
             [
-                "COST  $10.00 since 2026-10-20T00:00:00.000Z",
-                "since 2026-10-14T08:00:00.000Z · 4 workers · 12 turns",
+                "COST  $10.00 since 20 Oct 2026, 00:00",
+                "since 14 Oct 2026, 08:00 · 4 workers · 12 turns",
                 "TOKENS  13.3k · 12.0k cache read · 1.2k cache write · 120 output · 12 input",
                 "",
                 "WORKER         ROLE        AREA   MODEL             TURNS    COST",
@@ -760,13 +970,41 @@ mod tests {
                 MAIN_NOTE,
             ]
         );
-        let model = range_lines(&ok(report(10_000_000)), start, Some(Split::Model), false).unwrap();
+        let model = range_lines(
+            &ok(report(10_000_000)),
+            start,
+            Some(Split::Model),
+            false,
+            &utc,
+        )
+        .unwrap();
         assert_eq!(model[5], "  claude-sonnet-5   12 turns   $10.00   100%");
-        let area = range_lines(&ok(report(10_000_000)), start, Some(Split::Area), false).unwrap();
+        let area = range_lines(
+            &ok(report(10_000_000)),
+            start,
+            Some(Split::Area),
+            false,
+            &utc,
+        )
+        .unwrap();
         assert_eq!(area[4], "BY AREA");
-        let role = range_lines(&ok(report(10_000_000)), start, Some(Split::Role), false).unwrap();
+        let role = range_lines(
+            &ok(report(10_000_000)),
+            start,
+            Some(Split::Role),
+            false,
+            &utc,
+        )
+        .unwrap();
         assert_eq!(role[4], "BY ROLE");
-        let tasks = range_lines(&ok(report(10_000_000)), start, Some(Split::Task), false).unwrap();
+        let tasks = range_lines(
+            &ok(report(10_000_000)),
+            start,
+            Some(Split::Task),
+            false,
+            &utc,
+        )
+        .unwrap();
         assert!(tasks[4].starts_with("TASKS"));
     }
 
@@ -779,19 +1017,27 @@ mod tests {
             empty[key] = json!([]);
         }
         let start = at(NOW);
-        let lines = range_lines(&ok(empty.clone()), start, None, false).unwrap();
+        let lines = range_lines(&ok(empty.clone()), start, None, false, &utc).unwrap();
         assert_eq!(lines[1], "0 workers · 0 turns");
         assert!(lines.contains(&"  no turns".to_owned()));
         assert!(lines.contains(&"  no task has a turn yet".to_owned()));
-        let workers = range_lines(&ok(empty.clone()), start, Some(Split::Worker), false).unwrap();
+        let workers =
+            range_lines(&ok(empty.clone()), start, Some(Split::Worker), false, &utc).unwrap();
         assert!(workers.contains(&"  no turns".to_owned()));
-        let models = range_lines(&ok(empty), start, Some(Split::Model), false).unwrap();
+        let models = range_lines(&ok(empty), start, Some(Split::Model), false, &utc).unwrap();
         assert!(models.contains(&"  no turns".to_owned()));
 
         let task = json!({"task": "T-1", "title": "t", "area": null, "build_micro_usd": 1, "review_micro_usd": 0, "total_micro_usd": 1, "tokens": tokens(1), "turns": 1});
         let many = with(report(1), "tasks", json!(vec![task; TOP_TASKS + 2]));
-        let lines =
-            summary_lines(&ok(many.clone()), &ok(many.clone()), &ok(many), None, false).unwrap();
+        let lines = summary_lines(
+            &ok(many.clone()),
+            &ok(many.clone()),
+            &ok(many),
+            None,
+            false,
+            &utc,
+        )
+        .unwrap();
         assert!(lines.contains(&"  2 more; fld cost --by task lists every task".to_owned()));
     }
 
@@ -848,7 +1094,14 @@ mod tests {
             Err(RemoteError::Refused { .. })
         ));
         assert!(matches!(
-            summary_lines(&ok(json!({})), &ok(json!({})), &ok(json!({})), None, false),
+            summary_lines(
+                &ok(json!({})),
+                &ok(json!({})),
+                &ok(json!({})),
+                None,
+                false,
+                &utc
+            ),
             Err(RemoteError::Answer)
         ));
         assert_eq!(
@@ -867,6 +1120,7 @@ mod tests {
                 &ok(report(0)),
                 None,
                 supervised,
+                &utc,
             )
             .unwrap()
         };
@@ -875,7 +1129,14 @@ mod tests {
         assert!(!counted.contains(&note));
         assert_eq!(counted.last().map(String::as_str), Some(DAYS_NOTE));
         let start = at("2026-10-20T00:00:00Z");
-        let range = range_lines(&ok(report(10_000_000)), start, Some(Split::Model), true).unwrap();
+        let range = range_lines(
+            &ok(report(10_000_000)),
+            start,
+            Some(Split::Model),
+            true,
+            &utc,
+        )
+        .unwrap();
         assert_eq!(
             range.last().map(String::as_str),
             Some("  claude-sonnet-5   12 turns   $10.00   100%")

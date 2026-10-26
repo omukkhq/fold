@@ -180,3 +180,4 @@ main_interactive
 main_not_supervised
 invalid_sign_in_link
 update_checks_running
+path_not_tracked

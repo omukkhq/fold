@@ -1,6 +1,8 @@
 use std::fmt::Display;
 use std::io::{self, Write};
 
+use fold_core::Timestamp;
+
 pub fn version_line() -> String {
     format!("fld {}", env!("CARGO_PKG_VERSION"))
 }
@@ -82,6 +84,58 @@ pub fn web_token_line(
     format!("{id} {human} created {created_at} last used {used}{label}")
 }
 
+/// One entry of a listing such as `fld log` or `fld status`: a head line, then each detail on its own line after `  ↳ `, and a detail of a detail after `    ↳ `. Plain text with no colour or other escape, so a pipe or a log keeps it as it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Item(Vec<String>);
+
+impl Item {
+    pub fn new(head: impl Into<String>) -> Self {
+        Self(vec![head.into()])
+    }
+
+    pub fn detail(&mut self, text: impl Display) -> &mut Self {
+        self.0.push(format!("  ↳ {text}"));
+        self
+    }
+
+    pub fn deeper(&mut self, text: impl Display) -> &mut Self {
+        self.0.push(format!("    ↳ {text}"));
+        self
+    }
+}
+
+/// The lines of `items`, with one blank line between each two.
+pub fn items(items: Vec<Item>) -> Vec<String> {
+    let mut lines = Vec::new();
+    for item in items {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.extend(item.0);
+    }
+    lines
+}
+
+/// `23 Oct 2026, 17:11`: the time as `zone` reads it, to the minute.
+pub fn readable_time<Zone: chrono::TimeZone>(at: Timestamp, zone: &Zone) -> String
+where
+    Zone::Offset: Display,
+{
+    chrono::DateTime::from_timestamp_millis(at.as_millis()).map_or_else(
+        || at.to_string(),
+        |time| {
+            time.with_timezone(zone)
+                .format("%-d %b %Y, %H:%M")
+                .to_string()
+        },
+    )
+}
+
+/// [`readable_time`] in the local time zone of the user, from `TZ` or the system's setting.
+pub fn local_time(at: Timestamp) -> String {
+    readable_time(at, &chrono::Local)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,7 +181,7 @@ mod tests {
 
     #[test]
     fn version_line_names_the_workspace_version() {
-        assert_eq!(version_line(), "fld 0.5.1");
+        assert_eq!(version_line(), "fld 0.5.2");
     }
 
     #[test]
@@ -158,6 +212,37 @@ mod tests {
         assert_eq!(revision_range(&"r3", &"r3"), "r3");
         assert_eq!(count(1, "commit", "commits"), "1 commit");
         assert_eq!(count(0, "commit", "commits"), "0 commits");
+    }
+
+    #[test]
+    fn items_are_a_head_line_and_details_with_a_blank_line_between_items() {
+        let mut first = Item::new("r2  Add the form");
+        first.detail("head of main").deeper("deeper");
+        let mut second = Item::new("r1  Genesis revision");
+        second.detail("the start of the history");
+        assert_eq!(
+            items(vec![first, second]),
+            [
+                "r2  Add the form",
+                "  ↳ head of main",
+                "    ↳ deeper",
+                "",
+                "r1  Genesis revision",
+                "  ↳ the start of the history",
+            ]
+        );
+        assert!(items(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn a_readable_time_is_in_the_zone_to_the_minute() {
+        let at = Timestamp::from_millis(1_792_775_503_162).unwrap();
+        assert_eq!(at.to_string(), "2026-10-23T17:11:43.162Z");
+        assert_eq!(readable_time(at, &chrono::Utc), "23 Oct 2026, 17:11");
+        let dhaka = chrono::FixedOffset::east_opt(6 * 3600).unwrap();
+        assert_eq!(readable_time(at, &dhaka), "23 Oct 2026, 23:11");
+        let early = Timestamp::from_millis(0).unwrap();
+        assert_eq!(readable_time(early, &chrono::Utc), "1 Jan 1970, 00:00");
     }
 
     #[test]

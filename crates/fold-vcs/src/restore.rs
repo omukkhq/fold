@@ -86,7 +86,16 @@ fn bring_to_tree(
     keep_unrecorded: bool,
 ) -> Result<Restored, FoldError> {
     let target = load_flat(objects, target_tree)?;
-    let scanned = scan(root, index, &opts.scan)?;
+    // A path the workspace tracks now or the target tracks counts although an ignore rule matches it, so the restore removes or writes it.
+    let mut tracked = opts.scan.recorded.cloned().unwrap_or_default();
+    for (path, entry) in &target {
+        tracked.entry(path.clone()).or_insert(*entry);
+    }
+    let scan_opts = ScanOptions {
+        recorded: Some(&tracked),
+        ..opts.scan
+    };
+    let scanned = scan(root, index, &scan_opts)?;
 
     let mut removals = Vec::new();
     let mut writes: Vec<(RepoPath, FlatEntry)> = Vec::new();

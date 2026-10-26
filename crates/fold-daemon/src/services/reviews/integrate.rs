@@ -94,6 +94,8 @@ pub struct RecordIntegration {
     pub base_tree: ObjectHash,
     pub tree: ObjectHash,
     pub human: HumanRecord,
+    /// The title of the revision, such as the one `fld untrack` gives; `None` for a change `fld record` read.
+    pub title: Option<String>,
 }
 
 /// A human change as its integration records it: the human whose change it is, and the data of its `human_change.recorded` event, which names the changed files, the open workspaces they touch and the leads of their tasks.
@@ -232,6 +234,7 @@ pub(super) enum Subject {
         base_tree: ObjectHash,
         tree: ObjectHash,
         human: HumanRecord,
+        title: Option<String>,
     },
     Direct {
         changeset: ChangesetId,
@@ -1074,6 +1077,7 @@ fn record_plan(actor: &Actor, record: &RecordIntegration) -> Result<Plan, Step> 
             base_tree: record.base_tree,
             tree: record.tree,
             human: record.human.clone(),
+            title: record.title.clone(),
         },
     })
 }
@@ -1485,9 +1489,11 @@ impl Commit<'_> {
                 base_tree,
                 tree,
                 human,
+                title,
             } => {
                 let subject = IntegrationSubject::Record {
                     remote_commit: commit.as_deref(),
+                    message: title.as_deref(),
                 };
                 let succeeded =
                     NewEvent::new(types::INTEGRATION_SUCCEEDED, label.clone())?.data(json!({

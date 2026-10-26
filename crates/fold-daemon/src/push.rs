@@ -1258,6 +1258,20 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
                 .await?
                 .is_some();
         }
+        let unclaimed_version =
+            kind == fold_core::events::types::PROPOSAL_VERSION_ADDED && ctx.review_claim.is_none();
+        if (kind == fold_core::events::types::PROPOSAL_OPENED || unclaimed_version)
+            && !ctx.planned
+            && !ctx.main_task
+        {
+            let mut read = store.read().begin().await?;
+            ctx.plan_candidates = crate::services::reviews::related_plan_tasks(&mut read, proposal)
+                .await?
+                .into_iter()
+                .map(|related| related.candidate)
+                .collect();
+            read.commit().await?;
+        }
         if kind == fold_core::events::types::INTEGRATION_SUCCEEDED {
             ctx.reviewer = integrated_reviewer(store, event, proposal).await?;
         }

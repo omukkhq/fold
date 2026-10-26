@@ -72,16 +72,20 @@ enum Command {
     Resume(commands::pause::PauseArgs),
     /// Record your changes in the project folder on main as one change of yours; a conflict with the agents' work waits for the main agent
     Record(commands::record::RecordArgs),
+    /// Stop tracking files of the project folder, as git rm --cached does: one revision of yours removes them from main from now on and leaves them on disk. Older revisions keep them, so a leaked secret still needs to be changed. Add them to .foldignore, or fld record records them again
+    Untrack(commands::untrack::UntrackArgs),
     /// Put your changes in the project folder aside, so the folder follows main; fld stash list shows the stash, newest first
     Stash(commands::stash::StashArgs),
     /// Merge the newest stash entry into the project folder as it is now; a conflict writes conflict markers and keeps the entry until fld record
     Unstash(commands::stash::UnstashArgs),
+    /// Show the project folder against main: the files fld record would record, what keeps the folder from following main with the next step, and the stash; it changes nothing
+    Status(commands::folder_status::StatusArgs),
     /// Print this process's environment for the daemon, which runs it through the user's login shell at its start
     #[command(hide = true, name = "shell-env")]
     ShellEnv,
     /// Manage the workers that fold runs: fld worker restart <name> starts one again in a new Claude Code session
     Worker(commands::worker::WorkerArgs),
-    /// List main's revisions, newest first, as the web app's repository screen shows them: id, title, task, author, time and Git commit
+    /// List main's revisions, newest first, as the web app's repository screen shows them: id and title, then the proposal, task and author or what the revision is, and the time in your local time zone with the Git commit
     Log(commands::log::LogArgs),
     /// Print what the project's supervised workers cost, from the values Claude Code reported: the total of all time, today and the last 7 days, the tokens, by role, by area and the top tasks; --since, --by and --task narrow it
     Cost(commands::cost::CostArgs),
@@ -167,11 +171,17 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         Some(Command::Record(args)) => {
             commands::record::run_record(&args, out).map_err(Failure::Remote)
         }
+        Some(Command::Untrack(args)) => {
+            commands::untrack::run_untrack(&args, out).map_err(Failure::Remote)
+        }
         Some(Command::Stash(args)) => {
             commands::stash::run_stash(&args, out).map_err(Failure::Remote)
         }
         Some(Command::Unstash(args)) => {
             commands::stash::run_unstash(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Status(args)) => {
+            commands::folder_status::run_status(&args, out).map_err(Failure::Remote)
         }
         Some(Command::ShellEnv) => {
             shell_env::print(std::env::vars_os(), out).map_err(Failure::Write)
@@ -315,7 +325,7 @@ mod tests {
             panic!("expected a parse failure, got {result:?}");
         };
         assert_eq!(error.kind(), ErrorKind::DisplayVersion);
-        assert_eq!(error.to_string().trim(), "fld 0.5.1");
+        assert_eq!(error.to_string().trim(), "fld 0.5.2");
         assert!(out.is_empty());
     }
 

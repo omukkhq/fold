@@ -19,24 +19,38 @@ async fn fld_log_lists_a_new_projects_record_and_genesis_newest_first() {
     let log = host
         .fold(&["log"], &root)
         .env("FOLD_HUMAN", "ana")
+        .env("TZ", "UTC")
         .output()
         .await
         .unwrap();
     let guard = DaemonGuard(daemons(&host.default_socket()));
     assert!(log.status.success(), "{log:?}");
     let text = String::from_utf8(log.stdout).unwrap();
+    assert!(!text.contains('\u{1b}'), "{text}");
     let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(lines.len(), 4, "{text}");
+    assert_eq!(lines.len(), 8, "{text}");
     assert_eq!(
-        lines[0],
-        "r1 (head of main) record · changes of the project folder"
+        lines[..3],
+        [
+            "r1  Changes of the project folder",
+            "  ↳ head of main",
+            "  ↳ recorded from the project folder by @ana",
+        ]
     );
+    // The time is the local time to the minute, here in UTC: `23 Oct 2026, 17:11`.
+    let time = lines[3].strip_prefix("  ↳ ").unwrap();
     assert!(
-        lines[1].starts_with("  @ana · ") && lines[1].ends_with('Z'),
+        time.len() >= 17 && time.contains(", ") && !time.contains('Z'),
         "{text}"
     );
-    assert_eq!(lines[2], "r0 Genesis revision");
-    assert!(lines[3].starts_with("  unknown · "), "{text}");
+    assert_eq!(
+        lines[4..7],
+        [
+            "",
+            "r0  Genesis revision",
+            "  ↳ the start of main's history"
+        ]
+    );
 
     let oneline = host
         .fold(&["log", "--oneline", "-n", "1"], &root)
@@ -47,7 +61,7 @@ async fn fld_log_lists_a_new_projects_record_and_genesis_newest_first() {
     assert!(oneline.status.success(), "{oneline:?}");
     assert_eq!(
         String::from_utf8(oneline.stdout).unwrap(),
-        "r1 (head of main) record · changes of the project folder\nolder revisions are not listed; fld log -n 2 lists more\n"
+        "r1  Changes of the project folder (head of main)\nolder revisions are not listed; fld log -n 2 lists more\n"
     );
     guard.stop().await;
 }

@@ -146,7 +146,7 @@ async fn record_folder(
         .await?
         .ok_or(StoreError::Corrupt("checkout"))?
         .tree;
-    let (human_tree, skipped) = snapshot_folder(handle, max_file_bytes).await?;
+    let (human_tree, skipped) = snapshot_folder(handle, record_tree, max_file_bytes).await?;
     #[cfg(feature = "failpoints")]
     fail::fail_point!("record_after_snapshot", |_| Err(fired(
         "record_after_snapshot"
@@ -176,8 +176,12 @@ async fn record_folder(
         base_tree: record_tree,
         tree: human_tree,
         commit: None,
+        title: None,
     };
-    let recorded = with_skipped(integrate_change(handle, actor, &change).await?, skipped);
+    let recorded = with_skipped(
+        integrate_change(handle, actor, &change, OnConflict::Wait).await?,
+        skipped,
+    );
     let RecordOutcome::Recorded {
         revision,
         files,
@@ -438,8 +442,9 @@ pub(crate) async fn record_branch_commits(
         base_tree,
         tree,
         commit: Some(tip.clone()),
+        title: None,
     };
-    let outcome = integrate_change(handle, &actor, &change).await?;
+    let outcome = integrate_change(handle, &actor, &change, OnConflict::Wait).await?;
     if let RecordOutcome::Recorded { revision, .. } = &outcome
         && let Some((head, newest)) = last
         && newest == *from
@@ -487,13 +492,25 @@ pub(crate) struct HumanFolderChange<'a> {
     pub(crate) base_tree: ObjectHash,
     pub(crate) tree: ObjectHash,
     pub(crate) commit: Option<CommitId>,
+    /// The title of the revision; `None` for the changes `fld record` reads, which Git and the log name by their kind.
+    pub(crate) title: Option<String>,
 }
 
-/// Merges `change` onto main under the integration mutex, three times at most when main moves meanwhile: a clean merge goes through the `record` entry of the integration procedure, and a conflict is written as the waiting human change with `human_change.conflicted`.
+/// What a merge of a human change that conflicts with main does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnConflict {
+    /// The change is written as the waiting human change, for the main agent to resolve with the human.
+    Wait,
+    /// Nothing is written and the conflicted paths come back as a refusal.
+    Refuse,
+}
+
+/// Merges `change` onto main under the integration mutex, three times at most when main moves meanwhile: a clean merge goes through the `record` entry of the integration procedure, and a conflict is written as the waiting human change with `human_change.conflicted`, or with [`OnConflict::Refuse`] refused with `reason` `main_changed` and the paths.
 pub(crate) async fn integrate_change(
     handle: &ProjectHandle,
     actor: &Actor,
     change: &HumanFolderChange<'_>,
+    on_conflict: OnConflict,
 ) -> Result<RecordOutcome, ProjectError> {
     let fold_dir = handle.paths.fold_dir();
     let commit_text = change.commit.as_ref().map(CommitId::as_str);
@@ -528,6 +545,24 @@ pub(crate) async fn integrate_change(
             })
             .await?
         };
+        if !merge.conflicts.is_empty() && on_conflict == OnConflict::Refuse {
+            drop(serial);
+            let paths: Vec<String> = merge
+                .conflicts
+                .iter()
+                .map(|conflict| String::from_utf8_lossy(&conflict.path).into_owned())
+                .collect();
+            return Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                format!(
+                    "main changed {} since the project folder's revision",
+                    paths.join(", ")
+                ),
+            )
+            .with_hint("run `fld status` to see what keeps the project folder from main; once it follows main, run the command again")
+            .with_details([("reason", json!("main_changed")), ("paths", json!(paths))])
+            .into());
+        }
         if !merge.conflicts.is_empty() {
             let rows: Vec<ConflictRow> = merge
                 .conflicts
@@ -580,6 +615,7 @@ pub(crate) async fn integrate_change(
         drop(serial);
         let request = RecordIntegration {
             commit: change.commit.as_ref().map(ToString::to_string),
+            title: change.title.clone(),
             base_tree,
             tree: human_tree,
             human: HumanRecord {
@@ -644,9 +680,10 @@ fn with_skipped(outcome: RecordOutcome, left: Vec<Skipped>) -> RecordOutcome {
     }
 }
 
-/// Reads the project folder as an import does, its objects written under the project's object lock, and returns its tree with the files it leaves out.
+/// Reads the project folder as an import does, its objects written under the project's object lock, and returns its tree with the files it leaves out. The paths of `record_tree`, the checkout record, are tracked: they count although an ignore rule matches them, and one the read leaves out, such as a file over the size limit, keeps its recorded entry.
 pub(super) async fn snapshot_folder(
     handle: &ProjectHandle,
+    record_tree: ObjectHash,
     max_file_bytes: u64,
 ) -> Result<(ObjectHash, Vec<Skipped>), ProjectError> {
     let objects_guard = handle.objects.clone().read_owned().await;
@@ -662,10 +699,12 @@ pub(super) async fn snapshot_folder(
                 format!("cannot probe the file system: {}", error.kind()),
             )
         })?;
+        let tracked = load_flat(&objects, &record_tree)?;
         let imported = import_dir(
             &objects,
             root,
             &IgnoreRules::new(root),
+            Some(&tracked),
             &ImportOptions {
                 max_file_bytes,
                 caps,

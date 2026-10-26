@@ -29,7 +29,9 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(pull))
         .routes(routes!(record))
         .routes(routes!(list_stash, stash))
+        .routes(routes!(show_folder))
         .routes(routes!(unstash))
+        .routes(routes!(untrack))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1025,6 +1027,75 @@ pub async fn record(
     Ok(Json(result))
 }
 
+/// The paths `fld untrack` removes from main.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UntrackRequest {
+    /// Paths relative to the project folder; a directory stands for every tracked path below it.
+    #[schema(example = json!(["config/local.env"]))]
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct UntrackResult {
+    /// The new revision, which no longer holds the paths.
+    #[schema(example = "r18")]
+    pub revision: String,
+    /// The Git commit of the new revision while Git sync is on; null otherwise.
+    #[schema(required = true)]
+    pub commit: Option<String>,
+    /// The tracked paths the revision removes, in path order.
+    pub files: Vec<String>,
+    /// The paths of `files` that no ignore rule matches, so the next `fld record` records them again.
+    pub unignored: Vec<String>,
+    pub touched: Vec<RecordTouched>,
+    /// The unstash that a stop had left part-way, which this command finished first; null when none was finished.
+    #[schema(required = true)]
+    pub unstash: Option<UnstashResult>,
+}
+
+/// Stops tracking files of the project folder, as `fld untrack` asks: one revision of the human removes every path main tracks at or below each named path, and the files stay in the folder. Other changes of the folder stay unrecorded. Older revisions keep the files. Socket only; the human comes from `x-fold-human`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/untrack",
+    operation_id = "untrack_project_paths",
+    params(("slug" = String, Path, description = "The project slug")),
+    request_body = UntrackRequest,
+    responses(
+        (status = 200, description = "Main no longer tracks the paths", body = UntrackResult),
+        (status = 400, description = "A path is not valid, no path is named, the branch or HEAD shows a change fold did not make (`reason` `head_moved`), the human's Git commits wait for the main agent (`reason` `git_commits_wait`), or main changed a path since the folder's revision (`reason` `main_changed`, the paths in `paths`)", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`: the request names no human", body = ErrorEnvelope),
+        (status = 404, description = "Not on the socket, the slug is not registered, or main does not track a path (`path_not_tracked`, the paths in `paths`)", body = ErrorEnvelope),
+        (status = 409, description = "Main moved during every attempt, or the config or sync map is invalid", body = ErrorEnvelope),
+        (status = 502, description = "A Git command failed", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open, or git is not on PATH", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn untrack(
+    _socket: SocketOnly,
+    human: Human,
+    Project(handle): Project,
+    ApiJson(body): ApiJson<UntrackRequest>,
+) -> Result<Json<UntrackResult>, ApiError> {
+    let done = projects::untrack(&handle, &human.actor(), &Git::default(), &body.paths).await?;
+    let outcome = done.outcome;
+    Ok(Json(UntrackResult {
+        revision: outcome.revision.to_string(),
+        commit: outcome.commit.map(|commit| commit.to_string()),
+        files: outcome.files,
+        unignored: outcome.unignored,
+        touched: outcome
+            .touched
+            .into_iter()
+            .map(|touched| RecordTouched {
+                task: touched.task.to_string(),
+                workspace: touched.workspace.to_string(),
+            })
+            .collect(),
+        unstash: done.unstash.map(UnstashResult::from),
+    }))
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StashState {
@@ -1271,6 +1342,235 @@ pub async fn list_stash(
             })
             .collect(),
     }))
+}
+
+/// How a path of the project folder differs from what fold knows it holds. `modified` covers other content and a changed executable bit; `type_changed` is a symlink where a file was, or a file where a symlink was.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderChangeKind {
+    Added,
+    Modified,
+    Deleted,
+    TypeChanged,
+}
+
+/// What a path holds: the folder's entry, or the record's for a deleted path.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderEntryKind {
+    File,
+    Executable,
+    Symlink,
+}
+
+/// One path that `fld record` would record now.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FolderChangeView {
+    pub path: String,
+    pub kind: FolderChangeKind,
+    pub entry: FolderEntryKind,
+    /// Main changed the path too since the folder's revision, so the change holds the folder where it is until it is recorded or taken back.
+    pub held: bool,
+}
+
+/// What keeps the project folder from following main, or the human's changes off main. `head_moved`: the Git branch or HEAD shows a change fold did not make. `commits_waiting`: the Git branch holds commits of the human's that fold has not recorded yet. `unstash_open`: an unstash stopped part-way and waits to be finished. `unstash_conflicted`: the conflict markers of `fld unstash` wait in the files. `human_change`: a change of the human's conflicts with main and waits for the main agent. `folder_held`: paths main changed hold changes of the human's that no revision records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderBlockerKind {
+    HeadMoved,
+    CommitsWaiting,
+    UnstashOpen,
+    UnstashConflicted,
+    HumanChange,
+    FolderHeld,
+}
+
+impl From<fold_core::folder::BlockerKind> for FolderBlockerKind {
+    fn from(kind: fold_core::folder::BlockerKind) -> Self {
+        use fold_core::folder::BlockerKind;
+        match kind {
+            BlockerKind::HeadMoved => Self::HeadMoved,
+            BlockerKind::CommitsWaiting => Self::CommitsWaiting,
+            BlockerKind::UnstashOpen => Self::UnstashOpen,
+            BlockerKind::UnstashConflicted => Self::UnstashConflicted,
+            BlockerKind::HumanChange => Self::HumanChange,
+            BlockerKind::FolderHeld => Self::FolderHeld,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FolderBlockerView {
+    pub kind: FolderBlockerKind,
+    /// The paths it is about, in path order; empty for the Git branch.
+    pub paths: Vec<String>,
+    /// The step that ends it.
+    #[schema(example = "run `fld record`, or take the changes back")]
+    pub next: String,
+}
+
+/// `stashed`: the entry waits on the stack. `conflicted`: its unstash wrote conflict markers that wait in the folder. `unstashing`: its unstash stopped part-way and waits to be finished.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderStashState {
+    Stashed,
+    Conflicted,
+    Unstashing,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FolderStashView {
+    #[schema(example = "stash@{0}")]
+    pub stash: String,
+    pub state: FolderStashState,
+    /// UTC milliseconds of the stash.
+    #[schema(value_type = i64)]
+    pub created_at: Timestamp,
+    /// The main revision the project folder held then.
+    #[schema(example = "r8")]
+    pub base: String,
+    /// Who stashed, such as `human:ana`.
+    pub actor: String,
+    /// How many paths the entry changes.
+    pub files: usize,
+    /// `fld unstash` applies this entry, or finishes its unstash, when it runs next.
+    pub next: bool,
+}
+
+/// A file of the project folder that fold leaves out.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FolderSkippedView {
+    pub path: String,
+    /// Why it is left out, such as `too_large`.
+    pub reason: String,
+    /// Main tracks the path, so it keeps the version it recorded; `fld untrack` removes it from main.
+    pub tracked: bool,
+}
+
+/// The project folder against main, as `fld status` shows it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FolderStatusView {
+    /// Main's head.
+    #[schema(example = "r12")]
+    pub head: String,
+    /// The main revision the project folder holds, apart from the changes no revision records.
+    #[schema(example = "r12")]
+    pub folder: String,
+    /// The folder holds main's head.
+    pub at_main: bool,
+    /// While the folder holds an older revision, the first blocker that keeps it there; null when it holds main's head, or when nothing blocks it and fold brings it to main on its next follow.
+    #[schema(required = true)]
+    pub behind_because: Option<FolderBlockerKind>,
+    /// The Git branch fold syncs main with; null while Git sync is off.
+    #[schema(required = true, example = "main")]
+    pub branch: Option<String>,
+    /// What `fld record` would record now, in path order.
+    pub changes: Vec<FolderChangeView>,
+    /// The files fold leaves out, as `fld record` leaves them out.
+    pub skipped: Vec<FolderSkippedView>,
+    /// The files main tracks that an ignore rule matches, in path order. They stay tracked, so `fld record` records their changes, until `fld untrack` removes them from main.
+    pub ignored_tracked: Vec<String>,
+    /// The first decides first.
+    pub blockers: Vec<FolderBlockerView>,
+    /// Newest first.
+    pub stash: Vec<FolderStashView>,
+}
+
+impl From<projects::FolderStatus> for FolderStatusView {
+    fn from(status: projects::FolderStatus) -> Self {
+        use fold_core::folder::{FolderPlace, UnrecordedKind};
+        use fold_core::tree::EntryKind;
+        let behind_because = match status.place {
+            FolderPlace::AtMain => None,
+            FolderPlace::Behind { why } => why.map(FolderBlockerKind::from),
+        };
+        Self {
+            head: status.head.to_string(),
+            folder: status.folder.to_string(),
+            at_main: status.place == FolderPlace::AtMain,
+            behind_because,
+            branch: status.branch,
+            changes: status
+                .changes
+                .into_iter()
+                .map(|change| FolderChangeView {
+                    path: change.path,
+                    kind: match change.kind {
+                        UnrecordedKind::Added => FolderChangeKind::Added,
+                        UnrecordedKind::Modified => FolderChangeKind::Modified,
+                        UnrecordedKind::Deleted => FolderChangeKind::Deleted,
+                        UnrecordedKind::TypeChanged => FolderChangeKind::TypeChanged,
+                    },
+                    entry: match change.entry {
+                        EntryKind::Executable => FolderEntryKind::Executable,
+                        EntryKind::Symlink => FolderEntryKind::Symlink,
+                        EntryKind::File | EntryKind::Directory => FolderEntryKind::File,
+                    },
+                    held: change.held,
+                })
+                .collect(),
+            skipped: status
+                .skipped
+                .into_iter()
+                .map(|left| FolderSkippedView {
+                    path: left.skipped.path.to_string(),
+                    reason: left.skipped.reason.as_str().to_owned(),
+                    tracked: left.tracked,
+                })
+                .collect(),
+            ignored_tracked: status.ignored_tracked,
+            blockers: status
+                .blockers
+                .iter()
+                .map(|blocker| FolderBlockerView {
+                    kind: blocker.kind().into(),
+                    paths: blocker.paths().to_vec(),
+                    next: blocker.next(),
+                })
+                .collect(),
+            stash: status
+                .stash
+                .into_iter()
+                .map(|entry| FolderStashView {
+                    stash: format!("stash@{{{}}}", entry.position),
+                    state: match entry.state {
+                        projects::StashEntryState::Stashed => FolderStashState::Stashed,
+                        projects::StashEntryState::Conflicted => FolderStashState::Conflicted,
+                        projects::StashEntryState::Unstashing => FolderStashState::Unstashing,
+                    },
+                    created_at: entry.created_at,
+                    base: entry.base.to_string(),
+                    actor: entry.actor,
+                    files: entry.files,
+                    next: entry.next,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// The project folder against main, as `fld status` shows it: main's head and the revision the folder holds, what `fld record` would record now with the paths main changed too, what keeps the folder where it is with the step that ends each, and the stash. A read: it records nothing, does not follow main and changes no stash entry. Socket only.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/folder",
+    operation_id = "show_project_folder",
+    params(("slug" = String, Path, description = "The project slug")),
+    responses(
+        (status = 200, description = "The folder's state", body = FolderStatusView),
+        (status = 404, description = "Not on the socket, or the slug is not registered", body = ErrorEnvelope),
+        (status = 503, description = "The project failed to open", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn show_folder(
+    _socket: SocketOnly,
+    Project(handle): Project,
+) -> Result<Json<FolderStatusView>, ApiError> {
+    Ok(Json(
+        projects::folder_status(&handle, &Git::default())
+            .await?
+            .into(),
+    ))
 }
 
 /// The Git identity for the project's own Git config, as `fld init --with-git` settled it; a value left out is not written.

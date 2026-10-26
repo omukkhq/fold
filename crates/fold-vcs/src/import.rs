@@ -6,12 +6,13 @@ use fold_core::object::ObjectHash;
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_core::{FoldError, codes};
 
-use crate::ignore::IgnoreRules;
+use crate::ignore::{Cover, IgnoreRules, tracked_names};
 use crate::objects::{ObjectError, ObjectStore};
 use crate::paths::{RepoPath, is_reserved_name};
 use crate::platform::{Capabilities, DirHandle, is_executable};
 use crate::revision_store::write_initial_tree;
 use crate::scan::{Entered, SkipReason, Skipped, enter_dir};
+use crate::snapshot::keep_base;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ImportOptions {
@@ -31,25 +32,32 @@ pub struct ImportResult {
     pub skipped: Vec<Skipped>,
 }
 
-/// Stores every tracked file under `source` as a blob, then writes the trees and returns the root. `rules` is built on `source`, so its `.gitignore` and `.foldignore` files decide what is tracked, while the files themselves import like any other. `.git` and `.fold` never import, because no `RepoPath` can name them. Nothing is written into `source`. A file that cannot be read is skipped and the import goes on; a failure of the object store or of reading `source` itself stops it. Blocking: async callers go through `spawn_blocking`.
+/// Stores every tracked file under `source` as a blob, then writes the trees and returns the root. `rules` is built on `source`, so its `.gitignore` and `.foldignore` files decide which untracked files count, while the files themselves import like any other; a path of `tracked`, the tree `source` was last known to match, counts even when a rule matches it, as [`IgnoreRules::cover`] decides. `.git` and `.fold` never import, because no `RepoPath` can name them. Nothing is written into `source`. A file that cannot be read is skipped and the import goes on, with what `tracked` holds at and below its path, so a tracked file over the size limit keeps its recorded version; a failure of the object store or of reading `source` itself stops it. Blocking: async callers go through `spawn_blocking`.
 pub fn import_dir(
     objects: &ObjectStore,
     source: &Path,
     rules: &IgnoreRules,
+    tracked: Option<&FlatTree>,
     opts: &ImportOptions,
 ) -> Result<ImportResult, FoldError> {
     rules.reload();
     let mut walk = Walk {
         objects,
         rules,
+        tracked,
         opts,
         entries: FlatTree::new(),
         bytes: 0,
         skipped: Vec::new(),
     };
     let root = DirHandle::open(source).map_err(|error| source_error(&error))?;
-    walk.dir(&root, None)?;
+    walk.dir(&root, None, false)?;
     walk.skipped.sort_by(|a, b| a.path.cmp(&b.path));
+    if let Some(tracked) = tracked {
+        for skipped in &walk.skipped {
+            keep_base(&mut walk.entries, tracked, &skipped.path);
+        }
+    }
     let files = walk.entries.len();
     let tree = write_initial_tree(objects, walk.entries)?;
     Ok(ImportResult {
@@ -63,6 +71,7 @@ pub fn import_dir(
 struct Walk<'a> {
     objects: &'a ObjectStore,
     rules: &'a IgnoreRules,
+    tracked: Option<&'a FlatTree>,
     opts: &'a ImportOptions,
     entries: FlatTree,
     bytes: u64,
@@ -70,16 +79,25 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    /// Lists the directory from its handle, so every entry found is inside it.
-    fn dir(&mut self, dir: &DirHandle, prefix: Option<&RepoPath>) -> Result<(), FoldError> {
-        let names = match dir.names() {
-            Ok(names) => names,
-            Err(error) if prefix.is_some() && error.kind() == io::ErrorKind::NotFound => {
-                return Ok(());
+    /// Lists the directory from its handle, so every entry found is inside it. In a directory an ignore rule covers (`covered`), only the names of tracked paths are looked at, as a scan looks at them.
+    fn dir(
+        &mut self,
+        dir: &DirHandle,
+        prefix: Option<&RepoPath>,
+        covered: bool,
+    ) -> Result<(), FoldError> {
+        let names: Vec<Vec<u8>> = if covered {
+            tracked_names(self.tracked, prefix).into_iter().collect()
+        } else {
+            match dir.names() {
+                Ok(names) => names,
+                Err(error) if prefix.is_some() && error.kind() == io::ErrorKind::NotFound => {
+                    return Ok(());
+                }
+                Err(error) => return Err(source_error(&error)),
             }
-            Err(error) => return Err(source_error(&error)),
         };
-        let rules = self.rules.dir_rules(prefix);
+        let rules = (!covered).then(|| self.rules.dir_rules(prefix));
         for name in names {
             if is_reserved_name(&name) {
                 continue;
@@ -95,11 +113,15 @@ impl Walk<'_> {
                     continue;
                 }
             };
-            if rules.is_ignored(&path, meta.is_dir()) {
+            let cover = match &rules {
+                Some(rules) => rules.cover(self.tracked, &path, meta.is_dir()),
+                None => Cover::of(true, self.tracked, &path, meta.is_dir()),
+            };
+            if cover == Cover::Ignored {
                 continue;
             }
             if meta.is_dir() {
-                self.subdir(dir, &name, &path)?;
+                self.subdir(dir, &name, &path, cover.is_covered())?;
             } else {
                 self.entry(dir, &name, &path, &meta)?;
             }
@@ -107,17 +129,19 @@ impl Walk<'_> {
         Ok(())
     }
 
-    /// A directory is entered as a scan enters it. One swapped for something else since it was listed imports as what is there now, unless that is ignored; one that cannot be entered, or keeps changing between a directory and something else, is skipped as unreadable.
+    /// A directory is entered as a scan enters it. One swapped for something else since it was listed imports as what is there now, unless that is ignored and not tracked; one that cannot be entered, or keeps changing between a directory and something else, is skipped as unreadable.
     fn subdir(
         &mut self,
         parent: &DirHandle,
         name: &[u8],
         path: &RepoPath,
+        covered: bool,
     ) -> Result<(), FoldError> {
         match enter_dir(parent, name) {
-            Ok(Entered::Dir(child)) => self.dir(&child, Some(path)),
+            Ok(Entered::Dir(child)) => self.dir(&child, Some(path), covered),
             Ok(Entered::Replaced(now)) => {
-                if self.rules.is_ignored_below(path, false) {
+                let ignored = covered || self.rules.is_ignored_below(path, false);
+                if Cover::of(ignored, self.tracked, path, false) == Cover::Ignored {
                     return Ok(());
                 }
                 self.entry(parent, name, path, &now)
@@ -315,6 +339,7 @@ mod tests {
         let mut walk = Walk {
             objects: &objects,
             rules: &rules,
+            tracked: None,
             opts: &opts,
             entries: FlatTree::new(),
             bytes: 0,
@@ -358,7 +383,7 @@ mod tests {
                 std::fs::rename(&sub, &moved).unwrap();
                 std::os::unix::fs::symlink(&target, &sub).unwrap();
             },
-            || import_dir(&objects, &source, &rules, &opts),
+            || import_dir(&objects, &source, &rules, None, &opts),
         )
         .unwrap();
 

@@ -55,12 +55,14 @@ use crate::services::fired;
 mod commits;
 mod enable_git;
 mod folder;
+mod folder_status;
 mod gc;
 mod git_status;
 mod pull;
 mod record;
 mod remote;
 mod stash;
+mod untrack;
 mod web_auth;
 
 pub(crate) use commits::error_code;
@@ -68,6 +70,9 @@ pub use commits::{Committed, commit_main, commit_message};
 pub use enable_git::{GitEnabled, GitIdentity, enable_git};
 pub use folder::{FolderFollowed, FolderSync, sync_folder};
 pub(crate) use folder::{append_alone, note_attention};
+pub use folder_status::{
+    FolderChange, FolderSkipped, FolderStashEntry, FolderStatus, StashEntryState, folder_status,
+};
 pub use gc::{GcReport, gc};
 pub use git_status::{GitStatus, PushFailed, Pushed, RemoteStatus, git_status, public_location};
 pub use pull::{PullOutcome, PulledConflict, pull};
@@ -78,6 +83,7 @@ pub use stash::{
     AfterUnstash, StashEntry, StashOutcome, UnstashConflict, UnstashOutcome, stash, stash_list,
     unstash,
 };
+pub use untrack::{UntrackOutcome, untrack};
 pub use web_auth::{
     DEFAULT_SESSION_LIFETIME, SIGN_IN_LINK_LIFETIME, SignInLink, SignedIn, WEB_TOUCH_INTERVAL,
     check_web_session, create_sign_in_link, create_web_session, create_web_token, end_web_session,
@@ -633,7 +639,7 @@ impl Init<'_> {
                 max_file_bytes,
                 caps,
             };
-            let imported = import_dir(&objects, root, &IgnoreRules::new(root), &opts)?;
+            let imported = import_dir(&objects, root, &IgnoreRules::new(root), None, &opts)?;
             #[cfg(feature = "failpoints")]
             fail::fail_point!("init_after_import", |_| Err(
                 fired("init_after_import").into()
@@ -819,6 +825,7 @@ impl FirstChange {
             number: integration,
             subject: IntegrationSubject::Record {
                 remote_commit: None,
+                message: None,
             },
             actor: label.as_str(),
             created_at: now,

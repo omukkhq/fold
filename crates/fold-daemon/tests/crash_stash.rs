@@ -583,3 +583,28 @@ async fn a_file_changed_before_the_first_write_abandons_the_unstash() {
     );
     scenario.teardown();
 }
+
+/// `fld status` names an unstash that stopped part-way and its entry, and leaves the journal for the command that finishes it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_folder_status_names_an_unstash_that_stopped_part_way_and_finishes_nothing() {
+    let scenario = fail::FailScenario::setup();
+    let h = project(false).await;
+    conflicting_stash(&h).await;
+    stop_unstash_at(&h, "unstash_after_journal").await;
+    let (status, body) = h
+        .socket(
+            axum::http::Method::GET,
+            "/api/v1/projects/demo/folder",
+            None,
+        )
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert_eq!(
+        body["blockers"],
+        serde_json::json!([{"kind": "unstash_open", "paths": ["README.md", "plan.md"], "next": "run `fld unstash` to finish it"}])
+    );
+    assert_eq!(body["stash"][0]["state"], "unstashing");
+    assert_eq!(body["stash"][0]["next"], true);
+    assert!(journal_open(&h).await);
+    scenario.teardown();
+}
