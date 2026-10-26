@@ -123,7 +123,7 @@ impl NeedsYouItem {
     /// The `FolderHeld` item of a project folder that waits since `since` on the human's changes to `paths`.
     pub fn folder_held(since: Timestamp, paths: Vec<String>) -> Self {
         let mut item = Self::new(NeedsYouKind::FolderHeld, since);
-        item.reason = Some("run `fld record`, or take the changes back".to_owned());
+        item.reason = Some(fold_core::folder::FOLDER_HELD_NEXT.to_owned());
         item.paths = paths;
         item
     }
@@ -285,8 +285,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         && let Some(since) = entry.conflicted_at
     {
         let mut item = NeedsYouItem::new(NeedsYouKind::UnstashConflicted, since);
-        item.reason =
-            Some("fix the conflict markers in these files, then run `fld record`".to_owned());
+        item.reason = Some(fold_core::folder::UNSTASH_CONFLICTED_NEXT.to_owned());
         item.paths = entry
             .conflicts
             .iter()

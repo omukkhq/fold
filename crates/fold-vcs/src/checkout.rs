@@ -302,7 +302,7 @@ pub fn follow(
 }
 
 /// What a follow knows before it writes: `record` with main's entry for every path of `changes` that holds it already, and the [`held`] paths. Reads no file.
-fn hold(record: &FlatTree, main: &FlatTree, changes: &[(RepoPath, FolderEntry)]) -> Followed {
+pub fn hold(record: &FlatTree, main: &FlatTree, changes: &[(RepoPath, FolderEntry)]) -> Followed {
     let mut followed = Followed {
         record: record.clone(),
         written: Vec::new(),

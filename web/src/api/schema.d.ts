@@ -364,6 +364,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/folder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The project folder against main, as `fld status` shows it: main's head and the revision the folder holds, what `fld record` would record now with the paths main changed too, what keeps the folder where it is with the step that ends each, and the stash. A read: it records nothing, does not follow main and changes no stash entry. Socket only. */
+        get: operations["show_project_folder"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/gc": {
         parameters: {
             query?: never;
@@ -2624,6 +2641,94 @@ export interface components {
         };
         /** @enum {string} */
         FileWarningReason: "unstable" | "too_large" | "special" | "unreadable" | "changed_during_snapshot";
+        /**
+         * @description What keeps the project folder from following main, or the human's changes off main. `head_moved`: the Git branch or HEAD shows a change fold did not make. `commits_waiting`: the Git branch holds commits of the human's that fold has not recorded yet. `unstash_open`: an unstash stopped part-way and waits to be finished. `unstash_conflicted`: the conflict markers of `fld unstash` wait in the files. `human_change`: a change of the human's conflicts with main and waits for the main agent. `folder_held`: paths main changed hold changes of the human's that no revision records.
+         * @enum {string}
+         */
+        FolderBlockerKind: "head_moved" | "commits_waiting" | "unstash_open" | "unstash_conflicted" | "human_change" | "folder_held";
+        FolderBlockerView: {
+            kind: components["schemas"]["FolderBlockerKind"];
+            /**
+             * @description The step that ends it.
+             * @example run `fld record`, or take the changes back
+             */
+            next: string;
+            /** @description The paths it is about, in path order; empty for the Git branch. */
+            paths: string[];
+        };
+        /**
+         * @description How a path of the project folder differs from what fold knows it holds. `modified` covers other content and a changed executable bit; `type_changed` is a symlink where a file was, or a file where a symlink was.
+         * @enum {string}
+         */
+        FolderChangeKind: "added" | "modified" | "deleted" | "type_changed";
+        /** @description One path that `fld record` would record now. */
+        FolderChangeView: {
+            entry: components["schemas"]["FolderEntryKind"];
+            /** @description Main changed the path too since the folder's revision, so the change holds the folder where it is until it is recorded or taken back. */
+            held: boolean;
+            kind: components["schemas"]["FolderChangeKind"];
+            path: string;
+        };
+        /**
+         * @description What a path holds: the folder's entry, or the record's for a deleted path.
+         * @enum {string}
+         */
+        FolderEntryKind: "file" | "executable" | "symlink";
+        /**
+         * @description `stashed`: the entry waits on the stack. `conflicted`: its unstash wrote conflict markers that wait in the folder. `unstashing`: its unstash stopped part-way and waits to be finished.
+         * @enum {string}
+         */
+        FolderStashState: "stashed" | "conflicted" | "unstashing";
+        FolderStashView: {
+            /** @description Who stashed, such as `human:ana`. */
+            actor: string;
+            /**
+             * @description The main revision the project folder held then.
+             * @example r8
+             */
+            base: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the stash.
+             */
+            created_at: number;
+            /** @description How many paths the entry changes. */
+            files: number;
+            /** @description `fld unstash` applies this entry, or finishes its unstash, when it runs next. */
+            next: boolean;
+            /** @example stash@{0} */
+            stash: string;
+            state: components["schemas"]["FolderStashState"];
+        };
+        /** @description The project folder against main, as `fld status` shows it. */
+        FolderStatusView: {
+            /** @description The folder holds main's head. */
+            at_main: boolean;
+            behind_because: components["schemas"]["FolderBlockerKind"] | null;
+            /** @description The first decides first. */
+            blockers: components["schemas"]["FolderBlockerView"][];
+            /**
+             * @description The Git branch fold syncs main with; null while Git sync is off.
+             * @example main
+             */
+            branch: string | null;
+            /** @description What `fld record` would record now, in path order. */
+            changes: components["schemas"]["FolderChangeView"][];
+            /**
+             * @description The main revision the project folder holds, apart from the changes no revision records.
+             * @example r12
+             */
+            folder: string;
+            /**
+             * @description Main's head.
+             * @example r12
+             */
+            head: string;
+            /** @description The files fold leaves out, as `fld record` leaves them out. */
+            skipped: components["schemas"]["RecordSkipped"][];
+            /** @description Newest first. */
+            stash: components["schemas"]["FolderStashView"][];
+        };
         /**
          * @description The gates in the order the integration procedure checks them.
          * @enum {string}
@@ -7054,6 +7159,74 @@ export interface operations {
             };
             /** @description `recipient_not_reader`: feedback on a task names a recipient that is not one of the task's readers */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    show_project_folder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The folder's state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderStatusView"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, or the slug is not registered */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -90,6 +90,7 @@ mod event_bus;
 mod events_service;
 mod exclude_file;
 mod folder_stash;
+mod folder_status;
 mod gc;
 mod git_commits;
 mod handoffs;

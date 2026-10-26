@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
+use fold_core::object::ObjectHash;
 use fold_core::tree::FlatTree;
 use fold_core::{FoldError, ProjectPaths, RevisionId, Timestamp};
 use fold_store::workspaces::{
-    Checkout, StashState, checkout, genesis, git_sync, head, merged_commits, newest_human_change,
-    open_unstash, set_checkout, stash_stack,
+    Checkout, RevisionRow, StashState, checkout, genesis, git_sync, head, merged_commits,
+    newest_human_change, open_unstash, set_checkout, stash_stack,
 };
 use fold_store::{Store, StoreError};
-use fold_vcs::checkout::{Followed, folder_changes, follow, overlay};
+use fold_vcs::checkout::{FolderEntry, Followed, folder_changes, follow, overlay};
 use fold_vcs::compare::load_flat;
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_remote::{BranchState, branch_state};
@@ -15,6 +16,7 @@ use fold_vcs::git_sync_map::SyncMap;
 use fold_vcs::ignore::IgnoreRules;
 use fold_vcs::index::StatIndex;
 use fold_vcs::objects::ObjectStore;
+use fold_vcs::paths::RepoPath;
 use fold_vcs::platform::Capabilities;
 use fold_vcs::revision_store::write_initial_tree;
 use fold_vcs::scan::{ScanOptions, scan};
@@ -256,18 +258,54 @@ pub async fn sync_folder(context: &RemoteContext, git: &Git) -> Result<FolderSyn
     })
 }
 
-/// Brings the project folder to main through its checkout record, as [`fold_vcs::checkout::follow`] describes, the same way with Git sync on or off: when a path main changed holds a change of the human's that no revision records, nothing is written and the folder stays on its revision until `fld record` records the change, a resolution of the human change brings it onto main, or the human takes it back; otherwise every path main changed gets main's entry. Paths main did not change are never touched. The newest human change that main holds is laid over the record first, so the human's recorded files count as fold's. While `fld unstash` left conflict markers that wait for the human, nothing is written either, and the held paths are the conflicted ones; so too while an unstash that stopped part-way waits to be finished, with the paths it writes. While Git sync is on the folder also moves only together with its branch: when the branch shows a change fold did not make, or commits fold did not write, nothing is written, so `git status` keeps telling the human's changes from main's. The record tree goes into the object store, then the record row, so a stop between the writes and the row leaves files that the next follow finds holding main's entries and takes as written. The caller holds the project's folder lock.
-pub(crate) async fn follow_folder(
+/// What a follow of the project folder reads before it writes anything, which `fld status` reads too, so both decide from the same facts.
+pub(crate) struct FolderRead {
+    pub(crate) max_file_bytes: u64,
+    /// The `[git]` branch.
+    pub(crate) branch_name: String,
+    pub(crate) head: RevisionRow,
+    /// The checkout record as stored; `None` before fold first wrote one.
+    pub(crate) recorded: Option<Checkout>,
+    /// The record's tree, or the genesis tree before fold first wrote one.
+    pub(crate) record_tree: ObjectHash,
+    /// The main revision the folder holds, apart from the changes no revision records.
+    pub(crate) from: RevisionId,
+    /// The newest human change whose entries the record holds once `lay` is laid over it.
+    pub(crate) human_change: Option<i64>,
+    /// The base and tree of a human change that main holds and the record does not yet.
+    pub(crate) lay: Option<(ObjectHash, ObjectHash)>,
+    /// What the `[git]` branch shows, read while Git sync is on; `None` while it is off or could not be read.
+    pub(crate) branch: Option<BranchState>,
+    pub(crate) synced: bool,
+    /// The conflicted paths of the stash entry whose unstash conflict waits in the folder.
+    pub(crate) stash_held: Option<Vec<String>>,
+    /// The folder's tree as an unstash that stopped part-way read it, and the tree it writes.
+    pub(crate) unstash: Option<(ObjectHash, ObjectHash)>,
+}
+
+impl FolderRead {
+    /// Whether a follow may write the folder: not while the conflict markers of an unstash wait, nor while an unstash that stopped part-way waits to be finished, and while Git sync is on only while the branch is fold's.
+    pub(crate) fn may_write(&self) -> bool {
+        self.stash_held.is_none()
+            && self.unstash.is_none()
+            && if self.synced {
+                matches!(self.branch, Some(BranchState::Fold { .. }))
+            } else {
+                true
+            }
+    }
+}
+
+/// Reads what a follow of the project folder decides from: main's head, the checkout record and the newest human change main holds, the stash and the unstash journal, and, while Git sync is on, the `[git]` branch. Writes nothing. `None` while main has no head.
+pub(crate) async fn read_folder(
     store: &Store,
     paths: &ProjectPaths,
-    objects: &Arc<tokio::sync::RwLock<()>>,
     git: &Git,
-    now: Timestamp,
-) -> Result<FolderFollowed, ProjectError> {
+) -> Result<Option<FolderRead>, ProjectError> {
     let config = load_config(paths).await?;
     let read = store.read();
     let Some(head) = head(read).await? else {
-        return Ok(FolderFollowed::default());
+        return Ok(None);
     };
     let recorded = checkout(read).await?;
     let synced = git_sync(read).await?.is_some();
@@ -334,35 +372,105 @@ pub(crate) async fn follow_folder(
     } else {
         None
     };
-    // While the conflict markers of an unstash wait in the folder, or an unstash that stopped part-way waits to be finished, the folder stays where it is, as while a path main changed holds a change of the human's.
-    let may_write = stash_held.is_none()
-        && unstash.is_none()
-        && if synced {
-            matches!(branch, Some(BranchState::Fold { .. }))
-        } else {
-            true
-        };
+    Ok(Some(FolderRead {
+        max_file_bytes: config.max_file_bytes,
+        branch_name: config.git.branch,
+        head,
+        recorded,
+        record_tree,
+        from,
+        human_change,
+        lay: lay.map(|change| (change.base_tree, change.tree)),
+        branch,
+        synced,
+        stash_held,
+        unstash,
+    }))
+}
+
+/// The checkout record with a human change laid over it, main's tree, and what the folder holds at each path where the two differ.
+pub(crate) struct Compared {
+    pub(crate) record: FlatTree,
+    pub(crate) main: FlatTree,
+    pub(crate) changes: Vec<(RepoPath, FolderEntry)>,
+}
+
+/// The checkout record with `lay` laid over it, main's tree, and what the folder at `root` holds at each path where the two differ. Blocking.
+pub(crate) fn compare_folder(
+    objects: &ObjectStore,
+    root: &std::path::Path,
+    record_tree: &ObjectHash,
+    lay: Option<(ObjectHash, ObjectHash)>,
+    head_tree: &ObjectHash,
+    max_file_bytes: u64,
+    caps: &Capabilities,
+) -> Result<Compared, ProjectError> {
+    let mut record = load_flat(objects, record_tree)?;
+    if let Some((base, tree)) = lay {
+        record = overlay(
+            &record,
+            &load_flat(objects, &base)?,
+            &load_flat(objects, &tree)?,
+        );
+    }
+    let main = load_flat(objects, head_tree)?;
+    let changes =
+        folder_changes(root, &record, &main, max_file_bytes, caps).map_err(FoldError::from)?;
+    Ok(Compared {
+        record,
+        main,
+        changes,
+    })
+}
+
+/// Brings the project folder to main through its checkout record, as [`fold_vcs::checkout::follow`] describes, the same way with Git sync on or off: when a path main changed holds a change of the human's that no revision records, nothing is written and the folder stays on its revision until `fld record` records the change, a resolution of the human change brings it onto main, or the human takes it back; otherwise every path main changed gets main's entry. Paths main did not change are never touched. The newest human change that main holds is laid over the record first, so the human's recorded files count as fold's. While `fld unstash` left conflict markers that wait for the human, nothing is written either, and the held paths are the conflicted ones; so too while an unstash that stopped part-way waits to be finished, with the paths it writes. While Git sync is on the folder also moves only together with its branch: when the branch shows a change fold did not make, or commits fold did not write, nothing is written, so `git status` keeps telling the human's changes from main's. The record tree goes into the object store, then the record row, so a stop between the writes and the row leaves files that the next follow finds holding main's entries and takes as written. The caller holds the project's folder lock.
+pub(crate) async fn follow_folder(
+    store: &Store,
+    paths: &ProjectPaths,
+    objects: &Arc<tokio::sync::RwLock<()>>,
+    git: &Git,
+    now: Timestamp,
+) -> Result<FolderFollowed, ProjectError> {
+    let Some(read) = read_folder(store, paths, git).await? else {
+        return Ok(FolderFollowed::default());
+    };
+    let may_write = read.may_write();
+    let FolderRead {
+        max_file_bytes,
+        head,
+        recorded,
+        record_tree,
+        from,
+        human_change,
+        lay,
+        branch,
+        stash_held,
+        unstash,
+        ..
+    } = read;
     let objects_guard = objects.clone().read_owned().await;
-    let (paths_owned, max_file_bytes) = (paths.clone(), config.max_file_bytes);
+    let paths_owned = paths.clone();
     let head_tree = head.tree_hash;
-    let lay = lay.map(|change| (change.base_tree, change.tree));
     let (tree, held, unrecorded, wrote) = blocking(move || {
         let _objects = objects_guard;
         let paths = paths_owned;
         let fold_dir = paths.fold_dir();
         let objects = ObjectStore::open_existing(&fold_dir).map_err(FoldError::from)?;
-        let mut record = load_flat(&objects, &record_tree)?;
-        if let Some((base, tree)) = lay {
-            record = overlay(
-                &record,
-                &load_flat(&objects, &base)?,
-                &load_flat(&objects, &tree)?,
-            );
-        }
-        let main = load_flat(&objects, &head_tree)?;
         let caps = Capabilities::probe(&fold_dir).map_err(|error| io_error(&error))?;
         let root = paths.root();
-        let changes = folder_changes(root, &record, &main, max_file_bytes, &caps)?;
+        let Compared {
+            record,
+            main,
+            changes,
+        } = compare_folder(
+            &objects,
+            root,
+            &record_tree,
+            lay,
+            &head_tree,
+            max_file_bytes,
+            &caps,
+        )?;
         let followed = if may_write {
             follow(&objects, root, &record, &main, &changes, caps)?
         } else {

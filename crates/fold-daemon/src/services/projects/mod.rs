@@ -55,6 +55,7 @@ use crate::services::fired;
 mod commits;
 mod enable_git;
 mod folder;
+mod folder_status;
 mod gc;
 mod git_status;
 mod pull;
@@ -68,6 +69,9 @@ pub use commits::{Committed, commit_main, commit_message};
 pub use enable_git::{GitEnabled, GitIdentity, enable_git};
 pub use folder::{FolderFollowed, FolderSync, sync_folder};
 pub(crate) use folder::{append_alone, note_attention};
+pub use folder_status::{
+    FolderChange, FolderStashEntry, FolderStatus, StashEntryState, folder_status,
+};
 pub use gc::{GcReport, gc};
 pub use git_status::{GitStatus, PushFailed, Pushed, RemoteStatus, git_status, public_location};
 pub use pull::{PullOutcome, PulledConflict, pull};
