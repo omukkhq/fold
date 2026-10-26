@@ -76,6 +76,8 @@ enum Command {
     Stash(commands::stash::StashArgs),
     /// Merge the newest stash entry into the project folder as it is now; a conflict writes conflict markers and keeps the entry until fld record
     Unstash(commands::stash::UnstashArgs),
+    /// Show the project folder against main: the files fld record would record, what keeps the folder from following main with the next step, and the stash; it changes nothing
+    Status(commands::folder_status::StatusArgs),
     /// Print this process's environment for the daemon, which runs it through the user's login shell at its start
     #[command(hide = true, name = "shell-env")]
     ShellEnv,
@@ -172,6 +174,9 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         }
         Some(Command::Unstash(args)) => {
             commands::stash::run_unstash(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Status(args)) => {
+            commands::folder_status::run_status(&args, out).map_err(Failure::Remote)
         }
         Some(Command::ShellEnv) => {
             shell_env::print(std::env::vars_os(), out).map_err(Failure::Write)

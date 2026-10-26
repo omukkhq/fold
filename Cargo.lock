@@ -688,6 +688,7 @@ version = "0.5.1"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "clap",
  "fold-core",
  "fold-daemon",

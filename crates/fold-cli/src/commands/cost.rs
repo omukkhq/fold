@@ -16,8 +16,8 @@ const HOUR_MILLIS: i64 = 60 * 60 * 1000;
 
 /// How many tasks the summary lists.
 const TOP_TASKS: usize = 10;
-
-/// fold reads no local time zone, so the terminal's days are UTC days.
+/// `fld cost` counts its days in UTC, as the project list does for a viewer that names no start of its day.
+/// `fld cost` counts its days in UTC, as the web app does without a viewer's zone, so its numbers match the daemon's whatever the terminal's zone.
 const DAYS_NOTE: &str = "Today and the last 7 days start at midnight UTC.";
 
 /// The cost view's note: the main agent's session is outside fold's view, and fold guesses no number for it. A project whose `[main] supervised` setting is on has fold run the main agent as a worker, so its cost is in the numbers and the note is left out.

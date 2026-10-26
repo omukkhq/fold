@@ -30,6 +30,7 @@ mod dev_command;
 #[cfg(feature = "dev-seed")]
 mod dev_stub;
 mod doctor;
+mod folder_status;
 mod gc;
 mod git;
 mod git_identity;
