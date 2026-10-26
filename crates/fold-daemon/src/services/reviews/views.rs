@@ -17,7 +17,7 @@ pub use fold_store::reviews::ReviewRow as ReviewView;
 use super::checks::{CheckRunView, VersionRun, next_version_run};
 use super::claims::ReviewClaimView;
 use super::integrate::caller_facts;
-use super::plans::{ProposalPlan, proposal_plan};
+use super::plans::{ProposalPlan, RelatedTaskView, proposal_plan, related_plan_tasks};
 use super::proposals::{ProposalDetail, proposal_detail, proposal_not_found};
 use super::{ReviewError, ReviewService};
 use crate::services::workspaces::StateRef;
@@ -71,6 +71,8 @@ pub struct ProposalView {
     pub update_run: Option<VersionRun>,
     /// The review plan the open proposal waits in for related tasks, to be reviewed with them as one batch.
     pub review_plan: Option<ProposalPlan>,
+    /// While the open proposal could wait in a review plan and waits in none, the related tasks a plan for it can wait for, closest first.
+    pub related_tasks: Vec<RelatedTaskView>,
     /// The revision an integrated proposal became, and the review batch it integrated with, if any.
     pub integrated: Option<(RevisionId, Option<ReviewBatchId>)>,
 }
@@ -109,6 +111,7 @@ impl ReviewService {
         let scope_choice =
             reviews::latest_scope_choice(&mut *read, proposal, detail.selected.version).await?;
         let review_plan = proposal_plan(&mut read, proposal).await?;
+        let related_tasks = related_plan_tasks(&mut read, proposal).await?;
         let integrated = reviews::batches::integrated_as(&mut *read, proposal).await?;
         read.commit().await.map_err(StoreError::from)?;
         let claim = match holder {
@@ -180,6 +183,7 @@ impl ReviewService {
             checks,
             update_run,
             review_plan,
+            related_tasks,
             integrated,
         })
     }

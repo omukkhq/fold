@@ -49,6 +49,8 @@ pub struct PushContext {
     pub unreviewed: Vec<ProposalId>,
     /// For `proposal.opened`, `proposal.version_added` and `proposal.review_again_requested`, the event's proposal waits in a review plan, whose own notices tell the review lead when to start its reviewer.
     pub planned: bool,
+    /// For `proposal.opened` of a proposal that waits in no review plan, the related tasks that a plan for it can wait for, with their status, closest first.
+    pub plan_candidates: Vec<(TaskId, TaskStatus)>,
 }
 
 /// One line for one agent's Claude Code session. `text` holds public ids and the next tool only.
@@ -766,11 +768,15 @@ fn review_rules(
 ) -> Option<Vec<(Vec<AgentName>, String, &'static str)>> {
     let kind = event.event_type;
     let proposal = event.proposal?;
+    let mut lead_text = None;
     let (text, leads_too) = if kind == types::PROPOSAL_OPENED {
         let text = match event.task {
             Some(task) => format!("{proposal} opened for {task}"),
             None => format!("{proposal} opened"),
         };
+        if !ctx.planned && !ctx.plan_candidates.is_empty() {
+            lead_text = Some(plan_notice(&text, proposal, &ctx.plan_candidates));
+        }
         (text, !ctx.planned)
     } else if kind == types::PROPOSAL_VERSION_ADDED {
         let text = match event
@@ -812,7 +818,46 @@ fn review_rules(
     } else {
         (holder, text.clone(), "create_review_checkout")
     };
-    Some(vec![(leads, text, "start_worker"), held])
+    let leads = match lead_text {
+        Some((hint, tool)) => (leads, hint, tool),
+        None => (leads, text, "start_worker"),
+    };
+    Some(vec![leads, held])
+}
+
+/// The review lead's notice of a new proposal whose related tasks can still open theirs: a proposal reviewed alone can integrate before its sibling opens, so the notice names the plan that waits for them. The tasks are spelled out with their status when the line fits, else by id alone, else counted, with `get_proposal` naming them.
+fn plan_notice(
+    opened: &str,
+    proposal: ProposalId,
+    candidates: &[(TaskId, TaskStatus)],
+) -> (String, &'static str) {
+    let tool = "create_review_plan";
+    let tasks: Vec<TaskId> = candidates.iter().map(|(task, _)| *task).collect();
+    let ids: Vec<String> = tasks.iter().map(ToString::to_string).collect();
+    let open = if candidates.len() == 1 {
+        "a proposal"
+    } else {
+        "proposals"
+    };
+    let call = crate::reviews::plans::plan_hint(proposal, &tasks);
+    let with_status = candidates
+        .iter()
+        .map(|(task, status)| format!("{task} ({status})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    for listed in [with_status, ids.join(", ")] {
+        let text = format!("{opened}; related {listed} can still open {open}: {call}");
+        if format!("fold: {text}. Call {tool}.").len() <= MAX_NOTICE_LEN {
+            return (text, tool);
+        }
+    }
+    (
+        format!(
+            "{opened}; {} related tasks can still open proposals: get_proposal names them and the {tool} call that waits for them",
+            candidates.len()
+        ),
+        "get_proposal",
+    )
 }
 
 /// A review plan reaches the review lead when it changes without the lead: an awaited task opened its proposal and joined, or stopped being eligible and left; the main agent took members out or closed it; the wait ended at the deadline; or the plan ended because no member is left. Once no task is awaited, the notice names the proposals to give one reviewer with the plan. The daemon writes the plan's open proposals and awaited tasks after the change into the event.
@@ -978,6 +1023,7 @@ mod tests {
             main_task: false,
             unreviewed: Vec::new(),
             planned: false,
+            plan_candidates: Vec::new(),
         }
     }
 
@@ -1015,6 +1061,76 @@ mod tests {
                     "start_worker"
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn an_opened_proposal_with_related_tasks_to_come_names_the_plan_that_waits_for_them() {
+        let task = |number| TaskId::from_number(number).unwrap();
+        let related = |candidates: Vec<(TaskId, TaskStatus)>| PushContext {
+            review_claim: None,
+            plan_candidates: candidates,
+            ..ctx()
+        };
+        let opened = event(types::PROPOSAL_OPENED, "frontend/ui");
+        let two = related(vec![
+            (task(13), TaskStatus::InProgress),
+            (task(14), TaskStatus::Todo),
+        ]);
+        let text = "fold: P-3 opened for T-12; related T-13 (in_progress), T-14 (todo) can still open proposals: create_review_plan(proposals[P-3], tasks[T-13, T-14]) waits for them. Call create_review_plan.";
+        assert_eq!(
+            sent(&notice_for(&opened, &two)),
+            vec![
+                row("lead", text, "create_review_plan"),
+                row("review", text, "create_review_plan"),
+            ]
+        );
+        let one = related(vec![(task(13), TaskStatus::Todo)]);
+        assert_eq!(
+            notice_for(&opened, &one)[0].text,
+            "fold: P-3 opened for T-12; related T-13 (todo) can still open a proposal: create_review_plan(proposals[P-3], tasks[T-13]) waits for them. Call create_review_plan."
+        );
+        // Four tasks with their status make the line too long, so they go by id alone.
+        let four = related(
+            (13..17)
+                .map(|number| (task(number), TaskStatus::InProgress))
+                .collect(),
+        );
+        assert_eq!(
+            notice_for(&opened, &four)[0].text,
+            "fold: P-3 opened for T-12; related T-13, T-14, T-15, T-16 can still open proposals: create_review_plan(proposals[P-3], tasks[T-13, T-14, T-15, T-16]) waits for them. Call create_review_plan."
+        );
+        let long = related(
+            (10_013..10_017)
+                .map(|number| (task(number), TaskStatus::Todo))
+                .collect(),
+        );
+        assert_eq!(
+            notice_for(&opened, &long)[0].text,
+            "fold: P-3 opened for T-12; 4 related tasks can still open proposals: get_proposal names them and the create_review_plan call that waits for them. Call get_proposal."
+        );
+        for ctx in [&two, &one, &four, &long] {
+            let notices = notice_for(&opened, ctx);
+            assert!(
+                notices
+                    .iter()
+                    .all(|notice| notice.text.len() <= MAX_NOTICE_LEN)
+            );
+        }
+        // A proposal that already waits in a plan, or a new version, never names a plan to make.
+        let planned = PushContext {
+            planned: true,
+            ..two.clone()
+        };
+        assert!(notice_for(&opened, &planned).is_empty());
+        let version = with_data(
+            event(types::PROPOSAL_VERSION_ADDED, "frontend/ui"),
+            json!({"version": 2}),
+        );
+        assert!(
+            notice_for(&version, &two)
+                .iter()
+                .all(|notice| notice.next_tool == "start_worker")
         );
     }
 
