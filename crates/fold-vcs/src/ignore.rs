@@ -1,13 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ::ignore::Match;
 use ::ignore::gitignore::{Gitignore, GitignoreBuilder};
+use fold_core::tree::FlatTree;
 
 use crate::lock;
-use crate::paths::{RepoPath, open_parent, os_path};
+use crate::paths::{RepoPath, entries_at_or_below, open_parent, os_path};
 
 pub const GITIGNORE: &str = ".gitignore";
 pub const FOLDIGNORE: &str = ".foldignore";
@@ -77,6 +78,11 @@ impl IgnoreRules {
             }
         }
         self.matches(bytes, is_dir)
+    }
+
+    /// What the rules make of `path` once the tracked tree is known, its parents included: Git's rule, under which an ignore rule applies only to what `tracked` does not hold. Every scan, import, watch and comparison of fold decides by it.
+    pub fn cover(&self, tracked: Option<&FlatTree>, path: &RepoPath, is_dir: bool) -> Cover {
+        Cover::of(self.is_ignored(path, is_dir), tracked, path, is_dir)
     }
 
     /// The check a directory walk makes for one entry. The parents were already walked, so they are known not to be ignored and only the entry itself is matched. A walk that checks every entry of a directory resolves [`IgnoreRules::dir_rules`] once instead.
@@ -220,6 +226,11 @@ impl DirRules {
         self.matches(path.as_bytes(), is_dir)
     }
 
+    /// [`IgnoreRules::cover`] for the entry `path` of this directory, whose parents a walk already found not covered.
+    pub(crate) fn cover(&self, tracked: Option<&FlatTree>, path: &RepoPath, is_dir: bool) -> Cover {
+        Cover::of(self.is_ignored(path, is_dir), tracked, path, is_dir)
+    }
+
     fn matches(&self, path: &[u8], is_dir: bool) -> bool {
         for (start, matcher) in &self.matchers {
             let Some(Ok(relative)) = path.get(*start..).map(RepoPath::parse) else {
@@ -233,5 +244,92 @@ impl DirRules {
             }
         }
         false
+    }
+}
+
+/// What the ignore rules make of one path. As in Git, a rule applies only to a path that is not tracked: a tracked file stays tracked when a rule matches it, so its changes and its deletion count, and an ignored directory still holds the tracked paths below it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cover {
+    /// No ignore rule covers the path.
+    Open,
+    /// An ignore rule covers the path, or a parent of it, but the tracked tree holds the path, or for a directory a path below it. Only tracked paths count at and below it, so a walk reads no more of an ignored directory than the tracked paths in it.
+    Tracked,
+    /// An ignore rule covers the path and nothing tracked is there.
+    Ignored,
+}
+
+impl Cover {
+    /// The cover of a path that an ignore rule covers when `ignored` is true.
+    pub(crate) fn of(
+        ignored: bool,
+        tracked: Option<&FlatTree>,
+        path: &RepoPath,
+        is_dir: bool,
+    ) -> Self {
+        if !ignored {
+            Self::Open
+        } else if tracks(tracked, path, is_dir) {
+            Self::Tracked
+        } else {
+            Self::Ignored
+        }
+    }
+
+    /// An ignore rule covers the path, tracked or not.
+    pub fn is_covered(self) -> bool {
+        self != Self::Open
+    }
+}
+
+/// Whether `tracked` holds `path`: the entry itself for a file, any entry below it for a directory.
+fn tracks(tracked: Option<&FlatTree>, path: &RepoPath, is_dir: bool) -> bool {
+    let Some(tracked) = tracked else {
+        return false;
+    };
+    let bytes = path.as_bytes();
+    if is_dir {
+        entries_at_or_below(tracked, bytes).any(|(found, _)| found.len() > bytes.len())
+    } else {
+        tracked.contains_key(bytes)
+    }
+}
+
+/// The names directly inside `dir` that `tracked` holds, as a file or as a directory with entries below it, in name order: what a walk of an ignored directory looks at instead of listing it.
+pub(crate) fn tracked_names(
+    tracked: Option<&FlatTree>,
+    dir: Option<&RepoPath>,
+) -> BTreeSet<Vec<u8>> {
+    let Some(tracked) = tracked else {
+        return BTreeSet::new();
+    };
+    let prefix = dir.map_or(&[][..], RepoPath::as_bytes);
+    let start = if prefix.is_empty() {
+        0
+    } else {
+        prefix.len() + 1
+    };
+    entries_at_or_below(tracked, prefix)
+        .filter_map(|(path, _)| path.get(start..))
+        .filter_map(|rest| rest.split(|&byte| byte == b'/').next())
+        .filter(|name| !name.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect()
+}
+
+/// The tracked tree of one workspace, which its scanner and the watcher share: the scanner sets it when the tree it compares against moves, and the watcher decides by it which changes below an ignored directory count.
+#[derive(Debug, Default)]
+pub struct TrackedSet(Mutex<Arc<FlatTree>>);
+
+impl TrackedSet {
+    pub fn new(tree: FlatTree) -> Self {
+        Self(Mutex::new(Arc::new(tree)))
+    }
+
+    pub fn set(&self, tree: FlatTree) {
+        *lock(&self.0) = Arc::new(tree);
+    }
+
+    pub fn get(&self) -> Arc<FlatTree> {
+        Arc::clone(&lock(&self.0))
     }
 }

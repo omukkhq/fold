@@ -94,7 +94,7 @@ fn an_import_of_the_project_folder_leaves_excluded_paths_out() {
         max_file_bytes: 1 << 20,
         caps: Capabilities::probe(&fold_dir).unwrap(),
     };
-    let imported = import_dir(&objects, &root, &IgnoreRules::new(&root), &opts).unwrap();
+    let imported = import_dir(&objects, &root, &IgnoreRules::new(&root), None, &opts).unwrap();
     assert_eq!(imported.files, 1);
 }
 

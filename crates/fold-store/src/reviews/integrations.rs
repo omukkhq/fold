@@ -80,9 +80,10 @@ pub enum IntegrationSubject<'a> {
         changeset: ChangesetId,
         message: &'a str,
     },
-    /// A change of the project folder by a human, with the id of the human's Git commit when it is one.
+    /// A change of the project folder by a human, with the id of the human's Git commit when it is one, and the title it was made with, such as one of `fld untrack`.
     Record {
         remote_commit: Option<&'a str>,
+        message: Option<&'a str>,
     },
 }
 
@@ -232,15 +233,16 @@ async fn insert(
             ("pull", None, None, Some(remote_commit), None)
         }
         IntegrationSubject::Direct { .. } => ("direct", None, None, None, None),
-        IntegrationSubject::Record { remote_commit } => ("record", None, None, remote_commit, None),
+        IntegrationSubject::Record { remote_commit, .. } => {
+            ("record", None, None, remote_commit, None)
+        }
     };
     let (changeset, message) = match new.subject {
         IntegrationSubject::Direct { changeset, message } => {
             (Some(changeset.to_db()), Some(message))
         }
-        IntegrationSubject::Proposal { .. }
-        | IntegrationSubject::Pull { .. }
-        | IntegrationSubject::Record { .. } => (None, None),
+        IntegrationSubject::Record { message, .. } => (None, message),
+        IntegrationSubject::Proposal { .. } | IntegrationSubject::Pull { .. } => (None, None),
     };
     let succeeded = result == "succeeded";
     let created_at = new.created_at.as_millis();

@@ -6,7 +6,7 @@ use std::path::Path;
 use fold_core::object::{ObjectHash, ObjectHasher, ObjectKind, hash_object};
 use fold_core::tree::{ChangeCounts, EntryKind, FlatEntry, FlatTree};
 
-use crate::ignore::{FOLDIGNORE, GITIGNORE, IgnoreRules};
+use crate::ignore::{Cover, FOLDIGNORE, GITIGNORE, IgnoreRules, tracked_names};
 use crate::index::{StatEntry, StatIndex, mtime_ns};
 use crate::paths::{RepoPath, WorkspaceError, is_reserved_name, open_parent};
 use crate::platform::{Capabilities, DirHandle, is_executable};
@@ -46,7 +46,7 @@ pub struct ScanOptions<'a> {
     pub rules: &'a IgnoreRules,
     pub max_file_bytes: u64,
     pub caps: Capabilities,
-    /// The entries of the tree the workspace was last known to match. Where the platform has no executable bit, a file that the stat index does not know keeps the kind recorded here.
+    /// The entries of the tree the workspace was last known to match: its tracked paths, which stay in the scan when an ignore rule matches them, as [`IgnoreRules::cover`] decides. Where the platform has no executable bit, a file that the stat index does not know keeps the kind recorded here.
     pub recorded: Option<&'a FlatTree>,
 }
 
@@ -89,6 +89,22 @@ pub struct ScanResult {
     pub removed: Vec<RepoPath>,
 }
 
+impl ScanResult {
+    /// The entries, with each path the scan skipped or found unstable settled to what `tracked` holds at and below it, as a snapshot records them: a tracked file fold cannot read, such as one over the size limit, keeps its recorded version and never counts as deleted.
+    pub fn settled(&self, tracked: &FlatTree) -> FlatTree {
+        let mut entries = self.entries.clone();
+        for path in self
+            .skipped
+            .iter()
+            .map(|skipped| &skipped.path)
+            .chain(&self.unstable)
+        {
+            crate::snapshot::keep_base(&mut entries, tracked, path);
+        }
+        entries
+    }
+}
+
 /// Walks the whole workspace. The stat index is updated in place; saving it is the caller's job. A path found in `skipped` or `unstable` has no entry and no index record, so the caller keeps whatever it knew before.
 pub fn scan(
     root: &Path,
@@ -98,7 +114,7 @@ pub fn scan(
     opts.rules.reload();
     let mut walk = Walk::new(index, opts);
     match DirHandle::open(root) {
-        Ok(handle) => walk.dir(&handle, None)?,
+        Ok(handle) => walk.dir(&handle, None, false)?,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
@@ -106,7 +122,7 @@ pub fn scan(
     Ok(walk.out)
 }
 
-/// Looks only at the given paths and everything below any of them that is a directory. `entries` holds the current state of those paths; a touched path with no entry is gone. A touched `.gitignore` or `.foldignore` changes which paths below its folder are tracked, so that whole folder is looked at in its place, and a touched ignore file at the root makes this a full [`scan`].
+/// Looks only at the given paths and everything below any of them that is a directory. `entries` holds the current state of those paths; a touched path with no entry is gone. A touched `.gitignore` or `.foldignore` changes which untracked paths below its folder count, so that whole folder is looked at in its place, and a touched ignore file at the root makes this a full [`scan`].
 pub fn rescan_paths(
     root: &Path,
     index: &mut StatIndex,
@@ -254,14 +270,24 @@ impl<'a, 'o> Walk<'a, 'o> {
         }
     }
 
-    /// Lists the directory from its handle, so every entry found is inside it. A directory removed since it was opened holds nothing.
-    fn dir(&mut self, dir: &DirHandle, prefix: Option<&RepoPath>) -> Result<(), WorkspaceError> {
-        let names = match dir.names() {
-            Ok(names) => names,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(error.into()),
+    /// Lists the directory from its handle, so every entry found is inside it. A directory removed since it was opened holds nothing. In a directory an ignore rule covers (`covered`), only the names of tracked paths are looked at, and the directory is never listed.
+    fn dir(
+        &mut self,
+        dir: &DirHandle,
+        prefix: Option<&RepoPath>,
+        covered: bool,
+    ) -> Result<(), WorkspaceError> {
+        let tracked = self.opts.recorded;
+        let names: Vec<Vec<u8>> = if covered {
+            tracked_names(tracked, prefix).into_iter().collect()
+        } else {
+            match dir.names() {
+                Ok(names) => names,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(error.into()),
+            }
         };
-        let rules = self.opts.rules.dir_rules(prefix);
+        let rules = (!covered).then(|| self.opts.rules.dir_rules(prefix));
         for name in names {
             if is_reserved_name(&name) {
                 continue;
@@ -274,29 +300,35 @@ impl<'a, 'o> Walk<'a, 'o> {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(error.into()),
             };
-            if rules.is_ignored(&path, meta.is_dir()) {
+            let cover = match &rules {
+                Some(rules) => rules.cover(tracked, &path, meta.is_dir()),
+                None => Cover::of(true, tracked, &path, meta.is_dir()),
+            };
+            if cover == Cover::Ignored {
                 continue;
             }
-            self.entry(dir, &name, &path, &meta)?;
+            self.entry(dir, &name, &path, &meta, cover.is_covered())?;
         }
         Ok(())
     }
 
-    /// A directory is entered through a handle opened without following a symlink. One swapped for something else after `meta` was read is looked at as what is there now, and dropped when that is ignored. One that keeps changing between a directory and something else is unstable, so the caller keeps what it knew below it.
+    /// A directory is entered through a handle opened without following a symlink. One swapped for something else after `meta` was read is looked at as what is there now, and dropped when that is ignored and not tracked. One that keeps changing between a directory and something else is unstable, so the caller keeps what it knew below it. `covered` tells that an ignore rule covers the path, which then counts only as far as it is tracked.
     fn entry(
         &mut self,
         parent: &DirHandle,
         name: &[u8],
         path: &RepoPath,
         meta: &Metadata,
+        covered: bool,
     ) -> Result<(), WorkspaceError> {
         if !meta.is_dir() {
             return Ok(self.file(parent, name, path, meta)?);
         }
         match enter_dir(parent, name)? {
-            Entered::Dir(child) => self.dir(&child, Some(path)),
+            Entered::Dir(child) => self.dir(&child, Some(path), covered),
             Entered::Replaced(now) => {
-                if !self.opts.rules.is_ignored_below(path, false) {
+                let ignored = covered || self.opts.rules.is_ignored_below(path, false);
+                if Cover::of(ignored, self.opts.recorded, path, false) != Cover::Ignored {
                     self.file(parent, name, path, &now)?;
                 }
                 Ok(())
@@ -332,11 +364,16 @@ impl<'a, 'o> Walk<'a, 'o> {
             }
             Err(error) => return Err(error.into()),
         };
-        if self.opts.rules.is_ignored(path, meta.is_dir()) {
-            self.drop_below(path);
-        } else {
-            self.entry(&parent, name, path, &meta)?;
-            self.prune(Some(path));
+        match self
+            .opts
+            .rules
+            .cover(self.opts.recorded, path, meta.is_dir())
+        {
+            Cover::Ignored => self.drop_below(path),
+            cover => {
+                self.entry(&parent, name, path, &meta, cover.is_covered())?;
+                self.prune(Some(path));
+            }
         }
         Ok(())
     }
@@ -723,7 +760,7 @@ mod tests {
         let mut index = StatIndex::empty(HOST);
         let mut walk = Walk::new(&mut index, &opts);
         let path = RepoPath::parse(b"gone").unwrap();
-        walk.dir(&handle, Some(&path)).unwrap();
+        walk.dir(&handle, Some(&path), false).unwrap();
         assert!(walk.out.entries.is_empty());
     }
 

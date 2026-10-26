@@ -184,8 +184,8 @@ fn a_backend_that_watches_subtrees_gets_only_the_roots() {
     fs::create_dir(root.join("gone")).unwrap();
     let fake = Fake::subtrees();
     let (hub, rx) = with_backend(fake.clone(), config(50, 1_000));
-    hub.add_workspace(ws(1), &root, rules(&root));
-    hub.add_workspace(ws(2), &other, rules(&other));
+    hub.add_workspace(ws(1), &root, rules(&root), Arc::default());
+    hub.add_workspace(ws(2), &other, rules(&other), Arc::default());
     assert_eq!(fake.watched_paths(), vec![root.clone(), other.clone()]);
     assert_eq!(
         hub.watched_dirs(ws(1)),
@@ -229,7 +229,7 @@ fn a_backend_that_watches_subtrees_gets_only_the_roots() {
 fn one_write_produces_one_changed() {
     let dir = tempfile::tempdir().unwrap();
     let (hub, rx) = native(config(100, 2_000));
-    hub.add_workspace(ws(1), dir.path(), rules(dir.path()));
+    hub.add_workspace(ws(1), dir.path(), rules(dir.path()), Arc::default());
     fs::write(dir.path().join("a.txt"), b"one").unwrap();
     assert_eq!(
         next(&rx),
@@ -246,7 +246,7 @@ fn one_write_produces_one_changed() {
 fn a_burst_inside_the_debounce_window_is_one_batch() {
     let dir = tempfile::tempdir().unwrap();
     let (hub, rx) = native(config(500, 30_000));
-    hub.add_workspace(ws(1), dir.path(), rules(dir.path()));
+    hub.add_workspace(ws(1), dir.path(), rules(dir.path()), Arc::default());
     let names: Vec<String> = (0..100).map(|n| format!("f{n:03}.txt")).collect();
     for name in &names {
         fs::write(dir.path().join(name), b"x").unwrap();
@@ -264,7 +264,7 @@ fn a_burst_inside_the_debounce_window_is_one_batch() {
 fn continuous_writes_still_flush_after_max_wait() {
     let dir = tempfile::tempdir().unwrap();
     let (hub, rx) = native(config(200, 500));
-    hub.add_workspace(ws(1), dir.path(), rules(dir.path()));
+    hub.add_workspace(ws(1), dir.path(), rules(dir.path()), Arc::default());
     let stop = Arc::new(AtomicBool::new(false));
     let writer = {
         let stop = Arc::clone(&stop);
@@ -299,8 +299,8 @@ fn workspaces_get_only_their_own_paths() {
     let one = workspace_dir(&parent, "one");
     let two = workspace_dir(&parent, "two");
     let (hub, rx) = native(config(100, 2_000));
-    hub.add_workspace(ws(1), &one, rules(&one));
-    hub.add_workspace(ws(2), &two, rules(&two));
+    hub.add_workspace(ws(1), &one, rules(&one), Arc::default());
+    hub.add_workspace(ws(2), &two, rules(&two), Arc::default());
     fs::write(one.join("a"), b"a").unwrap();
     fs::write(two.join("b"), b"b").unwrap();
     let mut batches = BTreeMap::new();
@@ -326,7 +326,7 @@ fn ignored_directories_cost_no_watch_and_no_event() {
     fs::create_dir(root.join("src")).unwrap();
     fs::create_dir(root.join(".git")).unwrap();
     let (hub, rx) = native(config(100, 2_000));
-    hub.add_workspace(ws(1), root, rules(root));
+    hub.add_workspace(ws(1), root, rules(root), Arc::default());
     assert_eq!(
         hub.watched_dirs(ws(1)),
         vec![root.to_path_buf(), root.join("src")]
@@ -351,7 +351,7 @@ fn folds_own_staging_and_git_metadata_send_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let (hub, rx) = native(config(100, 2_000));
-    hub.add_workspace(ws(1), root, rules(root));
+    hub.add_workspace(ws(1), root, rules(root), Arc::default());
     fs::create_dir_all(root.join(".fold/tmp")).unwrap();
     for n in 0..5 {
         let staged = root.join(format!(".fold/tmp/stage-{n}"));
@@ -381,7 +381,7 @@ fn a_rescan_brings_the_watches_in_line_with_the_tree() {
     fs::create_dir(root.join("old")).unwrap();
     let fake = Fake::default();
     let (hub, rx) = with_backend(fake.clone(), config(50, 1_000));
-    hub.add_workspace(ws(1), root, rules(root));
+    hub.add_workspace(ws(1), root, rules(root), Arc::default());
     assert_eq!(
         hub.watched_dirs(ws(1)),
         vec![root.to_path_buf(), root.join("old")]
@@ -415,7 +415,7 @@ fn a_changed_ignore_file_moves_the_watches() {
     let root = dir.path();
     fs::create_dir_all(root.join("gen/inner")).unwrap();
     let (hub, rx) = native(config(100, 2_000));
-    hub.add_workspace(ws(1), root, rules(root));
+    hub.add_workspace(ws(1), root, rules(root), Arc::default());
     assert_eq!(hub.watched_dirs(ws(1)).len(), 3);
     fs::write(root.join(".foldignore"), b"gen/\n").unwrap();
     changed_until(&rx, ws(1), &[".foldignore"]);
@@ -433,7 +433,7 @@ fn a_new_directory_is_scanned_and_a_removed_one_loses_its_watches() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let (hub, rx) = native(config(100, 2_000));
-    hub.add_workspace(ws(1), root, rules(root));
+    hub.add_workspace(ws(1), root, rules(root), Arc::default());
     fs::create_dir_all(root.join("new/deep")).unwrap();
     fs::write(root.join("new/a"), b"a").unwrap();
     fs::write(root.join("new/deep/b"), b"b").unwrap();
@@ -454,7 +454,7 @@ fn a_renamed_directory_is_watched_under_its_new_name() {
     let root = dir.path();
     fs::create_dir_all(root.join("a/sub")).unwrap();
     let (hub, rx) = native(config(100, 2_000));
-    hub.add_workspace(ws(1), root, rules(root));
+    hub.add_workspace(ws(1), root, rules(root), Arc::default());
     fs::rename(root.join("a"), root.join("b")).unwrap();
     fs::create_dir(root.join("a")).unwrap();
     changed_until(&rx, ws(1), &["a", "b", "b/sub"]);
@@ -488,7 +488,7 @@ fn the_watch_limit_degrades_to_timer_scans_once() {
             ..config(50, 1_000)
         },
     );
-    hub.add_workspace(ws(1), root, rules(root));
+    hub.add_workspace(ws(1), root, rules(root), Arc::default());
     assert_eq!(fake.watched(), 3);
     fs::create_dir(root.join("d3")).unwrap();
     fs::create_dir(root.join("d4")).unwrap();
@@ -540,8 +540,8 @@ fn an_unsupported_backend_puts_every_workspace_on_timer_scans() {
         },
     );
     let added = Instant::now();
-    hub.add_workspace(ws(1), &one, rules(&one));
-    hub.add_workspace(ws(2), &two, rules(&two));
+    hub.add_workspace(ws(1), &one, rules(&one), Arc::default());
+    hub.add_workspace(ws(2), &two, rules(&two), Arc::default());
     let mut degraded = BTreeSet::new();
     let mut ticks: BTreeMap<WorkspaceId, usize> = BTreeMap::new();
     while ticks.values().filter(|&&count| count >= 2).count() < 2 {
@@ -582,7 +582,7 @@ fn reported_paths_are_filtered_and_slash_joined() {
     let root = dir.path();
     let outside = tempfile::tempdir().unwrap();
     let (hub, rx) = with_backend(Fake::backslash(), config(50, 1_000));
-    hub.add_workspace(ws(1), root, rules(root));
+    hub.add_workspace(ws(1), root, rules(root), Arc::default());
     let notifier = hub.notifier();
     let file = |at: PathBuf| Event::new(EventKind::Create(CreateKind::File)).add_path(at);
     notifier.send(Ok(file(outside.path().join("x"))));
@@ -607,7 +607,7 @@ fn a_backslash_is_a_name_byte_where_the_platform_says_so() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let (hub, rx) = native(config(100, 2_000));
-    hub.add_workspace(ws(1), root, rules(root));
+    hub.add_workspace(ws(1), root, rules(root), Arc::default());
     fs::write(root.join("a\\b"), b"x").unwrap();
     assert_eq!(
         next(&rx),
@@ -624,8 +624,8 @@ fn overflow_requests_a_rescan_of_the_affected_workspaces() {
     let one = workspace_dir(&parent, "one");
     let two = workspace_dir(&parent, "two");
     let (hub, rx) = with_backend(Fake::default(), config(100, 1_000));
-    hub.add_workspace(ws(1), &one, rules(&one));
-    hub.add_workspace(ws(2), &two, rules(&two));
+    hub.add_workspace(ws(1), &one, rules(&one), Arc::default());
+    hub.add_workspace(ws(2), &two, rules(&two), Arc::default());
     let notifier = hub.notifier();
     let overflow = || Event::new(EventKind::Other).set_flag(Flag::Rescan);
 
@@ -670,14 +670,14 @@ fn a_removed_root_is_reported_once() {
     fs::create_dir_all(root.join("src/deep")).unwrap();
     fs::write(root.join("src/deep/file"), b"f").unwrap();
     let (hub, rx) = native(config(100, 2_000));
-    hub.add_workspace(ws(1), &root, rules(&root));
+    hub.add_workspace(ws(1), &root, rules(&root), Arc::default());
     fs::remove_dir_all(&root).unwrap();
     assert_eq!(next(&rx), WatchEvent::RootMissing { workspace: ws(1) });
     quiet(&rx, Duration::from_millis(400));
     assert!(hub.watched_dirs(ws(1)).is_empty());
 
     let gone = parent.path().join("never");
-    hub.add_workspace(ws(2), &gone, rules(&gone));
+    hub.add_workspace(ws(2), &gone, rules(&gone), Arc::default());
     assert_eq!(next(&rx), WatchEvent::RootMissing { workspace: ws(2) });
 }
 
@@ -687,8 +687,8 @@ fn a_removed_workspace_sends_nothing_more() {
     let one = workspace_dir(&parent, "one");
     let two = workspace_dir(&parent, "two");
     let (hub, rx) = native(config(100, 2_000));
-    hub.add_workspace(ws(1), &one, rules(&one));
-    hub.add_workspace(ws(2), &two, rules(&two));
+    hub.add_workspace(ws(1), &one, rules(&one), Arc::default());
+    hub.add_workspace(ws(2), &two, rules(&two), Arc::default());
     fs::write(one.join("early"), b"e").unwrap();
     hub.remove_workspace(ws(1));
     assert!(hub.watched_dirs(ws(1)).is_empty());
@@ -710,8 +710,8 @@ fn adding_an_id_again_replaces_the_workspace() {
     let one = workspace_dir(&parent, "one");
     let two = workspace_dir(&parent, "two");
     let (hub, rx) = native(config(100, 2_000));
-    hub.add_workspace(ws(1), &one, rules(&one));
-    hub.add_workspace(ws(1), &two, rules(&two));
+    hub.add_workspace(ws(1), &one, rules(&one), Arc::default());
+    hub.add_workspace(ws(1), &two, rules(&two), Arc::default());
     assert_eq!(hub.watched_dirs(ws(1)), vec![two.clone()]);
     fs::write(one.join("old"), b"o").unwrap();
     fs::write(two.join("new"), b"n").unwrap();
@@ -728,7 +728,7 @@ fn adding_an_id_again_replaces_the_workspace() {
 fn shutdown_joins_the_thread_and_drops_the_sink() {
     let dir = tempfile::tempdir().unwrap();
     let (hub, rx) = native(config(100, 2_000));
-    hub.add_workspace(ws(1), dir.path(), rules(dir.path()));
+    hub.add_workspace(ws(1), dir.path(), rules(dir.path()), Arc::default());
     let notifier = hub.notifier();
     hub.shutdown();
     assert_eq!(rx.recv_timeout(WAIT), Err(RecvTimeoutError::Disconnected));
@@ -737,4 +737,103 @@ fn shutdown_joins_the_thread_and_drops_the_sink() {
     let (dropped, rx) = native(config(100, 2_000));
     drop(dropped);
     assert_eq!(rx.recv_timeout(WAIT), Err(RecvTimeoutError::Disconnected));
+}
+
+#[test]
+fn a_tracked_file_below_an_ignored_directory_is_watched_and_the_rest_is_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join(".gitignore"), b"build/\n").unwrap();
+    fs::create_dir_all(root.join("build/keep")).unwrap();
+    fs::create_dir_all(root.join("build/cache")).unwrap();
+    fs::write(root.join("build/keep/version.txt"), b"1").unwrap();
+    let tracked: fold_core::tree::FlatTree = [(
+        b"build/keep/version.txt".to_vec(),
+        fold_core::tree::FlatEntry {
+            kind: fold_core::tree::EntryKind::File,
+            hash: fold_core::object::hash_object(fold_core::object::ObjectKind::Blob, b"1"),
+        },
+    )]
+    .into();
+    let (hub, rx) = native(config(100, 2_000));
+    hub.add_workspace(
+        ws(1),
+        root,
+        rules(root),
+        Arc::new(fold_vcs::ignore::TrackedSet::new(tracked)),
+    );
+    assert_eq!(
+        hub.watched_dirs(ws(1)),
+        vec![
+            root.to_path_buf(),
+            root.join("build"),
+            root.join("build/keep")
+        ]
+    );
+    settle(&rx, ws(1), root);
+    fs::write(root.join("build/cache/out.o"), b"o").unwrap();
+    fs::write(root.join("build/keep/other.o"), b"o").unwrap();
+    fs::write(root.join("build/keep/version.txt"), b"2").unwrap();
+    assert_eq!(
+        next(&rx),
+        WatchEvent::Changed {
+            workspace: ws(1),
+            paths: paths(&["build/keep/version.txt"]),
+        }
+    );
+    quiet(&rx, Duration::from_millis(300));
+}
+
+#[test]
+fn a_moved_tracked_set_picks_the_watches_below_an_ignored_directory_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join(".gitignore"), b"build/\n").unwrap();
+    fs::create_dir_all(root.join("build/keep")).unwrap();
+    fs::create_dir_all(root.join("build/cache")).unwrap();
+    fs::write(root.join("build/keep/version.txt"), b"1").unwrap();
+    let tracked = Arc::new(fold_vcs::ignore::TrackedSet::default());
+    let (hub, rx) = native(config(100, 2_000));
+    hub.add_workspace(ws(1), root, rules(root), Arc::clone(&tracked));
+    assert_eq!(hub.watched_dirs(ws(1)), vec![root.to_path_buf()]);
+
+    // A sync brings a tracked file below the ignored directory: its directories get watches, and its edit is seen at once.
+    let before = tracked.get();
+    tracked.set(
+        [(
+            b"build/keep/version.txt".to_vec(),
+            fold_core::tree::FlatEntry {
+                kind: fold_core::tree::EntryKind::File,
+                hash: fold_core::object::hash_object(fold_core::object::ObjectKind::Blob, b"1"),
+            },
+        )]
+        .into(),
+    );
+    hub.retrack(ws(1), before);
+    assert_eq!(
+        hub.watched_dirs(ws(1)),
+        vec![
+            root.to_path_buf(),
+            root.join("build"),
+            root.join("build/keep")
+        ]
+    );
+    settle(&rx, ws(1), root);
+    fs::write(root.join("build/cache/out.o"), b"o").unwrap();
+    fs::write(root.join("build/keep/version.txt"), b"2").unwrap();
+    assert_eq!(
+        next(&rx),
+        WatchEvent::Changed {
+            workspace: ws(1),
+            paths: paths(&["build/keep/version.txt"]),
+        }
+    );
+
+    // Once nothing below it is tracked, the ignored directory loses its watches again.
+    let before = tracked.get();
+    tracked.set(fold_core::tree::FlatTree::new());
+    hub.retrack(ws(1), before);
+    assert_eq!(hub.watched_dirs(ws(1)), vec![root.to_path_buf()]);
+    // An id the hub does not hold is left alone, and the call still returns.
+    hub.retrack(ws(2), tracked.get());
 }

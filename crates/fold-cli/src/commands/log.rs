@@ -8,7 +8,7 @@ use hyper::Method;
 use serde_json::Value;
 
 use super::remote::{RemoteError, refusal, request_project};
-use crate::output;
+use crate::output::{self, Item};
 
 /// The most revisions the daemon lists in one answer.
 const MAX_COUNT: u64 = 1000;
@@ -18,7 +18,7 @@ pub struct LogArgs {
     /// List the newest N revisions of main; at most 1000
     #[arg(short = 'n', long = "count", value_name = "N", default_value_t = 20, value_parser = clap::value_parser!(u64).range(1..=1000))]
     count: u64,
-    /// One line per revision: its id, the head mark and its title
+    /// One line per revision: its id, its title and the head mark
     #[arg(long)]
     oneline: bool,
     /// Unix socket of the daemon; overrides daemon.toml (default $XDG_RUNTIME_DIR/fold/fold.sock)
@@ -37,14 +37,19 @@ pub fn run_log(args: &LogArgs, out: &mut impl Write) -> Result<(), RemoteError> 
         Method::GET,
         &format!("revisions?limit={}", args.count),
     )?;
-    for line in log_lines(&response, args.count, args.oneline)? {
+    for line in log_lines(&response, args.count, args.oneline, &output::local_time)? {
         output::line(out, &line)?;
     }
     Ok(())
 }
 
-/// The lines `fld log` prints for one page of revisions, newest first, or the error the answer carries. The page starts at main's head, because it is asked for without `before`.
-fn log_lines(response: &Response, count: u64, oneline: bool) -> Result<Vec<String>, RemoteError> {
+/// The lines `fld log` prints for one page of revisions, newest first, or the error the answer carries: one item per revision, its id and title on the head line and its details below, or with `oneline` the head line alone. The page starts at main's head, because it is asked for without `before`. `time` writes a revision's time.
+fn log_lines(
+    response: &Response,
+    count: u64,
+    oneline: bool,
+    time: &dyn Fn(Timestamp) -> String,
+) -> Result<Vec<String>, RemoteError> {
     refusal(response)?;
     let revisions = response.body["revisions"]
         .as_array()
@@ -52,85 +57,107 @@ fn log_lines(response: &Response, count: u64, oneline: bool) -> Result<Vec<Strin
     if revisions.is_empty() {
         return Ok(vec!["main has no revisions yet".to_owned()]);
     }
+    let mut items = Vec::new();
     let mut lines = Vec::new();
     for (index, revision) in revisions.iter().enumerate() {
-        let described = describe(revision)?;
-        let head = if index == 0 { " (head of main)" } else { "" };
-        lines.push(format!("{}{head} {}", described.id, described.title));
-        if !oneline {
-            lines.push(format!("  {}", described.meta));
+        let described = describe(revision, time)?;
+        let head = index == 0;
+        if oneline {
+            let mark = if head { " (head of main)" } else { "" };
+            lines.push(format!("{}  {}{mark}", described.id, described.title));
+            continue;
         }
+        let mut item = Item::new(format!("{}  {}", described.id, described.title));
+        if head {
+            item.detail("head of main");
+        }
+        item.detail(&described.what).detail(&described.when);
+        items.push(item);
     }
-    if !response.body["before"].is_null() {
-        lines.push(if count < MAX_COUNT {
+    let footer = (!response.body["before"].is_null()).then(|| {
+        if count < MAX_COUNT {
             format!(
                 "older revisions are not listed; fld log -n {} lists more",
                 (count * 2).min(MAX_COUNT)
             )
         } else {
             format!("older revisions are not listed; fld log lists at most {MAX_COUNT}")
-        });
+        }
+    });
+    if oneline {
+        lines.extend(footer);
+        return Ok(lines);
     }
-    Ok(lines)
+    items.extend(footer.map(Item::new));
+    Ok(output::items(items))
 }
 
-/// What one revision shows: its id, its title and its meta line of task, author, time and Git commit.
+/// What one revision shows: its id, its title, what it is and who made it, and when with its Git commit.
 #[derive(Debug, PartialEq, Eq)]
 struct Described {
     id: String,
     title: String,
-    meta: String,
+    what: String,
+    when: String,
 }
 
-/// The title and the meta line by origin, in the words of the web app: a proposal names itself and its task, a pull the remote commit, a direct change its commit subject and the user's approval, a record the human's change of the project folder, and the genesis the start of the history. Agent and remote text is escaped.
-fn describe(revision: &Value) -> Result<Described, RemoteError> {
+/// The title and the details by origin, in the words of the web app: a proposal names itself, its task and its author; a pull, a direct change, a record and the genesis say what they are. Agent and remote text is escaped.
+fn describe(
+    revision: &Value,
+    time: &dyn Fn(Timestamp) -> String,
+) -> Result<Described, RemoteError> {
     let text = |key: &str| revision[key].as_str().map(output::escape_control);
     let id = text("id").ok_or(RemoteError::Answer)?;
     let created_at = revision["created_at"]
         .as_i64()
         .and_then(|millis| Timestamp::from_millis(millis).ok())
         .ok_or(RemoteError::Answer)?;
-    let who = text("author").map_or_else(|| "unknown".to_owned(), |author| output::person(&author));
-    let at = created_at.to_string();
-    let (title, meta) = match revision["origin"].as_str().ok_or(RemoteError::Answer)? {
+    let by = text("author").map(|author| format!(" by {}", output::person(&author)));
+    let by = by.as_deref().unwrap_or_default();
+    let short = |commit: &str| commit.get(..7).unwrap_or(commit).to_owned();
+    let (title, what) = match revision["origin"].as_str().ok_or(RemoteError::Answer)? {
         "proposal" => {
-            let name = text("proposal").unwrap_or_else(|| id.clone());
-            let title = match text("title") {
-                Some(title) => format!("{name} · {title}"),
-                None => name,
+            let name = text("proposal").unwrap_or_else(|| "a proposal".to_owned());
+            let what = match text("task") {
+                Some(task) => format!("{name} for {task}{by}"),
+                None => format!("{name}{by}"),
             };
-            let meta = match text("task") {
-                Some(task) => format!("{task} · {who} · {at}"),
-                None => format!("{who} · {at}"),
-            };
-            (title, meta)
+            let title = text("title")
+                .or_else(|| text("proposal"))
+                .unwrap_or_else(|| id.clone());
+            (title, what)
         }
         "pull" => (
-            format!("pull · {}", text("pull").unwrap_or_default()),
-            format!("{who} · {at}"),
+            match text("pull") {
+                Some(commit) => format!("Pull of the remote commit {}", short(&commit)),
+                None => "Pull from a Git remote".to_owned(),
+            },
+            format!("pulled from a Git remote{by}"),
         ),
         "direct" => (
-            format!("direct · {}", text("title").unwrap_or_else(|| id.clone())),
-            format!("{who} · approved by the user · {at}"),
+            text("title").unwrap_or_else(|| id.clone()),
+            format!("a direct change on main{by}, approved by the user"),
         ),
         "record" => (
-            format!(
-                "record · {}",
-                text("title").unwrap_or_else(|| "changes of the project folder".to_owned())
-            ),
-            format!("{who} · {at}"),
+            text("title").unwrap_or_else(|| "Changes of the project folder".to_owned()),
+            format!("recorded from the project folder{by}"),
         ),
         "initial" => (
             text("title").unwrap_or_else(|| "Genesis revision".to_owned()),
-            format!("{who} · {at}"),
+            format!("the start of main's history{by}"),
         ),
         _ => return Err(RemoteError::Answer),
     };
-    let meta = match text("commit") {
-        Some(commit) => format!("{meta} · {}", commit.get(..7).unwrap_or(&commit)),
-        None => meta,
+    let when = match text("commit") {
+        Some(commit) => format!("{} · Git {}", time(created_at), short(&commit)),
+        None => time(created_at),
     };
-    Ok(Described { id, title, meta })
+    Ok(Described {
+        id,
+        title,
+        what,
+        when,
+    })
 }
 
 #[cfg(test)]
@@ -141,7 +168,11 @@ mod tests {
     use super::*;
 
     const AT: i64 = 1_792_576_800_000;
-    const TIME: &str = "2026-10-21T10:00:00.000Z";
+    const TIME: &str = "21 Oct 2026, 10:00";
+
+    fn utc(at: Timestamp) -> String {
+        output::readable_time(at, &chrono::Utc)
+    }
 
     fn revision(id: &str, origin: &str, fields: Value) -> Value {
         let mut revision = json!({
@@ -161,22 +192,21 @@ mod tests {
         }
     }
 
-    fn described(revision: &Value) -> (String, String) {
-        let described = describe(revision).unwrap();
-        (described.title, described.meta)
+    fn lines(response: &Response, count: u64, oneline: bool) -> Vec<String> {
+        log_lines(response, count, oneline, &utc).unwrap()
     }
 
-    fn pair(title: &str, meta: &str) -> (String, String) {
-        (title.to_owned(), meta.to_owned())
+    fn described(revision: &Value) -> (String, String, String) {
+        let described = describe(revision, &utc).unwrap();
+        (described.title, described.what, described.when)
+    }
+
+    fn three(title: &str, what: &str, when: &str) -> (String, String, String) {
+        (title.to_owned(), what.to_owned(), when.to_owned())
     }
 
     #[test]
-    fn the_time_is_utc() {
-        assert_eq!(Timestamp::from_millis(AT).unwrap().to_string(), TIME);
-    }
-
-    #[test]
-    fn each_origin_reads_as_the_repository_screen_says_it() {
+    fn each_origin_says_what_it_is() {
         let proposal = revision(
             "r17",
             "proposal",
@@ -184,24 +214,42 @@ mod tests {
         );
         assert_eq!(
             described(&proposal),
-            pair(
-                "P-3 · Add the login form",
-                &format!("T-12 · @frontend · {TIME} · 1a2b3c4")
+            three(
+                "Add the login form",
+                "P-3 for T-12 by @frontend",
+                &format!("{TIME} · Git 1a2b3c4")
             )
         );
-        let bare = revision("r9", "proposal", json!({}));
-        assert_eq!(described(&bare), pair("r9", &format!("unknown · {TIME}")));
+        assert_eq!(
+            described(&revision("r9", "proposal", json!({}))),
+            three("r9", "a proposal", TIME)
+        );
+        assert_eq!(
+            described(&revision(
+                "r8",
+                "proposal",
+                json!({"proposal": "P-2", "author": "backend"})
+            )),
+            three("P-2", "P-2 by @backend", TIME)
+        );
 
         let pull = revision(
             "r16",
             "pull",
-            json!({"pull": "9f8e7d6c", "author": "human:ana"}),
+            json!({"pull": "9f8e7d6c5b4a", "author": "human:ana"}),
         );
         assert_eq!(
             described(&pull),
-            pair("pull · 9f8e7d6c", &format!("@ana · {TIME}"))
+            three(
+                "Pull of the remote commit 9f8e7d6",
+                "pulled from a Git remote by @ana",
+                TIME
+            )
         );
-        assert_eq!(described(&revision("r15", "pull", json!({}))).0, "pull · ");
+        assert_eq!(
+            described(&revision("r15", "pull", json!({}))).0,
+            "Pull from a Git remote"
+        );
 
         let direct = revision(
             "r14",
@@ -210,32 +258,31 @@ mod tests {
         );
         assert_eq!(
             described(&direct),
-            pair(
-                "direct · Fix the build",
-                &format!("@main · approved by the user · {TIME}")
+            three(
+                "Fix the build",
+                "a direct change on main by @main, approved by the user",
+                TIME
             )
         );
-        assert_eq!(
-            described(&revision("r13", "direct", json!({}))).0,
-            "direct · r13"
-        );
+        assert_eq!(described(&revision("r13", "direct", json!({}))).0, "r13");
 
         let record = revision("r12", "record", json!({"author": "human:ana"}));
         assert_eq!(
             described(&record),
-            pair(
-                "record · changes of the project folder",
-                &format!("@ana · {TIME}")
+            three(
+                "Changes of the project folder",
+                "recorded from the project folder by @ana",
+                TIME
             )
         );
         assert_eq!(
             described(&revision("r11", "record", json!({"title": "Tidy"}))).0,
-            "record · Tidy"
+            "Tidy"
         );
 
         assert_eq!(
-            described(&revision("r1", "initial", json!({}))),
-            pair("Genesis revision", &format!("unknown · {TIME}"))
+            described(&revision("r0", "initial", json!({}))),
+            three("Genesis revision", "the start of main's history", TIME)
         );
         assert_eq!(
             described(&revision(
@@ -255,56 +302,73 @@ mod tests {
             "proposal",
             json!({"proposal": "P-1", "title": "Fix\u{1b}[2J\nr4 forged", "author": "frontend"}),
         );
-        assert_eq!(described(&sneaky).0, "P-1 · Fix\\u{1b}[2J\\nr4 forged");
+        assert_eq!(described(&sneaky).0, "Fix\\u{1b}[2J\\nr4 forged");
+        let all = lines(&page(vec![sneaky], None), 20, false);
+        assert!(all.iter().all(|line| !line.contains('\u{1b}')));
     }
 
     #[test]
-    fn the_head_is_marked_and_each_revision_has_its_meta_line() {
+    fn each_revision_is_an_item_with_the_head_marked_and_a_blank_line_between() {
         let answer = page(
             vec![
                 revision(
-                    "r2",
-                    "record",
-                    json!({"author": "human:ana", "commit": "abcdef0123"}),
+                    "r99",
+                    "proposal",
+                    json!({"proposal": "P-95", "title": "Add PIN sign-in", "task": "T-18", "author": "backend-worker-23", "commit": "a1b2c3d4e5"}),
                 ),
-                revision("r1", "initial", json!({})),
+                revision("r98", "record", json!({"author": "human:ana"})),
             ],
             None,
         );
         assert_eq!(
-            log_lines(&answer, 20, false).unwrap(),
+            lines(&answer, 20, false),
             [
-                "r2 (head of main) record · changes of the project folder",
-                &format!("  @ana · {TIME} · abcdef0"),
-                "r1 Genesis revision",
-                &format!("  unknown · {TIME}"),
+                "r99  Add PIN sign-in",
+                "  ↳ head of main",
+                "  ↳ P-95 for T-18 by @backend-worker-23",
+                &format!("  ↳ {TIME} · Git a1b2c3d"),
+                "",
+                "r98  Changes of the project folder",
+                "  ↳ recorded from the project folder by @ana",
+                &format!("  ↳ {TIME}"),
             ]
         );
         assert_eq!(
-            log_lines(&answer, 20, true).unwrap(),
+            lines(&answer, 20, true),
             [
-                "r2 (head of main) record · changes of the project folder",
-                "r1 Genesis revision",
+                "r99  Add PIN sign-in (head of main)",
+                "r98  Changes of the project folder",
             ]
         );
     }
 
     #[test]
-    fn a_page_that_stops_before_r1_says_older_revisions_are_not_listed() {
+    fn a_page_that_stops_before_the_genesis_names_how_to_list_more() {
         let answer = page(vec![revision("r9", "initial", json!({}))], Some("r9"));
         assert_eq!(
-            log_lines(&answer, 1, true).unwrap(),
+            lines(&answer, 1, false),
             [
-                "r9 (head of main) Genesis revision",
+                "r9  Genesis revision",
+                "  ↳ head of main",
+                "  ↳ the start of main's history",
+                &format!("  ↳ {TIME}"),
+                "",
                 "older revisions are not listed; fld log -n 2 lists more",
             ]
         );
         assert_eq!(
-            log_lines(&answer, 600, true).unwrap()[1],
+            lines(&answer, 1, true),
+            [
+                "r9  Genesis revision (head of main)",
+                "older revisions are not listed; fld log -n 2 lists more",
+            ]
+        );
+        assert_eq!(
+            lines(&answer, 600, true)[1],
             "older revisions are not listed; fld log -n 1000 lists more"
         );
         assert_eq!(
-            log_lines(&answer, 1000, true).unwrap()[1],
+            lines(&answer, 1000, true)[1],
             "older revisions are not listed; fld log lists at most 1000"
         );
     }
@@ -312,14 +376,15 @@ mod tests {
     #[test]
     fn an_empty_history_says_so_and_a_strange_or_refused_answer_is_an_error() {
         assert_eq!(
-            log_lines(&page(vec![], None), 20, false).unwrap(),
+            lines(&page(vec![], None), 20, false),
             ["main has no revisions yet"]
         );
         assert!(matches!(
             log_lines(
                 &page(vec![revision("r1", "merge", json!({}))], None),
                 20,
-                false
+                false,
+                &utc
             ),
             Err(RemoteError::Answer)
         ));
@@ -327,7 +392,8 @@ mod tests {
             log_lines(
                 &page(vec![json!({"id": "r1", "origin": "initial"})], None),
                 20,
-                false
+                false,
+                &utc
             ),
             Err(RemoteError::Answer)
         ));
@@ -336,7 +402,7 @@ mod tests {
             body: json!({"error": {"code": "project_not_found", "message": "no project"}}),
         };
         assert!(matches!(
-            log_lines(&refused, 20, false),
+            log_lines(&refused, 20, false, &utc),
             Err(RemoteError::Refused { code, .. }) if code == "project_not_found"
         ));
     }

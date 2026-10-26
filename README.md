@@ -119,6 +119,8 @@ fld record
 
 `fld record` makes your changes one revision of main. If they conflict with the agents' work, they wait in **Needs you**, and the main agent helps you resolve them. When Git is on, a commit that you make yourself is recorded at once.
 
+`.gitignore` and `.foldignore` keep files out of fold, as in Git: they apply only to files that main does not track yet. A file that main records stays tracked when a new ignore line matches it. To stop tracking it, add the line and run `fld untrack <path>`, like `git rm --cached`. One revision removes the file from main, and the file stays in your folder. Older revisions keep the file, so change any secret that main held.
+
 ## Work with Git
 
 `fld init --with-git` turns Git on for a project, and Git stays on after that:
@@ -150,12 +152,14 @@ Run these commands inside your project:
 | `fld resume` | Resume workers stopped by a project pause. |
 | `fld worker restart <name>` | Start a worker again in a new Claude Code session, for example when its session is broken. It keeps its name, claims and workers. |
 | `fld record` | Record your own changes in the project folder on main. |
+| `fld untrack <path>...` | Stop tracking files that main records and keep them in the project folder. A directory stands for every tracked file in it. Older revisions keep the files. |
 | `fld stash` | Put your unrecorded changes aside, so the project folder follows main. `fld stash list` shows the stash. |
 | `fld unstash` | Bring the newest stashed changes back into the project folder. If they conflict, fix the conflict markers, then run `fld record`. When an unstash stops part-way, the next `fld stash`, `fld unstash`, or `fld record` finishes it first. |
+| `fld status` | See your project folder against main, like `git status`: the files `fld record` would record, the ones main changed too, what keeps the folder from following main with the next step for each, how many tracked files an ignore line matches (listed when one of them changed), and the stash with the entry `fld unstash` takes next. It changes nothing; `--json` prints the daemon's answer. |
 | `fld setup` | Start the daemon at login. |
 | `fld restart` | Restart the daemon after an update, so the new version takes over. Workers continue in their sessions. |
-| `fld` | Show fold's status: the version, whether the daemon runs and where, the service, and the current project. |
-| `fld log` | List main's revisions, newest first: `fld log -n 50` shows more, and `fld log --oneline` shows one line each. |
+| `fld` | Show fold's own state: the version, whether the daemon runs and where, the service, and the current project. `fld status` shows the project folder instead. |
+| `fld log` | List main's revisions, newest first: each revision's id and title, then its proposal, task and author or what kind of revision it is, and its time in your local time zone with its Git commit. `fld log -n 50` shows more, and `fld log --oneline` shows one line each. |
 | `fld cost` | See what the project's agents cost and the tokens they used: the total of all time, today, and the last 7 days, by role, by area, and the top tasks. `--since`, `--by`, and `--task` narrow it, and `--json` prints the daemon's answer. |
 | `fld doctor` | Check the installation, daemon, and projects, with suggested fixes. It names the running daemon and its version, says why workers cannot sign in, and repeats every problem with its fix at the end. |
 | `fld transcript` | Find an agent's Claude Code transcript: `fld transcript <agent>` prints the path of the file of its current session, and `fld transcript <agent> --tail N` prints the file's last N lines. |
