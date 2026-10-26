@@ -52,7 +52,7 @@ pub struct RevisionSummary {
     pub origin: RevisionOrigin,
     pub task: Option<TaskId>,
     pub proposal: Option<ProposalId>,
-    /// The title of the integrated proposal, or the first line of a direct change's commit message.
+    /// The title of the integrated proposal, the first line of a direct change's commit message, or the title of a change of the project folder that has one, such as the one `fld untrack` gives; null for the changes `fld record` reads.
     pub title: Option<String>,
     /// The agent whose proposal was integrated, the human who pulled, or the main agent that made a direct change.
     pub author: Option<String>,
@@ -97,7 +97,7 @@ impl From<RevisionRow> for RevisionSummary {
             proposal: proposal.as_ref().map(|proposal| proposal.number),
             title: match proposal {
                 Some(proposal) => Some(proposal.title),
-                // The subject line of the commit message the main agent wrote.
+                // The subject line of the commit message the main agent wrote, or the title of a change of the project folder.
                 None => integration
                     .as_ref()
                     .and_then(|info| info.message.as_deref())

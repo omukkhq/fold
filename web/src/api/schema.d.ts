@@ -4296,7 +4296,7 @@ export interface components {
             pull: string | null;
             /** @example T-12 */
             task: string | null;
-            /** @description The title of the integrated proposal, or the first line of a direct change's commit message. */
+            /** @description The title of the integrated proposal, the first line of a direct change's commit message, or the title of a change of the project folder that has one, such as the one `fld untrack` gives; null for the changes `fld record` reads. */
             title: string | null;
             /** @description The hash of the revision's root tree. */
             tree: string;

@@ -825,6 +825,7 @@ impl FirstChange {
             number: integration,
             subject: IntegrationSubject::Record {
                 remote_commit: None,
+                message: None,
             },
             actor: label.as_str(),
             created_at: now,

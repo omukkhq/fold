@@ -333,6 +333,10 @@ async fn fld_untrack_with_git_sync_deletes_the_file_from_the_branch_and_the_inde
 
     let outcome = untrack_as_ana(&h, &["secret.env"]).await.unwrap();
     let commit = outcome.commit.unwrap();
+    assert_eq!(
+        git(&dir, &["log", "-1", "--format=%s", commit.as_str()]).trim(),
+        "Stop tracking secret.env"
+    );
     let listed = git(&dir, &["ls-tree", "-r", "--name-only", commit.as_str()]);
     assert!(!listed.lines().any(|path| path == "secret.env"), "{listed}");
     assert_eq!(git(&dir, &["ls-files", "secret.env"]), "");

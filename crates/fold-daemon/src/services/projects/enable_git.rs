@@ -258,6 +258,7 @@ async fn record_gitignore(
         base_tree: base,
         tree,
         commit: None,
+        title: None,
     };
     match integrate_change(handle, actor, &change, OnConflict::Wait).await? {
         RecordOutcome::Recorded { revision, .. } => Ok(Some(revision)),

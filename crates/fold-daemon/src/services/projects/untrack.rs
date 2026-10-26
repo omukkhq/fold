@@ -161,6 +161,7 @@ async fn run(
         base_tree: record_tree,
         tree,
         commit: None,
+        title: Some(title(&files)),
     };
     let RecordOutcome::Recorded {
         revision, touched, ..
@@ -191,6 +192,21 @@ async fn run(
     })
 }
 
+/// The longest title that names the files; a longer list is counted.
+const TITLE_CHARS: usize = 72;
+
+/// The revision's title, which the Git commit, `fld log` and the web app show: the files when they fit on one short line, else their count.
+fn title(files: &[String]) -> String {
+    let named = format!("Stop tracking {}", files.join(", "));
+    if named.chars().count() <= TITLE_CHARS && !named.chars().any(char::is_control) {
+        named
+    } else if files.len() == 1 {
+        "Stop tracking 1 file".to_owned()
+    } else {
+        format!("Stop tracking {} files", files.len())
+    }
+}
+
 fn main_changed(paths: &[String]) -> FoldError {
     FoldError::new(
         codes::INVALID_REQUEST,
@@ -210,4 +226,26 @@ fn not_tracked(paths: &[String]) -> FoldError {
     )
     .with_hint("name a file or directory that main records; `fld status` lists the tracked files that ignore rules match")
     .with_details([("paths", json!(paths))])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_title_names_the_files_while_they_fit_and_counts_them_after() {
+        let named = |files: &[&str]| {
+            title(
+                &files
+                    .iter()
+                    .map(|file| (*file).to_owned())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(named(&["a.txt", ".env"]), "Stop tracking a.txt, .env");
+        let long: Vec<String> = (0..12).map(|n| format!("generated/file-{n}.rs")).collect();
+        assert_eq!(title(&long), "Stop tracking 12 files");
+        assert_eq!(named(&[&"x".repeat(80)]), "Stop tracking 1 file");
+        assert_eq!(named(&["a\nb"]), "Stop tracking 1 file");
+    }
 }

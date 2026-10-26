@@ -176,6 +176,7 @@ async fn record_folder(
         base_tree: record_tree,
         tree: human_tree,
         commit: None,
+        title: None,
     };
     let recorded = with_skipped(
         integrate_change(handle, actor, &change, OnConflict::Wait).await?,
@@ -441,6 +442,7 @@ pub(crate) async fn record_branch_commits(
         base_tree,
         tree,
         commit: Some(tip.clone()),
+        title: None,
     };
     let outcome = integrate_change(handle, &actor, &change, OnConflict::Wait).await?;
     if let RecordOutcome::Recorded { revision, .. } = &outcome
@@ -490,6 +492,8 @@ pub(crate) struct HumanFolderChange<'a> {
     pub(crate) base_tree: ObjectHash,
     pub(crate) tree: ObjectHash,
     pub(crate) commit: Option<CommitId>,
+    /// The title of the revision; `None` for the changes `fld record` reads, which Git and the log name by their kind.
+    pub(crate) title: Option<String>,
 }
 
 /// What a merge of a human change that conflicts with main does.
@@ -611,6 +615,7 @@ pub(crate) async fn integrate_change(
         drop(serial);
         let request = RecordIntegration {
             commit: change.commit.as_ref().map(ToString::to_string),
+            title: change.title.clone(),
             base_tree,
             tree: human_tree,
             human: HumanRecord {
