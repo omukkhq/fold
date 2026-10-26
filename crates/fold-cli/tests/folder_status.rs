@@ -377,12 +377,28 @@ fn fld_untrack_stops_tracking_a_file_the_rules_match_and_leaves_it_on_disk() {
     let _daemon = sandbox.serve();
     // `fld init` wrote a .foldignore already; this one replaces it.
     write(&project, ".foldignore", "*.env\n");
+    // Unchanged, the file is only counted; once it changes, it is listed.
+    let lines = status_with(
+        &sandbox,
+        &project,
+        "  ↳ 1 tracked file matches ignore rules; `fld status --json` lists them",
+    );
+    assert!(!lines.contains(&"  ↳ secret.env".to_owned()), "{lines:#?}");
+    write(&project, "secret.env", "TOKEN=2\n");
     let lines = status_with(
         &sandbox,
         &project,
         "Tracked although ignored: 1 file, which `fld record` records because main tracks them",
     );
+    assert!(
+        lines.contains(&"  ↳ modified: secret.env".to_owned()),
+        "{lines:#?}"
+    );
     assert!(lines.contains(&"  ↳ secret.env".to_owned()), "{lines:#?}");
+    assert!(
+        !lines.iter().any(|line| line.contains("match ignore rules")),
+        "{lines:#?}"
+    );
 
     let file = project.join("secret.env");
     let untracked = sandbox.run(&project, &["untrack", file.to_str().unwrap()]);
@@ -393,7 +409,7 @@ fn fld_untrack_stops_tracking_a_file_the_rules_match_and_leaves_it_on_disk() {
     );
     assert_eq!(lines[1], "  ↳ secret.env");
     assert_eq!(lines.len(), 3, "{lines:#?}");
-    assert_eq!(fs::read_to_string(&file).unwrap(), "TOKEN=1\n");
+    assert_eq!(fs::read_to_string(&file).unwrap(), "TOKEN=2\n");
     assert_eq!(git(&project, &["ls-files", "secret.env"]), "");
     assert_eq!(
         sandbox.status(&project),

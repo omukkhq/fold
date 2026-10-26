@@ -155,7 +155,7 @@ Run these commands inside your project:
 | `fld untrack <path>...` | Stop tracking files that main records and keep them in the project folder. A directory stands for every tracked file in it. Older revisions keep the files. |
 | `fld stash` | Put your unrecorded changes aside, so the project folder follows main. `fld stash list` shows the stash. |
 | `fld unstash` | Bring the newest stashed changes back into the project folder. If they conflict, fix the conflict markers, then run `fld record`. When an unstash stops part-way, the next `fld stash`, `fld unstash`, or `fld record` finishes it first. |
-| `fld status` | See your project folder against main, like `git status`: the files `fld record` would record, the ones main changed too, what keeps the folder from following main with the next step for each, the tracked files that an ignore line matches, and the stash with the entry `fld unstash` takes next. It changes nothing; `--json` prints the daemon's answer. |
+| `fld status` | See your project folder against main, like `git status`: the files `fld record` would record, the ones main changed too, what keeps the folder from following main with the next step for each, how many tracked files an ignore line matches (listed when one of them changed), and the stash with the entry `fld unstash` takes next. It changes nothing; `--json` prints the daemon's answer. |
 | `fld setup` | Start the daemon at login. |
 | `fld restart` | Restart the daemon after an update, so the new version takes over. Workers continue in their sessions. |
 | `fld` | Show fold's own state: the version, whether the daemon runs and where, the service, and the current project. `fld status` shows the project folder instead. |
