@@ -374,3 +374,23 @@ async fn the_untrack_route_answers_for_the_named_human() {
         })
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_untrack_route_is_socket_only() {
+    let h = Harness::start_plain().await;
+    let dir = root(&h);
+    write(&dir, "notes.md", "notes\n");
+    record_as_ana(&h).await.unwrap();
+    let head = h.head().await.number;
+    let (status, body) = h
+        .http(
+            Method::POST,
+            "/api/v1/projects/demo/untrack",
+            Some(&json!({"paths": ["notes.md"]})),
+            "ana",
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"]["code"], "not_found", "{body}");
+    assert_eq!(h.head().await.number, head);
+}
