@@ -16,6 +16,7 @@ const HOUR_MILLIS: i64 = 60 * 60 * 1000;
 
 /// How many tasks the summary lists.
 const TOP_TASKS: usize = 10;
+
 /// `fld cost` counts its days in the terminal's time zone, as the web app counts them in the viewer's.
 const DAYS_NOTE: &str = "Today and the last 7 days start at midnight in your time zone.";
 
