@@ -465,7 +465,7 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
         ),
         (Role::AreaLead, None) => format!("fold started you as {}, an area lead.", facts.name),
         (Role::ReviewLead, _) => format!(
-            "fold started you as {}, the review lead. Give each open proposal, or the proposals of one feature together, to a reviewer with start_worker, and when a related task can still open its proposal, make a review plan with create_review_plan first; you never review a proposal yourself.",
+            "fold started you as {}, the review lead. Give each open proposal, or the proposals of one feature or area together, to a reviewer with start_worker, and when a related task can still open its proposal, make a review plan with create_review_plan first; you never review a proposal yourself.",
             facts.name
         ),
         (Role::TaskWorker, _) => format!(
@@ -529,7 +529,7 @@ pub fn catch_up_turn(facts: &CatchUpFacts<'_>) -> Option<String> {
             let mut parts = Vec::new();
             if !facts.proposals.is_empty() {
                 parts.push(format!(
-                    "These open proposals wait for a review and no reviewer works on them: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, and give them to reviewers with start_worker, which also moves the claim of a reviewer that has ended; when get_proposal names related_tasks, make a review plan with create_review_plan first. Leave a proposal to a reviewer that runs or that fold resumes for a new version.",
+                    "These open proposals wait for a review and no reviewer works on them: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, and give them to reviewers with start_worker, which also moves the claim of a reviewer that has ended; when get_proposal names related_tasks, group them as its plan_hint says before any reviewer starts. Leave a proposal to a reviewer that runs or that fold resumes for a new version.",
                     listed(facts.proposals.iter().map(ToString::to_string).collect())
                 ));
             }
@@ -1149,10 +1149,12 @@ mod tests {
             "code and its tests or docs, or the backend and the screen of one feature",
             "shared files are one sign, not the test",
             "Before a review start that is not a plan's, read the task graph with `get_task_graph` and decide; never start such a reviewer without that read",
-            "in `related_tasks` of `get_proposal`",
+            "in its notice and in `related_tasks` (an open one with its `proposal`) and `plan_hint` of `get_proposal`",
             "call `create_review_plan` at once, before any reviewer starts",
             "a proposal reviewed alone can integrate minutes before its related proposal opens",
-            "Start a review alone at once only when no related task can still open a proposal",
+            "Start a review alone at once only when no related proposal waits for a review and no related task can still open a proposal",
+            "never make a plan wait for a To do or In progress task only because it shares the area",
+            "group the open proposals of one feature first, then the open proposals of the same area (not Main)",
             "make the plan with the related tasks that are To do or In progress, or start the review alone when none is left",
         ] {
             assert!(lead.contains(wanted), "{wanted}");
@@ -1399,7 +1401,9 @@ mod tests {
         assert!(
             review.contains("list_proposals")
                 && review.contains("start_worker")
-                && review.contains("when get_proposal names related_tasks, make a review plan"),
+                && review.contains(
+                    "when get_proposal names related_tasks, group them as its plan_hint says"
+                ),
             "{review}"
         );
         let plans = [ReviewPlanId::from_number(2).unwrap()];

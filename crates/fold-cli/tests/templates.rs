@@ -1112,7 +1112,9 @@ fn the_review_lead_skill_groups_one_feature_and_plans_before_any_review_starts()
         "Before a review start that is not a plan's, read `get_task_graph` and decide; never start such a reviewer without it.",
         "`related_tasks` and `plan_hint` of `get_proposal(id)`",
         "call `create_review_plan(proposals[], tasks[])` at once, before any reviewer starts",
-        "Start the review alone at once only when no related task can still open a proposal.",
+        "Start the review alone at once only when no related proposal waits for a review and no related task can still open a proposal.",
+        "never make a plan wait for a task only because it shares the area",
+        "give the new proposal and the related open proposals to one reviewer with `start_worker`: `create_review_plan` needs a task to wait for.",
         "leave it out and plan with the eligible tasks, or start the review alone when none is left",
     ] {
         assert!(skill.contains(rule), "{rule}");
