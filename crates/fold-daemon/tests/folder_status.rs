@@ -183,6 +183,57 @@ async fn with_git_sync_a_branch_fold_did_not_move_names_the_command_that_brings_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_read_leaves_the_stat_index_of_the_folder_as_it_was() {
+    let h = Harness::start_plain().await;
+    let dir = root(&h);
+    let index = h.handle.paths.folder_index();
+    // The first read waits for the follow at the project's start, which holds the folder lock; in a folder with no Git sync and no held path, only an integration starts another.
+    status(&h).await;
+    let before = std::fs::read(&index).ok();
+    assert!(before.is_some(), "the follow at the start saves the index");
+    write(&dir, "notes.md", "new\n");
+    write(&dir, "README.md", "# changed\n");
+    let body = status(&h).await;
+    assert_eq!(body["changes"].as_array().unwrap().len(), 2, "{body}");
+    status(&h).await;
+    assert_eq!(std::fs::read(&index).ok(), before);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn with_git_sync_a_conflicting_git_commit_of_the_human_waits_as_commits_and_as_a_change() {
+    let h = Harness::start().await;
+    branch_born(&h).await;
+    let dir = root(&h);
+    write(&dir, "README.md", "# mine\n");
+    integrate(&h, "frontend", &[("README.md", "# fold\n")]).await;
+    eventually(WAIT, async || match h.handle.git_attention.folder_held() {
+        Some((_, held)) if held == ["README.md"] => Ok(()),
+        other => Err(other),
+    })
+    .await;
+    git(&dir, &["commit", "--quiet", "-am", "mine"]);
+    // The Git job records the commit, which conflicts with main and waits for the main agent; the branch keeps it until then.
+    let body = eventually(WAIT, async || {
+        let body = status(&h).await;
+        if kinds(&body).contains(&"human_change") {
+            Ok(body)
+        } else {
+            Err(body)
+        }
+    })
+    .await;
+    assert_eq!(kinds(&body), ["commits_waiting", "human_change"], "{body}");
+    assert_eq!(body["blockers"][0]["paths"], json!([]));
+    assert_eq!(
+        body["blockers"][0]["next"],
+        "fold records them on its next run; `fld record` records them now"
+    );
+    assert_eq!(body["blockers"][1]["paths"], json!(["README.md"]));
+    assert_eq!(body["at_main"], false);
+    assert_eq!(body["behind_because"], "commits_waiting");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_folder_route_is_socket_only() {
     let h = Harness::start_plain().await;
     let (status, _) = h.http(Method::GET, ROUTE, None, "ana").await;
