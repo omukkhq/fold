@@ -169,7 +169,6 @@ pub async fn folder_status(
             None => None,
         };
         let held: Vec<String> = settled.held.iter().map(ToString::to_string).collect();
-        // The held paths are in path order.
         Ok((changes, found.skipped, held, files, unstash_paths))
     })
     .await?;
@@ -192,6 +191,7 @@ pub async fn folder_status(
         commits_waiting: matches!(read.branch, Some(BranchState::Ahead { .. })),
     };
     let blockers = blockers(&facts);
+    let held: std::collections::BTreeSet<String> = held.into_iter().collect();
     let journal_stash = journal.map(|journal| journal.stash_id);
     let stash = stack
         .into_iter()
@@ -226,7 +226,7 @@ pub async fn folder_status(
             .map(|change| {
                 let path = String::from_utf8_lossy(&change.path).into_owned();
                 FolderChange {
-                    held: held.binary_search(&path).is_ok(),
+                    held: held.contains(&path),
                     path,
                     kind: change.kind,
                     entry: change.entry,
