@@ -54,8 +54,8 @@ pub use integrate::{
     PullIntegration, PullOutcome, RecordIntegration,
 };
 pub use plans::{
-    AwaitedTask, DEFAULT_PLAN_LIST, MAX_PLAN_LIST, PlanChange, ProposalPlan, ReviewPlanView,
-    proposal_plan, proposal_plans,
+    AwaitedTask, DEFAULT_PLAN_LIST, MAX_PLAN_LIST, PlanChange, ProposalPlan, RelatedTaskView,
+    ReviewPlanView, proposal_plan, proposal_plans, related_plan_tasks,
 };
 pub(crate) use plans::{mark_plan_started, refuse_planned, settle_plans, take_plan_for_start};
 pub(crate) use proposals::proposal_missing;

@@ -3,12 +3,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use fold_core::dag::Dag;
 use fold_core::events::types;
 use fold_core::reviews::plans::{
-    AwaitFacts, JoinedFacts, MAX_PLAN_TASKS, PlanProposalFacts, PlanRelease, PlanState,
-    await_issue, depends_on_member, joined_release, plan_deadline, proposal_issue,
+    AwaitFacts, JoinedFacts, MAX_PLAN_TASKS, PlanCandidate, PlanProposalFacts, PlanRelease,
+    PlanState, RelatedTask, await_issue, depends_on_member, joined_release, plan_candidates,
+    plan_deadline, proposal_issue,
 };
+use fold_core::tasks::areas::in_main_area;
 use fold_core::{
     Actor, AgentName, EventActor, FoldError, IdKind, NewEvent, ProposalId, ReviewBatchId,
-    ReviewPlanId, TaskId, TaskStatus, Timestamp, WorkerName, codes, policy,
+    ReviewPlanId, TaskId, TaskStatus, TaskTitle, Timestamp, WorkerName, codes, policy,
 };
 use fold_store::reviews::batches;
 use fold_store::reviews::plans::{self as store, LiveMember, PlanMemberRow, PlanRow};
@@ -118,6 +120,81 @@ pub async fn proposal_plan(
         return Ok(None);
     }
     Ok(proposal_plans(conn).await?.remove(&proposal))
+}
+
+/// A related task that goes with a new proposal, as the review lead reads it: its open proposal joins the review, or a review plan waits for the task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelatedTaskView {
+    pub candidate: PlanCandidate,
+    pub title: TaskTitle,
+}
+
+/// The related open proposals that can be reviewed with `proposal` and the related tasks that `create_review_plan` would accept as awaited tasks of a plan for it, by [`plan_candidates`]; empty unless the proposal is open, in no plan and could wait in one by [`proposal_issue`], and its task is not of main. A read.
+pub async fn related_plan_tasks(
+    conn: &mut SqliteConnection,
+    proposal: ProposalId,
+) -> Result<Vec<RelatedTaskView>, StoreError> {
+    let Some(row) = reviews::get_proposal(&mut *conn, proposal).await? else {
+        return Ok(Vec::new());
+    };
+    if row.state != ProposalState::Open
+        || store::live_plan_of_proposal(&mut *conn, proposal)
+            .await?
+            .is_some()
+        || task_in_main_area(conn, row.task).await?
+    {
+        return Ok(Vec::new());
+    }
+    let facts = PlanProposalFacts {
+        reviewed: store::has_verdict(&mut *conn, proposal).await?,
+        claimed: row.review_claim.is_some(),
+        in_batch: batches::open_batch_of(&mut *conn, proposal)
+            .await?
+            .is_some(),
+        human_review: row.human_review.is_some(),
+    };
+    if proposal_issue(&facts).is_some() {
+        return Ok(Vec::new());
+    }
+    let rows = store::related_tasks(conn, row.task).await?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let related: Vec<RelatedTask> = rows
+        .iter()
+        .map(|found| RelatedTask {
+            task: found.task,
+            relation: found.relation,
+            facts: AwaitFacts {
+                status: found.status,
+                kind: found.kind,
+                archived: false,
+                human_review: found.human_review,
+                main_area: in_main_area(&found.labels),
+                blocker: found.blocker,
+                depends_on_member: false,
+            },
+            open_proposal: found.open_proposal,
+            in_plan: found.in_plan,
+        })
+        .collect();
+    let titles: BTreeMap<TaskId, &TaskTitle> = rows
+        .iter()
+        .map(|found| (found.task, &found.title))
+        .collect();
+    let seeds: Vec<TaskId> = std::iter::once(row.task)
+        .chain(related.iter().map(|item| item.task))
+        .collect();
+    let dag = Dag::from_edges(tasks::dependent_edges(conn, &seeds).await?);
+    Ok(plan_candidates(row.task, &related, &dag)
+        .into_iter()
+        .filter_map(|candidate| {
+            Some(RelatedTaskView {
+                title: (*titles.get(&candidate.task)?).clone(),
+                candidate,
+            })
+        })
+        .collect())
 }
 
 /// Refuses to give a reviewer `proposal` on its own while it waits in a plan, inside the caller's write: the plan's start gives it to a reviewer with the others. The start of the plan takes its members out first, so it passes.
