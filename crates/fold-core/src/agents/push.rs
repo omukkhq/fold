@@ -1092,7 +1092,7 @@ mod tests {
         let one = related(vec![(task(13), TaskStatus::Todo)]);
         assert_eq!(
             notice_for(&opened, &one)[0].text,
-            "fold: P-3 opened for T-12; related T-13 (todo) can still open a proposal: create_review_plan(proposals[P-3], tasks[T-13]) waits for them. Call create_review_plan."
+            "fold: P-3 opened for T-12; related T-13 (todo) can still open a proposal: create_review_plan(proposals[P-3], tasks[T-13]) waits for it. Call create_review_plan."
         );
         // Four tasks with their status make the line too long, so they go by id alone.
         let four = related(
@@ -1134,7 +1134,7 @@ mod tests {
         );
         assert_eq!(
             notice_for(&version, &one)[0].text,
-            "fold: P-3 has version 2; related T-13 (todo) can still open a proposal: create_review_plan(proposals[P-3], tasks[T-13]) waits for them. Call create_review_plan."
+            "fold: P-3 has version 2; related T-13 (todo) can still open a proposal: create_review_plan(proposals[P-3], tasks[T-13]) waits for it. Call create_review_plan."
         );
         let claimed = PushContext {
             review_claim: Some(name("review")),

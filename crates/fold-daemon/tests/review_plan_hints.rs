@@ -246,7 +246,7 @@ async fn a_new_version_before_any_review_still_names_the_plan() {
     assert_eq!(
         notice(&mut inbox, " has version 2").await,
         format!(
-            "fold: {proposal} has version 2; related {} (todo) can still open a proposal: create_review_plan(proposals[{proposal}], tasks[{}]) waits for them. Call create_review_plan.",
+            "fold: {proposal} has version 2; related {} (todo) can still open a proposal: create_review_plan(proposals[{proposal}], tasks[{}]) waits for it. Call create_review_plan.",
             request[1], request[1]
         )
     );

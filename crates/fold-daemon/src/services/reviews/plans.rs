@@ -7,6 +7,7 @@ use fold_core::reviews::plans::{
     RelatedTask, Relation, await_issue, depends_on_member, joined_release, plan_candidates,
     plan_deadline, proposal_issue,
 };
+use fold_core::tasks::areas::in_main_area;
 use fold_core::{
     Actor, AgentName, EventActor, FoldError, IdKind, NewEvent, ProposalId, ReviewBatchId,
     ReviewPlanId, TaskId, TaskStatus, TaskTitle, Timestamp, WorkerName, codes, policy,
@@ -157,32 +158,32 @@ pub async fn related_plan_tasks(
     if proposal_issue(&facts).is_some() {
         return Ok(Vec::new());
     }
-    let mut related = Vec::new();
-    let mut titles = BTreeMap::new();
-    for (task, relation) in tasks::related_tasks(conn, row.task).await? {
-        let Some(found) = tasks::fetch(conn, task).await? else {
-            continue;
-        };
-        related.push(RelatedTask {
-            task,
-            relation,
+    let rows = store::related_tasks(conn, row.task).await?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let related: Vec<RelatedTask> = rows
+        .iter()
+        .map(|found| RelatedTask {
+            task: found.task,
+            relation: found.relation,
             facts: AwaitFacts {
                 status: found.status,
                 kind: found.kind,
-                archived: found.archived_at.is_some(),
-                human_review: found.human_review.is_some(),
-                main_area: task_in_main_area(conn, task).await?,
-                blocker: found.hold.is_some(),
+                archived: false,
+                human_review: found.human_review,
+                main_area: in_main_area(&found.labels),
+                blocker: found.blocker,
                 depends_on_member: false,
             },
-            open_proposal: reviews::open_for_task(&mut *conn, task).await?.is_some(),
-            in_plan: store::live_plan_of_task(&mut *conn, task).await?.is_some(),
-        });
-        titles.insert(task, found.title);
-    }
-    if related.is_empty() {
-        return Ok(Vec::new());
-    }
+            open_proposal: found.open_proposal,
+            in_plan: found.in_plan,
+        })
+        .collect();
+    let titles: BTreeMap<TaskId, &TaskTitle> = rows
+        .iter()
+        .map(|found| (found.task, &found.title))
+        .collect();
     let seeds: Vec<TaskId> = std::iter::once(row.task)
         .chain(related.iter().map(|item| item.task))
         .collect();
@@ -194,7 +195,7 @@ pub async fn related_plan_tasks(
                 task: candidate.task,
                 relation: candidate.relation,
                 status: candidate.status,
-                title: titles.get(&candidate.task)?.clone(),
+                title: (*titles.get(&candidate.task)?).clone(),
             })
         })
         .collect())

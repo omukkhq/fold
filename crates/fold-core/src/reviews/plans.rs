@@ -116,11 +116,10 @@ pub fn depends_on_member(dag: &Dag, task: TaskId, members: &[TaskId]) -> bool {
 }
 
 define_names!(
-    /// How a task belongs to the same piece of work as a proposal's task, closest first: a direct edge between the two, a checklist parent that links both, or the request whose approval created both. Shared files are no part of it: the code and the tests or docs of one feature often touch different files.
+    /// How a task belongs to the same piece of work as a proposal's task, closest first: a direct prerequisite of it, a checklist parent that links both, or the request whose approval created both. A task that needs the proposal's task is no candidate, since a plan cannot wait for it. Shared files are no part of it: the code and the tests or docs of one feature often touch different files.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub enum Relation {
         Dependency = "dependency",
-        Dependent = "dependent",
         SameParent = "same_parent",
         SameRequest = "same_request",
     }
@@ -189,9 +188,10 @@ pub fn plan_candidates(task: TaskId, related: &[RelatedTask], dag: &Dag) -> Vec<
 
 /// The `create_review_plan` call that has the new `proposal` wait for `tasks`, as fold names it to the review lead.
 pub fn plan_hint(proposal: ProposalId, tasks: &[TaskId]) -> String {
+    let them = if tasks.len() == 1 { "it" } else { "them" };
     let tasks: Vec<String> = tasks.iter().map(ToString::to_string).collect();
     format!(
-        "create_review_plan(proposals[{proposal}], tasks[{}]) waits for them",
+        "create_review_plan(proposals[{proposal}], tasks[{}]) waits for {them}",
         tasks.join(", ")
     )
 }
@@ -559,7 +559,7 @@ mod tests {
             related(4, Relation::SameRequest, TaskStatus::Todo),
             related(3, Relation::SameParent, TaskStatus::InProgress),
             related(2, Relation::Dependency, TaskStatus::InProgress),
-            related(5, Relation::Dependent, TaskStatus::Todo),
+            related(5, Relation::SameRequest, TaskStatus::Todo),
             related(6, Relation::SameRequest, TaskStatus::Todo),
             // The proposal's own task never waits for itself.
             related(1, Relation::SameRequest, TaskStatus::Review),
@@ -633,6 +633,80 @@ mod tests {
             });
         }
         assert_eq!(plan_candidates(t(1), &refused, &dag), Vec::new());
+    }
+
+    proptest::proptest! {
+        /// Whatever the graph and the facts, every task fold names is one `create_review_plan` accepts with the proposal's task and the other named tasks, counted by its closest relation, and the list fits a plan.
+        #[test]
+        fn every_candidate_is_a_task_the_plan_accepts(
+            edges in proptest::collection::vec((1u32..=10, 1u32..=10), 0..16),
+            facts in proptest::collection::vec(
+                (0usize..5, proptest::bool::ANY, proptest::bool::ANY, proptest::bool::ANY, proptest::bool::ANY),
+                10,
+            ),
+            links in proptest::collection::vec((1u32..=10, 0usize..3), 0..20),
+        ) {
+            // An edge always points to a lower number, so the graph has no cycle; T-5 has the proposal.
+            let dag = Dag::from_edges(
+                edges
+                    .into_iter()
+                    .filter(|(task, needs)| task > needs)
+                    .map(|(task, needs)| (t(task), t(needs))),
+            );
+            let statuses = [
+                TaskStatus::Backlog,
+                TaskStatus::Todo,
+                TaskStatus::InProgress,
+                TaskStatus::Review,
+                TaskStatus::Done,
+            ];
+            let relations = [Relation::Dependency, Relation::SameParent, Relation::SameRequest];
+            let related: Vec<RelatedTask> = links
+                .iter()
+                .map(|&(number, relation)| {
+                    let (status, blocker, archived, open_proposal, in_plan) =
+                        facts[number as usize - 1];
+                    RelatedTask {
+                        task: t(number),
+                        relation: relations[relation],
+                        facts: AwaitFacts {
+                            status: statuses[status],
+                            blocker,
+                            archived,
+                            ..ELIGIBLE
+                        },
+                        open_proposal,
+                        in_plan,
+                    }
+                })
+                .collect();
+            let found = plan_candidates(t(5), &related, &dag);
+            proptest::prop_assert!(found.len() < MAX_PLAN_TASKS);
+            let ordered = found
+                .windows(2)
+                .all(|pair| (pair[0].relation, pair[0].task) < (pair[1].relation, pair[1].task));
+            proptest::prop_assert!(ordered);
+            let members: Vec<TaskId> = std::iter::once(t(5))
+                .chain(found.iter().map(|candidate| candidate.task))
+                .collect();
+            for candidate in &found {
+                proptest::prop_assert_ne!(candidate.task, t(5));
+                let closest = related
+                    .iter()
+                    .filter(|item| item.task == candidate.task)
+                    .min_by_key(|item| item.relation);
+                proptest::prop_assert!(closest.is_some());
+                let Some(closest) = closest else { continue };
+                proptest::prop_assert_eq!(candidate.relation, closest.relation);
+                proptest::prop_assert_eq!(candidate.status, closest.facts.status);
+                proptest::prop_assert!(!closest.open_proposal && !closest.in_plan);
+                let facts = AwaitFacts {
+                    depends_on_member: depends_on_member(&dag, candidate.task, &members),
+                    ..closest.facts
+                };
+                proptest::prop_assert_eq!(await_issue(&facts), None);
+            }
+        }
     }
 
     #[test]

@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use fold_core::reviews::plans::Relation;
 use fold_core::{TaskId, TaskStatus, TaskTitle, Timestamp, WorkerName, WorkspaceId};
 use sqlx::{SqliteConnection, SqlitePool};
 
@@ -248,47 +247,6 @@ pub async fn task_refs(
                 .parse()
                 .map_err(|_| StoreError::Corrupt("tasks.status"))?,
         })
-    })
-    .collect()
-}
-
-/// The tasks related to `task`, each once per relation, in number order: its direct prerequisites and dependents, the other tasks a checklist parent of it links, and the other tasks of the request whose approval created it.
-pub async fn related_tasks(
-    conn: &mut SqliteConnection,
-    task: TaskId,
-) -> Result<Vec<(TaskId, Relation)>, StoreError> {
-    let number = task.to_db();
-    sqlx::query!(
-        r#"WITH me AS (SELECT id, request_id FROM tasks WHERE number = ?1)
-           SELECT t.number AS "task!: i64", 'dependency' AS "relation!: String"
-           FROM dependencies d JOIN me ON d.task_id = me.id JOIN tasks t ON t.id = d.needs_task_id
-           UNION
-           SELECT t.number, 'dependent'
-           FROM dependencies d JOIN me ON d.needs_task_id = me.id JOIN tasks t ON t.id = d.task_id
-           UNION
-           SELECT t.number, 'same_parent'
-           FROM checklist_items mine
-           JOIN me ON mine.linked_task_id = me.id
-           JOIN checklists c ON c.id = mine.checklist_id
-           JOIN checklists siblings ON siblings.task_id = c.task_id
-           JOIN checklist_items other ON other.checklist_id = siblings.id
-           JOIN tasks t ON t.id = other.linked_task_id
-           WHERE t.id <> me.id
-           UNION
-           SELECT t.number, 'same_request'
-           FROM tasks t JOIN me ON t.request_id = me.request_id
-           WHERE t.id <> me.id
-           ORDER BY 1, 2"#,
-        number
-    )
-    .fetch_all(conn)
-    .await?
-    .into_iter()
-    .map(|row| {
-        Ok((
-            task_id(row.task)?,
-            Relation::parse(&row.relation).ok_or(StoreError::Corrupt("related_tasks.relation"))?,
-        ))
     })
     .collect()
 }

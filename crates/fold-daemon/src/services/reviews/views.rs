@@ -71,7 +71,7 @@ pub struct ProposalView {
     pub update_run: Option<VersionRun>,
     /// The review plan the open proposal waits in for related tasks, to be reviewed with them as one batch.
     pub review_plan: Option<ProposalPlan>,
-    /// While the open proposal could wait in a review plan and waits in none, the related tasks a plan for it can wait for, closest first.
+    /// For an agent's read, while the open proposal could wait in a review plan and waits in none, the related tasks a plan for it can wait for, closest first; empty for a human's read.
     pub related_tasks: Vec<RelatedTaskView>,
     /// The revision an integrated proposal became, and the review batch it integrated with, if any.
     pub integrated: Option<(RevisionId, Option<ReviewBatchId>)>,
@@ -88,6 +88,8 @@ impl ReviewService {
         let now = self.clock.now();
         let mut read = self.store.read().begin().await.map_err(StoreError::from)?;
         let standing = agents::standing_of(&mut *read, caller).await?;
+        // Only an agent's read names the tasks a review plan can wait for: a human never makes a plan.
+        let agent_reads = matches!(caller, Actor::Agent(_));
         let caller = caller_facts(caller, standing, false)?;
         let detail = proposal_detail(&mut read, proposal, version).await?;
         let facts = reviews::integration_facts(&mut read, proposal)
@@ -111,7 +113,11 @@ impl ReviewService {
         let scope_choice =
             reviews::latest_scope_choice(&mut *read, proposal, detail.selected.version).await?;
         let review_plan = proposal_plan(&mut read, proposal).await?;
-        let related_tasks = related_plan_tasks(&mut read, proposal).await?;
+        let related_tasks = if agent_reads {
+            related_plan_tasks(&mut read, proposal).await?
+        } else {
+            Vec::new()
+        };
         let integrated = reviews::batches::integrated_as(&mut *read, proposal).await?;
         read.commit().await.map_err(StoreError::from)?;
         let claim = match holder {

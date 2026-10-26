@@ -1,6 +1,9 @@
-use fold_core::reviews::plans::{PlanRelease, PlanState};
-use fold_core::{AgentName, ProposalId, ReviewBatchId, ReviewPlanId, TaskId, Timestamp};
-use sqlx::SqliteExecutor;
+use fold_core::reviews::plans::{PlanRelease, PlanState, Relation};
+use fold_core::{
+    AgentName, LabelName, ProposalId, ReviewBatchId, ReviewPlanId, TaskId, TaskKind, TaskStatus,
+    TaskTitle, Timestamp,
+};
+use sqlx::{SqliteConnection, SqliteExecutor};
 
 use crate::columns::{optional_time, time};
 use crate::error::StoreError;
@@ -522,4 +525,99 @@ pub async fn has_verdict(
     .fetch_one(executor)
     .await?;
     Ok(found)
+}
+
+/// A task related to a proposal's task, with the facts that decide whether a review plan can wait for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelatedTaskRow {
+    pub task: TaskId,
+    pub relation: Relation,
+    pub title: TaskTitle,
+    pub status: TaskStatus,
+    pub kind: TaskKind,
+    pub human_review: bool,
+    pub blocker: bool,
+    pub labels: Vec<LabelName>,
+    /// The task has an open proposal.
+    pub open_proposal: bool,
+    /// The task is a member of a live plan.
+    pub in_plan: bool,
+}
+
+/// The tasks related to `task` that are neither archived nor Done, each once per relation, in number order: its direct prerequisites, the other tasks a checklist parent of it links, and the other tasks of the request whose approval created it. One read gives every fact a plan's wait reads.
+pub async fn related_tasks(
+    conn: &mut SqliteConnection,
+    task: TaskId,
+) -> Result<Vec<RelatedTaskRow>, StoreError> {
+    let number = task.to_db();
+    let rows = sqlx::query!(
+        r#"WITH me AS (SELECT id, request_id FROM tasks WHERE number = ?1),
+           related (id, relation) AS (
+               SELECT d.needs_task_id, 'dependency'
+               FROM dependencies d JOIN me ON d.task_id = me.id
+               UNION
+               SELECT other.linked_task_id, 'same_parent'
+               FROM checklist_items mine
+               JOIN me ON mine.linked_task_id = me.id
+               JOIN checklists c ON c.id = mine.checklist_id
+               JOIN checklists siblings ON siblings.task_id = c.task_id
+               JOIN checklist_items other ON other.checklist_id = siblings.id
+               WHERE other.linked_task_id <> me.id
+               UNION
+               SELECT t.id, 'same_request'
+               FROM tasks t JOIN me ON t.request_id = me.request_id
+               WHERE t.id <> me.id
+           )
+           SELECT t.number AS "task!: i64",
+                  r.relation AS "relation!: String",
+                  t.title AS "title!: String",
+                  t.status AS "status!: String",
+                  t.kind AS "kind!: String",
+                  t.human_review AS "human_review!: bool",
+                  t.hold_reason IS NOT NULL AS "blocker!: bool",
+                  (SELECT json_group_array(l.name)
+                   FROM task_labels tl JOIN labels l ON l.id = tl.label_id
+                   WHERE tl.task_id = t.id) AS "labels!: String",
+                  EXISTS (SELECT 1 FROM proposals p
+                          WHERE p.task_id = t.id AND p.state = 'open') AS "open_proposal!: bool",
+                  EXISTS (SELECT 1 FROM review_plan_members m
+                          WHERE m.task_id = t.id AND m.released_at IS NULL) AS "in_plan!: bool"
+           FROM related r JOIN tasks t ON t.id = r.id
+           WHERE t.archived_at IS NULL AND t.status <> 'done'
+           ORDER BY t.number, r.relation"#,
+        number
+    )
+    .fetch_all(conn)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let labels: Vec<String> = serde_json::from_str(&row.labels)
+                .map_err(|_| StoreError::Corrupt("labels.name"))?;
+            Ok(RelatedTaskRow {
+                task: TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?,
+                relation: Relation::parse(&row.relation)
+                    .ok_or(StoreError::Corrupt("related_tasks.relation"))?,
+                title: TaskTitle::parse(&row.title)
+                    .map_err(|_| StoreError::Corrupt("tasks.title"))?,
+                status: row
+                    .status
+                    .parse()
+                    .map_err(|_| StoreError::Corrupt("tasks.status"))?,
+                kind: row
+                    .kind
+                    .parse()
+                    .map_err(|_| StoreError::Corrupt("tasks.kind"))?,
+                human_review: row.human_review,
+                blocker: row.blocker,
+                labels: labels
+                    .iter()
+                    .map(|name| {
+                        LabelName::parse(name).map_err(|_| StoreError::Corrupt("labels.name"))
+                    })
+                    .collect::<Result<_, _>>()?,
+                open_proposal: row.open_proposal,
+                in_plan: row.in_plan,
+            })
+        })
+        .collect()
 }

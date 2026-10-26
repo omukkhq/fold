@@ -1264,12 +1264,13 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
             && !ctx.planned
             && !ctx.main_task
         {
-            let mut conn = store.read().acquire().await?;
-            ctx.plan_candidates = crate::services::reviews::related_plan_tasks(&mut conn, proposal)
+            let mut read = store.read().begin().await?;
+            ctx.plan_candidates = crate::services::reviews::related_plan_tasks(&mut read, proposal)
                 .await?
                 .into_iter()
                 .map(|related| (related.task, related.status))
                 .collect();
+            read.commit().await?;
         }
         if kind == fold_core::events::types::INTEGRATION_SUCCEEDED {
             ctx.reviewer = integrated_reviewer(store, event, proposal).await?;
