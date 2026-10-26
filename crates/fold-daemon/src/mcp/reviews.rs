@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use fold_core::policy::{Gate, GateState, GateStatus};
+use fold_core::reviews::plans::{PlanCandidate, plan_hint};
 use fold_core::reviews::{
     HumanReviewMark, ReviewScope, ReviewScopeRecord, ScopeChoice, Side, Verdict,
 };
@@ -317,7 +318,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             GET_PROPOSAL,
-            "Read one proposal: versions, the evidence size, the task and its prerequisites, related_tasks with plan_hint while it waits for nobody's review (the related tasks that can still open proposals, which create_review_plan can wait for), the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again), update_run (run and purpose) when the author's update (update_proposal) or a reviewer's fix (review_fix) runs the checks of the next version (approve and integrate wait for its checks.finished) and the changed files. The short form gives evidence_chars for the evidence, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the task description and every whole body, such as before a review or when the task description matters.",
+            "Read one proposal: versions, the evidence size, the task and its prerequisites, related_tasks with plan_hint while it waits for nobody's review (the related open proposals without a review, each with its proposal, and the related tasks that can still open proposals, strongest link first, with the create_review_plan or start_worker call that has one reviewer review them together), the review claim, reviews with the scope of each review of a revised version (the scope followed, fold's suggestion, its rules and the reason of a choice), comment counts, last_reviewed (the newest earlier version that has a verdict, by any reviewer), review_scope (that since version and the review lead's newest chosen scope for the version, which the review follows instead of fold's suggestion), the gate report for integrating, the human review mark, the conflict report, the check runs of the version (read their results instead of running the same checks again), update_run (run and purpose) when the author's update (update_proposal) or a reviewer's fix (review_fix) runs the checks of the next version (approve and integrate wait for its checks.finished) and the changed files. The short form gives evidence_chars for the evidence, the task without its description, and of each review of an earlier version the first 200 characters of its body with body_chars; pass detail full for the evidence text, the task description and every whole body, such as before a review or when the task description matters.",
             schema_for_type::<GetProposalInput>(),
         ),
         Tool::new(
@@ -659,20 +660,25 @@ fn view_json(view: &ProposalView, full: bool) -> Value {
             .related_tasks
             .iter()
             .map(|related| {
-                json!({
-                    "id": related.task,
-                    "status": related.status.as_str(),
+                let candidate = &related.candidate;
+                let mut task = json!({
+                    "id": candidate.task,
+                    "status": candidate.status.as_str(),
                     "title": related.title.as_str(),
-                    "relation": related.relation.as_str(),
-                })
+                    "relation": candidate.relation.as_str(),
+                });
+                if let Some(proposal) = candidate.proposal {
+                    task["proposal"] = json!(proposal);
+                }
+                task
             })
             .collect();
-        let tasks: Vec<TaskId> = view
+        let candidates: Vec<PlanCandidate> = view
             .related_tasks
             .iter()
-            .map(|related| related.task)
+            .map(|related| related.candidate)
             .collect();
-        value["plan_hint"] = json!(fold_core::reviews::plans::plan_hint(summary.id, &tasks));
+        value["plan_hint"] = json!(plan_hint(summary.id, &candidates).0);
     }
     // The run of an update or a reviewer's fix has no version until its checks pass, so it is not among the version's checks; approve and integrate wait for it.
     if let Some(update) = view.update_run {

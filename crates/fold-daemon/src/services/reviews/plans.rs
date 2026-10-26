@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use fold_core::dag::Dag;
 use fold_core::events::types;
 use fold_core::reviews::plans::{
-    AwaitFacts, JoinedFacts, MAX_PLAN_TASKS, PlanProposalFacts, PlanRelease, PlanState,
-    RelatedTask, Relation, await_issue, depends_on_member, joined_release, plan_candidates,
+    AwaitFacts, JoinedFacts, MAX_PLAN_TASKS, PlanCandidate, PlanProposalFacts, PlanRelease,
+    PlanState, RelatedTask, await_issue, depends_on_member, joined_release, plan_candidates,
     plan_deadline, proposal_issue,
 };
 use fold_core::tasks::areas::in_main_area;
@@ -122,16 +122,14 @@ pub async fn proposal_plan(
     Ok(proposal_plans(conn).await?.remove(&proposal))
 }
 
-/// A related task that a review plan for a new proposal can wait for, as the review lead reads it.
+/// A related task that goes with a new proposal, as the review lead reads it: its open proposal joins the review, or a review plan waits for the task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelatedTaskView {
-    pub task: TaskId,
-    pub relation: Relation,
-    pub status: TaskStatus,
+    pub candidate: PlanCandidate,
     pub title: TaskTitle,
 }
 
-/// The related tasks that `create_review_plan` would accept as awaited tasks of a plan for `proposal`, by [`plan_candidates`]; empty unless the proposal is open, in no plan and could wait in one by [`proposal_issue`], and its task is not of main. A read.
+/// The related open proposals that can be reviewed with `proposal` and the related tasks that `create_review_plan` would accept as awaited tasks of a plan for it, by [`plan_candidates`]; empty unless the proposal is open, in no plan and could wait in one by [`proposal_issue`], and its task is not of main. A read.
 pub async fn related_plan_tasks(
     conn: &mut SqliteConnection,
     proposal: ProposalId,
@@ -192,10 +190,8 @@ pub async fn related_plan_tasks(
         .into_iter()
         .filter_map(|candidate| {
             Some(RelatedTaskView {
-                task: candidate.task,
-                relation: candidate.relation,
-                status: candidate.status,
                 title: (*titles.get(&candidate.task)?).clone(),
+                candidate,
             })
         })
         .collect())

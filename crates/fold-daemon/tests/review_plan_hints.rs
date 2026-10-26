@@ -251,3 +251,115 @@ async fn a_new_version_before_any_review_still_names_the_plan() {
         )
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sibling_proposal_that_opened_first_goes_into_the_plan_of_the_next() {
+    let (h, mut inbox) = with_review_lead().await;
+    let request = approved_request(
+        &h,
+        &[
+            ("api", "Add the report API"),
+            ("docs", "Document the report"),
+            ("tests", "Test the report"),
+        ],
+        &[],
+    )
+    .await;
+    let [api, docs, tests] = <[String; 3]>::try_from(request).unwrap();
+    let api_work = h.start_work("frontend", &api).await;
+    let docs_work = h.start_work("frontend", &docs).await;
+    api_work.write(&[("src/report_api.txt", "GET /report\n")]);
+    let first = h.propose("frontend", &api_work, "Add the report API").await;
+    // The review lead misses this notice, so the API proposal waits for a review in no plan when the docs proposal opens.
+    notice(&mut inbox, &format!("{first} opened for ")).await;
+    docs_work.write(&[("docs/report.md", "# The report\n")]);
+    let second = h
+        .propose("frontend", &docs_work, "Document the report")
+        .await;
+    assert_eq!(
+        notice(&mut inbox, &format!("{second} opened for ")).await,
+        format!(
+            "fold: {second} opened for {docs}; related {first} ({api}) waits for a review, and {tests} (todo) can still open a proposal: create_review_plan(proposals[{second}, {first}], tasks[{tests}]) waits for it. Call create_review_plan."
+        )
+    );
+
+    // After a restart the lead reads the first proposal and finds the second there too.
+    let read = h.call(LEAD, "get_proposal", json!({"id": first})).await;
+    assert_eq!(
+        read["related_tasks"],
+        json!([
+            {"id": docs, "status": "review", "title": "Document the report", "relation": "same_request", "proposal": second},
+            {"id": tests, "status": "todo", "title": "Test the report", "relation": "same_request"},
+        ]),
+        "{read}"
+    );
+    assert_eq!(
+        read["plan_hint"],
+        format!("create_review_plan(proposals[{first}, {second}], tasks[{tests}]) waits for it")
+    );
+    let plan = h
+        .call(
+            LEAD,
+            "create_review_plan",
+            json!({"proposals": [first, second], "tasks": [tests]}),
+        )
+        .await;
+    assert_eq!(plan["awaited"].as_array().unwrap().len(), 1, "{plan}");
+    for proposal in [&first, &second] {
+        let planned = h.call(LEAD, "get_proposal", json!({"id": proposal})).await;
+        assert_eq!(planned["review_plan"]["id"], plan["id"], "{planned}");
+        assert!(planned.get("related_tasks").is_none(), "{planned}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_open_proposal_of_the_same_area_joins_the_review_but_no_plan_waits_for_the_area() {
+    let (h, mut inbox) = with_review_lead().await;
+    let login = h.create_task("frontend", "Fix the login page").await;
+    let header = h.create_task("frontend", "Add the header").await;
+    let logo = h.create_task("frontend", "Add the logo").await;
+    let login_work = h.start_work("frontend", &login).await;
+    login_work.write(&[("src/login.txt", "login\n")]);
+    let first = h
+        .propose("frontend", &login_work, "Fix the login page")
+        .await;
+    // The header shares the area and is In progress, but the area alone never makes a plan wait.
+    h.start_work("frontend", &header).await;
+    assert_eq!(
+        notice(&mut inbox, &format!("{first} opened for ")).await,
+        format!("fold: {first} opened for {login}. Call start_worker.")
+    );
+    let logo_work = h.start_work("frontend", &logo).await;
+    logo_work.write(&[("src/logo.txt", "logo\n")]);
+    let second = h.propose("frontend", &logo_work, "Add the logo").await;
+    assert_eq!(
+        notice(&mut inbox, &format!("{second} opened for ")).await,
+        format!(
+            "fold: {second} opened for {logo}; related {first} ({login}) waits for a review: start_worker(role reviewer, proposals[{second}, {first}]) gives them to one reviewer. Call start_worker."
+        )
+    );
+    let read = h.call(LEAD, "get_proposal", json!({"id": second})).await;
+    assert_eq!(
+        read["related_tasks"],
+        json!([
+            {"id": login, "status": "review", "title": "Fix the login page", "relation": "same_area", "proposal": first},
+        ]),
+        "{read}"
+    );
+    assert!(
+        !read.to_string().contains(&format!("\"{header}\"")),
+        "{read}"
+    );
+    // A human's read of the same proposal has no grouping hint: only the review lead groups reviews.
+    let human = h
+        .handle
+        .reviews(h.project.registry())
+        .view_proposal(
+            &fold_core::Actor::human(fold_core::HumanName::parse("ana").unwrap()),
+            second.parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(human.related_tasks.is_empty());
+}

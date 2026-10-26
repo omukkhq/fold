@@ -1,4 +1,6 @@
-use fold_core::reviews::plans::{PlanRelease, PlanState, Relation};
+use fold_core::reviews::plans::{
+    PlanProposalFacts, PlanRelease, PlanState, RelatedProposal, Relation,
+};
 use fold_core::{
     AgentName, LabelName, ProposalId, ReviewBatchId, ReviewPlanId, TaskId, TaskKind, TaskStatus,
     TaskTitle, Timestamp,
@@ -527,7 +529,7 @@ pub async fn has_verdict(
     Ok(found)
 }
 
-/// A task related to a proposal's task, with the facts that decide whether a review plan can wait for it.
+/// A task related to a proposal's task, with the facts that decide whether a review plan can wait for it or take its open proposal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelatedTaskRow {
     pub task: TaskId,
@@ -538,13 +540,13 @@ pub struct RelatedTaskRow {
     pub human_review: bool,
     pub blocker: bool,
     pub labels: Vec<LabelName>,
-    /// The task has an open proposal.
-    pub open_proposal: bool,
-    /// The task is a member of a live plan.
+    /// The task's open proposal and its facts.
+    pub open_proposal: Option<RelatedProposal>,
+    /// The task is a member of a live plan, awaited or with its proposal.
     pub in_plan: bool,
 }
 
-/// The tasks related to `task` that are neither archived nor Done, each once per relation, in number order: its direct prerequisites, the other tasks a checklist parent of it links, and the other tasks of the request whose approval created it. One read gives every fact a plan's wait reads.
+/// The tasks related to `task` that are neither archived nor Done, each once per relation, in number order: its direct prerequisites, the other tasks a checklist parent of it links, the other tasks of the request whose approval created it, and the tasks with an open proposal that share an area label with it. One read gives every fact a plan reads.
 pub async fn related_tasks(
     conn: &mut SqliteConnection,
     task: TaskId,
@@ -567,6 +569,14 @@ pub async fn related_tasks(
                SELECT t.id, 'same_request'
                FROM tasks t JOIN me ON t.request_id = me.request_id
                WHERE t.id <> me.id
+               UNION
+               SELECT other.task_id, 'same_area'
+               FROM task_labels mine
+               JOIN me ON mine.task_id = me.id
+               JOIN areas a ON a.label_id = mine.label_id
+               JOIN task_labels other ON other.label_id = mine.label_id
+               JOIN proposals op ON op.task_id = other.task_id AND op.state = 'open'
+               WHERE other.task_id <> me.id
            )
            SELECT t.number AS "task!: i64",
                   r.relation AS "relation!: String",
@@ -578,11 +588,20 @@ pub async fn related_tasks(
                   (SELECT json_group_array(l.name)
                    FROM task_labels tl JOIN labels l ON l.id = tl.label_id
                    WHERE tl.task_id = t.id) AS "labels!: String",
-                  EXISTS (SELECT 1 FROM proposals p
-                          WHERE p.task_id = t.id AND p.state = 'open') AS "open_proposal!: bool",
+                  op.number AS "proposal?: i64",
+                  EXISTS (SELECT 1 FROM reviews v
+                          JOIN proposal_versions pv ON pv.id = v.version_id
+                          WHERE pv.proposal_id = op.id AND v.verdict <> 'comment') AS "reviewed!: bool",
+                  EXISTS (SELECT 1 FROM claims c
+                          WHERE c.proposal_id = op.id AND c.kind = 'review'
+                            AND c.released_at IS NULL) AS "claimed!: bool",
+                  EXISTS (SELECT 1 FROM review_batch_members bm
+                          WHERE bm.proposal_id = op.id AND bm.released_at IS NULL) AS "in_batch!: bool",
                   EXISTS (SELECT 1 FROM review_plan_members m
                           WHERE m.task_id = t.id AND m.released_at IS NULL) AS "in_plan!: bool"
-           FROM related r JOIN tasks t ON t.id = r.id
+           FROM related r
+           JOIN tasks t ON t.id = r.id
+           LEFT JOIN proposals op ON op.task_id = t.id AND op.state = 'open'
            WHERE t.archived_at IS NULL AND t.status <> 'done'
            ORDER BY t.number, r.relation"#,
         number
@@ -593,6 +612,21 @@ pub async fn related_tasks(
         .map(|row| {
             let labels: Vec<String> = serde_json::from_str(&row.labels)
                 .map_err(|_| StoreError::Corrupt("labels.name"))?;
+            let open_proposal = row
+                .proposal
+                .map(|number| {
+                    Ok::<_, StoreError>(RelatedProposal {
+                        id: ProposalId::try_from_db(number)
+                            .ok_or(StoreError::Corrupt("proposals.number"))?,
+                        facts: PlanProposalFacts {
+                            reviewed: row.reviewed,
+                            claimed: row.claimed,
+                            in_batch: row.in_batch,
+                            human_review: row.human_review,
+                        },
+                    })
+                })
+                .transpose()?;
             Ok(RelatedTaskRow {
                 task: TaskId::try_from_db(row.task).ok_or(StoreError::Corrupt("tasks.number"))?,
                 relation: Relation::parse(&row.relation)
@@ -615,7 +649,7 @@ pub async fn related_tasks(
                         LabelName::parse(name).map_err(|_| StoreError::Corrupt("labels.name"))
                     })
                     .collect::<Result<_, _>>()?,
-                open_proposal: row.open_proposal,
+                open_proposal,
                 in_plan: row.in_plan,
             })
         })

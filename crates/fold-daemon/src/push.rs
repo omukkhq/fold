@@ -1268,7 +1268,7 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
             ctx.plan_candidates = crate::services::reviews::related_plan_tasks(&mut read, proposal)
                 .await?
                 .into_iter()
-                .map(|related| (related.task, related.status))
+                .map(|related| related.candidate)
                 .collect();
             read.commit().await?;
         }

@@ -4,6 +4,7 @@ use crate::agents::roles::{CLAUDE_NOT_FOUND, FLD_MISSING, MCP_UNAVAILABLE};
 use crate::agents::{AgentName, AreaName};
 use crate::events::{Event, types};
 use crate::ids::{MessageId, ProposalId, RequestId, TaskId};
+use crate::reviews::plans::PlanCandidate;
 use crate::tasks::status::TaskStatus;
 
 /// The longest notice text, one line of ids and the next tool. A notice whose next tool is `get_inbox` carries the messages the agent has not seen yet in place of that call, up to [`crate::carry::MAX_CARRIED_LEN`]; see [`Notice::carrier_head`].
@@ -49,8 +50,8 @@ pub struct PushContext {
     pub unreviewed: Vec<ProposalId>,
     /// For `proposal.opened`, `proposal.version_added` and `proposal.review_again_requested`, the event's proposal waits in a review plan, whose own notices tell the review lead when to start its reviewer.
     pub planned: bool,
-    /// For `proposal.opened`, and for `proposal.version_added` without a review claim, of a proposal that waits in no review plan: the related tasks that a plan for it can wait for, with their status, closest first; empty once the proposal has a verdict.
-    pub plan_candidates: Vec<(TaskId, TaskStatus)>,
+    /// For `proposal.opened`, and for `proposal.version_added` without a review claim, of a proposal that waits in no review plan: the related open proposals that can be reviewed with it and the related tasks that a plan for it can wait for, strongest link first; empty once the proposal has a verdict.
+    pub plan_candidates: Vec<PlanCandidate>,
 }
 
 /// One line for one agent's Claude Code session. `text` holds public ids and the next tool only.
@@ -829,35 +830,67 @@ fn review_rules(
     Some(vec![leads, held])
 }
 
-/// The review lead's notice of a new proposal, or of a new version that nobody reviewed or claimed yet, whose related tasks can still open theirs: a proposal reviewed alone can integrate before its sibling opens, so the notice names the plan that waits for them. The tasks are spelled out with their status when the line fits, else by id alone, else counted, with `get_proposal` naming them.
+/// The review lead's notice of a new proposal, or of a new version that nobody reviewed or claimed yet, that related open proposals or tasks can be reviewed with: a proposal reviewed alone can integrate before its sibling opens, and one review of several proposals costs less than several reviews, so the notice names the call that groups them. The proposals and tasks are spelled out with their task or status when the line fits, else by id alone, else counted, with `get_proposal` naming them.
 fn plan_notice(
     opened: &str,
     proposal: ProposalId,
-    candidates: &[(TaskId, TaskStatus)],
+    candidates: &[PlanCandidate],
 ) -> (String, &'static str) {
-    let tool = "create_review_plan";
-    let tasks: Vec<TaskId> = candidates.iter().map(|(task, _)| *task).collect();
-    let ids: Vec<String> = tasks.iter().map(ToString::to_string).collect();
-    let open = if candidates.len() == 1 {
-        "a proposal"
-    } else {
-        "proposals"
-    };
-    let call = crate::reviews::plans::plan_hint(proposal, &tasks);
-    let with_status = candidates
+    let (call, tool) = crate::reviews::plans::plan_hint(proposal, candidates);
+    let open: Vec<&PlanCandidate> = candidates
         .iter()
-        .map(|(task, status)| format!("{task} ({status})"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    for listed in [with_status, ids.join(", ")] {
-        let text = format!("{opened}; related {listed} can still open {open}: {call}");
+        .filter(|candidate| candidate.proposal.is_some())
+        .collect();
+    let awaited: Vec<&PlanCandidate> = candidates
+        .iter()
+        .filter(|candidate| candidate.proposal.is_none())
+        .collect();
+    let listed = |detailed: bool| {
+        let mut parts = Vec::new();
+        if !open.is_empty() {
+            let ids: Vec<String> = open
+                .iter()
+                .filter_map(|candidate| {
+                    let id = candidate.proposal?;
+                    Some(if detailed {
+                        format!("{id} ({})", candidate.task)
+                    } else {
+                        id.to_string()
+                    })
+                })
+                .collect();
+            let wait = if open.len() == 1 { "waits" } else { "wait" };
+            parts.push(format!("{} {wait} for a review", ids.join(", ")));
+        }
+        if !awaited.is_empty() {
+            let ids: Vec<String> = awaited
+                .iter()
+                .map(|candidate| {
+                    if detailed {
+                        format!("{} ({})", candidate.task, candidate.status)
+                    } else {
+                        candidate.task.to_string()
+                    }
+                })
+                .collect();
+            let proposals = if awaited.len() == 1 {
+                "a proposal"
+            } else {
+                "proposals"
+            };
+            parts.push(format!("{} can still open {proposals}", ids.join(", ")));
+        }
+        parts.join(", and ")
+    };
+    for detailed in [true, false] {
+        let text = format!("{opened}; related {}: {call}", listed(detailed));
         if format!("fold: {text}. Call {tool}.").len() <= MAX_NOTICE_LEN {
             return (text, tool);
         }
     }
     (
         format!(
-            "{opened}; {} related tasks can still open proposals: get_proposal names them and the {tool} call that waits for them",
+            "{opened}; {} related proposals or tasks can be reviewed with it: get_proposal names them and the {tool} call that groups them",
             candidates.len()
         ),
         "get_proposal",
@@ -1070,16 +1103,22 @@ mod tests {
 
     #[test]
     fn an_opened_proposal_with_related_tasks_to_come_names_the_plan_that_waits_for_them() {
-        let task = |number| TaskId::from_number(number).unwrap();
-        let related = |candidates: Vec<(TaskId, TaskStatus)>| PushContext {
+        use crate::reviews::plans::Relation;
+        let awaited = |number, status| PlanCandidate {
+            task: TaskId::from_number(number).unwrap(),
+            relation: Relation::SameRequest,
+            status,
+            proposal: None,
+        };
+        let related = |candidates: Vec<PlanCandidate>| PushContext {
             review_claim: None,
             plan_candidates: candidates,
             ..ctx()
         };
         let opened = event(types::PROPOSAL_OPENED, "frontend/ui");
         let two = related(vec![
-            (task(13), TaskStatus::InProgress),
-            (task(14), TaskStatus::Todo),
+            awaited(13, TaskStatus::InProgress),
+            awaited(14, TaskStatus::Todo),
         ]);
         let text = "fold: P-3 opened for T-12; related T-13 (in_progress), T-14 (todo) can still open proposals: create_review_plan(proposals[P-3], tasks[T-13, T-14]) waits for them. Call create_review_plan.";
         assert_eq!(
@@ -1089,7 +1128,7 @@ mod tests {
                 row("review", text, "create_review_plan"),
             ]
         );
-        let one = related(vec![(task(13), TaskStatus::Todo)]);
+        let one = related(vec![awaited(13, TaskStatus::Todo)]);
         assert_eq!(
             notice_for(&opened, &one)[0].text,
             "fold: P-3 opened for T-12; related T-13 (todo) can still open a proposal: create_review_plan(proposals[P-3], tasks[T-13]) waits for it. Call create_review_plan."
@@ -1097,7 +1136,7 @@ mod tests {
         // Four tasks with their status make the line too long, so they go by id alone.
         let four = related(
             (13..17)
-                .map(|number| (task(number), TaskStatus::InProgress))
+                .map(|number| awaited(number, TaskStatus::InProgress))
                 .collect(),
         );
         assert_eq!(
@@ -1106,12 +1145,12 @@ mod tests {
         );
         let long = related(
             (10_013..10_017)
-                .map(|number| (task(number), TaskStatus::Todo))
+                .map(|number| awaited(number, TaskStatus::Todo))
                 .collect(),
         );
         assert_eq!(
             notice_for(&opened, &long)[0].text,
-            "fold: P-3 opened for T-12; 4 related tasks can still open proposals: get_proposal names them and the create_review_plan call that waits for them. Call get_proposal."
+            "fold: P-3 opened for T-12; 4 related proposals or tasks can be reviewed with it: get_proposal names them and the create_review_plan call that groups them. Call get_proposal."
         );
         for ctx in [&two, &one, &four, &long] {
             let notices = notice_for(&opened, ctx);
@@ -1144,6 +1183,64 @@ mod tests {
             notice_for(&version, &claimed)
                 .iter()
                 .all(|notice| notice.next_tool != "create_review_plan")
+        );
+    }
+
+    #[test]
+    fn related_open_proposals_go_into_the_plan_or_to_one_reviewer() {
+        use crate::reviews::plans::Relation;
+        let open = |task, proposal, relation| PlanCandidate {
+            task: TaskId::from_number(task).unwrap(),
+            relation,
+            status: TaskStatus::Review,
+            proposal: Some(ProposalId::from_number(proposal).unwrap()),
+        };
+        let with = |candidates: Vec<PlanCandidate>| PushContext {
+            review_claim: None,
+            plan_candidates: candidates,
+            ..ctx()
+        };
+        let opened = event(types::PROPOSAL_OPENED, "frontend/ui");
+        // A sibling proposal opened before and nobody reviewed it: one reviewer gets both, since no task is left to wait for.
+        assert_eq!(
+            sent(&notice_for(
+                &opened,
+                &with(vec![open(14, 4, Relation::SameRequest)])
+            ))[0],
+            row(
+                "lead",
+                "fold: P-3 opened for T-12; related P-4 (T-14) waits for a review: start_worker(role reviewer, proposals[P-3, P-4]) gives them to one reviewer. Call start_worker.",
+                "start_worker"
+            )
+        );
+        // With a task still to come, the open proposal goes into the plan's proposals.
+        let mixed = with(vec![
+            open(14, 4, Relation::SameRequest),
+            PlanCandidate {
+                task: TaskId::from_number(15).unwrap(),
+                relation: Relation::SameRequest,
+                status: TaskStatus::Todo,
+                proposal: None,
+            },
+        ]);
+        let notice = &notice_for(&opened, &mixed)[0];
+        assert_eq!(
+            (notice.text.as_str(), notice.next_tool),
+            (
+                "fold: P-3 opened for T-12; related P-4 (T-14) waits for a review, and T-15 (todo) can still open a proposal: create_review_plan(proposals[P-3, P-4], tasks[T-15]) waits for it. Call create_review_plan.",
+                "create_review_plan"
+            )
+        );
+        assert!(notice.text.len() <= MAX_NOTICE_LEN);
+        // Proposals of the same area are named the same way, by id alone when the line is long.
+        let area = with(
+            (14..17)
+                .map(|number| open(number, number - 10, Relation::SameArea))
+                .collect(),
+        );
+        assert_eq!(
+            notice_for(&opened, &area)[0].text,
+            "fold: P-3 opened for T-12; related P-4 (T-14), P-5 (T-15), P-6 (T-16) wait for a review: start_worker(role reviewer, proposals[P-3, P-4, P-5, P-6]) gives them to one reviewer. Call start_worker."
         );
     }
 
