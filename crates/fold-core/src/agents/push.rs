@@ -49,7 +49,7 @@ pub struct PushContext {
     pub unreviewed: Vec<ProposalId>,
     /// For `proposal.opened`, `proposal.version_added` and `proposal.review_again_requested`, the event's proposal waits in a review plan, whose own notices tell the review lead when to start its reviewer.
     pub planned: bool,
-    /// For `proposal.opened` of a proposal that waits in no review plan, the related tasks that a plan for it can wait for, with their status, closest first.
+    /// For `proposal.opened`, and for `proposal.version_added` without a review claim, of a proposal that waits in no review plan: the related tasks that a plan for it can wait for, with their status, closest first; empty once the proposal has a verdict.
     pub plan_candidates: Vec<(TaskId, TaskStatus)>,
 }
 
@@ -787,7 +787,11 @@ fn review_rules(
             Some(version) => format!("{proposal} has version {version}"),
             None => format!("{proposal} has a new version"),
         };
-        (text, ctx.review_claim.is_none() && !ctx.planned)
+        let leads_too = ctx.review_claim.is_none() && !ctx.planned;
+        if leads_too && !ctx.plan_candidates.is_empty() {
+            lead_text = Some(plan_notice(&text, proposal, &ctx.plan_candidates));
+        }
+        (text, leads_too)
     } else if kind == types::PROPOSAL_REVIEW_AGAIN_REQUESTED {
         let version = event.data.get("version")?.as_u64()?;
         let text = format!("a human sent {proposal} version {version} for review again");
@@ -825,7 +829,7 @@ fn review_rules(
     Some(vec![leads, held])
 }
 
-/// The review lead's notice of a new proposal whose related tasks can still open theirs: a proposal reviewed alone can integrate before its sibling opens, so the notice names the plan that waits for them. The tasks are spelled out with their status when the line fits, else by id alone, else counted, with `get_proposal` naming them.
+/// The review lead's notice of a new proposal, or of a new version that nobody reviewed or claimed yet, whose related tasks can still open theirs: a proposal reviewed alone can integrate before its sibling opens, so the notice names the plan that waits for them. The tasks are spelled out with their status when the line fits, else by id alone, else counted, with `get_proposal` naming them.
 fn plan_notice(
     opened: &str,
     proposal: ProposalId,
@@ -1117,20 +1121,29 @@ mod tests {
                     .all(|notice| notice.text.len() <= MAX_NOTICE_LEN)
             );
         }
-        // A proposal that already waits in a plan, or a new version, never names a plan to make.
+        // A proposal that already waits in a plan never names a plan to make.
         let planned = PushContext {
             planned: true,
             ..two.clone()
         };
         assert!(notice_for(&opened, &planned).is_empty());
+        // A new version that nobody reviewed or claimed yet can still wait in a plan.
         let version = with_data(
             event(types::PROPOSAL_VERSION_ADDED, "frontend/ui"),
             json!({"version": 2}),
         );
+        assert_eq!(
+            notice_for(&version, &one)[0].text,
+            "fold: P-3 has version 2; related T-13 (todo) can still open a proposal: create_review_plan(proposals[P-3], tasks[T-13]) waits for them. Call create_review_plan."
+        );
+        let claimed = PushContext {
+            review_claim: Some(name("review")),
+            ..one.clone()
+        };
         assert!(
-            notice_for(&version, &two)
+            notice_for(&version, &claimed)
                 .iter()
-                .all(|notice| notice.next_tool == "start_worker")
+                .all(|notice| notice.next_tool != "create_review_plan")
         );
     }
 

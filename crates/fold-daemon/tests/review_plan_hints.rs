@@ -87,14 +87,14 @@ async fn complete(h: &Harness, task: &str) {
         .unwrap();
 }
 
-/// The notice text of the next post that tells of an opened proposal. The post carries it as a JSON string, so it ends at the escaped line break.
-async fn opened_notice(inbox: &mut FakeInbox) -> String {
+/// The notice text of the next post that contains `needle`. The post carries it as a JSON string, so it ends at the escaped line break.
+async fn notice(inbox: &mut FakeInbox, needle: &str) -> String {
     loop {
         let post = inbox.next().await;
         if let Some(at) = post.find("fold: P-") {
             let line = &post[at..];
             let end = line.find(['"', '\\']).unwrap_or(line.len());
-            if line[..end].contains(" opened for ") {
+            if line[..end].contains(needle) {
                 return line[..end].to_owned();
             }
         }
@@ -132,7 +132,7 @@ async fn the_review_lead_hears_which_related_tasks_a_plan_can_wait_for() {
     .await;
     complete(&h, &seed).await;
     let work = h.start_work("frontend", &api).await;
-    // The API also needs the schema, and one parent links the API and the export.
+    // The API also needs the schema, an edge added after its work started so that the API can still open its proposal, and one parent links the API and the export.
     h.call(
         "frontend",
         "add_dependency",
@@ -153,7 +153,7 @@ async fn the_review_lead_hears_which_related_tasks_a_plan_can_wait_for() {
     let expected = format!(
         "fold: {proposal} opened for {api}; related {schema} (todo), {export} (todo), {screen} (in_progress) can still open proposals: create_review_plan(proposals[{proposal}], tasks[{schema}, {export}, {screen}]) waits for them. Call create_review_plan."
     );
-    assert_eq!(opened_notice(&mut inbox).await, expected);
+    assert_eq!(notice(&mut inbox, " opened for ").await, expected);
 
     let read = h.call(LEAD, "get_proposal", json!({"id": proposal})).await;
     assert_eq!(
@@ -208,7 +208,7 @@ async fn a_proposal_with_no_related_task_to_come_is_started_at_once() {
     work.write(&[("src/report_api.txt", "GET /report\n")]);
     let proposal = h.propose("frontend", &work, "Add the report API").await;
     assert_eq!(
-        opened_notice(&mut inbox).await,
+        notice(&mut inbox, " opened for ").await,
         format!(
             "fold: {proposal} opened for {}. Call start_worker.",
             request[0]
@@ -216,4 +216,38 @@ async fn a_proposal_with_no_related_task_to_come_is_started_at_once() {
     );
     let read = h.call(LEAD, "get_proposal", json!({"id": proposal})).await;
     assert!(read.get("related_tasks").is_none(), "{read}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_version_before_any_review_still_names_the_plan() {
+    let (h, mut inbox) = with_review_lead().await;
+    let request = approved_request(
+        &h,
+        &[
+            ("api", "Add the report API"),
+            ("docs", "Document the report"),
+        ],
+        &[],
+    )
+    .await;
+    let work = h.start_work("frontend", &request[0]).await;
+    work.write(&[("src/report_api.txt", "GET /report\n")]);
+    let proposal = h.propose("frontend", &work, "Add the report API").await;
+    notice(&mut inbox, " opened for ").await;
+    work.write(&[("src/report_api.txt", "GET /report?week=1\n")]);
+    h.call(
+        "frontend",
+        "record_changes",
+        json!({"ws": work.workspace, "message": "Take the week"}),
+    )
+    .await;
+    h.call("frontend", "update_proposal", json!({"id": proposal}))
+        .await;
+    assert_eq!(
+        notice(&mut inbox, " has version 2").await,
+        format!(
+            "fold: {proposal} has version 2; related {} (todo) can still open a proposal: create_review_plan(proposals[{proposal}], tasks[{}]) waits for them. Call create_review_plan.",
+            request[1], request[1]
+        )
+    );
 }

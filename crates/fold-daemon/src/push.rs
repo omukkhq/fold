@@ -1258,7 +1258,12 @@ pub(crate) async fn context(store: &Store, event: &Event) -> Result<PushContext,
                 .await?
                 .is_some();
         }
-        if kind == fold_core::events::types::PROPOSAL_OPENED && !ctx.planned && !ctx.main_task {
+        let unclaimed_version =
+            kind == fold_core::events::types::PROPOSAL_VERSION_ADDED && ctx.review_claim.is_none();
+        if (kind == fold_core::events::types::PROPOSAL_OPENED || unclaimed_version)
+            && !ctx.planned
+            && !ctx.main_task
+        {
             let mut conn = store.read().acquire().await?;
             ctx.plan_candidates = crate::services::reviews::related_plan_tasks(&mut conn, proposal)
                 .await?
