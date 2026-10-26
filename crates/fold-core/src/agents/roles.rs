@@ -1148,7 +1148,7 @@ mod tests {
             "the same request (`RQ-n`), have the same parent task or a dependency between them",
             "code and its tests or docs, or the backend and the screen of one feature",
             "shared files are one sign, not the test",
-            "Before every review start, read the task graph with `get_task_graph` and decide; never start a reviewer without that read",
+            "Before a review start that is not a plan's, read the task graph with `get_task_graph` and decide; never start such a reviewer without that read",
             "in `related_tasks` of `get_proposal`",
             "call `create_review_plan` at once, before any reviewer starts",
             "a proposal reviewed alone can integrate minutes before its related proposal opens",

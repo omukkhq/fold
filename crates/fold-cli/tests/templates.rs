@@ -1109,7 +1109,7 @@ fn the_review_lead_skill_groups_one_feature_and_plans_before_any_review_starts()
         "Group the proposals of one feature for one reviewer.",
         "a request (`RQ-n`), a parent task or a dependency",
         "code and its tests or docs, or the backend and the screen of one feature, even when their files differ: shared files are one sign, not the test.",
-        "Before every review start, read `get_task_graph` and decide; never start a reviewer without it.",
+        "Before a review start that is not a plan's, read `get_task_graph` and decide; never start such a reviewer without it.",
         "`related_tasks` and `plan_hint` of `get_proposal(id)`",
         "call `create_review_plan(proposals[], tasks[])` at once, before any reviewer starts",
         "Start the review alone at once only when no related task can still open a proposal.",
