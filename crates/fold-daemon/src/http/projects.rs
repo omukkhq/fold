@@ -1367,6 +1367,16 @@ pub struct FolderStashView {
     pub next: bool,
 }
 
+/// A file of the project folder that fold leaves out.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FolderSkippedView {
+    pub path: String,
+    /// Why it is left out, such as `too_large`.
+    pub reason: String,
+    /// Main tracks the path, so it keeps the version it recorded; `fld untrack` removes it from main.
+    pub tracked: bool,
+}
+
 /// The project folder against main, as `fld status` shows it.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct FolderStatusView {
@@ -1387,7 +1397,9 @@ pub struct FolderStatusView {
     /// What `fld record` would record now, in path order.
     pub changes: Vec<FolderChangeView>,
     /// The files fold leaves out, as `fld record` leaves them out.
-    pub skipped: Vec<RecordSkipped>,
+    pub skipped: Vec<FolderSkippedView>,
+    /// The files main tracks that an ignore rule matches, in path order. They stay tracked, so `fld record` records their changes, until `fld untrack` removes them from main.
+    pub ignored_tracked: Vec<String>,
     /// The first decides first.
     pub blockers: Vec<FolderBlockerView>,
     /// Newest first.
@@ -1432,11 +1444,13 @@ impl From<projects::FolderStatus> for FolderStatusView {
             skipped: status
                 .skipped
                 .into_iter()
-                .map(|skipped| RecordSkipped {
-                    path: skipped.path.to_string(),
-                    reason: skipped.reason.as_str().to_owned(),
+                .map(|left| FolderSkippedView {
+                    path: left.skipped.path.to_string(),
+                    reason: left.skipped.reason.as_str().to_owned(),
+                    tracked: left.tracked,
                 })
                 .collect(),
+            ignored_tracked: status.ignored_tracked,
             blockers: status
                 .blockers
                 .iter()

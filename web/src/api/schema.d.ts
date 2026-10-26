@@ -2674,6 +2674,14 @@ export interface components {
          * @enum {string}
          */
         FolderEntryKind: "file" | "executable" | "symlink";
+        /** @description A file of the project folder that fold leaves out. */
+        FolderSkippedView: {
+            path: string;
+            /** @description Why it is left out, such as `too_large`. */
+            reason: string;
+            /** @description Main tracks the path, so it keeps the version it recorded; `fld untrack` removes it from main. */
+            tracked: boolean;
+        };
         /**
          * @description `stashed`: the entry waits on the stack. `conflicted`: its unstash wrote conflict markers that wait in the folder. `unstashing`: its unstash stopped part-way and waits to be finished.
          * @enum {string}
@@ -2724,8 +2732,10 @@ export interface components {
              * @example r12
              */
             head: string;
+            /** @description The files main tracks that an ignore rule matches, in path order. They stay tracked, so `fld record` records their changes, until `fld untrack` removes them from main. */
+            ignored_tracked: string[];
             /** @description The files fold leaves out, as `fld record` leaves them out. */
-            skipped: components["schemas"]["RecordSkipped"][];
+            skipped: components["schemas"]["FolderSkippedView"][];
             /** @description Newest first. */
             stash: components["schemas"]["FolderStashView"][];
         };

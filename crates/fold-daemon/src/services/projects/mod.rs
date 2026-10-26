@@ -70,7 +70,7 @@ pub use enable_git::{GitEnabled, GitIdentity, enable_git};
 pub use folder::{FolderFollowed, FolderSync, sync_folder};
 pub(crate) use folder::{append_alone, note_attention};
 pub use folder_status::{
-    FolderChange, FolderStashEntry, FolderStatus, StashEntryState, folder_status,
+    FolderChange, FolderSkipped, FolderStashEntry, FolderStatus, StashEntryState, folder_status,
 };
 pub use gc::{GcReport, gc};
 pub use git_status::{GitStatus, PushFailed, Pushed, RemoteStatus, git_status, public_location};

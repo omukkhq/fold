@@ -10,6 +10,9 @@ use serde_json::Value;
 use super::remote::{RemoteError, refusal, request_project};
 use crate::output::{self, Item};
 
+/// The most tracked files that ignore rules match the command lists; the rest are counted.
+const LISTED_PATHS: usize = 10;
+
 #[derive(Args, Debug)]
 pub struct StatusArgs {
     /// Print the daemon's answer as JSON, with times in UTC milliseconds
@@ -71,11 +74,13 @@ fn status_lines(
     let at_main = body["at_main"].as_bool().ok_or(RemoteError::Answer)?;
     let changes = list(body, "changes")?;
     let skipped = list(body, "skipped")?;
+    let ignored_tracked = list(body, "ignored_tracked")?;
     let blockers = list(body, "blockers")?;
     let stash = list(body, "stash")?;
     if at_main
         && changes.is_empty()
         && skipped.is_empty()
+        && ignored_tracked.is_empty()
         && blockers.is_empty()
         && stash.is_empty()
     {
@@ -148,13 +153,33 @@ fn status_lines(
             output::count(skipped.len(), "file", "files")
         ));
         for file in skipped {
-            left.detail(format!(
-                "{}: {}",
-                output::escape_control(text(file, "path")?),
-                skipped_reason(text(file, "reason")?)
-            ));
+            let path = output::escape_control(text(file, "path")?);
+            let mut line = format!("{path}: {}", skipped_reason(text(file, "reason")?));
+            if file["tracked"].as_bool().ok_or(RemoteError::Answer)? {
+                line.push_str(&format!(
+                    "; main keeps the version it recorded, and `fld untrack {path}` removes it from main"
+                ));
+            }
+            left.detail(line);
         }
         items.push(left);
+    }
+
+    if !ignored_tracked.is_empty() {
+        let mut tracked = Item::new(format!(
+            "Tracked although ignored: {}, which `fld record` records because main tracks them",
+            output::count(ignored_tracked.len(), "file", "files")
+        ));
+        for path in ignored_tracked.iter().take(LISTED_PATHS) {
+            tracked.detail(output::escape_control(
+                path.as_str().ok_or(RemoteError::Answer)?,
+            ));
+        }
+        if ignored_tracked.len() > LISTED_PATHS {
+            tracked.detail(format!("and {} more", ignored_tracked.len() - LISTED_PATHS));
+        }
+        tracked.detail("Next: `fld untrack <path>` stops tracking a file and leaves it on disk");
+        items.push(tracked);
     }
 
     let mut waits = Vec::new();
@@ -303,7 +328,7 @@ mod tests {
     fn answer(fields: Value) -> Value {
         let mut body = json!({
             "head": "r12", "folder": "r12", "at_main": true, "behind_because": null, "branch": null,
-            "changes": [], "skipped": [], "blockers": [], "stash": [],
+            "changes": [], "skipped": [], "ignored_tracked": [], "blockers": [], "stash": [],
         });
         for (key, value) in fields.as_object().unwrap() {
             body[key] = value.clone();
@@ -340,7 +365,7 @@ mod tests {
                     change("old.md", "deleted", "file", false),
                     change("tip", "added", "symlink", false),
                 ],
-                "skipped": [{"path": "video.mp4", "reason": "too_large"}],
+                "skipped": [{"path": "video.mp4", "reason": "too_large", "tracked": false}],
             }))),
             [
                 "Project folder at main r12",
@@ -487,6 +512,49 @@ mod tests {
             ))[1],
             "  ↳ Why: the Git branch or HEAD shows a change fold did not make"
         );
+    }
+
+    #[test]
+    fn tracked_files_that_rules_match_name_fld_untrack() {
+        let many: Vec<String> = (0..12).map(|n| format!("gen/{n:02}.rs")).collect();
+        assert_eq!(
+            lines(answer(json!({
+                "skipped": [{"path": "data.bin", "reason": "too_large", "tracked": true}],
+                "ignored_tracked": many,
+            }))),
+            [
+                "Project folder at main r12",
+                "",
+                "Left out: 1 file, as `fld record` leaves them out",
+                "  ↳ data.bin: larger than the limit; main keeps the version it recorded, and `fld untrack data.bin` removes it from main",
+                "",
+                "Tracked although ignored: 12 files, which `fld record` records because main tracks them",
+                "  ↳ gen/00.rs",
+                "  ↳ gen/01.rs",
+                "  ↳ gen/02.rs",
+                "  ↳ gen/03.rs",
+                "  ↳ gen/04.rs",
+                "  ↳ gen/05.rs",
+                "  ↳ gen/06.rs",
+                "  ↳ gen/07.rs",
+                "  ↳ gen/08.rs",
+                "  ↳ gen/09.rs",
+                "  ↳ and 2 more",
+                "  ↳ Next: `fld untrack <path>` stops tracking a file and leaves it on disk",
+                "",
+                "nothing to record",
+            ]
+        );
+        assert!(matches!(
+            status_lines(
+                &Response {
+                    status: 200,
+                    body: answer(json!({"ignored_tracked": [7]})),
+                },
+                &utc,
+            ),
+            Err(RemoteError::Answer)
+        ));
     }
 
     #[test]

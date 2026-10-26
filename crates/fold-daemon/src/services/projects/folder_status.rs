@@ -12,6 +12,7 @@ use fold_vcs::git_remote::BranchState;
 use fold_vcs::ignore::IgnoreRules;
 use fold_vcs::index::StatIndex;
 use fold_vcs::objects::ObjectStore;
+use fold_vcs::paths::RepoPath;
 use fold_vcs::platform::Capabilities;
 use fold_vcs::scan::{ScanOptions, Skipped, scan};
 use fold_vcs::stash::changed_paths;
@@ -34,7 +35,9 @@ pub struct FolderStatus {
     /// What `fld record` would record now, in path order.
     pub changes: Vec<FolderChange>,
     /// The files the read leaves out, as a record leaves them out.
-    pub skipped: Vec<Skipped>,
+    pub skipped: Vec<FolderSkipped>,
+    /// The files the record tracks that an ignore rule matches, in path order: they stay tracked until `fld untrack` removes them from main.
+    pub ignored_tracked: Vec<String>,
     pub blockers: Vec<Blocker>,
     /// Newest first.
     pub stash: Vec<FolderStashEntry>,
@@ -47,6 +50,14 @@ pub struct FolderChange {
     pub entry: EntryKind,
     /// Main changed the path too since the folder's revision, so the change holds the folder where it is.
     pub held: bool,
+}
+
+/// A file the read of the folder leaves out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderSkipped {
+    pub skipped: Skipped,
+    /// The record tracks the path, so main keeps the version it recorded.
+    pub tracked: bool,
 }
 
 /// The state of a stash entry as `fld status` names it.
@@ -152,6 +163,21 @@ pub async fn folder_status(
         .map_err(FoldError::from)?;
         let folder = found.settled(&settled.record);
         let changes = unrecorded_changes(&settled.record, &folder);
+        let ignored_tracked: Vec<String> = settled
+            .record
+            .keys()
+            .filter_map(|path| RepoPath::parse(path).ok())
+            .filter(|path| rules.is_ignored(path, false))
+            .map(|path| path.to_string())
+            .collect();
+        let skipped: Vec<FolderSkipped> = found
+            .skipped
+            .into_iter()
+            .map(|skipped| FolderSkipped {
+                tracked: skipped.path.at_or_below(&settled.record).next().is_some(),
+                skipped,
+            })
+            .collect();
         let files: Vec<usize> = entries
             .iter()
             .map(|(base, tree)| {
@@ -168,10 +194,17 @@ pub async fn folder_status(
             None => None,
         };
         let held: Vec<String> = settled.held.iter().map(ToString::to_string).collect();
-        Ok((changes, found.skipped, held, files, unstash_paths))
+        Ok((
+            changes,
+            skipped,
+            ignored_tracked,
+            held,
+            files,
+            unstash_paths,
+        ))
     })
     .await?;
-    let (changes, skipped, held, files, unstash_paths) = scanned;
+    let (changes, skipped, ignored_tracked, held, files, unstash_paths) = scanned;
     let facts = FolderFacts {
         held: held.clone(),
         human_change: waiting.map(|change| {
@@ -233,6 +266,7 @@ pub async fn folder_status(
             })
             .collect(),
         skipped,
+        ignored_tracked,
         blockers,
         stash,
     })

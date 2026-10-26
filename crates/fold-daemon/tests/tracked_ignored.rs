@@ -80,7 +80,12 @@ async fn record_status_and_needs_you_agree_on_a_tracked_file_the_rules_match() {
     write(&dir, "local.env", "SECRET=1\n");
     // Untracked files the rules match count nowhere; the tracked ones stay as main has them.
     assert!(!sync(&h).await.followed.unrecorded);
-    assert_eq!(status(&h).await["changes"], json!([]));
+    let body = status(&h).await;
+    assert_eq!(body["changes"], json!([]));
+    assert_eq!(
+        body["ignored_tracked"],
+        json!(["app.env", "build/version.txt"])
+    );
     assert!(matches!(
         record_as_ana(&h).await.unwrap(),
         RecordOutcome::UpToDate { .. }
@@ -127,7 +132,9 @@ async fn record_status_and_needs_you_agree_on_a_tracked_file_the_rules_match() {
     // Once main no longer tracks it, the rules leave the file out again.
     write(&dir, "app.env", "KEY=4\n");
     assert!(!sync(&h).await.followed.unrecorded);
-    assert_eq!(status(&h).await["changes"], json!([]));
+    let body = status(&h).await;
+    assert_eq!(body["changes"], json!([]));
+    assert_eq!(body["ignored_tracked"], json!(["build/version.txt"]));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -144,7 +151,7 @@ async fn a_tracked_file_over_the_size_limit_keeps_its_recorded_version() {
     assert_eq!(body["changes"], json!([]));
     assert_eq!(
         body["skipped"],
-        json!([{"path": "README.md", "reason": "too_large"}])
+        json!([{"path": "README.md", "reason": "too_large", "tracked": true}])
     );
     assert!(matches!(
         record_as_ana(&h).await.unwrap(),

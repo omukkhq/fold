@@ -51,7 +51,7 @@ async fn a_clean_folder_is_at_main_with_nothing_to_record() {
         status(&h).await,
         json!({
             "head": "r1", "folder": "r1", "at_main": true, "behind_because": null, "branch": null,
-            "changes": [], "skipped": [], "blockers": [], "stash": [],
+            "changes": [], "skipped": [], "ignored_tracked": [], "blockers": [], "stash": [],
         })
     );
 }
