@@ -180,7 +180,7 @@ fn status_lines(
                 "unstash conflict",
             ),
             "human_change" => (
-                format!("Waits for the main agent: your recorded change conflicts with main in {counted}"),
+                format!("Waits for the main agent: your change conflicts with main in {counted}"),
                 "waits for the main agent",
             ),
             "folder_held" => (
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(
             waiting[7..],
             [
-                "Waits for the main agent: your recorded change conflicts with main in 1 path",
+                "Waits for the main agent: your change conflicts with main in 1 path",
                 "  ↳ a.txt",
                 "  ↳ Next: ask the main agent",
                 "",
