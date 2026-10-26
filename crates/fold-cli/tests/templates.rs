@@ -369,7 +369,7 @@ const INVALID_REQUEST_REASONS: [&str; 15] = [
     "batch_waiting",
 ];
 
-const NON_TOOL_NAMES: [&str; 49] = [
+const NON_TOOL_NAMES: [&str; 51] = [
     "human_review",
     "fold_failed",
     "left_out",
@@ -419,6 +419,8 @@ const NON_TOOL_NAMES: [&str; 49] = [
     "done_count",
     "include_done",
     "update_run",
+    "related_tasks",
+    "plan_hint",
 ];
 
 /// The sections of the index before the shared ones.
@@ -1098,6 +1100,24 @@ fn the_skill_sends_missing_work_back_and_new_work_to_a_request() {
             assert!(role_skill(role).contains(rule), "{role}: {rule}");
         }
     }
+}
+
+#[test]
+fn the_review_lead_skill_groups_one_feature_and_plans_before_any_review_starts() {
+    let skill = role_skill(Role::ReviewLead);
+    for rule in [
+        "Group the proposals of one feature for one reviewer.",
+        "a request (`RQ-n`), a parent task or a dependency",
+        "code and its tests or docs, or the backend and the screen of one feature, even when their files differ: shared files are one sign, not the test.",
+        "Before every review start, read `get_task_graph` and decide; never start a reviewer without it.",
+        "`related_tasks` and `plan_hint` of `get_proposal(id)`",
+        "call `create_review_plan(proposals[], tasks[])` at once, before any reviewer starts",
+        "Start the review alone at once only when no related task can still open a proposal.",
+        "leave it out and plan with the eligible tasks, or start the review alone when none is left",
+    ] {
+        assert!(skill.contains(rule), "{rule}");
+    }
+    assert!(!skill.contains("their areas, files and dependencies"));
 }
 
 const SUBCOMMANDS: [&str; 15] = [

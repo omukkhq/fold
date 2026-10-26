@@ -465,7 +465,7 @@ pub fn first_turn(facts: &StartFacts<'_>) -> String {
         ),
         (Role::AreaLead, None) => format!("fold started you as {}, an area lead.", facts.name),
         (Role::ReviewLead, _) => format!(
-            "fold started you as {}, the review lead. Give each open proposal, or a group of related proposals, to a reviewer with start_worker; you never review a proposal yourself.",
+            "fold started you as {}, the review lead. Give each open proposal, or the proposals of one feature together, to a reviewer with start_worker, and when a related task can still open its proposal, make a review plan with create_review_plan first; you never review a proposal yourself.",
             facts.name
         ),
         (Role::TaskWorker, _) => format!(
@@ -529,7 +529,7 @@ pub fn catch_up_turn(facts: &CatchUpFacts<'_>) -> Option<String> {
             let mut parts = Vec::new();
             if !facts.proposals.is_empty() {
                 parts.push(format!(
-                    "These open proposals wait for a review and no reviewer works on them: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, and give them to reviewers with start_worker, which also moves the claim of a reviewer that has ended. Leave a proposal to a reviewer that runs or that fold resumes for a new version.",
+                    "These open proposals wait for a review and no reviewer works on them: {}. fold may not have told you of each one. Read each with get_proposal, find the others with list_proposals, and give them to reviewers with start_worker, which also moves the claim of a reviewer that has ended; when get_proposal names related_tasks, make a review plan with create_review_plan first. Leave a proposal to a reviewer that runs or that fold resumes for a new version.",
                     listed(facts.proposals.iter().map(ToString::to_string).collect())
                 ));
             }
@@ -1141,6 +1141,39 @@ mod tests {
     }
 
     #[test]
+    fn the_review_lead_groups_the_tasks_of_one_feature_before_any_review_starts() {
+        let lead = Role::ReviewLead.prompt();
+        for wanted in [
+            "Group the proposals of one feature",
+            "the same request (`RQ-n`), have the same parent task or a dependency between them",
+            "code and its tests or docs, or the backend and the screen of one feature",
+            "shared files are one sign, not the test",
+            "Before every review start, read the task graph with `get_task_graph` and decide; never start a reviewer without that read",
+            "in `related_tasks` of `get_proposal`",
+            "call `create_review_plan` at once, before any reviewer starts",
+            "a proposal reviewed alone can integrate minutes before its related proposal opens",
+            "Start a review alone at once only when no related task can still open a proposal",
+            "make the plan with the related tasks that are To do or In progress, or start the review alone when none is left",
+        ] {
+            assert!(lead.contains(wanted), "{wanted}");
+        }
+        assert!(!lead.contains("the same files or code"));
+        // The rule comes right after the skill, ahead of every other step.
+        let bullets: Vec<&str> = lead.lines().filter(|line| line.starts_with("- ")).collect();
+        assert!(bullets[1].starts_with("- Group the proposals of one feature"));
+        let turn = first_turn(&StartFacts {
+            role: Role::ReviewLead,
+            name: &AgentName::parse("review").unwrap(),
+            area: None,
+            tasks: &[],
+            proposals: &[],
+            batch: None,
+            instructions: None,
+        });
+        assert!(turn.contains("make a review plan with create_review_plan first"));
+    }
+
+    #[test]
     fn workers_get_their_claims_from_their_lead_and_never_claim() {
         for role in [Role::TaskWorker, Role::Reviewer] {
             let prompt = role.prompt();
@@ -1364,7 +1397,9 @@ mod tests {
         );
         assert!(!review.contains("yourself"), "{review}");
         assert!(
-            review.contains("list_proposals") && review.contains("start_worker"),
+            review.contains("list_proposals")
+                && review.contains("start_worker")
+                && review.contains("when get_proposal names related_tasks, make a review plan"),
             "{review}"
         );
         let plans = [ReviewPlanId::from_number(2).unwrap()];
