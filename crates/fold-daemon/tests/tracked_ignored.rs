@@ -341,6 +341,12 @@ async fn fld_untrack_with_git_sync_deletes_the_file_from_the_branch_and_the_inde
     assert!(!listed.lines().any(|path| path == "secret.env"), "{listed}");
     assert_eq!(git(&dir, &["ls-files", "secret.env"]), "");
     assert_eq!(read(&dir, "secret.env").as_deref(), Some("TOKEN=1\n"));
+    // The branch holds the commit, and Git sees the file as untracked, with no deletion staged: no Git ignore file matches it.
+    assert_eq!(git(&dir, &["rev-parse", "HEAD"]).trim(), commit.as_str());
+    assert_eq!(
+        git(&dir, &["status", "--porcelain", "--", "secret.env"]),
+        "?? secret.env\n"
+    );
     // The .foldignore line is a change of the folder that no revision records yet.
     let body = status(&h).await;
     assert_eq!(
