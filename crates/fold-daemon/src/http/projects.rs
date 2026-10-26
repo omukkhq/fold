@@ -1315,16 +1315,16 @@ pub enum FolderBlockerKind {
     FolderHeld,
 }
 
-impl FolderBlockerKind {
-    fn of(blocker: &fold_core::folder::Blocker) -> Self {
-        use fold_core::folder::Blocker;
-        match blocker {
-            Blocker::HeadMoved { .. } => Self::HeadMoved,
-            Blocker::CommitsWaiting => Self::CommitsWaiting,
-            Blocker::UnstashOpen { .. } => Self::UnstashOpen,
-            Blocker::UnstashConflicted { .. } => Self::UnstashConflicted,
-            Blocker::HumanChange { .. } => Self::HumanChange,
-            Blocker::FolderHeld { .. } => Self::FolderHeld,
+impl From<fold_core::folder::BlockerKind> for FolderBlockerKind {
+    fn from(kind: fold_core::folder::BlockerKind) -> Self {
+        use fold_core::folder::BlockerKind;
+        match kind {
+            BlockerKind::HeadMoved => Self::HeadMoved,
+            BlockerKind::CommitsWaiting => Self::CommitsWaiting,
+            BlockerKind::UnstashOpen => Self::UnstashOpen,
+            BlockerKind::UnstashConflicted => Self::UnstashConflicted,
+            BlockerKind::HumanChange => Self::HumanChange,
+            BlockerKind::FolderHeld => Self::FolderHeld,
         }
     }
 }
@@ -1399,10 +1399,8 @@ impl From<projects::FolderStatus> for FolderStatusView {
         use fold_core::folder::{FolderPlace, UnrecordedKind};
         use fold_core::tree::EntryKind;
         let behind_because = match status.place {
-            FolderPlace::AtMain | FolderPlace::Behind { why: None } => None,
-            FolderPlace::Behind { why: Some(_) } => {
-                status.blockers.first().map(FolderBlockerKind::of)
-            }
+            FolderPlace::AtMain => None,
+            FolderPlace::Behind { why } => why.map(FolderBlockerKind::from),
         };
         Self {
             head: status.head.to_string(),
@@ -1441,7 +1439,7 @@ impl From<projects::FolderStatus> for FolderStatusView {
                 .blockers
                 .iter()
                 .map(|blocker| FolderBlockerView {
-                    kind: FolderBlockerKind::of(blocker),
+                    kind: blocker.kind().into(),
                     paths: blocker.paths().to_vec(),
                     next: blocker.next(),
                 })
