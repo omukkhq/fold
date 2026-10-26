@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use chrono::{DateTime, Days, NaiveDate, TimeZone};
+use chrono::{DateTime, Days, LocalResult, NaiveDate, TimeZone};
 use clap::{Args, ValueEnum};
 use fold_cli::daemon_client::Response;
 use fold_core::{TaskId, Timestamp};
@@ -68,7 +68,12 @@ fn local_date<Zone: TimeZone>(at: Timestamp, zone: &Zone) -> Option<NaiveDate> {
 fn day_start<Zone: TimeZone>(date: NaiveDate, zone: &Zone) -> Option<Timestamp> {
     (0..24 * 60).find_map(|minute| {
         let local = date.and_hms_opt(minute / 60, minute % 60, 0)?;
-        let start = zone.from_local_datetime(&local).earliest()?;
+        // `chrono::Local` gives a repeated time with its later instant first, so `earliest` would take the second midnight.
+        let start = match zone.from_local_datetime(&local) {
+            LocalResult::Single(start) => start,
+            LocalResult::Ambiguous(one, other) => one.min(other),
+            LocalResult::None => return None,
+        };
         Timestamp::from_millis(start.timestamp_millis()).ok()
     })
 }
@@ -793,7 +798,7 @@ mod tests {
         );
     }
 
-    /// A zone whose clock moves from `before` to `after` at the instant `change`.
+    /// A zone whose clock moves from `before` to `after` at the instant `change`. It gives a repeated local time with its later instant first, as `chrono::Local` does.
     #[derive(Clone, Copy)]
     struct Shifting {
         change: Timestamp,
@@ -820,7 +825,7 @@ mod tests {
             let instant = |offset: FixedOffset| (*local - offset).and_utc().timestamp_millis();
             let change = self.change.as_millis();
             match (instant(self.before) < change, instant(self.after) >= change) {
-                (true, true) => LocalResult::Ambiguous(self.before, self.after),
+                (true, true) => LocalResult::Ambiguous(self.after, self.before),
                 (true, false) => LocalResult::Single(self.before),
                 (false, true) => LocalResult::Single(self.after),
                 (false, false) => LocalResult::None,
