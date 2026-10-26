@@ -99,16 +99,40 @@ pub enum Blocker {
     FolderHeld { paths: Vec<String> },
 }
 
-impl Blocker {
+/// The kind of a [`Blocker`], without what it is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockerKind {
+    HeadMoved,
+    CommitsWaiting,
+    UnstashOpen,
+    UnstashConflicted,
+    HumanChange,
+    FolderHeld,
+}
+
+impl BlockerKind {
     /// The name the HTTP view gives the kind.
-    pub fn kind(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
-            Self::HeadMoved { .. } => "head_moved",
+            Self::HeadMoved => "head_moved",
             Self::CommitsWaiting => "commits_waiting",
-            Self::UnstashOpen { .. } => "unstash_open",
-            Self::UnstashConflicted { .. } => "unstash_conflicted",
-            Self::HumanChange { .. } => "human_change",
-            Self::FolderHeld { .. } => "folder_held",
+            Self::UnstashOpen => "unstash_open",
+            Self::UnstashConflicted => "unstash_conflicted",
+            Self::HumanChange => "human_change",
+            Self::FolderHeld => "folder_held",
+        }
+    }
+}
+
+impl Blocker {
+    pub fn kind(&self) -> BlockerKind {
+        match self {
+            Self::HeadMoved { .. } => BlockerKind::HeadMoved,
+            Self::CommitsWaiting => BlockerKind::CommitsWaiting,
+            Self::UnstashOpen { .. } => BlockerKind::UnstashOpen,
+            Self::UnstashConflicted { .. } => BlockerKind::UnstashConflicted,
+            Self::HumanChange { .. } => BlockerKind::HumanChange,
+            Self::FolderHeld { .. } => BlockerKind::FolderHeld,
         }
     }
 
@@ -177,7 +201,7 @@ pub enum FolderPlace {
     /// The folder holds main's head, apart from the changes no revision records.
     AtMain,
     /// The folder holds an older revision; `why` is the kind of the first blocker, or `None` when nothing blocks it and fold brings it to main on its next follow.
-    Behind { why: Option<&'static str> },
+    Behind { why: Option<BlockerKind> },
 }
 
 /// Whether the folder at `folder` holds main's `head`, and if not, which of `blockers` keeps it back.
@@ -304,7 +328,10 @@ mod tests {
         };
         let found = blockers(&all);
         assert_eq!(
-            found.iter().map(Blocker::kind).collect::<Vec<_>>(),
+            found
+                .iter()
+                .map(|blocker| blocker.kind().as_str())
+                .collect::<Vec<_>>(),
             [
                 "head_moved",
                 "commits_waiting",
@@ -314,9 +341,18 @@ mod tests {
             ]
         );
         assert_eq!(
+            [
+                BlockerKind::UnstashOpen,
+                BlockerKind::HumanChange,
+                BlockerKind::FolderHeld
+            ]
+            .map(BlockerKind::as_str),
+            ["unstash_open", "human_change", "folder_held"]
+        );
+        assert_eq!(
             place(&5, &4, &found),
             FolderPlace::Behind {
-                why: Some("head_moved")
+                why: Some(BlockerKind::HeadMoved)
             }
         );
         assert_eq!(
@@ -347,7 +383,7 @@ mod tests {
         assert_eq!(
             place(&"r5", &"r4", &found),
             FolderPlace::Behind {
-                why: Some("folder_held")
+                why: Some(BlockerKind::FolderHeld)
             }
         );
         let conflicted = FolderFacts {
@@ -359,7 +395,7 @@ mod tests {
                 .iter()
                 .map(Blocker::kind)
                 .collect::<Vec<_>>(),
-            ["unstash_conflicted"]
+            [BlockerKind::UnstashConflicted]
         );
     }
 }

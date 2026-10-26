@@ -5,6 +5,7 @@ mod container;
 mod dag_props;
 mod error_codes;
 mod events;
+mod folder_props;
 mod messages;
 mod policy;
 mod presence;

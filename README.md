@@ -158,7 +158,7 @@ Run these commands inside your project:
 | `fld status` | See your project folder against main, like `git status`: the files `fld record` would record, the ones main changed too, what keeps the folder from following main with the next step for each, the tracked files that an ignore line matches, and the stash with the entry `fld unstash` takes next. It changes nothing; `--json` prints the daemon's answer. |
 | `fld setup` | Start the daemon at login. |
 | `fld restart` | Restart the daemon after an update, so the new version takes over. Workers continue in their sessions. |
-| `fld` | Show fold's status: the version, whether the daemon runs and where, the service, and the current project. |
+| `fld` | Show fold's own state: the version, whether the daemon runs and where, the service, and the current project. `fld status` shows the project folder instead. |
 | `fld log` | List main's revisions, newest first: each revision's id and title, then its proposal, task and author or what kind of revision it is, and its time in your local time zone with its Git commit. `fld log -n 50` shows more, and `fld log --oneline` shows one line each. |
 | `fld cost` | See what the project's agents cost and the tokens they used: the total of all time, today, and the last 7 days, by role, by area, and the top tasks. `--since`, `--by`, and `--task` narrow it, and `--json` prints the daemon's answer. |
 | `fld doctor` | Check the installation, daemon, and projects, with suggested fixes. It names the running daemon and its version, says why workers cannot sign in, and repeats every problem with its fix at the end. |
