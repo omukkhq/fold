@@ -15,7 +15,7 @@ use fold_core::{
 use fold_store::workspaces::{self, Checkpoint, CheckpointKind, WorkspaceKind, WorkspaceState};
 use fold_store::{Store, reviews};
 use fold_vcs::compare::{self as vcs, FileChange, LineCache, State};
-use fold_vcs::ignore::IgnoreRules;
+use fold_vcs::ignore::{IgnoreRules, TrackedSet};
 use fold_vcs::index::StatIndex;
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::RepoPath;
@@ -470,6 +470,7 @@ impl LiveState {
             base_tree: base.tree_hash,
             version,
             max_file_bytes: shared.config.max_file_bytes,
+            tracked: Arc::default(),
         };
         let (caps, opened) = {
             let shared = Arc::clone(shared);
@@ -481,6 +482,7 @@ impl LiveState {
             .await?
         };
         let rules = Arc::clone(&opened.rules);
+        let tracked = Arc::clone(&seed.tracked);
         let (sender, commands) = mpsc::channel(QUEUE);
         let overflow = Arc::new(Overflow::default());
         lock(&shared.routes).insert(
@@ -492,8 +494,10 @@ impl LiveState {
         );
         let watching = {
             let shared = Arc::clone(shared);
-            tokio::task::spawn_blocking(move || shared.hub().add_workspace(workspace, &root, rules))
-                .await
+            tokio::task::spawn_blocking(move || {
+                shared.hub().add_workspace(workspace, &root, rules, tracked)
+            })
+            .await
         };
         if watching.is_err() {
             tracing::warn!(workspace = %workspace, "the watcher did not take the workspace; the rescan tick still covers it");
@@ -817,6 +821,8 @@ struct Seed {
     /// The tree of the open proposal's newest version.
     version: Option<ObjectHash>,
     max_file_bytes: u64,
+    /// The base tree's paths, which the scanner and the watcher keep although an ignore rule matches them.
+    tracked: Arc<TrackedSet>,
 }
 
 struct Pipeline {
@@ -1171,6 +1177,8 @@ struct Scanner {
     objects: ObjectStore,
     caps: Capabilities,
     rules: Arc<IgnoreRules>,
+    /// Shared with the watcher; it holds the base's entries.
+    tracked: Arc<TrackedSet>,
     index: StatIndex,
     base: State,
     current: FlatTree,
@@ -1192,6 +1200,7 @@ impl Scanner {
         }
         let objects = ObjectStore::open_existing(&paths.fold_dir()).map_err(FoldError::from)?;
         let base = vcs::load_flat(&objects, &seed.base_tree)?;
+        seed.tracked.set(base.clone());
         let version = Version::load(&objects, seed.version.as_ref());
         let index = StatIndex::load(&paths.workspace_index(seed.workspace), caps);
         let boundary_dir = paths.index();
@@ -1203,6 +1212,7 @@ impl Scanner {
             objects,
             caps,
             rules: Arc::new(IgnoreRules::new(&seed.root)),
+            tracked: Arc::clone(&seed.tracked),
             index,
             base: State::recorded(base),
             current: FlatTree::new(),
@@ -1216,7 +1226,9 @@ impl Scanner {
 
     /// Compares against `tree` from the next scan on. The stat index and the line counts stay: both are keyed by content.
     fn rebase(&mut self, tree: &ObjectHash) -> Result<(), FoldError> {
-        self.base = State::recorded(vcs::load_flat(&self.objects, tree)?);
+        let base = vcs::load_flat(&self.objects, tree)?;
+        self.tracked.set(base.clone());
+        self.base = State::recorded(base);
         Ok(())
     }
 

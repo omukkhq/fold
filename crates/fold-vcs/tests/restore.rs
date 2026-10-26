@@ -353,21 +353,24 @@ fn untracked_files_where_the_target_writes_refuse_the_restore() {
     fs::remove_dir_all(fx.root.join("out")).unwrap();
     write(&fx.root, "out", b"ignored file over a target directory");
     let current = fx.checkpoint(Some(target));
+    // The target tracks notes.txt, so the checkpoint records its new content although a rule now matches it, and the restore loses nothing there.
+    let mut scanned = fx.fresh_scan();
+    scanned.insert(
+        b"notes.txt".to_vec(),
+        fx.flat(&current)[b"notes.txt".as_slice()],
+    );
+    assert_eq!(scanned, fx.flat(&current));
 
     let error = fx.restore(&target).unwrap_err();
-    assert_eq!(
-        refused_paths(&error),
-        vec!["notes.txt", "out/report.txt", "swap"]
-    );
+    assert_eq!(refused_paths(&error), vec!["out/report.txt", "swap"]);
     assert_eq!(read(&fx.root, ".gitignore"), "*.log\nnotes.txt\nout\n");
     assert_eq!(read(&fx.root, "notes.txt"), "private");
     assert_eq!(read(&fx.root, "swap/build.log"), "ignored");
-    assert_eq!(fx.fresh_scan(), fx.flat(&current));
 
-    fs::remove_file(fx.root.join("notes.txt")).unwrap();
     fs::remove_file(fx.root.join("swap/build.log")).unwrap();
     fs::remove_file(fx.root.join("out")).unwrap();
     fx.restore(&target).unwrap();
+    assert_eq!(read(&fx.root, "notes.txt"), "tracked");
     assert_eq!(fx.fresh_scan(), fx.flat(&target));
 }
 

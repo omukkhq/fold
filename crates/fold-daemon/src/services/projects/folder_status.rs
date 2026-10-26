@@ -111,6 +111,7 @@ pub async fn folder_status(
         .map(|entry| (entry.base_tree, entry.tree))
         .collect();
     let unstash = read.unstash;
+    let may_write = read.may_write();
     let scanned = blocking(move || {
         let _objects = objects_guard;
         let fold_dir = paths.fold_dir();
@@ -131,7 +132,11 @@ pub async fn folder_status(
             max_file_bytes,
             &caps,
         )?;
-        let settled = hold(&compared.record, &compared.main, &compared.changes);
+        let mut settled = hold(&compared.record, &compared.main, &compared.changes);
+        // A follow that may not write keeps the record as it is, also where the folder holds main's entry already, and `fld record` compares with that record.
+        if !may_write {
+            settled.record = compared.record;
+        }
         let rules = IgnoreRules::new(root);
         let mut index = StatIndex::load(&paths.folder_index(), caps);
         let found = scan(
@@ -145,13 +150,7 @@ pub async fn folder_status(
             },
         )
         .map_err(FoldError::from)?;
-        let mut folder = found.entries;
-        // A file that kept changing while it was read keeps the entry fold knows, as the scan leaves it to its caller.
-        for path in &found.unstable {
-            if let Some(entry) = settled.record.get(path.as_bytes()) {
-                folder.insert(path.as_bytes().to_vec(), *entry);
-            }
-        }
+        let folder = found.settled(&settled.record);
         let changes = unrecorded_changes(&settled.record, &folder);
         let files: Vec<usize> = entries
             .iter()

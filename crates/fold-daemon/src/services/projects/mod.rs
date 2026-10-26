@@ -637,7 +637,7 @@ impl Init<'_> {
                 max_file_bytes,
                 caps,
             };
-            let imported = import_dir(&objects, root, &IgnoreRules::new(root), &opts)?;
+            let imported = import_dir(&objects, root, &IgnoreRules::new(root), None, &opts)?;
             #[cfg(feature = "failpoints")]
             fail::fail_point!("init_after_import", |_| Err(
                 fired("init_after_import").into()

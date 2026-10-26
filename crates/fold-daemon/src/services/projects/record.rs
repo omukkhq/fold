@@ -146,7 +146,7 @@ async fn record_folder(
         .await?
         .ok_or(StoreError::Corrupt("checkout"))?
         .tree;
-    let (human_tree, skipped) = snapshot_folder(handle, max_file_bytes).await?;
+    let (human_tree, skipped) = snapshot_folder(handle, record_tree, max_file_bytes).await?;
     #[cfg(feature = "failpoints")]
     fail::fail_point!("record_after_snapshot", |_| Err(fired(
         "record_after_snapshot"
@@ -644,9 +644,10 @@ fn with_skipped(outcome: RecordOutcome, left: Vec<Skipped>) -> RecordOutcome {
     }
 }
 
-/// Reads the project folder as an import does, its objects written under the project's object lock, and returns its tree with the files it leaves out.
+/// Reads the project folder as an import does, its objects written under the project's object lock, and returns its tree with the files it leaves out. The paths of `record_tree`, the checkout record, are tracked: they count although an ignore rule matches them, and one the read leaves out, such as a file over the size limit, keeps its recorded entry.
 pub(super) async fn snapshot_folder(
     handle: &ProjectHandle,
+    record_tree: ObjectHash,
     max_file_bytes: u64,
 ) -> Result<(ObjectHash, Vec<Skipped>), ProjectError> {
     let objects_guard = handle.objects.clone().read_owned().await;
@@ -662,10 +663,12 @@ pub(super) async fn snapshot_folder(
                 format!("cannot probe the file system: {}", error.kind()),
             )
         })?;
+        let tracked = load_flat(&objects, &record_tree)?;
         let imported = import_dir(
             &objects,
             root,
             &IgnoreRules::new(root),
+            Some(&tracked),
             &ImportOptions {
                 max_file_bytes,
                 caps,

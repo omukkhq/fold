@@ -107,15 +107,16 @@ impl WorkspaceService {
             let index_path = paths.checks_index();
             let mut index = StatIndex::load(&index_path, caps);
             let rules = IgnoreRules::new(&root);
+            let expected = load_flat(&objects, &tree)?;
             let opts = ScanOptions {
                 rules: &rules,
                 max_file_bytes: config.max_file_bytes,
                 caps,
-                recorded: None,
+                recorded: Some(&expected),
             };
             let scanned = scan(&root, &mut index, &opts).map_err(FoldError::from)?;
             let _ = index.save(&index_path);
-            Ok(scanned.unstable.is_empty() && scanned.entries == load_flat(&objects, &tree)?)
+            Ok(scanned.unstable.is_empty() && scanned.entries == expected)
         })
         .await
     }

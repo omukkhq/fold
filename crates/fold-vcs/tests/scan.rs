@@ -926,3 +926,144 @@ mod walker_agreement {
         }
     }
 }
+
+fn tracked_tree(paths: &[(&str, &[u8])]) -> FlatTree {
+    paths
+        .iter()
+        .map(|(path, content)| {
+            (
+                path.as_bytes().to_vec(),
+                FlatEntry {
+                    kind: EntryKind::File,
+                    hash: hash_object(ObjectKind::Blob, content),
+                },
+            )
+        })
+        .collect()
+}
+
+fn scan_tracked(root: &Path, index: &mut StatIndex, recorded: &FlatTree) -> ScanResult {
+    let rules = IgnoreRules::new(root);
+    let opts = ScanOptions {
+        recorded: Some(recorded),
+        ..options(&rules, HOST, DEFAULT_MAX_FILE_BYTES)
+    };
+    scan(root, index, &opts).unwrap()
+}
+
+#[test]
+fn a_tracked_file_an_ignore_rule_matches_stays_and_an_untracked_one_is_left_out() {
+    let (_dir, root) = workspace();
+    write(&root, ".foldignore", b"*.env\n");
+    write(&root, "app.env", b"edited");
+    write(&root, "other.env", b"new");
+    write(&root, "main.rs", b"fn main() {}");
+    let recorded = tracked_tree(&[("app.env", b"old"), ("main.rs", b"fn main() {}")]);
+    let mut index = StatIndex::empty(HOST);
+    let found = scan_tracked(&root, &mut index, &recorded);
+    assert_eq!(
+        flat_paths(&found.entries),
+        [".foldignore", "app.env", "main.rs"]
+    );
+    assert_eq!(
+        found.entries[b"app.env".as_slice()].hash,
+        hash_object(ObjectKind::Blob, b"edited")
+    );
+    // A tracked file the rules match that is gone from disk is a deletion, not a file the rules hide.
+    fs::remove_file(root.join("app.env")).unwrap();
+    let found = scan_tracked(&root, &mut index, &recorded);
+    assert_eq!(flat_paths(&found.entries), [".foldignore", "main.rs"]);
+    // Without a tracked tree the rules decide alone.
+    write(&root, "app.env", b"edited");
+    assert_eq!(tracked(&root), [".foldignore", "main.rs"]);
+}
+
+#[test]
+fn a_tracked_file_below_an_ignored_directory_is_found_without_reading_the_rest() {
+    let (_dir, root) = workspace();
+    write(&root, ".gitignore", b"build/\n");
+    write(&root, "build/keep/version.txt", b"1.0");
+    write(&root, "build/out.bin", b"generated");
+    write(&root, "build/keep/cache.bin", b"generated");
+    write(&root, "build/locked/inner.bin", b"x");
+    fs::set_permissions(root.join("build/locked"), fs::Permissions::from_mode(0o000)).unwrap();
+    let recorded = tracked_tree(&[("build/keep/version.txt", b"1.0")]);
+    let mut index = StatIndex::empty(HOST);
+    let found = scan_tracked(&root, &mut index, &recorded);
+    fs::set_permissions(root.join("build/locked"), fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        flat_paths(&found.entries),
+        [".gitignore", "build/keep/version.txt"]
+    );
+    // Only the tracked file and the ignore file were read, and the unreadable ignored directory was never entered.
+    assert_eq!(found.hashed, 2);
+    assert!(found.skipped.is_empty(), "{:?}", found.skipped);
+}
+
+#[test]
+fn a_rescan_after_an_ignore_file_changes_keeps_tracked_paths() {
+    let (_dir, root) = workspace();
+    write(&root, "src/gen/table.rs", b"table");
+    write(&root, "src/gen/scratch.rs", b"scratch");
+    write(&root, "src/lib.rs", b"lib");
+    let recorded = tracked_tree(&[("src/gen/table.rs", b"table"), ("src/lib.rs", b"lib")]);
+    let rules = IgnoreRules::new(&root);
+    let opts = ScanOptions {
+        recorded: Some(&recorded),
+        ..options(&rules, HOST, DEFAULT_MAX_FILE_BYTES)
+    };
+    let mut index = StatIndex::empty(HOST);
+    let first = scan(&root, &mut index, &opts).unwrap();
+    assert_eq!(
+        flat_paths(&first.entries),
+        ["src/gen/scratch.rs", "src/gen/table.rs", "src/lib.rs"]
+    );
+    write(&root, "src/.foldignore", b"gen/\n");
+    let again = rescan_paths(&root, &mut index, &[rp("src/.foldignore")], &opts).unwrap();
+    assert_eq!(
+        flat_paths(&again.entries),
+        ["src/.foldignore", "src/gen/table.rs", "src/lib.rs"]
+    );
+    assert_eq!(
+        again
+            .removed
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["src/gen/scratch.rs"]
+    );
+    // A touched path below the ignored directory counts only when it is tracked.
+    write(&root, "src/gen/table.rs", b"table 2");
+    write(&root, "src/gen/scratch.rs", b"scratch 2");
+    let touched = rescan_paths(
+        &root,
+        &mut index,
+        &[rp("src/gen/table.rs"), rp("src/gen/scratch.rs")],
+        &opts,
+    )
+    .unwrap();
+    assert_eq!(flat_paths(&touched.entries), ["src/gen/table.rs"]);
+    assert_eq!(
+        touched.entries[b"src/gen/table.rs".as_slice()].hash,
+        hash_object(ObjectKind::Blob, b"table 2")
+    );
+    let whole = rescan_paths(&root, &mut index, &[rp("src/gen")], &opts).unwrap();
+    assert_eq!(flat_paths(&whole.entries), ["src/gen/table.rs"]);
+}
+
+#[test]
+fn a_tracked_file_the_scan_cannot_read_settles_to_its_recorded_version() {
+    let (_dir, root) = workspace();
+    write(&root, "big.bin", b"far too long now");
+    write(&root, "small.txt", b"s");
+    let recorded = tracked_tree(&[("big.bin", b"short"), ("small.txt", b"s")]);
+    let rules = IgnoreRules::new(&root);
+    let opts = ScanOptions {
+        recorded: Some(&recorded),
+        ..options(&rules, HOST, 8)
+    };
+    let found = scan(&root, &mut StatIndex::empty(HOST), &opts).unwrap();
+    assert_eq!(found.skipped[0].reason, SkipReason::TooLarge);
+    assert_eq!(flat_paths(&found.entries), ["small.txt"]);
+    assert_eq!(found.settled(&recorded), recorded);
+}

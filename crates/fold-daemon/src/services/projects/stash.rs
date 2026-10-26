@@ -214,7 +214,7 @@ async fn stash_folder(
     let record = workspaces::checkout(handle.store.read())
         .await?
         .ok_or(StoreError::Corrupt("checkout"))?;
-    let (tree, skipped) = snapshot_folder(handle, max_file_bytes).await?;
+    let (tree, skipped) = snapshot_folder(handle, record.tree, max_file_bytes).await?;
     let newest = stack.first().map(|entry| (entry.base_tree, entry.tree));
     let open = refuse_unstashable(handle, record.tree, tree, &skipped, newest).await?;
     if !open.is_empty() {
@@ -436,7 +436,7 @@ async fn run_unstash(
     let record = workspaces::checkout(handle.store.read())
         .await?
         .ok_or(StoreError::Corrupt("checkout"))?;
-    let (folder, _) = snapshot_folder(handle, config.max_file_bytes).await?;
+    let (folder, _) = snapshot_folder(handle, record.tree, config.max_file_bytes).await?;
     let objects_guard = handle.objects.clone().read_owned().await;
     let paths = handle.paths.clone();
     let (base, tree) = (entry.base_tree, entry.tree);

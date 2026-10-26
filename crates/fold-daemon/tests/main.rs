@@ -175,6 +175,7 @@ mod takeover;
 mod task_read;
 mod task_views;
 mod tasks_service;
+mod tracked_ignored;
 #[cfg(feature = "failpoints")]
 mod version_run_race;
 mod web_tokens;
