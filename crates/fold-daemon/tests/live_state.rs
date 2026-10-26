@@ -889,6 +889,32 @@ async fn sync_and_restore_move_the_base_the_live_state_compares_against() {
     assert_eq!(changes.checkpoint, recorded.id);
 }
 
+/// A sync that brings a tracked file into an ignored directory makes the watcher watch that directory, so an edit there shows without waiting for a rescan; the project clock never moves here, so no rescan runs.
+#[tokio::test]
+async fn an_edit_of_a_tracked_file_that_a_sync_brings_into_an_ignored_directory_shows_at_once() {
+    let fx = Fixture::new().await;
+    fx.move_main(&[(".gitignore", b"build/\n")]).await;
+    let (id, dir) = fx.create(&fx.frontend, 1).await;
+    let actor = by(&fx.frontend);
+    fs::create_dir(dir.join("build")).unwrap();
+    fs::write(dir.join("build/cache.o"), "untracked\n").unwrap();
+    fx.move_main(&[(".gitignore", b"build/\n"), ("build/version.txt", b"1\n")])
+        .await;
+    fx.workspaces.sync_workspace(&actor, id).await.unwrap();
+    assert_eq!(
+        fs::read_to_string(dir.join("build/version.txt")).unwrap(),
+        "1\n"
+    );
+    fx.wait_for(id, |state| state.view.files.is_empty()).await;
+
+    fs::write(dir.join("build/version.txt"), "2\n").unwrap();
+    let edited = fx.wait_for(id, |state| !state.view.files.is_empty()).await;
+    assert_eq!(
+        files(&edited.view),
+        [row("build/version.txt", None, ChangeKind::Modified, 1, 1)]
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn a_mode_change_is_a_modification_without_lines_and_no_activity() {

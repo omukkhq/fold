@@ -10,6 +10,9 @@ use serde_json::Value;
 use super::remote::{RemoteError, refusal, request_project};
 use crate::output::{self, Item};
 
+/// The most tracked files that ignore rules match the command lists; the rest are counted.
+const LISTED_PATHS: usize = 10;
+
 #[derive(Args, Debug)]
 pub struct StatusArgs {
     /// Print the daemon's answer as JSON, with times in UTC milliseconds
@@ -59,7 +62,7 @@ fn paths(body: &Value) -> Result<Vec<String>, RemoteError> {
         .ok_or(RemoteError::Answer)
 }
 
-/// The lines `fld status` prints for the daemon's answer, or the error it carries: the folder against main, what `fld record` would record, each blocker with its next step, the stash, then a summary line. A folder with nothing to show says so on one head line, with the Git branch below it while Git sync is on. Paths are escaped, since agents name files too.
+/// The lines `fld status` prints for the daemon's answer, or the error it carries: the folder against main, what `fld record` would record, each blocker with its next step, the stash, then a summary line. A folder with nothing to record or to show says so on one head line, with the Git branch below it while Git sync is on. Tracked files that ignore rules match are counted on the head item, and listed only when one of them has a change, since a project may keep such files tracked on purpose. Paths are escaped, since agents name files too.
 fn status_lines(
     response: &Response,
     time: &dyn Fn(Timestamp) -> String,
@@ -71,6 +74,11 @@ fn status_lines(
     let at_main = body["at_main"].as_bool().ok_or(RemoteError::Answer)?;
     let changes = list(body, "changes")?;
     let skipped = list(body, "skipped")?;
+    let ignored_tracked = list(body, "ignored_tracked")?
+        .iter()
+        .map(Value::as_str)
+        .collect::<Option<Vec<&str>>>()
+        .ok_or(RemoteError::Answer)?;
     let blockers = list(body, "blockers")?;
     let stash = list(body, "stash")?;
     let synced = body["branch"].as_str().map(|branch| {
@@ -78,6 +86,18 @@ fn status_lines(
             "Git: main is synced with the branch {}",
             output::escape_control(branch)
         )
+    });
+    let ignored_changed = changes
+        .iter()
+        .filter_map(|change| change["path"].as_str())
+        .any(|path| ignored_tracked.contains(&path));
+    let ignored_note = (!ignored_tracked.is_empty() && !ignored_changed).then(|| {
+        let (files, verb) = if ignored_tracked.len() == 1 {
+            ("1 tracked file".to_owned(), "matches")
+        } else {
+            (format!("{} tracked files", ignored_tracked.len()), "match")
+        };
+        format!("{files} {verb} ignore rules; `fld status --json` lists them")
     });
     if at_main
         && changes.is_empty()
@@ -90,6 +110,9 @@ fn status_lines(
         ));
         if let Some(synced) = &synced {
             clean.detail(synced);
+        }
+        if let Some(note) = &ignored_note {
+            clean.detail(note);
         }
         return Ok(output::items(vec![clean]));
     }
@@ -110,6 +133,9 @@ fn status_lines(
     };
     if let Some(synced) = &synced {
         place.detail(synced);
+    }
+    if let Some(note) = &ignored_note {
+        place.detail(note);
     }
     items.push(place);
 
@@ -155,13 +181,31 @@ fn status_lines(
             output::count(skipped.len(), "file", "files")
         ));
         for file in skipped {
-            left.detail(format!(
-                "{}: {}",
-                output::escape_control(text(file, "path")?),
-                skipped_reason(text(file, "reason")?)
-            ));
+            let path = output::escape_control(text(file, "path")?);
+            let mut line = format!("{path}: {}", skipped_reason(text(file, "reason")?));
+            if file["tracked"].as_bool().ok_or(RemoteError::Answer)? {
+                line.push_str(&format!(
+                    "; main keeps the version it recorded, and `fld untrack {path}` removes it from main"
+                ));
+            }
+            left.detail(line);
         }
         items.push(left);
+    }
+
+    if ignored_changed {
+        let mut tracked = Item::new(format!(
+            "Tracked although ignored: {}, which `fld record` records because main tracks them",
+            output::count(ignored_tracked.len(), "file", "files")
+        ));
+        for path in ignored_tracked.iter().take(LISTED_PATHS) {
+            tracked.detail(output::escape_control(path));
+        }
+        if ignored_tracked.len() > LISTED_PATHS {
+            tracked.detail(format!("and {} more", ignored_tracked.len() - LISTED_PATHS));
+        }
+        tracked.detail("Next: `fld untrack <path>` stops tracking a file and leaves it on disk");
+        items.push(tracked);
     }
 
     let mut waits = Vec::new();
@@ -310,7 +354,7 @@ mod tests {
     fn answer(fields: Value) -> Value {
         let mut body = json!({
             "head": "r12", "folder": "r12", "at_main": true, "behind_because": null, "branch": null,
-            "changes": [], "skipped": [], "blockers": [], "stash": [],
+            "changes": [], "skipped": [], "ignored_tracked": [], "blockers": [], "stash": [],
         });
         for (key, value) in fields.as_object().unwrap() {
             body[key] = value.clone();
@@ -354,7 +398,7 @@ mod tests {
                     change("old.md", "deleted", "file", false),
                     change("tip", "added", "symlink", false),
                 ],
-                "skipped": [{"path": "video.mp4", "reason": "too_large"}],
+                "skipped": [{"path": "video.mp4", "reason": "too_large", "tracked": false}],
             }))),
             [
                 "Project folder at main r12",
@@ -501,6 +545,75 @@ mod tests {
             ))[1],
             "  ↳ Why: the Git branch or HEAD shows a change fold did not make"
         );
+    }
+
+    #[test]
+    fn tracked_files_that_rules_match_are_counted_and_listed_only_when_one_changed() {
+        assert_eq!(
+            lines(answer(
+                json!({"branch": "main", "ignored_tracked": ["app.env"]})
+            )),
+            [
+                "Nothing to record: the project folder is at main r12",
+                "  ↳ Git: main is synced with the branch main",
+                "  ↳ 1 tracked file matches ignore rules; `fld status --json` lists them",
+            ]
+        );
+        let many: Vec<String> = (0..12).map(|n| format!("gen/{n:02}.rs")).collect();
+        assert_eq!(
+            lines(answer(json!({
+                "skipped": [{"path": "data.bin", "reason": "too_large", "tracked": true}],
+                "ignored_tracked": many,
+            }))),
+            [
+                "Project folder at main r12",
+                "  ↳ 12 tracked files match ignore rules; `fld status --json` lists them",
+                "",
+                "Left out: 1 file, as `fld record` leaves them out",
+                "  ↳ data.bin: larger than the limit; main keeps the version it recorded, and `fld untrack data.bin` removes it from main",
+                "",
+                "nothing to record",
+            ]
+        );
+        assert_eq!(
+            lines(answer(json!({
+                "changes": [change("gen/03.rs", "modified", "file", false)],
+                "ignored_tracked": many,
+            }))),
+            [
+                "Project folder at main r12",
+                "",
+                "To record: 1 file",
+                "  ↳ modified: gen/03.rs",
+                "  ↳ Next: `fld record` records them on main; `fld stash` puts them aside",
+                "",
+                "Tracked although ignored: 12 files, which `fld record` records because main tracks them",
+                "  ↳ gen/00.rs",
+                "  ↳ gen/01.rs",
+                "  ↳ gen/02.rs",
+                "  ↳ gen/03.rs",
+                "  ↳ gen/04.rs",
+                "  ↳ gen/05.rs",
+                "  ↳ gen/06.rs",
+                "  ↳ gen/07.rs",
+                "  ↳ gen/08.rs",
+                "  ↳ gen/09.rs",
+                "  ↳ and 2 more",
+                "  ↳ Next: `fld untrack <path>` stops tracking a file and leaves it on disk",
+                "",
+                "1 file to record",
+            ]
+        );
+        assert!(matches!(
+            status_lines(
+                &Response {
+                    status: 200,
+                    body: answer(json!({"ignored_tracked": [7]})),
+                },
+                &utc,
+            ),
+            Err(RemoteError::Answer)
+        ));
     }
 
     #[test]

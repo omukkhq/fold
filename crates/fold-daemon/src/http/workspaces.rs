@@ -90,7 +90,7 @@ pub struct RevisionView {
     pub task: Option<TaskId>,
     #[schema(value_type = Option<String>, required = true, example = "P-3")]
     pub proposal: Option<ProposalId>,
-    /// The title of the integrated proposal, or the first line of a direct change's commit message.
+    /// The title of the integrated proposal, the first line of a direct change's commit message, or the title of a change of the project folder that has one, such as the one `fld untrack` gives; null for the changes `fld record` reads.
     #[schema(required = true)]
     pub title: Option<String>,
     /// The agent whose proposal was integrated, the human who pulled, or the main agent that made a direct change.

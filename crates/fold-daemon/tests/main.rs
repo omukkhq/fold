@@ -34,6 +34,7 @@ mod acceptance_23_message_resume;
 mod acceptance_24_review_plan;
 mod acceptance_25_supervised_main;
 mod acceptance_26_batch_integration;
+mod acceptance_28_untrack;
 mod acceptance_2_messaging;
 mod acceptance_3_parallel_workspaces;
 mod acceptance_4_live_diff;
@@ -175,6 +176,7 @@ mod takeover;
 mod task_read;
 mod task_views;
 mod tasks_service;
+mod tracked_ignored;
 #[cfg(feature = "failpoints")]
 mod version_run_race;
 mod web_tokens;

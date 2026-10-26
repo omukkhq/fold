@@ -901,12 +901,14 @@ mod tests {
     #[test]
     fn a_touched_ignore_file_widens_the_refresh_to_its_folder() {
         let ws = workspace();
+        fs::write(ws.root.join("src/gen.rs"), b"generated\n").unwrap();
+        fs::write(ws.root.join("out.bin"), b"built").unwrap();
         let rules = IgnoreRules::new(&ws.root);
         let opts = opts(&rules, DEFAULT_MAX_FILE_BYTES);
         let mut index = StatIndex::empty(HOST);
         let mut current = FlatTree::new();
         refresh_working(&ws.root, &mut index, &mut current, &ws.base, None, &opts).unwrap();
-        fs::write(ws.root.join("src/.gitignore"), b"lib.rs\n").unwrap();
+        fs::write(ws.root.join("src/.gitignore"), b"*.rs\n").unwrap();
         let touched = [path("src/.gitignore")];
         let found = refresh_working(
             &ws.root,
@@ -918,7 +920,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(found.scope, Some(vec![path("src")]));
-        assert_eq!(names(&current), ["a.txt", "big.bin", "src/.gitignore"]);
+        // The base tracks src/lib.rs, so the new rule leaves out only the untracked file.
+        assert_eq!(
+            names(&current),
+            [
+                "a.txt",
+                "big.bin",
+                "out.bin",
+                "src/.gitignore",
+                "src/lib.rs"
+            ]
+        );
 
         fs::write(ws.root.join(".gitignore"), b"*.bin\n").unwrap();
         let root_rules = [path(".gitignore")];
@@ -932,7 +944,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(whole.scope, None);
-        assert_eq!(names(&current), [".gitignore", "a.txt", "src/.gitignore"]);
+        assert_eq!(
+            names(&current),
+            [
+                ".gitignore",
+                "a.txt",
+                "big.bin",
+                "src/.gitignore",
+                "src/lib.rs"
+            ]
+        );
     }
 
     #[test]

@@ -4,8 +4,8 @@ use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
-use fold_core::object::{ObjectHash, ObjectKind};
-use fold_core::tree::{EntryKind, FlatTree, Tree, flatten};
+use fold_core::object::{ObjectHash, ObjectKind, hash_object};
+use fold_core::tree::{EntryKind, FlatEntry, FlatTree, Tree, flatten};
 use fold_core::{FoldError, codes};
 use fold_vcs::ignore::IgnoreRules;
 use fold_vcs::import::{ImportOptions, ImportResult, import_dir};
@@ -31,7 +31,7 @@ fn import_opts(caps: Capabilities) -> ImportOptions {
 }
 
 fn import_with(store: &ObjectStore, source: &Path, opts: &ImportOptions) -> ImportResult {
-    import_dir(store, source, &IgnoreRules::new(source), opts).unwrap()
+    import_dir(store, source, &IgnoreRules::new(source), None, opts).unwrap()
 }
 
 fn import(store: &ObjectStore, source: &Path) -> ImportResult {
@@ -298,6 +298,7 @@ fn a_missing_source_stops_the_import() {
         &store,
         &absent,
         &IgnoreRules::new(&absent),
+        None,
         &import_opts(HOST),
     )
     .unwrap_err();
@@ -313,7 +314,55 @@ fn a_failing_object_store_stops_the_import() {
     let scratch = store_dir.path().join(".fold/objects/tmp");
     fs::remove_dir_all(&scratch).unwrap();
     fs::write(&scratch, b"not a directory").unwrap();
-    let error =
-        import_dir(&store, &root, &IgnoreRules::new(&root), &import_opts(HOST)).unwrap_err();
+    let error = import_dir(
+        &store,
+        &root,
+        &IgnoreRules::new(&root),
+        None,
+        &import_opts(HOST),
+    )
+    .unwrap_err();
     assert_eq!(error.code(), codes::OBJECT_IO);
+}
+
+#[test]
+fn an_import_keeps_tracked_files_the_ignore_rules_match_and_their_recorded_version_when_too_large()
+{
+    let dir = tempfile::tempdir().unwrap();
+    let (_store_dir, store) = store();
+    let root = dir.path();
+    write(root, ".foldignore", b"secret.env\nbuild/\n");
+    write(root, "secret.env", b"KEY=1");
+    write(root, "build/version.txt", b"1.0");
+    write(root, "build/out.bin", b"generated");
+    write(root, "big.bin", b"grown past the limit");
+    let entry = |content: &[u8]| FlatEntry {
+        kind: EntryKind::File,
+        hash: hash_object(ObjectKind::Blob, content),
+    };
+    let tracked: FlatTree = [
+        (b"secret.env".to_vec(), entry(b"KEY=0")),
+        (b"build/version.txt".to_vec(), entry(b"1.0")),
+        (b"big.bin".to_vec(), entry(b"small")),
+    ]
+    .into();
+    let opts = ImportOptions {
+        max_file_bytes: 19,
+        ..import_opts(HOST)
+    };
+    let imported =
+        import_dir(&store, root, &IgnoreRules::new(root), Some(&tracked), &opts).unwrap();
+    let flat = fold_vcs::compare::load_flat(&store, &imported.tree).unwrap();
+    assert_eq!(
+        flat_paths(&flat),
+        [".foldignore", "big.bin", "build/version.txt", "secret.env"]
+    );
+    assert_eq!(flat[b"secret.env".as_slice()], entry(b"KEY=1"));
+    assert_eq!(flat[b"big.bin".as_slice()], entry(b"small"));
+    assert_eq!(imported.skipped.len(), 1);
+    let untracked = import_dir(&store, root, &IgnoreRules::new(root), None, &opts).unwrap();
+    assert_eq!(
+        flat_paths(&fold_vcs::compare::load_flat(&store, &untracked.tree).unwrap()),
+        [".foldignore"]
+    );
 }

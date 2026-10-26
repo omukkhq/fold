@@ -59,7 +59,8 @@ fn status_of(code: &str) -> Option<StatusCode> {
         | codes::UNKNOWN_HUMAN
         | codes::AGENT_NOT_REGISTERED
         | codes::REQUEST_NOT_FOUND
-        | codes::REVIEW_BATCH_NOT_FOUND => Some(StatusCode::NOT_FOUND),
+        | codes::REVIEW_BATCH_NOT_FOUND
+        | codes::PATH_NOT_TRACKED => Some(StatusCode::NOT_FOUND),
         codes::INVALID_REQUEST
         | codes::INVALID_NAME
         | codes::INVALID_ID

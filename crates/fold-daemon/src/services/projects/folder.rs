@@ -522,7 +522,7 @@ pub(crate) async fn follow_folder(
     })
 }
 
-/// Whether a file of the folder that the ignore rules keep differs from the record, read through the folder's stat index so an unchanged file is not hashed again. A path the record holds that the rules leave out does not count. Blocking.
+/// Whether the folder differs from the record as `fld record` reads it, through the folder's stat index so an unchanged file is not hashed again: the record's paths count although an ignore rule matches them, and a file the scan cannot read, such as one over the size limit, keeps its recorded entry. Blocking.
 fn differs(
     paths: &ProjectPaths,
     record: &FlatTree,
@@ -546,26 +546,7 @@ fn differs(
     .map_err(FoldError::from)?;
     // The index only spares work; a failed save makes the next scan read the files again.
     let _ = index.save(&index_path);
-    let unstable: Vec<&[u8]> = scanned
-        .unstable
-        .iter()
-        .map(|path| path.as_bytes())
-        .collect();
-    for (path, entry) in record {
-        let Ok(repo) = fold_vcs::paths::RepoPath::parse(path) else {
-            continue;
-        };
-        if rules.is_ignored(&repo, false) {
-            continue;
-        }
-        if scanned.entries.get(path) != Some(entry) && !unstable.contains(&path.as_slice()) {
-            return Ok(true);
-        }
-    }
-    Ok(scanned
-        .entries
-        .keys()
-        .any(|path| !record.contains_key(path)))
+    Ok(scanned.settled(record) != *record)
 }
 
 fn io_error(error: &std::io::Error) -> ProjectError {

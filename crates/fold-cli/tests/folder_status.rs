@@ -365,3 +365,68 @@ fn with_git_sync_fld_status_shows_the_branch_a_path_held_by_main_and_a_moved_hea
         ]
     );
 }
+
+#[test]
+fn fld_untrack_stops_tracking_a_file_the_rules_match_and_leaves_it_on_disk() {
+    let sandbox = Sandbox::new();
+    let project = sandbox.project(
+        "app",
+        true,
+        &[("README.md", "# app\n"), ("secret.env", "TOKEN=1\n")],
+    );
+    let _daemon = sandbox.serve();
+    // `fld init` wrote a .foldignore already; this one replaces it.
+    write(&project, ".foldignore", "*.env\n");
+    // Unchanged, the file is only counted; once it changes, it is listed.
+    let lines = status_with(
+        &sandbox,
+        &project,
+        "  ↳ 1 tracked file matches ignore rules; `fld status --json` lists them",
+    );
+    assert!(!lines.contains(&"  ↳ secret.env".to_owned()), "{lines:#?}");
+    write(&project, "secret.env", "TOKEN=2\n");
+    let lines = status_with(
+        &sandbox,
+        &project,
+        "Tracked although ignored: 1 file, which `fld record` records because main tracks them",
+    );
+    assert!(
+        lines.contains(&"  ↳ modified: secret.env".to_owned()),
+        "{lines:#?}"
+    );
+    assert!(lines.contains(&"  ↳ secret.env".to_owned()), "{lines:#?}");
+    assert!(
+        !lines.iter().any(|line| line.contains("match ignore rules")),
+        "{lines:#?}"
+    );
+
+    let file = project.join("secret.env");
+    let untracked = sandbox.run(&project, &["untrack", file.to_str().unwrap()]);
+    let lines: Vec<&str> = untracked.lines().collect();
+    assert!(
+        lines[0].starts_with("Stopped tracking 1 file in main as r2, Git commit "),
+        "{lines:#?}"
+    );
+    assert_eq!(lines[1], "  ↳ secret.env");
+    assert_eq!(lines.len(), 3, "{lines:#?}");
+    assert_eq!(fs::read_to_string(&file).unwrap(), "TOKEN=2\n");
+    assert_eq!(git(&project, &["ls-files", "secret.env"]), "");
+    assert_eq!(
+        sandbox.status(&project),
+        [
+            "Project folder at main r2",
+            "  ↳ Git: main is synced with the branch main",
+            "",
+            "To record: 1 file",
+            "  ↳ modified: .foldignore",
+            "  ↳ Next: `fld record` records them on main; `fld stash` puts them aside",
+            "",
+            "1 file to record",
+        ]
+    );
+
+    let refused = sandbox.output(&project, &["untrack", file.to_str().unwrap()]);
+    assert!(!refused.status.success());
+    let text = String::from_utf8_lossy(&refused.stderr);
+    assert!(text.contains("path_not_tracked"), "{text}");
+}

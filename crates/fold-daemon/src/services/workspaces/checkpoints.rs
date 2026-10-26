@@ -214,7 +214,7 @@ impl WorkspaceService {
                         "workspace_restore_before_write fired",
                     ))
                 });
-                files.restore(&tree)?;
+                files.restore(&tree, &base_tree)?;
                 #[cfg(feature = "failpoints")]
                 fail::fail_point!("workspace_restore_after_write", |_| {
                     Err(FoldError::new(

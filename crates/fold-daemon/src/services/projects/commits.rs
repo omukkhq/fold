@@ -340,9 +340,12 @@ pub fn commit_message(row: &RevisionRow) -> String {
                 let short = commit.get(..12).unwrap_or(commit);
                 format!("Merge commit {short} of the project folder\n\nFold-Revision: {revision}\n")
             }
-            None => {
-                format!("Record the changes of the project folder\n\nFold-Revision: {revision}\n")
-            }
+            None => match integration.message.as_deref() {
+                Some(title) => format!("{}\n\nFold-Revision: {revision}\n", one_line(title)),
+                None => format!(
+                    "Record the changes of the project folder\n\nFold-Revision: {revision}\n"
+                ),
+            },
         },
     }
 }
@@ -483,6 +486,25 @@ mod tests {
             (
                 row(11, None, Some(direct("  "))),
                 "fold r11\n\nFold-Changeset: C-40\nFold-Revision: r11\n",
+            ),
+            (
+                row(
+                    12,
+                    None,
+                    Some(integration(IntegrationKind::Record, None, None)),
+                ),
+                "Record the changes of the project folder\n\nFold-Revision: r12\n",
+            ),
+            (
+                row(
+                    13,
+                    None,
+                    Some(IntegrationInfo {
+                        message: Some("Stop tracking a.txt, .env".to_owned()),
+                        ..integration(IntegrationKind::Record, None, None)
+                    }),
+                ),
+                "Stop tracking a.txt, .env\n\nFold-Revision: r13\n",
             ),
         ];
         for (row, expected) in cases {

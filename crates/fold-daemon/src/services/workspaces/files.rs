@@ -84,16 +84,21 @@ impl Files {
         Ok(snapshot)
     }
 
-    /// Makes the tracked files equal `target`. The caller has recorded the current state first.
-    pub(super) fn restore(&self, target: &ObjectHash) -> Result<(), FoldError> {
+    /// Makes the tracked files equal `target`. The caller has recorded the current state first, against `base_tree`, whose paths count as tracked as they did for that record.
+    pub(super) fn restore(
+        &self,
+        target: &ObjectHash,
+        base_tree: &ObjectHash,
+    ) -> Result<(), FoldError> {
         let rules = IgnoreRules::new(&self.root);
         let mut index = self.index();
+        let base = self.flat_tree(base_tree)?;
         let opts = RestoreOptions {
             scan: ScanOptions {
                 rules: &rules,
                 max_file_bytes: self.max_file_bytes,
                 caps: self.caps,
-                recorded: None,
+                recorded: Some(&base),
             },
             write: MaterialiseOptions {
                 read_only: false,
