@@ -83,7 +83,7 @@ enum Command {
     ShellEnv,
     /// Manage the workers that fold runs: fld worker restart <name> starts one again in a new Claude Code session
     Worker(commands::worker::WorkerArgs),
-    /// List main's revisions, newest first, as the web app's repository screen shows them: id, title, task, author, time and Git commit
+    /// List main's revisions, newest first, as the web app's repository screen shows them: id and title, then the proposal, task and author or what the revision is, and the time in your local time zone with the Git commit
     Log(commands::log::LogArgs),
     /// Print what the project's supervised workers cost, from the values Claude Code reported: the total of all time, today and the last 7 days, the tokens, by role, by area and the top tasks; --since, --by and --task narrow it
     Cost(commands::cost::CostArgs),

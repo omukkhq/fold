@@ -156,7 +156,7 @@ Run these commands inside your project:
 | `fld setup` | Start the daemon at login. |
 | `fld restart` | Restart the daemon after an update, so the new version takes over. Workers continue in their sessions. |
 | `fld` | Show fold's status: the version, whether the daemon runs and where, the service, and the current project. |
-| `fld log` | List main's revisions, newest first: `fld log -n 50` shows more, and `fld log --oneline` shows one line each. |
+| `fld log` | List main's revisions, newest first: each revision's id and title, then its proposal, task and author or what kind of revision it is, and its time in your local time zone with its Git commit. `fld log -n 50` shows more, and `fld log --oneline` shows one line each. |
 | `fld cost` | See what the project's agents cost and the tokens they used: the total of all time, today, and the last 7 days, by role, by area, and the top tasks. `--since`, `--by`, and `--task` narrow it, and `--json` prints the daemon's answer. |
 | `fld doctor` | Check the installation, daemon, and projects, with suggested fixes. It names the running daemon and its version, says why workers cannot sign in, and repeats every problem with its fix at the end. |
 | `fld transcript` | Find an agent's Claude Code transcript: `fld transcript <agent>` prints the path of the file of its current session, and `fld transcript <agent> --tail N` prints the file's last N lines. |
