@@ -163,7 +163,7 @@ pub async fn stash_list(handle: &ProjectHandle) -> Result<Vec<StashEntry>, Proje
 }
 
 /// Runs a command to its end on its own task, so a client that goes away does not stop it between the files and the row.
-async fn spawned<T: Send + 'static>(
+pub(super) async fn spawned<T: Send + 'static>(
     work: impl Future<Output = Result<T, ProjectError>> + Send + 'static,
 ) -> Result<T, ProjectError> {
     tokio::spawn(work).await.unwrap_or_else(|error| {
@@ -866,7 +866,7 @@ pub(super) async fn settle_markers_on_main(handle: &ProjectHandle) -> Result<(),
 }
 
 /// A branch that is not fold's keeps the folder's files those of another state, so neither command reads or writes them.
-fn refuse_branch(branch: &str, followed: &FolderFollowed) -> Result<(), FoldError> {
+pub(super) fn refuse_branch(branch: &str, followed: &FolderFollowed) -> Result<(), FoldError> {
     match &followed.branch {
         Some(BranchState::Moved(moved)) => Err(head_moved(branch, moved)),
         Some(BranchState::Ahead { .. }) => Err(FoldError::new(

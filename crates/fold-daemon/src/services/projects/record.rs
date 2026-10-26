@@ -177,7 +177,10 @@ async fn record_folder(
         tree: human_tree,
         commit: None,
     };
-    let recorded = with_skipped(integrate_change(handle, actor, &change).await?, skipped);
+    let recorded = with_skipped(
+        integrate_change(handle, actor, &change, OnConflict::Wait).await?,
+        skipped,
+    );
     let RecordOutcome::Recorded {
         revision,
         files,
@@ -439,7 +442,7 @@ pub(crate) async fn record_branch_commits(
         tree,
         commit: Some(tip.clone()),
     };
-    let outcome = integrate_change(handle, &actor, &change).await?;
+    let outcome = integrate_change(handle, &actor, &change, OnConflict::Wait).await?;
     if let RecordOutcome::Recorded { revision, .. } = &outcome
         && let Some((head, newest)) = last
         && newest == *from
@@ -489,11 +492,21 @@ pub(crate) struct HumanFolderChange<'a> {
     pub(crate) commit: Option<CommitId>,
 }
 
-/// Merges `change` onto main under the integration mutex, three times at most when main moves meanwhile: a clean merge goes through the `record` entry of the integration procedure, and a conflict is written as the waiting human change with `human_change.conflicted`.
+/// What a merge of a human change that conflicts with main does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnConflict {
+    /// The change is written as the waiting human change, for the main agent to resolve with the human.
+    Wait,
+    /// Nothing is written and the conflicted paths come back as a refusal.
+    Refuse,
+}
+
+/// Merges `change` onto main under the integration mutex, three times at most when main moves meanwhile: a clean merge goes through the `record` entry of the integration procedure, and a conflict is written as the waiting human change with `human_change.conflicted`, or with [`OnConflict::Refuse`] refused with `reason` `main_changed` and the paths.
 pub(crate) async fn integrate_change(
     handle: &ProjectHandle,
     actor: &Actor,
     change: &HumanFolderChange<'_>,
+    on_conflict: OnConflict,
 ) -> Result<RecordOutcome, ProjectError> {
     let fold_dir = handle.paths.fold_dir();
     let commit_text = change.commit.as_ref().map(CommitId::as_str);
@@ -528,6 +541,24 @@ pub(crate) async fn integrate_change(
             })
             .await?
         };
+        if !merge.conflicts.is_empty() && on_conflict == OnConflict::Refuse {
+            drop(serial);
+            let paths: Vec<String> = merge
+                .conflicts
+                .iter()
+                .map(|conflict| String::from_utf8_lossy(&conflict.path).into_owned())
+                .collect();
+            return Err(FoldError::new(
+                codes::INVALID_REQUEST,
+                format!(
+                    "main changed {} since the project folder's revision",
+                    paths.join(", ")
+                ),
+            )
+            .with_hint("run `fld status` to see what keeps the project folder from main; once it follows main, run the command again")
+            .with_details([("reason", json!("main_changed")), ("paths", json!(paths))])
+            .into());
+        }
         if !merge.conflicts.is_empty() {
             let rows: Vec<ConflictRow> = merge
                 .conflicts

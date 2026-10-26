@@ -1327,6 +1327,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/untrack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stops tracking files of the project folder, as `fld untrack` asks: one revision of the human removes every path main tracks at or below each named path, and the files stay in the folder. Other changes of the folder stay unrecorded. Older revisions keep the files. Socket only; the human comes from `x-fold-human`. */
+        post: operations["untrack_project_paths"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/worker-limits": {
         parameters: {
             query?: never;
@@ -4927,6 +4944,31 @@ export interface components {
         };
         /** @enum {string} */
         UnstashState: "applied" | "conflicted";
+        /** @description The paths `fld untrack` removes from main. */
+        UntrackRequest: {
+            /**
+             * @description Paths relative to the project folder; a directory stands for every tracked path below it.
+             * @example [
+             *       "config/local.env"
+             *     ]
+             */
+            paths: string[];
+        };
+        UntrackResult: {
+            /** @description The Git commit of the new revision while Git sync is on; null otherwise. */
+            commit: string | null;
+            /** @description The tracked paths the revision removes, in path order. */
+            files: string[];
+            /**
+             * @description The new revision, which no longer holds the paths.
+             * @example r18
+             */
+            revision: string;
+            touched: components["schemas"]["RecordTouched"][];
+            /** @description The paths of `files` that no ignore rule matches, so the next `fld record` records them again. */
+            unignored: string[];
+            unstash: components["schemas"]["UnstashResult"] | null;
+        };
         /** @description A change of an area's profile; a field left out and not cleared stays as it is. */
         UpdateAreaBody: {
             /** @description True removes the instructions. */
@@ -12852,6 +12894,105 @@ export interface operations {
                 };
             };
             /** @description The config or sync map is invalid */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A Git command failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The project failed to open, or git is not on PATH */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    untrack_project_paths: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UntrackRequest"];
+            };
+        };
+        responses: {
+            /** @description Main no longer tracks the paths */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UntrackResult"];
+                };
+            };
+            /** @description A path is not valid, no path is named, the branch or HEAD shows a change fold did not make (`reason` `head_moved`), the human's Git commits wait for the main agent (`reason` `git_commits_wait`), or main changed a path since the folder's revision (`reason` `main_changed`, the paths in `paths`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`: the request names no human; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not on the socket, the slug is not registered, or main does not track a path (`path_not_tracked`, the paths in `paths`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Main moved during every attempt, or the config or sync map is invalid */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -17,7 +17,7 @@ use serde_json::json;
 
 use super::commits::commit_main;
 use super::folder::follow_folder;
-use super::record::{HumanFolderChange, RecordOutcome, integrate_change};
+use super::record::{HumanFolderChange, OnConflict, RecordOutcome, integrate_change};
 use super::remote::blocking;
 use super::{ProjectError, enable_sync, load_config, plan_gitignore};
 use crate::projects::ProjectHandle;
@@ -259,7 +259,7 @@ async fn record_gitignore(
         tree,
         commit: None,
     };
-    match integrate_change(handle, actor, &change).await? {
+    match integrate_change(handle, actor, &change, OnConflict::Wait).await? {
         RecordOutcome::Recorded { revision, .. } => Ok(Some(revision)),
         other => Err(FoldError::new(
             codes::INTERNAL_ERROR,

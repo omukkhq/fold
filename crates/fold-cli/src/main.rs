@@ -72,6 +72,8 @@ enum Command {
     Resume(commands::pause::PauseArgs),
     /// Record your changes in the project folder on main as one change of yours; a conflict with the agents' work waits for the main agent
     Record(commands::record::RecordArgs),
+    /// Stop tracking files of the project folder, as git rm --cached does: one revision of yours removes them from main from now on and leaves them on disk. Older revisions keep them, so a leaked secret still needs to be changed. Add them to .foldignore, or fld record records them again
+    Untrack(commands::untrack::UntrackArgs),
     /// Put your changes in the project folder aside, so the folder follows main; fld stash list shows the stash, newest first
     Stash(commands::stash::StashArgs),
     /// Merge the newest stash entry into the project folder as it is now; a conflict writes conflict markers and keeps the entry until fld record
@@ -168,6 +170,9 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         }
         Some(Command::Record(args)) => {
             commands::record::run_record(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Untrack(args)) => {
+            commands::untrack::run_untrack(&args, out).map_err(Failure::Remote)
         }
         Some(Command::Stash(args)) => {
             commands::stash::run_stash(&args, out).map_err(Failure::Remote)
