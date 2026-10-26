@@ -285,7 +285,10 @@ fn with_git_sync_fld_status_shows_the_branch_a_path_held_by_main_and_a_moved_hea
     sandbox.run(&project, &["push"]);
     assert_eq!(
         sandbox.status(&project),
-        ["Nothing to record: the project folder is at main r1"]
+        [
+            "Nothing to record: the project folder is at main r1",
+            "  ↳ Git: main is synced with the branch main",
+        ]
     );
 
     // Someone else changes a.txt on the remote while the human changes it in the folder.
@@ -332,7 +335,13 @@ fn with_git_sync_fld_status_shows_the_branch_a_path_held_by_main_and_a_moved_hea
         &project,
         "Nothing to record: the project folder is at main r2",
     );
-    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        lines,
+        [
+            "Nothing to record: the project folder is at main r2",
+            "  ↳ Git: main is synced with the branch main",
+        ]
+    );
 
     git(&project, &["switch", "--quiet", "-c", "side"]);
     assert_eq!(
@@ -350,6 +359,9 @@ fn with_git_sync_fld_status_shows_the_branch_a_path_held_by_main_and_a_moved_hea
     git(&project, &["switch", "--quiet", "main"]);
     assert_eq!(
         sandbox.status(&project),
-        ["Nothing to record: the project folder is at main r2"]
+        [
+            "Nothing to record: the project folder is at main r2",
+            "  ↳ Git: main is synced with the branch main",
+        ]
     );
 }

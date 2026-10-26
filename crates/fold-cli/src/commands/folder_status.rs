@@ -59,7 +59,7 @@ fn paths(body: &Value) -> Result<Vec<String>, RemoteError> {
         .ok_or(RemoteError::Answer)
 }
 
-/// The lines `fld status` prints for the daemon's answer, or the error it carries: the folder against main, what `fld record` would record, each blocker with its next step, the stash, then a summary line. A folder with nothing to show says so in one line. Paths are escaped, since agents name files too.
+/// The lines `fld status` prints for the daemon's answer, or the error it carries: the folder against main, what `fld record` would record, each blocker with its next step, the stash, then a summary line. A folder with nothing to show says so on one head line, with the Git branch below it while Git sync is on. Paths are escaped, since agents name files too.
 fn status_lines(
     response: &Response,
     time: &dyn Fn(Timestamp) -> String,
@@ -73,15 +73,25 @@ fn status_lines(
     let skipped = list(body, "skipped")?;
     let blockers = list(body, "blockers")?;
     let stash = list(body, "stash")?;
+    let synced = body["branch"].as_str().map(|branch| {
+        format!(
+            "Git: main is synced with the branch {}",
+            output::escape_control(branch)
+        )
+    });
     if at_main
         && changes.is_empty()
         && skipped.is_empty()
         && blockers.is_empty()
         && stash.is_empty()
     {
-        return Ok(vec![format!(
+        let mut clean = Item::new(format!(
             "Nothing to record: the project folder is at main {head}"
-        )]);
+        ));
+        if let Some(synced) = &synced {
+            clean.detail(synced);
+        }
+        return Ok(output::items(vec![clean]));
     }
 
     let mut items = Vec::new();
@@ -98,11 +108,8 @@ fn status_lines(
         ));
         place
     };
-    if let Some(branch) = body["branch"].as_str() {
-        place.detail(format!(
-            "Git: main is synced with the branch {}",
-            output::escape_control(branch)
-        ));
+    if let Some(synced) = &synced {
+        place.detail(synced);
     }
     items.push(place);
 
@@ -320,10 +327,17 @@ mod tests {
     }
 
     #[test]
-    fn a_clean_folder_says_so_in_one_line() {
+    fn a_clean_folder_says_so_in_one_line_with_the_git_branch_while_git_sync_is_on() {
         assert_eq!(
             lines(answer(json!({}))),
             ["Nothing to record: the project folder is at main r12"]
+        );
+        assert_eq!(
+            lines(answer(json!({"branch": "trunk"}))),
+            [
+                "Nothing to record: the project folder is at main r12",
+                "  ↳ Git: main is synced with the branch trunk",
+            ]
         );
     }
 
