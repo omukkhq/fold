@@ -26,6 +26,7 @@ import {
   choosePreset,
   choosesMoves,
   draftOf,
+  failureField,
   newDraft,
   notifyFailure,
   toggleColumn,
@@ -70,7 +71,7 @@ function Segments<T extends string>({
   );
 }
 
-/** Adds a target to `scope`, or changes `editing`. Every write stays pending until the settings are read again; the add's body leaves the mutation cache once it is done, as its answer holds a signing secret. */
+/** Adds a target to `scope`, or changes `editing`. A change of `scope` keeps what the person typed. Every write stays pending until the settings are read again; the add's body leaves the mutation cache once it is done, as its answer holds a signing secret. */
 export function TargetForm({
   scope,
   editing,
@@ -110,6 +111,8 @@ export function TargetForm({
     },
   });
   const busy = !canWrite || save.isPending;
+  const refusedField = save.isError ? failureField(save.error) : null;
+  const refusal = save.isError ? notifyFailure(save.error) : null;
   const submit = (event: SyntheticEvent) => {
     event.preventDefault();
     const checked = checkDraft(draft, editing !== undefined);
@@ -165,7 +168,9 @@ export function TargetForm({
         spellCheck={false}
         className="font-mono"
         value={draft.url}
-        error={errors.url}
+        error={
+          errors.url ?? (refusedField === "url" ? refusal?.text : undefined)
+        }
         disabled={busy}
         onChange={(event) => {
           setDraft({ ...draft, url: event.target.value });
@@ -263,7 +268,9 @@ export function TargetForm({
           </Button>
         </div>
       </div>
-      {save.isError ? <ErrorNote failure={notifyFailure(save.error)} /> : null}
+      {refusal !== null && refusedField === null ? (
+        <ErrorNote failure={refusal} />
+      ) : null}
     </form>
   );
 }

@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { KeyRound, RefreshCw, Save, X } from "lucide-react";
+import { Check, Copy, KeyRound, RefreshCw, Save, X } from "lucide-react";
 import { useState, type ReactNode, type SyntheticEvent } from "react";
 import { apiErrorCode } from "@/api/errors";
 import {
@@ -11,6 +11,7 @@ import {
 import { projectNotifyQuery, sessionQuery } from "@/api/queries";
 import { Button, IconButton } from "@/components/button/Button";
 import { Checkbox, TextField } from "@/components/form/controls";
+import { copyOutcome, type CopyState } from "@/components/mono/commitCopy";
 import { Mono } from "@/components/mono/Mono";
 import { FailurePanel } from "@/components/states/FailurePanel";
 import { Skeleton } from "@/components/states/Skeleton";
@@ -58,25 +59,41 @@ function SecretPanel({
   added: NotifyTargetAdded;
   onClose: () => void;
 }) {
+  const [copy, setCopy] = useState<CopyState>("idle");
+  const secret = added.secret ?? "";
   return (
-    <div
-      role="status"
-      className="flex items-start justify-between gap-12 rounded-m bg-warning-soft px-14 py-12"
-    >
+    <div className="flex items-start justify-between gap-12 rounded-m bg-warning-soft px-14 py-12">
       <div className="flex min-w-0 flex-col gap-6">
         <p className="flex items-center gap-6 text-bar font-semibold text-warning">
           <KeyRound aria-hidden="true" size={14} />
           Signing secret of {added.target.name}
         </p>
-        <Mono className="text-meta break-all text-text">{added.secret}</Mono>
+        <Mono className="text-meta break-all text-text">{secret}</Mono>
         <p className="text-meta text-text-muted">
           fold shows it only now. Give it to the receiver, which checks the
           webhook-signature header with it.
         </p>
       </div>
-      <IconButton aria-label="Close" onClick={onClose}>
-        <X aria-hidden="true" size={15} />
-      </IconButton>
+      <div className="flex shrink-0 items-center gap-4">
+        <IconButton
+          aria-label="Copy the signing secret"
+          onClick={() => {
+            void copyOutcome(secret, navigator.clipboard).then(setCopy);
+          }}
+        >
+          {copy === "copied" ? (
+            <Check aria-hidden="true" size={15} />
+          ) : (
+            <Copy aria-hidden="true" size={15} />
+          )}
+        </IconButton>
+        <span role="status" className="sr-only">
+          {copy === "copied" ? "Copied" : copy === "failed" ? "Not copied" : ""}
+        </span>
+        <IconButton aria-label="Close" onClick={onClose}>
+          <X aria-hidden="true" size={15} />
+        </IconButton>
+      </div>
     </div>
   );
 }
@@ -203,6 +220,7 @@ export function SettingsScreen({ slug }: { slug: string }) {
         </div>
         {secret ? (
           <SecretPanel
+            key={secret.secret}
             added={secret}
             onClose={() => {
               setSecret(null);
@@ -244,10 +262,9 @@ export function SettingsScreen({ slug }: { slug: string }) {
                 slug={slug}
                 targets={[
                   ...project.data.targets,
-                  ...(project.data.use_host_targets
-                    ? project.data.host_targets
-                    : []),
+                  ...project.data.host_targets,
                 ]}
+                usesHostTargets={project.data.use_host_targets}
                 canWrite={canWrite}
                 onSecret={showSecret}
               />
@@ -259,7 +276,6 @@ export function SettingsScreen({ slug }: { slug: string }) {
                 onCheckedChange={setHost}
               />
               <TargetForm
-                key={host ? "host" : "project"}
                 scope={host ? { kind: "host" } : { kind: "project", slug }}
                 canWrite={canWrite}
                 onSaved={async (added) => {

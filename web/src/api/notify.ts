@@ -25,10 +25,6 @@ export async function getProjectNotify(slug: string): Promise<ProjectNotify> {
   );
 }
 
-export async function getHostNotify(): Promise<HostNotify> {
-  return unwrap(api.GET("/api/v1/notify"));
-}
-
 /** Sets the web address that links in notices start with; null sends notices without links. */
 export async function setWebUrl(webUrl: string | null): Promise<HostNotify> {
   return unwrap(api.PUT("/api/v1/notify", { body: { web_url: webUrl } }));

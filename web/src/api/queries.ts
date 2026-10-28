@@ -8,7 +8,7 @@ import {
   listProposalThreads,
   listThreads,
 } from "./messages";
-import { getHostNotify, getProjectNotify, listNotifySends } from "./notify";
+import { getProjectNotify, listNotifySends } from "./notify";
 import { getProject, listProjects } from "./projects";
 import { localDayStart } from "../format/days";
 import {
@@ -300,9 +300,6 @@ export const projectNotifyQuery = (slug: string) =>
     queryKey: keys.notify(slug),
     queryFn: () => getProjectNotify(slug),
   });
-
-export const hostNotifyQuery = () =>
-  queryOptions({ queryKey: keys.hostNotify(), queryFn: getHostNotify });
 
 export const notifySendsQuery = (slug: string, target: string) =>
   queryOptions({

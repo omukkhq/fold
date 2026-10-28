@@ -5,7 +5,6 @@ import { isApiError } from "./errors";
 import {
   addNotifyTarget,
   editNotifyTarget,
-  getHostNotify,
   getProjectNotify,
   listNotifySends,
   removeNotifyTarget,
@@ -34,16 +33,13 @@ describe("the notice settings", () => {
   it("read and write the project's and the host's settings", async () => {
     const calls = stubFetch({
       "GET /api/v1/projects/demo/notify": { body: settings },
-      "GET /api/v1/notify": { body: { targets: [], web_url: null } },
       "PUT /api/v1/notify": { body: { targets: [], web_url: "x" } },
       "PUT /api/v1/projects/demo/notify": { body: settings },
     });
     expect(await getProjectNotify("demo")).toEqual(settings);
-    expect((await getHostNotify()).targets).toEqual([]);
     expect((await setWebUrl("x")).web_url).toBe("x");
     await setUseHostTargets("demo", false);
     expect(calls.map((call) => call.body)).toEqual([
-      undefined,
       undefined,
       { web_url: "x" },
       { use_host_targets: false },

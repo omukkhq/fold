@@ -1,4 +1,6 @@
+import type { QueryKey } from "@tanstack/react-query";
 import { ApiError, apiErrorCode } from "@/api/errors";
+import { keys } from "@/api/keys";
 import type {
   BoardColumn,
   NewNotifyTarget,
@@ -10,9 +12,18 @@ import type {
   NotifyTargetKind,
   ProjectNotify,
 } from "@/api/notify";
+import { COLUMNS } from "@/features/board/columns";
 import { failureText } from "@/format/failure";
 import { formatAsOf, formatSince } from "@/format/time";
 import type { Failure } from "../workers/startLead";
+
+const NOTIFY_READ = keys.notify("")[1];
+const NEEDS_YOU_READ = keys.needsYou("")[1];
+
+/** The reads a person's own notice write refreshes in every project: a host target shows on every project's page, and a rotation, the host switch and the web address store no event that would refresh them. A change of a target's state can open or end a Needs you item. */
+export function refreshedByNotifyWrite(queryKey: QueryKey): boolean {
+  return queryKey[1] === NOTIFY_READ || queryKey[1] === NEEDS_YOU_READ;
+}
 
 /** The events a target selects, in the order the form lists them, with the words of each box. `webhook.test` is not among them: every test send carries it. */
 export const EVENT_OPTIONS: readonly {
@@ -58,14 +69,12 @@ export const KIND_OPTIONS: readonly {
   { kind: "discord", label: "Discord" },
 ];
 
+/** The board's columns, in its order and with its names. */
 export const COLUMN_OPTIONS: readonly { column: BoardColumn; label: string }[] =
-  [
-    { column: "backlog", label: "Backlog" },
-    { column: "todo", label: "To do" },
-    { column: "in_progress", label: "In progress" },
-    { column: "review", label: "Review" },
-    { column: "done", label: "Done" },
-  ];
+  COLUMNS.map((column) => ({ column: column.status, label: column.name }));
+
+/** How long the note of a test that got through stays on screen. */
+export const TEST_NOTE_MS = 8_000;
 
 export const DEFAULT_WINDOW = 15;
 export const MAX_WINDOW = 3600;
@@ -265,6 +274,8 @@ export interface TargetView {
   /** The kind, the URL without its path and the selection, such as `Slack · <host>/… · Recommended (9 events)`. */
   detail: string;
   scope: string;
+  /** A host target this project does not send to: listed so that a person can still change it, but greyed. */
+  unused: boolean;
   state: { label: string; tone: Tone };
   /** How the sends go now, such as `Sent 2 min ago` or `3 sends failed · next try in 4 min`; null before the first send. */
   health: string | null;
@@ -311,8 +322,13 @@ function waitText(now: number, at: number): string {
     : `next try in ${String(minutes)} min`;
 }
 
-/** One row of the target list. */
-export function targetView(target: NotifyTarget, now: number): TargetView {
+/** One row of the target list. `usesHostTargets` is the project's switch: while it is off, a host target gets none of this project's notices. */
+export function targetView(
+  target: NotifyTarget,
+  now: number,
+  usesHostTargets = true,
+): TargetView {
+  const unused = target.host && !usesHostTargets;
   const state: TargetView["state"] =
     target.state === "on"
       ? { label: "On", tone: "ok" }
@@ -333,10 +349,24 @@ export function targetView(target: NotifyTarget, now: number): TargetView {
   return {
     title: target.name,
     detail: `${kindLabel(target.kind)} · ${target.url} · ${selectionText(target)}`,
-    scope: target.host ? "Host target" : "This project",
+    scope: target.host
+      ? unused
+        ? "Host target · this project does not use the host targets"
+        : "Host target"
+      : "This project",
+    unused,
     state,
     health: parts.length === 0 ? null : parts.join(" · "),
   };
+}
+
+/** The hint of a target's on and off box. */
+export function enabledHint(target: NotifyTarget, pending: boolean): string {
+  if (pending) return "Saving…";
+  if (!target.enabled) return "Off: fold sends this target nothing.";
+  return target.state === "gone" || target.state === "failing"
+    ? "fold turned it off; a test that gets through turns it on again."
+    : "fold sends this target the events it selected.";
 }
 
 export interface SendView {
@@ -397,12 +427,22 @@ export function hostTargetsHint(settings: ProjectNotify): string {
 /** The hint of the settings: without a web address, notices carry no links. */
 export function webUrlHint(webUrl: string | null): string {
   return webUrl === null
-    ? "Notices carry no links until you set the address people open fold at."
-    : `Links in notices start with ${webUrl}.`;
+    ? "The address is the host's, for every project: notices carry no links until you set the address people open fold at."
+    : `The address is the host's, for every project: links in notices start with ${webUrl}.`;
 }
 
 function daemonMessage(error: unknown): string {
   return error instanceof ApiError ? error.message : "";
+}
+
+/** The daemon's words with a capital first letter. */
+function sentence(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** The field of the form that a refusal is about, for the refusals that name one field only. */
+export function failureField(error: unknown): DraftField | null {
+  return apiErrorCode(error) === "plaintext_notify_target" ? "url" : null;
 }
 
 /** A refused write or a failed test, worded for its code. A failed test also says how the receiver answered, in the daemon's words, which never hold a URL or a secret. */
@@ -413,10 +453,12 @@ export function notifyFailure(error: unknown): Failure {
     case "notify_send_failed":
       return {
         code,
-        text:
-          reason === ""
-            ? "The test was not sent."
-            : `The test was not sent: ${reason}.`,
+        text: reason === "" ? "The test send failed." : `${sentence(reason)}.`,
+      };
+    case "notify_target_inactive":
+      return {
+        code,
+        text: "fold sends nothing to this target now: it is off, or it is a host target and this project does not use the host targets.",
       };
     case "invalid_notify_target":
     case "plaintext_notify_target":

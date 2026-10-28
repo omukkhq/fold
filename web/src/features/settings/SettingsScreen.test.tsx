@@ -66,7 +66,7 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByText("2 targets get this project's notices."),
     ).toBeTruthy();
-    expect(screen.getByText(/Notices carry no links/)).toBeTruthy();
+    expect(screen.getByText(/notices carry no links/)).toBeTruthy();
     expect(
       screen
         .getByRole("checkbox", { name: /Use the host targets/ })
@@ -162,10 +162,10 @@ describe("SettingsScreen", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Send a test through Release bot" }),
     );
-    expect(await screen.findByText("The test was not sent.")).toBeTruthy();
-    const sends = screen.getAllByRole("button", { name: "Sends" })[0];
-    if (sends === undefined) throw new Error("no Sends button");
-    await userEvent.click(sends);
+    expect(await screen.findByText("The test send failed.")).toBeTruthy();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Sends of Team Slack" }),
+    );
     const log = await screen.findByRole("region", {
       name: "Recent sends of Team Slack",
     });
@@ -187,7 +187,12 @@ describe("SettingsScreen", () => {
       await screen.findByText(/only a person changes where notices go/),
     ).toBeTruthy();
     const list = await screen.findByRole("list", { name: "Targets" });
-    expect(within(list).queryByText("Release bot")).toBeNull();
+    const host = within(list).getByRole("listitem", { name: "Release bot" });
+    expect(
+      within(host).getByText(
+        "Host target · this project does not use the host targets",
+      ),
+    ).toBeTruthy();
     expect(
       screen
         .getByRole<HTMLButtonElement>("button", {
@@ -195,5 +200,145 @@ describe("SettingsScreen", () => {
         })
         .hasAttribute("disabled"),
     ).toBe(true);
+  });
+
+  it("removes a target only once the person confirms, and stays pending until the daemon answers", async () => {
+    let removed = false;
+    let answer: (() => void) | undefined;
+    const calls = stubFetch({
+      "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+      "GET /api/v1/projects/demo/notify": () => ({
+        body: settings({ targets: removed ? [] : [notifyTarget()] }),
+      }),
+      "DELETE /api/v1/projects/demo/notify/targets/nt-1": () =>
+        new Promise((resolve) => {
+          answer = () => {
+            removed = true;
+            resolve({ status: 204 });
+          };
+        }),
+    });
+    show();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Remove Team Slack" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Remove Team Slack?",
+    });
+    expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Remove target" }),
+    );
+    expect(
+      await within(dialog).findByRole("button", { name: /Removing/ }),
+    ).toBeTruthy();
+    answer?.();
+    await vi.waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    const list = await screen.findByRole("list", { name: "Targets" });
+    await vi.waitFor(() => {
+      expect(within(list).queryByText("Team Slack")).toBeNull();
+    });
+  });
+
+  it("turns a target off with its box, showing the daemon's value", async () => {
+    let enabled = true;
+    const calls = stubFetch({
+      "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+      "GET /api/v1/projects/demo/notify": () => ({
+        body: settings({
+          targets: [notifyTarget({ enabled, state: enabled ? "on" : "off" })],
+        }),
+      }),
+      "PUT /api/v1/projects/demo/notify/targets/nt-1": () => {
+        enabled = false;
+        return { body: notifyTarget({ enabled: false, state: "off" }) };
+      },
+    });
+    show();
+    const box = await screen.findByRole("checkbox", {
+      name: /Send notices to Team Slack/,
+    });
+    expect(box.getAttribute("aria-checked")).toBe("true");
+    await userEvent.click(box);
+    await vi.waitFor(() => {
+      expect(
+        screen
+          .getByRole("checkbox", { name: /Send notices to Team Slack/ })
+          .getAttribute("aria-checked"),
+      ).toBe("false");
+    });
+    expect(calls.find((call) => call.method === "PUT")?.body).toEqual({
+      enabled: false,
+    });
+  });
+
+  it("shows a plain-text refusal at the URL and keeps the form when the scope changes", async () => {
+    stubFetch({
+      "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+      "GET /api/v1/projects/demo/notify": { body: settings() },
+      "POST /api/v1/notify/targets": {
+        status: 400,
+        body: {
+          error: {
+            code: "plaintext_notify_target",
+            message: "a target without TLS must be on this machine",
+            details: {},
+          },
+        },
+      },
+    });
+    show();
+    const form = await screen.findByRole("form", { name: "Add a target" });
+    await userEvent.type(within(form).getByLabelText("Name"), "CI");
+    await userEvent.type(within(form).getByLabelText(/Webhook URL/), SECURE);
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /Add the new target to the host/ }),
+    );
+    const kept = screen.getByRole("form", { name: "Add a target" });
+    expect(within(kept).getByLabelText<HTMLInputElement>("Name").value).toBe(
+      "CI",
+    );
+    await userEvent.click(within(kept).getByRole("button", { name: "Save" }));
+    const url = within(kept).getByLabelText(/Webhook URL/);
+    await vi.waitFor(() => {
+      expect(url.getAttribute("aria-invalid")).toBe("true");
+    });
+    expect(
+      within(kept).getByText(
+        "The daemon refused the target: a target without TLS must be on this machine.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("copies the signing secret of a rotation", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    stubFetch({
+      "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
+      "GET /api/v1/projects/demo/notify": { body: settings() },
+      "POST /api/v1/notify/targets/nt-2/rotate": {
+        body: {
+          target: notifyTarget({ id: "nt-2", name: "Release bot", host: true }),
+          secret: "whsec_NEW",
+        },
+      },
+    });
+    show();
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: "New signing secret for Release bot",
+      }),
+    );
+    expect(await screen.findByText("whsec_NEW")).toBeTruthy();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Copy the signing secret" }),
+    );
+    expect(writeText).toHaveBeenCalledWith("whsec_NEW");
+    expect(await screen.findByText("Copied")).toBeTruthy();
   });
 });

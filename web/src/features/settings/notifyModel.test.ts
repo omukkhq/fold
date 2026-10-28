@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/api/errors";
+import { keys } from "@/api/keys";
 import { notifySend, notifyTarget } from "@/test/notify";
 import {
+  COLUMN_OPTIONS,
   EVENT_OPTIONS,
   checkDraft,
   checkWebUrl,
   choosePreset,
   choosesMoves,
   draftOf,
+  enabledHint,
+  failureField,
   hostTargetsHint,
   isLoopbackHost,
   newDraft,
@@ -15,6 +19,7 @@ import {
   presetEvents,
   presetOf,
   projectStatus,
+  refreshedByNotifyWrite,
   selectionText,
   sendView,
   targetView,
@@ -157,6 +162,7 @@ describe("targetView", () => {
       title: "Team Slack",
       detail: `Slack · ${["https:", "", "hooks.slack.com", "…"].join("/")} · Recommended (9 events) · card moves to Review, Done`,
       scope: "Host target",
+      unused: false,
       state: { label: "On", tone: "ok" },
       health: "Sent 2 min ago",
     });
@@ -192,6 +198,41 @@ describe("targetView", () => {
     expect(targetView(notifyTarget({ kind: "webhook" }), NOW).detail).toMatch(
       /^Generic JSON/,
     );
+  });
+
+  it("greys a host target the project does not use, and only a host target", () => {
+    const host = targetView(notifyTarget({ host: true }), NOW, false);
+    expect(host.unused).toBe(true);
+    expect(host.scope).toBe(
+      "Host target · this project does not use the host targets",
+    );
+    const own = targetView(notifyTarget({ host: false }), NOW, false);
+    expect(own.unused).toBe(false);
+    expect(own.scope).toBe("This project");
+  });
+
+  it("says what the on and off box does", () => {
+    expect(enabledHint(notifyTarget(), true)).toBe("Saving…");
+    expect(
+      enabledHint(notifyTarget({ enabled: false, state: "off" }), false),
+    ).toMatch(/^Off/);
+    expect(enabledHint(notifyTarget({ state: "failing" }), false)).toMatch(
+      /test that gets through/,
+    );
+    expect(enabledHint(notifyTarget({ state: "gone" }), false)).toMatch(
+      /test that gets through/,
+    );
+    expect(enabledHint(notifyTarget(), false)).toMatch(/events it selected/);
+  });
+
+  it("names the board's columns as the board does", () => {
+    expect(COLUMN_OPTIONS.map((option) => option.label)).toEqual([
+      "Backlog",
+      "Todo",
+      "In Progress",
+      "Review",
+      "Done",
+    ]);
   });
 
   it("words each selection", () => {
@@ -292,8 +333,10 @@ describe("the settings texts", () => {
     expect(hostTargetsHint({ ...settings, use_host_targets: false })).toMatch(
       /Only/,
     );
-    expect(webUrlHint(null)).toMatch(/no links/);
-    expect(webUrlHint("x")).toBe("Links in notices start with x.");
+    expect(webUrlHint(null)).toMatch(/every project: notices carry no links/);
+    expect(webUrlHint("x")).toBe(
+      "The address is the host's, for every project: links in notices start with x.",
+    );
   });
 
   it("word the refusals", () => {
@@ -301,9 +344,12 @@ describe("the settings texts", () => {
       notifyFailure(
         refused("notify_send_failed", "the receiver answered HTTP 503"),
       ).text,
-    ).toBe("The test was not sent: the receiver answered HTTP 503.");
+    ).toBe("The receiver answered HTTP 503.");
     expect(notifyFailure(refused("notify_send_failed")).text).toBe(
-      "The test was not sent.",
+      "The test send failed.",
+    );
+    expect(notifyFailure(refused("notify_target_inactive")).text).toMatch(
+      /^fold sends nothing to this target now/,
     );
     expect(
       notifyFailure(refused("plaintext_notify_target", "plain")).text,
@@ -322,9 +368,25 @@ describe("the settings texts", () => {
     expect(notifyFailure(new Error("x")).code).toBeNull();
   });
 
+  it("puts a plain-text refusal on the URL field and nothing else on a field", () => {
+    expect(failureField(refused("plaintext_notify_target"))).toBe("url");
+    expect(failureField(refused("invalid_notify_target"))).toBeNull();
+    expect(failureField(new Error("x"))).toBeNull();
+  });
+
   it("checks the web address", () => {
     expect(checkWebUrl("  ")).toEqual({ webUrl: null });
     expect(checkWebUrl(`${SECURE}/`)).toEqual({ webUrl: SECURE });
     expect(checkWebUrl("fold.example.org").error).toBeDefined();
+  });
+});
+
+describe("refreshedByNotifyWrite", () => {
+  it("refreshes the notice settings, the send logs and Needs you of every project, and nothing else", () => {
+    expect(refreshedByNotifyWrite(keys.notify("demo"))).toBe(true);
+    expect(refreshedByNotifyWrite(keys.notify("other"))).toBe(true);
+    expect(refreshedByNotifyWrite(keys.notifySends("demo", "nt-1"))).toBe(true);
+    expect(refreshedByNotifyWrite(keys.needsYou("demo"))).toBe(true);
+    expect(refreshedByNotifyWrite(keys.board("demo"))).toBe(false);
   });
 });
