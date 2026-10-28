@@ -45,8 +45,8 @@ function FileRow({
   return (
     <li
       className={cn(
-        "flex items-center gap-10 rounded-m bg-surface px-12 py-8 inset-ring",
-        problem ? "inset-ring-bad" : "inset-ring-line",
+        "flex items-center gap-10 rounded-m px-12 py-8",
+        problem ? "bg-bad-soft" : "bg-sunken",
       )}
     >
       <Icon aria-hidden="true" size={15} className="shrink-0 text-text-2" />
@@ -64,6 +64,8 @@ function FileRow({
       <IconButton
         aria-label={`Remove ${file.name}`}
         size="sm"
+        // The row is sunken, which the quiet fill matches, so the button takes the surface to keep an edge.
+        className="bg-surface hover:bg-line"
         disabled={disabled}
         onClick={onRemove}
       >
@@ -137,7 +139,7 @@ export function NewRequestDialog({
         {/* z-10 matches the task dialog, so the request dialog opened from New task draws over it. */}
         <RadixDialog.Overlay className="fixed inset-0 z-10 bg-scrim" />
         <RadixDialog.Content className="fixed top-1/2 z-10 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-surface shadow-dialog outline-none">
-          <div className="flex items-center justify-between border-b border-line px-24 py-16">
+          <div className="flex items-center justify-between px-24 pt-18 pb-4">
             <RadixDialog.Title className="text-16 leading-tight font-semibold text-text">
               New request
             </RadixDialog.Title>
@@ -223,8 +225,8 @@ export function NewRequestDialog({
                     if (!isSubmitting) take([...event.dataTransfer.files]);
                   }}
                   className={cn(
-                    "flex items-center justify-center gap-8 rounded-m bg-sunken px-12 py-12 text-14 text-text-2 inset-ring inset-ring-line disabled:cursor-not-allowed disabled:opacity-60",
-                    dragging && "inset-ring-accent",
+                    "flex items-center justify-center gap-8 rounded-m px-12 py-12 text-14 text-text-2 disabled:cursor-not-allowed disabled:opacity-60",
+                    dragging ? "bg-accent-soft text-text" : "bg-sunken",
                     focusRing,
                   )}
                 >
@@ -267,7 +269,7 @@ export function NewRequestDialog({
                 ) : null}
               </div>
             </div>
-            <div className="flex items-center gap-12 border-t border-line px-24 py-14">
+            <div className="flex items-center gap-12 px-24 pt-4 pb-20">
               <p className="flex min-w-0 flex-1 items-center gap-6 text-14 text-text-2">
                 <UserRound aria-hidden="true" size={15} className="shrink-0" />
                 {human === null

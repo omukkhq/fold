@@ -68,7 +68,7 @@ function WorkspaceSide({
       })
     : [];
   return (
-    <aside className="flex w-side-panel shrink-0 flex-col gap-20">
+    <aside className="flex w-full shrink-0 flex-col gap-20 lg:w-side-panel">
       <section className="flex flex-col gap-8">
         <h2 className="font-title text-13 leading-tight font-semibold text-text-2">
           This view
@@ -143,7 +143,7 @@ export function DiffScreen({
         now={now}
         readAt={comparison.source === "working" ? readAt : null}
       />
-      <div className="flex items-start gap-20 px-16 pt-4 pb-24 md:px-24">
+      <div className="flex flex-col gap-20 px-16 pt-4 pb-24 md:px-24 lg:flex-row lg:items-start">
         {shown === null ? (
           <EmptyPanel title="No changes" className="flex-1">
             {`${comparison.from.id} and ${comparison.to.id} hold the same files.`}
