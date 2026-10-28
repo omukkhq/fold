@@ -186,9 +186,17 @@ describe("DiffScreen", () => {
         to: state("revision", "r8"),
       }),
     );
+    const title = await screen.findByRole("heading", {
+      name: "Changes from r7 to r8",
+    });
+    const older = screen.getByText("r7", { selector: "span" });
+    const newer = screen.getByText("r8", { selector: "span" });
     expect(
-      await screen.findByRole("heading", { name: "Changes from r7 to r8" }),
+      older.compareDocumentPosition(newer) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    expect(title.parentElement?.nextElementSibling?.textContent).toContain(
+      "r7tor8",
+    );
     expect(screen.queryByText(/They are not history/)).toBeNull();
     expect(screen.queryByText(/live · read/)).toBeNull();
   });

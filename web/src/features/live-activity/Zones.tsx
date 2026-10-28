@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import type { WorkspaceEntry } from "../../api/workspaces";
+import { Tooltip } from "../../components/overlay/Tooltip";
 import { formatSince } from "../../format/time";
 import { cn } from "../../lib/cn";
 import { focusRing } from "../../lib/focus";
@@ -135,7 +136,9 @@ export function RecordedZone({ entry, items, now }: RecordedZoneProps) {
         <ul className="flex flex-col gap-6">
           {items.map((item) => (
             <li key={item.id} className="flex items-center gap-8">
-              <IdLink href={item.href}>{item.id}</IdLink>
+              <Tooltip content={item.text}>
+                <IdLink href={item.href}>{item.id}</IdLink>
+              </Tooltip>
               <span className="min-w-0 flex-1 truncate text-bar text-text">
                 {item.text}
               </span>

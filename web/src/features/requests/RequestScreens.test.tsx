@@ -926,7 +926,7 @@ describe("Request detail", () => {
   it("explains an id the project does not have", async () => {
     renderAt("/p/demo/requests/RQ-99");
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("RQ-99 does not exist in this project");
+    expect(alert.textContent).toContain("Request RQ-99 not found");
     expect(
       within(alert)
         .getByRole("link", { name: "Back to requests" })

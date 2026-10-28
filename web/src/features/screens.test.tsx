@@ -510,6 +510,88 @@ describe("A project fold removed", () => {
   });
 });
 
+describe("A not-found inside an open project", () => {
+  function stubProject(
+    batch: StubReply = errorReply(404, "review_batch_not_found"),
+  ) {
+    stubFetch({
+      ...shellRoutes(["demo"]),
+      "GET /api/v1/projects/demo/workers": { body: workerList() },
+      "GET /api/v1/projects/demo/events": () =>
+        new Promise<StubReply>(() => undefined),
+      "GET /api/v1/projects/demo/reviews/batches/rb-1": batch,
+    });
+  }
+
+  /** The not-found state under the project's top bar and tabs, never the project not-found state. */
+  async function missingInShell(title: string, back: string) {
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(title);
+    expect(
+      within(alert)
+        .getAllByRole("link")
+        .map((link) => [link.textContent, link.getAttribute("href")]),
+    ).toEqual([[expect.stringContaining("Back to") as string, back]]);
+    expect(screen.getByRole("navigation", { name: "Project" })).toBeTruthy();
+    expect(screen.queryByText("Project not found")).toBeNull();
+    return alert;
+  }
+
+  it("says a batch the daemon does not have is not found and leads to the proposals", async () => {
+    stubProject();
+    renderAt("/p/demo/batches/rb-1");
+    const alert = await missingInShell(
+      "Batch rb-1 not found",
+      "/p/demo/proposals",
+    );
+    expect(alert.textContent).toContain("code: review_batch_not_found");
+  });
+
+  it("shows the error state, not a missing batch, when the daemon fails to answer for the batch", async () => {
+    stubProject(errorReply(500, "internal"));
+    renderAt("/p/demo/batches/rb-1");
+    expect(await screen.findByText("This screen could not load.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "Project" })).toBeTruthy();
+    expect(screen.queryByText(/not found/)).toBeNull();
+  });
+
+  it("says the same of an id that is no batch id", async () => {
+    stubProject();
+    renderAt("/p/demo/batches/P-1");
+    await missingInShell("Batch P-1 not found", "/p/demo/proposals");
+  });
+
+  it("names a malformed task, proposal or request id and leads to the board or its list", async () => {
+    stubProject();
+    renderAt("/p/demo/t/abc");
+    await missingInShell("Task abc not found", "/p/demo/board");
+    cleanup();
+    renderAt("/p/demo/proposals/xyz");
+    await missingInShell("Proposal xyz not found", "/p/demo/proposals");
+    cleanup();
+    renderAt("/p/demo/requests/RQ-x");
+    await missingInShell("Request RQ-x not found", "/p/demo/requests");
+  });
+
+  it("says a page the project does not have is not found", async () => {
+    stubProject();
+    renderAt("/p/demo/nowhere");
+    await missingInShell("Page not found", "/p/demo/board");
+    cleanup();
+    renderAt("/p/demo/diff");
+    await missingInShell("Page not found", "/p/demo/board");
+  });
+
+  it("keeps the project not-found state for an address that is no project slug", async () => {
+    stubFetch(shellRoutes(["demo"]));
+    renderAt("/p/Not_A_Slug/board");
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Project not found");
+    expect(screen.queryByRole("navigation", { name: "Project" })).toBeNull();
+  });
+});
+
 describe("The top bar", () => {
   it("links the wordmark to the projects page and switches among the five most recent projects", async () => {
     const slugs = ["a", "b", "c", "d", "e", "f"];
