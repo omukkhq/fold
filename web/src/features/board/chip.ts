@@ -43,8 +43,9 @@ type ChipCard = Pick<
  * The one chip a card shows, or null. The first state that holds wins: a person must answer or approve, a human
  * blocker, an unfinished prerequisite (before the stall, which it causes), a check run that goes, which no person
  * waits for and which the daemon never counts as a stall, a stalled worker or a stale claim, a proposal back with its
- * author, then a wait on others. `run` is the card's run as the live frame of its workspace has it. A Done card has
- * no chip.
+ * author, then a wait on others. A stale claim still shows over a check run: a worker that waits for a long run makes
+ * no calls, so its lease can run out while the run goes. `run` is the card's run as the live frame of its workspace
+ * has it. A Done card has no chip.
  */
 export function cardChip(
   card: ChipCard,
@@ -66,13 +67,14 @@ export function cardChip(
   if (blocked !== null) {
     return { tone: "bad", icon: OctagonAlert, text: blocked };
   }
-  if (run !== null) {
+  const staleClaim = hasKind(card.attention, "stale_claim");
+  if (run !== null && !staleClaim) {
     return { tone: "neutral", icon: ListChecks, text: "Running checks" };
   }
   if (hasKind(card.attention, "stalled")) {
     return { tone: "warn", icon: Hand, text: "Stalled · needs you" };
   }
-  if (hasKind(card.attention, "stale_claim")) {
+  if (staleClaim) {
     return { tone: "warn", icon: Hand, text: "Stale claim · needs you" };
   }
   return proposalChip(card);
