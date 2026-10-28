@@ -917,6 +917,15 @@ describe("the task dialog route", () => {
       within(dialog).queryByRole("button", { name: "Copy link" }),
     ).toBeNull();
   }, 15_000);
+
+  it("names its two columns, and each one takes keyboard focus so the keys scroll it", async () => {
+    const { dialog } = await openTask();
+    expect(region(dialog, "Task").tabIndex).toBe(0);
+    expect(
+      within(dialog).getByRole("complementary", { name: "Task details" })
+        .tabIndex,
+    ).toBe(0);
+  }, 15_000);
 });
 
 describe("creating a task", () => {
