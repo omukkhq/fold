@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { boardCards, boardQuery } from "@/api/board";
 import { keys } from "@/api/keys";
@@ -17,16 +17,9 @@ import {
   sendRequestMessage,
   type RequestDetail,
 } from "@/api/requests";
-import { HrefLink } from "@/app/HrefLink";
-import { missingState } from "@/app/missingState";
+import { MissingPanel } from "@/app/MissingPanel";
 import { Button } from "@/components/button/Button";
-import {
-  buttonClasses,
-  buttonIconClass,
-} from "@/components/button/buttonStyles";
 import { Skeleton } from "@/components/states/Skeleton";
-import { cn } from "@/lib/cn";
-import { focusRing } from "@/lib/focus";
 import { useMediaQuery } from "@/lib/pageState";
 import { useNow } from "@/live/useNow";
 import { knownFrom } from "@/mentions/parse";
@@ -204,41 +197,24 @@ export function RequestDetailScreen({
   });
 
   if (query.isPending) return <RequestDetailPending slug={slug} id={id} />;
+  if (detail === null && !query.isError) {
+    return <MissingPanel slug={slug} missing={{ kind: "request", id }} />;
+  }
   if (query.isError || detail === null) {
-    const missing = detail === null && !query.isError;
-    const absent = missingState(slug, { kind: "request", id });
     return (
       <div className="flex flex-col gap-16 px-16 pt-16 pb-24 md:px-28 md:pt-20 md:pb-32">
         <Crumb slug={slug} id={id} />
         <FailurePanel
-          title={missing ? absent.title : `Could not load ${id}`}
-          text={
-            missing
-              ? absent.text
-              : "The daemon answered with an error. Nothing is lost; try again."
-          }
-          code={
-            missing ? "request_not_found" : describeFailure(query.error).code
-          }
+          title={`Could not load ${id}`}
+          text="The daemon answered with an error. Nothing is lost; try again."
+          code={describeFailure(query.error).code}
           action={
-            missing ? (
-              <HrefLink
-                href={absent.href}
-                className={cn(buttonClasses("quiet", "md"), focusRing)}
-              >
-                <span className={buttonIconClass("quiet")}>
-                  <ArrowLeft aria-hidden="true" size={15} />
-                </span>
-                {absent.linkText}
-              </HrefLink>
-            ) : (
-              <Button
-                icon={<RefreshCw aria-hidden="true" size={15} />}
-                onClick={() => void query.refetch()}
-              >
-                Try again
-              </Button>
-            )
+            <Button
+              icon={<RefreshCw aria-hidden="true" size={15} />}
+              onClick={() => void query.refetch()}
+            >
+              Try again
+            </Button>
           }
         />
       </div>
