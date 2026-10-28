@@ -154,6 +154,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
             <div className="px-8 py-8">
               <EmptyPanel
                 icon={MessagesSquare}
+                className="lg:bg-fill"
                 title={
                   data.length === 0 ? "No messages yet" : "No thread matches"
                 }

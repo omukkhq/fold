@@ -84,7 +84,9 @@ export function RequestHeader({
       </h1>
       <p className="flex flex-wrap items-center gap-x-8 gap-y-4 text-14 text-text-2">
         <KindLabel kind={kindOf(detail.request)} />
-        <span aria-hidden="true">·</span>
+        <span aria-hidden="true" className="max-sm:hidden">
+          ·
+        </span>
         <span>
           <ActorText
             segments={metaLine(detail, now)}
