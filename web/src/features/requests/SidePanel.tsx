@@ -15,7 +15,10 @@ import type { ReactNode } from "react";
 import { Controller, useForm } from "react-hook-form";
 import type { RequestDetail } from "@/api/requests";
 import { HrefLink } from "@/app/HrefLink";
+import { Chip } from "@/components/badge/Chip";
 import { Button } from "@/components/button/Button";
+import { Id } from "@/components/id/Id";
+import { IdText } from "@/components/text/IdText";
 import {
   buttonClasses,
   buttonIconClass,
@@ -37,14 +40,71 @@ import {
 } from "./actions";
 import { changesSchema, type ChangesValues } from "./compose";
 import type { Failure } from "./errors";
-import { drafterLine, type CreatedTask } from "./present";
+import {
+  drafterLine,
+  stateChip,
+  statusHeading,
+  type CreatedTask,
+} from "./present";
 import { OVERLINE } from "./RequestContent";
 import { projectPath } from "@/routes/paths";
 
-function Block({ title, children }: { title: string; children: ReactNode }) {
+/** A part of a side card; `quiet` leaves its name to screen readers, where the card's heading already says it. */
+function Block({
+  title,
+  quiet = false,
+  children,
+}: {
+  title: string;
+  quiet?: boolean;
+  children: ReactNode;
+}) {
   return (
     <section aria-label={title} className="flex flex-col gap-8">
-      <h2 className={OVERLINE}>{title}</h2>
+      <h2 className={quiet ? "sr-only" : OVERLINE}>{title}</h2>
+      {children}
+    </section>
+  );
+}
+
+const CARD = "flex flex-col gap-14 rounded-m bg-surface px-18 pt-16 pb-18";
+
+/** The request's state, what it waits for and who acts next, above the actions that state allows. */
+export function StatusCard({
+  detail,
+  human,
+  now,
+  children,
+}: {
+  detail: RequestDetail;
+  human: string | null;
+  now: number;
+  children: ReactNode;
+}) {
+  const chip = stateChip(detail.request, human);
+  return (
+    <section aria-label="Status" className={CARD}>
+      <div className="flex flex-col items-start gap-6">
+        <Chip tone={chip.tone}>{chip.label}</Chip>
+        <h2 className="font-title text-18 leading-tight font-semibold text-text">
+          <ActorText
+            segments={statusHeading(detail, human, now)}
+            personClassName="text-18"
+          />
+        </h2>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** Who drafts the request and its versions. */
+export function AboutCard({ children }: { children: ReactNode }) {
+  return (
+    <section aria-label="About this request" className={CARD}>
+      <h2 className="font-title text-16 leading-tight font-semibold text-text">
+        About this request
+      </h2>
       {children}
     </section>
   );
@@ -117,9 +177,9 @@ export function DecisionPanel({
   });
   const has = (a: RequestAction) => actions.includes(a);
   return (
-    <Block title="Your decision">
-      <p className="text-14 leading-tight text-text-2">
-        {decisionText(r, actions, busy)}
+    <Block title="Your decision" quiet>
+      <p className="text-15 text-text">
+        <IdText text={decisionText(r, actions, busy)} />
       </p>
       {olderDraft ? (
         <p className="text-13 text-text-2">{OLDER_DRAFT_NOTE}</p>
@@ -128,10 +188,11 @@ export function DecisionPanel({
         <>
           <Button
             variant="primary"
+            className="w-full py-9"
             pending={pending === "approve"}
             pendingLabel={`Approving ${v}…`}
             disabled={busy}
-            icon={<Check aria-hidden="true" size={15} />}
+            icon={<Check aria-hidden="true" size={16} />}
             onClick={onApprove}
           >
             Approve {v}
@@ -147,12 +208,9 @@ export function DecisionPanel({
         <form
           noValidate
           onSubmit={(event) => void submit(event)}
-          className="flex flex-col gap-8"
+          className="flex flex-col gap-6 pt-8"
         >
-          <label
-            htmlFor="request-changes"
-            className="text-14 leading-tight font-semibold text-text"
-          >
+          <label htmlFor="request-changes" className={OVERLINE}>
             Comment for {v}
           </label>
           <Controller
@@ -180,10 +238,11 @@ export function DecisionPanel({
           ) : null}
           <Button
             type="submit"
+            className="w-full"
             pending={pending === "request_changes"}
             pendingLabel="Requesting changes…"
             disabled={busy}
-            icon={<MessageSquareWarning aria-hidden="true" size={15} />}
+            icon={<MessageSquareWarning aria-hidden="true" size={16} />}
           >
             Request changes
           </Button>
@@ -194,12 +253,12 @@ export function DecisionPanel({
           ) : null}
         </form>
       ) : null}
-      <div className="flex gap-8">
+      <div className="flex gap-8 pt-4">
         {has("edit") ? (
           <Button
             className="flex-1"
             disabled={busy}
-            icon={<Pencil aria-hidden="true" size={15} />}
+            icon={<Pencil aria-hidden="true" size={16} />}
             onClick={onEdit}
           >
             Edit
@@ -207,11 +266,12 @@ export function DecisionPanel({
         ) : null}
         {has("close") ? (
           <Button
-            className="flex-1 text-bad"
+            variant="danger"
+            className="flex-1"
             pending={pending === "close"}
             pendingLabel="Closing…"
             disabled={busy}
-            icon={<X aria-hidden="true" size={15} />}
+            icon={<X aria-hidden="true" size={16} />}
             onClick={onClose}
           >
             Close
@@ -228,9 +288,13 @@ export function DecisionPanel({
 
 export function ViewerPanel({ detail }: { detail: RequestDetail }) {
   return (
-    <Block title="Decision">
-      <p className="flex items-start gap-8 rounded-m bg-sunken px-12 py-10 text-14 leading-tight text-text-2">
-        <Lock aria-hidden="true" size={15} className="mt-2 shrink-0" />
+    <Block title="Decision" quiet>
+      <p className="flex items-start gap-8 rounded-s bg-fill px-12 py-10 text-14 text-text">
+        <Lock
+          aria-hidden="true"
+          size={16}
+          className="mt-2 shrink-0 text-text-2"
+        />
         <ActorText segments={viewerText(detail.request)} />
       </p>
     </Block>
@@ -264,14 +328,11 @@ export function EditingPanel({
   return (
     <>
       <Block title="Editing">
-        <p className="text-14 leading-tight text-text-2">
+        <p className="text-14 text-text">
           Edit the cards and the edges, then save. fold keeps v{latest} and adds
           your changes as {next}, which starts unapproved.
         </p>
-        <label
-          htmlFor="draft-note"
-          className="text-14 leading-tight font-semibold text-text"
-        >
+        <label htmlFor="draft-note" className={OVERLINE}>
           Note for {next}
         </label>
         <MentionTextarea
@@ -287,14 +348,14 @@ export function EditingPanel({
           variant="primary"
           pending={saving}
           pendingLabel={`Saving ${next}…`}
-          icon={<Save aria-hidden="true" size={15} />}
+          icon={<Save aria-hidden="true" size={16} />}
           onClick={onSave}
         >
           Save as {next}
         </Button>
         <Button
           disabled={saving}
-          icon={<X aria-hidden="true" size={15} />}
+          icon={<X aria-hidden="true" size={16} />}
           onClick={onCancel}
         >
           Cancel
@@ -329,7 +390,7 @@ export function CreatedTasksPanel({
 }) {
   return (
     <Block title="Created tasks">
-      <p className="text-14 leading-tight text-text-2">
+      <p className="text-14 text-text">
         The cards are tasks now. Their columns are calculated like every other
         task.
       </p>
@@ -341,14 +402,12 @@ export function CreatedTasksPanel({
               <HrefLink
                 href={projectPath(slug, "t", t.task)}
                 className={cn(
-                  "flex flex-col gap-4 rounded-m bg-surface px-10 py-8 inset-ring inset-ring-line hover:bg-bg",
+                  "flex flex-col gap-4 rounded-s bg-fill px-12 py-8 hover:bg-line",
                   focusRing,
                 )}
               >
                 <span className="flex items-center gap-8">
-                  <span className="font-mono text-13 font-semibold text-text">
-                    {t.task}
-                  </span>
+                  <Id className="text-13 font-semibold text-text">{t.task}</Id>
                   {t.key ? (
                     <span className="text-13 text-text-2">from {t.key}</span>
                   ) : null}
@@ -373,7 +432,7 @@ export function CreatedTasksPanel({
         className={cn(buttonClasses("quiet", "md"), focusRing)}
       >
         <span className={buttonIconClass("quiet")}>
-          <Kanban aria-hidden="true" size={15} />
+          <Kanban aria-hidden="true" size={16} />
         </span>
         Open on the board
       </HrefLink>
@@ -391,8 +450,8 @@ export function ClosedPanel({
   known: Known;
 }) {
   return (
-    <Block title="Closed">
-      <p className="text-14 leading-tight text-text-2">
+    <Block title="Closed" quiet>
+      <p className="text-14 text-text">
         <PersonName name={detail.request.requester} /> closed the request. It
         only reads now.
       </p>
@@ -452,12 +511,10 @@ export function VersionsBlock({
     <Block title="Versions">
       <ul className="flex flex-col gap-6">
         {[...detail.drafts].reverse().map((d) => (
-          <li
-            key={d.version}
-            className="flex items-baseline gap-8 font-mono text-13"
-          >
+          <li key={d.version} className="flex items-baseline gap-8 text-14">
             <span
               className={cn(
+                "tabular-nums",
                 d.version === latest
                   ? "font-semibold text-text"
                   : "text-text-2",
@@ -468,7 +525,7 @@ export function VersionsBlock({
             <span className="min-w-0 flex-1 truncate text-text-2">
               <PersonName name={d.author} className="text-14" />
             </span>
-            <span className="text-13 text-text-2">
+            <span className="text-13 text-text-2 tabular-nums">
               {d.version === latest ? "current · " : ""}
               {formatAsOfMinute(now, d.created_at)}
             </span>

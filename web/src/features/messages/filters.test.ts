@@ -3,20 +3,21 @@ import { describe, expect, it } from "vitest";
 import type { ThreadView } from "@/api/messages";
 import { message, recipient, thread } from "@/test/messages";
 import {
-  filterLabel,
+  choicesWith,
   filterOptions,
+  filterSummary,
   filterThreads,
   findThread,
   hasAsk,
   searchThreads,
-  showChips,
   showFilter,
+  showOptions,
   startedBy,
+  threadCount,
   withShow,
   replyPlaceholder,
   replyTargets,
   waitingCount,
-  waitingLabel,
 } from "./filters";
 
 const threads = [
@@ -122,13 +123,9 @@ describe("names", () => {
         }),
       ),
     ).toBe("Reply to @api-audit, @api-lead…");
-  });
-});
-
-describe("filterLabel", () => {
-  it("names the filter and its value once set", () => {
-    expect(filterLabel("Agent", undefined)).toBe("Agent");
-    expect(filterLabel("Agent", "frontend")).toBe("Agent: frontend");
+    expect(replyPlaceholder(threads[0] as ThreadView, true)).toBe(
+      "Reply to @fe/ui…  Enter sends, Shift+Enter adds a line",
+    );
   });
 });
 
@@ -139,8 +136,6 @@ describe("the waiting filter", () => {
     ]);
     expect(filterThreads(threads, { waiting: false })).toHaveLength(3);
     expect(waitingCount(threads)).toBe(1);
-    expect(waitingLabel(1)).toBe("Waits for you · 1");
-    expect(waitingLabel(0)).toBe("Waits for you");
   });
 });
 
@@ -226,14 +221,14 @@ describe("searchThreads", () => {
   });
 });
 
-describe("the chip row", () => {
-  it("reads which chip is on, all when none is", () => {
+describe("the Show choice", () => {
+  it("reads which choice is on, all when none is", () => {
     expect(showFilter({})).toBe("all");
     expect(showFilter({ waiting: true, task: "T-1" })).toBe("waiting");
     expect(showFilter({ questions: true })).toBe("questions");
     expect(showFilter({ mine: true })).toBe("mine");
   });
-  it("turns one chip on and the others off, keeping the other filters", () => {
+  it("turns one choice on and the others off, keeping the other filters", () => {
     expect(withShow({ waiting: true, task: "T-1" }, "mine")).toEqual({
       task: "T-1",
       waiting: undefined,
@@ -245,16 +240,38 @@ describe("the chip row", () => {
     expect(showFilter(withShow({}, "waiting"))).toBe("waiting");
   });
   it("counts the waiting threads and offers Mine only to a signed-in human", () => {
-    expect(showChips(threads, "tanim").map((c) => c.label)).toEqual([
-      "All",
-      "Waits for you · 1",
-      "Questions",
-      "Mine",
+    expect(
+      showOptions(threads, "tanim").map((c) => [c.label, c.count]),
+    ).toEqual([
+      ["All threads", null],
+      ["Waits for you", 1],
+      ["Questions", null],
+      ["Mine", null],
     ]);
-    expect(showChips([], null).map((c) => c.label)).toEqual([
-      "All",
-      "Waits for you",
-      "Questions",
+    expect(showOptions([], null).map((c) => [c.label, c.count])).toEqual([
+      ["All threads", null],
+      ["Waits for you", 0],
+      ["Questions", null],
     ]);
+  });
+  it("names the Show choice on the button and counts the other set filters", () => {
+    expect(filterSummary({})).toBe("All threads");
+    expect(filterSummary({ waiting: true })).toBe("Waits for you");
+    expect(filterSummary({ mine: true, agent: "fe", task: "T-1" })).toBe(
+      "Mine · 2 more",
+    );
+    expect(filterSummary({ proposal: "P-1" })).toBe("All threads · 1 more");
+  });
+  it("counts the threads it shows", () => {
+    expect(threadCount(1)).toBe("1 thread");
+    expect(threadCount(5)).toBe("5 threads");
+  });
+});
+
+describe("choicesWith", () => {
+  it("adds the value the address sets when no thread holds it", () => {
+    expect(choicesWith(["T-1"], "T-9")).toEqual(["T-1", "T-9"]);
+    expect(choicesWith(["T-1"], "T-1")).toEqual(["T-1"]);
+    expect(choicesWith(["T-1"], undefined)).toEqual(["T-1"]);
   });
 });

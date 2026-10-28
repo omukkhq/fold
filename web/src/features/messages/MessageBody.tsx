@@ -1,7 +1,9 @@
 import { Fragment } from "react";
 import { HrefLink } from "@/app/HrefLink";
 import { textFlow } from "@/components/text/textFlow";
+import { ID_LINK_CLASSES } from "@/components/id/idStyles";
 import { cn } from "@/lib/cn";
+import { focusRing } from "@/lib/focus";
 import { MentionLink } from "@/mentions/MentionLink";
 import { mentionHref, splitMentions } from "@/mentions/parse";
 import { mentionTag } from "@/mentions/remark";
@@ -28,7 +30,7 @@ export function MessageBody({ body, slug }: { body: string; slug: string }) {
                 <HrefLink
                   key={at}
                   href={segment.href}
-                  className="font-mono text-13 text-accent hover:underline"
+                  className={cn(ID_LINK_CLASSES, focusRing)}
                 >
                   {segment.text}
                 </HrefLink>
