@@ -50,11 +50,7 @@ export function StepText({
           {step.tool}
         </span>
       ) : null}
-      {step.text ? (
-        <span className="truncate" title={step.text}>
-          {step.text}
-        </span>
-      ) : null}
+      {step.text ? <span className="truncate">{step.text}</span> : null}
     </span>
   );
 }

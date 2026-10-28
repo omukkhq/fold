@@ -92,6 +92,8 @@ describe("pills", () => {
     expect(mainPill("offline")).toEqual({ label: "offline", tone: "stopped" });
     expect(pillSpec("failed").fill).toBe("bg-bad-soft");
     expect(pillSpec("ready").text).toBe("text-ok");
+    // Gold is for a worker that waits for a person, never for one that stops.
+    expect(pillSpec("stopping").fill).toBe("bg-fill");
     expect(pillSpec("stopped")).toEqual({
       fill: "bg-fill",
       dot: "bg-presence-offline",

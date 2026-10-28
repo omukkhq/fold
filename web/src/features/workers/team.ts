@@ -37,9 +37,9 @@ const PILLS: Record<PillTone, PillSpec> = {
     text: "text-accent",
   },
   stopping: {
-    fill: "bg-warn-soft",
-    dot: "bg-warn",
-    text: "text-warn",
+    fill: "bg-fill",
+    dot: "bg-text-2",
+    text: "text-text",
   },
   idle: { fill: "bg-fill", dot: "bg-presence-idle", text: "text-text" },
   failed: { fill: "bg-bad-soft", dot: "bg-bad", text: "text-bad" },
