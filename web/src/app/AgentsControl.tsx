@@ -104,7 +104,7 @@ export function AgentsControl({ slug }: { slug: string }) {
               <p className="min-w-0 flex-1 text-13 text-text-2">
                 {pauseNote(paused)}
               </p>
-              <PauseControl slug={slug} />
+              <PauseControl slug={slug} onSunken />
             </div>
           )}
           {list.length === 0 ? (

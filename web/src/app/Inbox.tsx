@@ -207,7 +207,9 @@ function MovesRow({
           <span aria-hidden="true">
             {row.path.map((status, index) => (
               <span key={index}>
-                {index > 0 ? <span className="px-3 text-text-2">→</span> : null}
+                {index > 0 ? (
+                  <span className="text-text-2">{" → "}</span>
+                ) : null}
                 <span
                   className={cn(
                     "whitespace-nowrap",

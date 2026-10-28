@@ -22,9 +22,12 @@ import {
 export function PauseControl({
   slug,
   className,
+  onSunken = false,
 }: {
   slug: string;
   className?: string;
+  /** The control sits on the sunken tone, as in the Agents panel, so the button takes the surface instead of the fill. */
+  onSunken?: boolean;
 }) {
   const project = useQuery(projectQuery(slug));
   const session = useQuery(sessionQuery());
@@ -58,7 +61,7 @@ export function PauseControl({
         pendingLabel={view.pendingLabel}
         icon={<Icon aria-hidden="true" size={16} />}
         className={cn(
-          "bg-surface hover:bg-surface",
+          onSunken && "bg-surface hover:bg-surface",
           view.paused && "bg-warn-soft text-warn hover:bg-warn-soft",
         )}
         onClick={() => {
