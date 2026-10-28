@@ -1,7 +1,5 @@
+import { COLUMNS } from "@/features/board/columns";
 import { columnName, type CardMove } from "./moves";
-
-/** A toast names at most this many tasks and counts the rest. */
-export const TOAST_TASKS = 3;
 
 /** A toast cuts a longer title to this many characters. */
 export const TOAST_TITLE = 40;
@@ -26,7 +24,7 @@ export function toastLine(
 }
 
 /**
- * The parts of one toast for a batch of moves, in the order the tasks last moved. A task that moved more than once is named once, with the column it reached last; a task that ended in the column it started from is left out, so the parts can be empty.
+ * The parts of one toast for a batch of moves. A task that moved more than once counts once, with the column it reached last; a task that ended in the column it started from is left out, so the parts can be empty. One task left gets its own line; more are counted per column, in the board's column order.
  */
 export function toastParts(
   moves: readonly (CardMove & { title: string | null })[],
@@ -37,22 +35,32 @@ export function toastParts(
     if (!started.has(move.task)) {
       started.set(move.task, move.from);
     }
-    last.delete(move.task);
     last.set(move.task, move);
   }
-  const lines = [...last.values()]
-    .filter((move) => started.get(move.task) !== move.to)
-    .map(toastLine);
-  const shown = lines.slice(0, TOAST_TASKS);
-  const rest = lines.length - shown.length;
-  return rest > 0 ? [...shown, `${String(rest)} more`] : shown;
+  const ended = [...last.values()].filter(
+    (move) => started.get(move.task) !== move.to,
+  );
+  if (ended.length === 1) {
+    return ended.map(toastLine);
+  }
+  const counts = new Map<CardMove["to"], number>();
+  for (const move of ended) {
+    counts.set(move.to, (counts.get(move.to) ?? 0) + 1);
+  }
+  return COLUMNS.flatMap((column) => {
+    const count = counts.get(column.status);
+    return count === undefined ? [] : [{ name: column.name, count }];
+  }).map(({ name, count }, index) => {
+    const cards = index > 0 ? "" : count === 1 ? " card" : " cards";
+    return `${String(count)}${cards} moved to ${name}`;
+  });
 }
 
-/** The toast as one line, such as `T-12 moved to Review · T-14 moved to Done`. */
+/** The toast as one line, such as `3 cards moved to Review, 1 moved to Done`. */
 export function toastText(
   moves: readonly (CardMove & { title: string | null })[],
 ): string {
-  return toastParts(moves).join(" · ");
+  return toastParts(moves).join(", ");
 }
 
 /** The accessible name of the bell button. */

@@ -81,7 +81,7 @@ describe("toasts", () => {
       {
         id: 1,
         slug: "demo",
-        parts: ["T-12 moved to Review", "T-14 moved to Done"],
+        text: "1 card moved to Review, 1 moved to Done",
       },
     ]);
   });
@@ -262,9 +262,7 @@ describe("toast text", () => {
     const title = (task: string) => (task === "T-1" ? "Add the bell" : null);
     store.receive("demo", moved(1, "T-1", "review"), frame(false, title));
     vi.advanceTimersByTime(BATCH_WINDOW_MS);
-    expect(store.toasts()[0]?.parts).toEqual([
-      "T-1 “Add the bell” moved to Review",
-    ]);
+    expect(store.toasts()[0]?.text).toBe("T-1 “Add the bell” moved to Review");
     store.receive("demo", moved(2, "T-2", "todo", "backlog"), frame(false));
     store.receive("demo", moved(3, "T-2", "backlog", "todo"), frame(false));
     vi.advanceTimersByTime(BATCH_WINDOW_MS);

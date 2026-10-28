@@ -140,7 +140,7 @@ describe("NotificationBell", () => {
     await renderBell("toast");
     receive("toast", moved(1, "T-12", "review"));
     receive("toast", moved(2, "T-14", "done"));
-    const text = "T-12 “Add the bell” moved to Review · T-14 moved to Done";
+    const text = "1 card moved to Review, 1 moved to Done";
     const region = screen.getByRole("region", { name: "Card moves (F8)" });
     await waitFor(
       () => {
