@@ -58,7 +58,7 @@ describe("proposalStrip", () => {
     ).toEqual({
       proposal: "P-7",
       lead: "P-7 v2 is approved",
-      rest: "· Add the form · 3 files",
+      rest: "Add the form · 3 files",
       waitsForYou: false,
     });
   });
@@ -75,7 +75,7 @@ describe("proposalStrip", () => {
     ).toEqual({
       proposal: "P-7",
       lead: "P-7 v2 waits for your review",
-      rest: "· Add the form · 3 files",
+      rest: "Add the form · 3 files",
       waitsForYou: true,
     });
   });
@@ -91,7 +91,7 @@ describe("proposalStrip", () => {
     ).toEqual({
       proposal: "P-7",
       lead: "P-7 v2 is with @review-lead",
-      rest: "· Add the form · 3 files",
+      rest: "Add the form · 3 files",
       waitsForYou: false,
     });
   });
@@ -112,7 +112,7 @@ describe("proposalStrip", () => {
       ),
     ).toMatchObject({
       lead: "P-7 v2 waits for your review",
-      rest: "· 1 file",
+      rest: "1 file",
     });
     expect(
       proposalStrip(
@@ -130,7 +130,7 @@ describe("proposalStrip", () => {
     ).toEqual({
       proposal: "P-7",
       lead: "P-7 v2 waits for a reviewer",
-      rest: "· Add the form · 3 files",
+      rest: "Add the form · 3 files",
       waitsForYou: false,
     });
   });

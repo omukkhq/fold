@@ -66,9 +66,9 @@ export function cycleText(path: readonly string[]): string {
   return `The edge would close a cycle: ${path.join(" → ")}.`;
 }
 
-/** `Needs · 1 unfinished`, so the waiting is read without scanning the rows. */
-export function needsTitle(groups: DependencyGroups): string {
+/** `1 unfinished` under the prerequisites, so the waiting is read without scanning the rows; null when none is unfinished. */
+export function waitingText(groups: DependencyGroups): string | null {
   return groups.waitingFor === 0
-    ? "Needs"
-    : `Needs · ${String(groups.waitingFor)} unfinished`;
+    ? null
+    : `${String(groups.waitingFor)} unfinished`;
 }

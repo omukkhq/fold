@@ -41,10 +41,6 @@ export function needsText(
   return `needs ${card.blocked_by.join(", ")}`;
 }
 
-export function blocksText(card: Pick<BoardCard, "blocks">): string | null {
-  return card.blocks > 0 ? `blocks ${String(card.blocks)}` : null;
-}
-
 /** The blocked indicator, listing the unfinished prerequisites. */
 export function blockedText(
   card: Pick<BoardCard, "blocked" | "blocked_by">,
@@ -55,11 +51,6 @@ export function blockedText(
   return card.blocked_by.length > 0
     ? `Blocked by ${card.blocked_by.join(", ")}`
     : "Blocked";
-}
-
-/** The message-square count on a card; null when no message names the task. */
-export function messagesText(card: Pick<BoardCard, "messages">): string | null {
-  return card.messages > 0 ? String(card.messages) : null;
 }
 
 const PROPOSAL_TEXT: Record<CardProposalState, string> = {
@@ -114,21 +105,6 @@ export function kindText(card: Pick<BoardCard, "kind">): string | null {
     case "proposal":
       return null;
   }
-}
-
-export interface BlockerMark {
-  text: string;
-  /** Why the task waits for a person. */
-  reason: string;
-}
-
-/** The blocker of a task that agents may not take until a human clears it; null without one. */
-export function blockerMark(
-  card: Pick<BoardCard, "blocker">,
-): BlockerMark | null {
-  return card.blocker === null
-    ? null
-    : { text: "Blocker", reason: card.blocker.reason };
 }
 
 export interface LeadCheckMark {

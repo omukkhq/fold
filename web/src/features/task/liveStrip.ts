@@ -15,8 +15,10 @@ export interface LiveStrip {
   verb: string;
   /** The file being edited; null after a sent version, while stalled or unless exactly one file changed. */
   file: string | null;
-  /** `· 4 files · ck-31 3 min ago · base r7`, after what a sent version waits for: `· waits for review · 4 files · …`. */
-  rest: string;
+  /** What a sent version waits for, `waits for review`; null without one. */
+  wait: string | null;
+  /** The strip's details behind its info button: `4 files · ck-31 3 min ago · base r7`; null when the stream and the task read name none. */
+  details: string | null;
   stalled: boolean;
 }
 
@@ -55,7 +57,7 @@ export function baseText(workspace: { base: string; main?: string }): string {
 }
 
 /**
- * Who is editing what, or which version the holder sent and what it waits for, then the files changed, the latest checkpoint and the base.
+ * One fact, who is editing what or which version the holder sent and what it waits for, and its details: the files changed, the latest checkpoint and the base.
  * The task payload names the workspace, and its details, activity, checkpoints and proposal; the event stream's frame fills in the rest.
  * The stall wording shows while no sent version waits on others. Null without a workspace.
  */
@@ -94,7 +96,7 @@ export function liveStrip(
     activity?.at ?? Number.NEGATIVE_INFINITY,
     live?.last_activity_at ?? Number.NEGATIVE_INFINITY,
   );
-  const parts: string[] = sent === null ? [] : [waitText(sent.waits)];
+  const parts: string[] = [];
   if (live) {
     parts.push(files(live.files.length));
   }
@@ -118,7 +120,8 @@ export function liveStrip(
     worker,
     verb,
     file: sent !== null || stalled ? null : (activity?.path ?? liveFile),
-    rest: parts.length > 0 ? `· ${parts.join(" · ")}` : "",
+    wait: sent === null ? null : waitText(sent.waits),
+    details: parts.length > 0 ? parts.join(" · ") : null,
     stalled,
   };
 }
