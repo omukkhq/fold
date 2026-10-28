@@ -11,6 +11,7 @@ describe("NAV_ENTRIES", () => {
       "Agents",
       "Messages",
       "Repository",
+      "Settings",
     ]);
   });
 });
@@ -36,6 +37,7 @@ describe("activeNav", () => {
     ["/p/demo/agents", "agents"],
     ["/p/demo/messages", "messages"],
     ["/p/demo/repository", "repository"],
+    ["/p/demo/settings", "settings"],
   ])("%s selects %s", (path, id) => {
     expect(activeNav(path)).toBe(id);
   });
