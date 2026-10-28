@@ -156,11 +156,17 @@ describe("MessagesScreen", () => {
     expect(
       within(list).getAllByRole("img", { name: "waits for you" }),
     ).toHaveLength(total);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Filter: All threads" }),
+    );
+    const menu = screen.getByRole("dialog", { name: "Filter threads" });
+    const waiting = within(menu).getByRole("radio", { name: /Waits for you/ });
+    expect(waiting.getAttribute("aria-checked")).toBe("false");
     expect(
-      screen
-        .getByRole("button", { name: `Waits for you · ${String(total)}` })
-        .getAttribute("aria-pressed"),
-    ).toBe("false");
+      within(waiting).getByRole("status", {
+        name: `${String(total)} wait for you`,
+      }),
+    ).toBeTruthy();
     cleanup();
     await setup({ waiting: true }, threads);
     const filtered = screen.getByRole("list", { name: "Threads" });
@@ -168,17 +174,59 @@ describe("MessagesScreen", () => {
     expect(
       within(filtered).getAllByRole("img", { name: "waits for you" }),
     ).toHaveLength(total);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Filter: Waits for you" }),
+    );
+    const open = screen.getByRole("dialog", { name: "Filter threads" });
     expect(
-      screen
-        .getByRole("button", { name: `Waits for you · ${String(total)}` })
-        .getAttribute("aria-pressed"),
+      within(open)
+        .getByRole("radio", { name: /Waits for you/ })
+        .getAttribute("aria-checked"),
     ).toBe("true");
     expect(
-      screen.getByRole("button", { name: "All" }).getAttribute("aria-pressed"),
+      within(open)
+        .getByRole("radio", { name: "All threads" })
+        .getAttribute("aria-checked"),
     ).toBe("false");
+    expect(screen.getByText("2 threads")).toBeTruthy();
   });
 
-  it("narrows the list by the search field and by the questions chip", async () => {
+  it("names the task the address narrows to in the filter menu", async () => {
+    const report = thread(SECOND, {
+      task: "T-3",
+      last_at: 2000,
+      messages: [message(SECOND, { body: "The build passes.", sent_at: 2000 })],
+    });
+    await setup({ task: "T-12" }, [report, question]);
+    expect(
+      within(screen.getByRole("list", { name: "Threads" })).getAllByRole(
+        "listitem",
+      ),
+    ).toHaveLength(1);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Filter: All threads · 1 more" }),
+    );
+    const menu = screen.getByRole("dialog", { name: "Filter threads" });
+    expect(
+      within(menu).getByRole<HTMLSelectElement>("combobox", { name: "Task" })
+        .value,
+    ).toBe("T-12");
+    expect(
+      within(menu)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual([
+      "All agents",
+      "frontend",
+      "frontend/ui",
+      "All tasks",
+      "T-3",
+      "T-12",
+      "All proposals",
+    ]);
+  });
+
+  it("narrows the list by the search field and by the questions choice", async () => {
     const report = thread(SECOND, {
       participants: ["backend", "human:tanim"],
       last_at: 2000,
@@ -197,7 +245,7 @@ describe("MessagesScreen", () => {
     const list = () => screen.getByRole("list", { name: "Threads" });
     await userEvent.type(screen.getByLabelText("Search threads"), "build");
     expect(within(list()).getAllByRole("listitem")).toHaveLength(1);
-    expect(within(list()).getAllByText("The build passes.")).toHaveLength(2);
+    expect(within(list()).getAllByText("The build passes.")).toHaveLength(1);
     await userEvent.clear(screen.getByLabelText("Search threads"));
     await userEvent.type(screen.getByLabelText("Search threads"), "nothing");
     expect(
@@ -206,12 +254,10 @@ describe("MessagesScreen", () => {
     cleanup();
     await setup({ questions: true }, [report, asked]);
     expect(within(list()).getAllByRole("listitem")).toHaveLength(1);
-    expect(within(list()).getAllByText("Which port?")).toHaveLength(2);
+    expect(within(list()).getAllByText("Which port?")).toHaveLength(1);
     expect(
-      screen
-        .getByRole("button", { name: "Questions" })
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
+      screen.getByRole("button", { name: "Filter: Questions" }),
+    ).toBeTruthy();
   });
 
   it("reads a requested thread the list did not reach, and says when it does not exist", async () => {

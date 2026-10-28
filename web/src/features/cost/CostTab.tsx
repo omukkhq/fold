@@ -3,13 +3,13 @@ import { Id } from "@/components/id/Id";
 import * as RadixTooltip from "@radix-ui/react-tooltip";
 import { useQuery } from "@tanstack/react-query";
 import { CircleDollarSign, Info, RefreshCw } from "lucide-react";
-import { Fragment, useState } from "react";
+import { useState } from "react";
 import { projectCostQuery, type ProjectCost } from "@/api/cost";
 import { apiErrorCode } from "@/api/errors";
 import { workersQuery } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
-import { Mono } from "@/components/mono/Mono";
+import { Tooltip } from "@/components/overlay/Tooltip";
 import {
   SEGMENT_LIST,
   segmentClasses,
@@ -21,6 +21,7 @@ import { taskPath } from "@/features/board/card";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { useNow } from "@/live/useNow";
+import { PersonName } from "@/people/PersonName";
 import {
   areaRows,
   barLabel,
@@ -39,6 +40,7 @@ import {
   roleRows,
   showsTick,
   taskRows,
+  tileHoverText,
   type TokenPart,
   type TokensCard,
   tokensCard,
@@ -50,8 +52,7 @@ import { mainAgentNote } from "./note";
 /** The tasks the table shows before the viewer asks for all of them. */
 const TOP_TASKS = 8;
 
-const PANEL =
-  "flex min-w-0 flex-col gap-12 rounded-l bg-surface p-16 inset-ring inset-ring-line";
+const PANEL = "flex min-w-0 flex-col gap-12 rounded-m bg-surface p-16";
 
 const PANEL_TITLE = "text-16 leading-tight font-semibold text-text";
 
@@ -69,7 +70,7 @@ export function CostTab({ slug, range }: { slug: string; range: CostRange }) {
         code={apiErrorCode(query.error)}
         action={
           <Button
-            icon={<RefreshCw aria-hidden="true" size={15} />}
+            icon={<RefreshCw aria-hidden="true" size={16} />}
             onClick={() => void query.refetch()}
           >
             Try again
@@ -98,8 +99,8 @@ export function CostTab({ slug, range }: { slug: string; range: CostRange }) {
         <CostContent slug={slug} view={view} range={range} now={now} />
       )}
       {note === null ? null : (
-        <p className="flex items-start gap-8 text-14 text-text-2">
-          <Info aria-hidden="true" size={15} className="mt-2 shrink-0" />
+        <p className="flex max-w-measure items-start gap-8 text-14 text-text-2">
+          <Info aria-hidden="true" size={16} className="mt-2 shrink-0" />
           {note}
         </p>
       )}
@@ -122,31 +123,26 @@ function CostContent({
     <>
       <ul
         aria-label="Totals"
-        className="grid grid-cols-2 gap-12 lg:grid-cols-4"
+        className="grid grid-cols-2 gap-14 lg:grid-cols-4"
       >
-        {costTiles(view).map((tile, index) => (
-          <li key={tile.label} className={cn(PANEL, "gap-4")}>
-            <span className="font-title text-13 leading-tight font-semibold text-text-2">
-              {tile.label}
-            </span>
-            <span
-              className={cn(
-                "leading-tight font-semibold text-text tabular-nums",
-                index === 0 ? "text-28" : "text-24",
-              )}
+        {costTiles(view).map((tile) => (
+          <Tooltip key={tile.label} content={tileHoverText(tile)}>
+            <li
+              // The tile's tokens are its hover text, so a keyboard reaches them too.
+              tabIndex={0}
+              className={cn(PANEL, "gap-2 px-16 py-14", focusRing)}
             >
-              {tile.amount}
-            </span>
-            <span className="text-13 text-text-2">{tile.detail}</span>
-            <span className="text-13 text-text-2 tabular-nums">
-              {tile.tokens.map((part, at) => (
-                <Fragment key={part}>
-                  {at > 0 ? " · " : null}
-                  <span className="whitespace-nowrap">{part}</span>
-                </Fragment>
-              ))}
-            </span>
-          </li>
+              <span className="font-title text-15 leading-tight font-semibold text-text">
+                {tile.label}
+              </span>
+              <span className="font-title text-28 leading-tight font-semibold text-text tabular-nums">
+                {tile.amount}
+              </span>
+              <span className="text-13 text-text-2 tabular-nums">
+                {tile.detail}
+              </span>
+            </li>
+          </Tooltip>
         ))}
       </ul>
       <Chart view={view} range={range} now={now} />
@@ -197,19 +193,49 @@ function Chart({
         </div>
       </div>
       <RadixTooltip.Provider delayDuration={0}>
-        <div className="flex flex-col gap-6">
-          <div className="flex h-chart items-end gap-2 border-b border-line">
+        <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-10 gap-y-8">
+          <div aria-hidden="true" className="relative h-chart">
+            <span className="invisible block text-13 whitespace-nowrap tabular-nums">
+              {chart.axis.ticks.at(-1)?.label}
+            </span>
+            {chart.axis.ticks.map((tick) => (
+              <span
+                key={tick.at}
+                className="absolute right-0 translate-y-1/2 text-13 leading-tight whitespace-nowrap text-text-2 tabular-nums"
+                style={{ bottom: `${String(tick.at * 100)}%` }}
+              >
+                {tick.label}
+              </span>
+            ))}
+          </div>
+          <div className="relative flex h-chart items-end gap-2 px-4">
+            {chart.axis.ticks.map((tick) => (
+              <span
+                key={tick.at}
+                aria-hidden="true"
+                className={cn(
+                  "absolute inset-x-0 border-t",
+                  tick.at === 0 ? "border-text-2/45" : "border-line",
+                )}
+                style={{ bottom: `${String(tick.at * 100)}%` }}
+              />
+            ))}
             {chart.bars.map((bar) => (
               <ChartBar key={bar.start} bar={bar} />
             ))}
           </div>
-          <div className="flex gap-2" aria-hidden="true">
+          <div className="col-start-2 flex gap-2 px-4" aria-hidden="true">
             {chart.bars.map((bar, index) => (
               <span
                 key={bar.start}
-                className="min-w-0 flex-1 truncate text-center text-13 text-text-2"
+                className="flex min-w-0 flex-1 justify-center text-13 whitespace-nowrap text-text-2 tabular-nums"
               >
-                {showsTick(index, chart.bars.length) ? bar.tick : ""}
+                {showsTick(index, chart.bars.length) ? (
+                  <>
+                    <span className="sm:hidden">{bar.narrowTick}</span>
+                    <span className="max-sm:hidden">{bar.tick}</span>
+                  </>
+                ) : null}
               </span>
             ))}
           </div>
@@ -228,7 +254,7 @@ function ChartBar({ bar }: { bar: CostBar }) {
           type="button"
           aria-label={barLabel(bar)}
           className={cn(
-            "flex h-full min-w-0 flex-1 items-end rounded-t-s hover:bg-sunken",
+            "relative flex h-full min-w-0 flex-1 items-end rounded-t-s hover:bg-fill/60",
             focusRing,
           )}
         >
@@ -262,9 +288,9 @@ function ChartBar({ bar }: { bar: CostBar }) {
 
 const TOKEN_FILL: Record<TokenPart["key"], string> = {
   cache_read: "bg-accent",
-  cache_write: "bg-accent",
-  output: "bg-warn",
-  input: "bg-text-2",
+  cache_write: "bg-accent/45",
+  output: "bg-text-2",
+  input: "bg-text-2/40",
 };
 
 function TokensPanel({ view }: { view: ProjectCost }) {
@@ -273,7 +299,7 @@ function TokensPanel({ view }: { view: ProjectCost }) {
     <section aria-label="Tokens" className={PANEL}>
       <div className="flex flex-wrap items-baseline justify-between gap-12">
         <h2 className={PANEL_TITLE}>Tokens</h2>
-        <span className="text-24 leading-tight font-semibold text-text tabular-nums">
+        <span className="font-title text-24 leading-tight font-semibold text-text tabular-nums">
           {card.total}
         </span>
       </div>
@@ -293,7 +319,7 @@ function TokenParts({ card }: { card: TokensCard }) {
     <>
       <div
         aria-hidden="true"
-        className="flex h-6 gap-2 overflow-hidden rounded-full bg-sunken"
+        className="flex h-10 gap-2 overflow-hidden rounded-pill bg-fill"
       >
         {card.parts.map((part) =>
           part.fill > 0 ? (
@@ -311,7 +337,7 @@ function TokenParts({ card }: { card: TokensCard }) {
             <dt className="flex items-center gap-6 text-13 text-text-2">
               <span
                 aria-hidden="true"
-                className={cn("size-7 rounded-full", TOKEN_FILL[part.key])}
+                className={cn("size-9 rounded-full", TOKEN_FILL[part.key])}
               />
               {part.label}
             </dt>
@@ -342,9 +368,9 @@ function Breakdown({ title, rows }: { title: string; rows: BreakdownRow[] }) {
                 {row.amount}
               </span>
             </span>
-            <span className="h-4 rounded-full bg-sunken">
+            <span className="h-6 rounded-pill bg-fill">
               <span
-                className="block h-4 rounded-full bg-accent"
+                className="block h-6 rounded-pill bg-accent"
                 style={{ width: `${String(row.fill * 100)}%` }}
               />
             </span>
@@ -412,9 +438,7 @@ function TasksTable({ slug, view }: { slug: string; view: ProjectCost }) {
                         focusRing,
                       )}
                     >
-                      <Id className="shrink-0 text-13 text-accent">
-                        {row.task}
-                      </Id>
+                      <Id className="shrink-0 text-accent">{row.task}</Id>
                       <span className="truncate hover:underline">
                         {row.title}
                       </span>
@@ -464,7 +488,7 @@ function WorkersTable({ view }: { view: ProjectCost }) {
               <tr key={row.name} className={TABLE_ROW}>
                 <td className={TD}>
                   <span className="flex items-baseline gap-8">
-                    <Mono className="text-13 text-text">{row.name}</Mono>
+                    <PersonName name={row.name} />
                     {row.ended ? (
                       <span className="text-13 text-text-2">stopped</span>
                     ) : null}
@@ -472,9 +496,7 @@ function WorkersTable({ view }: { view: ProjectCost }) {
                 </td>
                 <td className={cn(TD, "text-text-2")}>{row.role}</td>
                 <td className={cn(TD, "text-text-2")}>{row.area}</td>
-                <td className={cn(TD, "text-text-2")}>
-                  <Mono className="text-13">{row.model}</Mono>
-                </td>
+                <td className={cn(TD, "text-text-2")}>{row.model}</td>
                 <td className={cn(TD, NUM)}>{row.turns}</td>
                 <td className={cn(TD, NUM, "text-text-2")}>{row.tokens}</td>
                 <td className={cn(TD, NUM, "text-text-2")}>{row.output}</td>

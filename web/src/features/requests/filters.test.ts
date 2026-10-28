@@ -7,7 +7,8 @@ import {
   isNarrowed,
   listHref,
   parseListSearch,
-  toggleKind,
+  visibleStates,
+  withKind,
   toggleMine,
 } from "./filters";
 
@@ -82,14 +83,31 @@ describe("addresses and toggles", () => {
     );
   });
 
-  it("toggles a kind and Mine", () => {
-    expect(toggleKind({}, "bug")).toEqual({ kind: "bug" });
-    expect(toggleKind({ kind: "bug" }, "feature")).toEqual({ kind: "feature" });
-    expect(toggleKind({ kind: "bug", state: "open" }, "bug")).toEqual({
+  it("sets one kind or none, and toggles Mine", () => {
+    expect(withKind({}, "bug")).toEqual({ kind: "bug" });
+    expect(withKind({ kind: "bug", mine: true }, "feature")).toEqual({
+      kind: "feature",
+      mine: true,
+    });
+    expect(withKind({ kind: "bug", state: "open" }, undefined)).toEqual({
       state: "open",
     });
     expect(toggleMine({})).toEqual({ mine: true });
     expect(toggleMine({ mine: true })).toEqual({});
+  });
+
+  it("shows only the states that have requests, and the chosen one", () => {
+    const counts = countByState(
+      [requestSummary("RQ-1"), requestSummary("RQ-2", { state: "approved" })],
+      {},
+      null,
+    );
+    expect(visibleStates(counts, undefined)).toEqual(["open", "approved"]);
+    expect(visibleStates(counts, "closed")).toEqual([
+      "open",
+      "approved",
+      "closed",
+    ]);
   });
 
   it("says when a filter narrows the list", () => {

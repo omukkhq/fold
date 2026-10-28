@@ -27,7 +27,11 @@ const REASONS = {
 } as const;
 
 // The comparison is one button in the tree's bar, so the two choices sit inline at the button's height.
-const SELECT = cn(controlClasses, focusRing, "w-auto py-7 font-mono text-14");
+const SELECT = cn(
+  controlClasses,
+  focusRing,
+  "w-auto bg-surface py-7 text-14 tabular-nums",
+);
 
 export function CompareBar({ slug, revisions, selected }: CompareBarProps) {
   const router = useRouter();
@@ -61,7 +65,7 @@ export function CompareBar({ slug, revisions, selected }: CompareBarProps) {
   return (
     <form
       aria-label="Compare revisions"
-      className="flex flex-wrap items-center justify-end gap-10"
+      className="flex flex-wrap items-center justify-end gap-8"
       onSubmit={(event) => {
         event.preventDefault();
         compare();
@@ -82,7 +86,7 @@ export function CompareBar({ slug, revisions, selected }: CompareBarProps) {
       >
         {options}
       </select>
-      <ArrowRight aria-hidden size={13} className="text-text-2" />
+      <ArrowRight aria-hidden size={14} className="text-text-2" />
       <select
         {...control}
         aria-label="To"
@@ -93,7 +97,11 @@ export function CompareBar({ slug, revisions, selected }: CompareBarProps) {
       >
         {options}
       </select>
-      <Button type="submit" icon={<GitCompare aria-hidden size={15} />}>
+      <Button
+        type="submit"
+        className="bg-surface"
+        icon={<GitCompare aria-hidden size={16} />}
+      >
         {compareLabel(from, to)}
       </Button>
     </form>

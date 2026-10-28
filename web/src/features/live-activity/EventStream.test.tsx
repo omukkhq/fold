@@ -176,7 +176,7 @@ describe("ReviewCheckouts", () => {
     ).toBeTruthy();
   });
 
-  it("keeps one title for several checkouts", async () => {
+  it("lists several checkouts under one title", async () => {
     listReviewCheckouts.mockResolvedValue([
       checkout(),
       checkout({ workspace: "ws-13", worker: "review/security" }),
@@ -184,7 +184,7 @@ describe("ReviewCheckouts", () => {
     ]);
     wrap(<ReviewCheckouts slug="demo" />);
     await screen.findByText("@review/security");
-    expect(screen.getAllByText("Review checkouts")).toHaveLength(3);
+    expect(screen.getAllByText("Review checkouts")).toHaveLength(1);
     expect(
       screen.getAllByText("P-4 v2 in ws/review-p-4 · not recordable"),
     ).toHaveLength(3);

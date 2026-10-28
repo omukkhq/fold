@@ -24,11 +24,13 @@ export function FileView({ slug, revision, path }: FileViewProps) {
   return (
     <section
       aria-label={`File ${path}`}
-      className="flex flex-col overflow-hidden rounded-l bg-surface inset-ring inset-ring-line"
+      className="flex flex-col overflow-hidden rounded-m bg-surface"
     >
-      <header className="flex items-center gap-10 border-b border-line px-14 py-10">
-        <Mono className="text-14 font-semibold text-text">{path}</Mono>
-        <Id className="text-13 text-text-2">{revision}</Id>
+      <header className="flex items-center gap-10 px-16 pt-12 pb-6">
+        <Mono className="min-w-0 truncate text-14 font-semibold text-text">
+          {path}
+        </Mono>
+        <Id className="ml-auto text-13 text-text-2">{revision}</Id>
       </header>
       {file.isPending ? <Skeleton className="m-12" /> : null}
       {file.isError ? (
@@ -42,26 +44,26 @@ export function FileView({ slug, revision, path }: FileViewProps) {
         <pre
           className={cn(
             CODE_BOX,
-            "px-14 py-12 font-mono text-13 leading-normal text-text",
+            "px-16 pt-6 pb-14 font-mono text-13 leading-normal text-text",
           )}
         >
           <SyntaxText code={shown.text} language={languageForPath(path)} />
         </pre>
       ) : null}
       {shown?.kind === "symlink" ? (
-        <p className="flex items-center gap-8 px-14 py-12 text-14 text-text-2">
-          <Link2 aria-hidden size={15} />
+        <p className="flex items-center gap-8 px-16 pt-6 pb-14 text-14 text-text-2">
+          <Link2 aria-hidden size={16} />
           <Mono className="text-text">{`→ ${shown.target}`}</Mono>
         </p>
       ) : null}
       {file.data &&
       (shown?.kind === "binary" || shown?.kind === "too_large") ? (
-        <div className="flex flex-col gap-6 px-14 py-12">
+        <div className="flex flex-col gap-6 px-16 pt-6 pb-14">
           <p className="flex items-center gap-8 text-14 text-text-2">
             {shown.kind === "binary" ? (
-              <FileX aria-hidden size={15} />
+              <FileX aria-hidden size={16} />
             ) : (
-              <Ruler aria-hidden size={15} />
+              <Ruler aria-hidden size={16} />
             )}
             {shown.kind === "binary"
               ? "Binary file, no content shown."

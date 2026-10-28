@@ -11,10 +11,13 @@ export function MarkAnswered({
   slug,
   scope,
   className,
+  bar = false,
 }: {
   slug: string;
   scope: AnsweredScope;
   className?: string;
+  /** The button sits in a thread's title bar: a quiet button beside the others, an icon alone below the wide layout. */
+  bar?: boolean;
 }) {
   const queryClient = useQueryClient();
   const mark = useMutation({
@@ -30,18 +33,31 @@ export function MarkAnswered({
   });
   const note = answeredNote(mark.data);
   return (
-    <span className={cn("inline-flex flex-col items-start gap-2", className)}>
+    <span
+      className={cn(
+        "inline-flex flex-col gap-2",
+        bar ? "items-end" : "items-start",
+        className,
+      )}
+    >
       <Button
-        size="sm"
-        variant="ghost"
-        icon={<CheckCheck aria-hidden="true" size={14} />}
+        size={bar ? "md" : "sm"}
+        variant={bar ? "quiet" : "ghost"}
+        icon={<CheckCheck aria-hidden="true" size={bar ? 16 : 14} />}
         pending={mark.isPending}
         pendingLabel="Marking…"
+        className={cn(
+          bar && "max-lg:size-44 max-lg:bg-transparent max-lg:px-0",
+        )}
         onClick={() => {
           mark.mutate();
         }}
       >
-        Mark answered
+        {bar ? (
+          <span className="max-lg:sr-only">Mark answered</span>
+        ) : (
+          "Mark answered"
+        )}
       </Button>
       {mark.error ? (
         <span role="alert" className="text-13 font-medium text-bad">

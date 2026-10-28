@@ -5,9 +5,9 @@ import {
   Sparkles,
   type LucideIcon,
 } from "lucide-react";
-import type { RequestState } from "@/api/requests";
-import { cn } from "@/lib/cn";
-import { KIND_SPECS, STATE_SPECS, type KindKey } from "./present";
+import type { RequestSummary } from "@/api/requests";
+import { Chip } from "@/components/badge/Chip";
+import { KIND_LABELS, stateChip, type KindKey } from "./present";
 
 export const KIND_ICONS: Record<KindKey, LucideIcon> = {
   bug: Bug,
@@ -16,38 +16,31 @@ export const KIND_ICONS: Record<KindKey, LucideIcon> = {
   unsorted: CircleDashed,
 };
 
-export function StatePill({ state }: { state: RequestState }) {
-  const spec = STATE_SPECS[state];
+export function StatePill({
+  request,
+  human,
+}: {
+  request: RequestSummary;
+  human: string | null;
+}) {
+  const chip = stateChip(request, human);
   return (
-    <span
-      data-state={state}
-      className={cn(
-        "inline-flex items-center gap-5 rounded-s px-9 py-3 text-13 leading-tight font-semibold whitespace-nowrap",
-        spec.pill,
-      )}
-    >
-      <span
-        aria-hidden="true"
-        className={cn("size-6 rounded-full", spec.dot)}
-      />
-      {spec.label}
+    <span data-state={request.state} className="inline-flex">
+      <Chip tone={chip.tone}>{chip.label}</Chip>
     </span>
   );
 }
 
-export function KindBadge({ kind }: { kind: KindKey }) {
-  const spec = KIND_SPECS[kind];
+/** The kind as its icon and word in the text colour: a kind is a fact, not a state that waits for anyone. */
+export function KindLabel({ kind }: { kind: KindKey }) {
   const Icon = KIND_ICONS[kind];
   return (
     <span
       data-kind={kind}
-      className={cn(
-        "inline-flex items-center gap-5 rounded-s px-8 py-2 text-13 leading-tight font-semibold whitespace-nowrap",
-        spec.classes,
-      )}
+      className="inline-flex items-center gap-6 font-medium whitespace-nowrap text-text"
     >
-      <Icon aria-hidden="true" size={12} />
-      {spec.label}
+      <Icon aria-hidden="true" size={14} className="shrink-0" />
+      {KIND_LABELS[kind]}
     </span>
   );
 }

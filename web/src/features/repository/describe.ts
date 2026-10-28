@@ -4,58 +4,64 @@ import type {
   Revision,
   TreeEntry,
 } from "../../api/repository";
-import { formatAsOf } from "../../format/time";
-import {
-  actorSegment,
-  seg,
-  type Segment,
-  type Segments,
-} from "@/people/segments";
+import { shortCommit } from "../../format/git";
+import { formatAsOfMinute } from "../../format/time";
+import { actorSegment, seg, type Segments } from "@/people/segments";
 
 export interface RevisionLines {
   title: string;
-  /** Mono meta line: ids, who, and the time of day. */
-  meta: Segments;
+  /** What the revision is and who made it, such as `P-5 for T-15 by @frontend/forms`. */
+  what: Segments;
+  /** The local time it was made, to the minute; the row adds its Git commit after it. */
+  when: string;
 }
 
-/** What a revision row shows: a proposal integration names its proposal and task, a pull names the remote commit and the human, a record names the human who changed the project folder, the genesis is the start of the history, and a direct change of the main agent names its commit subject and the user's approval. */
+/** A revision in the shape of `fld log`: a proposal integration is titled by its proposal's title and names the proposal, its task and its author; a pull, a direct change of the main agent, a record of the project folder and the genesis say what they are and who made them. */
 export function describeRevision(
   revision: Revision,
   now: number,
 ): RevisionLines {
-  const at = formatAsOf(now, revision.created_at);
-  const who: Segment =
-    revision.author === null ? "unknown" : actorSegment(revision.author);
+  const when = formatAsOfMinute(now, revision.created_at);
+  const by: Segments =
+    revision.author === null ? [] : seg` by ${actorSegment(revision.author)}`;
   switch (revision.origin) {
-    case "proposal":
+    case "proposal": {
+      const name = revision.proposal ?? "a proposal";
       return {
-        title: [revision.proposal ?? revision.id, revision.title]
-          .filter((part) => part !== null)
-          .join(" · "),
-        meta:
+        title: revision.title ?? revision.proposal ?? revision.id,
+        what:
           revision.task === null
-            ? seg`${who} · ${at}`
-            : seg`${revision.task} · ${who} · ${at}`,
+            ? seg`${name}${by}`
+            : seg`${name} for ${revision.task}${by}`,
+        when,
       };
+    }
     case "pull":
       return {
-        title: `pull · ${revision.pull ?? ""}`,
-        meta: seg`${who} · ${at}`,
+        title:
+          revision.pull === null
+            ? "Pull from a Git remote"
+            : `Pull of the remote commit ${shortCommit(revision.pull)}`,
+        what: seg`pulled from a Git remote${by}`,
+        when,
       };
     case "direct":
       return {
-        title: `direct · ${revision.title ?? revision.id}`,
-        meta: seg`${who} · approved by the user · ${at}`,
+        title: revision.title ?? revision.id,
+        what: seg`a direct change on main${by}, approved by the user`,
+        when,
       };
     case "record":
       return {
-        title: `record · ${revision.title ?? "changes of the project folder"}`,
-        meta: seg`${who} · ${at}`,
+        title: revision.title ?? "Changes of the project folder",
+        what: seg`recorded from the project folder${by}`,
+        when,
       };
     case "initial":
       return {
         title: revision.title ?? "Genesis revision",
-        meta: seg`${who} · ${at}`,
+        what: seg`the start of main's history${by}`,
+        when,
       };
   }
 }

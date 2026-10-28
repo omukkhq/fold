@@ -32,7 +32,7 @@ function revision(fields: Partial<Revision>): Revision {
 }
 
 describe("describeRevision", () => {
-  it("names the proposal, the task and the agent for a proposal integration", () => {
+  it("titles a proposal integration by its title and names the proposal, the task and the agent", () => {
     expect(
       describeRevision(
         revision({
@@ -45,33 +45,44 @@ describe("describeRevision", () => {
         NOW,
       ),
     ).toEqual({
-      title: "P-5 · Form field components",
-      meta: ["T-15 · ", { actor: "frontend/forms" }, " · 14:06:00"],
+      title: "Form field components",
+      what: ["P-5 for T-15 by ", { actor: "frontend/forms" }],
+      when: "14:06",
     });
   });
 
-  it("leaves out the task and names an unknown author when the revision has none", () => {
+  it("leaves out the task and the author when the revision has none", () => {
     expect(
-      describeRevision(revision({ proposal: "P-5", title: "x" }), NOW).meta,
-    ).toEqual(["unknown · 14:06:00"]);
+      describeRevision(revision({ proposal: "P-5", title: "x" }), NOW).what,
+    ).toEqual(["P-5"]);
+    expect(describeRevision(revision({}), NOW).what).toEqual(["a proposal"]);
   });
 
-  it("names only the proposal when the revision carries no title", () => {
+  it("titles a proposal without a title by its proposal, else by its id", () => {
     expect(describeRevision(revision({ proposal: "P-5" }), NOW).title).toBe(
       "P-5",
     );
+    expect(describeRevision(revision({}), NOW).title).toBe("r8");
   });
 
-  it("names pull, the remote commit and the human for a pull", () => {
+  it("names the remote commit and the human for a pull", () => {
     expect(
       describeRevision(
-        revision({ origin: "pull", pull: "9f2c1ab", author: "human:tanim" }),
+        revision({
+          origin: "pull",
+          pull: "9f2c1ab8d0",
+          author: "human:tanim",
+        }),
         NOW,
       ),
     ).toEqual({
-      title: "pull · 9f2c1ab",
-      meta: [{ actor: "human:tanim" }, " · 14:06:00"],
+      title: "Pull of the remote commit 9f2c1ab",
+      what: ["pulled from a Git remote by ", { actor: "human:tanim" }],
+      when: "14:06",
     });
+    expect(describeRevision(revision({ origin: "pull" }), NOW).title).toBe(
+      "Pull from a Git remote",
+    );
   });
 
   it("names the commit subject, the main agent and the user's approval for a direct change", () => {
@@ -85,25 +96,33 @@ describe("describeRevision", () => {
         NOW,
       ),
     ).toEqual({
-      title: "direct · Add the AGENTS.md rules",
-      meta: [{ actor: "main" }, " · approved by the user · 14:06:00"],
+      title: "Add the AGENTS.md rules",
+      what: [
+        "a direct change on main by ",
+        { actor: "main" },
+        ", approved by the user",
+      ],
+      when: "14:06",
     });
     expect(describeRevision(revision({ origin: "direct" }), NOW).title).toBe(
-      "direct · r8",
+      "r8",
     );
   });
 
   it("shows the title of the first revision, or a name when it has none", () => {
-    expect(
-      describeRevision(
-        revision({
-          origin: "initial",
-          title: "Imported",
-          author: "human:tanim",
-        }),
-        NOW,
-      ).title,
-    ).toBe("Imported");
+    const first = describeRevision(
+      revision({
+        origin: "initial",
+        title: "Imported",
+        author: "human:tanim",
+      }),
+      NOW,
+    );
+    expect(first.title).toBe("Imported");
+    expect(first.what).toEqual([
+      "the start of main's history by ",
+      { actor: "human:tanim" },
+    ]);
     expect(describeRevision(revision({ origin: "initial" }), NOW).title).toBe(
       "Genesis revision",
     );
@@ -114,8 +133,18 @@ describe("describeRevision", () => {
       revision({ origin: "record", author: "human:tanim" }),
       NOW,
     );
-    expect(lines.title).toBe("record · changes of the project folder");
-    expect(lines.meta).toEqual([{ actor: "human:tanim" }, " · 14:06:00"]);
+    expect(lines.title).toBe("Changes of the project folder");
+    expect(lines.what).toEqual([
+      "recorded from the project folder by ",
+      { actor: "human:tanim" },
+    ]);
+  });
+
+  it("puts the date before the time of a revision from another day", () => {
+    expect(
+      describeRevision(revision({ created_at: NOW - 2 * 86_400_000 }), NOW)
+        .when,
+    ).toBe("Oct 13, 15:00");
   });
 });
 
