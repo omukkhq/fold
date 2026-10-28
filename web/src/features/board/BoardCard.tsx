@@ -1,177 +1,191 @@
-import { Id } from "@/components/id/Id";
+import * as RadixPopover from "@radix-ui/react-popover";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
-import {
-  ClipboardCheck,
-  GitFork,
-  GitMerge,
-  GitPullRequest,
-  Hand,
-  Hourglass,
-  ListChecks,
-  MessageSquare,
-  UserRound,
-  type LucideIcon,
-} from "lucide-react";
-import type { BoardCard as BoardCardData, BoardProposal } from "@/api/board";
+import { CornerDownLeft, GitMerge, GitPullRequest } from "lucide-react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import type { BoardCard as BoardCardData } from "@/api/board";
 import { keys } from "@/api/keys";
 import { HrefLink } from "@/app/HrefLink";
-import { Badge } from "@/components/badge/Badge";
+import { Chip } from "@/components/badge/Chip";
 import { Card } from "@/components/card/Card";
+import { Id } from "@/components/id/Id";
 import { Label } from "@/components/label/Label";
-import { Tooltip } from "@/components/overlay/Tooltip";
 import { cn } from "@/lib/cn";
-import { HumanReviewBadge } from "@/people/HumanReviewBadge";
 import { PersonName } from "@/people/PersonName";
 import type { LiveWorkspace } from "@/live/envelope";
-import { activityLine, liveFilesText, type ActivityLine } from "./activityLine";
 import { MarkAnswered } from "@/features/messages/MarkAnswered";
 import { taskCanMarkAnswered } from "@/features/messages/answered";
-import { attentionMark, hasKind } from "./attention";
-import {
-  blockedText,
-  blockerMark,
-  blocksText,
-  checklistText,
-  kindText,
-  leadCheckMark,
-  messagesText,
-  needsText,
-  planWaitText,
-  proposalLook,
-  proposalText,
-  taskPath,
-  type BlockerMark,
-  type LeadCheckMark,
-  type ProposalLook,
-} from "./card";
+import { activityLine, type ActivityLine } from "./activityLine";
+import { taskPath } from "./card";
+import { cardChip, metaFact } from "./chip";
+import { cardDetails, type DetailRow } from "./details";
+import { hoverPeek, type HoverPeek } from "./hoverPeek";
 
-const PROPOSAL_ICON: Record<ProposalLook, { icon: LucideIcon; color: string }> =
-  {
-    attention: { icon: GitPullRequest, color: "text-bad" },
-    active: { icon: GitPullRequest, color: "text-accent" },
-    merged: { icon: GitMerge, color: "text-text-2" },
-  };
-
-function Meta({
-  icon: Icon,
-  text,
-  label,
-}: {
-  icon: LucideIcon;
-  text: string;
-  /** Names a bare number for a screen reader. */
-  label?: string;
-}) {
-  return (
-    <span className="inline-flex items-center gap-4 text-13 text-text-2">
-      <Icon aria-hidden="true" size={13} />
-      {text}
-      {label ? <span className="sr-only">{label}</span> : null}
-    </span>
-  );
-}
-
-/** The proposal pill; a proposal that waits in a review plan says under it what its batch waits for. */
-function ProposalPill({
-  proposal,
-  now,
-}: {
-  proposal: BoardProposal;
-  now: number;
-}) {
-  const { icon: Icon, color } = PROPOSAL_ICON[proposalLook(proposal)];
-  const wait = planWaitText(proposal, now);
-  const pill = (
-    <span className="inline-flex items-center gap-4 self-start rounded-s bg-surface px-7 py-2 text-13 font-medium text-text inset-ring inset-ring-line">
-      <Icon aria-hidden="true" size={12} className={color} />
-      {proposalText(proposal)}
-    </span>
-  );
-  if (wait === null) {
-    return pill;
-  }
-  return (
-    <div className="flex flex-col gap-4">
-      {pill}
-      <p className="flex items-start gap-4 text-13 leading-normal text-text-2">
-        <Hourglass aria-hidden="true" size={12} className="mt-2 shrink-0" />
-        <span className="min-w-0">{wait}</span>
-      </p>
-    </div>
-  );
-}
-
-/** The proposal pill's place and shape, for a reported task without a proposal: the mark and the task worker's note. */
-function LeadCheckPill({ mark }: { mark: LeadCheckMark }) {
-  return (
-    <div className="flex flex-col gap-4">
-      <span className="inline-flex items-center gap-4 self-start rounded-s bg-surface px-7 py-2 text-13 font-medium text-text inset-ring inset-ring-line">
-        <ClipboardCheck aria-hidden="true" size={12} className="text-warn" />
-        {mark.text}
-      </span>
-      <p className="line-clamp-2 text-13 leading-normal wrap-anywhere text-text-2">
-        {mark.note}
-      </p>
-    </div>
-  );
-}
-
-/** The blocker under the title: agents may not take the task until a human clears it. */
-function BlockerPill({ mark }: { mark: BlockerMark }) {
-  return (
-    <div className="flex flex-col gap-4">
-      <span className="inline-flex items-center gap-5 self-start rounded-s bg-warn-soft px-8 py-3 text-13 font-semibold text-warn">
-        <Hand aria-hidden="true" size={12} />
-        {mark.text}
-      </span>
-      <p className="line-clamp-2 text-13 leading-normal wrap-anywhere text-text-2">
-        {mark.reason}
-      </p>
-    </div>
-  );
-}
+const PROPOSAL_TONE = {
+  attention: "text-bad",
+  active: "text-accent",
+  merged: "text-text-2",
+} as const;
 
 function Activity({ line }: { line: ActivityLine }) {
   return (
-    <div
+    <p
       className={cn(
-        "flex items-center gap-6 rounded-s px-8 py-5",
-        line.stalled ? "bg-bg inset-ring inset-ring-line" : "bg-accent-soft",
+        "flex items-baseline gap-8 rounded-s px-10 py-8",
+        line.stalled ? "bg-warn-soft" : "bg-accent-soft",
       )}
     >
       <span
         aria-hidden="true"
         className={cn(
-          "size-7 shrink-0 rounded-full",
+          "size-8 shrink-0 self-center rounded-full",
           line.stalled ? "bg-warn" : "bg-accent",
         )}
       />
-      <span
-        className={cn(
-          "min-w-0 flex-1 truncate text-13",
-          line.stalled ? "text-warn" : "font-mono text-accent",
-        )}
-      >
+      <span className="min-w-0 flex-1 font-medium wrap-anywhere">
         {line.text}
       </span>
       <span className="shrink-0 text-13 text-text-2">{line.since}</span>
+    </p>
+  );
+}
+
+function RowValue({ row, card }: { row: DetailRow; card: BoardCardData }) {
+  switch (row.kind) {
+    case "person":
+      return <PersonName name={row.person} />;
+    case "labels":
+      return (
+        <>
+          {card.labels.map((label) => (
+            <Label key={label.name} color={label.color}>
+              {label.name}
+            </Label>
+          ))}
+        </>
+      );
+    case "proposal": {
+      const Icon = row.look === "merged" ? GitMerge : GitPullRequest;
+      return (
+        <>
+          <Icon
+            aria-hidden="true"
+            size={14}
+            className={PROPOSAL_TONE[row.look]}
+          />
+          {row.text}
+        </>
+      );
+    }
+    case "text":
+      return <span className="wrap-anywhere">{row.text}</span>;
+  }
+}
+
+/** The facts a card leaves out, shown on hover or keyboard focus. Mark answered is its one button. */
+function CardPanel({
+  slug,
+  card,
+  line,
+  now,
+}: {
+  slug: string;
+  card: BoardCardData;
+  line: ActivityLine | null;
+  now: number;
+}) {
+  const details = cardDetails(card, line, now);
+  return (
+    <div className="flex flex-col gap-10">
+      <p className="text-13 text-text-2">{details.head}</p>
+      {line ? <Activity line={line} /> : null}
+      {details.rows.length > 0 ? (
+        <dl className="grid grid-cols-[var(--width-fact-label)_minmax(0,1fr)] gap-x-10 gap-y-5">
+          {details.rows.map((row) => (
+            <Fragment key={row.name}>
+              <dt className="pt-2 text-13 text-text-2">{row.name}</dt>
+              <dd className="flex min-w-0 flex-wrap items-center gap-6 tabular-nums">
+                <RowValue row={row} card={card} />
+              </dd>
+            </Fragment>
+          ))}
+        </dl>
+      ) : null}
+      {details.notes.map((note) => (
+        <p key={note} className="text-13 text-text-2">
+          {note}
+        </p>
+      ))}
+      {details.why ? (
+        <p className="text-13 text-text-2">{details.why}</p>
+      ) : null}
+      {taskCanMarkAnswered(card.attention) ? (
+        <MarkAnswered slug={slug} scope={{ task: card.task }} />
+      ) : null}
+      <p className="flex items-center gap-8 text-13 text-text-2">
+        <CornerDownLeft aria-hidden="true" size={14} />
+        Click or press Enter to open the task
+      </p>
     </div>
   );
 }
 
+function MetaLine({ card }: { card: BoardCardData }) {
+  const fact = metaFact(card);
+  const parts: ReactNode[] = [
+    <Id key="id">{card.task}</Id>,
+    ...card.labels.map((label) => (
+      <Label key={`label-${label.name}`} color={label.color}>
+        {label.name}
+      </Label>
+    )),
+  ];
+  if (card.worker !== null) {
+    parts.push(<PersonName key="worker" name={card.worker} />);
+  } else if (fact !== null) {
+    parts.push(<span key="fact">{fact}</span>);
+  }
+  return (
+    <p className="flex flex-wrap items-center gap-x-6 text-13 leading-normal text-text-2">
+      {parts.map((part, index) => (
+        <Fragment key={index}>
+          {index > 0 ? <span aria-hidden="true">·</span> : null}
+          {part}
+        </Fragment>
+      ))}
+    </p>
+  );
+}
+
+function usePeek(): [boolean, HoverPeek] {
+  const [open, setOpen] = useState(false);
+  const [peek] = useState(() =>
+    hoverPeek(setOpen, {
+      set: (run, ms) => window.setTimeout(run, ms),
+      clear: (id) => {
+        window.clearTimeout(id);
+      },
+    }),
+  );
+  useEffect(() => peek.stop, [peek]);
+  return [open, peek];
+}
+
 /**
- * One read-only card. The title is the only control: a link stretched over the card, so a keyboard user opens the
- * task with Enter and nothing on the card can be dragged or moved.
+ * One read-only card: the title, one line of facts and at most one chip. The title is the only control on the card: a
+ * link stretched over it, so a keyboard user opens the task with Enter and nothing can be dragged or moved. The rest
+ * shows in a panel on hover or keyboard focus; `peek` is off on a phone, which has no hover.
  */
 export function BoardCard({
   slug,
   card,
   now,
+  peek: withPeek = true,
 }: {
   slug: string;
   card: BoardCardData;
   now: number;
+  peek?: boolean;
 }) {
   // Live workspace state is written only by the event stream, so this query observes the cache and never fetches.
   const { data: live } = useQuery<LiveWorkspace>({
@@ -180,121 +194,81 @@ export function BoardCard({
   });
   const filters = useRouterState({ select: (s) => s.location.searchStr });
   const line = activityLine(card, card.workspace ? live : undefined, now);
-  const filesText = liveFilesText(line);
-  const mark = attentionMark(card.attention);
-  const checklist = checklistText(card);
-  const blocks = blocksText(card);
-  const messages = messagesText(card);
-  const needs = needsText(card);
-  const blocked = blockedText(card);
-  const kind = kindText(card);
-  const blocker = blockerMark(card);
-  const leadCheck = leadCheckMark(card);
-  const answerable = taskCanMarkAnswered(card.attention);
-  const stalled = hasKind(card.attention, "stalled");
-  const stale = hasKind(card.attention, "stale_claim");
-  const hasFooter =
-    card.worker !== null || stalled || stale || filesText !== null;
+  const chip = cardChip(card);
+  const [open, peek] = usePeek();
+  const box = useRef<HTMLDivElement>(null);
+  const inside = (target: EventTarget | null) =>
+    target instanceof Node && box.current?.contains(target) === true;
+  const shown = withPeek && open;
 
   return (
-    <Card
-      data-task={card.task}
-      className="relative has-[a:focus-visible]:outline-2 has-[a:focus-visible]:outline-offset-2 has-[a:focus-visible]:outline-accent"
+    <RadixPopover.Root
+      open={shown}
+      onOpenChange={(next) => {
+        if (!next) peek.dismiss();
+      }}
     >
-      {mark ? (
-        <div className="flex flex-wrap items-center gap-6">
-          <Tooltip content={mark.tooltip}>
-            <span
-              tabIndex={0}
-              aria-label={`Needs you: ${mark.tooltip}`}
-              className="relative z-10 self-start rounded-s focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-            >
-              <Badge tone="needs-you" icon={mark.icon}>
-                {mark.text}
-              </Badge>
-            </span>
-          </Tooltip>
-          {answerable ? (
-            <MarkAnswered
-              slug={slug}
-              scope={{ task: card.task }}
-              className="relative z-10"
-            />
-          ) : null}
-        </div>
-      ) : null}
-      {card.labels.length > 0 ? (
-        <div className="flex flex-wrap gap-4">
-          {card.labels.map((label) => (
-            <Label key={label.name} color={label.color}>
-              {label.name}
-            </Label>
-          ))}
-        </div>
-      ) : null}
-      <HrefLink
-        href={taskPath(slug, card.task, filters)}
-        draggable={false}
-        className="text-16 leading-tight font-medium wrap-anywhere text-text outline-none after:absolute after:inset-0 after:rounded-m"
-      >
-        {card.title}
-      </HrefLink>
-      {blocked ? (
-        <Badge tone="blocked" className="self-start">
-          {blocked}
-        </Badge>
-      ) : null}
-      {blocker ? <BlockerPill mark={blocker} /> : null}
-      <div className="flex flex-wrap items-center gap-x-10 gap-y-4 leading-tight">
-        <Id className="text-13 text-text-2">{card.task}</Id>
-        {kind ? (
-          <Meta
-            icon={card.kind === "human" ? UserRound : ClipboardCheck}
-            text={kind}
-          />
-        ) : null}
-        {checklist ? <Meta icon={ListChecks} text={checklist} /> : null}
-        {blocks ? <Meta icon={GitFork} text={blocks} /> : null}
-        {needs ? <Meta icon={Hourglass} text={needs} /> : null}
-        {messages ? (
-          <Meta icon={MessageSquare} text={messages} label="messages" />
-        ) : null}
-      </div>
-      {card.human_review ? (
-        <HumanReviewBadge
-          reviewer={card.human_review.reviewer}
-          className="self-start"
-        />
-      ) : null}
-      {card.proposal ? (
-        <ProposalPill proposal={card.proposal} now={now} />
-      ) : null}
-      {leadCheck ? <LeadCheckPill mark={leadCheck} /> : null}
-      {hasFooter ? (
-        <div className="flex items-center justify-between gap-8 border-t border-line pt-7">
-          {card.worker ? (
-            <span className="min-w-0 truncate text-13">
-              <PersonName name={card.worker} />
-            </span>
-          ) : (
-            <span />
+      <RadixPopover.Anchor asChild>
+        <Card
+          ref={box}
+          data-task={card.task}
+          className={cn(
+            "relative gap-6 px-14 pt-12 pb-13 has-[a:focus-visible]:outline-2 has-[a:focus-visible]:outline-offset-2 has-[a:focus-visible]:outline-accent",
+            shown && "outline-2 outline-offset-2 outline-accent",
           )}
-          <span className="inline-flex shrink-0 items-center gap-4">
-            {stale ? <Badge tone="stale" /> : null}
-            {stalled ? <Badge tone="stalled" /> : null}
-            {filesText ? (
-              <span className="inline-flex items-center gap-6 rounded-s bg-accent-soft px-8 py-2 text-13 font-medium text-accent">
-                <span
-                  aria-hidden="true"
-                  className="size-7 rounded-full bg-accent"
-                />
-                {filesText}
-              </span>
-            ) : null}
-          </span>
-        </div>
-      ) : null}
-      {line ? <Activity line={line} /> : null}
-    </Card>
+          onPointerEnter={(event) => {
+            if (withPeek) peek.pointerEnter(event.pointerType);
+          }}
+          onPointerLeave={() => {
+            if (withPeek) peek.pointerLeave();
+          }}
+          onFocus={() => {
+            if (withPeek) peek.focusIn();
+          }}
+          onBlur={(event) => {
+            if (withPeek) peek.focusOut(inside(event.relatedTarget));
+          }}
+        >
+          <HrefLink
+            href={taskPath(slug, card.task, filters)}
+            draggable={false}
+            className="font-title text-16 leading-tight font-semibold wrap-anywhere text-text outline-none after:absolute after:inset-0 after:rounded-m"
+          >
+            {card.title}
+          </HrefLink>
+          <MetaLine card={card} />
+          {chip ? (
+            <Chip tone={chip.tone} className="mt-2 self-start">
+              <chip.icon aria-hidden="true" size={14} />
+              {chip.text}
+            </Chip>
+          ) : null}
+          {shown ? (
+            // Not in a portal: the panel follows the title in the DOM, so Tab reaches Mark answered.
+            <RadixPopover.Content
+              side="right"
+              align="start"
+              sideOffset={12}
+              collisionPadding={12}
+              onOpenAutoFocus={(event) => {
+                event.preventDefault();
+              }}
+              onCloseAutoFocus={(event) => {
+                event.preventDefault();
+              }}
+              onFocusOutside={(event) => {
+                if (inside(event.target)) event.preventDefault();
+              }}
+              onPointerDownOutside={(event) => {
+                if (inside(event.target)) event.preventDefault();
+              }}
+              className="z-10 w-side-panel rounded-m bg-surface px-16 py-14 text-14 text-text shadow-pop outline-none"
+            >
+              <CardPanel slug={slug} card={card} line={line} now={now} />
+            </RadixPopover.Content>
+          ) : null}
+        </Card>
+      </RadixPopover.Anchor>
+    </RadixPopover.Root>
   );
 }

@@ -3,7 +3,15 @@ import type { TaskStatus } from "@/api/board";
 import { boardCard } from "@/test/payloads";
 import { INITIAL_STATUS } from "@/live/status";
 import { groupColumns } from "./columns";
-import { cardCount, needsYouLook, reconnectAsOf, summaryText } from "./view";
+import {
+  cardCount,
+  needsYouPill,
+  phoneColumn,
+  phoneHint,
+  reconnectAsOf,
+  summaryText,
+  taskCountText,
+} from "./view";
 
 const make = (task: string, status: TaskStatus) => boardCard(task, { status });
 
@@ -65,10 +73,40 @@ describe("reconnectAsOf", () => {
   });
 });
 
-describe("needsYouLook", () => {
-  it("is ink with the count, ink with a dash while loading, and plain at zero", () => {
-    expect(needsYouLook(3)).toEqual({ variant: "primary", pill: "3" });
-    expect(needsYouLook(null)).toEqual({ variant: "primary", pill: "–" });
-    expect(needsYouLook(0)).toEqual({ variant: "quiet", pill: null });
+describe("needsYouPill", () => {
+  it("is the count, a dash while loading, and nothing at zero", () => {
+    expect(needsYouPill(3)).toBe("3");
+    expect(needsYouPill(null)).toBe("–");
+    expect(needsYouPill(0)).toBeNull();
+  });
+});
+
+describe("phoneColumn", () => {
+  it("opens on the first column with a card that needs a person", () => {
+    const columns = groupColumns([
+      make("T-1", "todo"),
+      boardCard("T-2", {
+        status: "review",
+        attention: [{ kind: "question", closable: true }],
+      }),
+    ]);
+    expect(phoneColumn(columns)).toBe("review");
+  });
+
+  it("falls back to the first column with a card, then To do", () => {
+    expect(phoneColumn(groupColumns([make("T-1", "in_progress")]))).toBe(
+      "in_progress",
+    );
+    expect(phoneColumn(groupColumns([]))).toBe("todo");
+  });
+});
+
+describe("phoneHint", () => {
+  it("names the column and its hint", () => {
+    expect(phoneHint("Backlog", "Waiting on prerequisites")).toBe(
+      "Backlog: waiting on prerequisites",
+    );
+    expect(taskCountText(1)).toBe("1 task");
+    expect(taskCountText(4)).toBe("4 tasks");
   });
 });

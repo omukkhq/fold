@@ -1,10 +1,12 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import type { TaskStatus } from "@/api/board";
 import { agentBarQuery } from "@/api/agentBar";
 import { boardCards, boardQuery } from "@/api/board";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { ReconnectingBanner } from "@/components/states/ReconnectingBanner";
 import { cn } from "@/lib/cn";
+import { useMediaQuery } from "@/lib/pageState";
 import { useLiveRetry } from "@/live/retry";
 import { useDataClock } from "@/live/useDataClock";
 import { useLiveStatus } from "@/live/status";
@@ -18,7 +20,7 @@ import { BoardToolbar } from "./BoardToolbar";
 import { groupColumns } from "./columns";
 import { applyFilters, labelOptions, needsYouCount } from "./filters";
 import { isFiltered, type BoardSearch } from "./search";
-import { reconnectAsOf, summaryText } from "./view";
+import { PHONE_LAYOUT, phoneColumn, reconnectAsOf, summaryText } from "./view";
 
 export interface BoardScreenProps {
   slug: string;
@@ -52,16 +54,23 @@ export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
     };
   }, [board.data, search]);
   const asOf = reconnectAsOf(status, board.dataUpdatedAt);
+  const isPhone = useMediaQuery(PHONE_LAYOUT);
+  const [chosen, setChosen] = useState<TaskStatus | null>(null);
+  const phone = isPhone
+    ? { selected: chosen ?? phoneColumn(columns), onSelect: setChosen }
+    : null;
 
   let body;
   if (board.isPending) {
-    body = <LoadingColumns />;
+    body = <LoadingColumns phone={phone} />;
   } else if (board.isError) {
-    body = <BareColumns />;
+    body = <BareColumns phone={phone} />;
   } else if (all.length === 0) {
-    body = <EmptyColumns slug={slug} />;
+    body = <EmptyColumns slug={slug} phone={phone} />;
   } else {
-    body = <BoardColumns slug={slug} columns={columns} now={now} />;
+    body = (
+      <BoardColumns slug={slug} columns={columns} now={now} phone={phone} />
+    );
   }
 
   return (
@@ -89,6 +98,7 @@ export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
         agents={agents.data ?? []}
         needsYou={board.isPending ? null : needsYouCount(all)}
         summary={board.isPending ? "Loading the board…" : summaryText(columns)}
+        phone={isPhone}
       />
       {/* The columns dim while they show the board as of an earlier time. */}
       <div

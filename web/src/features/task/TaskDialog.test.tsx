@@ -7,6 +7,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import {
+  act,
   cleanup,
   configure,
   render,
@@ -2075,7 +2076,12 @@ describe("a task without a proposal", () => {
     if (!card) throw new Error("no card");
     expect(card.dataset.task).toBe("T-7");
     expect(within(card).getByText("Waits for lead check")).toBeTruthy();
-    expect(within(card).getByText(REPORT)).toBeTruthy();
+    // The kind of work and the report note wait in the card's detail panel.
+    expect(within(card).queryByText(REPORT)).toBeNull();
+    act(() => {
+      title.focus();
+    });
+    expect(await within(card).findByText(REPORT)).toBeTruthy();
     expect(within(card).getByText("no proposal")).toBeTruthy();
   }, 15_000);
 
