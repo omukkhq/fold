@@ -4,6 +4,7 @@ import { add, ctx, del, hunk } from "@/test/diff";
 import {
   EXPAND_STEP,
   addSpan,
+  diffSides,
   expandPart,
   fileGaps,
   fileLineSet,
@@ -12,6 +13,7 @@ import {
   hiddenParts,
   keptSpans,
   layoutWithGaps,
+  spansOn,
   splitLines,
   textFits,
   withGaps,
@@ -171,6 +173,29 @@ describe("textFits and gapText", () => {
     ).toEqual({
       status: "error",
     });
+  });
+});
+
+describe("diffSides and spansOn", () => {
+  const diff = (old: string | null, next: string | null) => ({
+    old_hash: old,
+    new_hash: next,
+  });
+
+  it("keeps the shown lines only on the sides they were shown on", () => {
+    const sides = diffSides(diff("a", "b"));
+    const shown = { sides, spans: [[3, 9]] as Span[] };
+    expect(spansOn(shown, sides)).toEqual([[3, 9]]);
+    expect(spansOn(shown, diffSides(diff("a", "c")))).toEqual([]);
+    expect(spansOn(shown, diffSides(diff("x", "b")))).toEqual([]);
+    expect(spansOn(shown, null)).toEqual([]);
+    expect(spansOn({ sides: null, spans: [[1, 2]] }, null)).toEqual([]);
+  });
+
+  it("names a missing side apart from the other side's hash", () => {
+    expect(diffSides(null)).toBeNull();
+    expect(diffSides(diff(null, "b"))).toBe("..b");
+    expect(diffSides(diff("b", null))).toBe("b..");
   });
 });
 

@@ -445,6 +445,33 @@ describe("DiffViewer", () => {
       expect(screen.queryByRole("gridcell", { name: /new 7: l7$/ })).toBeNull();
     });
 
+    it("starts another version of the file with its hunks only, and keeps the whole file shown", async () => {
+      const user = userEvent.setup();
+      const hash = "d".repeat(64);
+      const next = {
+        status: "ready",
+        diff: { ...LONG, new_hash: hash },
+      } as const;
+      const nextText: FileTextView = {
+        status: "ready",
+        file: { ...FILE, hash },
+      };
+      const { rerender } = render(<Harness fileDiff={long} fileText={TEXT} />);
+      await user.click(button("Show lines 34–53"));
+      expect(cell(/^Unchanged line, old 34, new 34: l34$/)).toBeTruthy();
+      rerender(<Harness fileDiff={next} fileText={nextText} />);
+      expect(
+        screen.queryByRole("gridcell", { name: /new 34: l34$/ }),
+      ).toBeNull();
+      expect(button("Show 23 unchanged lines")).toBeTruthy();
+      await user.click(button("Show whole file"));
+      rerender(<Harness fileDiff={long} fileText={TEXT} />);
+      expect(button("Show changes only")).toBeTruthy();
+      expect(
+        screen.getAllByRole("gridcell", { name: /, new \d+:/ }),
+      ).toHaveLength(81);
+    });
+
     it("selects an expanded line on the new side, as any unchanged line", async () => {
       const user = userEvent.setup();
       render(<Harness fileDiff={long} fileText={TEXT} />);

@@ -279,6 +279,29 @@ export type GapText =
   | { status: "pending" }
   | { status: "error" };
 
+/** The lines a reader showed, with the two sides of the diff they were shown on. */
+export interface ShownSpans {
+  sides: string | null;
+  spans: readonly Span[];
+}
+
+/** The two sides of a diff by their hashes, null while it is not read: lines shown on other sides have other numbers. */
+export function diffSides(
+  diff: { old_hash: string | null; new_hash: string | null } | null,
+): string | null {
+  return diff === null
+    ? null
+    : `${diff.old_hash ?? ""}..${diff.new_hash ?? ""}`;
+}
+
+/** The spans of `shown` when they were shown on `sides`, none when the diff on screen compares other sides, such as another version of the file. */
+export function spansOn(
+  shown: ShownSpans,
+  sides: string | null,
+): readonly Span[] {
+  return shown.sides !== null && shown.sides === sides ? shown.spans : [];
+}
+
 export interface GapState {
   text: GapText;
   /** The lines the reader has shown. */

@@ -12,13 +12,16 @@ import { Skeleton } from "@/components/states/Skeleton";
 import { DiffRows } from "./DiffRows";
 import { FileList } from "./FileList";
 import {
+  diffSides,
   expandPart,
   gapText,
   hasGaps,
   layoutWithGaps,
+  spansOn,
   type FileTextView,
   type GapText,
   type KeptRange,
+  type ShownSpans,
   type Span,
 } from "./gaps";
 import {
@@ -282,9 +285,16 @@ function shownGaps(
   return gapText(diff.hunks, diff.new_hash, fileText);
 }
 
-/** One file: its head and its lines. The lines the reader showed belong to the file, so another file starts with its hunks only. */
+/** One file: its head and its lines. The lines the reader showed belong to the file and the sides it compares, so another file or another version of it starts with its hunks only. */
 function FilePanel({ file, split, headExtra, fileText, ...body }: PanelProps) {
-  const [spans, setSpans] = useState<readonly Span[]>([]);
+  const sides = diffSides(
+    body.fileDiff.status === "ready" ? body.fileDiff.diff : null,
+  );
+  const [shown, setShown] = useState<ShownSpans>({ sides, spans: [] });
+  const spans = spansOn(shown, sides);
+  const setSpans = (next: readonly Span[]) => {
+    setShown({ sides, spans: next });
+  };
   const [whole, setWhole] = useState(false);
   const counts = lineCounts(file);
   const note = changeNote(file);
