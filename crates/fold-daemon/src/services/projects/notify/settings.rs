@@ -491,8 +491,20 @@ impl NotifySettings {
         }
     }
 
-    /// Changes the target `id` of `scope` with `change` and returns it as it is kept; `notify_target_not_found` when the scope has none of that id.
+    /// Changes the target `id` of `scope` with `change` and returns it as it is kept; `notify_target_not_found` when the scope has none of that id. The notifiers of the projects the target serves look at it again.
     pub async fn update(
+        &self,
+        scope: &Scope,
+        id: NotifyTargetId,
+        change: impl FnOnce(&mut Target) -> Result<(), FoldError> + Send + 'static,
+    ) -> Result<Target, FoldError> {
+        let target = self.change(scope, id, change).await?;
+        self.wake_scope(scope);
+        Ok(target)
+    }
+
+    /// [`NotifySettings::update`] without a wake: the health a try writes is no news to any notifier.
+    async fn change(
         &self,
         scope: &Scope,
         id: NotifyTargetId,
@@ -528,7 +540,6 @@ impl NotifySettings {
                 }
             })
             .await?;
-        self.wake_scope(scope);
         Ok(target)
     }
 
@@ -547,7 +558,7 @@ impl NotifySettings {
             Scope::Project(slug.to_owned())
         };
         let updated = self
-            .update(&scope, id, move |target| {
+            .change(&scope, id, move |target| {
                 let health = &mut target.health;
                 match outcome {
                     TryOutcome::Delivered => {
