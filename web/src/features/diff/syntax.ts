@@ -11,8 +11,8 @@ export interface DiffSyntax {
 }
 
 /**
- * Each hunk is two segments: the old side (unchanged and removed lines) and the new side (unchanged and added lines),
- * so each side reads as the code it was. Only the rows on screen are taken, and an unchanged line is highlighted on
+ * Each run of rows between headers and hidden lines is two segments: the old side (unchanged and removed lines) and the new side (unchanged and
+ * added lines), so each side reads as the code it was. Only the rows on screen are taken, and an unchanged line is highlighted on
  * the new side.
  */
 export function diffSyntax(
@@ -23,11 +23,10 @@ export function diffSyntax(
   const at = new Map<string, readonly [number, number]>();
   let side: { old: string[]; new: string[]; first: number } | null = null;
   for (const row of rows) {
-    if (row.type === "hunk") {
+    if (row.type !== "line") {
       side = null;
       continue;
     }
-    if (row.type !== "line") continue;
     if (side === null) {
       side = { old: [], new: [], first: segments.length };
       segments.push(side.old, side.new);

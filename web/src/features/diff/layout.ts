@@ -23,7 +23,24 @@ export type LineRow = {
 
 export type ExpanderRow = { type: "expander"; key: string; hidden: number };
 
-export type DiffRow = HunkRow | LineRow | ExpanderRow;
+/** Unchanged lines around the hunks that are not on screen, `first` to `last` by new number, with the controls that show them. */
+export type GapRow = {
+  type: "gap";
+  key: string;
+  first: number;
+  last: number;
+  hidden: number;
+  /** Offers to show the lines over the row below. */
+  up: boolean;
+  /** Offers to show the lines under the row above. */
+  down: boolean;
+  /** The header of the hunk right below, drawn in this row in place of its own. */
+  header: string | null;
+  /** Whether the file's text is read, still loading, or failed to load. */
+  status: "ready" | "pending" | "error";
+};
+
+export type DiffRow = HunkRow | LineRow | ExpanderRow | GapRow;
 
 /** The header of a hunk, with U+2212 before the old range. */
 export function hunkHeader(hunk: Hunk): string {
@@ -55,7 +72,7 @@ export function hunkRows(hunks: readonly Hunk[]): (HunkRow | LineRow)[] {
   return rows;
 }
 
-interface CollapseOptions {
+export interface CollapseOptions {
   threshold?: number;
   edge?: number;
   /** The lines, as `side:line` keys, that end a review thread: a run that holds one stays open, so the thread is drawn under its line. */
