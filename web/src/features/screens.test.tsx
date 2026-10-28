@@ -510,6 +510,62 @@ describe("A project fold removed", () => {
   });
 });
 
+describe("A batch the project does not have", () => {
+  function stubProject(batch: StubReply) {
+    stubFetch({
+      ...shellRoutes(["demo"]),
+      "GET /api/v1/projects/demo/workers": { body: workerList() },
+      "GET /api/v1/projects/demo/events": () =>
+        new Promise<StubReply>(() => undefined),
+      "GET /api/v1/projects/demo/reviews/batches/rb-1": batch,
+    });
+  }
+
+  it("says the batch is not found and leads to the proposals, never to the project not-found state", async () => {
+    stubProject(errorReply(404, "review_batch_not_found"));
+    renderAt("/p/demo/batches/rb-1");
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Batch rb-1 not found");
+    expect(alert.textContent).toContain("code: review_batch_not_found");
+    expect(
+      within(alert)
+        .getByRole("link", { name: "Back to proposals" })
+        .getAttribute("href"),
+    ).toBe("/p/demo/proposals");
+    expect(screen.queryByText("Project not found")).toBeNull();
+  });
+
+  it("says the same of an id that is no batch id", async () => {
+    stubProject(errorReply(404, "review_batch_not_found"));
+    renderAt("/p/demo/batches/P-1");
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Batch P-1 not found");
+    expect(screen.queryByText("Project not found")).toBeNull();
+  });
+});
+
+describe("A page inside a project that does not exist", () => {
+  it("shows the not-found state of the page, never the project not-found state", async () => {
+    stubFetch({
+      ...shellRoutes(["demo"]),
+      "GET /api/v1/projects/demo/events": () =>
+        new Promise<StubReply>(() => undefined),
+    });
+    renderAt("/p/demo/proposals/xyz");
+    expect(
+      await screen.findByRole("heading", { name: "Not found" }),
+    ).toBeTruthy();
+    expect(screen.queryByText("Project not found")).toBeNull();
+  });
+
+  it("keeps the project not-found state for an address that is no project slug", async () => {
+    stubFetch(shellRoutes(["demo"]));
+    renderAt("/p/Not_A_Slug/board");
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Project not found");
+  });
+});
+
 describe("The top bar", () => {
   it("links the wordmark to the projects page and switches among the five most recent projects", async () => {
     const slugs = ["a", "b", "c", "d", "e", "f"];

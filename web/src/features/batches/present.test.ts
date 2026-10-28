@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { batch, member, proposalSummary, workerProcess } from "@/test/workers";
 import {
+  batchMissing,
   checkoutView,
   conflictedMembers,
   countsText,
@@ -205,5 +206,16 @@ describe("the change switch", () => {
     });
     expect(memberSearch(changes.get("P-4"))).toEqual({ tab: "changes" });
     expect(memberSearch(undefined)).toEqual({ tab: "changes" });
+  });
+});
+
+describe("batchMissing", () => {
+  it("names the batch and leads to the proposals of the project", () => {
+    expect(batchMissing("demo", "rb-1")).toEqual({
+      title: "Batch rb-1 not found",
+      text: expect.stringContaining("no review batch with this id") as string,
+      code: "review_batch_not_found",
+      href: "/p/demo/proposals",
+    });
   });
 });
