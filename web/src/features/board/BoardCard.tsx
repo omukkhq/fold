@@ -145,13 +145,14 @@ function MetaLine({ card }: { card: BoardCardData }) {
   } else if (fact !== null) {
     parts.push(<span key="fact">{fact}</span>);
   }
+  // Each separator travels with the part after it, so a wrapped line never ends in a dot.
   return (
     <p className="flex flex-wrap items-center gap-x-6 text-13 leading-normal text-text-2">
       {parts.map((part, index) => (
-        <Fragment key={index}>
+        <span key={index} className="inline-flex items-center gap-6">
           {index > 0 ? <span aria-hidden="true">·</span> : null}
           {part}
-        </Fragment>
+        </span>
       ))}
     </p>
   );

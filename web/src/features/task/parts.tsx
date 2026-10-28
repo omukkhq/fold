@@ -62,27 +62,35 @@ export function SideCard({
   );
 }
 
-/** One row of a side group: the field label on the left, the value at 14px on the right, and an optional control at the end of the value. */
+/** One row of a side group: the field label on the left, the value at 14px on the right, and an optional control after the value, which wraps under it when the row is narrow. */
 export function SideGroup({
   title,
   action,
+  stacked = false,
   children,
 }: {
   title: string;
   /** A control at the end of the row. */
   action?: ReactNode;
+  /** The label sits above a value that needs the group's whole width, such as a chart. */
+  stacked?: boolean;
   children: ReactNode;
 }) {
   return (
     <section
       aria-label={title}
-      className="grid grid-cols-[var(--width-side-label)_minmax(0,1fr)] items-baseline gap-x-12"
+      className={cn(
+        "grid items-baseline gap-x-12 gap-y-6",
+        stacked
+          ? "grid-cols-1"
+          : "grid-cols-[var(--width-side-label)_minmax(0,1fr)]",
+      )}
     >
       <h4 className="font-title text-13 leading-tight font-semibold text-text-2">
         {title}
       </h4>
-      <div className="flex min-w-0 items-start gap-8">
-        <div className="flex min-w-0 flex-1 flex-col gap-4 text-14 text-text">
+      <div className="flex min-w-0 flex-wrap items-start gap-x-12 gap-y-4">
+        <div className="flex min-w-0 grow basis-auto flex-col gap-4 text-14 text-text">
           {children}
         </div>
         {action}

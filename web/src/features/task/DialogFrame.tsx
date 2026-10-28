@@ -45,7 +45,7 @@ export function DialogFrame({
     >
       <RadixDialog.Portal>
         {/* z-10 lifts the dialog over the board's raised marks; menus and popovers share it and open later in the DOM, so they stay on top. */}
-        <RadixDialog.Overlay className="fixed inset-0 z-10 flex justify-center bg-scrim px-16 py-32">
+        <RadixDialog.Overlay className="fixed inset-0 z-10 flex justify-center bg-scrim px-16 py-32 max-md:p-0">
           <RadixDialog.Content
             {...(described ? {} : { "aria-describedby": undefined })}
             // The dialog itself takes the focus on open, so no control shows a ring before the human moves.
@@ -60,7 +60,7 @@ export function DialogFrame({
               }
             }}
             className={cn(
-              "flex max-h-full max-w-full flex-col self-start overflow-hidden rounded-l bg-surface shadow-dialog outline-none focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-accent",
+              "flex max-h-full max-w-full flex-col self-start overflow-hidden rounded-l bg-surface shadow-dialog outline-none focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-accent max-md:h-full max-md:w-full max-md:rounded-none max-md:focus-visible:-outline-offset-2",
               narrow ? "w-dialog-narrow" : "w-dialog",
             )}
           >

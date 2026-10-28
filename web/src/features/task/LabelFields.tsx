@@ -266,7 +266,7 @@ export function LabelsField({
           <div
             ref={box}
             className={cn(
-              "flex flex-wrap items-center gap-6 rounded-s bg-fill px-8 py-6 has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent",
+              "flex flex-wrap items-center gap-6 rounded-s bg-fill px-8 py-7 has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent",
               disabled && "opacity-60",
             )}
           >
