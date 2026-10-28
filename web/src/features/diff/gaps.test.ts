@@ -105,6 +105,20 @@ describe("fileGaps", () => {
     ]);
   });
 
+  it("reads the edges of a hunk with more lines than a call takes as arguments", () => {
+    // Every line of a 140k-line file rewritten, below the daemon's 1 MiB limit for hunks.
+    const count = 140_000;
+    const drafts = [
+      ...Array.from({ length: count }, () => del("o")),
+      ...Array.from({ length: count }, () => add("n")),
+      ctx("end"),
+    ];
+    expect(fileGaps([hunk(1, 1, drafts)], count + 3)).toEqual([
+      { index: 0, first: 1, last: 0, shift: 0, tail: false },
+      { index: 1, first: count + 2, last: count + 3, shift: 0, tail: true },
+    ]);
+  });
+
   it("is null when the hunks do not fit a file", () => {
     expect(fileGaps(HUNKS40, 20)).toBeNull();
     expect(fileGaps([hunk(3, 5, [ctx("a")])], 10)).toBeNull();

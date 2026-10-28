@@ -56,15 +56,34 @@ interface Edges {
   lastOld: number;
 }
 
-/** A start names the line before the hunk when its side has no lines in it, so the edges come from the numbered lines. */
+/**
+ * A start names the line before the hunk when its side has no lines in it, so the edges come from the numbered lines. They are read in one pass,
+ * never spread into one call: a hunk can hold more lines than a browser takes as the arguments of a call.
+ */
 function edges(hunk: Hunk): Edges {
-  const news = hunk.lines.flatMap((l) => (l.new_no === null ? [] : [l.new_no]));
-  const olds = hunk.lines.flatMap((l) => (l.old_no === null ? [] : [l.old_no]));
+  const found = {
+    firstNew: Infinity,
+    lastNew: -Infinity,
+    firstOld: Infinity,
+    lastOld: -Infinity,
+  };
+  for (const line of hunk.lines) {
+    if (line.new_no !== null) {
+      found.firstNew = Math.min(found.firstNew, line.new_no);
+      found.lastNew = Math.max(found.lastNew, line.new_no);
+    }
+    if (line.old_no !== null) {
+      found.firstOld = Math.min(found.firstOld, line.old_no);
+      found.lastOld = Math.max(found.lastOld, line.old_no);
+    }
+  }
+  const news = found.lastNew >= found.firstNew;
+  const olds = found.lastOld >= found.firstOld;
   return {
-    firstNew: news.length > 0 ? Math.min(...news) : hunk.new_start + 1,
-    lastNew: news.length > 0 ? Math.max(...news) : hunk.new_start,
-    firstOld: olds.length > 0 ? Math.min(...olds) : hunk.old_start + 1,
-    lastOld: olds.length > 0 ? Math.max(...olds) : hunk.old_start,
+    firstNew: news ? found.firstNew : hunk.new_start + 1,
+    lastNew: news ? found.lastNew : hunk.new_start,
+    firstOld: olds ? found.firstOld : hunk.old_start + 1,
+    lastOld: olds ? found.lastOld : hunk.old_start,
   };
 }
 
