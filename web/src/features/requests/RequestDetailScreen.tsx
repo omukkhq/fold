@@ -27,6 +27,7 @@ import {
 import { Skeleton } from "@/components/states/Skeleton";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
+import { useMediaQuery } from "@/lib/pageState";
 import { useNow } from "@/live/useNow";
 import { knownFrom } from "@/mentions/parse";
 import {
@@ -60,14 +61,19 @@ import {
   VersionTabs,
 } from "./RequestContent";
 import {
+  AboutCard,
   ClosedPanel,
   CreatedTasksPanel,
   DecisionPanel,
   DrafterBlock,
   EditingPanel,
+  StatusCard,
   VersionsBlock,
   ViewerPanel,
 } from "./SidePanel";
+
+/** Below the wide layout the status and the actions come first, then the request, then who drafts it. */
+const NARROW = "(max-width: 63.99rem)";
 
 interface RequestDetailScreenProps {
   slug: string;
@@ -103,7 +109,7 @@ export function RequestDetailPending({
   id: string;
 }) {
   return (
-    <div className="flex flex-col gap-16 px-24 pt-18 pb-24">
+    <div className="flex flex-col gap-16 px-16 pt-16 pb-24 md:px-28 md:pt-20 md:pb-32">
       <Crumb slug={slug} id={id} />
       <Skeleton />
       <div className="flex items-start gap-24">
@@ -140,6 +146,7 @@ export function RequestDetailScreen({
     enabled: (detail?.tasks.length ?? 0) > 0,
   });
   const now = useNow(true, 30_000);
+  const phone = useMediaQuery(NARROW);
   const [chosen, setChosen] = useState<number | null>(null);
   const [editing, setEditing] = useState<DraftForm | null>(null);
   const [note, setNote] = useState("");
@@ -201,7 +208,7 @@ export function RequestDetailScreen({
     const missing = detail === null && !query.isError;
     const absent = missingState(slug, { kind: "request", id });
     return (
-      <div className="flex flex-col gap-16 px-24 pt-18 pb-24">
+      <div className="flex flex-col gap-16 px-16 pt-16 pb-24 md:px-28 md:pt-20 md:pb-32">
         <Crumb slug={slug} id={id} />
         <FailurePanel
           title={missing ? absent.title : `Could not load ${id}`}
@@ -277,129 +284,145 @@ export function RequestDetailScreen({
     write.mutate({ action: "edit", form: editing, note });
   };
 
+  const status = (
+    <StatusCard detail={detail} human={human} now={now}>
+      {kind === "approved" ? (
+        <CreatedTasksPanel
+          slug={slug}
+          tasks={createdTasks(
+            detail,
+            board.data ? boardCards(board.data) : undefined,
+          )}
+        />
+      ) : kind === "closed" ? (
+        <ClosedPanel slug={slug} detail={detail} known={known} />
+      ) : kind === "viewer" ? (
+        <ViewerPanel detail={detail} />
+      ) : kind === "editing" ? (
+        <EditingPanel
+          slug={slug}
+          detail={detail}
+          note={note}
+          saving={pending === "edit"}
+          failure={failureOf("edit")}
+          onNote={setNote}
+          onSave={save}
+          onCancel={() => {
+            setEditing(null);
+            setNote("");
+            setFailure(null);
+          }}
+        />
+      ) : (
+        <DecisionPanel
+          slug={slug}
+          detail={detail}
+          actions={actions}
+          pending={pending}
+          failure={decisionFailure}
+          cards={latest?.cards.length ?? 0}
+          olderDraft={olderDraft}
+          onApprove={() => {
+            write.mutate({
+              action: "approve",
+              version: r.latest_version ?? 0,
+            });
+          }}
+          onRequestChanges={async (comment) => {
+            await write.mutateAsync({
+              action: "request_changes",
+              version: r.latest_version ?? 0,
+              comment,
+            });
+          }}
+          onEdit={() => {
+            if (latest) {
+              setFailure(null);
+              setEditing(formFrom(latest));
+            }
+          }}
+          onClose={() => {
+            setFailure(null);
+            setClosing(true);
+          }}
+        />
+      )}
+    </StatusCard>
+  );
+  const about = (
+    <AboutCard>
+      <DrafterBlock detail={detail} now={now} />
+      <VersionsBlock detail={detail} human={human} now={now} />
+    </AboutCard>
+  );
+  const content = (
+    <div className="flex w-full min-w-0 max-w-thread-column flex-col gap-28">
+      <BodySection slug={slug} detail={detail} known={known} />
+      {editing !== null ? (
+        <DraftEditor
+          slug={slug}
+          form={editing}
+          next={(r.latest_version ?? 0) + 1}
+          locked={pending === "edit"}
+          onChange={setEditing}
+        />
+      ) : (
+        <DraftView
+          slug={slug}
+          detail={detail}
+          draft={draft}
+          known={known}
+          now={now}
+          tabs={
+            draft && detail.drafts.length > 1 ? (
+              <VersionTabs
+                drafts={detail.drafts}
+                shown={draft.version}
+                disabled={pending !== null}
+                onShow={setChosen}
+              />
+            ) : null
+          }
+        />
+      )}
+      <CommentsSection slug={slug} detail={detail} known={known} now={now} />
+      <ThreadSection
+        slug={slug}
+        detail={detail}
+        messages={thread.data?.messages}
+        known={known}
+        now={now}
+        target={target.label}
+        closed={threadClosedText(r)}
+        failure={threadFailure}
+        onSend={async (body) => {
+          await message.mutateAsync({ body, to: target.to });
+        }}
+      />
+    </div>
+  );
+
   return (
-    <div className="flex flex-col gap-16 px-24 pt-18 pb-24">
+    <div className="flex flex-col gap-16 px-16 pt-16 pb-24 md:px-28 md:pt-20 md:pb-32">
       <Crumb slug={slug} id={id} />
       <RequestHeader detail={detail} now={now} />
-      <div className="flex flex-col items-start gap-24 lg:flex-row">
-        <div className="flex w-full min-w-0 flex-1 flex-col gap-24">
-          <BodySection slug={slug} detail={detail} known={known} />
-          {editing !== null ? (
-            <DraftEditor
-              slug={slug}
-              form={editing}
-              next={(r.latest_version ?? 0) + 1}
-              locked={pending === "edit"}
-              onChange={setEditing}
-            />
-          ) : (
-            <DraftView
-              slug={slug}
-              detail={detail}
-              draft={draft}
-              known={known}
-              now={now}
-              tabs={
-                draft && detail.drafts.length > 1 ? (
-                  <VersionTabs
-                    drafts={detail.drafts}
-                    shown={draft.version}
-                    disabled={pending !== null}
-                    onShow={setChosen}
-                  />
-                ) : null
-              }
-            />
-          )}
-          <CommentsSection
-            slug={slug}
-            detail={detail}
-            known={known}
-            now={now}
-          />
-          <ThreadSection
-            slug={slug}
-            detail={detail}
-            messages={thread.data?.messages}
-            known={known}
-            now={now}
-            target={target.label}
-            closed={threadClosedText(r)}
-            failure={threadFailure}
-            onSend={async (body) => {
-              await message.mutateAsync({ body, to: target.to });
-            }}
-          />
+      {phone ? (
+        <div className="flex flex-col gap-24">
+          <aside aria-label="Request actions" className="flex flex-col">
+            {status}
+          </aside>
+          {content}
+          {about}
         </div>
-        <aside
-          aria-label="Request actions"
-          className="flex w-full shrink-0 flex-col gap-20 border-line lg:w-side-panel lg:border-l lg:pl-20"
-        >
-          {kind === "approved" ? (
-            <CreatedTasksPanel
-              slug={slug}
-              tasks={createdTasks(
-                detail,
-                board.data ? boardCards(board.data) : undefined,
-              )}
-            />
-          ) : kind === "closed" ? (
-            <ClosedPanel slug={slug} detail={detail} known={known} />
-          ) : kind === "viewer" ? (
-            <ViewerPanel detail={detail} />
-          ) : kind === "editing" ? (
-            <EditingPanel
-              slug={slug}
-              detail={detail}
-              note={note}
-              saving={pending === "edit"}
-              failure={failureOf("edit")}
-              onNote={setNote}
-              onSave={save}
-              onCancel={() => {
-                setEditing(null);
-                setNote("");
-                setFailure(null);
-              }}
-            />
-          ) : (
-            <DecisionPanel
-              slug={slug}
-              detail={detail}
-              actions={actions}
-              pending={pending}
-              failure={decisionFailure}
-              cards={latest?.cards.length ?? 0}
-              olderDraft={olderDraft}
-              onApprove={() => {
-                write.mutate({
-                  action: "approve",
-                  version: r.latest_version ?? 0,
-                });
-              }}
-              onRequestChanges={async (comment) => {
-                await write.mutateAsync({
-                  action: "request_changes",
-                  version: r.latest_version ?? 0,
-                  comment,
-                });
-              }}
-              onEdit={() => {
-                if (latest) {
-                  setFailure(null);
-                  setEditing(formFrom(latest));
-                }
-              }}
-              onClose={() => {
-                setFailure(null);
-                setClosing(true);
-              }}
-            />
-          )}
-          <DrafterBlock detail={detail} now={now} />
-          <VersionsBlock detail={detail} human={human} now={now} />
-        </aside>
-      </div>
+      ) : (
+        <div className="grid grid-cols-[minmax(0,1fr)_var(--width-side-panel)] items-start gap-28">
+          {content}
+          <aside aria-label="Request actions" className="flex flex-col gap-16">
+            {status}
+            {about}
+          </aside>
+        </div>
+      )}
       <CloseDialog
         slug={slug}
         id={id}
