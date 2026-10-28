@@ -26,5 +26,6 @@ describe("tabBadge", () => {
     expect(tabBadge("proposals", 0, 5)).toBeNull();
     expect(tabBadge("messages", 5, 0)).toBeNull();
     expect(tabBadge("board", 5, 5)).toBeNull();
+    expect(tabBadge("settings", 5, 5)).toBeNull();
   });
 });
