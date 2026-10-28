@@ -43,11 +43,13 @@ export function ReviewPill({
       )}
     >
       <Icon aria-hidden="true" size={14} className="shrink-0" />
-      {pill.segments ? (
-        <ActorText segments={pill.segments} slot="waitingChip" />
-      ) : (
-        pill.text
-      )}
+      <span className="min-w-0">
+        {pill.segments ? (
+          <ActorText segments={pill.segments} slot="waitingChip" />
+        ) : (
+          pill.text
+        )}
+      </span>
     </span>
   );
 }

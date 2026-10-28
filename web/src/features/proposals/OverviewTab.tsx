@@ -543,7 +543,7 @@ function AboutCard({
         className={cn(CARD, "flex flex-col gap-12 px-16 py-14")}
       >
         <h2 className="text-16 leading-tight font-semibold text-text">About</h2>
-        <dl className="grid grid-cols-[var(--width-fact-label)_minmax(0,1fr)] gap-x-12 gap-y-8 text-14">
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-16 gap-y-8 text-14">
           <Fact label="Author">
             <PersonName name={summary.author} />
           </Fact>
