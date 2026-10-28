@@ -1137,6 +1137,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{slug}/reviews/batches/{id}/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One file of the new side of the batch's merged change, from the same sides as `get_review_batch_diff`: the members merged onto main's head before the batch's integration, the last member's revision after it. The diff view reads the unchanged lines around the hunks from it. A symlink gives its target text and is never followed. */
+        get: operations["read_review_batch_file"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{slug}/reviews/batches/{id}/integrate": {
         parameters: {
             query?: never;
@@ -11906,6 +11923,88 @@ export interface operations {
                 };
             };
             /** @description `review_batch_not_found`, `path_not_in_comparison`, `revision_not_found`: main has no revision, or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    read_review_batch_file: {
+        parameters: {
+            query: {
+                /** @description A file of the merged change's new side, such as `src/lib.rs`. */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The review batch id, such as rb-3 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileContentView"];
+                };
+            };
+            /** @description `invalid_id`, `invalid_path`, or `invalid_request`: the query string is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `review_batch_not_found`, `not_found`: the new side has no file at the path or the batch compares nothing, `revision_not_found`: main has no revision, or `project_not_found` */
             404: {
                 headers: {
                     [name: string]: unknown;

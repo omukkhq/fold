@@ -7,6 +7,18 @@ export function isProjectGone(error: unknown): boolean {
   return isApiError(error, "project_not_found");
 }
 
+/** The data of the project route's own not-found: a screen inside the project throws its not-found without it, so the project's not-found state does not answer for a missing task, batch or page. */
+export const PROJECT_MISSING = { project: "missing" } as const;
+
+export function isProjectMissing(data: unknown): boolean {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "project" in data &&
+    data.project === PROJECT_MISSING.project
+  );
+}
+
 /** Why fold cannot show a project, by the error code and, for `project_unavailable`, its `details.reason`. */
 export type ProjectProblem =
   | { kind: "gone" }

@@ -122,6 +122,39 @@ describe("NeedsYou", () => {
     expect(within(list).getByText("needs your review")).toBeTruthy();
   });
 
+  it("keeps each id on one line, cuts a long title and gives its whole text on keyboard focus", async () => {
+    const title = "Record changes in an audit log for every write";
+    await renderBadge(
+      [
+        needsItem({
+          kind: "human_review",
+          screen: "proposal",
+          proposal: "P-4",
+          task: "T-7",
+          title,
+        }),
+      ],
+      null,
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Needs you/ }),
+    );
+    const list = screen.getByRole("dialog", { name: "Needs you" });
+    const task = within(list).getByText("T-7");
+    expect(task.className).toContain("whitespace-nowrap");
+    expect(task.className).toContain("shrink-0");
+    const chip = within(list).getByText("P-4");
+    expect(chip.className).toContain("whitespace-nowrap");
+    const cut = within(list).getByText(title).closest("span[title]");
+    expect(cut?.getAttribute("title")).toBe(title);
+    expect(cut?.className).toContain("truncate");
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    await userEvent.tab();
+    expect(document.activeElement).toBe(within(list).getByRole("link"));
+    expect((await screen.findByRole("tooltip")).textContent).toBe(title);
+  });
+
   it("shows an unstash conflict as a line that opens nothing and counts it", async () => {
     await renderBadge(
       [

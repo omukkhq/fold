@@ -1,5 +1,6 @@
 import * as RadixPopover from "@radix-ui/react-popover";
 import { CodeText } from "@/components/code/CodeText";
+import { Tooltip } from "@/components/overlay/Tooltip";
 import { useQuery } from "@tanstack/react-query";
 import {
   BellOff,
@@ -21,7 +22,7 @@ import {
   UserRound,
   type LucideIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { needsYouQuery, sessionQuery } from "@/api/queries";
 import type { NeedsYouKind } from "@/api/workers";
 import { formatAsOfMinute } from "@/format/time";
@@ -32,6 +33,7 @@ import { useNow } from "@/live/useNow";
 import { PersonName } from "@/people/PersonName";
 import { HrefLink } from "./HrefLink";
 import {
+  fullTitle,
   itemsFor,
   needsYouGroups,
   waitingText,
@@ -68,6 +70,7 @@ function Line({
   onOpen: () => void;
 }) {
   const Icon = ICONS[line.kind];
+  const full = fullTitle(line);
   const row = "flex items-center gap-10 px-16 py-8";
   const content = (
     <>
@@ -78,7 +81,7 @@ function Line({
             <PersonName name={line.person} slot="needsYouLine" />
           ) : null}
           {line.chip ? (
-            <span className="inline-flex items-center gap-4 rounded-s bg-sunken px-6 py-2 font-mono text-code text-primary-text">
+            <span className="inline-flex shrink-0 items-center gap-4 rounded-s bg-sunken px-6 py-2 font-mono text-code whitespace-nowrap text-primary-text tabular-nums">
               <Icon aria-hidden="true" size={12} />
               {line.chip}
             </span>
@@ -87,18 +90,24 @@ function Line({
             <CodeText text={line.text} />
           </span>
         </span>
-        <span className="flex items-center gap-6 text-meta text-text-muted">
+        <span className="flex min-w-0 items-center gap-6 text-meta text-text-muted">
           {line.task ? (
-            <span className="font-mono text-label">{line.task}</span>
+            <span className="shrink-0 font-mono text-label whitespace-nowrap tabular-nums">
+              {line.task}
+            </span>
           ) : null}
           {line.title ? (
-            <span className="min-w-0 truncate">
+            <span className="min-w-0 truncate" title={full ?? undefined}>
               <CodeText text={line.title} caption />
             </span>
           ) : null}
-          <span>{formatAsOfMinute(now, line.since)}</span>
+          <span className="shrink-0 whitespace-nowrap">
+            {formatAsOfMinute(now, line.since)}
+          </span>
           {line.hint ? (
-            <span className="text-text-faint">· {line.hint}</span>
+            <span className="shrink-0 whitespace-nowrap text-text-faint">
+              · {line.hint}
+            </span>
           ) : null}
         </span>
       </span>
@@ -111,21 +120,22 @@ function Line({
       </li>
     );
   }
+  const link = (
+    <HrefLink
+      href={line.href}
+      onClick={onOpen}
+      className={cn(row, "hover:bg-sunken", focusRing)}
+    >
+      {content}
+      <ChevronRight
+        aria-hidden="true"
+        size={14}
+        className="shrink-0 text-text-faint"
+      />
+    </HrefLink>
+  );
   return (
-    <li>
-      <HrefLink
-        href={line.href}
-        onClick={onOpen}
-        className={cn(row, "hover:bg-sunken", focusRing)}
-      >
-        {content}
-        <ChevronRight
-          aria-hidden="true"
-          size={14}
-          className="text-text-faint"
-        />
-      </HrefLink>
-    </li>
+    <li>{full === null ? link : <Tooltip content={full}>{link}</Tooltip>}</li>
   );
 }
 
@@ -136,6 +146,7 @@ export function NeedsYou({ slug }: { slug: string }) {
   const status = useLiveStatus();
   const now = useNow(status.state === "reconnecting", MINUTE_MS);
   const [open, setOpen] = useState(false);
+  const list = useRef<HTMLDivElement>(null);
   const items = itemsFor(needs.data ?? [], session.data?.human ?? null);
   if (items.length === 0) {
     return null;
@@ -168,6 +179,12 @@ export function NeedsYou({ slug }: { slug: string }) {
           sideOffset={6}
           collisionPadding={16}
           aria-label="Needs you"
+          ref={list}
+          // The list takes the focus itself: on its first line the line's tooltip would open over the next line.
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            list.current?.focus();
+          }}
           className="z-10 flex w-needs-you max-w-(--width-popover-max) flex-col rounded-m border border-border bg-raised shadow-card outline-none"
         >
           <div className="flex items-center gap-8 border-b border-border-subtle px-16 py-12">

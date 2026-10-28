@@ -116,8 +116,15 @@ export function comparisonTitle(comparison: Comparison): string {
   const { from, to } = comparison;
   if (isWorkingChanges(comparison)) return `Working changes in ${to.id}`;
   if (to.kind === "workspace")
-    return `Working files in ${to.id} against ${from.id}`;
+    return `Changes from ${from.id} to the working files in ${to.id}`;
   return `Changes from ${from.id} to ${to.id}`;
+}
+
+/** The two compared states in the order the title, the crumb and the compare row name them: the older one first. */
+export function comparisonSides(
+  comparison: Comparison,
+): readonly [ComparedState, ComparedState] {
+  return [comparison.from, comparison.to];
 }
 
 export interface Crumb {
@@ -206,6 +213,20 @@ export function lineLabel(row: LineRow): string {
 
 export function hiddenLinesText(hidden: number): string {
   return `Show ${plural(hidden, "unchanged line")}`;
+}
+
+/** The name of a control that shows the run of lines `first` to `last`. */
+export function showLinesText(first: number, last: number): string {
+  return first === last
+    ? `Show line ${String(first)}`
+    : `Show lines ${String(first)}–${String(last)}`;
+}
+
+export const GAP_ERROR = "The unchanged lines could not load.";
+
+/** The file head's control that shows every line of the file, or only the changes again. */
+export function wholeFileText(whole: boolean): string {
+  return whole ? "Show changes only" : "Show whole file";
 }
 
 export function moreRowsText(remaining: number): string {

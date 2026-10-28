@@ -1,5 +1,6 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, notFound } from "@tanstack/react-router";
+import { MissingPanel } from "../app/MissingPanel";
 import { comparisonQuery } from "../api/queries";
 import { DiffScreen } from "../features/diff/DiffScreen";
 import { namesComparison, parseDiffSearch } from "../features/diff/search";
@@ -17,6 +18,7 @@ export const Route = createFileRoute("/p/$slug/diff")({
       comparisonQuery(params.slug, deps.from, deps.to),
     );
   },
+  notFoundComponent: DiffNotFound,
   component: DiffRoute,
 });
 
@@ -38,4 +40,9 @@ function DiffRoute() {
       }}
     />
   );
+}
+
+function DiffNotFound() {
+  const { slug } = Route.useParams();
+  return <MissingPanel slug={slug} missing={{ kind: "page" }} />;
 }

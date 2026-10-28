@@ -4,11 +4,12 @@ use fold_store::StoreError;
 use fold_store::reviews::batches::{self, BatchState, MemberRelease, MemberRow};
 use fold_store::reviews::{self, ProposalState};
 use fold_store::workspaces;
+use fold_vcs::browse::FileContent;
 use fold_vcs::compare::{FileChange, FileDiff, Totals};
 
 use super::batches::{batch_not_found, merge_inputs};
 use super::{ReviewError, ReviewService};
-use crate::services::workspaces::StateRef;
+use crate::services::workspaces::{StateRef, file_path};
 
 /// What the merged change of a batch compares, or why it compares nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +171,34 @@ impl ReviewService {
             Sides::Merge { tree, members, .. } => Ok(self
                 .workspaces
                 .diff_file_batch_merge(tree, merge_inputs(&members), path)
+                .await?),
+        }
+    }
+
+    /// One file of the new side of [`ReviewService::batch_merged_changes`], from the same sides: the merged tree before the batch's integration, the last member's revision after it. The diff view reads the unchanged lines around each hunk from it. A batch whose change compares nothing has no new side, so every path is `not_found`. A read: it writes nothing.
+    pub async fn batch_merged_file(
+        &self,
+        batch: ReviewBatchId,
+        path: &str,
+    ) -> Result<FileContent, ReviewError> {
+        let path = file_path(path)?;
+        match self.merged_sides(batch).await? {
+            Sides::Nothing(_) => Err(FoldError::new(
+                codes::NOT_FOUND,
+                "the batch's merged change has no files to read",
+            )
+            .with_details([("path", serde_json::json!(path.to_string()))])
+            .with_hint("read the batch's merged change, which says why it compares nothing")
+            .into()),
+            Sides::Revisions { head, .. } => {
+                let tree = workspaces::get_by_number(self.store.read(), head)
+                    .await?
+                    .tree_hash;
+                Ok(self.workspaces.read_tree_file(tree, path).await?)
+            }
+            Sides::Merge { tree, members, .. } => Ok(self
+                .workspaces
+                .read_batch_merge_file(tree, merge_inputs(&members), path)
                 .await?),
         }
     }

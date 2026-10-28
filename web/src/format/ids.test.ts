@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findIds, parseId } from "./ids";
+import { findIds, idRuns, parseId } from "./ids";
 
 describe("findIds", () => {
   it("finds all eight id kinds with exact spans", () => {
@@ -68,5 +68,22 @@ describe("parseId", () => {
     expect(parseId("xT-12")).toBeNull();
     expect(parseId("T-")).toBeNull();
     expect(parseId("")).toBeNull();
+  });
+});
+
+describe("idRuns", () => {
+  it("parts a sentence into its ids and the words between them", () => {
+    expect(idRuns("T-12 “Add the bell” moved to Review")).toEqual([
+      { text: "T-12", id: true },
+      { text: " “Add the bell” moved to Review", id: false },
+    ]);
+    expect(idRuns("see P-3 and ws-9")).toEqual([
+      { text: "see ", id: false },
+      { text: "P-3", id: true },
+      { text: " and ", id: false },
+      { text: "ws-9", id: true },
+    ]);
+    expect(idRuns("2 more")).toEqual([{ text: "2 more", id: false }]);
+    expect(idRuns("")).toEqual([]);
   });
 });

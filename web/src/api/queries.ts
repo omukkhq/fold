@@ -26,6 +26,7 @@ import { getRequest, getThread, listRequests } from "./requests";
 import {
   getReviewBatch,
   getReviewBatchDiff,
+  getReviewBatchFile,
   getReviewBatchFileDiff,
   listReviewBatches,
 } from "./reviews";
@@ -284,6 +285,13 @@ export const reviewBatchFileDiffQuery = (
   queryOptions({
     queryKey: keys.reviewBatchFileDiff(slug, id, path),
     queryFn: () => getReviewBatchFileDiff(slug, id, path),
+    staleTime: Infinity,
+  });
+
+export const reviewBatchFileQuery = (slug: string, id: string, path: string) =>
+  queryOptions({
+    queryKey: keys.reviewBatchFile(slug, id, path),
+    queryFn: () => getReviewBatchFile(slug, id, path),
     staleTime: Infinity,
   });
 

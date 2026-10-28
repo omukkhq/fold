@@ -54,12 +54,15 @@ vi.mock("@/api/client", async (importOriginal) => {
 const SCHEMA = "migrations/0004_reports.sql";
 
 // The version diff is the proposal diff seam's to read; the proposal screens only name the range they read.
-const diffReads = vi.hoisted(() => ({ refs: [] as string[] }));
+const diffReads = vi.hoisted(() => ({
+  refs: [] as string[],
+  /** The schema file is a change of line 20 of a 30-line file, not a new file, so unchanged lines lie around its hunk. */
+  modified: false,
+}));
 vi.mock("@/api/proposals", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/proposals")>();
-  const { add, comparedFile, comparison, fileDiff, hunk, state } = await import(
-    "@/test/diff"
-  );
+  const { add, comparedFile, comparison, ctx, del, fileDiff, hunk, state } =
+    await import("@/test/diff");
   const lines = [
     "CREATE TABLE reports (",
     "  id INTEGER,",
@@ -72,8 +75,19 @@ vi.mock("@/api/proposals", async (importOriginal) => {
     removed_lines: 0,
     new_hash: "f".repeat(64),
   });
+  const modified = comparedFile("migrations/0004_reports.sql", "modified", {
+    added_lines: 1,
+    removed_lines: 1,
+    old_hash: "e".repeat(64),
+    new_hash: "f".repeat(64),
+  });
+  const shown = () => (diffReads.modified ? modified : file);
   const from = (range: ChangeRange) =>
     range.since === null ? "base" : `v${String(range.since)}`;
+  const around = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) =>
+      ctx(`-- ${String(from + i)}`),
+    );
   return {
     ...actual,
     getProposalChanges: (
@@ -83,7 +97,7 @@ vi.mock("@/api/proposals", async (importOriginal) => {
     ): Promise<Comparison> => {
       diffReads.refs.push(`${from(range)}..v${String(range.version)}`);
       return Promise.resolve(
-        comparison([file], {
+        comparison([shown()], {
           source: "recorded",
           from: state("changeset", from(range)),
           to: state("changeset", `v${String(range.version)}`),
@@ -97,12 +111,30 @@ vi.mock("@/api/proposals", async (importOriginal) => {
       path: string,
     ): Promise<FileDiff> =>
       Promise.resolve(
-        fileDiff({ ...file, path }, [hunk(0, 1, lines.map(add))], {
-          source: "recorded",
-        }),
+        diffReads.modified
+          ? fileDiff(
+              { ...modified, path },
+              [
+                hunk(17, 17, [
+                  ...around(17, 19),
+                  del("-- 20"),
+                  add("-- twenty"),
+                  ...around(21, 23),
+                ]),
+              ],
+              { source: "recorded" },
+            )
+          : fileDiff({ ...file, path }, [hunk(0, 1, lines.map(add))], {
+              source: "recorded",
+            }),
       ),
   };
 });
+
+/** The new side of the modified schema file: 30 lines, line 20 changed. */
+const MODIFIED_TEXT = Array.from({ length: 30 }, (_, i) =>
+  i === 19 ? "-- twenty\n" : `-- ${String(i + 1)}\n`,
+).join("");
 
 const mark = {
   reviewer: "tanim",
@@ -145,6 +177,7 @@ function seed(): void {
   nextComment = 10;
   held = null;
   diffReads.refs = [];
+  diffReads.modified = false;
   revisions = [revision(8, "P-5"), revision(7, "P-2"), revision(1)];
   proposals = new Map();
   comments = new Map();
@@ -304,6 +337,18 @@ function routes(): void {
     return asked === null || Number(asked) === found.summary.current_version
       ? ok(found)
       : ok({ ...found, checks: [] });
+  });
+  daemon.on("GET /api/v1/projects/:slug/proposals/:id/file", (call) => {
+    const query = new URLSearchParams(call.path.split("?")[1] ?? "");
+    return ok({
+      path: query.get("path"),
+      kind: "file",
+      hash: "f".repeat(64),
+      size: MODIFIED_TEXT.length,
+      binary: false,
+      too_large: false,
+      text: MODIFIED_TEXT,
+    });
   });
   daemon.on("GET /api/v1/projects/:slug/proposals/:id/comments", (call) =>
     ok({ comments: comments.get(call.params.id ?? "") ?? [] }),
@@ -790,6 +835,46 @@ describe("Proposal detail", () => {
     expect(
       writes("POST /api/v1/projects/demo/proposals/P-4/comments")[1]?.body,
     ).toMatchObject({ start_line: 2, end_line: 4, side: "new" });
+  });
+
+  it("shows the unchanged lines around a change from the version's file, keeps a thread's lines open and comments on a shown line", async () => {
+    diffReads.modified = true;
+    const user = userEvent.setup();
+    const { container } = renderAt("/p/demo/proposals/P-4?tab=changes");
+    // The outdated thread on line 3 keeps lines 1-6 open; lines 7-16 and 24-30 are hidden.
+    await user.click(
+      await screen.findByRole("button", { name: "Show 10 unchanged lines" }),
+    );
+    expect(
+      daemon.made(
+        `GET /api/v1/projects/demo/proposals/P-4/file?version=2&path=${encodeURIComponent(SCHEMA)}`,
+      ),
+    ).toHaveLength(1);
+    expect(
+      screen.getByText("Add an index on (owner_id, report_date)."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Other comments" })).toBeNull();
+    await user.click(await lineCell(container, "new:12"));
+    await choose(user, "Review comment");
+    const form = await screen.findByRole("form", {
+      name: "Comment on line 12 · new side · tanim",
+    });
+    await user.type(within(form).getByLabelText("Comment"), "Why twelve?");
+    await user.click(
+      within(form).getByRole("button", { name: "Add to review" }),
+    );
+    expect(
+      await screen.findByText("Why twelve?", { selector: "p" }),
+    ).toBeTruthy();
+    expect(
+      writes("POST /api/v1/projects/demo/proposals/P-4/comments")[0]?.body,
+    ).toMatchObject({ version: 2, side: "new", start_line: 12, end_line: 12 });
+    await user.click(screen.getByRole("button", { name: "Show whole file" }));
+    await user.click(screen.getByRole("button", { name: "Show changes only" }));
+    expect(screen.getByText("Why twelve?", { selector: "p" })).toBeTruthy();
+    expect(container.querySelector('[data-line="new:12"]')).not.toBeNull();
+    expect(container.querySelector('[data-line="new:8"]')).toBeNull();
+    expect(screen.queryByRole("region", { name: "Other comments" })).toBeNull();
   });
 
   it("says at the selection why an older version takes no comment, and links to the current version", async () => {
@@ -1488,7 +1573,7 @@ describe("Proposal detail", () => {
   it("says when the project has no such proposal", async () => {
     renderAt("/p/demo/proposals/P-99");
     expect(
-      await screen.findByRole("region", { name: "No proposal P-99" }),
+      await screen.findByRole("region", { name: "Proposal P-99 not found" }),
     ).toBeTruthy();
   });
 });
