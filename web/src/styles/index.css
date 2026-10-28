@@ -160,6 +160,7 @@
   --width-task-side: var(--width-task-side);
   --width-side-label: var(--width-side-label);
   --width-dialog-narrow: var(--width-dialog-narrow);
+  --width-label-input: var(--width-label-input);
 
   /* The width from which the top bar shows its full row of tabs, the Agents control and the avatar. A breakpoint cannot read a variable, so the value is written here. */
   --breakpoint-wide: 90rem;

@@ -42,7 +42,7 @@ export function Dialog({
             </div>
             <RadixDialog.Close asChild>
               <IconButton aria-label="Close" size="sm">
-                <X aria-hidden="true" size={13} />
+                <X aria-hidden="true" size={14} />
               </IconButton>
             </RadixDialog.Close>
           </div>

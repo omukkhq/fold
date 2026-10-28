@@ -126,7 +126,7 @@ function RowMenu({
           pendingLabel={`Updating ${name}…`}
           className={ROW_MENU}
         >
-          <Ellipsis aria-hidden="true" size={13} />
+          <Ellipsis aria-hidden="true" size={16} />
         </IconButton>
       }
     />
@@ -391,8 +391,10 @@ function AddItemForm({
       )}
     >
       <div className="flex gap-8">
+        {/* The form sits on the sunken tone, which the fill of a control matches in light mode, so its controls take the surface. */}
         <Select
           label="Kind"
+          className="bg-surface"
           disabled={write.isPending}
           {...form.register("kind")}
         >
@@ -403,6 +405,7 @@ function AddItemForm({
           <TextField
             label={kind === "step" ? "Step" : "Task id"}
             placeholder={kind === "step" ? "Describe the step" : "T-12"}
+            className="bg-surface"
             autoFocus
             disabled={write.isPending}
             hint={kind === "linked" ? linkAddText(task) : undefined}

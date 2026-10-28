@@ -218,7 +218,7 @@ export function TitleBlock({ slug, task, strip }: Props) {
               setEditing(true);
             }}
           >
-            <Pencil aria-hidden="true" size={15} />
+            <Pencil aria-hidden="true" size={16} />
           </IconButton>
         </div>
       )}

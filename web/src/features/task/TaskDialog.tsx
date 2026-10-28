@@ -44,9 +44,9 @@ function CopyLink() {
       variant="ghost"
       icon={
         copied ? (
-          <Check aria-hidden="true" size={15} />
+          <Check aria-hidden="true" size={16} />
         ) : (
-          <Link aria-hidden="true" size={15} />
+          <Link aria-hidden="true" size={16} />
         )
       }
       onClick={() => {

@@ -105,9 +105,9 @@ export function AreaMenu({
                 value={option?.name ?? NO_AREA}
                 className={cn(menuItem, "text-14")}
               >
-                <span className="flex w-12 shrink-0 justify-center">
+                <span className="flex w-14 shrink-0 justify-center">
                   <DropdownMenu.ItemIndicator>
-                    <Check aria-hidden="true" size={12} />
+                    <Check aria-hidden="true" size={14} />
                   </DropdownMenu.ItemIndicator>
                 </span>
                 {option === null ? (
@@ -210,7 +210,7 @@ export function RemovableLabel({
         className="size-auto rounded-s p-2 text-text-2"
         onClick={onRemove}
       >
-        <X aria-hidden="true" size={11} />
+        <X aria-hidden="true" size={14} />
       </IconButton>
     </span>
   );
@@ -301,7 +301,7 @@ export function LabelsField({
               }
               value={query}
               disabled={disabled}
-              className="w-skeleton-s flex-1 bg-transparent text-14 text-text outline-none placeholder:text-text-2"
+              className="w-label-input flex-1 bg-transparent text-14 text-text outline-none placeholder:text-text-2"
               onFocus={() => {
                 setFocused(true);
               }}

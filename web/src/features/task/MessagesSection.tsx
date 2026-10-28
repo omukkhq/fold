@@ -49,7 +49,7 @@ function Message({ slug, message }: { slug: string; message: TaskMessage }) {
     <li className="flex max-w-measure flex-col gap-4 rounded-m bg-bg px-14 py-10">
       <div className="flex items-center gap-8">
         <PersonName name={message.sender} slot="messageHead" />
-        <ArrowRight aria-label="to" size={12} className="text-text-2" />
+        <ArrowRight aria-label="to" size={14} className="text-text-2" />
         <PersonList
           names={message.recipients.map((r) => r.name)}
           className="text-13 text-text-2"
@@ -193,7 +193,7 @@ function FeedbackBox({
           pending={write.isPending}
           pendingLabel="Sending…"
           className="self-end md:self-auto"
-          icon={<Send aria-hidden="true" size={15} />}
+          icon={<Send aria-hidden="true" size={16} />}
         >
           Send
         </Button>

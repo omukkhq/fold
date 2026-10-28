@@ -45,7 +45,7 @@ export function ProjectUnavailable({
           <div className="flex shrink-0 gap-8">
             <Button
               variant="quiet"
-              icon={<RotateCw aria-hidden="true" size={15} />}
+              icon={<RotateCw aria-hidden="true" size={16} />}
               onClick={onRetry}
             >
               Retry
@@ -55,7 +55,7 @@ export function ProjectUnavailable({
               className={cn(buttonClasses("quiet", "md"), focusRing)}
             >
               <span className={buttonIconClass("quiet")}>
-                <ArrowLeft aria-hidden="true" size={15} />
+                <ArrowLeft aria-hidden="true" size={16} />
               </span>
               Back to projects
             </HrefLink>

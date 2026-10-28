@@ -95,6 +95,8 @@
   --width-dialog-narrow: 760px;
   /* The project switcher in the top bar; a longer slug is cut and its tooltip names it. */
   --width-switcher: 128px;
+  /* The smallest width of the text box after the chips of a label field, so its placeholder stays whole. */
+  --width-label-input: 96px;
 }
 
 :root {

@@ -13,7 +13,7 @@ export function EditingPill({ text }: { text: string }) {
 export function MissingBadge() {
   return (
     <span className="inline-flex items-center gap-5 rounded-s bg-bad-soft px-8 py-2 text-13 leading-tight font-semibold text-bad">
-      <TriangleAlert aria-hidden="true" size={12} />
+      <TriangleAlert aria-hidden="true" size={14} />
       missing
     </span>
   );

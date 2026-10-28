@@ -47,9 +47,9 @@ export function CommitId({
     >
       {short}
       {state === "copied" ? (
-        <Check aria-hidden size={12} />
+        <Check aria-hidden size={14} />
       ) : (
-        <Copy aria-hidden size={12} className="text-text-2" />
+        <Copy aria-hidden size={14} className="text-text-2" />
       )}
       <span role="status" className="sr-only">
         {state === "copied" ? "Copied" : state === "failed" ? "Not copied" : ""}

@@ -77,7 +77,7 @@ export function TokenCard({ pending, error, onSubmit }: CardProps) {
           className="w-full"
           pending={pending}
           pendingLabel="Signing in…"
-          icon={<ArrowRight aria-hidden size={15} />}
+          icon={<ArrowRight aria-hidden size={16} />}
         >
           Sign in
         </Button>

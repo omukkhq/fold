@@ -83,6 +83,17 @@ async function renderToasts(slug: string) {
 }
 
 describe("MoveToasts", () => {
+  it("keeps a phone's bottom action bar free and sits at the bottom right from md", async () => {
+    await renderToasts("place");
+    const region = screen.getByRole("region", { name: "Card moves (F8)" });
+    const list = region.querySelector("ol") ?? region;
+    const classes = list.className.split(" ");
+    expect(classes).toContain("top-(--height-bar-compact)");
+    expect(classes).not.toContain("bottom-16");
+    expect(classes).toContain("md:bottom-16");
+    expect(classes).toContain("md:top-auto");
+  });
+
   it("shows one polite toast for the moves of one window", async () => {
     await renderToasts("toast");
     receive("toast", moved(1, "T-12", "review"));

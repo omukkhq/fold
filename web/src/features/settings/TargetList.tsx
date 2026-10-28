@@ -365,7 +365,7 @@ function TargetRow({
               {view.state.label}
             </Chip>
             {view.health ? (
-              <span className="font-body text-13 font-normal text-text-2">
+              <span className="font-body text-13 font-regular text-text-2">
                 {view.health}
               </span>
             ) : null}

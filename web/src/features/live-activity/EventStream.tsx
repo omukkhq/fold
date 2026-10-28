@@ -2,6 +2,7 @@ import { CommitId } from "@/components/mono/CommitId";
 import { CodeText } from "@/components/code/CodeText";
 import { PersonName } from "@/people/PersonName";
 import { cn } from "../../lib/cn";
+import { focusRing } from "../../lib/focus";
 import { eventGroups, liveDot } from "./eventStreamModel";
 import { useEventStream } from "./useEventStream";
 
@@ -41,7 +42,7 @@ export function EventStream({ slug }: { slug: string }) {
           <button
             type="button"
             onClick={stream.retry}
-            className="rounded-s text-accent underline"
+            className={cn("rounded-s text-accent underline", focusRing)}
           >
             Retry
           </button>

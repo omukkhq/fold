@@ -1,4 +1,6 @@
 import { ScanEye } from "lucide-react";
+import { cn } from "../../lib/cn";
+import { focusRing } from "../../lib/focus";
 import { PersonName } from "../../people/PersonName";
 import { checkoutText } from "./eventStreamModel";
 import { useReviewCheckouts } from "./useEventStream";
@@ -25,7 +27,7 @@ export function ReviewCheckouts({ slug }: { slug: string }) {
           <button
             type="button"
             onClick={checkouts.retry}
-            className="rounded-s text-accent underline"
+            className={cn("rounded-s text-accent underline", focusRing)}
           >
             Retry
           </button>
