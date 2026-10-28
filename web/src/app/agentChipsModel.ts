@@ -19,6 +19,15 @@ export function stalledCount(agent: ProjectAgent): number {
   return agent.attention.filter((item) => item.kind === "stalled").length;
 }
 
+/** Workspaces of the agent's workers in which a check run goes: the worker waits for its result, which is no stall. */
+export function checkingCount(agent: ProjectAgent): number {
+  return agent.workers.reduce(
+    (count, worker) =>
+      count + worker.workspaces.filter((ws) => ws.check_run !== null).length,
+    0,
+  );
+}
+
 type AgentProcess = NonNullable<ProjectAgent["process"]>;
 
 /** The short words for a failure reason a person can act on; any other failure reads plain `failed`. */
@@ -34,10 +43,22 @@ export function failedText(reason: string | null): string {
   return words === undefined ? "failed" : `failed: ${words}`;
 }
 
-/** `text`, followed by the count of stalled tasks when there are any. */
+/** `text`, followed by the count of stalled tasks and by the check runs that go, when there are any. */
 function withStalled(agent: ProjectAgent, text: string): string {
   const stalled = stalledCount(agent);
-  return stalled > 0 ? `${text} · ${String(stalled)} stalled` : text;
+  const checking = checkingCount(agent);
+  const parts = [text];
+  if (stalled > 0) {
+    parts.push(`${String(stalled)} stalled`);
+  }
+  if (checking > 0) {
+    parts.push(
+      checking === 1
+        ? "running checks"
+        : `running checks in ${String(checking)} tasks`,
+    );
+  }
+  return parts.join(" · ");
 }
 
 /** What the chip says of a process whose turns fail before they reach the model, which the daemon decides. */
