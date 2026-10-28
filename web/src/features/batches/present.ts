@@ -1,5 +1,4 @@
 import type { ComparisonTotals, ProposalSummary } from "@/api/proposals";
-import { projectPath } from "@/routes/paths";
 import type { ReviewBatch, ReviewBatchMember } from "@/api/reviews";
 import type { WorkerProcess } from "@/api/workers";
 import { reviewerActor } from "@/people/names";
@@ -218,22 +217,4 @@ export function reviewerLine(worker: WorkerProcess): string {
 /** The review lead that groups proposals into batches: the newest one fold runs or ran. */
 export function reviewLead(workers: readonly WorkerProcess[]): string | null {
   return workers.filter((w) => w.role === "review_lead").at(-1)?.name ?? null;
-}
-
-export interface BatchMissing {
-  title: string;
-  text: string;
-  code: "review_batch_not_found";
-  /** The proposals list, where a batch's members are found. */
-  href: string;
-}
-
-/** The state of a batch address the project does not have: a batch that never existed in it, or an id that is no batch id. */
-export function batchMissing(slug: string, id: string): BatchMissing {
-  return {
-    title: `Batch ${id} not found`,
-    text: "This project has no review batch with this id. The id may be mistyped, or the link may come from another project. Open the proposals to find the batch.",
-    code: "review_batch_not_found",
-    href: projectPath(slug, "proposals"),
-  };
 }

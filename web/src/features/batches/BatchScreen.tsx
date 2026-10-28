@@ -9,7 +9,6 @@ import {
 import * as RadixTabs from "@radix-ui/react-tabs";
 import { useState } from "react";
 import {
-  ArrowLeft,
   Bot,
   Check,
   ChevronRight,
@@ -41,7 +40,6 @@ import {
   SEGMENT_LIST,
   segmentClasses,
 } from "@/components/segments/segmentStyles";
-import { FailurePanel } from "@/components/states/FailurePanel";
 import { Skeleton } from "@/components/states/Skeleton";
 import { TAB_BY_STATE, TAB_LIST } from "@/components/overlay/tabStyles";
 import { detailHref } from "@/features/proposals/view";
@@ -54,7 +52,6 @@ import { stopControl, workerPill, workerStep } from "@/features/workers/team";
 import type { WorkerSteps } from "@/live/apply";
 import {
   VERDICT_TEXT,
-  batchMissing,
   checkoutView,
   conflictedMembers,
   hasSince,
@@ -569,31 +566,6 @@ export function BatchPending() {
     <div className="flex min-w-0 flex-col gap-16 px-16 pt-20 pb-24 md:px-24">
       <Skeleton />
       <Skeleton />
-    </div>
-  );
-}
-
-/** The state of a batch the project does not have, with the way back to the proposals. */
-export function BatchNotFound({ slug, id }: { slug: string; id: string }) {
-  const missing = batchMissing(slug, id);
-  return (
-    <div className="flex min-w-0 flex-col gap-16 px-16 pt-20 pb-24 md:px-24">
-      <FailurePanel
-        title={missing.title}
-        text={missing.text}
-        code={missing.code}
-        action={
-          <HrefLink
-            href={missing.href}
-            className={cn(buttonClasses("secondary", "md"), focusRing)}
-          >
-            <span className={buttonIconClass("secondary")}>
-              <ArrowLeft aria-hidden="true" size={15} />
-            </span>
-            Back to proposals
-          </HrefLink>
-        }
-      />
     </div>
   );
 }

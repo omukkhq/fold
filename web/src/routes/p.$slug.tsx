@@ -4,7 +4,7 @@ import {
   type NotFoundRouteProps,
 } from "@tanstack/react-router";
 import { projectQuery } from "../api/queries";
-import { NotFound } from "../app/NotFound";
+import { MissingPanel } from "../app/MissingPanel";
 import {
   PROJECT_MISSING,
   isProjectGone,
@@ -47,6 +47,12 @@ function ProjectLayout() {
   );
 }
 
+/** A project fold does not know shows its state alone; an address inside an open project that matches no screen shows the page state in the shell's content area, where the router renders it. */
 function ProjectRouteNotFound({ data }: NotFoundRouteProps) {
-  return isProjectMissing(data) ? <ProjectNotFound /> : <NotFound />;
+  const { slug } = Route.useParams();
+  return isProjectMissing(data) ? (
+    <ProjectNotFound />
+  ) : (
+    <MissingPanel slug={slug} missing={{ kind: "page" }} />
+  );
 }

@@ -1,11 +1,8 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { isApiError } from "../api/errors";
 import { reviewBatchQuery } from "../api/queries";
-import {
-  BatchNotFound,
-  BatchPending,
-  BatchScreen,
-} from "../features/batches/BatchScreen";
+import { MissingPanel } from "../app/MissingPanel";
+import { BatchPending, BatchScreen } from "../features/batches/BatchScreen";
 import { parseBatchSearch } from "../features/batches/merged";
 import { isBatchId } from "../features/workers/search";
 
@@ -36,7 +33,7 @@ export const Route = createFileRoute("/p/$slug/batches/$id")({
 
 function BatchRouteNotFound() {
   const { slug, id } = Route.useParams();
-  return <BatchNotFound slug={slug} id={id} />;
+  return <MissingPanel slug={slug} missing={{ kind: "batch", id }} />;
 }
 
 function BatchRoute() {
