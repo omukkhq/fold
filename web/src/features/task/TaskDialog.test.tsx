@@ -659,7 +659,7 @@ describe("the task dialog route", () => {
     const details = within(within(dialog).getByLabelText("Live")).getByRole(
       "button",
       {
-        name: "Details: 1 file · base r7",
+        name: "Details",
       },
     );
     await userEvent.click(details);

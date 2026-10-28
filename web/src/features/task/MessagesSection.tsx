@@ -71,6 +71,7 @@ function Message({ slug, message }: { slug: string; message: TaskMessage }) {
           slug={slug}
           proposal={message.proposal}
           lines={message.lines}
+          onSurface={false}
         />
       )}
       <MessageBody body={message.body} slug={slug} />

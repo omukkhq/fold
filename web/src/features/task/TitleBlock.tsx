@@ -83,7 +83,7 @@ function StripDetails({ details }: { details: string }) {
       <RadixTooltip.Root open={open} onOpenChange={setOpen}>
         <RadixTooltip.Trigger asChild>
           <IconButton
-            aria-label={`Details: ${details}`}
+            aria-label="Details"
             className="shrink-0"
             onClick={(event) => {
               // Radix closes a tooltip on a click; a tap opens and closes it instead.
