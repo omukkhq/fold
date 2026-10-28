@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT w.number AS \"workspace!: i64\", MAX(c.finished_at) AS \"ended_at!: i64\"\n           FROM check_runs c\n           JOIN workspaces w ON w.id = c.workspace_id\n           WHERE c.stage = 'proposal' AND c.finished_at IS NOT NULL\n           GROUP BY c.workspace_id\n           ORDER BY w.number",
+  "query": "SELECT w.number AS \"workspace!: i64\", MAX(c.finished_at) AS \"ended_at!: i64\"\n           FROM check_runs c\n           JOIN workspaces w ON w.id = c.workspace_id\n           WHERE c.stage = 'proposal' AND c.finished_at IS NOT NULL\n             AND w.state IN ('active', 'missing')\n           GROUP BY c.workspace_id\n           ORDER BY w.number",
   "describe": {
     "columns": [
       {
@@ -29,5 +29,5 @@
       true
     ]
   },
-  "hash": "53340fd9fd16db19bcaf47acb0f8c0faed82d6321f4ba46a553f4bfb6af3a570"
+  "hash": "1f9c48acfc1c6ef37875c167f6109900396d1d817e3ca2bc68a6d635db09ae75"
 }

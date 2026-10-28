@@ -480,7 +480,7 @@ pub async fn running_runs(
     rows(raw)
 }
 
-/// The end time of the newest ended proposal-stage run of each workspace that has one, in workspace order: the start of the stall window after a worker's checks.
+/// The end time of the newest ended proposal-stage run of each active or missing workspace that has one, in workspace order: the start of the stall window after a worker's checks. A closed workspace never stalls, so its runs are left out.
 pub async fn last_proposal_run_ends(
     executor: impl SqliteExecutor<'_>,
 ) -> Result<Vec<(WorkspaceId, Timestamp)>, StoreError> {
@@ -489,6 +489,7 @@ pub async fn last_proposal_run_ends(
            FROM check_runs c
            JOIN workspaces w ON w.id = c.workspace_id
            WHERE c.stage = 'proposal' AND c.finished_at IS NOT NULL
+             AND w.state IN ('active', 'missing')
            GROUP BY c.workspace_id
            ORDER BY w.number"#
     )
