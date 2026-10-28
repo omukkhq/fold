@@ -196,7 +196,15 @@ describe("LiveActivityScreen", () => {
     const checkpoint = within(recorded).getByRole("link", { name: "ck-1" });
     expect(checkpoint.className).toContain("whitespace-nowrap");
     const text = checkpoint.nextElementSibling;
-    expect(text?.getAttribute("title")).toBe(text?.textContent);
+    expect(text?.className).toContain("truncate");
+    expect(text?.hasAttribute("title")).toBe(false);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    act(() => {
+      checkpoint.focus();
+    });
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      text?.textContent,
+    );
   });
 
   it("updates the file list from a workspace_changed event and drops a panel on a snapshot", async () => {
