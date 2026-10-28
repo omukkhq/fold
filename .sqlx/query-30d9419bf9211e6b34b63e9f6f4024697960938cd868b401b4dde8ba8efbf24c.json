@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE notify_sends SET state = ?2, tries = ?3, next_try_at = ?4, status = ?5, error = ?6, duration_ms = ?7\n         WHERE number = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "30d9419bf9211e6b34b63e9f6f4024697960938cd868b401b4dde8ba8efbf24c"
+}

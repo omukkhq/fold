@@ -8,6 +8,7 @@ import {
   listProposalThreads,
   listThreads,
 } from "./messages";
+import { getProjectNotify, listNotifySends } from "./notify";
 import { getProject, listProjects } from "./projects";
 import { localDayStart } from "../format/days";
 import {
@@ -292,4 +293,16 @@ export const reviewBatchFileQuery = (slug: string, id: string, path: string) =>
     queryKey: keys.reviewBatchFile(slug, id, path),
     queryFn: () => getReviewBatchFile(slug, id, path),
     staleTime: Infinity,
+  });
+
+export const projectNotifyQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.notify(slug),
+    queryFn: () => getProjectNotify(slug),
+  });
+
+export const notifySendsQuery = (slug: string, target: string) =>
+  queryOptions({
+    queryKey: keys.notifySends(slug, target),
+    queryFn: () => listNotifySends(slug, target),
   });

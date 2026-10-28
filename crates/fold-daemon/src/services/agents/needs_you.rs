@@ -47,6 +47,8 @@ pub enum NeedsYouKind {
     WorkerModelUnreachable,
     /// A worker failed because the daemon found no `claude` on the `PATH` it gives workers. The daemon reads that `PATH` from the user's login shell at its start, so `reason` names `fld restart`, after which the daemon start resumes the worker; the item ends when the worker runs again.
     ClaudeNotFound,
+    /// fold turned a notice target off: its receiver answered 410 Gone, a send failed every try of its retry schedule, or [`fold_core::projects::notify::OFF_AFTER_FAILURES`] tries failed in a row. `title` holds the target's name, `target` its id and `reason` what the human does. A successful test send turns it on again and ends the item.
+    NotifyTargetOff,
 }
 
 /// The screen on which a human answers an item.
@@ -58,9 +60,31 @@ pub enum Screen {
     Request,
     Task,
     Repository,
+    Settings,
 }
 
 impl NeedsYouKind {
+    /// The kind's wire name, as the Needs you list and the notices name it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NeedsYouKind::Question => "question",
+            NeedsYouKind::Permission => "permission",
+            NeedsYouKind::HumanReview => "human_review",
+            NeedsYouKind::RequestDraft => "request_draft",
+            NeedsYouKind::HumanTask => "human_task",
+            NeedsYouKind::Blocker => "blocker",
+            NeedsYouKind::HumanChange => "human_change",
+            NeedsYouKind::HeadMoved => "head_moved",
+            NeedsYouKind::FolderHeld => "folder_held",
+            NeedsYouKind::UnstashConflicted => "unstash_conflicted",
+            NeedsYouKind::ChecksFileInvalidOnMain => "checks_file_invalid_on_main",
+            NeedsYouKind::WorkerUnreachable => "worker_unreachable",
+            NeedsYouKind::WorkerModelUnreachable => "worker_model_unreachable",
+            NeedsYouKind::ClaudeNotFound => "claude_not_found",
+            NeedsYouKind::NotifyTargetOff => "notify_target_off",
+        }
+    }
+
     pub fn screen(self) -> Screen {
         match self {
             NeedsYouKind::Question => Screen::Messages,
@@ -76,6 +100,7 @@ impl NeedsYouKind {
             NeedsYouKind::WorkerUnreachable
             | NeedsYouKind::WorkerModelUnreachable
             | NeedsYouKind::ClaudeNotFound => Screen::Worker,
+            NeedsYouKind::NotifyTargetOff => Screen::Settings,
         }
     }
 }
@@ -110,12 +135,17 @@ pub struct NeedsYouItem {
     pub commit: Option<String>,
     /// The paths of a `HumanChange` that conflict with main, those of a `FolderHeld` that keep the folder where it is, or those of an `UnstashConflicted` that hold the conflict, in path order.
     pub paths: Vec<String>,
+    /// What a project folder item is about, the same for as long as it is the same item and across a daemon restart: the tree of a `HumanChange` or of an `UnstashConflicted` stash entry, the time main's checks file started to hold integrations for a `ChecksFileInvalidOnMain`, or a digest of the hint of a `HeadMoved`, which names the commit fold left or the branch to go back to. `None` for every other kind: the project folder waits as one `FolderHeld` item whatever paths hold it.
+    pub about: Option<String>,
+    /// The notice target of a `NotifyTargetOff`.
+    pub target: Option<fold_core::NotifyTargetId>,
 }
 
 impl NeedsYouItem {
     /// The `HeadMoved` item of a branch that moved at `since`, with the command that brings it back.
     pub fn head_moved(since: Timestamp, hint: String) -> Self {
         let mut item = Self::new(NeedsYouKind::HeadMoved, since);
+        item.about = Some(blake3::hash(hint.as_bytes()).to_hex()[..16].to_owned());
         item.reason = Some(hint);
         item
     }
@@ -128,7 +158,7 @@ impl NeedsYouItem {
         item
     }
 
-    fn new(kind: NeedsYouKind, since: Timestamp) -> Self {
+    pub(crate) fn new(kind: NeedsYouKind, since: Timestamp) -> Self {
         Self {
             kind,
             since,
@@ -147,7 +177,23 @@ impl NeedsYouItem {
             reason: None,
             commit: None,
             paths: Vec::new(),
+            about: None,
+            target: None,
         }
+    }
+
+    /// The item of a notice target fold turned off at `since`, with what the human does about it.
+    pub fn notify_target_off(
+        since: Timestamp,
+        target: fold_core::NotifyTargetId,
+        name: &str,
+        reason: &str,
+    ) -> Self {
+        let mut item = Self::new(NeedsYouKind::NotifyTargetOff, since);
+        item.target = Some(target);
+        item.title = Some(name.to_owned());
+        item.reason = Some(reason.to_owned());
+        item
     }
 }
 
@@ -271,6 +317,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
     .await?;
     if let Some(change) = fold_store::workspaces::conflicted_human_change(&mut conn).await? {
         let mut item = NeedsYouItem::new(NeedsYouKind::HumanChange, change.created_at);
+        item.about = Some(change.tree.to_string());
         item.human = HumanName::parse(&change.human).ok();
         item.commit = change.commit;
         item.paths = change
@@ -285,6 +332,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
         && let Some(since) = entry.conflicted_at
     {
         let mut item = NeedsYouItem::new(NeedsYouKind::UnstashConflicted, since);
+        item.about = Some(entry.tree.to_string());
         item.reason = Some(fold_core::folder::UNSTASH_CONFLICTED_NEXT.to_owned());
         item.paths = entry
             .conflicts
@@ -295,6 +343,7 @@ pub async fn needs_you(store: &Store) -> Result<Vec<NeedsYouItem>, StoreError> {
     }
     if let Some((since, problem)) = reviews::checks::held_by_main(&mut *conn).await? {
         let mut item = NeedsYouItem::new(NeedsYouKind::ChecksFileInvalidOnMain, since);
+        item.about = Some(since.as_millis().to_string());
         item.title = Some(held_title(&problem));
         item.paths = vec![CHECKS_FILE.to_owned()];
         items.push(item);

@@ -720,6 +720,27 @@ describe("invalidation rules", () => {
     }
   });
 
+  it("refreshes the notice settings, the target's send log and Needs you when a notice target changes", () => {
+    applyEvent(
+      client,
+      slug,
+      ev("notify.target_changed", {
+        actor: "fold",
+        data: {
+          target: "nt-3",
+          name: "Team Slack",
+          host: true,
+          state: "failing",
+        },
+      }),
+    );
+    expect(hit(keys.notify(slug))).toBe(true);
+    expect(refreshes(keys.notifySends(slug, "nt-3"))).toBe(true);
+    expect(hit(keys.needsYou(slug))).toBe(true);
+    expect(refreshes(keys.notify("other"))).toBe(false);
+    expect(refreshes(keys.board(slug))).toBe(false);
+  });
+
   it("refreshes the workers for a change of the worker limits", () => {
     applyEvent(client, slug, ev("workers.limits_changed"));
     expect(hit(keys.workers(slug))).toBe(true);

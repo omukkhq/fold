@@ -44,6 +44,7 @@ const GROUPS: readonly { kind: NeedsYouKind; title: string }[] = [
   { kind: "worker_unreachable", title: "Worker connection" },
   { kind: "worker_model_unreachable", title: "Model access" },
   { kind: "claude_not_found", title: "Claude Code" },
+  { kind: "notify_target_off", title: "Notice targets" },
 ];
 
 /** The items for this human: an item that waits for another named human is theirs, and a question to named humans is only theirs, as their Messages count is. Before a name, every item shows. */
@@ -248,6 +249,17 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         href: projectPath(slug, "agents"),
       };
     }
+    case "notify_target_off":
+      return {
+        ...base,
+        person: null,
+        chip: item.target,
+        task: null,
+        title: titleText(item.title),
+        text: "fold turned this notice target off after its sends failed; a test that gets through turns it on again",
+        hint: "opens the settings",
+        href: projectPath(slug, "settings"),
+      };
     case "human_review":
       return {
         ...base,

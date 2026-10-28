@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n             SELECT 1 FROM notify_outbox WHERE target NOT IN (SELECT value FROM json_each(?1))\n             UNION ALL\n             SELECT 1 FROM notify_sends WHERE state IN ('pending', 'sending')\n               AND target NOT IN (SELECT value FROM json_each(?1))\n           ) AS \"found!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "found!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b7e906a1ab8e9e38552b064bdb212a0b9237602848816def5a3f056c010f5dc1"
+}

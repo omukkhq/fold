@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO notify_state (id, last_seq) VALUES (1, ?1) ON CONFLICT (id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "d162de1815fa6059ff0634e4db4b7ba0110194fa94a0eee2372f573db1a31127"
+}

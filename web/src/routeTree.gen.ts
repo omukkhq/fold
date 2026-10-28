@@ -21,6 +21,7 @@ import { Route as PSlugMessagesRouteImport } from './routes/p.$slug.messages'
 import { Route as PSlugProposalsRouteImport } from './routes/p.$slug.proposals'
 import { Route as PSlugRepositoryRouteImport } from './routes/p.$slug.repository'
 import { Route as PSlugRequestsRouteImport } from './routes/p.$slug.requests'
+import { Route as PSlugSettingsRouteImport } from './routes/p.$slug.settings'
 import { Route as PSlugBatchesIdRouteImport } from './routes/p.$slug.batches.$id'
 import { Route as PSlugProposalsIdRouteImport } from './routes/p.$slug.proposals_.$id'
 import { Route as PSlugRequestsIdRouteImport } from './routes/p.$slug.requests_.$id'
@@ -87,6 +88,11 @@ const PSlugRequestsRoute = PSlugRequestsRouteImport.update({
   path: '/requests',
   getParentRoute: () => PSlugRoute,
 } as any)
+const PSlugSettingsRoute = PSlugSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => PSlugRoute,
+} as any)
 const PSlugBatchesIdRoute = PSlugBatchesIdRouteImport.update({
   id: '/batches/$id',
   path: '/batches/$id',
@@ -126,6 +132,7 @@ export interface FileRoutesByFullPath {
   '/p/$slug/proposals': typeof PSlugProposalsRoute
   '/p/$slug/repository': typeof PSlugRepositoryRoute
   '/p/$slug/requests': typeof PSlugRequestsRoute
+  '/p/$slug/settings': typeof PSlugSettingsRoute
   '/p/$slug/batches/$id': typeof PSlugBatchesIdRoute
   '/p/$slug/proposals/$id': typeof PSlugProposalsIdRoute
   '/p/$slug/requests/$id': typeof PSlugRequestsIdRoute
@@ -145,6 +152,7 @@ export interface FileRoutesByTo {
   '/p/$slug/proposals': typeof PSlugProposalsRoute
   '/p/$slug/repository': typeof PSlugRepositoryRoute
   '/p/$slug/requests': typeof PSlugRequestsRoute
+  '/p/$slug/settings': typeof PSlugSettingsRoute
   '/p/$slug/batches/$id': typeof PSlugBatchesIdRoute
   '/p/$slug/proposals/$id': typeof PSlugProposalsIdRoute
   '/p/$slug/requests/$id': typeof PSlugRequestsIdRoute
@@ -165,6 +173,7 @@ export interface FileRoutesById {
   '/p/$slug/proposals': typeof PSlugProposalsRoute
   '/p/$slug/repository': typeof PSlugRepositoryRoute
   '/p/$slug/requests': typeof PSlugRequestsRoute
+  '/p/$slug/settings': typeof PSlugSettingsRoute
   '/p/$slug/batches/$id': typeof PSlugBatchesIdRoute
   '/p/$slug/proposals_/$id': typeof PSlugProposalsIdRoute
   '/p/$slug/requests_/$id': typeof PSlugRequestsIdRoute
@@ -186,6 +195,7 @@ export interface FileRouteTypes {
     | '/p/$slug/proposals'
     | '/p/$slug/repository'
     | '/p/$slug/requests'
+    | '/p/$slug/settings'
     | '/p/$slug/batches/$id'
     | '/p/$slug/proposals/$id'
     | '/p/$slug/requests/$id'
@@ -205,6 +215,7 @@ export interface FileRouteTypes {
     | '/p/$slug/proposals'
     | '/p/$slug/repository'
     | '/p/$slug/requests'
+    | '/p/$slug/settings'
     | '/p/$slug/batches/$id'
     | '/p/$slug/proposals/$id'
     | '/p/$slug/requests/$id'
@@ -224,6 +235,7 @@ export interface FileRouteTypes {
     | '/p/$slug/proposals'
     | '/p/$slug/repository'
     | '/p/$slug/requests'
+    | '/p/$slug/settings'
     | '/p/$slug/batches/$id'
     | '/p/$slug/proposals_/$id'
     | '/p/$slug/requests_/$id'
@@ -324,6 +336,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PSlugRequestsRouteImport
       parentRoute: typeof PSlugRoute
     }
+    '/p/$slug/settings': {
+      id: '/p/$slug/settings'
+      path: '/settings'
+      fullPath: '/p/$slug/settings'
+      preLoaderRoute: typeof PSlugSettingsRouteImport
+      parentRoute: typeof PSlugRoute
+    }
     '/p/$slug/batches/$id': {
       id: '/p/$slug/batches/$id'
       path: '/batches/$id'
@@ -371,6 +390,7 @@ interface PSlugRouteChildren {
   PSlugProposalsRoute: typeof PSlugProposalsRoute
   PSlugRepositoryRoute: typeof PSlugRepositoryRoute
   PSlugRequestsRoute: typeof PSlugRequestsRoute
+  PSlugSettingsRoute: typeof PSlugSettingsRoute
   PSlugBatchesIdRoute: typeof PSlugBatchesIdRoute
   PSlugProposalsIdRoute: typeof PSlugProposalsIdRoute
   PSlugRequestsIdRoute: typeof PSlugRequestsIdRoute
@@ -387,6 +407,7 @@ const PSlugRouteChildren: PSlugRouteChildren = {
   PSlugProposalsRoute: PSlugProposalsRoute,
   PSlugRepositoryRoute: PSlugRepositoryRoute,
   PSlugRequestsRoute: PSlugRequestsRoute,
+  PSlugSettingsRoute: PSlugSettingsRoute,
   PSlugBatchesIdRoute: PSlugBatchesIdRoute,
   PSlugProposalsIdRoute: PSlugProposalsIdRoute,
   PSlugRequestsIdRoute: PSlugRequestsIdRoute,

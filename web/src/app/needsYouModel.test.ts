@@ -432,6 +432,30 @@ describe("needsYouGroups", () => {
     });
   });
 
+  it("shows a notice target fold turned off with a link to the settings, last", () => {
+    const groups = needsYouGroups("demo", [
+      needsItem({
+        kind: "notify_target_off",
+        screen: "settings",
+        target: "nt-3",
+        title: "Release bot",
+      }),
+      needsItem({ kind: "blocker", screen: "task", task: "T-1" }),
+    ]);
+    expect(groups.map((group) => group.kind)).toEqual([
+      "blocker",
+      "notify_target_off",
+    ]);
+    expect(groups[1]?.title).toBe("Notice targets");
+    expect(groups[1]?.lines[0]).toMatchObject({
+      person: null,
+      chip: "nt-3",
+      title: "Release bot",
+      hint: "opens the settings",
+      href: "/p/demo/settings",
+    });
+  });
+
   it("counts what waits", () => {
     expect(waitingText(4)).toBe("4 waiting");
   });

@@ -9,6 +9,7 @@ import {
   Kanban,
   MessagesSquare,
   Plus,
+  Settings,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -34,6 +35,7 @@ const ICONS: Record<NavId, LucideIcon> = {
   agents: Bot,
   messages: MessagesSquare,
   repository: History,
+  settings: Settings,
 };
 
 const MESSAGES_BADGE =

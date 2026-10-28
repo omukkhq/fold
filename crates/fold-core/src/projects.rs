@@ -1,3 +1,5 @@
+pub mod notify;
+
 use std::collections::BTreeSet;
 use std::path::{Component, Path};
 

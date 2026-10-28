@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO notify_needs_you (key, kind, item, path, seen_at) VALUES (?1, ?2, ?3, ?4, ?5)\n         ON CONFLICT (key) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "038940e4bcb18913f2e288d9b30b48c33390da30fd612fed57a7e50b10164ca7"
+}

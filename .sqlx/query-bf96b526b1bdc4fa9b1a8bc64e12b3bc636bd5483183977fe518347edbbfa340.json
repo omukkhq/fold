@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT key AS \"key!\", kind, item, path, seen_at FROM notify_needs_you ORDER BY seen_at, key",
+  "describe": {
+    "columns": [
+      {
+        "name": "key!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "notify_needs_you",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "name": "kind",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "notify_needs_you",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "item",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "notify_needs_you",
+            "name": "item"
+          }
+        }
+      },
+      {
+        "name": "path",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "notify_needs_you",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "name": "seen_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_needs_you",
+            "name": "seen_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "bf96b526b1bdc4fa9b1a8bc64e12b3bc636bd5483183977fe518347edbbfa340"
+}

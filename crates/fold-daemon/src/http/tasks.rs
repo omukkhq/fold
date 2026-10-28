@@ -42,7 +42,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
 }
 
 /// A calculated board status; it is also the board's column key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
     Backlog,
@@ -77,6 +77,18 @@ impl From<TaskKind> for fold_core::TaskKind {
             TaskKind::Proposal => Self::Proposal,
             TaskKind::NoProposal => Self::NoProposal,
             TaskKind::Human => Self::Human,
+        }
+    }
+}
+
+impl From<TaskStatus> for fold_core::TaskStatus {
+    fn from(status: TaskStatus) -> Self {
+        match status {
+            TaskStatus::Backlog => Self::Backlog,
+            TaskStatus::Todo => Self::Todo,
+            TaskStatus::InProgress => Self::InProgress,
+            TaskStatus::Review => Self::Review,
+            TaskStatus::Done => Self::Done,
         }
     }
 }

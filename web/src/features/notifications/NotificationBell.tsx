@@ -114,15 +114,8 @@ function MoveToasts({ slug }: { slug: string }) {
             size={15}
             className="mt-2 shrink-0"
           />
-          <Toast.Description className="min-w-0 flex-1 text-body">
-            {toast.parts.map((part, index) => (
-              <span key={part}>
-                {index > 0 ? " · " : null}
-                <span className="break-words">
-                  <IdText text={part} />
-                </span>
-              </span>
-            ))}
+          <Toast.Description className="min-w-0 flex-1 break-words text-body">
+            <IdText text={toast.text} />
           </Toast.Description>
           <Toast.Close
             aria-label="Dismiss"

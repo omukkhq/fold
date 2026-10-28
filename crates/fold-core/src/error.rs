@@ -197,6 +197,13 @@ define_codes! {
     INVALID_SIGN_IN_LINK = "invalid_sign_in_link",
     UPDATE_CHECKS_RUNNING = "update_checks_running",
     PATH_NOT_TRACKED = "path_not_tracked",
+    NOTIFY_TARGET_NOT_FOUND = "notify_target_not_found",
+    INVALID_NOTIFY_TARGET = "invalid_notify_target",
+    NOTIFY_SEND_FAILED = "notify_send_failed",
+    NOTIFY_SETTINGS_IO = "notify_settings_io",
+    PLAINTEXT_NOTIFY_TARGET = "plaintext_notify_target",
+    NOTIFY_SEND_NOT_FOUND = "notify_send_not_found",
+    NOTIFY_TARGET_INACTIVE = "notify_target_inactive",
 }
 
 /// The error every transport reports. The message and details name ids, never content.
