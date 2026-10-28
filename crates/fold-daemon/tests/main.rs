@@ -36,6 +36,7 @@ mod acceptance_25_supervised_main;
 mod acceptance_26_batch_integration;
 mod acceptance_27_request_batch;
 mod acceptance_28_untrack;
+mod acceptance_29_webhook_notices;
 mod acceptance_2_messaging;
 mod acceptance_3_parallel_workspaces;
 mod acceptance_4_live_diff;

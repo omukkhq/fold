@@ -140,6 +140,20 @@ Without a branch, fold uses the branch that the remote's `HEAD` names, or `main`
 
 fold pushes without force. If incoming changes conflict, fold creates a sync task to resolve them through its task and review workflow.
 
+## Get notices
+
+fold can tell a webhook, a Slack channel or a Discord channel when something on a project changes: an item comes into Needs you, a card moves to Review or Done, a proposal is integrated, a check, an integration, a worker or Git fails, and more. Open the project's **Settings** tab in the web interface, or use `fld notify`:
+
+```bash
+fld notify add slack "Team Slack" --events recommended --moves-to review,done   # reads the URL from stdin
+fld notify add webhook "Release bot" --events all <receiver-url>
+fld notify web-url <address-people-open-fold-at>
+fld notify test "Team Slack"
+fld notify log "Release bot"
+```
+
+Each target selects its events and the board columns of its card moves. The notices of a target's window (15 seconds by default) go in one send. A generic webhook gets a JSON body signed with Standard Webhooks; fld prints its signing secret once. Slack and Discord get one message with a line per notice. A notice holds ids, titles, columns, names and links, never message text, review text or diffs. fold retries a failed send with the same `webhook-id` for about 8.5 hours, and turns a target off after 20 failed tries in a row, which shows in Needs you. Host targets (`--host`) apply to every project; `fld notify host-targets off` keeps a project to its own targets. Only a person can change targets, never an agent.
+
 ## Everyday commands
 
 Run these commands inside your project:
@@ -165,6 +179,7 @@ Run these commands inside your project:
 | `fld transcript` | Find an agent's Claude Code transcript: `fld transcript <agent>` prints the path of the file of its current session, and `fld transcript <agent> --tail N` prints the file's last N lines. |
 | `fld gc` | Delete objects that nothing refers to, prune old automatic checkpoints, remove the folder of a closed workspace that is still there, and prune the checkpoints of workspaces closed for longer than `closed_workspace_days` (14 days by default). fold removes a workspace's folder as soon as the workspace closes and its agent has no running worker and no open session, after a final checkpoint of the tracked files it had not recorded. That checkpoint is a record, not a restore point. `fld gc` retries a removal that failed. The daemon also runs it every day; `fld gc` needs a running daemon. `fld gc --dry-run` counts what a run would remove and changes nothing. |
 | `fld web` | Print a one-time link that signs you in to the web interface. It works once, for a few minutes, and starts the daemon when needed. |
+| `fld notify` | Send the project's events to webhooks, Slack or Discord: `fld notify list`, `add`, `edit`, `remove`, `test`, `log`, `rotate`, `web-url` and `host-targets`. See [Get notices](#get-notices). |
 | `fld token` | Manage the tokens that sign a person in to the web interface from a browser that cannot open a link from `fld web`, such as one on another machine: `fld token create <username>`, `fld token list`, and `fld token revoke`. |
 | `fld --help` | See the command reference. |
 
