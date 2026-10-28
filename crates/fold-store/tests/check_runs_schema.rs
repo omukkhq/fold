@@ -339,3 +339,54 @@ async fn a_queued_integration_waits_until_it_ends_once() {
         .await;
     assert!(missing.is_err());
 }
+
+#[tokio::test]
+async fn the_newest_proposal_run_end_of_each_open_workspace_starts_its_stall_window() {
+    let (_dir, store) = seeded().await;
+    let ws = WorkspaceId::from_number(1).unwrap();
+    let ends = async || checks::last_proposal_run_ends(store.read()).await.unwrap();
+    assert!(ends().await.is_empty());
+
+    insert(&store, &workspace_run(1)).await.unwrap();
+    assert!(ends().await.is_empty(), "a running run has no end");
+    assert!(finish(&store, 1, RunState::Failed).await.unwrap());
+    insert(&store, &workspace_run(2)).await.unwrap();
+    assert_eq!(
+        ends().await,
+        [(ws, at(5))],
+        "the run that goes has no end yet"
+    );
+    store
+        .write(async |tx| checks::finish_run(tx, run_id(2), RunState::Passed, None, at(9)).await)
+        .await
+        .unwrap();
+    insert(&store, &integration_run(3)).await.unwrap();
+    store
+        .write(async |tx| checks::finish_run(tx, run_id(3), RunState::Passed, None, at(20)).await)
+        .await
+        .unwrap();
+    assert_eq!(
+        ends().await,
+        [(ws, at(9))],
+        "the newest end, never an integration run's"
+    );
+
+    exec(
+        &store,
+        "UPDATE workspaces SET state = 'missing' WHERE id = 1",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        ends().await,
+        [(ws, at(9))],
+        "a missing workspace is still open"
+    );
+    exec(
+        &store,
+        "UPDATE workspaces SET state = 'archived', closed_at = 30 WHERE id = 1",
+    )
+    .await
+    .unwrap();
+    assert!(ends().await.is_empty(), "a closed workspace never stalls");
+}

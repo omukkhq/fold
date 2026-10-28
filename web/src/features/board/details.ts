@@ -81,6 +81,9 @@ export function cardDetails(
   if (card.report !== null && card.kind === "no_proposal") {
     rows.push({ kind: "text", name: "Report", text: card.report });
   }
+  if (line?.run) {
+    rows.push({ kind: "text", name: "Checks", text: `${line.run} running` });
+  }
   const files = liveFilesText(line);
   if (files !== null) {
     rows.push({ kind: "text", name: "Files", text: files });

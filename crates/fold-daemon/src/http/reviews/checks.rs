@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use fold_core::CheckRunId;
-use fold_core::reviews::checks::{Outcome, Purpose, RunReason, RunState, Stage};
+use fold_core::reviews::checks::{Outcome, RunReason, RunState, Stage};
 use serde::Serialize;
 use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
@@ -12,6 +12,7 @@ use super::super::error::{ApiError, ErrorEnvelope};
 use super::super::tasks::id;
 use super::service;
 use crate::daemon::AppState;
+pub use crate::live::CheckPurpose;
 use crate::services::reviews::checks::{CheckRunView, VersionRun};
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -33,29 +34,6 @@ impl From<Stage> for CheckStage {
         match stage {
             Stage::Proposal => Self::Proposal,
             Stage::Integration => Self::Integration,
-        }
-    }
-}
-
-/// What asked for a run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum CheckPurpose {
-    Check,
-    CreateProposal,
-    UpdateProposal,
-    Integrate,
-    ReviewFix,
-}
-
-impl From<Purpose> for CheckPurpose {
-    fn from(purpose: Purpose) -> Self {
-        match purpose {
-            Purpose::Check => Self::Check,
-            Purpose::CreateProposal => Self::CreateProposal,
-            Purpose::UpdateProposal => Self::UpdateProposal,
-            Purpose::Integrate => Self::Integrate,
-            Purpose::ReviewFix => Self::ReviewFix,
         }
     }
 }

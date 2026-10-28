@@ -2052,6 +2052,7 @@ export interface components {
              * @description How many open tasks wait directly for this one; 0 once it is Done.
              */
             blocks: number;
+            check_run: components["schemas"]["LiveCheckRun"] | null;
             checklist: components["schemas"]["ChecklistCounts"];
             /**
              * Format: int64
@@ -3189,6 +3190,22 @@ export interface components {
         LinkSignIn: {
             link: string;
         };
+        /** @description A check run that goes in a workspace. */
+        LiveCheckRun: {
+            /**
+             * @description The proposal whose next version the run makes when its checks pass; null for `check` and `create_proposal`.
+             * @example P-3
+             */
+            proposal: string | null;
+            purpose: components["schemas"]["CheckPurpose"];
+            /** @example cr-4 */
+            run: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds.
+             */
+            started_at: number;
+        };
         /** @description What an active workspace holds right now. These are working changes, never history. */
         LiveWorkspace: {
             /**
@@ -3196,6 +3213,7 @@ export interface components {
              * @example r17
              */
             base: string;
+            check_run: components["schemas"]["LiveCheckRun"] | null;
             checkpoints: components["schemas"]["CheckpointSummary"][];
             /** @description Whether the working files differ from the tree of the open proposal's newest version: false while every file is the same, true from the first file that differs. Null without an open proposal. */
             edits_after_version: boolean | null;
@@ -5110,6 +5128,7 @@ export interface components {
             can_set_blocker: boolean;
             /** @description Of the live workspace, or of the latest one when none is live; newest first. */
             changesets: components["schemas"]["TaskChangeset"][];
+            check_run: components["schemas"]["LiveCheckRun"] | null;
             /** @description The first checklist is `Subtasks` when the task was split. */
             checklists: components["schemas"]["Checklist"][];
             /** @description Of the live workspace, or of the latest one when none is live; pruned ones left out, newest first. */
@@ -5622,6 +5641,7 @@ export interface components {
              * @description The workspace row's cached count.
              */
             changed_files: number;
+            check_run: components["schemas"]["LiveCheckRun"] | null;
             /**
              * Format: int64
              * @description UTC milliseconds.

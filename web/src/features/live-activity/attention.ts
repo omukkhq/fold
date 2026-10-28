@@ -1,26 +1,35 @@
 import type { AttentionItem } from "../../api/workspaces";
+import type { LiveWorkspace } from "../../live/envelope";
 import { revisionsAhead } from "../../format/revisions";
 import { formatQuiet } from "../../format/time";
 
 export interface AttentionView {
-  /** `no edits for 7 min` when the daemon reports the workspace stalled. */
+  /** `running checks` while a check run goes in the workspace. */
+  checks: string | null;
+  /** `no edits for 7 min` when the daemon reports the workspace stalled and no check run goes. */
   stalled: string | null;
   staleClaim: boolean;
 }
 
 /**
  * Shows the daemon's `stalled` and `stale_claim` items and ignores the kinds this screen does not draw; the web decides nothing.
- * `lastActivityAt` is the workspace's last edit, which is what a stalled workspace has been quiet since.
+ * `lastActivityAt` is the workspace's last edit, which is what a stalled workspace has been quiet since. `live` is the
+ * workspace's live state, which is newer than the list's items: while it names a check run, the worker waits for its
+ * result and the stall does not show.
  */
 export function attentionView(
   items: readonly AttentionItem[],
   lastActivityAt: number,
   now: number,
+  live: Pick<LiveWorkspace, "check_run"> | null = null,
 ): AttentionView {
+  const checking = (live?.check_run ?? null) !== null;
   return {
-    stalled: items.some((item) => item.kind === "stalled")
-      ? formatQuiet(now, lastActivityAt)
-      : null,
+    checks: checking ? "running checks" : null,
+    stalled:
+      !checking && items.some((item) => item.kind === "stalled")
+        ? formatQuiet(now, lastActivityAt)
+        : null,
     staleClaim: items.some((item) => item.kind === "stale_claim"),
   };
 }

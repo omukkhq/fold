@@ -2,14 +2,15 @@ use std::collections::BTreeSet;
 
 use fold_core::events::types;
 use fold_core::{
-    CheckpointId, Event, EventActor, EventType, ProposalId, RevisionId, TaskId, Timestamp,
-    WorkspaceId,
+    CheckRunId, CheckpointId, Event, EventActor, EventType, ProposalId, RevisionId, TaskId,
+    Timestamp, WorkspaceId,
 };
 use fold_daemon::http::events::{
-    ChangeKind, ChangedFile, CheckpointSummary, EventEnvelope, LiveWorkspace, PresenceChange,
-    Snapshot,
+    ChangeKind, ChangedFile, CheckpointSummary, EventEnvelope, LiveCheckRun, LiveWorkspace,
+    PresenceChange, Snapshot,
 };
 use fold_daemon::http::openapi::{base, check_operations, to_json};
+use fold_daemon::http::reviews::checks::CheckPurpose;
 use serde_json::{Value, json};
 use utoipa::openapi::path::{HttpMethod, OperationBuilder, PathItem};
 use utoipa::openapi::{
@@ -77,8 +78,14 @@ fn sample_workspace() -> LiveWorkspace {
             created_at: Timestamp::from_millis(1_760_000_000_100).unwrap(),
         }],
         proposal: ProposalId::from_number(3),
-        stalled: true,
+        stalled: false,
         edits_after_version: Some(true),
+        check_run: Some(LiveCheckRun {
+            run: CheckRunId::from_number(4).unwrap(),
+            purpose: CheckPurpose::UpdateProposal,
+            proposal: ProposalId::from_number(3),
+            started_at: Timestamp::from_millis(1_760_000_000_600).unwrap(),
+        }),
     }
 }
 
@@ -332,6 +339,7 @@ fn every_live_workspace_field_is_declared_and_required() {
         ("LiveWorkspace", &wire),
         ("ChangedFile", &wire["files"][0]),
         ("CheckpointSummary", &wire["checkpoints"][0]),
+        ("LiveCheckRun", &wire["check_run"]),
     ] {
         let fields: BTreeSet<String> = value.as_object().unwrap().keys().cloned().collect();
         let declared = schema(&doc, name);

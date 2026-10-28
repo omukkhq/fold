@@ -35,7 +35,8 @@
         "checkpoints": [],
         "proposal": null,
         "stalled": true,
-        "edits_after_version": null
+        "edits_after_version": null,
+        "check_run": null
       },
       "watch": "watching",
       "attention": [
@@ -70,7 +71,8 @@
         "checkpoints": [],
         "proposal": null,
         "stalled": false,
-        "edits_after_version": null
+        "edits_after_version": null,
+        "check_run": null
       },
       "watch": "watching",
       "attention": [

@@ -21,7 +21,7 @@ use super::auth::SESSION_COOKIE;
 use super::error::{ApiError, ApiQuery, ErrorEnvelope};
 use super::{Project, Transport};
 use crate::daemon::AppState;
-pub use crate::live::{ChangeKind, ChangedFile, CheckpointSummary, LiveWorkspace};
+pub use crate::live::{ChangeKind, ChangedFile, CheckpointSummary, LiveCheckRun, LiveWorkspace};
 use crate::services::events::{self, Feed, FeedItem, HistoryPage, parse_last_event_id};
 use crate::services::projects;
 

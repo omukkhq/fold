@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectAgent } from "../api/agentBar";
-import { agent as baseAgent, claim, worker } from "../test/agents";
+import { agent as baseAgent, claim, worker, workspace } from "../test/agents";
 import { INITIAL_STATUS, type LiveStatus } from "../live/status";
 import {
   agentBoardPath,
   agentStateText,
+  checkingCount,
   panelAgents,
   chipPresence,
   chipStateText,
@@ -21,6 +22,8 @@ interface ChipOptions {
   working?: number;
   /** Of those, the tasks with a stalled item. */
   stalled?: number;
+  /** Of those, the tasks whose workspace runs checks. */
+  checking?: number;
 }
 
 /** An agent whose single worker holds `working` implementation claims, `stalled` of their tasks stalled. */
@@ -29,12 +32,28 @@ const agent = ({
   presence = "active",
   working = 0,
   stalled = 0,
+  checking = 0,
 }: ChipOptions): ProjectAgent => ({
   ...baseAgent(name, { presence }),
   workers: [
     worker(name, {
       claims: Array.from({ length: working }, (_, i) =>
         claim({ task: `T-${String(i + 1)}` }),
+      ),
+      workspaces: Array.from({ length: working }, (_, i) =>
+        workspace({
+          ws: `ws-${String(i + 1)}`,
+          task: `T-${String(i + 1)}`,
+          check_run:
+            i < checking
+              ? {
+                  run: `cr-${String(i + 1)}`,
+                  purpose: "check",
+                  proposal: null,
+                  started_at: 0,
+                }
+              : null,
+        }),
       ),
     }),
   ],
@@ -101,6 +120,19 @@ describe("agentStateText of a supervised agent", () => {
     expect(agentStateText(supervised("idle", { stalled: 1 }))).toBe(
       "idle · 1 stalled",
     );
+  });
+
+  it("says that the checks of its tasks run, which is no stall", () => {
+    expect(
+      agentStateText(supervised("working", { working: 1, checking: 1 })),
+    ).toBe("1 working · running checks");
+    expect(
+      agentStateText(
+        supervised("idle", { working: 3, stalled: 1, checking: 2 }),
+      ),
+    ).toBe("idle · 1 stalled · running checks in 2 tasks");
+    expect(checkingCount(agent({ working: 3, checking: 2 }))).toBe(2);
+    expect(checkingCount(agent({ working: 3 }))).toBe(0);
   });
 
   it("says that a process whose turns fail cannot reach the model unless it failed for a reason the chip names, with Claude Code's error as the tooltip", () => {

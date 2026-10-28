@@ -12,6 +12,7 @@ use serde_json::json;
 
 use super::presence::facts;
 use super::{AgentError, AgentService};
+use crate::live::LiveCheckRun;
 use crate::push::PushReach;
 use crate::services::tasks::{AttentionKind, stalled_tasks};
 
@@ -107,6 +108,8 @@ pub struct WorkspaceSummary {
     pub changed_files: u32,
     pub last_activity_at: Option<Timestamp>,
     pub latest_checkpoint: Option<CheckpointId>,
+    /// The check run that goes in the workspace, from the live state.
+    pub check_run: Option<LiveCheckRun>,
 }
 
 /// An open proposal the worker wrote.
@@ -206,6 +209,11 @@ impl AgentService {
                     changed_files: workspace.changed_files,
                     last_activity_at: workspace.last_activity_at,
                     latest_checkpoint: workspace.latest_checkpoint,
+                    check_run: self
+                        .live
+                        .as_ref()
+                        .and_then(|live| live.get(workspace.id))
+                        .and_then(|state| state.view.check_run),
                 });
         }
         let mut proposals_of: HashMap<i64, Vec<ProposalSummary>> = HashMap::new();

@@ -24,6 +24,7 @@ export function workspace(fields: Partial<WorkspaceView> = {}): WorkspaceView {
     changed_files: 2,
     last_activity_at: null,
     latest_checkpoint: null,
+    check_run: null,
     state: "active",
     ...fields,
   };

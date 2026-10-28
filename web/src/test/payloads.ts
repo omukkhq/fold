@@ -43,6 +43,7 @@ export function boardCard(
     proposal: null,
     activity: null,
     edits_after_version: null,
+    check_run: null,
     ...over,
   };
 }
@@ -95,6 +96,7 @@ export function taskView(
     workspace_info: null,
     activity: null,
     edits_after_version: null,
+    check_run: null,
     changesets: [],
     checkpoints: [],
     proposal: null,
@@ -127,6 +129,7 @@ export function liveWorkspace(
     proposal: null,
     stalled: false,
     edits_after_version: null,
+    check_run: null,
     ...over,
   };
 }

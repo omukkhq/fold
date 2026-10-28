@@ -26,7 +26,7 @@ function Dot() {
 export function WorkspacePanel({ slug, panel, now }: WorkspacePanelProps) {
   const { entry, live } = panel;
   const activity = lastActivity(panel);
-  const attention = attentionView(entry.attention, activity, now);
+  const attention = attentionView(entry.attention, activity, now, live);
   const worker = workerOf(panel);
   const base = live?.base ?? entry.base;
   const heading = panelHeading(entry);
@@ -52,6 +52,8 @@ export function WorkspacePanel({ slug, panel, now }: WorkspacePanelProps) {
           <span className="ml-auto flex flex-wrap items-center gap-6 sm:ml-0">
             {entry.state === "missing" ? (
               <MissingBadge />
+            ) : attention.checks !== null ? (
+              <EditingPill text={attention.checks} />
             ) : attention.stalled === null ? (
               <EditingPill text="active" />
             ) : (

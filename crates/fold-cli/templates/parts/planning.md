@@ -11,7 +11,7 @@ An orchestrator keeps the task graph correct and the workers busy.
 7. When agent work must wait until a person says it can start, give a new task its `blocker` in `create_task_plan`, or call `set_blocker(id, reason)` on an existing task while it waits in Backlog or Todo, before an agent starts it. A task with a claim, a workspace or an open proposal is refused with `task_hold_denied`. While the blocker is set, no agent claims the task, no lead starts a task worker for it and `get_ready_tasks` leaves it out; its status does not change. Use a human task when a person has work to do, and a blocker when agent work only waits for a person's word. Only a human, the main agent or the lead of the task's area sets a blocker, and only a human or the main agent clears it with `clear_blocker(id)`.
 8. A Claude Code subagent that you spawn works for you; fold does not know it (see Subagents). It cannot expand your role or assignment.
 
-A task is ready when its dependencies are Done and nobody holds it. Stalled and stale are two different states. A claim is stalled when its workspace had no file change for 5 minutes (`stall_minutes`). This only shows on the board. A claim is stale when its 30-minute lease (`lease_minutes`) ran out. A stale claim allows `takeover_claim`.
+A task is ready when its dependencies are Done and nobody holds it. Stalled and stale are two different states. A claim is stalled when its workspace had no file change for 5 minutes (`stall_minutes`) and runs no checks. After a check run in the workspace, the 5 minutes count from the end of the run. This only shows on the board. A claim is stale when its 30-minute lease (`lease_minutes`) ran out. A stale claim allows `takeover_claim`.
 
 ## Task template
 
