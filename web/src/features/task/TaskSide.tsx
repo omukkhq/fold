@@ -39,7 +39,7 @@ import { taskPath } from "@/features/board/card";
 import { TaskCostSection } from "@/features/cost/TaskCostSection";
 import { formatAge } from "@/format/time";
 import { cn } from "@/lib/cn";
-import { focusRing } from "@/lib/focus";
+import { focusRing, insetFocusRing } from "@/lib/focus";
 import { ActorText } from "@/people/ActorText";
 import { PersonName } from "@/people/PersonName";
 import {
@@ -1014,7 +1014,14 @@ function History({ task }: { task: TaskDetail }) {
 /** The side column, top to bottom. */
 export function TaskSide({ slug, task, live, now }: Props) {
   return (
-    <aside className="flex w-full shrink-0 flex-col gap-20 border-border-subtle md:w-side-panel md:border-l md:pt-2 md:pl-20">
+    <aside
+      aria-label="Task details"
+      tabIndex={0}
+      className={cn(
+        "flex w-full shrink-0 flex-col gap-20 border-border-subtle px-24 pt-4 pb-24 md:w-side-panel-scroll md:overflow-y-auto md:border-l md:pt-24 md:pl-20",
+        insetFocusRing,
+      )}
+    >
       <LabelsSide slug={slug} task={task} />
       <Responsible task={task} now={now} />
       {needsProposal(task) ? (

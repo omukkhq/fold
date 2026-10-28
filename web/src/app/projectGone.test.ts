@@ -2,7 +2,13 @@ import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/errors";
 import { keys } from "../api/keys";
-import { forgetProject, isProjectGone, projectProblem } from "./projectGone";
+import {
+  PROJECT_MISSING,
+  forgetProject,
+  isProjectGone,
+  isProjectMissing,
+  projectProblem,
+} from "./projectGone";
 
 describe("a project fold removed", () => {
   it("is told apart from every other failure by its code", () => {
@@ -67,5 +73,15 @@ describe("a project fold removed", () => {
       true,
     );
     expect(reload).toHaveBeenCalledOnce();
+  });
+});
+
+describe("the project route's not-found", () => {
+  it("answers only for the project, never for a not-found that a screen inside it throws", () => {
+    expect(isProjectMissing(PROJECT_MISSING)).toBe(true);
+    expect(isProjectMissing(undefined)).toBe(false);
+    expect(isProjectMissing(null)).toBe(false);
+    expect(isProjectMissing("missing")).toBe(false);
+    expect(isProjectMissing({ project: "other" })).toBe(false);
   });
 });

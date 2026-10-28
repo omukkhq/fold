@@ -8,6 +8,7 @@ import {
   changeBadge,
   changeNote,
   comparisonCrumbs,
+  comparisonSides,
   comparisonNote,
   comparisonTitle,
   hiddenLinesText,
@@ -89,12 +90,23 @@ describe("working changes", () => {
 describe("comparisonTitle", () => {
   it("names a workspace against another revision", () => {
     expect(comparisonTitle(againstOther)).toBe(
-      "Working files in ws-7 against r6",
+      "Changes from r6 to the working files in ws-7",
     );
   });
 
   it("names two states", () => {
     expect(comparisonTitle(revisions)).toBe("Changes from r7 to r8");
+  });
+});
+
+describe("comparisonSides", () => {
+  it("puts the older state first, as the title and the crumb name them", () => {
+    expect(comparisonSides(revisions)).toEqual([revisions.from, revisions.to]);
+    expect(comparisonSides(working)).toEqual([working.from, working.to]);
+    expect(comparisonSides(againstOther)).toEqual([
+      againstOther.from,
+      againstOther.to,
+    ]);
   });
 });
 

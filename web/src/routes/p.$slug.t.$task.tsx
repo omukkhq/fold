@@ -1,4 +1,5 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
+import { MissingPanel } from "../app/MissingPanel";
 import { BoardScreen } from "../features/board/BoardScreen";
 import { boardSearchSchema, cleanSearch } from "../features/board/search";
 import { TaskDialog } from "../features/task/TaskDialog";
@@ -12,6 +13,7 @@ export const Route = createFileRoute("/p/$slug/t/$task")({
       notFound({ throw: true });
     }
   },
+  notFoundComponent: TaskNotFound,
   component: TaskRoute,
 });
 
@@ -42,4 +44,9 @@ function TaskRoute() {
       />
     </>
   );
+}
+
+function TaskNotFound() {
+  const { slug, task } = Route.useParams();
+  return <MissingPanel slug={slug} missing={{ kind: "task", id: task }} />;
 }
