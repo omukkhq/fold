@@ -1,10 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { NARROW_ONLY, WIDE_ONLY, menuAlert, menuLabel } from "./topBarLayout";
+import {
+  NARROW_ONLY,
+  SWITCHER_FIT,
+  WIDE_ONLY,
+  menuAlert,
+  menuLabel,
+  switcherTooltip,
+} from "./topBarLayout";
+import themeCss from "../styles/index.css?raw";
 
 describe("the top bar layout", () => {
-  it("swaps the full row and the menu at xl", () => {
-    expect(WIDE_ONLY).toBe("max-xl:hidden");
-    expect(NARROW_ONLY).toBe("xl:hidden");
+  it("swaps the full row and the menu at the wide breakpoint of 1440px", () => {
+    expect(WIDE_ONLY).toBe("max-wide:hidden");
+    expect(NARROW_ONLY).toBe("wide:hidden");
+    expect(themeCss).toMatch(/--breakpoint-wide:\s*90rem;/);
+  });
+});
+
+describe("the project switcher's tooltip", () => {
+  it("names only a slug the switcher cuts", () => {
+    expect(switcherTooltip("a".repeat(SWITCHER_FIT))).toBeNull();
+    expect(switcherTooltip("nobs-demo")).toBeNull();
+    expect(switcherTooltip("frontend-rewrite-demo")).toBe(
+      "frontend-rewrite-demo",
+    );
   });
 });
 

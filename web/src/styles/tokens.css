@@ -93,6 +93,8 @@
   --width-task-side: 344px;
   --width-side-label: 92px;
   --width-dialog-narrow: 760px;
+  /* The project switcher in the top bar; a longer slug is cut and its tooltip names it. */
+  --width-switcher: 128px;
 }
 
 :root {

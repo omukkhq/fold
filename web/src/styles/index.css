@@ -130,6 +130,7 @@
   --container-*: initial;
   --container-measure: var(--measure);
   --container-thread-column: var(--width-thread-column);
+  --container-switcher: var(--width-switcher);
 
   --width-*: initial;
   --width-skeleton-s: var(--width-skeleton-s);
@@ -159,6 +160,9 @@
   --width-task-side: var(--width-task-side);
   --width-side-label: var(--width-side-label);
   --width-dialog-narrow: var(--width-dialog-narrow);
+
+  /* The width from which the top bar shows its full row of tabs, the Agents control and the avatar. A breakpoint cannot read a variable, so the value is written here. */
+  --breakpoint-wide: 90rem;
 
   --height-*: initial;
   --height-bar: var(--height-bar);

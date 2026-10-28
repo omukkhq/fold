@@ -127,7 +127,9 @@ describe("utility guard", () => {
     expect([...(keys.get("container") ?? [])]).toEqual([
       "measure",
       "thread-column",
+      "switcher",
     ]);
+    expect(offToken('className="max-w-switcher"', keys)).toEqual([]);
     expect(keys.get("max-width")).toBeUndefined();
     expect(offToken('className="max-w-content"', keys)).toEqual([
       "max-w-content",

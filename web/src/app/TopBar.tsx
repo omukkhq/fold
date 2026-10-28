@@ -16,12 +16,12 @@ import { NARROW_ONLY, WIDE_ONLY } from "./topBarLayout";
 /** One bar for every project screen: the wordmark, the project, the tabs, the Agents control, the Inbox, New task and the avatar. Below `xl` the tabs, the agents and the avatar move into the menu. */
 export function TopBar({ slug }: { slug: string }) {
   return (
-    <header className="flex h-bar-compact shrink-0 items-center gap-4 bg-surface pr-6 pl-16 xl:h-bar xl:gap-16 xl:px-20">
+    <header className="flex h-bar-compact shrink-0 items-center gap-4 bg-surface pr-6 pl-16 wide:h-bar wide:gap-16 wide:px-20">
       <HrefLink
         href="/projects"
         aria-label="fold, all projects"
         className={cn(
-          "flex shrink-0 items-center rounded-s max-xl:min-h-44",
+          "flex shrink-0 items-center rounded-s max-wide:min-h-44",
           focusRing,
         )}
       >
@@ -39,12 +39,12 @@ export function TopBar({ slug }: { slug: string }) {
         aria-label="New task"
         className={cn(
           buttonClasses("primary", "md"),
-          "shrink-0 max-xl:size-40 max-xl:p-0",
+          "shrink-0 max-wide:size-40 max-wide:p-0",
           focusRing,
         )}
       >
         <Plus aria-hidden="true" size={16} />
-        <span className="max-xl:sr-only">New task</span>
+        <span className="max-wide:sr-only">New task</span>
       </HrefLink>
       <AvatarMenu className={WIDE_ONLY} />
       <PhoneMenu slug={slug} className={NARROW_ONLY} />

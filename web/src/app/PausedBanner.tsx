@@ -29,7 +29,7 @@ export function PausedBanner({
     <div
       role="status"
       className={cn(
-        "flex shrink-0 flex-wrap items-baseline gap-x-12 gap-y-2 bg-warn-soft px-16 py-10 xl:px-22",
+        "flex shrink-0 flex-wrap items-baseline gap-x-12 gap-y-2 bg-warn-soft px-16 py-10 wide:px-22",
         className,
       )}
     >

@@ -9,6 +9,8 @@ import { switchProjectPath } from "../routes/nav";
 import { menuContent, menuItem } from "../components/overlay/menuStyles";
 import { Mono } from "../components/mono/Mono";
 import { recentProjects } from "./projectSwitcherModel";
+import { switcherTooltip } from "./topBarLayout";
+import { Tooltip } from "../components/overlay/Tooltip";
 
 /** The current project and a menu of the most recently used ones, with the way to every project on the projects page. */
 export function ProjectSwitcher({ slug }: { slug: string }) {
@@ -16,21 +18,26 @@ export function ProjectSwitcher({ slug }: { slug: string }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const projects = useQuery(projectsQuery());
   const recent = projects.data ? recentProjects(projects.data, slug) : [];
+  const cut = switcherTooltip(slug);
+
+  const trigger = (
+    <Menu.Trigger
+      aria-label={`Project ${slug}, switch project`}
+      className={cn(
+        "flex min-w-0 max-w-switcher shrink items-center gap-6 rounded-s px-8 py-6 hover:bg-sunken max-wide:min-h-44 max-wide:px-6",
+        focusRing,
+      )}
+    >
+      <span className="truncate font-title text-15 font-semibold text-text">
+        {slug}
+      </span>
+      <ChevronDown size={16} className="shrink-0 text-text-2" aria-hidden />
+    </Menu.Trigger>
+  );
 
   return (
     <Menu.Root>
-      <Menu.Trigger
-        aria-label={`Project ${slug}, switch project`}
-        className={cn(
-          "flex min-w-0 shrink items-center gap-6 rounded-s px-8 py-6 hover:bg-sunken max-xl:min-h-44 max-xl:px-6",
-          focusRing,
-        )}
-      >
-        <span className="truncate font-title text-15 font-semibold text-text">
-          {slug}
-        </span>
-        <ChevronDown size={16} className="shrink-0 text-text-2" aria-hidden />
-      </Menu.Trigger>
+      {cut === null ? trigger : <Tooltip content={cut}>{trigger}</Tooltip>}
       <Menu.Portal>
         <Menu.Content align="start" sideOffset={6} className={menuContent}>
           {projects.isPending && (

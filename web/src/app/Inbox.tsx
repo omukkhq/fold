@@ -299,12 +299,12 @@ export function Inbox({ slug }: { slug: string }) {
           aria-label={inboxLabel(items.length, unread)}
           className={cn(
             buttonClasses("quiet", "md"),
-            "shrink-0 max-xl:min-h-44 max-xl:px-10",
+            "shrink-0 max-wide:min-h-44 max-wide:px-10",
             focusRing,
           )}
         >
-          <InboxIcon aria-hidden="true" size={16} className="xl:hidden" />
-          <span className="max-xl:sr-only">Inbox</span>
+          <InboxIcon aria-hidden="true" size={16} className="wide:hidden" />
+          <span className="max-wide:sr-only">Inbox</span>
           {items.length > 0 ? <Count value={items.length} /> : null}
         </button>
       </RadixPopover.Trigger>
