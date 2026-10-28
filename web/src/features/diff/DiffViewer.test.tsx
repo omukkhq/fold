@@ -399,15 +399,15 @@ describe("DiffViewer", () => {
 
     it("names the hidden lines of each gap with the controls that show them", () => {
       render(<Harness fileDiff={long} fileText={TEXT} />);
-      expect(button("Show 26 unchanged lines")).toBeTruthy();
+      expect(button("Show all 26 unchanged lines")).toBeTruthy();
       expect(button("Show lines 7–26")).toBeTruthy();
       expect(
         screen.queryByRole("button", { name: "Show lines 1–20" }),
       ).toBeNull();
-      expect(button("Show 23 unchanged lines")).toBeTruthy();
+      expect(button("Show all 23 unchanged lines")).toBeTruthy();
       expect(button("Show lines 34–53")).toBeTruthy();
       expect(button("Show lines 37–56")).toBeTruthy();
-      expect(button("Show 18 unchanged lines")).toBeTruthy();
+      expect(button("Show all 18 unchanged lines")).toBeTruthy();
       expect(screen.getByText("@@ −27,7 +27,7 @@")).toBeTruthy();
       expect(screen.getByText("@@ −57,6 +57,7 @@")).toBeTruthy();
     });
@@ -419,9 +419,9 @@ describe("DiffViewer", () => {
       const first = cell(/^Unchanged line, old 34, new 34: l34$/);
       expect(document.activeElement).toBe(first);
       expect(cell(/^Unchanged line, old 53, new 53: l53$/)).toBeTruthy();
-      expect(button("Show 3 unchanged lines")).toBeTruthy();
+      expect(button("Show all 3 unchanged lines")).toBeTruthy();
       expect(screen.queryByText("@@ −57,6 +57,7 @@")).toBeNull();
-      await user.click(button("Show 18 unchanged lines"));
+      await user.click(button("Show all 18 unchanged lines"));
       expect(cell(/^Unchanged line, old 80, new 81: l80$/)).toBeTruthy();
       expect(document.activeElement).toBe(
         cell(/^Unchanged line, old 63, new 64: l63$/),
@@ -441,7 +441,7 @@ describe("DiffViewer", () => {
         screen.getAllByRole("gridcell", { name: /, new \d+:/ }),
       ).toHaveLength(81);
       await user.click(button("Show changes only"));
-      expect(button("Show 26 unchanged lines")).toBeTruthy();
+      expect(button("Show all 26 unchanged lines")).toBeTruthy();
       expect(screen.queryByRole("gridcell", { name: /new 7: l7$/ })).toBeNull();
     });
 
@@ -463,7 +463,7 @@ describe("DiffViewer", () => {
       expect(
         screen.queryByRole("gridcell", { name: /new 34: l34$/ }),
       ).toBeNull();
-      expect(button("Show 23 unchanged lines")).toBeTruthy();
+      expect(button("Show all 23 unchanged lines")).toBeTruthy();
       await user.click(button("Show whole file"));
       rerender(<Harness fileDiff={long} fileText={TEXT} />);
       expect(button("Show changes only")).toBeTruthy();
@@ -475,7 +475,7 @@ describe("DiffViewer", () => {
     it("selects an expanded line on the new side, as any unchanged line", async () => {
       const user = userEvent.setup();
       render(<Harness fileDiff={long} fileText={TEXT} />);
-      await user.click(button("Show 18 unchanged lines"));
+      await user.click(button("Show all 18 unchanged lines"));
       await user.click(cell(/old 69, new 70: l69$/));
       expect(selection()).toEqual({
         path: "src/a.ts",
@@ -508,8 +508,8 @@ describe("DiffViewer", () => {
       expect(cell(/old 66, new 67: l66$/)).toBeTruthy();
       expect(cell(/old 72, new 73: l72$/)).toBeTruthy();
       expect(screen.queryByRole("gridcell", { name: /new 74:/ })).toBeNull();
-      expect(button("Show 3 unchanged lines")).toBeTruthy();
-      expect(button("Show 8 unchanged lines")).toBeTruthy();
+      expect(button("Show all 3 unchanged lines")).toBeTruthy();
+      expect(button("Show all 8 unchanged lines")).toBeTruthy();
     });
 
     it("waits with the controls while the file loads, and offers Retry when it fails", async () => {

@@ -24,26 +24,26 @@ export function ThreadBox({
     <ol
       aria-label={`Thread ${thread.id}`}
       data-outdated={thread.outdated || undefined}
-      className="flex flex-col gap-8"
+      className="flex flex-col gap-10"
     >
       {thread.comments.map((entry) => (
         <li key={entry.comment.id}>
           <article
             className={cn(
-              "flex flex-col gap-4 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-line",
+              "flex flex-col gap-2",
               thread.outdated && !entry.reply && "opacity-80",
             )}
           >
-            <p className="flex items-center gap-8 font-mono text-13 text-text-2">
-              <PersonName name={entry.comment.author} className="text-13" />
-              <span className="min-w-0 truncate">
-                {commentNote(thread, entry)}
-              </span>
-              <span className="ml-auto text-13 text-text-2">
-                {formatAsOfMinute(now, entry.comment.created_at)}
-              </span>
+            <p className="text-13 text-text-2">
+              <PersonName name={entry.comment.author} /> ·{" "}
+              <span>{commentNote(thread, entry)}</span> ·{" "}
+              {formatAsOfMinute(now, entry.comment.created_at)}
             </p>
-            <MentionText text={entry.comment.body} slug={slug} />
+            <MentionText
+              text={entry.comment.body}
+              slug={slug}
+              className="max-w-measure text-15 leading-normal"
+            />
           </article>
         </li>
       ))}

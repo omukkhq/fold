@@ -843,7 +843,9 @@ describe("Proposal detail", () => {
     const { container } = renderAt("/p/demo/proposals/P-4?tab=changes");
     // The outdated thread on line 3 keeps lines 1-6 open; lines 7-16 and 24-30 are hidden.
     await user.click(
-      await screen.findByRole("button", { name: "Show 10 unchanged lines" }),
+      await screen.findByRole("button", {
+        name: "Show all 10 unchanged lines",
+      }),
     );
     expect(
       daemon.made(

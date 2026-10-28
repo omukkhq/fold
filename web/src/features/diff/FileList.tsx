@@ -46,14 +46,14 @@ export function FileList({
                   onSelectFile(file.path);
                 }}
                 className={cn(
-                  "flex w-full items-center gap-10 rounded-s px-8 py-6 text-left hover:bg-sunken",
-                  current && "bg-sunken",
+                  "flex w-full items-center gap-10 rounded-s px-8 py-5 text-left hover:bg-surface/60",
+                  current && "bg-surface hover:bg-surface",
                   focusRing,
                 )}
               >
                 <span
                   className={cn(
-                    "flex size-18 shrink-0 items-center justify-center rounded-s font-mono text-13 font-bold",
+                    "w-14 shrink-0 text-center font-title text-13 font-bold",
                     badge.classes,
                   )}
                 >
@@ -72,7 +72,7 @@ export function FileList({
                   <span className="font-mono text-13 text-text-2">bin</span>
                 ) : null}
                 {counts.added ? (
-                  <span className="font-mono text-13 text-accent">
+                  <span className="font-mono text-13 text-ok">
                     {counts.added}
                   </span>
                 ) : null}
@@ -98,13 +98,13 @@ export function FileList({
                     onSelectFile(warning.path);
                   }}
                   className={cn(
-                    "flex w-full items-center gap-10 rounded-s px-8 py-6 text-left hover:bg-sunken",
-                    current && "bg-sunken",
+                    "flex w-full items-center gap-10 rounded-s px-8 py-5 text-left hover:bg-surface/60",
+                    current && "bg-surface hover:bg-surface",
                     focusRing,
                   )}
                 >
-                  <span className="flex size-18 shrink-0 items-center justify-center rounded-s bg-warn-soft text-warn">
-                    <TriangleAlert aria-hidden="true" size={12} />
+                  <span className="flex w-14 shrink-0 justify-center text-warn">
+                    <TriangleAlert aria-hidden="true" size={14} />
                   </span>
                   <span className="min-w-0 flex-1 truncate font-mono text-13 text-text">
                     {warning.path}

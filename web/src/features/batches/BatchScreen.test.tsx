@@ -486,7 +486,7 @@ describe("BatchScreen", () => {
     });
     await user.click(screen.getByRole("tab", { name: "Merged changes" }));
     await user.click(
-      await screen.findByRole("button", { name: "Show 3 unchanged lines" }),
+      await screen.findByRole("button", { name: "Show all 3 unchanged lines" }),
     );
     expect(
       screen.getByRole("gridcell", {
