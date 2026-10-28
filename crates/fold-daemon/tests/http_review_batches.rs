@@ -520,6 +520,13 @@ async fn a_file_of_the_merged_side_reads_from_the_merge_in_memory() {
 #[tokio::test]
 async fn a_file_of_an_integrated_batch_reads_from_the_last_member_revision() {
     let fx = batched_with(TWO_FILES).await;
+    let (status, body) = get(&fx, "/reviews/batches/rb-1/file?path=src").await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a directory of the merge: {body}"
+    );
+    assert_eq!(body["error"]["code"], "not_found");
     let review = fx.agent("review").await;
     let batch = ReviewBatchId::from_number(1).unwrap();
     let approve = |number: u32| BatchVerdict {
@@ -543,4 +550,11 @@ async fn a_file_of_an_integrated_batch_reads_from_the_last_member_revision() {
         let (_, diff) = get(&fx, &format!("/reviews/batches/rb-1/diff/file?path={path}")).await;
         assert_eq!(file["hash"], diff["new_hash"]);
     }
+    let (status, body) = get(&fx, "/reviews/batches/rb-1/file?path=src").await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a directory of the revision: {body}"
+    );
+    assert_eq!(body["error"]["code"], "not_found");
 }

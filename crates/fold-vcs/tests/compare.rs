@@ -4,6 +4,7 @@ use fold_core::object::{ObjectKind, hash_object};
 use fold_core::tree::{EntryKind, FlatEntry, FlatTree};
 use fold_vcs::compare::{
     ChangeKind, FileChange, State, Totals, carried_state, compare, file_diff, load_flat,
+    read_state_file,
 };
 use fold_vcs::diff::{LineKind, MAX_INLINE_BYTES};
 use fold_vcs::objects::ObjectStore;
@@ -206,6 +207,75 @@ fn a_side_above_the_inline_cap_gives_no_hunks() {
     assert!(diff.too_large && !diff.binary);
     assert!(diff.hunks.is_empty());
     assert_eq!(diff.change, ChangeKind::Modified);
+}
+
+#[test]
+fn a_file_of_a_state_gives_text_binary_too_large_and_symlink_content() {
+    let (_dir, objects) = store();
+    let large = "line\n".repeat(MAX_INLINE_BYTES / 5 + 1);
+    let state = State::recorded(flat(
+        &objects,
+        &[
+            ("src/lib.rs", FILE, b"fn a() {}\n"),
+            ("img.png", FILE, b"\x89PNG\0\x01"),
+            ("big.txt", FILE, large.as_bytes()),
+            ("link", EntryKind::Symlink, b"src/lib.rs"),
+        ],
+    ));
+
+    let text = read_state_file(&objects, &state, &path("src/lib.rs")).unwrap();
+    assert_eq!(text.kind, FILE);
+    assert_eq!(text.bytes, b"fn a() {}\n");
+    assert_eq!(text.size, 10);
+    assert_eq!(text.hash, hash_object(ObjectKind::Blob, b"fn a() {}\n"));
+    assert!(!text.binary && !text.too_large);
+
+    let binary = read_state_file(&objects, &state, &path("img.png")).unwrap();
+    assert!(binary.binary && !binary.too_large);
+
+    let big = read_state_file(&objects, &state, &path("big.txt")).unwrap();
+    assert!(big.too_large && !big.binary);
+    assert!(big.bytes.is_empty(), "a too-large file is never read");
+    assert_eq!(big.size, large.len() as u64);
+    assert_eq!(big.hash, hash_object(ObjectKind::Blob, large.as_bytes()));
+
+    let link = read_state_file(&objects, &state, &path("link")).unwrap();
+    assert_eq!(link.kind, EntryKind::Symlink);
+    assert_eq!(
+        link.bytes, b"src/lib.rs",
+        "the target text, not the target's content"
+    );
+
+    for missing in ["src", "src/none.rs"] {
+        let error = read_state_file(&objects, &state, &path(missing)).unwrap_err();
+        assert_eq!(error.code(), "not_found", "{missing}");
+        assert_eq!(error.details().unwrap()["path"], missing);
+    }
+}
+
+#[test]
+fn a_working_symlink_of_a_state_gives_its_target_text_and_is_never_followed() {
+    let (dir, objects) = store();
+    let root = dir.path().join("ws");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(dir.path().join("outside.txt"), b"outside the workspace\n").unwrap();
+    std::os::unix::fs::symlink("../outside.txt", root.join("link")).unwrap();
+    let entries: FlatTree = [(
+        b"link".to_vec(),
+        FlatEntry {
+            kind: EntryKind::Symlink,
+            hash: hash_object(ObjectKind::Blob, b"../outside.txt"),
+        },
+    )]
+    .into_iter()
+    .collect();
+    let state = State::working(root, entries);
+
+    let link = read_state_file(&objects, &state, &path("link")).unwrap();
+    assert_eq!(link.kind, EntryKind::Symlink);
+    assert_eq!(link.bytes, b"../outside.txt");
+    assert_eq!(link.size, 14);
+    assert!(!link.binary && !link.too_large);
 }
 
 #[test]
