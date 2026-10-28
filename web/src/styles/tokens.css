@@ -96,6 +96,8 @@
   --width-filter-column: 260px;
   --width-group-head: calc(100cqw - 2 * var(--space-16));
   --width-popover-max: calc(100vw - 2 * var(--space-16));
+  /* The task dialog's side panel when it scrolls on its own: it carries the dialog's right gutter inside it, so its scroll bar sits at the dialog's edge. */
+  --width-side-panel-scroll: calc(var(--width-side-panel) + var(--space-24));
 }
 
 :root {

@@ -26,6 +26,7 @@ import {
   vi,
 } from "vitest";
 import type { Board, BoardCard } from "@/api/board";
+import { keys } from "@/api/keys";
 import type { components } from "@/api/schema";
 import type { TaskDetail } from "@/api/tasks";
 import { applyEvent } from "@/live/apply";
@@ -916,6 +917,44 @@ describe("the task dialog route", () => {
     expect(
       within(dialog).queryByRole("button", { name: "Copy link" }),
     ).toBeNull();
+  }, 15_000);
+
+  it("names its two columns, and each one takes keyboard focus so the keys scroll it", async () => {
+    const { dialog } = await openTask();
+    expect(region(dialog, "Task").tabIndex).toBe(0);
+    expect(
+      within(dialog).getByRole("complementary", { name: "Task details" })
+        .tabIndex,
+    ).toBe(0);
+  }, 15_000);
+
+  it("keeps the task on screen when a read again fails, with a line that reads it again on Retry", async () => {
+    const { dialog, queryClient } = await openTask();
+    const column = region(dialog, "Task");
+    let failing = true;
+    daemon.on(`GET ${P}/:slug/tasks/:id`, (call) =>
+      failing ? refuse(500, "internal_error") : ok(view(call.params.id ?? "")),
+    );
+    await queryClient.refetchQueries({ queryKey: keys.task("demo", "T-2") });
+
+    const alert = await within(dialog).findByRole("alert", {}, WAIT);
+    expect(alert.textContent).toContain("The task could not be read again.");
+    expect(alert.textContent).toContain("The daemon failed. Try again.");
+    // The same column stays mounted, so the reader keeps the scroll position.
+    expect(region(dialog, "Task")).toBe(column);
+    expect(within(dialog).getByRole("heading", { name: TITLE })).toBeTruthy();
+    expect(
+      within(dialog).getByRole("button", { name: "Copy link" }),
+    ).toBeTruthy();
+
+    failing = false;
+    await userEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(
+        within(dialog).queryByText("The task could not be read again."),
+      ).toBeNull();
+    }, WAIT);
+    expect(region(dialog, "Task")).toBe(column);
   }, 15_000);
 });
 
