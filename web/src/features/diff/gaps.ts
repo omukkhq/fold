@@ -251,9 +251,15 @@ export interface FileContent {
   text?: string | null;
 }
 
+/** The last text each hunk list was checked against, so the screens that read one file on every render split its text once. */
+const checked = new WeakMap<
+  readonly Hunk[],
+  { hash: string; text: string; result: GapText | null }
+>();
+
 /**
  * What the gaps can show of the new side: null when the file cannot give lines (binary, too large, not text), or when it is not the file the hunks
- * were built from, so no line shows with a wrong number.
+ * were built from, so no line shows with a wrong number. The same hunks and file give the same answer, split and checked once.
  */
 export function gapText(
   hunks: readonly Hunk[],
@@ -266,11 +272,18 @@ export function gapText(
     return null;
   }
   if (file.hash !== newHash) return null;
-  const lines = splitLines(file.text);
-  if (!textFits(hunks, lines) || fileGaps(hunks, lines.length) === null) {
-    return null;
+  const text = file.text;
+  const held = checked.get(hunks);
+  if (held && held.hash === file.hash && held.text === text) {
+    return held.result;
   }
-  return { status: "ready", lines };
+  const lines = splitLines(text);
+  const result: GapText | null =
+    textFits(hunks, lines) && fileGaps(hunks, lines.length) !== null
+      ? { status: "ready", lines }
+      : null;
+  checked.set(hunks, { hash: file.hash, text, result });
+  return result;
 }
 
 /** The file's text as the gaps read it: its lines once they fit the hunks, while they load, or after the read failed. */

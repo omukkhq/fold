@@ -174,6 +174,19 @@ describe("textFits and gapText", () => {
       status: "error",
     });
   });
+
+  it("splits and checks the same file against the same hunks once", () => {
+    const text = NEW40.join("");
+    const first = gapText(HUNKS40, "h", view(text));
+    expect(first).toEqual(ready(NEW40));
+    expect(gapText(HUNKS40, "h", view(text))).toBe(first);
+    // Hunks read again are another list, and a file of the same hash with other text is checked again.
+    expect(gapText([...HUNKS40], "h", view(text))).not.toBe(first);
+    expect(gapText(HUNKS40, "h", view(`${text}more\n`))).not.toBe(first);
+    const short = view(NEW40.slice(0, 20).join(""));
+    expect(gapText(HUNKS40, "h", short)).toBeNull();
+    expect(gapText(HUNKS40, "h", short)).toBeNull();
+  });
 });
 
 describe("diffSides and spansOn", () => {
