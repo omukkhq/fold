@@ -1,6 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { Diff, GitMerge } from "lucide-react";
-import { reviewBatchDiffQuery, reviewBatchFileDiffQuery } from "@/api/queries";
+import {
+  reviewBatchDiffQuery,
+  reviewBatchFileDiffQuery,
+  reviewBatchFileQuery,
+} from "@/api/queries";
 import type { ReviewBatch, ReviewBatchDiff } from "@/api/reviews";
 import { HrefLink } from "@/app/HrefLink";
 import {
@@ -10,7 +14,11 @@ import {
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
-import { useFileDiff } from "@/features/diff/fileDiff";
+import {
+  needsFileText,
+  useFileDiff,
+  useFileText,
+} from "@/features/diff/fileDiff";
 import { currentFile, fileBody, listedFiles } from "@/features/diff/layout";
 import { ChangedFiles } from "@/features/proposals/ChangedFiles";
 import { useChangedFiles } from "@/features/proposals/changedFilesState";
@@ -53,6 +61,10 @@ function MergedBody({
   const fileDiff = useFileDiff(
     reviewBatchFileDiffQuery(slug, id, file?.path ?? ""),
     file !== null && fileBody(file) === "text",
+  );
+  const fileText = useFileText(
+    reviewBatchFileQuery(slug, id, file?.path ?? ""),
+    needsFileText(file, fileDiff),
   );
   const line = mergedLine(diff);
   const integrates = integratesLine(batch, diff);
@@ -107,6 +119,7 @@ function MergedBody({
           selectedPath={file?.path}
           onSelectFile={onPath}
           fileDiff={fileDiff}
+          fileText={fileText}
           selection={null}
           onSelect={() => undefined}
         />

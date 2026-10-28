@@ -42,6 +42,37 @@ describe("diffSyntax", () => {
     expect(request.segments[1]).toEqual(["new", "1", "2", "3"]);
   });
 
+  it("starts new segments after hidden lines, and runs on through shown lines of a gap", () => {
+    const line = (key: string, text: string, n: number): DiffRow => ({
+      type: "line",
+      key,
+      kind: "context",
+      oldNo: n,
+      newNo: n,
+      text,
+      noNewline: false,
+    });
+    const rows: DiffRow[] = [
+      line("g1", "a", 1),
+      ...hunkRows([hunk(2, 2, [add("b")])]).filter((r) => r.type === "line"),
+      {
+        type: "gap",
+        key: "x3",
+        first: 3,
+        last: 9,
+        hidden: 7,
+        up: false,
+        down: false,
+        header: null,
+        status: "ready",
+      },
+      line("g10", "c", 10),
+    ];
+    const { request, at } = diffSyntax(rows, "file:a.ts");
+    expect(request.segments).toEqual([["a"], ["a", "b"], ["c"], ["c"]]);
+    expect(at.get("g10")).toEqual([3, 0]);
+  });
+
   it("keys the request by the shown code", () => {
     const again = hunkRows([
       hunk(1, 1, [ctx("a"), del("b"), add("B"), ctx("c")]),

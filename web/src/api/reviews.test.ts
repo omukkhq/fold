@@ -6,6 +6,7 @@ import { comparedFile } from "@/test/diff";
 import {
   getReviewBatch,
   getReviewBatchDiff,
+  getReviewBatchFile,
   getReviewBatchFileDiff,
   listReviewBatches,
   listReviewCheckouts,
@@ -98,6 +99,23 @@ describe("the merged change of a batch", () => {
       file,
     );
     expect(calls[1]?.search.get("path")).toBe("src/a.ts");
+  });
+
+  it("reads a file of the merged side by its path", async () => {
+    const file = {
+      path: "src/a.ts",
+      kind: "file",
+      hash: "h1",
+      size: 2,
+      binary: false,
+      too_large: false,
+      text: "a\n",
+    };
+    const calls = stubFetch({
+      "GET /api/v1/projects/demo/reviews/batches/rb-3/file": { body: file },
+    });
+    expect(await getReviewBatchFile("demo", "rb-3", "src/a.ts")).toEqual(file);
+    expect(calls[0]?.search.get("path")).toBe("src/a.ts");
   });
 
   it("rejects a path the change does not list with its code", async () => {

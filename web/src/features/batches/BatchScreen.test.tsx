@@ -448,6 +448,60 @@ describe("BatchScreen", () => {
     expect(router.state.location.search).toEqual({});
   });
 
+  it("shows the unchanged lines of the merged side around a merged hunk", async () => {
+    const user = userEvent.setup();
+    const path = "src/forms/login.ts";
+    const diff = batchDiff({
+      files: [
+        comparedFile(path, "modified", { added_lines: 1, removed_lines: 0 }),
+      ],
+    });
+    const text = ["import x\n", "merged\n", "a\n", "b\n", "c\n", "d\n"];
+    const { calls } = await setup(rb3, {
+      [`GET ${BASE}/reviews/batches/rb-3/diff`]: { body: diff },
+      [`GET ${BASE}/reviews/batches/rb-3/diff/file`]: {
+        body: {
+          source: "recorded",
+          path,
+          previous_path: null,
+          change: "modified",
+          binary: false,
+          too_large: false,
+          old_hash: "a",
+          new_hash: "b",
+          hunks: [hunk(1, 1, [ctx("import x"), add("merged"), ctx("a")])],
+        },
+      },
+      [`GET ${BASE}/reviews/batches/rb-3/file`]: {
+        body: {
+          path,
+          kind: "file",
+          hash: "b",
+          size: 30,
+          binary: false,
+          too_large: false,
+          text: text.join(""),
+        },
+      },
+    });
+    await user.click(screen.getByRole("tab", { name: "Merged changes" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Show 3 unchanged lines" }),
+    );
+    expect(
+      screen.getByRole("gridcell", {
+        name: "Unchanged line, old 5, new 6: d",
+      }),
+    ).toBeTruthy();
+    expect(
+      calls.some(
+        (c) =>
+          c.path.endsWith("/reviews/batches/rb-3/file") &&
+          c.search.get("path") === path,
+      ),
+    ).toBe(true);
+  });
+
   it("names the member that conflicts and shows the members before it", async () => {
     await setup(
       rb3,
