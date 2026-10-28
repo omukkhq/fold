@@ -54,7 +54,7 @@ export function FileEditor({
   return (
     <section
       aria-label={`Edit ${path}`}
-      className="flex min-w-0 flex-1 flex-col gap-10 rounded-l bg-surface p-16 inset-ring inset-ring-line"
+      className="flex min-w-0 flex-1 flex-col gap-10 rounded-m bg-surface p-16"
     >
       <h2 className="flex items-center gap-8 text-14 font-semibold text-text">
         <Pencil aria-hidden="true" size={15} className="shrink-0" />

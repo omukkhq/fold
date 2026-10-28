@@ -27,7 +27,11 @@ interface DraftEditorProps {
   onChange: (form: DraftForm) => void;
 }
 
-const SELECT = cn(controlClasses, focusRing, "w-auto py-5 font-mono text-13");
+const SELECT = cn(
+  controlClasses,
+  focusRing,
+  "w-auto py-5 text-13 tabular-nums",
+);
 
 export function DraftEditor({
   slug,
@@ -52,10 +56,10 @@ export function DraftEditor({
           {form.cards.map((card, index) => (
             <li
               key={card.key}
-              className="flex flex-col gap-8 rounded-m bg-surface px-14 py-12 inset-ring inset-ring-line"
+              className="flex flex-col gap-8 rounded-m bg-surface px-14 py-12"
             >
               <div className="flex items-center gap-10">
-                <span className="rounded-s bg-sunken px-6 py-2 font-mono text-13 text-text-2">
+                <span className="rounded-s bg-fill px-7 py-2 text-13 font-semibold text-text-2 tabular-nums">
                   {card.key}
                 </span>
                 <input
@@ -107,7 +111,7 @@ export function DraftEditor({
                 onValueChange={(description) => {
                   onChange(updateCard(form, card.key, { description }));
                 }}
-                className="font-mono text-13"
+                className="text-14"
               />
               <p className="text-13 text-text-2">
                 Markdown in the task template shape: Scope, then Acceptance.

@@ -166,7 +166,9 @@ export function FileTree({
   return (
     <nav
       aria-label="Changed files"
-      className="flex min-w-0 flex-col gap-10 lg:w-review-panel lg:shrink-0"
+      className="flex min-w-0 flex-col gap-10 lg:sticky lg:w-review-panel lg:shrink-0"
+      // Held in view under the page's bar while the diff scrolls; the proposal page measures its bar, and a page without one holds the tree at the top.
+      style={{ top: "calc(var(--decision-bar-height, 0px) + var(--space-14))" }}
     >
       <div className="flex items-baseline justify-between gap-8">
         <label

@@ -226,11 +226,7 @@ export function ChecksTab({ slug, id, items, search, now }: ChecksTabProps) {
                         data-outcome={result.outcome}
                         className={cn(
                           "flex items-center gap-8 rounded-s px-8 py-6 hover:bg-sunken",
-                          current &&
-                            (result.outcome === "failed" ||
-                            result.outcome === "timed_out"
-                              ? "bg-bad-soft hover:bg-bad-soft"
-                              : "bg-ok-soft hover:bg-ok-soft"),
+                          current && step.selected,
                           focusRing,
                         )}
                       >

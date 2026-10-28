@@ -215,7 +215,23 @@ const AXIS_STEPS = 4;
 /** The smallest step each measure labels apart: a cent, which is 10,000 millionths of a dollar, or one token. */
 const MIN_STEP: Record<ChartMeasure, number> = { cost: 10_000, tokens: 1 };
 
-/** A value axis of round steps (1, 2, 2.5 or 5 times a power of ten) whose top is at or above `max`; an empty chart has its base only. */
+/** The amount a label of `value` shows exactly: cents for a cost; one token below a thousand, a tenth of a thousand below a million, and a tenth of a million above. */
+function labelResolution(value: number, measure: ChartMeasure): number {
+  if (measure === "cost") return MIN_STEP.cost;
+  if (value < 1000) return 1;
+  if (value < 1_000_000) return 100;
+  return 100_000;
+}
+
+/** Whether every tick of a step of `step` has a label that names its value exactly, so `$0.025` never reads `$0.03`. */
+function labelsExactly(step: number, measure: ChartMeasure): boolean {
+  return Array.from(
+    { length: AXIS_STEPS + 1 },
+    (_, index) => step * index,
+  ).every((value) => Number.isInteger(value / labelResolution(value, measure)));
+}
+
+/** A value axis of round steps (1, 2, 2.5 or 5 times a power of ten, each tick labelled exactly) whose top is at or above `max`; an empty chart has its base only. */
 export function chartAxis(max: number, measure: ChartMeasure): ChartAxis {
   const label = (value: number) =>
     measure === "cost" ? costText(value) : tokensText(value);
@@ -224,7 +240,9 @@ export function chartAxis(max: number, measure: ChartMeasure): ChartAxis {
   }
   const raw = max / AXIS_STEPS;
   const power = 10 ** Math.floor(Math.log10(raw));
-  const round = [1, 2, 2.5, 5].map((factor) => factor * power);
+  const round = [1, 2, 2.5, 5]
+    .map((factor) => factor * power)
+    .filter((candidate) => labelsExactly(candidate, measure));
   const step = Math.max(
     round.find((candidate) => candidate >= raw) ?? 10 * power,
     MIN_STEP[measure],

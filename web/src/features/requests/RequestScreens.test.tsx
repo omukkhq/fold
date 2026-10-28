@@ -485,6 +485,42 @@ describe("Requests list", () => {
     });
   });
 
+  it("shows each request as a card on a phone that opens from anywhere on it, with cards while the list loads", async () => {
+    // A phone: every max-width query matches and no min-width one does.
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query.includes("max-width"),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    let release: () => void = () => undefined;
+    const answer = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    daemon.on("GET /api/v1/projects/:slug/requests", async () => {
+      await answer;
+      return ok({ items: [...requests.values()].map((d) => d.request) });
+    });
+    renderAt("/p/demo/requests");
+    const loading = await screen.findByRole("list", {
+      name: "Loading requests",
+    });
+    expect(loading.getAttribute("aria-busy")).toBe("true");
+    expect(screen.queryByRole("table")).toBeNull();
+    release();
+    const cards = await screen.findByRole("list", { name: "Requests" });
+    expect(within(cards).getAllByRole("listitem")).toHaveLength(4);
+    const link = within(cards).getByRole("link", {
+      name: "Product wants the board as a spreadsheet",
+    });
+    // The title's link stretches over its card.
+    expect(link.className).toContain("after:inset-0");
+    expect(link.closest("li")?.className).toContain("relative");
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
   it("renders the empty state for a project without requests", async () => {
     requests.clear();
     renderAt("/p/demo/requests");
@@ -886,7 +922,9 @@ describe("Request detail", () => {
     ).toBeTruthy();
     expect(within(panel).queryAllByRole("button")).toEqual([]);
     expect(
-      within(panel).getByText(
+      within(
+        screen.getByRole("region", { name: "About this request" }),
+      ).getByText(
         byContent(
           "@review approves one version at a time. Each new version starts unapproved.",
         ),

@@ -241,17 +241,25 @@ export function stateOptions(
   }));
 }
 
-/** The kinds as options; choosing the chosen kind again shows every kind. */
+/** Every kind as an option, after the option for any of them. */
 export function kindOptions(
   threads: readonly ConversationThread[],
   filter: ConversationFilter,
-): FilterOption<ConversationKind>[] {
-  return KIND_LABELS.map(([value, label]) => ({
-    value,
-    label,
-    count: filterConversation(threads, { ...filter, kind: value }).length,
-    selected: filter.kind === value,
-  }));
+): FilterOption<ConversationKind | null>[] {
+  return [
+    {
+      value: null,
+      label: "Any kind",
+      count: filterConversation(threads, { ...filter, kind: null }).length,
+      selected: filter.kind === null,
+    },
+    ...KIND_LABELS.map(([value, label]) => ({
+      value,
+      label,
+      count: filterConversation(threads, { ...filter, kind: value }).length,
+      selected: filter.kind === value,
+    })),
+  ];
 }
 
 /** Every version a thread is about, newest first, after the option for all of them. */

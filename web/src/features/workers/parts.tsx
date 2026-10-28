@@ -1,11 +1,15 @@
 import { CircleAlert } from "lucide-react";
 import { CodeText } from "@/components/code/CodeText";
+import { Tooltip } from "@/components/overlay/Tooltip";
 import { cn } from "@/lib/cn";
+import { focusRing } from "@/lib/focus";
 import {
+  errorHoverText,
   pillSpec,
   type RowError,
   type StatePill as Pill,
   type Step,
+  stepHoverText,
 } from "./team";
 import type { Failure } from "./startLead";
 
@@ -36,11 +40,15 @@ export function StepText({
   step: Step;
   warn?: boolean;
 }) {
-  return (
+  const hover = stepHoverText(step);
+  const text = (
     <span
+      // A cut step shows whole in its tooltip, which focus opens too.
+      tabIndex={hover === null ? undefined : 0}
       className={cn(
-        "flex max-w-full min-w-0 items-center gap-6 text-13 leading-tight",
+        "flex max-w-full min-w-0 items-center gap-6 rounded-s text-13 leading-tight",
         warn ? "text-warn" : "text-text-2",
+        hover === null ? null : focusRing,
       )}
     >
       {step.tool ? (
@@ -53,15 +61,25 @@ export function StepText({
       {step.text ? <span className="truncate">{step.text}</span> : null}
     </span>
   );
+  return hover === null ? text : <Tooltip content={hover}>{text}</Tooltip>;
 }
 
-/** What a worker's last error means, in the place of its step once the process has ended. */
+/** What a worker's last error means, in the place of its step until a turn ends well. */
 export function ErrorTitle({ error }: { error: RowError }) {
   return (
-    <span className="flex min-w-0 items-center gap-6 text-13 leading-tight font-medium text-bad">
-      <CircleAlert aria-hidden="true" size={14} className="shrink-0" />
-      <span className="truncate">{error.title}</span>
-    </span>
+    <Tooltip content={errorHoverText(error)}>
+      <span
+        // Claude Code's text shows in the tooltip, which focus opens too; the open row holds it with the hint.
+        tabIndex={0}
+        className={cn(
+          "flex max-w-full min-w-0 items-center gap-6 rounded-s text-13 leading-tight font-medium text-bad",
+          focusRing,
+        )}
+      >
+        <CircleAlert aria-hidden="true" size={14} className="shrink-0" />
+        <span className="truncate">{error.title}</span>
+      </span>
+    </Tooltip>
   );
 }
 

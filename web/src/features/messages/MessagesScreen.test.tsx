@@ -28,6 +28,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** The router of the latest setup, to read where a filter choice leads. */
+let lastRouter: { state: { location: { href: string } } } | null = null;
+
 async function setup(
   search: MessagesSearch,
   threads: ThreadView[],
@@ -50,6 +53,7 @@ async function setup(
     routeTree: root.addChildren([index]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
+  lastRouter = router;
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -160,8 +164,8 @@ describe("MessagesScreen", () => {
       screen.getByRole("button", { name: "Filter: All threads" }),
     );
     const menu = screen.getByRole("dialog", { name: "Filter threads" });
-    const waiting = within(menu).getByRole("radio", { name: /Waits for you/ });
-    expect(waiting.getAttribute("aria-checked")).toBe("false");
+    const waiting = within(menu).getByRole("button", { name: /Waits for you/ });
+    expect(waiting.getAttribute("aria-pressed")).toBe("false");
     expect(
       within(waiting).getByRole("status", {
         name: `${String(total)} wait for you`,
@@ -180,13 +184,13 @@ describe("MessagesScreen", () => {
     const open = screen.getByRole("dialog", { name: "Filter threads" });
     expect(
       within(open)
-        .getByRole("radio", { name: /Waits for you/ })
-        .getAttribute("aria-checked"),
+        .getByRole("button", { name: /Waits for you/ })
+        .getAttribute("aria-pressed"),
     ).toBe("true");
     expect(
       within(open)
-        .getByRole("radio", { name: "All threads" })
-        .getAttribute("aria-checked"),
+        .getByRole("button", { name: "All threads" })
+        .getAttribute("aria-pressed"),
     ).toBe("false");
     expect(screen.getByText("2 threads")).toBeTruthy();
   });
@@ -224,6 +228,13 @@ describe("MessagesScreen", () => {
       "T-12",
       "All proposals",
     ]);
+    await userEvent.selectOptions(
+      within(menu).getByRole("combobox", { name: "Task" }),
+      "T-3",
+    );
+    await waitFor(() => {
+      expect(lastRouter?.state.location.href).toBe("/p/demo/messages?task=T-3");
+    });
   });
 
   it("narrows the list by the search field and by the questions choice", async () => {

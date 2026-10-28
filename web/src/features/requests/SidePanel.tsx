@@ -49,7 +49,7 @@ import {
 import { OVERLINE } from "./RequestContent";
 import { projectPath } from "@/routes/paths";
 
-/** A part of a side card; `quiet` leaves its name to screen readers, where the card's heading already says it. */
+/** A part of a side card, headed one level under the card; `quiet` leaves its name to screen readers, where the card's heading already says it. */
 function Block({
   title,
   quiet = false,
@@ -61,7 +61,7 @@ function Block({
 }) {
   return (
     <section aria-label={title} className="flex flex-col gap-8">
-      <h2 className={quiet ? "sr-only" : OVERLINE}>{title}</h2>
+      <h3 className={quiet ? "sr-only" : OVERLINE}>{title}</h3>
       {children}
     </section>
   );

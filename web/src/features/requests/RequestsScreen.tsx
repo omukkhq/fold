@@ -270,6 +270,27 @@ function SkeletonRows() {
   );
 }
 
+/** The phone's loading state: the cards the list will show, as quiet bars. */
+function SkeletonCards() {
+  return (
+    <ul
+      aria-busy="true"
+      aria-label="Loading requests"
+      className="flex flex-col gap-8"
+    >
+      {[0, 1, 2, 3, 4].map((card) => (
+        <li
+          key={card}
+          className="flex flex-col gap-8 rounded-m bg-surface px-14 py-12"
+        >
+          <span className="block h-14 w-full animate-pulse rounded-s bg-sunken motion-reduce:animate-none" />
+          <span className="block h-12 w-skeleton-l animate-pulse rounded-s bg-sunken motion-reduce:animate-none" />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function Table({ children }: { children: ReactNode }) {
   return (
     <div className="overflow-x-auto rounded-m bg-surface">
@@ -387,12 +408,13 @@ function RequestCards({
       {rows.map((r) => (
         <li
           key={r.id}
-          className="flex flex-col gap-6 rounded-m bg-surface px-14 py-12"
+          className="relative flex flex-col gap-6 rounded-m bg-surface px-14 py-12 hover:bg-fill/45"
         >
+          {/* The title's link covers the whole card, so a tap anywhere on it opens the request while its name stays the title. */}
           <TitleLink
             slug={slug}
             request={r}
-            className="line-clamp-2 leading-normal"
+            className="line-clamp-2 leading-normal after:absolute after:inset-0 after:rounded-m"
           />
           <p className="flex flex-wrap items-center gap-x-10 gap-y-6">
             <StatePill request={r} human={human} />
@@ -454,9 +476,13 @@ export function RequestsScreen({
           }
         />
       ) : data === undefined ? (
-        <Table>
-          <SkeletonRows />
-        </Table>
+        phone ? (
+          <SkeletonCards />
+        ) : (
+          <Table>
+            <SkeletonRows />
+          </Table>
+        )
       ) : rows.length === 0 ? (
         <section
           aria-label={

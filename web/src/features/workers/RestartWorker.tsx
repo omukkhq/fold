@@ -62,7 +62,7 @@ export function RestartWorker({
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="fixed inset-0 bg-scrim" />
         <RadixDialog.Content className="fixed top-1/2 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-surface shadow-dialog outline-none">
-          <div className="flex items-center justify-between border-b border-line py-12 pr-16 pl-24">
+          <div className="flex items-center justify-between pt-16 pr-16 pb-4 pl-24">
             <RadixDialog.Title className="text-16 leading-tight font-semibold text-text">
               Start {name} in a new session
             </RadixDialog.Title>
@@ -117,7 +117,7 @@ export function RestartWorker({
                 <ErrorNote failure={restartFailure(restart.error)} />
               ) : null}
             </div>
-            <div className="flex items-center justify-end gap-8 border-t border-line px-24 py-12">
+            <div className="flex items-center justify-end gap-8 px-24 pt-4 pb-20">
               <Button disabled={restart.isPending} onClick={close}>
                 Cancel
               </Button>

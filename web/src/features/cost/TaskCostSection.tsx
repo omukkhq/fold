@@ -55,7 +55,7 @@ export function TaskCostSection({
                 />
               ) : null}
               {section.buildPart < 1 ? (
-                <span className="h-full flex-1 bg-warn" />
+                <span className="h-full flex-1 bg-text-2" />
               ) : null}
             </div>
             <p className="flex flex-wrap gap-x-12 gap-y-2 text-13 text-text-2">
@@ -69,7 +69,7 @@ export function TaskCostSection({
               <span className="flex items-center gap-6">
                 <span
                   aria-hidden="true"
-                  className="size-7 rounded-full bg-warn"
+                  className="size-7 rounded-full bg-text-2"
                 />
                 Review {section.review}
               </span>

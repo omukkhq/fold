@@ -53,3 +53,28 @@ export function phoneMore(visible: readonly HumanAction[]): HumanAction[] {
     (action) => action === "integrate" || action === "review_again",
   );
 }
+
+/** The name of a phone's More button: every item its menu holds, in the menu's order. */
+export function moreLabel(
+  more: readonly HumanAction[],
+  version: number,
+): string {
+  const items = more.map((action) =>
+    action === "integrate"
+      ? "Integrate"
+      : `Send v${String(version)} for review again`,
+  );
+  return `More: ${[...items, "Ask the author"].join(", ")}`;
+}
+
+/** What a phone's bar says while a write it started under More runs, since the menu closed as the write began; null when no such write runs, as Approve and Request changes show their own state on their buttons. */
+export function phonePendingText(
+  pending: HumanAction | null,
+  version: number,
+): string | null {
+  if (pending === "integrate") return "Integrating…";
+  if (pending === "review_again") {
+    return `Sending v${String(version)} for review…`;
+  }
+  return null;
+}

@@ -20,6 +20,7 @@ import {
   batchedProposals,
   contextText,
   costText,
+  errorHoverText,
   groupName,
   hasNoLeads,
   heldBatch,
@@ -39,6 +40,7 @@ import {
   showsSupervisedMain,
   roleName,
   sessionsFact,
+  stepHoverText,
   stepOf,
   stopControl,
   teamGroups,
@@ -172,18 +174,33 @@ describe("steps", () => {
     expect(stepOf({ step: "tool_use", tool: "Edit" })).toEqual({
       tool: "Edit",
       text: "",
-      faint: false,
     });
     expect(stepOf({ step: "tool_use", tool: null }).text).toBe("calls a tool");
     expect(stepOf({ step: "permission_request", tool: "Bash" })).toEqual({
       tool: "Bash",
       text: "waits for your answer",
-      faint: false,
     });
     expect(stepOf({ step: "thinking", tool: null }).text).toBe("thinking");
     expect(stepOf({ step: "future_kind", tool: null }).text).toBe(
       "future_kind",
     );
+  });
+
+  it("gives a cut step and an error in its place their whole text on hover", () => {
+    expect(stepHoverText({ tool: "Edit", text: "" })).toBeNull();
+    expect(
+      stepHoverText({ tool: null, text: "waiting for its next turn" }),
+    ).toBe("waiting for its next turn");
+    expect(stepHoverText({ tool: "Bash", text: "waits for your answer" })).toBe(
+      "Bash · waits for your answer",
+    );
+    expect(
+      errorHoverText({
+        title: "cannot reach the model",
+        text: "Invalid API key",
+        hint: null,
+      }),
+    ).toBe("cannot reach the model: Invalid API key");
   });
 
   it("uses the live step only while the process works", () => {
@@ -192,7 +209,6 @@ describe("steps", () => {
     expect(workerStep(workerProcess("w"), {})).toEqual({
       tool: null,
       text: "in a turn",
-      faint: true,
     });
     const states = [
       ["starting", "starting the process"],
@@ -285,7 +301,7 @@ describe("steps", () => {
     expect(current?.rows[0]?.olderFold).toBe(false);
   });
 
-  it("shows a worker's last error under its step, and what to check once it cannot reach the model", () => {
+  it("names a worker's last error in the place of its step, also while it runs, and what to check once it cannot reach the model", () => {
     expect(rowError(workerProcess("web-lead"))).toBeNull();
     expect(
       rowError(workerProcess("web-lead", { last_error: "Reached max turns" })),
@@ -306,7 +322,8 @@ describe("steps", () => {
       input({ workers: workerList({ workers: [failing] }) }),
     );
     expect(group?.rows[0]?.error?.title).toBe("cannot reach the model");
-    expect(group?.rows[0]?.errorInStep).toBe(false);
+    // An idle worker that cannot reach the model still shows it in its row.
+    expect(group?.rows[0]?.errorInStep).toBe(true);
     const [ended] = teamGroups(
       input({
         workers: workerList({
@@ -315,6 +332,14 @@ describe("steps", () => {
       }),
     );
     expect(ended?.rows[0]?.errorInStep).toBe(true);
+    const [fine] = teamGroups(
+      input({
+        workers: workerList({
+          workers: [{ ...failing, last_error: null, model_unreachable: false }],
+        }),
+      }),
+    );
+    expect(fine?.rows[0]?.errorInStep).toBe(false);
   });
 
   it("words the earlier sessions of an open row", () => {
@@ -378,7 +403,6 @@ describe("notices", () => {
     expect(noticeStep(agent("main", { notices: "unreachable" }))).toEqual({
       tool: null,
       text: "not reachable · reads new messages from its inbox",
-      faint: true,
     });
     expect(noticeStep(agent("main", { notices: "failing" }))?.text).toBe(
       "notices fail · reads new messages from its inbox",
@@ -464,7 +488,7 @@ describe("teamGroups", () => {
       asks: true,
       model: "-",
       bound: { kind: "ids", text: "T-12 · ws-7, T-13", batch: null },
-      step: { tool: "Edit", text: "", faint: false },
+      step: { tool: "Edit", text: "" },
       session: { short: "0f8e2c1a" },
     });
     expect(api?.label).toEqual({ name: "api", color: "stone" });

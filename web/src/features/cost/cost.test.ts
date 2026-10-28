@@ -186,6 +186,33 @@ describe("costChart", () => {
       label: "800.0k",
       at: 1,
     });
+    // A step of 2.5 stays only where every tick's label names its value exactly.
+    expect(
+      chartAxis(9_000_000, "cost").ticks.map((tick) => tick.label),
+    ).toEqual(["$0.00", "$2.50", "$5.00", "$7.50", "$10.00"]);
+    expect(chartAxis(90_000, "cost").ticks.map((tick) => tick.label)).toEqual([
+      "$0.00",
+      "$0.05",
+      "$0.10",
+      "$0.15",
+      "$0.20",
+    ]);
+    expect(chartAxis(9, "tokens").ticks.map((tick) => tick.label)).toEqual([
+      "0",
+      "5",
+      "10",
+      "15",
+      "20",
+    ]);
+    expect(chartAxis(90, "tokens").ticks.map((tick) => tick.label)).toEqual([
+      "0",
+      "25",
+      "50",
+      "75",
+      "100",
+    ]);
+    expect(chartAxis(9_000, "tokens").ticks.at(1)?.label).toBe("2.5k");
+    expect(chartAxis(9_000_000, "tokens").ticks.at(1)?.label).toBe("2.5M");
   });
 
   it("draws the last seven days by weekday", () => {

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { AGENT_APPROVES_FIRST, CHECKS_FAILED } from "./actions";
-import { approveReason, barNotes, phoneMore, reviewerLine } from "./decisions";
+import {
+  approveReason,
+  barNotes,
+  moreLabel,
+  phoneMore,
+  phonePendingText,
+  reviewerLine,
+} from "./decisions";
 
 const ALL = ["approve", "request_changes", "integrate"] as const;
 
@@ -57,5 +64,25 @@ describe("phoneMore", () => {
       "review_again",
     ]);
     expect(phoneMore(["approve"])).toEqual([]);
+  });
+});
+
+describe("moreLabel", () => {
+  it("names every item the phone's More menu holds", () => {
+    expect(moreLabel([], 3)).toBe("More: Ask the author");
+    expect(moreLabel(["integrate"], 3)).toBe("More: Integrate, Ask the author");
+    expect(moreLabel(["integrate", "review_again"], 3)).toBe(
+      "More: Integrate, Send v3 for review again, Ask the author",
+    );
+  });
+});
+
+describe("phonePendingText", () => {
+  it("names a write from the More menu while it runs, and leaves the bar's own buttons to say theirs", () => {
+    expect(phonePendingText(null, 2)).toBeNull();
+    expect(phonePendingText("approve", 2)).toBeNull();
+    expect(phonePendingText("request_changes", 2)).toBeNull();
+    expect(phonePendingText("integrate", 2)).toBe("Integrating…");
+    expect(phonePendingText("review_again", 2)).toBe("Sending v2 for review…");
   });
 });

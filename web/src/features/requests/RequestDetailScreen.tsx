@@ -20,7 +20,6 @@ import {
 import { MissingPanel } from "@/app/MissingPanel";
 import { Button } from "@/components/button/Button";
 import { Skeleton } from "@/components/states/Skeleton";
-import { useMediaQuery } from "@/lib/pageState";
 import { useNow } from "@/live/useNow";
 import { knownFrom } from "@/mentions/parse";
 import {
@@ -64,9 +63,6 @@ import {
   VersionsBlock,
   ViewerPanel,
 } from "./SidePanel";
-
-/** Below the wide layout the status and the actions come first, then the request, then who drafts it. */
-const NARROW = "(max-width: 63.99rem)";
 
 interface RequestDetailScreenProps {
   slug: string;
@@ -139,7 +135,6 @@ export function RequestDetailScreen({
     enabled: (detail?.tasks.length ?? 0) > 0,
   });
   const now = useNow(true, 30_000);
-  const phone = useMediaQuery(NARROW);
   const [chosen, setChosen] = useState<number | null>(null);
   const [editing, setEditing] = useState<DraftForm | null>(null);
   const [note, setNote] = useState("");
@@ -382,23 +377,21 @@ export function RequestDetailScreen({
     <div className="flex flex-col gap-16 px-16 pt-16 pb-24 md:px-28 md:pt-20 md:pb-32">
       <Crumb slug={slug} id={id} />
       <RequestHeader detail={detail} now={now} />
-      {phone ? (
-        <div className="flex flex-col gap-24">
-          <aside aria-label="Request actions" className="flex flex-col">
-            {status}
-          </aside>
+      {/* One tree for every width, so a resize never remounts a form and loses what the human typed: below lg the actions come first and the about card last; from lg the content holds the left column and the two cards stack on the right. */}
+      <div className="flex flex-col gap-24 lg:grid lg:grid-cols-[minmax(0,1fr)_var(--width-side-panel)] lg:grid-rows-[auto_1fr] lg:items-start lg:gap-x-28 lg:gap-y-16">
+        <aside
+          aria-label="Request actions"
+          className="flex flex-col lg:col-start-2 lg:row-start-1"
+        >
+          {status}
+        </aside>
+        <div className="flex min-w-0 flex-col lg:col-start-1 lg:row-span-2 lg:row-start-1">
           {content}
+        </div>
+        <div className="flex flex-col lg:col-start-2 lg:row-start-2">
           {about}
         </div>
-      ) : (
-        <div className="grid grid-cols-[minmax(0,1fr)_var(--width-side-panel)] items-start gap-28">
-          {content}
-          <aside aria-label="Request actions" className="flex flex-col gap-16">
-            {status}
-            {about}
-          </aside>
-        </div>
-      )}
+      </div>
       <CloseDialog
         slug={slug}
         id={id}

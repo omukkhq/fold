@@ -140,8 +140,6 @@ export type Bound =
 export interface Step {
   tool: string | null;
   text: string;
-  /** A sentence about the process rather than a step it reported. */
-  faint: boolean;
 }
 
 export type StopControl = "stop" | "stopping" | null;
@@ -153,6 +151,17 @@ export interface RowError {
   text: string;
   /** The daemon's hint, with its commands between backticks; null when the worker still reaches the model. */
   hint: string | null;
+}
+
+/** The hover text of a step the row may cut: its tool and its sentence; null for a step with no sentence, which the row never cuts. */
+export function stepHoverText(step: Step): string | null {
+  if (step.text === "") return null;
+  return step.tool === null ? step.text : `${step.tool} · ${step.text}`;
+}
+
+/** The hover text of an error in the place of a step: what it means, then Claude Code's text. */
+export function errorHoverText(error: RowError): string {
+  return `${error.title}: ${error.text}`;
 }
 
 /** The row's error line; null for a worker whose last turn ended without an error. */
@@ -184,7 +193,7 @@ export interface TeamRow {
   context: string;
   step: Step;
   error: RowError | null;
-  /** The row's state line names the error instead of the step: the process has ended, so no live step replaces it. */
+  /** The row names the error in the place of the step: the worker's latest turn failed or its process ended with an error, and a turn that ends well clears it. */
   errorInStep: boolean;
   stop: StopControl;
   /** What the stop control says of what follows a stop; null when the worker is stopped like any other. */
@@ -273,18 +282,17 @@ export function stepOf(step: WorkerSteps[string]): Step {
     return {
       tool: step.tool,
       text: step.tool === null ? "calls a tool" : "",
-      faint: false,
     };
   }
   return {
     tool: step.step.startsWith("permission_") ? step.tool : null,
     text: STEP_TEXTS[step.step] ?? step.step,
-    faint: false,
   };
 }
 
-function faint(text: string): Step {
-  return { tool: null, text, faint: true };
+/** A sentence about the process rather than a step it reported. */
+function sentence(text: string): Step {
+  return { tool: null, text };
 }
 
 /** The live step while the process works; otherwise a sentence about the process. */
@@ -296,19 +304,19 @@ export function workerStep(
   const live = steps[worker.name];
   switch (worker.state) {
     case "working":
-      return live ? stepOf(live) : faint("in a turn");
+      return live ? stepOf(live) : sentence("in a turn");
     case "starting":
-      return faint("starting the process");
+      return sentence("starting the process");
     case "stopping":
-      return faint("waiting for the process to exit");
+      return sentence("waiting for the process to exit");
     case "idle":
-      return faint(
+      return sentence(
         waitsForTaskWorkers
           ? "waiting for task workers"
           : "waiting for its next turn",
       );
     default:
-      return faint(
+      return sentence(
         worker.exit_code === null
           ? worker.state
           : `exit code ${String(worker.exit_code)}`,
@@ -449,7 +457,7 @@ function workerRow(
     return {
       ...runningRow(worker, input, child),
       pill: PAUSED_PILL,
-      step: faint("paused · resumes in its own session"),
+      step: sentence("paused · resumes in its own session"),
       stop: null,
       restart: false,
     };
@@ -483,9 +491,7 @@ function runningRow(
       waitsForTaskWorkers(worker, input.workers.workers),
     ),
     error: rowError(worker),
-    errorInStep:
-      worker.last_error !== null &&
-      (worker.state === "failed" || worker.state === "stopped"),
+    errorInStep: worker.last_error !== null,
     stop: stopControl(worker.state),
     stopNote: worker.role === "main" ? MAIN_STOP_NOTE : null,
     restart: canRestart(worker.state),
@@ -500,9 +506,9 @@ export function noticeStep(agent: AgentView): Step | null {
   if (agent.sessions === 0) return null;
   switch (agent.notices) {
     case "unreachable":
-      return faint("not reachable · reads new messages from its inbox");
+      return sentence("not reachable · reads new messages from its inbox");
     case "failing":
-      return faint("notices fail · reads new messages from its inbox");
+      return sentence("notices fail · reads new messages from its inbox");
     default:
       return null;
   }
@@ -525,7 +531,7 @@ function mainRow(agent: AgentView, human: string | null): TeamRow {
     turns: NONE,
     cost: NONE,
     context: NONE,
-    step: noticeStep(agent) ?? faint(NONE),
+    step: noticeStep(agent) ?? sentence(NONE),
     error: null,
     errorInStep: false,
     stop: null,

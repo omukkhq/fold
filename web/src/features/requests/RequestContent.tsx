@@ -526,7 +526,7 @@ export function ThreadSection({
         ) : null}
         <p className="text-13 text-text-2">
           {closed ??
-            "A message never changes the state of the request. Only the actions on the right do."}
+            "A message never changes the state of the request. Only the request actions do."}
         </p>
       </form>
     </Section>
