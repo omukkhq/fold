@@ -3,12 +3,9 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
 import {
-  Bookmark,
   ChevronDown,
-  ClipboardCheck,
   ChevronUp,
-  GitCommitHorizontal,
-  GitPullRequestArrow,
+  ClipboardCheck,
   Hand,
   Pencil,
   Plus,
@@ -31,9 +28,11 @@ import {
   type TaskDetail,
 } from "@/api/tasks";
 import { HrefLink } from "@/app/HrefLink";
+import { Chip } from "@/components/badge/Chip";
 import { Button, IconButton } from "@/components/button/Button";
 import { Textarea, TextField } from "@/components/form/controls";
 import { CommitId } from "@/components/mono/CommitId";
+import { Mono } from "@/components/mono/Mono";
 import { textFlow } from "@/components/text/textFlow";
 import { taskPath } from "@/features/board/card";
 import { TaskCostSection } from "@/features/cost/TaskCostSection";
@@ -45,7 +44,7 @@ import { PersonName } from "@/people/PersonName";
 import {
   canEditDependencies,
   groupDependencies,
-  needsTitle,
+  waitingText,
   type DependencyRow,
 } from "./dependencies";
 import {
@@ -62,10 +61,11 @@ import { LabelsSide } from "./LabelsSide";
 import { recordedCheckpoints } from "./liveStrip";
 import { proposalPath, revisionPath } from "./links";
 import {
-  KeyValue,
+  NothingYet,
+  SideCard,
   SideGroup,
+  SideNote,
   SmallAction,
-  StatusMark,
   submit,
   WriteError,
 } from "./parts";
@@ -80,6 +80,7 @@ import {
   type HumanReviewInput,
   type SendBackForm as SendBackValues,
 } from "./schemas";
+import { linkGaps, nothingText, peopleGaps, workGaps } from "./sideGroups";
 import {
   checkpointText,
   claimNote,
@@ -89,6 +90,7 @@ import {
   integrationText,
   proposalStateText,
   reviewText,
+  statusLook,
 } from "./text";
 import { useTaskWrite } from "./useTaskWrite";
 
@@ -116,7 +118,7 @@ function MoreToggle({
     <SmallAction
       icon={open ? ChevronUp : ChevronDown}
       aria-expanded={open}
-      className="self-start px-0 py-2"
+      className="self-start text-13"
       onClick={onToggle}
     >
       {text}
@@ -124,39 +126,26 @@ function MoreToggle({
   );
 }
 
-function Note({ children }: { children: string }) {
-  return <p className="text-14 leading-normal text-text-2">{children}</p>;
-}
-
+/** Who holds the implementation claim; the People group names an empty claim in its Nothing yet line. */
 function Responsible({ task, now }: { task: TaskDetail; now: number }) {
   // Every claim of a task read is its implementation claim.
   const implementation = task.claims[0];
   // The task read lists implementation claims only, so the review row draws for no task.
   const review = task.claims.find((c) => (c.kind as string) === "review");
+  if (implementation === undefined) {
+    return null;
+  }
   return (
     <SideGroup title="Responsible">
-      {implementation ? (
-        <>
-          <span className="inline-flex items-center gap-6">
-            <PersonName name={implementation.holder} className="text-15" />
-          </span>
-          <p
-            className={cn(
-              "text-13 leading-normal",
-              implementation.stale ? "text-warn" : "text-text-2",
-            )}
-          >
-            {claimNote(implementation, now)}
-          </p>
-        </>
-      ) : (
-        <Note>Nobody holds the implementation claim.</Note>
-      )}
+      <PersonName name={implementation.holder} />
+      <SideNote className={cn(implementation.stale && "text-warn")}>
+        {claimNote(implementation, now)}
+      </SideNote>
       {review ? (
-        <p className="text-13 leading-normal text-text-2">
-          Review claim: <PersonName name={review.holder} className="text-14" />{" "}
-          · {claimNote(review, now)}
-        </p>
+        <SideNote>
+          Review claim: <PersonName name={review.holder} /> ·{" "}
+          {claimNote(review, now)}
+        </SideNote>
       ) : null}
     </SideGroup>
   );
@@ -171,36 +160,34 @@ function Workspace({
 }) {
   const ws = task.workspace_info;
   if (task.workspace === null) {
-    return (
-      <SideGroup title="Workspace">
-        <Note>No workspace yet.</Note>
-      </SideGroup>
-    );
+    return null;
   }
+  const base = ws
+    ? ws.base === ws.main
+      ? `Base ${ws.base} (main)`
+      : `Base ${ws.base} (main is ${ws.main})`
+    : live
+      ? `Base ${live.base}`
+      : null;
   return (
     <SideGroup title="Workspace">
-      <KeyValue name="Id" value={task.workspace} />
-      {ws ? (
-        <>
-          <KeyValue name="Directory" value={ws.directory} />
-          <KeyValue
-            name="Base"
-            value={
-              ws.base === ws.main
-                ? `${ws.base} (main)`
-                : `${ws.base} (main is ${ws.main})`
-            }
-          />
-          {ws.behind > 0 ? (
-            <p className="flex items-center gap-6 self-start rounded-s bg-sunken px-8 py-5 text-13 text-text-2">
-              <GitPullRequestArrow aria-hidden="true" size={13} />
-              Main moved {ws.behind}{" "}
-              {ws.behind === 1 ? "revision" : "revisions"} since this base
-            </p>
-          ) : null}
-        </>
-      ) : live ? (
-        <KeyValue name="Base" value={live.base} />
+      <p className="flex flex-wrap items-baseline gap-x-6">
+        <Id>{task.workspace}</Id>
+        {ws ? (
+          <>
+            <span aria-hidden="true" className="text-text-2">
+              ·
+            </span>
+            <Mono className="min-w-0 wrap-anywhere">{ws.directory}</Mono>
+          </>
+        ) : null}
+      </p>
+      {base === null ? null : <SideNote>{base}</SideNote>}
+      {ws && ws.behind > 0 ? (
+        <SideNote className="self-start rounded-s bg-bg px-9 py-5">
+          Main moved {ws.behind} {ws.behind === 1 ? "revision" : "revisions"}{" "}
+          since this base
+        </SideNote>
       ) : null}
     </SideGroup>
   );
@@ -210,20 +197,19 @@ function Checkpoints({ task, live, now }: Props) {
   const [open, setOpen] = useState(false);
   const all = recordedCheckpoints(task.checkpoints, live);
   const list = collapse(all, 1, open);
+  if (all.length === 0) {
+    return null;
+  }
   return (
     <SideGroup title="Checkpoints">
-      {all.length === 0 ? <Note>No checkpoints yet.</Note> : null}
-      <ul className="flex flex-col gap-8">
+      <ul className="flex flex-col gap-4">
         {list.shown.map((ck) => (
-          <li key={ck.id} className="flex items-center gap-8">
-            <Bookmark
-              aria-hidden="true"
-              size={13}
-              className="shrink-0 text-text-2"
-            />
-            <Id className="text-13 text-text-2">{ck.id}</Id>
-            <span className="min-w-0 flex-1 truncate text-14 text-text">
-              {checkpointText(ck)}
+          <li
+            key={ck.id}
+            className="flex flex-wrap items-baseline justify-between gap-x-8"
+          >
+            <span className="min-w-0 wrap-anywhere">
+              <Id>{ck.id}</Id> · {checkpointText(ck)}
             </span>
             <span className="shrink-0 text-13 text-text-2">
               {formatAge(now, ck.created_at)}
@@ -242,22 +228,20 @@ function Checkpoints({ task, live, now }: Props) {
   );
 }
 
-function Changesets({ task, now }: Props) {
-  const changesets = task.changesets;
+function Changesets({ task, now }: { task: TaskDetail; now: number }) {
+  if (task.changesets.length === 0) {
+    return null;
+  }
   return (
     <SideGroup title="Changesets">
-      {changesets.length === 0 ? <Note>No changesets yet.</Note> : null}
-      <ul className="flex flex-col gap-8">
-        {changesets.map((cs) => (
-          <li key={cs.id} className="flex items-center gap-8">
-            <GitCommitHorizontal
-              aria-hidden="true"
-              size={14}
-              className="shrink-0 text-text-2"
-            />
-            <Id className="text-13 text-text-2">{cs.id}</Id>
-            <span className="min-w-0 flex-1 truncate text-14 text-text">
-              {cs.message}
+      <ul className="flex flex-col gap-4">
+        {task.changesets.map((cs) => (
+          <li
+            key={cs.id}
+            className="flex flex-wrap items-baseline justify-between gap-x-8"
+          >
+            <span className="min-w-0 wrap-anywhere">
+              <Id>{cs.id}</Id> · {cs.message}
             </span>
             <span className="shrink-0 text-13 text-text-2">
               {formatAge(now, cs.created_at)}
@@ -271,56 +255,46 @@ function Changesets({ task, now }: Props) {
 
 function Proposal({ slug, task }: { slug: string; task: TaskDetail }) {
   const { proposal, integration } = task;
+  if (proposal === null && integration === null) {
+    return null;
+  }
   return (
     <SideGroup title="Proposal">
       {proposal ? (
         <>
-          <p className="flex items-center gap-8 text-14 text-text">
-            <Id href={proposalPath(slug, proposal.id)}>{proposal.id}</Id>
-            <span className="text-text-2">
-              {proposalStateText(
-                proposal.state,
-                proposal.version,
-                proposal.review_claim,
-              )}
-            </span>
+          <p className="wrap-anywhere">
+            <Id href={proposalPath(slug, proposal.id)}>{proposal.id}</Id> ·{" "}
+            {proposalStateText(
+              proposal.state,
+              proposal.version,
+              proposal.review_claim,
+            )}
           </p>
           {proposal.reviews.length > 0 ? (
-            <ul aria-label="Reviews" className="flex flex-col gap-4">
+            <ul aria-label="Reviews" className="flex flex-col gap-2">
               {proposal.reviews.map((review) => (
                 <li
                   key={`${review.reviewer}-${String(review.at)}`}
                   className="text-13 text-text-2"
                 >
-                  <ActorText
-                    segments={reviewText(review)}
-                    personClassName="text-14"
-                  />
+                  <ActorText segments={reviewText(review)} />
                 </li>
               ))}
             </ul>
           ) : (
-            <Note>No reviews yet.</Note>
+            <SideNote>No reviews yet.</SideNote>
           )}
         </>
-      ) : (
-        <Note>
-          None yet. It opens when the worker calls create_proposal; the card
-          then moves to Review.
-        </Note>
-      )}
+      ) : null}
       {integration ? (
-        <p className="text-13 text-text-2">
+        <SideNote>
           Integrated as{" "}
           <Id href={revisionPath(slug, integration.revision)}>
             {integration.revision}
           </Id>{" "}
           <CommitId commit={integration.commit} />{" "}
-          <ActorText
-            segments={integrationText(integration)}
-            personClassName="text-14"
-          />
-        </p>
+          <ActorText segments={integrationText(integration)} />
+        </SideNote>
       ) : null}
     </SideGroup>
   );
@@ -381,111 +355,6 @@ function SendBackForm({
         </Button>
       </div>
     </form>
-  );
-}
-
-/** Takes the proposal group's place for a task without a proposal: the task worker's newest report, how the lead check answered it, and the human's complete and send-back controls. */
-function LeadCheck({
-  slug,
-  task,
-  now,
-}: {
-  slug: string;
-  task: TaskDetail;
-  now: number;
-}) {
-  const [sending, setSending] = useState(false);
-  const complete = useTaskWrite(slug, task.task, () =>
-    completeTask(slug, task.task),
-  );
-  const check = leadCheck(task);
-  if (check === null) {
-    return null;
-  }
-  const { report } = check;
-  const resolved = report === null ? null : resolvedText(report, now);
-  return (
-    <SideGroup title="Lead check">
-      <p
-        className={cn(
-          "flex items-center gap-6 text-14 font-medium",
-          check.state === "waiting" ? "text-warn" : "text-text",
-        )}
-      >
-        <ClipboardCheck aria-hidden="true" size={13} />
-        {check.title}
-      </p>
-      {report === null ? (
-        <Note>{KIND_NOTE}</Note>
-      ) : (
-        <>
-          <p className="text-13 text-text-2">
-            <ActorText
-              segments={reportedText(report, now)}
-              personClassName="text-14"
-            />
-          </p>
-          <p
-            className={cn(
-              "text-14 leading-normal text-text",
-              textFlow("prose"),
-            )}
-          >
-            {report.note}
-          </p>
-          {resolved ? (
-            <p className="text-13 text-text-2">
-              <ActorText segments={resolved} personClassName="text-14" />
-            </p>
-          ) : null}
-          {report.send_back_note === null ? null : (
-            <p
-              className={cn(
-                "text-14 leading-normal text-text",
-                textFlow("prose"),
-              )}
-            >
-              {report.send_back_note}
-            </p>
-          )}
-        </>
-      )}
-      {check.canCheck && sending ? (
-        <SendBackForm
-          slug={slug}
-          task={task.task}
-          onDone={() => {
-            setSending(false);
-          }}
-        />
-      ) : null}
-      {check.canCheck && !sending ? (
-        <div className="flex gap-8">
-          <Button
-            variant="primary"
-            size="sm"
-            pending={complete.isPending}
-            pendingLabel="Completing task…"
-            onClick={() => {
-              complete.mutate(undefined);
-            }}
-          >
-            Complete task
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={complete.isPending}
-            onClick={() => {
-              setSending(true);
-            }}
-          >
-            Send back
-          </Button>
-        </div>
-      ) : null}
-      <WriteError error={complete.error} />
-    </SideGroup>
   );
 }
 
@@ -560,89 +429,6 @@ function HumanReviewForm({
   );
 }
 
-function HumanReview({ slug, task }: { slug: string; task: TaskDetail }) {
-  const [adding, setAdding] = useState(false);
-  const clear = useTaskWrite(slug, task.task, () =>
-    clearHumanReview(slug, task.task),
-  );
-  const mark = task.human_review;
-  const editable = task.can_change_human_review;
-  const { areas } = useAreas(slug);
-  const note = mainReviewNote(
-    inMainArea(task.labels, areas ?? []),
-    mark !== null,
-  );
-  if (mark === null) {
-    return (
-      <SideGroup title="Human review">
-        {adding ? (
-          <HumanReviewForm
-            slug={slug}
-            task={task.task}
-            onDone={() => {
-              setAdding(false);
-            }}
-          />
-        ) : (
-          <div className="flex items-center gap-8">
-            <span className="flex-1 text-14 text-text-2">Not required</span>
-            {editable ? (
-              <SmallAction
-                icon={UserCheck}
-                onClick={() => {
-                  setAdding(true);
-                }}
-              >
-                Require my review
-              </SmallAction>
-            ) : null}
-          </div>
-        )}
-        {note === null ? null : (
-          <p className="text-13 leading-normal text-text-2">{note}</p>
-        )}
-      </SideGroup>
-    );
-  }
-  const lines = humanReviewLines(mark, task.human_review_set_at);
-  return (
-    <SideGroup title="Human review">
-      <p className="flex items-center gap-6 text-14 font-medium text-warn">
-        <UserCheck aria-hidden="true" size={13} />
-        Required ·
-        {lines.reviewer === null ? (
-          "any human"
-        ) : (
-          <PersonName name={lines.reviewer} className="text-15" />
-        )}
-      </p>
-      <p className="flex flex-wrap items-center gap-x-6 text-13 text-text-2">
-        Set by <PersonName name={lines.setBy} className="text-14" />
-        {lines.at === null ? null : ` · ${lines.at}`}
-      </p>
-      <p className="text-14 leading-normal text-text">{mark.reason}</p>
-      {note === null ? null : (
-        <p className="text-13 leading-normal text-text-2">{note}</p>
-      )}
-      {editable ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="self-start"
-          pending={clear.isPending}
-          pendingLabel="Turning off human review…"
-          onClick={() => {
-            clear.mutate(undefined);
-          }}
-        >
-          Turn off human review
-        </Button>
-      ) : null}
-      <WriteError error={clear.error} />
-    </SideGroup>
-  );
-}
-
 function BlockerForm({
   slug,
   task,
@@ -700,154 +486,6 @@ function BlockerForm({
         </Button>
       </div>
     </form>
-  );
-}
-
-/** The blocker: while it is set, no agent claims the task and no lead starts a task worker for it. */
-function Blocker({
-  slug,
-  task,
-  now,
-}: {
-  slug: string;
-  task: TaskDetail;
-  now: number;
-}) {
-  const [editing, setEditing] = useState(false);
-  const clear = useTaskWrite(slug, task.task, () =>
-    clearBlocker(slug, task.task),
-  );
-  const view = blockerView(task, now);
-  const controls = blockerControls(task);
-  if (editing && controls.canSet) {
-    return (
-      <SideGroup title="Blocker">
-        <BlockerForm
-          slug={slug}
-          task={task.task}
-          reason={view?.reason ?? ""}
-          onDone={() => {
-            setEditing(false);
-          }}
-        />
-      </SideGroup>
-    );
-  }
-  if (view === null) {
-    return (
-      <SideGroup title="Blocker">
-        <div className="flex items-center gap-8">
-          <span className="flex-1 text-14 text-text-2">None</span>
-          {controls.canSet ? (
-            <SmallAction
-              icon={Hand}
-              onClick={() => {
-                setEditing(true);
-              }}
-            >
-              Set blocker
-            </SmallAction>
-          ) : null}
-        </div>
-      </SideGroup>
-    );
-  }
-  return (
-    <SideGroup title="Blocker">
-      <div className="flex flex-col gap-6 rounded-m bg-warn-soft px-12 py-10">
-        <p className="flex items-center gap-6 text-14 font-semibold text-warn">
-          <Hand aria-hidden="true" size={13} />
-          No agent takes this task
-        </p>
-        <p
-          className={cn("text-14 leading-normal text-text", textFlow("prose"))}
-        >
-          {view.reason}
-        </p>
-        <p className="text-13 text-text-2">
-          <ActorText segments={view.setBy} personClassName="text-14" />
-        </p>
-      </div>
-      {controls.canClear || controls.canSet ? (
-        <div className="flex gap-4">
-          {controls.canClear ? (
-            <SmallAction
-              icon={X}
-              pending={clear.isPending}
-              pendingLabel="Clearing blocker…"
-              onClick={() => {
-                clear.mutate(undefined);
-              }}
-            >
-              Clear blocker
-            </SmallAction>
-          ) : null}
-          {controls.canSet ? (
-            <SmallAction
-              icon={Pencil}
-              disabled={clear.isPending}
-              onClick={() => {
-                setEditing(true);
-              }}
-            >
-              Change reason
-            </SmallAction>
-          ) : null}
-        </div>
-      ) : null}
-      <WriteError error={clear.error} />
-    </SideGroup>
-  );
-}
-
-function EdgeRow({
-  slug,
-  row,
-  onRemove,
-  removing,
-}: {
-  slug: string;
-  row: DependencyRow;
-  onRemove: (() => void) | null;
-  removing: boolean;
-}) {
-  const filters = useRouterState({ select: (s) => s.location.searchStr });
-  return (
-    <li
-      data-edge={row.task}
-      data-unfinished={row.unfinished ? "" : undefined}
-      className="flex items-center gap-8"
-    >
-      <HrefLink
-        href={taskPath(slug, row.task, filters)}
-        className={cn(
-          "flex min-w-0 flex-1 items-center gap-8 rounded-s hover:underline",
-          focusRing,
-        )}
-      >
-        <Id className="text-13 text-text-2">{row.task}</Id>
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate text-14",
-            row.unfinished ? "text-text" : "text-text-2",
-          )}
-        >
-          {row.title}
-        </span>
-      </HrefLink>
-      <StatusMark status={row.status} />
-      {onRemove ? (
-        <IconButton
-          size="sm"
-          aria-label={`Remove the dependency on ${row.task}`}
-          pending={removing}
-          pendingLabel={`Removing the dependency on ${row.task}…`}
-          onClick={onRemove}
-        >
-          <X aria-hidden="true" size={13} />
-        </IconButton>
-      ) : null}
-    </li>
   );
 }
 
@@ -909,55 +547,129 @@ function AddDependencyForm({
   );
 }
 
-function Dependencies({ slug, task }: { slug: string; task: TaskDetail }) {
-  const [adding, setAdding] = useState(false);
-  const remove = useTaskWrite(slug, task.task, (needs: string) =>
-    removeDependency(slug, task.task, needs),
+/** Takes the place of the workspace, checkpoints, changesets and proposal for a task without a proposal: the task worker's newest report, how the lead check answered it, and the human's complete and send-back controls. */
+function LeadCheck({
+  slug,
+  task,
+  now,
+}: {
+  slug: string;
+  task: TaskDetail;
+  now: number;
+}) {
+  const [sending, setSending] = useState(false);
+  const complete = useTaskWrite(slug, task.task, () =>
+    completeTask(slug, task.task),
   );
-  const groups = groupDependencies(task.dependencies);
-  const editable = canEditDependencies(task.status);
+  const check = leadCheck(task);
+  if (check === null) {
+    return null;
+  }
+  const { report } = check;
+  const resolved = report === null ? null : resolvedText(report, now);
   return (
-    <SideGroup title="Dependencies">
-      <h4 className="text-13 font-semibold text-text-2">
-        {needsTitle(groups)}
-      </h4>
-      {groups.needs.length === 0 ? <Note>No prerequisites.</Note> : null}
-      <ul aria-label="Needs" className="flex flex-col gap-8">
-        {groups.needs.map((row) => (
-          <EdgeRow
-            key={row.task}
-            slug={slug}
-            row={row}
-            removing={remove.isPending && remove.variables === row.task}
-            onRemove={
-              editable && row.removable
-                ? () => {
-                    remove.mutate(row.task);
-                  }
-                : null
-            }
-          />
-        ))}
-      </ul>
-      <WriteError error={remove.error} />
-      <h4 className="text-13 font-semibold text-text-2">Needed by</h4>
-      {groups.neededBy.length === 0 ? (
-        <Note>No task waits for this one.</Note>
+    <SideGroup title="Lead check">
+      <p
+        className={cn(
+          "flex items-center gap-6 font-medium",
+          check.state === "waiting" ? "text-warn" : "text-text",
+        )}
+      >
+        <ClipboardCheck aria-hidden="true" size={14} />
+        {check.title}
+      </p>
+      {report === null ? (
+        <SideNote>{KIND_NOTE}</SideNote>
+      ) : (
+        <>
+          <SideNote>
+            <ActorText segments={reportedText(report, now)} />
+          </SideNote>
+          <p className={cn("leading-normal", textFlow("prose"))}>
+            {report.note}
+          </p>
+          {resolved ? (
+            <SideNote>
+              <ActorText segments={resolved} />
+            </SideNote>
+          ) : null}
+          {report.send_back_note === null ? null : (
+            <p className={cn("leading-normal", textFlow("prose"))}>
+              {report.send_back_note}
+            </p>
+          )}
+        </>
+      )}
+      {check.canCheck && sending ? (
+        <SendBackForm
+          slug={slug}
+          task={task.task}
+          onDone={() => {
+            setSending(false);
+          }}
+        />
       ) : null}
-      <ul aria-label="Needed by" className="flex flex-col gap-8">
-        {groups.neededBy.map((row) => (
-          <EdgeRow
-            key={row.task}
-            slug={slug}
-            row={row}
-            removing={false}
-            onRemove={null}
-          />
-        ))}
-      </ul>
-      {editable ? (
-        adding ? (
-          <AddDependencyForm
+      {check.canCheck && !sending ? (
+        <div className="flex flex-wrap gap-8">
+          <Button
+            variant="primary"
+            size="sm"
+            pending={complete.isPending}
+            pendingLabel="Completing task…"
+            onClick={() => {
+              complete.mutate(undefined);
+            }}
+          >
+            Complete task
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={complete.isPending}
+            onClick={() => {
+              setSending(true);
+            }}
+          >
+            Send back
+          </Button>
+        </div>
+      ) : null}
+      <WriteError error={complete.error} />
+    </SideGroup>
+  );
+}
+
+function HumanReview({ slug, task }: { slug: string; task: TaskDetail }) {
+  const [adding, setAdding] = useState(false);
+  const clear = useTaskWrite(slug, task.task, () =>
+    clearHumanReview(slug, task.task),
+  );
+  const mark = task.human_review;
+  const editable = task.can_change_human_review;
+  const { areas } = useAreas(slug);
+  const note = mainReviewNote(
+    inMainArea(task.labels, areas ?? []),
+    mark !== null,
+  );
+  if (mark === null) {
+    return (
+      <SideGroup
+        title="Human review"
+        action={
+          editable && !adding ? (
+            <SmallAction
+              icon={UserCheck}
+              onClick={() => {
+                setAdding(true);
+              }}
+            >
+              Require my review
+            </SmallAction>
+          ) : undefined
+        }
+      >
+        {adding ? (
+          <HumanReviewForm
             slug={slug}
             task={task.task}
             onDone={() => {
@@ -965,75 +677,389 @@ function Dependencies({ slug, task }: { slug: string; task: TaskDetail }) {
             }}
           />
         ) : (
-          <SmallAction
-            icon={Plus}
-            className="self-start px-0 py-4 text-14"
-            onClick={() => {
-              setAdding(true);
-            }}
-          >
-            Add dependency
-          </SmallAction>
-        )
+          <span className="text-text-2">Not required</span>
+        )}
+        {note === null ? null : <SideNote>{note}</SideNote>}
+      </SideGroup>
+    );
+  }
+  const lines = humanReviewLines(mark, task.human_review_set_at);
+  return (
+    <SideGroup title="Human review">
+      <Chip tone="warn" className="self-start">
+        <UserCheck aria-hidden="true" size={14} />
+        Required ·
+        {lines.reviewer === null ? (
+          " any human"
+        ) : (
+          <PersonName name={lines.reviewer} />
+        )}
+      </Chip>
+      <SideNote className="flex flex-wrap items-center gap-x-6">
+        Set by <PersonName name={lines.setBy} />
+        {lines.at === null ? null : ` · ${lines.at}`}
+      </SideNote>
+      <p className="leading-normal">{mark.reason}</p>
+      {note === null ? null : <SideNote>{note}</SideNote>}
+      {editable ? (
+        <SmallAction
+          icon={X}
+          className="self-start"
+          pending={clear.isPending}
+          pendingLabel="Turning off human review…"
+          onClick={() => {
+            clear.mutate(undefined);
+          }}
+        >
+          Turn off human review
+        </SmallAction>
       ) : null}
+      <WriteError error={clear.error} />
     </SideGroup>
   );
 }
 
+/** The blocker while it is set or being set: while it is set, no agent claims the task and no lead starts a task worker for it. */
+function Blocker({
+  slug,
+  task,
+  now,
+  editing,
+  onEditing,
+}: {
+  slug: string;
+  task: TaskDetail;
+  now: number;
+  editing: boolean;
+  onEditing: (editing: boolean) => void;
+}) {
+  const clear = useTaskWrite(slug, task.task, () =>
+    clearBlocker(slug, task.task),
+  );
+  const view = blockerView(task, now);
+  const controls = blockerControls(task);
+  if (editing && controls.canSet) {
+    return (
+      <SideGroup title="Blocker">
+        <BlockerForm
+          slug={slug}
+          task={task.task}
+          reason={view?.reason ?? ""}
+          onDone={() => {
+            onEditing(false);
+          }}
+        />
+      </SideGroup>
+    );
+  }
+  if (view === null) {
+    return null;
+  }
+  return (
+    <SideGroup title="Blocker">
+      <p className="flex items-center gap-6 font-semibold text-warn">
+        <Hand aria-hidden="true" size={14} />
+        No agent takes this task
+      </p>
+      <p className={cn("leading-normal", textFlow("prose"))}>{view.reason}</p>
+      <SideNote>
+        <ActorText segments={view.setBy} />
+      </SideNote>
+      {controls.canClear || controls.canSet ? (
+        <div className="flex flex-wrap gap-x-16 gap-y-4">
+          {controls.canClear ? (
+            <SmallAction
+              icon={X}
+              pending={clear.isPending}
+              pendingLabel="Clearing blocker…"
+              onClick={() => {
+                clear.mutate(undefined);
+              }}
+            >
+              Clear blocker
+            </SmallAction>
+          ) : null}
+          {controls.canSet ? (
+            <SmallAction
+              icon={Pencil}
+              disabled={clear.isPending}
+              onClick={() => {
+                onEditing(true);
+              }}
+            >
+              Change reason
+            </SmallAction>
+          ) : null}
+        </div>
+      ) : null}
+      <WriteError error={clear.error} />
+    </SideGroup>
+  );
+}
+
+function EdgeRow({
+  slug,
+  row,
+  onRemove,
+  removing,
+}: {
+  slug: string;
+  row: DependencyRow;
+  onRemove: (() => void) | null;
+  removing: boolean;
+}) {
+  const filters = useRouterState({ select: (s) => s.location.searchStr });
+  return (
+    <li
+      data-edge={row.task}
+      data-unfinished={row.unfinished ? "" : undefined}
+      className="flex items-start gap-6"
+    >
+      <HrefLink
+        href={taskPath(slug, row.task, filters)}
+        className={cn(
+          "flex min-w-0 flex-1 flex-col rounded-s hover:underline",
+          focusRing,
+        )}
+      >
+        <span className={cn("wrap-anywhere", !row.unfinished && "text-text-2")}>
+          <Id className="text-text-2">{row.task}</Id> {row.title}
+        </span>
+        <span className="text-13 text-text-2">
+          {statusLook(row.status).text}
+        </span>
+      </HrefLink>
+      {onRemove ? (
+        <IconButton
+          size="sm"
+          variant="ghost"
+          aria-label={`Remove the dependency on ${row.task}`}
+          pending={removing}
+          pendingLabel={`Removing the dependency on ${row.task}…`}
+          onClick={onRemove}
+        >
+          <X aria-hidden="true" size={14} />
+        </IconButton>
+      ) : null}
+    </li>
+  );
+}
+
+/** The prerequisites and the dependents that exist, and the form that adds a prerequisite. */
+function Dependencies({
+  slug,
+  task,
+  adding,
+  onAdding,
+}: {
+  slug: string;
+  task: TaskDetail;
+  adding: boolean;
+  onAdding: (adding: boolean) => void;
+}) {
+  const remove = useTaskWrite(slug, task.task, (needs: string) =>
+    removeDependency(slug, task.task, needs),
+  );
+  const groups = groupDependencies(task.dependencies);
+  const editable = canEditDependencies(task.status);
+  const waiting = waitingText(groups);
+  return (
+    <section aria-label="Dependencies" className="flex flex-col gap-14">
+      {groups.needs.length > 0 ? (
+        <SideGroup title="Needs">
+          {waiting === null ? null : <SideNote>{waiting}</SideNote>}
+          <ul aria-label="Needs" className="flex flex-col gap-8">
+            {groups.needs.map((row) => (
+              <EdgeRow
+                key={row.task}
+                slug={slug}
+                row={row}
+                removing={remove.isPending && remove.variables === row.task}
+                onRemove={
+                  editable && row.removable
+                    ? () => {
+                        remove.mutate(row.task);
+                      }
+                    : null
+                }
+              />
+            ))}
+          </ul>
+          <WriteError error={remove.error} />
+        </SideGroup>
+      ) : null}
+      {groups.neededBy.length > 0 ? (
+        <SideGroup title="Needed by">
+          <ul aria-label="Needed by" className="flex flex-col gap-8">
+            {groups.neededBy.map((row) => (
+              <EdgeRow
+                key={row.task}
+                slug={slug}
+                row={row}
+                removing={false}
+                onRemove={null}
+              />
+            ))}
+          </ul>
+        </SideGroup>
+      ) : null}
+      {editable && adding ? (
+        <AddDependencyForm
+          slug={slug}
+          task={task.task}
+          onDone={() => {
+            onAdding(false);
+          }}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function Links({
+  slug,
+  task,
+  now,
+}: {
+  slug: string;
+  task: TaskDetail;
+  now: number;
+}) {
+  const [blocking, setBlocking] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const controls = blockerControls(task);
+  const canSet = controls.canSet && task.blocker === null && !blocking;
+  const canAdd = canEditDependencies(task.status) && !adding;
+  return (
+    <SideCard title="Links">
+      <Blocker
+        slug={slug}
+        task={task}
+        now={now}
+        editing={blocking}
+        onEditing={setBlocking}
+      />
+      <Dependencies
+        slug={slug}
+        task={task}
+        adding={adding}
+        onAdding={setAdding}
+      />
+      <NothingYet text={nothingText(linkGaps(task))} />
+      {canSet || canAdd ? (
+        <div className="flex flex-wrap gap-x-16 gap-y-4">
+          {canSet ? (
+            <SmallAction
+              icon={Hand}
+              onClick={() => {
+                setBlocking(true);
+              }}
+            >
+              Set blocker
+            </SmallAction>
+          ) : null}
+          {canAdd ? (
+            <SmallAction
+              icon={Plus}
+              onClick={() => {
+                setAdding(true);
+              }}
+            >
+              Add dependency
+            </SmallAction>
+          ) : null}
+        </div>
+      ) : null}
+    </SideCard>
+  );
+}
+
+/** The task's events, closed until the human opens them. */
 function History({ task }: { task: TaskDetail }) {
+  const [shown, setShown] = useState(false);
   const [open, setOpen] = useState(false);
   const list = collapse(task.history, 2, open);
   return (
-    <SideGroup title="History">
-      <ul className="flex flex-col gap-8">
-        {list.shown.map((event) => (
-          <li key={event.seq} className="text-13 leading-normal text-text-2">
-            <ActorText
-              segments={historyText(event)}
-              personClassName="text-14"
-            />
-          </li>
-        ))}
-      </ul>
-      <MoreToggle
-        text={list.more}
-        open={open}
-        onToggle={() => {
-          setOpen(!open);
+    <section aria-label="History" className="flex flex-col gap-8">
+      <button
+        type="button"
+        aria-expanded={shown}
+        onClick={() => {
+          setShown(!shown);
         }}
-      />
-    </SideGroup>
+        className={cn(
+          "flex w-full items-center justify-between rounded-m px-16 py-10 font-title text-15 font-semibold text-text hover:bg-fill",
+          focusRing,
+        )}
+      >
+        History
+        {shown ? (
+          <ChevronUp aria-hidden="true" size={16} />
+        ) : (
+          <ChevronDown aria-hidden="true" size={16} />
+        )}
+      </button>
+      {shown ? (
+        <div className="flex flex-col gap-8 px-16 pb-8">
+          <ul className="flex flex-col gap-8">
+            {list.shown.map((event) => (
+              <li
+                key={event.seq}
+                className="text-13 leading-normal text-text-2"
+              >
+                <ActorText segments={historyText(event)} />
+              </li>
+            ))}
+          </ul>
+          <MoreToggle
+            text={list.more}
+            open={open}
+            onToggle={() => {
+              setOpen(!open);
+            }}
+          />
+        </div>
+      ) : null}
+    </section>
   );
 }
 
-/** The side column, top to bottom. */
+/** The side panel: People, Work and Links on the panel's ground, each empty item folded into its group's one line, then History. */
 export function TaskSide({ slug, task, live, now }: Props) {
+  const withProposal = needsProposal(task);
   return (
     <aside
       aria-label="Task details"
       tabIndex={0}
       className={cn(
-        "flex w-full shrink-0 flex-col gap-20 border-line px-24 pt-4 pb-24 md:w-side-panel-scroll md:overflow-y-auto md:border-l md:pt-24 md:pl-20",
+        "flex w-full shrink-0 flex-col gap-12 bg-bg p-14 md:w-task-side md:overflow-y-auto",
         insetFocusRing,
       )}
     >
-      <LabelsSide slug={slug} task={task} />
-      <Responsible task={task} now={now} />
-      {needsProposal(task) ? (
-        <>
-          <Workspace task={task} live={live} />
-          <Checkpoints slug={slug} task={task} live={live} now={now} />
-          <Changesets slug={slug} task={task} live={live} now={now} />
-          <Proposal slug={slug} task={task} />
-        </>
-      ) : (
-        <LeadCheck slug={slug} task={task} now={now} />
-      )}
-      <Blocker slug={slug} task={task} now={now} />
-      <HumanReview slug={slug} task={task} />
-      <Dependencies slug={slug} task={task} />
-      <TaskCostSection slug={slug} task={task.task} />
-      {/* An empty History draws nothing, so the group is left out for a task read without events. */}
+      <SideCard title="People">
+        <LabelsSide slug={slug} task={task} />
+        <Responsible task={task} now={now} />
+        <HumanReview slug={slug} task={task} />
+        <NothingYet text={nothingText(peopleGaps(task))} />
+      </SideCard>
+      <SideCard title="Work">
+        {withProposal ? (
+          <>
+            <Workspace task={task} live={live} />
+            <Checkpoints slug={slug} task={task} live={live} now={now} />
+            <Changesets task={task} now={now} />
+            <Proposal slug={slug} task={task} />
+          </>
+        ) : (
+          <LeadCheck slug={slug} task={task} now={now} />
+        )}
+        <TaskCostSection slug={slug} task={task.task} />
+        {withProposal ? (
+          <NothingYet text={nothingText(workGaps(task, live))} />
+        ) : null}
+      </SideCard>
+      <Links slug={slug} task={task} now={now} />
+      {/* An empty History draws nothing, so the row is left out for a task read without events. */}
       {task.history.length > 0 ? <History task={task} /> : null}
     </aside>
   );

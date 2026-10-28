@@ -67,10 +67,13 @@ describe("the blocker group", () => {
   it("sets a blocker with a reason", async () => {
     const task = taskView("T-2", { can_set_blocker: true });
     mount(<TaskSide slug="demo" task={task} live={null} now={0} />);
-    const group = await screen.findByRole("region", { name: "Blocker" });
+    // Without a blocker the Links group offers Set blocker, which opens the Blocker row's form.
+    const links = await screen.findByRole("region", { name: "Links" });
+    expect(within(links).getByText(/no blocker/)).toBeTruthy();
     await userEvent.click(
-      within(group).getByRole("button", { name: "Set blocker" }),
+      within(links).getByRole("button", { name: "Set blocker" }),
     );
+    const group = screen.getByRole("region", { name: "Blocker" });
     await userEvent.type(
       within(group).getByRole("textbox", { name: "Reason" }),
       "Wait for the logo",

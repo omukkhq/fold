@@ -2,12 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { BoardProposal } from "@/api/board";
 import {
   blockedText,
-  blockerMark,
-  blocksText,
   checklistText,
   kindText,
   leadCheckMark,
-  messagesText,
   needsText,
   planWaitText,
   proposalLook,
@@ -88,13 +85,6 @@ describe("needsText", () => {
   });
 });
 
-describe("blocksText", () => {
-  it("counts the open tasks that wait for this one", () => {
-    expect(blocksText({ blocks: 2 })).toBe("blocks 2");
-    expect(blocksText({ blocks: 0 })).toBeNull();
-  });
-});
-
 describe("blockedText", () => {
   it("lists the unfinished prerequisites of a blocked task", () => {
     expect(blockedText({ blocked: true, blocked_by: ["T-3", "T-9"] })).toBe(
@@ -102,13 +92,6 @@ describe("blockedText", () => {
     );
     expect(blockedText({ blocked: true, blocked_by: [] })).toBe("Blocked");
     expect(blockedText({ blocked: false, blocked_by: ["T-3"] })).toBeNull();
-  });
-});
-
-describe("messagesText", () => {
-  it("counts the messages that name the task", () => {
-    expect(messagesText({ messages: 3 })).toBe("3");
-    expect(messagesText({ messages: 0 })).toBeNull();
   });
 });
 
@@ -156,18 +139,12 @@ describe("tasks without a proposal", () => {
   });
 });
 
-describe("human tasks and blockers", () => {
-  it("names a human task and shows a blocker with its reason", () => {
+describe("human tasks", () => {
+  it("names a human task", () => {
     expect(kindText({ kind: "human" })).toBe("human task");
     expect(
       leadCheckMark({ kind: "human", status: "review", report: "x" }),
     ).toBeNull();
-    expect(blockerMark({ blocker: null })).toBeNull();
-    expect(
-      blockerMark({
-        blocker: { reason: "Wait for the logo", set_by: "web-lead", set_at: 1 },
-      }),
-    ).toEqual({ text: "Blocker", reason: "Wait for the logo" });
   });
 });
 

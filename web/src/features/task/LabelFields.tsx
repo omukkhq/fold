@@ -7,7 +7,7 @@ import type { BoardLabel } from "@/api/board";
 import { workersQuery } from "@/api/queries";
 import { labelsQuery } from "@/api/tasks";
 import { IconButton } from "@/components/button/Button";
-import { controlClasses } from "@/components/form/Field";
+import { controlClasses, SENTENCE_HINT } from "@/components/form/Field";
 import { labelColors } from "@/components/label/labelColors";
 import { menuContent, menuItem } from "@/components/overlay/menuStyles";
 import { cn } from "@/lib/cn";
@@ -24,8 +24,10 @@ import {
   type AreaRef,
 } from "./areas";
 
-const FIELD_LABEL = "text-14 leading-tight font-semibold text-text";
-const FIELD_HINT = "text-13 leading-normal text-text-2";
+// The same label and help text as the shared form fields around them.
+const FIELD_LABEL =
+  "font-title text-13 leading-tight font-semibold text-text-2";
+const FIELD_HINT = SENTENCE_HINT;
 
 /** The project's areas, with the built-in area Main first, and its labels. The areas are null until the worker list is read; a refused read leaves them empty, so every label counts as one that is no area, and sets `failed`. */
 export function useAreas(slug: string): {
@@ -193,7 +195,7 @@ export function RemovableLabel({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-5 rounded-s py-2 pr-4 pl-6 text-13 leading-tight font-medium text-text-2 inset-ring inset-ring-line",
+        "inline-flex items-center gap-5 rounded-pill py-2 pr-4 pl-8 text-13 leading-tight font-medium text-text",
         labelColors(label.color).soft,
       )}
     >
@@ -264,7 +266,7 @@ export function LabelsField({
           <div
             ref={box}
             className={cn(
-              "flex flex-wrap items-center gap-6 rounded-m bg-surface px-8 py-7 inset-ring inset-ring-line has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent",
+              "flex flex-wrap items-center gap-6 rounded-s bg-fill px-8 py-7 has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent",
               disabled && "opacity-60",
             )}
           >

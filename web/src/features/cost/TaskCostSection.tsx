@@ -21,6 +21,7 @@ export function TaskCostSection({
   return (
     <SideGroup
       title="Cost"
+      stacked
       action={
         section ? (
           <span className="text-15 font-semibold text-text tabular-nums">

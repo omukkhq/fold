@@ -1,10 +1,13 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as RadixDialog from "@radix-ui/react-dialog";
-import { ArrowRight, GitPullRequest, Pencil } from "lucide-react";
+import * as RadixTooltip from "@radix-ui/react-tooltip";
+import { ArrowRight, GitPullRequest, Info, Pencil } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { setTitle, type TaskDetail } from "@/api/tasks";
+import { Chip } from "@/components/badge/Chip";
 import { Button, IconButton } from "@/components/button/Button";
 import { TextField } from "@/components/form/controls";
+import { Mono } from "@/components/mono/Mono";
 import { useState } from "react";
 import { cn } from "@/lib/cn";
 import { PersonName } from "@/people/PersonName";
@@ -72,12 +75,47 @@ function TitleEditor({
   );
 }
 
+/** The details of the live strip: a tooltip on hover and focus, which a tap opens too, as a phone has no hover. */
+function StripDetails({ details }: { details: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <RadixTooltip.Provider delayDuration={300}>
+      <RadixTooltip.Root open={open} onOpenChange={setOpen}>
+        <RadixTooltip.Trigger asChild>
+          <IconButton
+            aria-label="Details"
+            className="shrink-0"
+            onClick={(event) => {
+              // Radix closes a tooltip on a click; a tap opens and closes it instead.
+              event.preventDefault();
+              setOpen(!open);
+            }}
+          >
+            <Info aria-hidden="true" size={16} />
+          </IconButton>
+        </RadixTooltip.Trigger>
+        <RadixTooltip.Portal>
+          <RadixTooltip.Content
+            side="bottom"
+            align="end"
+            sideOffset={6}
+            className="z-20 max-w-measure rounded-s bg-ink px-10 py-6 text-13 text-on-ink"
+          >
+            {details}
+          </RadixTooltip.Content>
+        </RadixTooltip.Portal>
+      </RadixTooltip.Root>
+    </RadixTooltip.Provider>
+  );
+}
+
+/** One fact, who does what now; the files, the checkpoint and the base wait behind the info button. */
 function Strip({ strip }: { strip: LiveStrip }) {
   return (
     <div
       aria-label="Live"
       className={cn(
-        "flex min-w-0 items-center gap-10 rounded-m px-12 py-8",
+        "flex min-w-0 items-center gap-10 rounded-m py-4 pr-4 pl-14 text-15",
         strip.stalled ? "bg-warn-soft" : "bg-accent-soft",
       )}
     >
@@ -88,25 +126,19 @@ function Strip({ strip }: { strip: LiveStrip }) {
           strip.stalled ? "bg-warn" : "bg-accent",
         )}
       />
-      <span className="shrink-0 text-14">
-        <PersonName name={strip.worker} />
-      </span>
-      <span
-        className={cn(
-          "shrink-0 text-14",
-          strip.stalled ? "text-warn" : "text-accent",
-        )}
-      >
-        {strip.verb}
-      </span>
-      {strip.file ? (
-        <span className="min-w-0 truncate font-mono text-13 font-semibold text-accent">
-          {strip.file}
-        </span>
-      ) : null}
-      <span className="min-w-0 flex-1 truncate text-14 text-text-2">
-        {strip.rest}
-      </span>
+      <p className="min-w-0 flex-1 py-5 wrap-anywhere">
+        <PersonName name={strip.worker} className="font-semibold" />
+        {" · "}
+        <span>{strip.verb}</span>
+        {strip.file ? (
+          <>
+            {" "}
+            <Mono className="text-14">{strip.file}</Mono>
+          </>
+        ) : null}
+        {strip.wait ? ` · ${strip.wait}` : null}
+      </p>
+      {strip.details === null ? null : <StripDetails details={strip.details} />}
     </div>
   );
 }
@@ -120,33 +152,43 @@ function ProposalStrip({ slug, task }: { slug: string; task: TaskDetail }) {
     <div
       aria-label="Proposal"
       className={cn(
-        "flex min-w-0 items-center gap-10 rounded-m py-8 pr-8 pl-12",
-        strip.waitsForYou ? "bg-warn-soft" : "bg-sunken",
+        "flex min-w-0 flex-wrap items-center gap-12 rounded-m py-10 pr-10 pl-14",
+        strip.waitsForYou ? "bg-warn-soft" : "bg-bg",
       )}
     >
       <GitPullRequest
         aria-hidden="true"
-        size={15}
-        className="shrink-0 text-warn"
+        size={16}
+        className={cn(
+          "shrink-0",
+          strip.waitsForYou ? "text-warn" : "text-text-2",
+        )}
       />
-      <span className="shrink-0 text-14 font-semibold text-text">
-        {strip.lead}
-      </span>
-      {strip.rest ? (
-        <span className="min-w-0 flex-1 truncate text-14 text-text-2">
-          {strip.rest}
+      <p className="flex min-w-0 flex-1 flex-col">
+        <span
+          className={cn(
+            "font-semibold",
+            strip.waitsForYou ? "text-warn" : "text-text",
+          )}
+        >
+          {strip.lead}
         </span>
-      ) : (
-        <span className="flex-1" />
-      )}
-      <LinkButton href={proposalPath(slug, strip.proposal)} icon={ArrowRight}>
+        {strip.rest ? (
+          <span className="text-13 text-text-2">{strip.rest}</span>
+        ) : null}
+      </p>
+      <LinkButton
+        href={proposalPath(slug, strip.proposal)}
+        variant={strip.waitsForYou ? "primary" : "quiet"}
+        icon={ArrowRight}
+      >
         Go to proposal
       </LinkButton>
     </div>
   );
 }
 
-/** The title block: the title, the calculated status and the live strip. */
+/** The title block: the title, the calculated status with its reason, the live strip and the proposal that waits. */
 export function TitleBlock({ slug, task, strip }: Props) {
   const [editing, setEditing] = useState(false);
   const look = statusLook(task.status);
@@ -180,19 +222,8 @@ export function TitleBlock({ slug, task, strip }: Props) {
           </IconButton>
         </div>
       )}
-      <div className="flex flex-wrap items-center gap-10">
-        <span
-          className={cn(
-            "inline-flex items-center gap-6 rounded-s px-9 py-3 text-13 font-semibold",
-            look.pill,
-          )}
-        >
-          <span
-            aria-hidden="true"
-            className={cn("size-7 rounded-full", look.dot)}
-          />
-          {look.text}
-        </span>
+      <div className="flex flex-wrap items-center gap-x-12 gap-y-6">
+        <Chip>{look.text}</Chip>
         {task.blocked ? (
           <span className="text-14 font-medium text-bad">Blocked</span>
         ) : null}

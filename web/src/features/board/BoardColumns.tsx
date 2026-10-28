@@ -1,10 +1,17 @@
+import * as RadixTabs from "@radix-ui/react-tabs";
 import { Plus } from "lucide-react";
 import type { ReactNode } from "react";
+import type { TaskStatus } from "@/api/board";
 import { HrefLink } from "@/app/HrefLink";
 import { buttonClasses } from "@/components/button/buttonStyles";
+import { Mono } from "@/components/mono/Mono";
+import { Tooltip } from "@/components/overlay/Tooltip";
+import {
+  SEGMENT_LIST,
+  segmentClasses,
+} from "@/components/segments/segmentStyles";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { Skeleton } from "@/components/states/Skeleton";
-import { Mono } from "@/components/mono/Mono";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { projectPath } from "@/routes/paths";
@@ -17,86 +24,192 @@ import {
   type ColumnSpec,
   type ColumnView,
 } from "./columns";
+import { phoneHint, taskCountText } from "./view";
 
 const LOADING_CARDS = [0, 1, 2];
 
-function Column({
-  spec,
-  count,
-  hint = spec.hint,
-  children,
-}: {
+/** One column as either layout draws it. */
+interface ColumnFrame {
   spec: ColumnSpec;
   /** The count beside the name; `–` while the board loads. */
   count: string;
-  hint?: string;
-  children?: ReactNode;
-}) {
+  /** The column's hint: a tooltip on its head, or the line under the phone's switcher. */
+  hint: string;
+  /** `4 tasks` beside the phone's line; empty while the board loads. */
+  tasks: string;
+  body: ReactNode;
+}
+
+/** The phone shows one column at a time under a switcher; without it the five columns stand side by side. */
+export interface PhoneColumns {
+  selected: TaskStatus;
+  onSelect: (status: TaskStatus) => void;
+}
+
+function Column({ frame }: { frame: ColumnFrame }) {
   return (
     <section
-      aria-label={spec.name}
-      data-status={spec.status}
-      className="flex min-h-0 min-w-(--width-column) flex-1 flex-col gap-8"
+      aria-label={frame.spec.name}
+      data-status={frame.spec.status}
+      className="flex min-h-0 min-w-(--width-column) flex-1 flex-col rounded-l bg-sunken"
     >
-      <header className="flex shrink-0 flex-col">
-        <div className="flex items-center gap-8 p-4">
-          <span
-            aria-hidden="true"
-            className={cn("size-8 shrink-0 rounded-full", spec.dot)}
-          />
-          <h2 className="text-16 leading-tight font-semibold text-text">
-            {spec.name}
+      <Tooltip content={frame.hint}>
+        <div
+          tabIndex={0}
+          className={cn(
+            "flex shrink-0 items-baseline gap-8 rounded-t-l px-16 pt-12 pb-6",
+            focusRing,
+          )}
+        >
+          <h2 className="font-title text-16 leading-tight font-semibold text-text">
+            {frame.spec.name}
           </h2>
-          <span className="text-15 font-medium text-text-2">{count}</span>
+          <span className="font-title text-15 font-medium text-text-2 tabular-nums">
+            {frame.count}
+          </span>
         </div>
-        <p className="text-13 leading-tight text-text-2">{hint}</p>
-      </header>
-      <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto p-4">
-        {children}
+      </Tooltip>
+      <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto px-10 pt-4 pb-12">
+        {frame.body}
       </div>
     </section>
   );
 }
 
-function Row({ children }: { children: ReactNode }) {
+function PhoneBoard({
+  frames,
+  phone,
+}: {
+  frames: readonly ColumnFrame[];
+  phone: PhoneColumns;
+}) {
+  const current =
+    frames.find((frame) => frame.spec.status === phone.selected) ?? frames[0];
   return (
-    <div className="flex min-h-0 flex-1 gap-16 overflow-x-auto px-24 pt-10 pb-24">
-      {children}
+    <RadixTabs.Root
+      value={current?.spec.status}
+      onValueChange={(value) => {
+        const chosen = frames.find((frame) => frame.spec.status === value);
+        if (chosen) phone.onSelect(chosen.spec.status);
+      }}
+      className="flex min-h-0 flex-1 flex-col gap-10 px-12 pt-10"
+    >
+      <RadixTabs.List
+        aria-label="Column"
+        className={cn(SEGMENT_LIST, "flex-nowrap bg-surface")}
+      >
+        {frames.map((frame) => (
+          <RadixTabs.Trigger
+            key={frame.spec.status}
+            value={frame.spec.status}
+            className={cn(
+              segmentClasses(frame === current),
+              "flex-auto px-4 whitespace-nowrap shadow-none data-[state=active]:bg-fill",
+              focusRing,
+            )}
+          >
+            {frame.spec.name}{" "}
+            <span className="tabular-nums">{frame.count}</span>
+          </RadixTabs.Trigger>
+        ))}
+      </RadixTabs.List>
+      {current ? (
+        <RadixTabs.Content
+          value={current.spec.status}
+          className="flex min-h-0 flex-1 flex-col gap-10 outline-none"
+        >
+          <section
+            aria-label={current.spec.name}
+            data-status={current.spec.status}
+            className="flex min-h-0 flex-1 flex-col gap-10"
+          >
+            <p className="flex justify-between gap-8 px-4 text-13 text-text-2">
+              <span>{phoneHint(current.spec.name, current.hint)}</span>
+              <span className="shrink-0 tabular-nums">{current.tasks}</span>
+            </p>
+            <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto pb-16">
+              {current.body}
+            </div>
+          </section>
+        </RadixTabs.Content>
+      ) : null}
+    </RadixTabs.Root>
+  );
+}
+
+function Layout({
+  frames,
+  phone,
+}: {
+  frames: readonly ColumnFrame[];
+  phone: PhoneColumns | null;
+}) {
+  if (phone !== null) {
+    return <PhoneBoard frames={frames} phone={phone} />;
+  }
+  return (
+    <div className="flex min-h-0 flex-1 gap-14 overflow-x-auto px-22 pt-10 pb-22">
+      {frames.map((frame) => (
+        <Column key={frame.spec.status} frame={frame} />
+      ))}
     </div>
   );
+}
+
+function frame(
+  spec: ColumnSpec,
+  count: number | null,
+  body: ReactNode,
+  hint = spec.hint,
+): ColumnFrame {
+  return {
+    spec,
+    count: count === null ? "–" : String(count),
+    hint,
+    tasks: count === null ? "" : taskCountText(count),
+    body,
+  };
 }
 
 export function BoardColumns({
   slug,
   columns,
   now,
+  phone,
 }: {
   slug: string;
   columns: readonly ColumnView[];
   now: number;
+  phone: PhoneColumns | null;
 }) {
   return (
-    <Row>
-      {columns.map((column) => (
-        <Column
-          key={column.status}
-          spec={column}
-          count={String(column.count)}
-          hint={hintText(column)}
-        >
-          {column.cards.length > 0 ? (
-            <ol className="flex flex-col gap-10">
-              {column.cards.map((card) => (
-                <li key={card.task}>
-                  <BoardCard slug={slug} card={card} now={now} />
-                </li>
-              ))}
-            </ol>
-          ) : null}
-          <MoreLink slug={slug} text={moreText(column)} />
-        </Column>
-      ))}
-    </Row>
+    <Layout
+      phone={phone}
+      frames={columns.map((column) =>
+        frame(
+          column,
+          column.count,
+          <>
+            {column.cards.length > 0 ? (
+              <ol className="flex flex-col gap-10">
+                {column.cards.map((card) => (
+                  <li key={card.task}>
+                    <BoardCard
+                      slug={slug}
+                      card={card}
+                      now={now}
+                      peek={phone === null}
+                    />
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+            <MoreLink slug={slug} text={moreText(column)} />
+          </>,
+          hintText(column),
+        ),
+      )}
+    />
   );
 }
 
@@ -108,7 +221,7 @@ function MoreLink({ slug, text }: { slug: string; text: string | null }) {
     <HrefLink
       href={projectPath(slug, "repository")}
       className={cn(
-        "self-start rounded-s text-13 font-medium text-accent hover:underline",
+        "self-start rounded-s px-6 text-13 font-medium text-accent hover:underline",
         focusRing,
       )}
     >
@@ -118,29 +231,42 @@ function MoreLink({ slug, text }: { slug: string; text: string | null }) {
 }
 
 /** Loading: every column with three skeleton cards and no count. */
-export function LoadingColumns() {
+export function LoadingColumns({ phone }: { phone: PhoneColumns | null }) {
   return (
-    <Row>
-      {COLUMNS.map((spec) => (
-        <Column key={spec.status} spec={spec} count="–">
-          {LOADING_CARDS.map((i) => (
-            <Skeleton key={i} />
-          ))}
-        </Column>
-      ))}
-    </Row>
+    <Layout
+      phone={phone}
+      frames={COLUMNS.map((spec) =>
+        frame(
+          spec,
+          null,
+          LOADING_CARDS.map((i) => (
+            <Skeleton key={i} className="inset-ring-0" />
+          )),
+        ),
+      )}
+    />
   );
 }
 
 /** Empty: the five columns at zero, and the next step in the To do column, where new tasks arrive. */
-export function EmptyColumns({ slug }: { slug: string }) {
+export function EmptyColumns({
+  slug,
+  phone,
+}: {
+  slug: string;
+  phone: PhoneColumns | null;
+}) {
   return (
-    <Row>
-      {COLUMNS.map((spec) => (
-        <Column key={spec.status} spec={spec} count="0">
-          {spec.status === "todo" ? (
+    <Layout
+      phone={phone}
+      frames={COLUMNS.map((spec) =>
+        frame(
+          spec,
+          0,
+          spec.status === "todo" ? (
             <EmptyPanel
               title="No tasks yet"
+              className="p-16"
               action={
                 <>
                   <Mono className="block text-13 text-text">fld claude</Mono>
@@ -154,7 +280,7 @@ export function EmptyColumns({ slug }: { slug: string }) {
                   >
                     <Plus
                       aria-hidden="true"
-                      size={15}
+                      size={16}
                       className="text-text-2"
                     />
                     New task
@@ -165,20 +291,19 @@ export function EmptyColumns({ slug }: { slug: string }) {
               Run the command below, then give the main agent a goal. It creates
               the tasks here. You can also add one yourself.
             </EmptyPanel>
-          ) : null}
-        </Column>
-      ))}
-    </Row>
+          ) : null,
+        ),
+      )}
+    />
   );
 }
 
 /** Column heads without cards, under the error banner. */
-export function BareColumns() {
+export function BareColumns({ phone }: { phone: PhoneColumns | null }) {
   return (
-    <Row>
-      {COLUMNS.map((spec) => (
-        <Column key={spec.status} spec={spec} count="–" />
-      ))}
-    </Row>
+    <Layout
+      phone={phone}
+      frames={COLUMNS.map((spec) => frame(spec, null, null))}
+    />
   );
 }
