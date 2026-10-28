@@ -31,6 +31,11 @@ impl HostPaths {
     pub fn registry_db(&self) -> PathBuf {
         self.fold_dir.join("registry.db")
     }
+
+    /// The daemon's notice settings, which a project's removal from the registry deletes its part of.
+    pub fn notify_dir(&self) -> PathBuf {
+        self.fold_dir.join("notices")
+    }
 }
 
 fn absolute(value: Option<&str>) -> Option<&str> {

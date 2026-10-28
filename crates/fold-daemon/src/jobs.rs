@@ -18,6 +18,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use crate::daemon::AppState;
 use crate::projects::ProjectHandle;
 use crate::services::events::{BusMessage, EventBuffer};
+use crate::services::projects::notify::notify_project;
 use crate::services::projects::{self, RemoteContext};
 use crate::services::tasks::sweep_leases;
 use crate::services::workspaces::{
@@ -48,6 +49,9 @@ pub const STALL_TICK: Duration = Duration::from_secs(30);
 
 /// How often the automatic integration job looks for projects it does not listen to yet. Each project's listener reacts to its events, so this only bounds how late a project opened while the daemon runs gets its first look.
 pub const AUTO_INTEGRATE_TICK: Duration = Duration::from_secs(5);
+
+/// How often each project's notifier looks at the clock for a due send. A send waits its target's window after the first notice, so this only bounds how late it goes out.
+pub const NOTIFY_TICK: Duration = Duration::from_secs(1);
 
 /// How often the idle job looks for short-lived workers idle past their role's `idle_minutes`.
 pub const WORKER_IDLE_TICK: Duration = Duration::from_secs(30);
@@ -450,6 +454,55 @@ async fn auto_integrate(
         }
     }
     while listeners.join_next().await.is_some() {}
+}
+
+/// Starts the notice job: every `tick` it starts a notifier for each open project that has none, which sends the project's notices to the targets that apply to it, as [`notify_project`] describes. Without notice settings it sends nothing. A cycle is a try that a receiver took. It stops when `stop` changes.
+pub fn spawn_notify(state: AppState, tick: Duration, stop: watch::Receiver<bool>) -> Job {
+    let (progress, watcher) = watch::channel(JobProgress::default());
+    let task = tokio::spawn(notify(state, tick, stop, Arc::new(progress)));
+    Job {
+        task,
+        progress: watcher,
+    }
+}
+
+async fn notify(
+    state: AppState,
+    tick: Duration,
+    mut stop: watch::Receiver<bool>,
+    progress: Arc<watch::Sender<JobProgress>>,
+) {
+    let Some(settings) = state.projects.notify().cloned() else {
+        let _ = stop.changed().await;
+        return;
+    };
+    let mut listening = HashSet::new();
+    let mut notifiers = JoinSet::new();
+    let mut ticks = tokio::time::interval(tick);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = stop.changed() => break,
+            _ = ticks.tick() => {}
+        }
+        while let Some(ended) = notifiers.try_join_next() {
+            if let Ok(slug) = ended {
+                listening.remove(&slug);
+            }
+        }
+        for handle in state.projects.handles() {
+            if listening.insert(handle.slug.clone()) {
+                notifiers.spawn(notify_project(
+                    handle,
+                    settings.clone(),
+                    tick,
+                    Arc::clone(&progress),
+                    stop.clone(),
+                ));
+            }
+        }
+    }
+    while notifiers.join_next().await.is_some() {}
 }
 
 /// One run after each event of a kind that can make a proposal ready, rather than one run for a burst: a run that is already past a proposal does not see an approval that lands on it during the run. Returns the project's slug once its project closes or the job stops. The listener holds the handle and so its bus, whose channel never closes, so a closed project ends it through [`EventBus::closing`].

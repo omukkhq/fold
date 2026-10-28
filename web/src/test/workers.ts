@@ -114,6 +114,7 @@ export function needsItem(fields: Partial<NeedsYouItem> = {}): NeedsYouItem {
     reason: null,
     commit: null,
     paths: [],
+    target: null,
     ...fields,
   };
 }

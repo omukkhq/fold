@@ -19,9 +19,9 @@ async fn a_notice_waits_in_the_outbox_until_one_send_takes_it() {
     assert_eq!(notify::cursor(store.read()).await.unwrap(), None);
     store
         .write(async |tx| {
-            notify::queue(tx, nt(1), 4, "{\"a\":1}", at(10)).await?;
-            notify::queue(tx, nt(1), 5, "{\"a\":2}", at(20)).await?;
-            notify::queue(tx, nt(2), 5, "{\"a\":3}", at(30)).await?;
+            notify::queue(tx, nt(1), 4, "{\"a\":1}", None, at(10)).await?;
+            notify::queue(tx, nt(1), 5, "{\"a\":2}", Some("question:m-1"), at(20)).await?;
+            notify::queue(tx, nt(2), 5, "{\"a\":3}", None, at(30)).await?;
             notify::set_cursor(tx, 5).await?;
             notify::set_cursor(tx, 3).await
         })
@@ -191,8 +191,8 @@ async fn the_log_keeps_the_newest_sends_and_a_gone_target_leaves_nothing() {
     assert_eq!(log[0].error.as_deref(), Some("timeout"));
     store
         .write(async |tx| {
-            notify::queue(tx, nt(1), 1, "{}", at(1)).await?;
-            notify::queue(tx, nt(2), 1, "{}", at(1)).await
+            notify::queue(tx, nt(1), 1, "{}", None, at(1)).await?;
+            notify::queue(tx, nt(2), 1, "{}", None, at(1)).await
         })
         .await
         .unwrap();
@@ -243,6 +243,19 @@ async fn seen_items_keep_their_first_time() {
         .await
         .unwrap();
     assert!(notify::seen_items(store.read()).await.unwrap().is_empty());
+    store
+        .write(async |tx| notify::queue(tx, nt(1), 1, "{}", Some("question:m-3"), at(1)).await)
+        .await
+        .unwrap();
+    for taken in [true, false] {
+        assert_eq!(
+            store
+                .write(async |tx| notify::take_back_opened(tx, nt(1), "question:m-3").await)
+                .await
+                .unwrap(),
+            taken
+        );
+    }
     assert_eq!(
         notify::first_seq_since(store.read(), at(0)).await.unwrap(),
         None

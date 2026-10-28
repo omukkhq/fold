@@ -892,17 +892,12 @@ fn private_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Writes a temporary file of mode 0600 and renames it into place, so a reader never sees half a file and the token is never in a file anyone else can read.
-fn write_target(dir: &Path, agent: &AgentName, socket: &Path, token: &PushToken) -> io::Result<()> {
+/// Writes `bytes` as `dir/name` through a temporary file of mode 0600 and a rename, after [`private_dir`], so a reader never sees half a file and a secret is never in a file anyone else can read.
+pub(crate) fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
     static TEMP: AtomicU64 = AtomicU64::new(0);
     private_dir(dir)?;
-    let bytes = serde_json::to_vec(&StoredTarget {
-        socket: socket.to_path_buf(),
-        token: token.0.to_string(),
-    })
-    .map_err(io::Error::other)?;
     let temp = dir.join(format!(
-        ".{agent}.{}.{}.tmp",
+        ".{name}.{}.{}.tmp",
         std::process::id(),
         TEMP.fetch_add(1, Ordering::Relaxed)
     ));
@@ -912,10 +907,10 @@ fn write_target(dir: &Path, agent: &AgentName, socket: &Path, token: &PushToken)
         .mode(0o600)
         .open(&temp)
         .and_then(|mut file| {
-            file.write_all(&bytes)?;
+            file.write_all(bytes)?;
             file.sync_all()
         })
-        .and_then(|()| std::fs::rename(&temp, target_file(dir, agent)))
+        .and_then(|()| std::fs::rename(&temp, dir.join(name)))
         .and_then(|()| std::fs::File::open(dir)?.sync_all());
     if written.is_err() {
         let _ = std::fs::remove_file(&temp);
@@ -923,11 +918,11 @@ fn write_target(dir: &Path, agent: &AgentName, socket: &Path, token: &PushToken)
     written
 }
 
-/// Reads the agent's file without following a symlink in its place.
-fn read_target(dir: &Path, agent: &AgentName) -> io::Result<Option<StoredTarget>> {
+/// The bytes of the regular file at `path`, read without following a symlink in its place; `None` when there is no file.
+pub(crate) fn read_private(path: &Path) -> io::Result<Option<Vec<u8>>> {
     use rustix::fs::{Mode, OFlags};
     let opened = rustix::fs::open(
-        target_file(dir, agent),
+        path,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     );
@@ -941,6 +936,22 @@ fn read_target(dir: &Path, agent: &AgentName) -> io::Result<Option<StoredTarget>
     }
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
+    Ok(Some(bytes))
+}
+
+fn write_target(dir: &Path, agent: &AgentName, socket: &Path, token: &PushToken) -> io::Result<()> {
+    let bytes = serde_json::to_vec(&StoredTarget {
+        socket: socket.to_path_buf(),
+        token: token.0.to_string(),
+    })
+    .map_err(io::Error::other)?;
+    write_private(dir, &format!("{agent}.json"), &bytes)
+}
+
+fn read_target(dir: &Path, agent: &AgentName) -> io::Result<Option<StoredTarget>> {
+    let Some(bytes) = read_private(&target_file(dir, agent))? else {
+        return Ok(None);
+    };
     serde_json::from_slice(&bytes)
         .map(Some)
         .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))
@@ -992,7 +1003,7 @@ fn remove_target(dir: &Path, agent: &AgentName, socket: &Path) -> io::Result<()>
     }
 }
 
-/// Removes the `.<agent>.<pid>.<n>.tmp` files of writes that stopped before their rename.
+/// Removes the `.<agent>.json.<pid>.<n>.tmp` files of writes that stopped before their rename.
 fn remove_temporary(dir: &Path) -> io::Result<()> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,

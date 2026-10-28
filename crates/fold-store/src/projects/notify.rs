@@ -111,26 +111,47 @@ pub struct OutboxRow {
     pub created_at: Timestamp,
 }
 
+/// Queues `notice` for `target`; `opened` is the Needs you key of a `needs_you.opened`.
 pub async fn queue(
     tx: &mut WriteTx,
     target: NotifyTargetId,
     seq: u64,
     notice: &str,
+    opened: Option<&str>,
     now: Timestamp,
 ) -> Result<(), StoreError> {
     let target = target.to_db();
     let seq = i64::try_from(seq).map_err(|_| StoreError::Corrupt("notify_outbox.seq"))?;
     let now = now.as_millis();
     sqlx::query!(
-        "INSERT INTO notify_outbox (target, seq, notice, created_at) VALUES (?1, ?2, ?3, ?4)",
+        "INSERT INTO notify_outbox (target, seq, notice, opened, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
         target,
         seq,
         notice,
+        opened,
         now
     )
     .execute(tx.conn())
     .await?;
     Ok(())
+}
+
+/// Takes back the `needs_you.opened` of the item `key` that still waits for `target`. Returns whether one waited: then the item came and went inside one window, and its close needs no notice either.
+pub async fn take_back_opened(
+    tx: &mut WriteTx,
+    target: NotifyTargetId,
+    key: &str,
+) -> Result<bool, StoreError> {
+    let target = target.to_db();
+    let taken = sqlx::query!(
+        "DELETE FROM notify_outbox WHERE target = ?1 AND opened = ?2",
+        target,
+        key
+    )
+    .execute(tx.conn())
+    .await?
+    .rows_affected();
+    Ok(taken > 0)
 }
 
 /// Each target with waiting notices and the time its first one came.

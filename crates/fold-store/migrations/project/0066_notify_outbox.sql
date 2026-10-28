@@ -14,12 +14,13 @@ CREATE TABLE notify_needs_you (
     seen_at INTEGER NOT NULL
 );
 
--- One notice that waits for its target's next send, in the order of the events: `notice` is the notice as fold-core builds it, ids, titles and links only.
+-- One notice that waits for its target's next send, in the order of the events: `notice` is the notice as fold-core builds it, ids, titles and links only. `opened` holds the Needs you key of a `needs_you.opened`, so an item that closes before the send takes its notice back. `created_at` is the time of the event or of the Needs you change, which starts the target's window.
 CREATE TABLE notify_outbox (
     id INTEGER PRIMARY KEY,
     target INTEGER NOT NULL CHECK (target BETWEEN 1 AND 4294967295),
     seq INTEGER NOT NULL CHECK (seq >= 0),
     notice TEXT NOT NULL,
+    opened TEXT,
     created_at INTEGER NOT NULL
 );
 

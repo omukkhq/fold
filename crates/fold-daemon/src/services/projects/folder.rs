@@ -159,6 +159,10 @@ pub(crate) async fn note_attention(context: &RemoteContext, synced: &FolderSync,
         )
         .await;
     }
+    // A run that only ends attention leaves the held paths unnoted, so only a raising run counts as a look at the folder.
+    if raise {
+        attention.mark_observed();
+    }
     let actor = Actor::System.event_actor();
     for kind in &change.raised {
         let event = match kind {

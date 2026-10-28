@@ -16,6 +16,8 @@ use crate::services::projects::{
 use fold_core::{Presence, TaskStatus, Timestamp};
 use fold_vcs::git::Git;
 
+mod notify;
+
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list, open))
@@ -32,6 +34,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(show_folder))
         .routes(routes!(unstash))
         .routes(routes!(untrack))
+        .merge(notify::routes())
 }
 
 #[derive(Debug, Serialize, ToSchema)]

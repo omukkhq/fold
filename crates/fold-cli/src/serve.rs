@@ -223,13 +223,13 @@ fn parse_file_config(text: &str) -> Result<FileConfig, toml::de::Error> {
     toml::from_str(text)
 }
 
-/// `RUST_LOG`'s filter, else `info`, with rmcp held at `warn` whatever `RUST_LOG` asks: rmcp logs the requests and notifications it handles with their arguments, and those can carry an agent's text.
+/// `RUST_LOG`'s filter, else `info`, with rmcp and ureq held at `warn` whatever `RUST_LOG` asks: rmcp logs the requests and notifications it handles with their arguments, and those can carry an agent's text; ureq logs a request's full path and query at trace, and a webhook's path can hold its token.
 fn log_filter(from_env: Option<tracing_subscriber::EnvFilter>) -> tracing_subscriber::EnvFilter {
     let filter = from_env.unwrap_or_else(|| tracing_subscriber::EnvFilter::new("info"));
-    match "rmcp=warn".parse::<tracing_subscriber::filter::Directive>() {
-        Ok(directive) => filter.add_directive(directive),
-        Err(_) => filter,
-    }
+    ["rmcp=warn", "ureq=warn"]
+        .into_iter()
+        .filter_map(|text| text.parse::<tracing_subscriber::filter::Directive>().ok())
+        .fold(filter, tracing_subscriber::EnvFilter::add_directive)
 }
 
 /// A project whose skills cannot be written still opens: its workers then find the skills a refresh or an earlier fold wrote.
@@ -305,16 +305,29 @@ mod tests {
         use tracing_subscriber::EnvFilter;
         let default = log_filter(None).to_string();
         assert!(
-            default.contains("rmcp=warn") && default.contains("info"),
+            default.contains("rmcp=warn")
+                && default.contains("ureq=warn")
+                && default.contains("info"),
             "{default}"
         );
-        for asked in ["trace", "rmcp=trace,fold_daemon=debug", "rmcp=info"] {
+        for asked in [
+            "trace",
+            "rmcp=trace,fold_daemon=debug",
+            "rmcp=info",
+            "ureq=trace",
+        ] {
             let filter = log_filter(Some(EnvFilter::new(asked))).to_string();
-            assert!(filter.contains("rmcp=warn"), "{asked}: {filter}");
-            assert!(
-                !filter.contains("rmcp=trace") && !filter.contains("rmcp=info"),
-                "{asked}: {filter}"
-            );
+            for crate_name in ["rmcp", "ureq"] {
+                assert!(
+                    filter.contains(&format!("{crate_name}=warn")),
+                    "{asked}: {filter}"
+                );
+                assert!(
+                    !filter.contains(&format!("{crate_name}=trace"))
+                        && !filter.contains(&format!("{crate_name}=info")),
+                    "{asked}: {filter}"
+                );
+            }
         }
     }
 

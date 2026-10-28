@@ -182,6 +182,9 @@ mod tracked_ignored;
 #[cfg(feature = "failpoints")]
 mod version_run_race;
 mod web_tokens;
+mod webhook_notices;
+#[cfg(feature = "failpoints")]
+mod webhook_notices_failpoints;
 mod worker_cost;
 mod worker_limits;
 mod worker_questions;

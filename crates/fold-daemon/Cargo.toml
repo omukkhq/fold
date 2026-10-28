@@ -30,6 +30,7 @@ tokio = { version = "1.53.3", features = ["fs", "macros", "net", "process", "rt-
 toml_edit = "0.25.17"
 tower-http = { version = "0.7.1", features = ["trace"] }
 tracing = "0.1.44"
+ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
 utoipa = "6.0.0"
 utoipa-axum = "0.3.0"
 
