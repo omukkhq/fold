@@ -120,7 +120,7 @@ export function comparisonTitle(comparison: Comparison): string {
   return `Changes from ${from.id} to ${to.id}`;
 }
 
-/** The two compared states in the order the title, the crumb and the compare row name them: the older one first. */
+/** The two compared states in the order the title, the crumb and the side line name them: the older one first. */
 export function comparisonSides(
   comparison: Comparison,
 ): readonly [ComparedState, ComparedState] {
@@ -131,7 +131,6 @@ export interface Crumb {
   label: string;
   /** A screen path; the last crumb has none. */
   href: string | null;
-  mono: boolean;
 }
 
 export function comparisonCrumbs(
@@ -141,17 +140,22 @@ export function comparisonCrumbs(
   const { from, to } = comparison;
   if (to.kind === "workspace") {
     return [
-      { label: "Activity", href: projectPath(slug, "activity"), mono: false },
-      { label: to.id, href: null, mono: true },
+      { label: "Activity", href: projectPath(slug, "activity") },
+      { label: to.id, href: null },
     ];
   }
   return [
-    { label: "Repository", href: projectPath(slug, "repository"), mono: false },
-    { label: `${from.id} → ${to.id}`, href: null, mono: true },
+    { label: "Repository", href: projectPath(slug, "repository") },
+    { label: `${from.id} → ${to.id}`, href: null },
   ];
 }
 
-/** The label of one side in the compare row: the workspace's base is `base r7`, its working files are `Working files`. */
+/** A workspace comparison names its two sides under the title, which names the workspace alone; the title and the crumb already hold a pair of recorded states. */
+export function namesSides(comparison: Comparison): boolean {
+  return comparison.to.kind === "workspace";
+}
+
+/** The label of one side in the side line: the workspace's base is `base r7`, its working files are `Working files`. */
 export function stateLabel(
   state: ComparedState,
   comparison: Comparison,
