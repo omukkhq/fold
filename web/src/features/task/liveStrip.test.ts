@@ -69,6 +69,7 @@ type StripTask = Pick<
   TaskDetail,
   | "activity"
   | "attention"
+  | "check_run"
   | "claims"
   | "checkpoints"
   | "edits_after_version"
@@ -81,6 +82,7 @@ function task(extra: Partial<StripTask> = {}): StripTask {
   return {
     activity: { path: "src/routes/login.tsx", at: NOW - 12 * SECOND },
     attention: [],
+    check_run: null,
     claims: [
       {
         kind: "implementation",
@@ -224,6 +226,44 @@ describe("liveStrip", () => {
     ).toBe("sent P-1 v1");
   });
 
+  it("says the worker runs checks, never the stall or the wait, while a run goes", () => {
+    const run = {
+      run: "cr-4",
+      purpose: "update_proposal" as const,
+      proposal: "P-1",
+      started_at: NOW - MINUTE,
+    };
+    const waiting = task({
+      attention: [{ kind: "stalled", closable: false }],
+      check_run: run,
+      proposal: {
+        id: "P-1",
+        title: "Add the form",
+        review_claim: null,
+        files: 3,
+        state: "changes_requested",
+        version: 2,
+        checks_failed: false,
+        reviews: [],
+      },
+      edits_after_version: true,
+    });
+    expect(liveStrip(waiting, null, NOW)).toMatchObject({
+      verb: "is running checks for v3",
+      file: null,
+      wait: null,
+      stalled: false,
+    });
+    expect(
+      liveStrip({ ...waiting, check_run: null }, live({ check_run: run }), NOW)
+        ?.verb,
+    ).toBe("is running checks for v3");
+    expect(
+      liveStrip(waiting, live({ check_run: null }), NOW)?.stalled,
+      "the frame says the run ended",
+    ).toBe(true);
+  });
+
   it("is null without a workspace or without anyone working in it", () => {
     expect(liveStrip(task({ workspace: null }), null, NOW)).toBeNull();
     expect(liveStrip(task({ claims: [] }), null, NOW)).toBeNull();
@@ -256,6 +296,7 @@ describe("liveStrip without the task details", () => {
       workspace_info: null,
       proposal: null,
       edits_after_version: null,
+      check_run: null,
     };
     expect(liveStrip(bare, live(), NOW)).toEqual({
       worker: "frontend/ui",

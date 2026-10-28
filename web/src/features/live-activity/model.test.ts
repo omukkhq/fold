@@ -104,18 +104,21 @@ describe("files", () => {
 describe("attention", () => {
   it("shows the daemon's stalled and stale items and nothing else", () => {
     expect(attentionView([], 0, 1000)).toEqual({
+      checks: null,
       stalled: null,
       staleClaim: false,
     });
     expect(
       attentionView([{ kind: "stalled", closable: false }], 0, 7 * 60_000),
     ).toEqual({
+      checks: null,
       stalled: "no edits for 7 min",
       staleClaim: false,
     });
     expect(
       attentionView([{ kind: "stale_claim", closable: false }], 0, 1000),
     ).toEqual({
+      checks: null,
       stalled: null,
       staleClaim: true,
     });
@@ -128,7 +131,7 @@ describe("attention", () => {
         0,
         1000,
       ),
-    ).toEqual({ stalled: null, staleClaim: false });
+    ).toEqual({ checks: null, stalled: null, staleClaim: false });
   });
 
   it("says how far main is ahead of the base", () => {
@@ -152,6 +155,27 @@ describe("attention", () => {
     expect(mainHeadText({ head: null, recent: [] })).toBeNull();
     expect(behindTag("r7", undefined)).toBeNull();
     expect(behindTag("r7", { head: null, recent: [] })).toBeNull();
+  });
+
+  it("shows running checks instead of a stall while the live state names a run", () => {
+    const run = {
+      run: "cr-4",
+      purpose: "check" as const,
+      proposal: null,
+      started_at: 0,
+    };
+    const items = [
+      { kind: "stalled" as const, closable: false },
+      { kind: "stale_claim" as const, closable: false },
+    ];
+    expect(attentionView(items, 0, 7 * 60_000, { check_run: run })).toEqual({
+      checks: "running checks",
+      stalled: null,
+      staleClaim: true,
+    });
+    expect(
+      attentionView(items, 0, 7 * 60_000, { check_run: null }).stalled,
+    ).toBe("no edits for 7 min");
   });
 });
 

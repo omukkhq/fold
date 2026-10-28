@@ -17,6 +17,7 @@ import type { LiveWorkspace } from "@/live/envelope";
 import { MarkAnswered } from "@/features/messages/MarkAnswered";
 import { taskCanMarkAnswered } from "@/features/messages/answered";
 import { activityLine, type ActivityLine } from "./activityLine";
+import { currentCheckRun } from "./checkRun";
 import { taskPath } from "./card";
 import { cardChip, metaFact } from "./chip";
 import { cardDetails, type DetailRow } from "./details";
@@ -195,8 +196,9 @@ export function BoardCard({
     queryFn: skipToken,
   });
   const filters = useRouterState({ select: (s) => s.location.searchStr });
-  const line = activityLine(card, card.workspace ? live : undefined, now);
-  const chip = cardChip(card);
+  const streamed = card.workspace ? live : undefined;
+  const line = activityLine(card, streamed, now);
+  const chip = cardChip(card, currentCheckRun(card.check_run, streamed));
   const [open, peek] = usePeek();
   const box = useRef<HTMLDivElement>(null);
   const inside = (target: EventTarget | null) =>

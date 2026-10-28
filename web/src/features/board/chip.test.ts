@@ -70,6 +70,30 @@ describe("cardChip", () => {
     ).toBe("Stale claim · needs you");
   });
 
+  it("shows a check run that goes in the neutral tone, before a stall and after a blocker", () => {
+    const run = {
+      run: "cr-4",
+      purpose: "check" as const,
+      proposal: null,
+      started_at: 0,
+    };
+    const card = boardCard("T-1", {
+      status: "in_progress",
+      attention: [{ kind: "stalled", closable: false }],
+      proposal: proposal("changes_requested"),
+    });
+    const chip = cardChip(card, run);
+    expect(chip?.text).toBe("Running checks");
+    expect(chip?.tone).toBe("neutral");
+    expect(cardChip(card)?.text).toBe("Stalled · needs you");
+    expect(
+      cardChip(
+        { ...card, blocker: { reason: "keys", set_by: "ana", set_at: 0 } },
+        run,
+      )?.text,
+    ).toBe("Blocker");
+  });
+
   it("names a proposal back with its author", () => {
     expect(chipText({ proposal: proposal("conflict") })).toBe("P-3 conflict");
     expect(chipText({ proposal: proposal("changes_requested") })).toBe(
