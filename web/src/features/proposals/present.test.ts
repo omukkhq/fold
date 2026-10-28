@@ -1,4 +1,5 @@
 import { bareName, isHumanName } from "@/people/names";
+import { segmentsText } from "@/people/segments";
 import { describe, expect, it } from "vitest";
 import type { Review } from "@/api/proposals";
 import {
@@ -12,6 +13,7 @@ import {
   approvers,
   claimLine,
   claimText,
+  humanReviewFact,
   currentVersion,
   evidenceLines,
   evidenceSource,
@@ -217,6 +219,19 @@ describe("names and versions", () => {
       claimText(proposalSummary("P-4", { review_claim: "review/quality" })),
     ).toEqual(["review claimed by ", { actor: "review/quality" }]);
     expect(claimText(proposalSummary("P-3"))).toEqual(["review not claimed"]);
+  });
+
+  it("names the human review mark's approver and who set it", () => {
+    expect(
+      segmentsText(
+        humanReviewFact({ reviewer: "dev", reason: "x", set_by: "backend" }),
+      ),
+    ).toBe("@dev, marked by @backend");
+    expect(
+      segmentsText(
+        humanReviewFact({ reviewer: null, reason: "x", set_by: "human:tanim" }),
+      ),
+    ).toBe("any human, marked by @tanim");
     expect(claimLine(proposalSummary("P-3"))).toEqual(["unclaimed"]);
     expect(
       claimLine(proposalSummary("P-4", { review_claim: "review/quality" })),

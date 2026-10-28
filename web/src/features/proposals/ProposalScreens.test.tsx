@@ -538,6 +538,11 @@ async function integration() {
   return screen.findByRole("region", { name: "Integration" });
 }
 
+/** The human's decisions, in the bar with the tabs. */
+async function decisions() {
+  return screen.findByRole("group", { name: "Your review" });
+}
+
 async function lineCell(container: HTMLElement, key: string) {
   await waitFor(() => {
     expect(container.querySelector(`[data-line="${key}"]`)).not.toBeNull();
@@ -705,7 +710,6 @@ describe("Proposal detail", () => {
     expect(
       screen.getByRole("button", { name: "Version: v2 · approved" }),
     ).toBeTruthy();
-    expect(await screen.findByText("base r8 → main r8")).toBeTruthy();
 
     await user.click(
       screen.getByRole("button", { name: "Version: v2 · approved" }),
@@ -913,7 +917,9 @@ describe("Proposal detail", () => {
       within(panel).getByRole("button", { name: "Request changes" }),
     );
     await expectMentionPopover(
-      within(panel).getByLabelText("What needs to change"),
+      within(
+        await screen.findByRole("form", { name: "Request changes" }),
+      ).getByLabelText("What needs to change"),
     );
   });
 
@@ -951,16 +957,19 @@ describe("Proposal detail", () => {
         .getByRole("link", { name: "web/report.tsx" })
         .getAttribute("href"),
     ).toBe("/p/demo/repository?path=web%2Freport.tsx");
-    const panel = await integration();
+    const panel = await decisions();
     await user.click(
       within(panel).getByRole("button", { name: "Request changes" }),
     );
+    const request = await screen.findByRole("form", {
+      name: "Request changes",
+    });
     await user.type(
-      within(panel).getByLabelText("What needs to change"),
+      within(request).getByLabelText("What needs to change"),
       "Fix #T-9 first",
     );
     await user.click(
-      within(panel).getByRole("button", { name: "Send request" }),
+      within(request).getByRole("button", { name: "Send request" }),
     );
     const reviews = screen.getByRole("article", { name: "Version v2" });
     await waitFor(() => {
@@ -1130,14 +1139,18 @@ describe("Proposal detail", () => {
   it("disables Approve and Integrate on a marked task until a reviewer agent approved the version", async () => {
     update("P-4", (p) => ({ ...p, agent_approved: false }));
     renderAt("/p/demo/proposals/P-4");
-    const panel = await integration();
-    const approve = within(panel).getByRole("button", { name: "Approve v2" });
+    const bar = await decisions();
+    const approve = within(bar).getByRole("button", { name: "Approve v2" });
     expect(approve).toHaveProperty("disabled", true);
     expect(
-      within(panel).getAllByText("A reviewer agent approves first."),
-    ).toHaveLength(2);
+      within(bar).getAllByText("A reviewer agent approves first."),
+    ).toHaveLength(1);
     expect(
-      within(panel).getByRole("button", { name: "Integrate" }),
+      document.getElementById(approve.getAttribute("aria-describedby") ?? "")
+        ?.textContent,
+    ).toBe("A reviewer agent approves first.");
+    expect(
+      within(bar).getByRole("button", { name: "Integrate" }),
     ).toHaveProperty("disabled", true);
     expect(writes("POST /api/v1/projects/demo/proposals/P-4/reviews")).toEqual(
       [],
@@ -1150,15 +1163,15 @@ describe("Proposal detail", () => {
       checks: [checkRun(16, { state: "running", finished_at: null })],
     }));
     const { queryClient } = renderAt("/p/demo/proposals/P-4");
-    const panel = await integration();
-    const approve = within(panel).getByRole("button", { name: "Approve v2" });
+    const bar = await decisions();
+    const approve = within(bar).getByRole("button", { name: "Approve v2" });
     expect(approve).toHaveProperty("disabled", true);
     expect(
       document.getElementById(approve.getAttribute("aria-describedby") ?? "")
         ?.textContent,
     ).toBe("A check runs on v2. Approve when it ends.");
     expect(
-      within(panel).getByRole("button", { name: "Request changes" }),
+      within(bar).getByRole("button", { name: "Request changes" }),
     ).toHaveProperty("disabled", false);
     update("P-4", (p) => ({ ...p, checks: [checkRun(16)] }));
     deliver(queryClient, "checks.finished", {
@@ -1168,11 +1181,11 @@ describe("Proposal detail", () => {
     });
     await waitFor(() => {
       expect(
-        within(panel).getByRole("button", { name: "Approve v2" }),
+        within(bar).getByRole("button", { name: "Approve v2" }),
       ).toHaveProperty("disabled", false);
     });
     expect(
-      within(panel).queryByText("A check runs on v2. Approve when it ends."),
+      within(bar).queryByText("A check runs on v2. Approve when it ends."),
     ).toBeNull();
   });
 
@@ -1182,20 +1195,20 @@ describe("Proposal detail", () => {
       update_run: { run: "cr-18", purpose: "update_proposal" },
     }));
     const { queryClient } = renderAt("/p/demo/proposals/P-4");
-    const panel = await integration();
-    const approve = within(panel).getByRole("button", { name: "Approve v2" });
-    const integrate = within(panel).getByRole("button", { name: "Integrate" });
+    const bar = await decisions();
+    const approve = within(bar).getByRole("button", { name: "Approve v2" });
+    const integrate = within(bar).getByRole("button", { name: "Integrate" });
     expect(approve).toHaveProperty("disabled", true);
     expect(integrate).toHaveProperty("disabled", true);
-    expect(
-      within(panel).getAllByText("v3 is running its checks."),
-    ).toHaveLength(1);
+    expect(within(bar).getAllByText("v3 is running its checks.")).toHaveLength(
+      1,
+    );
     expect(
       document.getElementById(approve.getAttribute("aria-describedby") ?? "")
         ?.textContent,
     ).toBe("v3 is running its checks.");
     expect(
-      within(panel).getByRole("button", { name: "Request changes" }),
+      within(bar).getByRole("button", { name: "Request changes" }),
     ).toHaveProperty("disabled", false);
     update("P-4", (p) => ({ ...p, update_run: null }));
     deliver(queryClient, "checks.finished", {
@@ -1210,10 +1223,10 @@ describe("Proposal detail", () => {
     });
     await waitFor(() => {
       expect(
-        within(panel).getByRole("button", { name: "Approve v2" }),
+        within(bar).getByRole("button", { name: "Approve v2" }),
       ).toHaveProperty("disabled", false);
     });
-    expect(within(panel).queryByText("v3 is running its checks.")).toBeNull();
+    expect(within(bar).queryByText("v3 is running its checks.")).toBeNull();
   });
 
   it("disables Integrate while an integration check of the current version runs that no queued request of it started", async () => {
@@ -1230,18 +1243,18 @@ describe("Proposal detail", () => {
       ],
     }));
     renderAt("/p/demo/proposals/P-4");
-    const panel = await integration();
-    const integrate = within(panel).getByRole("button", { name: "Integrate" });
+    const bar = await decisions();
+    const integrate = within(bar).getByRole("button", { name: "Integrate" });
     expect(integrate).toHaveProperty("disabled", true);
     expect(
       document.getElementById(integrate.getAttribute("aria-describedby") ?? "")
         ?.textContent,
     ).toBe("fold runs the integration checks of v2. Integrate when they end.");
     expect(
-      within(panel).getByRole("button", { name: "Approve v2" }),
+      within(bar).getByRole("button", { name: "Approve v2" }),
     ).toHaveProperty("disabled", true);
     expect(
-      within(panel).getByRole("button", { name: "Request changes" }),
+      within(bar).getByRole("button", { name: "Request changes" }),
     ).toHaveProperty("disabled", false);
   });
 
@@ -1249,6 +1262,7 @@ describe("Proposal detail", () => {
     const user = userEvent.setup();
     renderAt("/p/demo/proposals/P-4");
     const panel = await integration();
+    const bar = await decisions();
     expect(
       within(panel).getByText(byContent(/Waiting for @tanim/)),
     ).toBeTruthy();
@@ -1256,9 +1270,9 @@ describe("Proposal detail", () => {
     const verdicts = () => reviews.querySelectorAll("[data-verdict]").length;
     const before = verdicts();
     const release = hold();
-    await user.click(within(panel).getByRole("button", { name: "Approve v2" }));
+    await user.click(within(bar).getByRole("button", { name: "Approve v2" }));
     expect(
-      within(panel)
+      within(bar)
         .getByRole("button", { name: "Approving v2…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
@@ -1273,14 +1287,14 @@ describe("Proposal detail", () => {
     expect(
       within(panel).getByText(byContent(/Approved by @tanim/)),
     ).toBeTruthy();
-    const approved = within(panel).getByRole("button", { name: "Approve v2" });
+    const approved = within(bar).getByRole("button", { name: "Approve v2" });
     expect(approved).toHaveProperty("disabled", true);
     expect(
       document.getElementById(approved.getAttribute("aria-describedby") ?? "")
         ?.textContent,
     ).toBe("You approved v2.");
     expect(
-      within(panel).getByRole("button", { name: "Integrate" }),
+      within(bar).getByRole("button", { name: "Integrate" }),
     ).toHaveProperty("disabled", false);
     expect(
       writes("POST /api/v1/projects/demo/proposals/P-4/reviews")[0]?.body,
@@ -1294,11 +1308,11 @@ describe("Proposal detail", () => {
   it("needs a body for Request changes, shows it pending, then the verdict once the server answers", async () => {
     const user = userEvent.setup();
     renderAt("/p/demo/proposals/P-4");
-    const panel = await integration();
+    const bar = await decisions();
     await user.click(
-      within(panel).getByRole("button", { name: "Request changes" }),
+      within(bar).getByRole("button", { name: "Request changes" }),
     );
-    const form = within(panel).getByRole("form", { name: "Request changes" });
+    const form = screen.getByRole("form", { name: "Request changes" });
     await user.click(
       within(form).getByRole("button", { name: "Send request" }),
     );
@@ -1332,13 +1346,11 @@ describe("Proposal detail", () => {
   it("closes the Request-changes form when the router moves to another proposal", async () => {
     const user = userEvent.setup();
     const { router } = renderAt("/p/demo/proposals/P-4");
-    const panel = await integration();
+    const bar = await decisions();
     await user.click(
-      within(panel).getByRole("button", { name: "Request changes" }),
+      within(bar).getByRole("button", { name: "Request changes" }),
     );
-    expect(
-      within(panel).getByRole("form", { name: "Request changes" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("form", { name: "Request changes" })).toBeTruthy();
     await act(async () => {
       await router.navigate({
         to: "/p/$slug/proposals/$id",
@@ -1365,14 +1377,15 @@ describe("Proposal detail", () => {
     const user = userEvent.setup();
     renderAt("/p/demo/proposals/P-3");
     const panel = await integration();
+    const bar = await decisions();
     expect(
       screen.getByText("Changes requested · back with the author"),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: /reject/i })).toBeNull();
     const release = hold();
-    await user.click(within(panel).getByRole("button", { name: "Integrate" }));
+    await user.click(within(bar).getByRole("button", { name: "Integrate" }));
     expect(
-      within(panel)
+      within(bar)
         .getByRole("button", { name: "Integrating…" })
         .getAttribute("aria-busy"),
     ).toBe("true");
@@ -1381,9 +1394,7 @@ describe("Proposal detail", () => {
     const link = await within(panel).findByRole("link", { name: "r9" });
     expect(link.getAttribute("href")).toBe("/p/demo/repository?revision=r9");
     expect(screen.getByText("Integrated as r9")).toBeTruthy();
-    expect(
-      within(panel).queryByRole("button", { name: "Integrate" }),
-    ).toBeNull();
+    expect(within(bar).queryByRole("button", { name: "Integrate" })).toBeNull();
     expect(
       writes("POST /api/v1/projects/demo/proposals/P-3/integrate")[0]?.body,
     ).toEqual({ expected_version: 1 });
@@ -1406,10 +1417,10 @@ describe("Proposal detail", () => {
     });
     const user = userEvent.setup();
     renderAt("/p/demo/proposals/P-4");
-    const panel = await integration();
-    await user.click(within(panel).getByRole("button", { name: "Integrate" }));
+    const bar = await decisions();
+    await user.click(within(bar).getByRole("button", { name: "Integrate" }));
     expect(
-      await within(panel).findByText(
+      await within(bar).findByText(
         "v3 is now the current version. Read it, then try once more.",
       ),
     ).toBeTruthy();
@@ -1417,7 +1428,7 @@ describe("Proposal detail", () => {
       await screen.findByRole("article", { name: "Version v3" }),
     ).toBeTruthy();
     expect(
-      within(panel).getByRole("button", { name: "Approve v3" }),
+      within(bar).getByRole("button", { name: "Approve v3" }),
     ).toBeTruthy();
     expect(screen.queryByText(/The request failed/)).toBeNull();
   });
@@ -1429,18 +1440,19 @@ describe("Proposal detail", () => {
     );
     const user = userEvent.setup();
     renderAt("/p/demo/proposals/P-4");
-    const panel = await integration();
-    await user.click(within(panel).getByRole("button", { name: "Approve v2" }));
+    const bar = await decisions();
+    await user.click(within(bar).getByRole("button", { name: "Approve v2" }));
     const banner = await screen.findByText("refused: disk_full");
     expect(banner.closest("[role=alert]")?.textContent).toMatch(
       /The request failed/,
     );
-    expect(within(panel).queryByRole("alert")).toBeNull();
+    expect(within(bar).queryByRole("alert")).toBeNull();
   });
 
   it("shows the result and the new revision after an agent integrates", async () => {
     const { queryClient } = renderAt("/p/demo/proposals/P-4");
     const panel = await integration();
+    const bar = await decisions();
     integrate("P-4", 9);
     deliver(queryClient, "proposal.integrated", {
       proposal: "P-4",
@@ -1455,7 +1467,7 @@ describe("Proposal detail", () => {
       within(panel).getByText(byContent(/^v2 integrated as r9/)),
     ).toBeTruthy();
     expect(
-      within(panel).queryByRole("button", { name: "Approve v2" }),
+      within(bar).queryByRole("button", { name: "Approve v2" }),
     ).toBeNull();
   });
 
@@ -1523,22 +1535,23 @@ describe("Proposal detail", () => {
     );
     renderAt("/p/demo/proposals/P-7");
     const panel = await integration();
+    const bar = await decisions();
     expect(within(panel).getAllByRole("img", { name: "met" })).toHaveLength(3);
     expect(within(panel).getByRole("img", { name: "not met" })).toBeTruthy();
     expect(
       within(panel).getByRole("img", { name: "checked at integration" }),
     ).toBeTruthy();
     expect(within(panel).getByText("Prerequisites not Done: T-1")).toBeTruthy();
-    const integrate = within(panel).getByRole("button", { name: "Integrate" });
+    const integrate = within(bar).getByRole("button", { name: "Integrate" });
     expect(integrate.hasAttribute("disabled")).toBe(true);
     expect(integrate.getAttribute("aria-describedby")).toBeTruthy();
     expect(
-      within(panel).getByText(
+      within(bar).getByText(
         "Prerequisites not Done: T-1, so you cannot integrate yet.",
       ),
     ).toBeTruthy();
     expect(
-      within(panel)
+      within(bar)
         .getByRole("button", { name: "Approve v1" })
         .hasAttribute("disabled"),
     ).toBe(false);
@@ -1561,14 +1574,14 @@ describe("Proposal detail", () => {
       ),
     );
     renderAt("/p/demo/proposals/P-8");
-    const panel = await integration();
+    const bar = await decisions();
     expect(
-      within(panel)
+      within(bar)
         .getByRole("button", { name: "Integrate" })
         .hasAttribute("disabled"),
     ).toBe(true);
     expect(
-      within(panel).getByText("Integrate waits for @ana to approve v1."),
+      within(bar).getByText("Integrate waits for @ana to approve v1."),
     ).toBeTruthy();
   });
 
@@ -1665,7 +1678,9 @@ describe("Proposal tabs", () => {
     expect(
       within(listed).getByText("Add an index on (owner_id, report_date)."),
     ).toBeTruthy();
-    expect(within(listed).getByText(`rc-1 · ${SCHEMA} · line 3`)).toBeTruthy();
+    expect(
+      within(listed).getByText(byContent(`rc-1 · ${SCHEMA} · line 3`)),
+    ).toBeTruthy();
     expect(
       within(listed).queryByText("Added reports_owner_date_idx in v2."),
     ).toBeNull();
@@ -1753,9 +1768,14 @@ describe("Proposal tabs", () => {
     ).toBeTruthy();
   });
 
-  it("asks the author about the whole proposal from the conversation, pending until the daemon answers", async () => {
+  it("asks the author about the whole proposal from the decision bar, pending until the daemon answers, then closes the panel", async () => {
     const user = userEvent.setup();
     renderAt("/p/demo/proposals/P-4?tab=conversation");
+    const bar = await decisions();
+    expect(screen.queryByRole("form", { name: "Ask the author" })).toBeNull();
+    await user.click(
+      within(bar).getByRole("button", { name: "Ask the author" }),
+    );
     const form = await screen.findByRole("form", { name: "Ask the author" });
     expect(screen.queryByRole("checkbox")).toBeNull();
     await user.type(
@@ -1777,6 +1797,7 @@ describe("Proposal tabs", () => {
     });
     expect(within(asked).getByText("whole proposal")).toBeTruthy();
     expect(within(asked).getByText("Why one table?")).toBeTruthy();
+    expect(screen.queryByRole("form", { name: "Ask the author" })).toBeNull();
     expect(
       writes("POST /api/v1/projects/demo/proposals/P-4/questions")[0]?.body,
     ).toEqual({ version: 2, body: "Why one table?" });
@@ -1844,17 +1865,31 @@ describe("Proposal tabs", () => {
     expect(
       screen.getAllByRole("article").map((a) => a.getAttribute("aria-label")),
     ).toEqual(["Question to you m-24"]);
+    expect(
+      within(filters)
+        .getAllByRole("button", { pressed: false })
+        .map((chip) => chip.textContent),
+    ).not.toContain("Open0");
     await user.click(within(filters).getByRole("button", { name: /^All ?\d/ }));
     await user.click(
-      within(filters).getByRole("button", { name: /^Review comments/ }),
+      within(filters).getByRole("button", { name: "Kind: Any kind" }),
+    );
+    await user.click(
+      await screen.findByRole("menuitem", { name: /^Review comments/ }),
     );
     expect(
       screen.getAllByRole("article").map((a) => a.getAttribute("aria-label")),
     ).toEqual(["Review comment rc-1"]);
     await user.click(
-      within(filters).getByRole("button", { name: /^Review comments/ }),
+      within(filters).getByRole("button", { name: "Kind: Review comments" }),
     );
-    await user.click(within(filters).getByRole("button", { name: /^v1 ?\d/ }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: /^Review comments/ }),
+    );
+    await user.click(
+      within(filters).getByRole("button", { name: "Version: All versions" }),
+    );
+    await user.click(await screen.findByRole("menuitem", { name: /^v1 ?\d/ }));
     expect(
       screen.getAllByRole("article").map((a) => a.getAttribute("aria-label")),
     ).toEqual(["Review comment rc-1"]);
@@ -1987,7 +2022,7 @@ describe("Human edit", () => {
     }));
     const user = userEvent.setup();
     renderAt("/p/demo/proposals/P-4");
-    const panel = await integration();
+    const panel = await decisions();
     const release = hold();
     await user.click(
       within(panel).getByRole("button", { name: "Send v3 for review again" }),
@@ -2153,24 +2188,25 @@ describe("Checks", () => {
     const history = await screen.findByRole("article", { name: "Version v2" });
     expect(within(history).getByText(/e2e failed \(exit 1\)/)).toBeTruthy();
     const panel = await integration();
+    const bar = await decisions();
     expect(
       within(panel).getByText(
         "The integration checks of v2 failed on the merge with main. The author sends a new version.",
       ),
     ).toBeTruthy();
     expect(
-      within(panel).getByRole("button", { name: "Approve v2" }),
+      within(bar).getByRole("button", { name: "Approve v2" }),
     ).toHaveProperty("disabled", true);
     expect(
-      within(panel).getByRole("button", { name: "Integrate" }),
+      within(bar).getByRole("button", { name: "Integrate" }),
     ).toHaveProperty("disabled", true);
     expect(
-      within(panel).getAllByText(
+      within(bar).getAllByText(
         "The integration checks failed; the author sends a new version.",
       ),
     ).toHaveLength(1);
     expect(
-      within(panel).getByRole("button", { name: "Request changes" }),
+      within(bar).getByRole("button", { name: "Request changes" }),
     ).toHaveProperty("disabled", false);
   });
 
@@ -2203,17 +2239,18 @@ describe("Checks", () => {
     const user = userEvent.setup();
     const { queryClient } = renderAt("/p/demo/proposals/P-4");
     const panel = await integration();
-    await user.click(within(panel).getByRole("button", { name: "Integrate" }));
+    const bar = await decisions();
+    await user.click(within(bar).getByRole("button", { name: "Integrate" }));
     expect(
       await within(panel).findByText(
         "Queued: fold runs the integration checks on the merge with main, then integrates when they pass.",
       ),
     ).toBeTruthy();
     expect(
-      within(panel).getByText("This integration is already queued."),
+      within(bar).getByText("This integration is already queued."),
     ).toBeTruthy();
     expect(
-      within(panel).getByRole("button", { name: "Integrate" }),
+      within(bar).getByRole("button", { name: "Integrate" }),
     ).toHaveProperty("disabled", true);
     integrate("P-4", 9);
     deliver(queryClient, "proposal.integrated", {
@@ -2233,9 +2270,10 @@ describe("Checks", () => {
     }));
     const { queryClient } = renderAt("/p/demo/proposals/P-4");
     const panel = await integration();
+    const bar = await decisions();
     expect(await within(panel).findByText(/^Queued:/)).toBeTruthy();
     expect(
-      within(panel).getByRole("button", { name: "Integrate" }),
+      within(bar).getByRole("button", { name: "Integrate" }),
     ).toHaveProperty("disabled", true);
     update("P-4", (p) => ({
       ...p,
@@ -2251,7 +2289,7 @@ describe("Checks", () => {
       expect(within(panel).queryByText(/^Queued:/)).toBeNull();
     });
     expect(
-      within(panel).getByRole("button", { name: "Integrate" }),
+      within(bar).getByRole("button", { name: "Integrate" }),
     ).toHaveProperty("disabled", false);
   });
 });

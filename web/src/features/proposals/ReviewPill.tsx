@@ -45,13 +45,13 @@ export function ReviewPill({
     <span
       data-tone={pill.tone}
       className={cn(
-        "inline-flex items-center rounded-s text-13 leading-tight font-semibold",
-        large ? "gap-6 px-9 py-3" : "gap-5 px-8 py-2",
+        "inline-flex items-center gap-6 rounded-pill leading-tight font-medium",
+        large ? "px-12 py-4 text-14" : "px-9 py-2 text-13",
         PILL_CLASSES[pill.tone],
         className,
       )}
     >
-      <Icon aria-hidden="true" size={large ? 13 : 12} className="shrink-0" />
+      <Icon aria-hidden="true" size={14} className="shrink-0" />
       {pill.segments ? (
         <ActorText segments={pill.segments} slot="waitingChip" />
       ) : (

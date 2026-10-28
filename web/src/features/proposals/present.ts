@@ -1,5 +1,6 @@
 import type {
   ComparisonTotals,
+  HumanReviewMark,
   ProposalDetail,
   ProposalSummary,
   ProposalVersion,
@@ -134,11 +135,12 @@ export function reviewPill(
   return { tone: "neutral", icon: "waiting", text: "Waiting for review" };
 }
 
+/** Gold is only for a wait on a person; a waiting review and an end state are quiet. */
 export const PILL_CLASSES: Record<PillTone, string> = {
   danger: "bg-bad-soft text-bad",
   human: "bg-warn-soft text-warn",
-  approved: "bg-accent-soft text-accent",
-  neutral: "bg-sunken text-text-2",
+  approved: "bg-ok-soft text-ok",
+  neutral: "bg-fill text-text",
   done: "bg-fill text-text",
 };
 
@@ -260,6 +262,11 @@ export function filesText(
   const n = fileCount(v);
   const files = `${String(n)} ${n === 1 ? "file" : "files"}`;
   return `${files} · +${String(totals.added_lines)} −${String(totals.removed_lines)}`;
+}
+
+/** `@dev, marked by @backend-lead`: who approves for the human review mark, and who set it. */
+export function humanReviewFact(mark: HumanReviewMark): Segments {
+  return seg`${reviewerSegment(mark.reviewer, "any human")}, marked by ${actorSegment(mark.set_by)}`;
 }
 
 export function claimText(p: ProposalSummary): Segments {

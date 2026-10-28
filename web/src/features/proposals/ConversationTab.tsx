@@ -1,12 +1,19 @@
-import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, MessageCircleQuestion, Send } from "lucide-react";
-import { useState } from "react";
-import { Controller, useForm } from "react-hook-form";
+import {
+  ArrowRight,
+  Check,
+  ChevronDown,
+  MessagesSquare,
+  Send,
+} from "lucide-react";
+import { useState, type ReactNode } from "react";
 import type { ProposalDetail } from "@/api/proposals";
 import { proposalFileDiffQuery } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
+import { Chip } from "@/components/badge/Chip";
+import type { ChipTone } from "@/components/badge/chips";
 import { Button } from "@/components/button/Button";
+import { Menu } from "@/components/overlay/Menu";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { Skeleton } from "@/components/states/Skeleton";
 import { CODE_BOX, textFlow } from "@/components/text/textFlow";
@@ -23,8 +30,9 @@ import { MentionText } from "@/mentions/MentionText";
 import { MessageComposer } from "@/mentions/MessageComposer";
 import { PersonList, PersonName } from "@/people/PersonName";
 import { idHref } from "@/routes/paths";
-import { questionSchema, type QuestionValues } from "./compose";
 import {
+  chipStates,
+  chosenLabel,
   filterConversation,
   KIND_TEXT,
   kindOptions,
@@ -41,41 +49,38 @@ import {
   type ConversationState,
   type ConversationThread,
   type FilterOption,
+  type StateFilter,
 } from "./conversation";
-import { NAME_NOTE } from "./lineQuestions";
 import { commentNote } from "./threadsModel";
 import { detailHref } from "./view";
 
-const OVERLINE = "font-title text-13 leading-tight font-semibold text-text-2";
-const CARD = "rounded-l bg-surface inset-ring inset-ring-line";
+const CARD = "rounded-m bg-surface";
 const LINK = cn("rounded-s text-accent hover:underline", focusRing);
 
 const KIND_CLASSES: Record<ConversationKind, string> = {
-  to_author: "bg-accent-soft text-accent",
-  to_you: "bg-warn-soft text-warn",
-  review: "bg-sunken text-text",
-  agent: "bg-sunken text-text-2",
+  to_author: "text-text",
+  to_you: "text-text",
+  review: "text-text",
+  agent: "text-text-2",
 };
 
-const STATE_CLASSES: Record<ConversationState, string> = {
-  needs_answer: "bg-warn-soft text-warn",
-  waits_author: "bg-accent-soft text-accent",
-  open: "bg-warn-soft text-warn",
-  closed: "bg-sunken text-text-2",
+/** Gold only for a thread that waits for the human's answer. */
+const STATE_TONES: Record<ConversationState, ChipTone> = {
+  needs_answer: "warn",
+  waits_author: "neutral",
+  open: "neutral",
+  closed: "neutral",
 };
 
-function FilterGroup<T>({
-  title,
+function FilterChips({
   options,
   onPick,
 }: {
-  title: string;
-  options: FilterOption<T>[];
-  onPick: (value: T) => void;
+  options: FilterOption<StateFilter>[];
+  onPick: (value: StateFilter) => void;
 }) {
   return (
-    <section aria-label={title} className="flex flex-col gap-2">
-      <h2 className={cn(OVERLINE, "px-10 pb-4")}>{title}</h2>
+    <>
       {options.map((option) => (
         <button
           key={option.label}
@@ -85,117 +90,109 @@ function FilterGroup<T>({
             onPick(option.value);
           }}
           className={cn(
-            "flex items-center gap-8 rounded-m px-10 py-6 text-left text-14",
+            "inline-flex items-center gap-6 rounded-pill px-12 py-5 text-14 whitespace-nowrap",
             option.selected
-              ? "bg-sunken font-semibold text-text"
-              : "text-text-2 hover:bg-sunken hover:text-text",
+              ? "bg-accent-soft font-semibold text-accent"
+              : "bg-surface text-text hover:bg-fill",
             focusRing,
           )}
         >
-          <span className="min-w-0 flex-1">{option.label}</span>
-          <span className="rounded-s bg-sunken px-6 text-13 font-medium text-text-2">
+          {option.label}
+          <span
+            className={cn(
+              "text-13 tabular-nums",
+              option.selected ? "text-accent" : "text-text-2",
+            )}
+          >
             {option.count}
           </span>
         </button>
       ))}
-    </section>
+    </>
   );
 }
 
-/** A question to the author about the whole proposal; the author decides on its own whether it needs a human's answer. */
-function AskWholeProposal({
+function FilterMenu<T>({
+  label,
+  none,
+  options,
+  onPick,
+}: {
+  /** Names the dropdown for a screen reader, such as `Kind`. */
+  label: string;
+  none: string;
+  options: FilterOption<T>[];
+  onPick: (value: T) => void;
+}) {
+  const shown = chosenLabel(options, none);
+  return (
+    <Menu
+      trigger={
+        <button
+          type="button"
+          aria-label={`${label}: ${shown}`}
+          className={cn(
+            "inline-flex items-center gap-6 rounded-s bg-surface py-5 pr-10 pl-12 text-14 whitespace-nowrap text-text hover:bg-fill",
+            focusRing,
+          )}
+        >
+          {shown}
+          <ChevronDown aria-hidden="true" size={14} className="text-text-2" />
+        </button>
+      }
+      items={options.map((option) => ({
+        label: `${option.label} ${String(option.count)}`,
+        icon: option.selected ? Check : undefined,
+        onSelect: () => {
+          onPick(option.value);
+        },
+      }))}
+    />
+  );
+}
+
+/** A reply box that opens when the human chooses Reply, so a thread shows its messages first. */
+function Reply({
   slug,
-  human,
-  changesHref,
-  onAsk,
+  label,
+  onSend,
+  children,
 }: {
   slug: string;
-  human: string | null;
-  changesHref: string;
-  onAsk: (body: string) => Promise<void>;
+  label: string;
+  onSend: (body: string) => Promise<void>;
+  /** Other actions of the thread, beside Reply. */
+  children?: ReactNode;
 }) {
-  const {
-    control,
-    handleSubmit,
-    reset,
-    setError,
-    formState: { errors, isSubmitting },
-  } = useForm<QuestionValues>({
-    resolver: zodResolver(questionSchema),
-    defaultValues: { body: "" },
-  });
-  const submit = handleSubmit(async ({ body }) => {
-    try {
-      await onAsk(body.trim());
-      reset();
-    } catch (error) {
-      setError("root", { message: failureText(error) });
-    }
-  });
+  const [open, setOpen] = useState(false);
+  if (open) {
+    return (
+      <ReplyForm
+        slug={slug}
+        label={label}
+        onSend={async (body) => {
+          await onSend(body);
+          setOpen(false);
+        }}
+        onCancel={() => {
+          setOpen(false);
+        }}
+      />
+    );
+  }
   return (
-    <form
-      aria-label="Ask the author"
-      noValidate
-      onSubmit={(event) => void submit(event)}
-      className={cn(CARD, "flex flex-col gap-10 p-14")}
-    >
-      <p className={cn(OVERLINE, "flex items-center gap-6")}>
-        <MessageCircleQuestion aria-hidden="true" size={13} />
-        Ask the author about the whole proposal
-      </p>
-      {human === null ? (
-        <p className="text-13 text-text-2">{NAME_NOTE}</p>
-      ) : (
-        <>
-          <Controller
-            control={control}
-            name="body"
-            render={({ field }) => (
-              <MessageComposer
-                slug={slug}
-                aria-label="Question to the author"
-                placeholder="What do you want to know? This changes nothing in the review."
-                pending={isSubmitting}
-                aria-invalid={errors.body ? true : undefined}
-                ref={field.ref}
-                value={field.value}
-                onValueChange={field.onChange}
-                onBlur={field.onBlur}
-              />
-            )}
-          />
-          {errors.body ? (
-            <p className="text-13 font-medium text-bad">
-              {errors.body.message}
-            </p>
-          ) : null}
-          {errors.root ? (
-            <p role="alert" className="text-13 font-medium text-bad">
-              The question was not sent. {errors.root.message}
-            </p>
-          ) : null}
-          <div className="flex flex-wrap items-center gap-10">
-            <span className="text-13 text-text-2">
-              To ask about some lines, select them in{" "}
-              <HrefLink href={changesHref} className={LINK}>
-                Changes
-              </HrefLink>
-              .
-            </span>
-            <Button
-              type="submit"
-              variant="primary"
-              className="ml-auto"
-              pending={isSubmitting}
-              pendingLabel="Asking…"
-              icon={<Send aria-hidden="true" size={13} />}
-            >
-              Ask the author
-            </Button>
-          </div>
-        </>
-      )}
-    </form>
+    <div className="flex flex-wrap items-center gap-8">
+      <Button
+        size="sm"
+        icon={<Send aria-hidden="true" size={14} />}
+        onClick={() => {
+          setOpen(true);
+        }}
+      >
+        Reply
+      </Button>
+      {children}
+    </div>
   );
 }
 
@@ -203,10 +200,12 @@ function ReplyForm({
   slug,
   label,
   onSend,
+  onCancel,
 }: {
   slug: string;
   label: string;
   onSend: (body: string) => Promise<void>;
+  onCancel: () => void;
 }) {
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
@@ -243,17 +242,21 @@ function ReplyForm({
             slug={slug}
             aria-label="Reply"
             placeholder="Reply"
+            autoFocus
             value={body}
             pending={sending}
             onValueChange={setBody}
           />
         </div>
+        <Button variant="ghost" size="sm" disabled={sending} onClick={onCancel}>
+          Cancel
+        </Button>
         <Button
           type="submit"
           size="sm"
           pending={sending}
           pendingLabel="Sending…"
-          icon={<Send aria-hidden="true" size={13} />}
+          icon={<Send aria-hidden="true" size={14} />}
         >
           Send
         </Button>
@@ -320,7 +323,7 @@ function CommentLines({
     <pre
       className={cn(
         CODE_BOX,
-        "border-b border-line bg-bg py-6 font-mono text-13 leading-tight text-text",
+        "rounded-s bg-sunken/60 py-6 font-mono text-13 leading-normal text-text",
       )}
     >
       {lines.map((line) => (
@@ -379,47 +382,42 @@ function ThreadCard({
     <article
       aria-label={`${KIND_TEXT[thread.kind]} ${thread.key}`}
       data-state={thread.state}
-      className={cn(CARD, "flex flex-col overflow-hidden")}
+      className={cn(CARD, "flex flex-col gap-12 px-18 pt-14 pb-16")}
     >
-      <header className="flex flex-wrap items-center gap-x-10 gap-y-6 border-b border-line px-16 py-10">
+      <header className="flex flex-wrap items-center gap-x-10 gap-y-6">
         <span
           className={cn(
-            "rounded-s px-8 py-2 text-13 font-semibold",
+            "font-title text-15 font-semibold",
             KIND_CLASSES[thread.kind],
           )}
         >
           {KIND_TEXT[thread.kind]}
         </span>
-        <span className="min-w-0 font-mono text-13 break-all text-text">
+        <span className="min-w-0 font-mono text-13 break-all text-text-2">
           {whereText(thread)}
         </span>
         {version === null ? null : (
           <span className="text-13 text-text-2">{version}</span>
         )}
-        <span className="flex flex-wrap items-center gap-x-10 gap-y-4 md:ml-auto">
-          <span
-            className={cn(
-              "rounded-s px-8 py-2 text-13 font-semibold",
-              STATE_CLASSES[thread.state],
-            )}
-          >
-            {thread.state === "waits_author" && thread.waitsFor.length > 0 ? (
-              <>
-                Waits for <PersonList names={thread.waitsFor} />
-              </>
-            ) : (
-              thread.stateText
-            )}
-          </span>
+        <Chip tone={STATE_TONES[thread.state]}>
+          {thread.state === "waits_author" && thread.waitsFor.length > 0 ? (
+            <>
+              Waits for <PersonList names={thread.waitsFor} />
+            </>
+          ) : (
+            thread.stateText
+          )}
+        </Chip>
+        <span className="flex flex-wrap items-center gap-x-14 gap-y-4 text-14 md:ml-auto">
           {diffHref === null ? null : (
-            <HrefLink href={diffHref} className={cn("text-13", LINK)}>
+            <HrefLink href={diffHref} className={LINK}>
               Show in diff
             </HrefLink>
           )}
           {source.type === "message" ? (
             <HrefLink
               href={idHref(slug, "message", source.thread.id)}
-              className={cn("text-13", LINK)}
+              className={LINK}
             >
               Open in Messages
             </HrefLink>
@@ -428,35 +426,24 @@ function ThreadCard({
       </header>
       {source.type === "message" ? (
         <>
-          <ol className="flex flex-col px-16">
+          <ol className="flex flex-col gap-10">
             {source.thread.messages.map((message) =>
               message.sender === "fold" ? (
-                <li
-                  key={message.id}
-                  className="border-b border-line py-8 text-13 text-text-2 italic last:border-b-0"
-                >
+                <li key={message.id} className="text-14 text-text-2 italic">
                   <MentionText text={message.body} slug={slug} />
                 </li>
               ) : (
-                <li
-                  key={message.id}
-                  className="flex flex-col gap-6 border-b border-line py-12 last:border-b-0"
-                >
-                  <p className="flex flex-wrap items-center gap-x-8 text-13 text-text-2">
-                    <PersonName
-                      name={message.sender}
-                      className="font-semibold"
-                    />
+                <li key={message.id} className="flex flex-col gap-4">
+                  <p className="flex flex-wrap items-center gap-x-6 text-13 text-text-2">
+                    <PersonName name={message.sender} />
                     <ArrowRight
                       aria-label="to"
                       role="img"
-                      size={12}
+                      size={14}
                       className="shrink-0 text-text-2"
                     />
                     <PersonList names={recipientActors(message)} />
-                    <span className="text-text-2">
-                      · {formatAsOfMinute(now, message.sent_at)}
-                    </span>
+                    <span>· {formatAsOfMinute(now, message.sent_at)}</span>
                   </p>
                   {message.lines === null ? null : (
                     <QuotedLines
@@ -465,61 +452,69 @@ function ThreadCard({
                       lines={message.lines}
                     />
                   )}
-                  <MessageBody body={message.body} slug={slug} />
+                  <div className="max-w-measure text-15 leading-normal">
+                    <MessageBody body={message.body} slug={slug} />
+                  </div>
                 </li>
               ),
             )}
           </ol>
-          <div className="flex flex-col gap-8 border-t border-line px-16 py-10">
-            {threadCanMarkAnswered(source.thread) ? (
+          {human === null ? (
+            threadCanMarkAnswered(source.thread) ? (
               <MarkAnswered slug={slug} scope={{ thread: source.thread.id }} />
-            ) : null}
-            {human === null ? null : (
-              <ReplyForm
-                slug={slug}
-                label={`Reply in ${source.thread.id}`}
-                onSend={async (body) => {
-                  const last = source.thread.messages.at(-1);
-                  if (last) await onReply(last.id, body);
-                }}
-              />
-            )}
-          </div>
+            ) : null
+          ) : (
+            <Reply
+              slug={slug}
+              label={`Reply in ${source.thread.id}`}
+              onSend={async (body) => {
+                const last = source.thread.messages.at(-1);
+                if (last) await onReply(last.id, body);
+              }}
+            >
+              {threadCanMarkAnswered(source.thread) ? (
+                <MarkAnswered
+                  slug={slug}
+                  scope={{ thread: source.thread.id }}
+                />
+              ) : null}
+            </Reply>
+          )}
         </>
       ) : (
         <>
           <CommentLines slug={slug} proposal={proposal} thread={thread} />
-          <ol className="flex flex-col px-16">
+          <ol className="flex flex-col gap-10">
             {source.thread.comments.map((entry) => (
               <li
                 key={entry.comment.id}
-                className="flex flex-col gap-4 border-b border-line py-12 last:border-b-0"
+                className={cn(
+                  "flex flex-col gap-4",
+                  entry.reply && "border-l-3 border-line pl-16",
+                )}
               >
-                <p className="flex flex-wrap items-center gap-x-8 text-13 text-text-2">
-                  <PersonName
-                    name={entry.comment.author}
-                    className="font-semibold"
-                  />
-                  <span className="text-text-2">
-                    · {commentNote(source.thread, entry)} ·{" "}
-                    {formatAsOfMinute(now, entry.comment.created_at)}
-                  </span>
+                <p className="text-13 text-text-2">
+                  <PersonName name={entry.comment.author} /> ·{" "}
+                  {commentNote(source.thread, entry)} ·{" "}
+                  {formatAsOfMinute(now, entry.comment.created_at)}
                 </p>
-                <MentionText text={entry.comment.body} slug={slug} />
+                <MentionText
+                  text={entry.comment.body}
+                  slug={slug}
+                  className="max-w-measure text-15 leading-normal"
+                />
               </li>
             ))}
           </ol>
           {human !== null && proposal.summary.state === "open" ? (
-            <div className="border-t border-line px-16 py-10">
-              <ReplyForm
-                slug={slug}
-                label={`Reply to ${source.thread.id}`}
-                onSend={async (body) => {
-                  const last = source.thread.comments.at(-1)?.comment;
-                  if (last) await onComment(last.id, body);
-                }}
-              />
-            </div>
+            <Reply
+              slug={slug}
+              label={`Reply to ${source.thread.id}`}
+              onSend={async (body) => {
+                const last = source.thread.comments.at(-1)?.comment;
+                if (last) await onComment(last.id, body);
+              }}
+            />
           ) : null}
         </>
       )}
@@ -536,12 +531,11 @@ export interface ConversationTabProps {
   olderNote: string | null;
   human: string | null;
   now: number;
-  changesHref: string;
-  onAsk: (body: string) => Promise<void>;
   onReply: (replyTo: string, body: string) => Promise<void>;
   onComment: (replyTo: string, body: string) => Promise<void>;
 }
 
+/** The threads about the proposal under one row of filters: a chip for each state that holds threads, and a dropdown each for the kind and the version. A question about the whole proposal starts from the decision bar. */
 export function ConversationTab({
   slug,
   proposal,
@@ -549,8 +543,6 @@ export function ConversationTab({
   olderNote,
   human,
   now,
-  changesHref,
-  onAsk,
   onReply,
   onComment,
 }: ConversationTabProps) {
@@ -559,66 +551,57 @@ export function ConversationTab({
   const all = threads ?? [];
   const shown = filterConversation(all, filter);
   return (
-    <div className="flex min-w-0 flex-col gap-24 px-16 py-20 md:px-24 lg:flex-row lg:items-start">
-      <aside
-        aria-label="Filters"
-        className="flex min-w-0 flex-col gap-18 lg:w-filter-column lg:shrink-0"
-      >
-        <FilterGroup
-          title="Show"
-          options={stateOptions(all, filter)}
+    <div className="flex min-w-0 max-w-thread-column flex-col gap-14 px-16 pt-18 pb-28 md:px-24">
+      <aside aria-label="Filters" className="flex flex-wrap items-center gap-8">
+        <FilterChips
+          options={chipStates(stateOptions(all, filter))}
           onPick={(state) => {
             setFilter({ ...filter, state });
           }}
         />
-        <FilterGroup
-          title="Kind"
+        <span aria-hidden="true" className="mx-4 h-20 w-px bg-line" />
+        <FilterMenu
+          label="Kind"
+          none="Any kind"
           options={kindOptions(all, filter)}
           onPick={(kind) => {
             setFilter({ ...filter, kind: filter.kind === kind ? null : kind });
           }}
         />
-        <FilterGroup
-          title="Version"
+        <FilterMenu
+          label="Version"
+          none="All versions"
           options={versionOptions(all, filter, current)}
           onPick={(version) => {
             setFilter({ ...filter, version });
           }}
         />
       </aside>
-      <div className="flex min-w-0 flex-1 flex-col gap-16">
-        <AskWholeProposal
-          slug={slug}
-          human={human}
-          changesHref={changesHref}
-          onAsk={onAsk}
-        />
-        {threads === null ? (
-          <Skeleton />
-        ) : shown.length === 0 ? (
-          <EmptyPanel title="No threads">
-            {all.length === 0
-              ? "Nobody wrote about this proposal yet."
-              : "No thread matches these filters."}
-          </EmptyPanel>
-        ) : (
-          shown.map((thread) => (
-            <ThreadCard
-              key={thread.key}
-              slug={slug}
-              proposal={proposal}
-              thread={thread}
-              human={human}
-              now={now}
-              onReply={onReply}
-              onComment={onComment}
-            />
-          ))
-        )}
-        {olderNote === null ? null : (
-          <p className="text-13 text-text-2">{olderNote}</p>
-        )}
-      </div>
+      {threads === null ? (
+        <Skeleton />
+      ) : shown.length === 0 ? (
+        <EmptyPanel icon={MessagesSquare} title="No threads">
+          {all.length === 0
+            ? "Nobody wrote about this proposal yet. Ask the author from the bar above."
+            : "No thread matches these filters."}
+        </EmptyPanel>
+      ) : (
+        shown.map((thread) => (
+          <ThreadCard
+            key={thread.key}
+            slug={slug}
+            proposal={proposal}
+            thread={thread}
+            human={human}
+            now={now}
+            onReply={onReply}
+            onComment={onComment}
+          />
+        ))
+      )}
+      {olderNote === null ? null : (
+        <p className="text-13 text-text-2">{olderNote}</p>
+      )}
     </div>
   );
 }

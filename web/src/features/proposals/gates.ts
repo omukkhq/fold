@@ -166,3 +166,12 @@ export function waitingSummary(p: ProposalDetail): Segments | null {
   if (unmet) return ["Waiting on the gates above."];
   return seg`Every gate is met. Next, ${INTEGRATORS}, or a human can integrate here.`;
 }
+
+/** The gates as the integration checklist lists them: the gates not met first, each group in check order. */
+export function checklistGates(gates: readonly Gate[]): Gate[] {
+  const shown = shownGates(gates);
+  return [
+    ...shown.filter((g) => g.status === "unmet"),
+    ...shown.filter((g) => g.status !== "unmet"),
+  ];
+}
