@@ -1,4 +1,5 @@
 import {
+  ArrowRight,
   Bookmark,
   ChevronRight,
   FilePen,
@@ -20,6 +21,7 @@ import { focusRing } from "@/lib/focus";
 import {
   comparisonCrumbs,
   comparisonNote,
+  comparisonSides,
   comparisonTitle,
   stateLabel,
 } from "./present";
@@ -65,6 +67,7 @@ export function DiffHeader({
   readAt,
 }: DiffHeaderProps) {
   const crumbs = comparisonCrumbs(slug, comparison);
+  const [older, newer] = comparisonSides(comparison);
   return (
     <header className="flex flex-col gap-8 px-24 pt-18 pb-12">
       <nav aria-label="Breadcrumb">
@@ -115,9 +118,10 @@ export function DiffHeader({
         )}
       </div>
       <div className="flex flex-wrap items-center gap-10">
-        <StateChip state={comparison.to} comparison={comparison} />
-        <span className="text-body text-text-muted">vs</span>
-        <StateChip state={comparison.from} comparison={comparison} />
+        <StateChip state={older} comparison={comparison} />
+        <ArrowRight aria-hidden="true" size={15} className="text-text-muted" />
+        <span className="sr-only">to</span>
+        <StateChip state={newer} comparison={comparison} />
         <span className="text-bar text-text-muted">
           {comparisonNote(comparison, files)}
         </span>
