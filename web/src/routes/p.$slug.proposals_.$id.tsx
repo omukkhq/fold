@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, notFound } from "@tanstack/react-router";
+import { MissingPanel } from "../app/MissingPanel";
 import { proposalQuery, sessionQuery } from "../api/queries";
 import {
   ProposalDetailPending,
@@ -22,6 +23,7 @@ export const Route = createFileRoute("/p/$slug/proposals_/$id")({
     });
   },
   pendingComponent: ProposalDetailPending,
+  notFoundComponent: ProposalNotFound,
   component: ProposalDetailRoute,
 });
 
@@ -45,4 +47,9 @@ function ProposalDetailRoute() {
       }}
     />
   );
+}
+
+function ProposalNotFound() {
+  const { slug, id } = Route.useParams();
+  return <MissingPanel slug={slug} missing={{ kind: "proposal", id: id }} />;
 }

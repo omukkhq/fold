@@ -153,7 +153,9 @@ export function ThreadPanel({
                 className={cn(CHIP, focusRing)}
               >
                 <SquareKanban aria-hidden="true" size={13} />
-                <span className="font-mono text-13">{thread.task}</span>
+                <span className="font-mono text-13 whitespace-nowrap tabular-nums">
+                  {thread.task}
+                </span>
               </HrefLink>
             ) : null}
             {thread.proposal ? (
@@ -162,10 +164,14 @@ export function ThreadPanel({
                 className={cn(CHIP, focusRing)}
               >
                 <GitPullRequest aria-hidden="true" size={13} />
-                <span className="font-mono text-13">{thread.proposal}</span>
+                <span className="font-mono text-13 whitespace-nowrap tabular-nums">
+                  {thread.proposal}
+                </span>
               </HrefLink>
             ) : null}
-            <span className="hidden font-mono lg:inline">{thread.id}</span>
+            <span className="hidden font-mono whitespace-nowrap tabular-nums lg:inline">
+              {thread.id}
+            </span>
             <span aria-hidden="true" className="hidden lg:inline">
               ·
             </span>

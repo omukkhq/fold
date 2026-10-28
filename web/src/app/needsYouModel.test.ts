@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { needsItem } from "@/test/workers";
 import {
+  fullTitle,
   itemsFor,
   needsYouGroups,
   reviewsWaitingFor,
@@ -433,5 +434,18 @@ describe("needsYouGroups", () => {
 
   it("counts what waits", () => {
     expect(waitingText(4)).toBe("4 waiting");
+  });
+});
+
+describe("fullTitle", () => {
+  it("gives the whole title as plain words, its commands without their marks", () => {
+    expect(fullTitle({ title: "Record changes in an audit log" })).toBe(
+      "Record changes in an audit log",
+    );
+    expect(
+      fullTitle({ title: "fold-checks.toml line 12: unknown field `tiemout`" }),
+    ).toBe("fold-checks.toml line 12: unknown field tiemout");
+    expect(fullTitle({ title: "a \\`b\\` path" })).toBe("a `b` path");
+    expect(fullTitle({ title: null })).toBeNull();
   });
 });

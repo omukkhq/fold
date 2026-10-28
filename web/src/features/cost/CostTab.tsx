@@ -1,5 +1,5 @@
 import { TABLE_ROW } from "@/components/table/tableStyles";
-import { IdText } from "@/components/id/IdText";
+import { Id } from "@/components/id/Id";
 import * as RadixTooltip from "@radix-ui/react-tooltip";
 import { useQuery } from "@tanstack/react-query";
 import { CircleDollarSign, Info, RefreshCw } from "lucide-react";
@@ -412,9 +412,9 @@ function TasksTable({ slug, view }: { slug: string; view: ProjectCost }) {
                         focusRing,
                       )}
                     >
-                      <IdText className="shrink-0 text-13 text-accent">
+                      <Id className="shrink-0 text-13 text-accent">
                         {row.task}
-                      </IdText>
+                      </Id>
                       <span className="truncate hover:underline">
                         {row.title}
                       </span>

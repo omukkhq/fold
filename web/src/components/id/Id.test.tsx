@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { IdText } from "./IdText";
+import { Id } from "./Id";
 
 afterEach(cleanup);
 
-describe("IdText", () => {
+describe("Id", () => {
   it("draws an id in the body face with tabular numbers, never broken", () => {
-    render(<IdText className="text-13">T-12</IdText>);
+    render(<Id className="text-13">T-12</Id>);
     const id = screen.getByText("T-12");
     expect(id.className).toContain("font-body");
     expect(id.className).toContain("tabular-nums");
@@ -17,7 +17,7 @@ describe("IdText", () => {
   });
 
   it("renders a link with href", () => {
-    render(<IdText href="/p/demo/proposals/P-3">P-3</IdText>);
+    render(<Id href="/p/demo/proposals/P-3">P-3</Id>);
     const link = screen.getByRole("link", { name: "P-3" });
     expect(link.getAttribute("href")).toBe("/p/demo/proposals/P-3");
     expect(link.className).toContain("text-accent");

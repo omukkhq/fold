@@ -1,4 +1,4 @@
-import { IdText } from "@/components/id/IdText";
+import { Id } from "@/components/id/Id";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
@@ -221,7 +221,7 @@ function Checkpoints({ task, live, now }: Props) {
               size={13}
               className="shrink-0 text-text-2"
             />
-            <IdText className="text-13 text-text-2">{ck.id}</IdText>
+            <Id className="text-13 text-text-2">{ck.id}</Id>
             <span className="min-w-0 flex-1 truncate text-14 text-text">
               {checkpointText(ck)}
             </span>
@@ -255,7 +255,7 @@ function Changesets({ task, now }: Props) {
               size={14}
               className="shrink-0 text-text-2"
             />
-            <IdText className="text-13 text-text-2">{cs.id}</IdText>
+            <Id className="text-13 text-text-2">{cs.id}</Id>
             <span className="min-w-0 flex-1 truncate text-14 text-text">
               {cs.message}
             </span>
@@ -276,9 +276,7 @@ function Proposal({ slug, task }: { slug: string; task: TaskDetail }) {
       {proposal ? (
         <>
           <p className="flex items-center gap-8 text-14 text-text">
-            <IdText href={proposalPath(slug, proposal.id)}>
-              {proposal.id}
-            </IdText>
+            <Id href={proposalPath(slug, proposal.id)}>{proposal.id}</Id>
             <span className="text-text-2">
               {proposalStateText(
                 proposal.state,
@@ -314,9 +312,9 @@ function Proposal({ slug, task }: { slug: string; task: TaskDetail }) {
       {integration ? (
         <p className="text-13 text-text-2">
           Integrated as{" "}
-          <IdText href={revisionPath(slug, integration.revision)}>
+          <Id href={revisionPath(slug, integration.revision)}>
             {integration.revision}
-          </IdText>{" "}
+          </Id>{" "}
           <CommitId commit={integration.commit} />{" "}
           <ActorText
             segments={integrationText(integration)}
@@ -827,7 +825,7 @@ function EdgeRow({
           focusRing,
         )}
       >
-        <IdText className="text-13 text-text-2">{row.task}</IdText>
+        <Id className="text-13 text-text-2">{row.task}</Id>
         <span
           className={cn(
             "min-w-0 flex-1 truncate text-14",

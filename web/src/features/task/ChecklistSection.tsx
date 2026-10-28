@@ -1,4 +1,4 @@
-import { IdText } from "@/components/id/IdText";
+import { Id } from "@/components/id/Id";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   ArrowDown,
@@ -287,7 +287,7 @@ function LinkedRow({
             focusRing,
           )}
         >
-          <IdText className="text-13 text-text-2">{item.task}</IdText>
+          <Id className="text-13 text-text-2">{item.task}</Id>
           <span className="truncate">{item.title}</span>
         </HrefLink>
         <span className="inline-flex shrink-0 items-center gap-5 text-13 text-text-2">

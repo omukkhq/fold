@@ -116,8 +116,15 @@ export function comparisonTitle(comparison: Comparison): string {
   const { from, to } = comparison;
   if (isWorkingChanges(comparison)) return `Working changes in ${to.id}`;
   if (to.kind === "workspace")
-    return `Working files in ${to.id} against ${from.id}`;
+    return `Changes from ${from.id} to the working files in ${to.id}`;
   return `Changes from ${from.id} to ${to.id}`;
+}
+
+/** The two compared states in the order the title, the crumb and the compare row name them: the older one first. */
+export function comparisonSides(
+  comparison: Comparison,
+): readonly [ComparedState, ComparedState] {
+  return [comparison.from, comparison.to];
 }
 
 export interface Crumb {

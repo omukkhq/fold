@@ -1,4 +1,4 @@
-import { IdText } from "@/components/id/IdText";
+import { Id } from "@/components/id/Id";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
 import {
@@ -246,7 +246,7 @@ export function BoardCard({
       ) : null}
       {blocker ? <BlockerPill mark={blocker} /> : null}
       <div className="flex flex-wrap items-center gap-x-10 gap-y-4 leading-tight">
-        <IdText className="text-13 text-text-2">{card.task}</IdText>
+        <Id className="text-13 text-text-2">{card.task}</Id>
         {kind ? (
           <Meta
             icon={card.kind === "human" ? UserRound : ClipboardCheck}

@@ -17,7 +17,7 @@ describe("table styles", () => {
 
   it("sets heads in sentence case at 13px and cells at 14px", () => {
     expect(TABLE_HEAD).toContain("text-13");
-    expect(TABLE_HEAD).not.toContain("uppercase");
+    expect(TABLE_HEAD).not.toMatch(/uppercase/);
     expect(TABLE_CELL).toContain("text-14");
   });
 });

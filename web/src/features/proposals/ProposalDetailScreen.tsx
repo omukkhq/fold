@@ -31,6 +31,7 @@ import {
 import { olderNotListed } from "@/api/pages";
 import { revisionsQuery } from "@/api/repositoryQueries";
 import { HrefLink } from "@/app/HrefLink";
+import { missingState } from "@/app/missingState";
 import { buttonClasses } from "@/components/button/buttonStyles";
 import { TAB_BY_STATE, TAB_LIST } from "@/components/overlay/tabStyles";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
@@ -39,7 +40,6 @@ import { Skeleton } from "@/components/states/Skeleton";
 import { cn } from "@/lib/cn";
 import { focusRing, insetFocusRing } from "@/lib/focus";
 import { useNow } from "@/live/useNow";
-import { projectPath } from "@/routes/paths";
 import {
   actedVersion,
   APPROVE_BODY,
@@ -197,21 +197,22 @@ export function ProposalDetailScreen({
   });
 
   if (data === null) {
+    const absent = missingState(slug, { kind: "proposal", id });
     return (
       <div className="p-24">
         <EmptyPanel
           icon={GitPullRequest}
-          title={`No proposal ${id}`}
+          title={absent.title}
           action={
             <HrefLink
-              href={projectPath(slug, "proposals")}
+              href={absent.href}
               className={cn(buttonClasses("quiet", "md"), focusRing)}
             >
-              Open the proposals
+              {absent.linkText}
             </HrefLink>
           }
         >
-          fold has no proposal with this id in this project.
+          {absent.text}
         </EmptyPanel>
       </div>
     );

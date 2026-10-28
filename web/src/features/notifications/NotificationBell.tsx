@@ -5,6 +5,8 @@ import { useState } from "react";
 import { createPortal } from "react-dom";
 import { COLUMNS } from "@/features/board/columns";
 import { HrefLink } from "@/app/HrefLink";
+import { Tooltip } from "@/components/overlay/Tooltip";
+import { IdText } from "@/components/text/IdText";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing, insetFocusRing } from "@/lib/focus";
@@ -37,33 +39,42 @@ function Entry({
   onOpen: () => void;
 }) {
   const text = moveText(entry);
-  return (
-    <li className={cn("flex items-center", fresh && "bg-accent-soft")}>
-      <HrefLink
-        href={idHref(slug, "task", entry.task)}
-        onClick={onOpen}
-        className={cn(
-          "flex min-w-0 flex-1 items-center gap-10 py-8 pr-4 pl-16 hover:bg-sunken",
-          insetFocusRing,
-        )}
-      >
-        <span
-          aria-hidden="true"
-          className={cn("size-8 shrink-0 rounded-pill", DOTS.get(entry.to))}
-        />
-        <span className="flex min-w-0 flex-1 flex-col gap-2">
-          <span className="text-15 text-text">{text}</span>
-          <span className="flex min-w-0 items-center gap-6 text-13 text-text-2">
-            {entry.title === null ? null : (
-              <span className="min-w-0 truncate">{entry.title}</span>
-            )}
-            <span className="shrink-0">
-              {columnName(entry.from)} → {columnName(entry.to)} ·{" "}
-              {formatAsOfMinute(now, entry.at)}
-            </span>
+  const link = (
+    <HrefLink
+      href={idHref(slug, "task", entry.task)}
+      onClick={onOpen}
+      className={cn(
+        "flex min-w-0 flex-1 items-center gap-10 py-8 pr-4 pl-16 hover:bg-sunken",
+        insetFocusRing,
+      )}
+    >
+      <span
+        aria-hidden="true"
+        className={cn("size-8 shrink-0 rounded-pill", DOTS.get(entry.to))}
+      />
+      <span className="flex min-w-0 flex-1 flex-col gap-2">
+        <span className="text-15 text-text">
+          <IdText text={text} />
+        </span>
+        <span className="flex min-w-0 items-center gap-6 text-13 text-text-2">
+          {entry.title === null ? null : (
+            <span className="min-w-0 truncate">{entry.title}</span>
+          )}
+          <span className="shrink-0 whitespace-nowrap">
+            {columnName(entry.from)} → {columnName(entry.to)} ·{" "}
+            {formatAsOfMinute(now, entry.at)}
           </span>
         </span>
-      </HrefLink>
+      </span>
+    </HrefLink>
+  );
+  return (
+    <li className={cn("flex items-center", fresh && "bg-accent-soft")}>
+      {entry.title === null ? (
+        link
+      ) : (
+        <Tooltip content={entry.title}>{link}</Tooltip>
+      )}
       <button
         type="button"
         aria-label={`Clear ${text}`}
@@ -105,7 +116,9 @@ function MoveToasts({ slug }: { slug: string }) {
             {toast.parts.map((part, index) => (
               <span key={part}>
                 {index > 0 ? " · " : null}
-                <span className="break-words">{part}</span>
+                <span className="break-words">
+                  <IdText text={part} />
+                </span>
               </span>
             ))}
           </Toast.Description>

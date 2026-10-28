@@ -114,6 +114,29 @@ describe("NotificationBell", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("keeps the task id on one line, cuts the title and gives its whole text on keyboard focus", async () => {
+    await renderBell("wrap");
+    receive("wrap", moved(1, "T-12", "review"), true);
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Notifications/ }),
+    );
+    const list = await screen.findByRole("dialog", { name: "Notifications" });
+    expect(within(list).getByText("T-12").className).toContain(
+      "whitespace-nowrap",
+    );
+    const title = within(list).getByText("Add the bell");
+    expect(title.hasAttribute("title")).toBe(false);
+    expect(title.className).toContain("truncate");
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    await userEvent.tab();
+    expect(document.activeElement).toBe(
+      within(list).getByRole("link", { name: /T-12 moved to Review/ }),
+    );
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Add the bell",
+    );
+  });
+
   it("clears one entry and then every entry", async () => {
     await renderBell("clear");
     receive("clear", moved(1, "T-12", "review"), true);
