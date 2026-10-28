@@ -273,6 +273,7 @@ describe("filters", () => {
         o.selected,
       ]),
     ).toEqual([
+      ["Any kind", 4, true],
       ["Questions to the author", 1, false],
       ["Questions to you", 1, false],
       ["Review comments", 1, false],

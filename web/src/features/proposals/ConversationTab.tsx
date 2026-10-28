@@ -1,3 +1,4 @@
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -13,7 +14,7 @@ import { HrefLink } from "@/app/HrefLink";
 import { Chip } from "@/components/badge/Chip";
 import type { ChipTone } from "@/components/badge/chips";
 import { Button } from "@/components/button/Button";
-import { Menu } from "@/components/overlay/Menu";
+import { menuContent, menuItem } from "@/components/overlay/menuStyles";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { Skeleton } from "@/components/states/Skeleton";
 import { CODE_BOX, textFlow } from "@/components/text/textFlow";
@@ -112,6 +113,7 @@ function FilterChips({
   );
 }
 
+/** A dropdown of the filter row: one radio item per option, so a screen reader hears which one is chosen. */
 function FilterMenu<T>({
   label,
   none,
@@ -125,9 +127,10 @@ function FilterMenu<T>({
   onPick: (value: T) => void;
 }) {
   const shown = chosenLabel(options, none);
+  const chosen = options.findIndex((option) => option.selected);
   return (
-    <Menu
-      trigger={
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
         <button
           type="button"
           aria-label={`${label}: ${shown}`}
@@ -139,15 +142,42 @@ function FilterMenu<T>({
           {shown}
           <ChevronDown aria-hidden="true" size={14} className="text-text-2" />
         </button>
-      }
-      items={options.map((option) => ({
-        label: `${option.label} ${String(option.count)}`,
-        icon: option.selected ? Check : undefined,
-        onSelect: () => {
-          onPick(option.value);
-        },
-      }))}
-    />
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="start"
+          sideOffset={6}
+          collisionPadding={16}
+          className={menuContent}
+        >
+          <DropdownMenu.RadioGroup
+            value={String(chosen)}
+            onValueChange={(value) => {
+              const option = options[Number(value)];
+              if (option) onPick(option.value);
+            }}
+          >
+            {options.map((option, index) => (
+              <DropdownMenu.RadioItem
+                key={option.label}
+                value={String(index)}
+                className={cn(menuItem, "gap-10")}
+              >
+                <span className="inline-flex size-16 shrink-0 items-center justify-center">
+                  <DropdownMenu.ItemIndicator>
+                    <Check aria-hidden="true" size={16} />
+                  </DropdownMenu.ItemIndicator>
+                </span>
+                <span className="flex-1">{option.label}</span>
+                <span className="text-13 text-text-2 tabular-nums">
+                  {option.count}
+                </span>
+              </DropdownMenu.RadioItem>
+            ))}
+          </DropdownMenu.RadioGroup>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }
 
@@ -565,7 +595,7 @@ export function ConversationTab({
           none="Any kind"
           options={kindOptions(all, filter)}
           onPick={(kind) => {
-            setFilter({ ...filter, kind: filter.kind === kind ? null : kind });
+            setFilter({ ...filter, kind });
           }}
         />
         <FilterMenu

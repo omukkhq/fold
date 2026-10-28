@@ -1610,6 +1610,40 @@ describe("Proposal detail", () => {
     ).toBeTruthy();
   });
 
+  it("states the base against main, the review claim and the human review mark in the About card", async () => {
+    renderAt("/p/demo/proposals/P-4");
+    const about = await screen.findByRole("region", { name: "About" });
+    const fact = (label: string) =>
+      within(about).getByText(label, { selector: "dt" }).nextElementSibling
+        ?.textContent;
+    await waitFor(() => {
+      expect(fact("Base")).toBe("r8 → main r8");
+    });
+    expect(fact("Review claim")).toBe("@review/quality");
+    expect(fact("Human review")).toContain("marked by @backend");
+  });
+
+  it("says an open proposal is not claimed and leaves out a human review it has no mark for", async () => {
+    put(
+      proposalDetail(
+        proposalSummary("P-12", {
+          title: "Unclaimed",
+          review_claim: null,
+          human_review: null,
+        }),
+      ),
+    );
+    renderAt("/p/demo/proposals/P-12");
+    const about = await screen.findByRole("region", { name: "About" });
+    expect(
+      within(about).getByText("Review claim", { selector: "dt" })
+        .nextElementSibling?.textContent,
+    ).toBe("not claimed");
+    expect(
+      within(about).queryByText("Human review", { selector: "dt" }),
+    ).toBeNull();
+  });
+
   it("says when the project has no such proposal", async () => {
     renderAt("/p/demo/proposals/P-99");
     expect(
@@ -1899,8 +1933,13 @@ describe("Proposal tabs", () => {
     await user.click(
       within(filters).getByRole("button", { name: "Kind: Any kind" }),
     );
+    expect(
+      (
+        await screen.findByRole("menuitemradio", { name: /^Any kind/ })
+      ).getAttribute("aria-checked"),
+    ).toBe("true");
     await user.click(
-      await screen.findByRole("menuitem", { name: /^Review comments/ }),
+      screen.getByRole("menuitemradio", { name: /^Review comments/ }),
     );
     expect(
       screen.getAllByRole("article").map((a) => a.getAttribute("aria-label")),
@@ -1908,13 +1947,19 @@ describe("Proposal tabs", () => {
     await user.click(
       within(filters).getByRole("button", { name: "Kind: Review comments" }),
     );
-    await user.click(
-      await screen.findByRole("menuitem", { name: /^Review comments/ }),
-    );
+    expect(
+      (
+        await screen.findByRole("menuitemradio", { name: /^Review comments/ })
+      ).getAttribute("aria-checked"),
+    ).toBe("true");
+    await user.click(screen.getByRole("menuitemradio", { name: /^Any kind/ }));
+    expect(screen.getAllByRole("article")).toHaveLength(3);
     await user.click(
       within(filters).getByRole("button", { name: "Version: All versions" }),
     );
-    await user.click(await screen.findByRole("menuitem", { name: /^v1 ?\d/ }));
+    await user.click(
+      await screen.findByRole("menuitemradio", { name: /^v1 ?\d/ }),
+    );
     expect(
       screen.getAllByRole("article").map((a) => a.getAttribute("aria-label")),
     ).toEqual(["Review comment rc-1"]);
