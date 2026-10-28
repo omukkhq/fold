@@ -1,6 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import type { ReviewCheckout } from "../../api/reviews";
-import { formatAsOf } from "../../format/time";
+import { formatAsOfMinute } from "../../format/time";
 import { EVENT_LIMIT } from "../../live/eventList";
 import type { ConnectionState } from "../../live/status";
 import { eventLine, type AnyEvent } from "./eventLine";
@@ -8,8 +8,8 @@ import { eventLine, type AnyEvent } from "./eventLine";
 export interface EventRow {
   seq: number;
   actor: string;
-  /** Local clock time, `14:12:31`, with the date in front when it is not today. */
-  time: string;
+  /** The local minute, `14:12`, with the date in front when it is not today; the rows of one minute share it. */
+  minute: string;
   icon: LucideIcon;
   text: string;
   emphasis: boolean;
@@ -54,7 +54,7 @@ export function eventRows(
       return {
         seq: event.seq,
         actor: event.actor,
-        time: formatAsOf(now, event.created_at),
+        minute: formatAsOfMinute(now, event.created_at),
         icon: line.icon,
         text: line.text,
         emphasis: line.emphasis,
@@ -64,6 +64,25 @@ export function eventRows(
             : null,
       };
     });
+}
+
+export interface EventGroup {
+  minute: string;
+  rows: EventRow[];
+}
+
+/** The rows in runs of one minute each, so the stream says each time once; the rows keep their order. */
+export function eventGroups(rows: readonly EventRow[]): EventGroup[] {
+  const groups: EventGroup[] = [];
+  for (const row of rows) {
+    const last = groups.at(-1);
+    if (last?.minute === row.minute) {
+      last.rows.push(row);
+    } else {
+      groups.push({ minute: row.minute, rows: [row] });
+    }
+  }
+  return groups;
 }
 
 export interface LiveDot {

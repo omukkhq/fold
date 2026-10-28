@@ -124,7 +124,7 @@ export function Receipts({
         <ul
           id={listId}
           aria-label="Delivery"
-          className="flex w-full max-w-measure flex-col rounded-m bg-surface py-4 inset-ring inset-ring-line"
+          className="flex w-full max-w-measure flex-col rounded-m bg-surface py-4"
         >
           {details.map(detailRow).map((row) => {
             const { icon: Icon, className } = TONES[row.tone];

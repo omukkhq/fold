@@ -24,20 +24,17 @@ interface MessageItemProps {
   onWriteOwn: (question: MessageView) => void;
 }
 
-function Avatar({ sender, small }: { sender: string; small: boolean }) {
+function Avatar({ sender }: { sender: string }) {
   const agent = messageSide(sender, null) === "agent";
   return (
     <span
       aria-hidden="true"
       className={cn(
-        "grid shrink-0 place-items-center font-bold",
-        small ? "size-24 text-13" : "size-28 text-13",
-        agent
-          ? "rounded-m bg-warn-soft text-warn"
-          : "rounded-full bg-accent-soft text-accent",
+        "grid size-32 shrink-0 place-items-center bg-accent-soft font-title text-14 font-bold text-accent",
+        agent ? "rounded-m" : "rounded-full",
       )}
     >
-      {agent ? <Bot size={small ? 13 : 16} /> : initial(sender)}
+      {agent ? <Bot size={16} /> : initial(sender)}
     </span>
   );
 }
@@ -81,19 +78,20 @@ export function MessageItem({
         slug={slug}
         proposal={message.proposal}
         lines={message.lines}
+        onSurface={false}
       />
     );
 
   if (side === "own") {
     return (
-      <li className="flex justify-end pl-40">
+      <li className="flex justify-end pl-32 lg:pl-44">
         <article className="flex min-w-0 max-w-measure flex-col items-end gap-6">
           <p className="flex items-baseline gap-8">
             {time}
-            <span className="text-15 font-semibold text-accent">You</span>
+            <span className="text-15 font-semibold text-text">You</span>
           </p>
           {lines}
-          <div className="max-w-full rounded-pill rounded-br-s bg-accent-soft px-14 py-10 inset-ring inset-ring-accent">
+          <div className="max-w-full rounded-l rounded-br-s bg-accent-soft px-14 py-10">
             {chosen ? (
               <ChosenAnswer body={message.body} own />
             ) : (
@@ -109,13 +107,10 @@ export function MessageItem({
   return (
     <li className="flex gap-12">
       <span className="hidden sm:flex">
-        <Avatar sender={message.sender} small={false} />
+        <Avatar sender={message.sender} />
       </span>
       <article className="flex min-w-0 flex-1 flex-col gap-6">
-        <p className="flex flex-wrap items-center gap-x-8 gap-y-2">
-          <span className="sm:hidden">
-            <Avatar sender={message.sender} small />
-          </span>
+        <p className="flex flex-wrap items-baseline gap-x-8 gap-y-2">
           <span
             className={cn(
               "text-15 font-semibold",
@@ -131,7 +126,7 @@ export function MessageItem({
           ) : null}
           {freeAskWaitsForYou(thread, message, you) ? (
             <span className="inline-flex items-center gap-5 rounded-pill bg-warn-soft px-8 py-2 text-13 font-semibold text-warn">
-              <CircleHelp aria-hidden="true" size={12} strokeWidth={2.2} />
+              <CircleHelp aria-hidden="true" size={14} />
               Waits for your answer
             </span>
           ) : null}

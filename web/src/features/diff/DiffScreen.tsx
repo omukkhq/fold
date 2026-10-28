@@ -125,7 +125,7 @@ export function DiffScreen({
 
   if (comparison === null) {
     return (
-      <div className="p-24">
+      <div className="px-16 py-24 md:px-24">
         <EmptyPanel title="Nothing to compare">
           {search.from === undefined
             ? `fold has no comparison for ${search.to}.`
@@ -143,7 +143,7 @@ export function DiffScreen({
         now={now}
         readAt={comparison.source === "working" ? readAt : null}
       />
-      <div className="flex items-start gap-20 px-24 pt-4 pb-24">
+      <div className="flex items-start gap-20 px-16 pt-4 pb-24 md:px-24">
         {shown === null ? (
           <EmptyPanel title="No changes" className="flex-1">
             {`${comparison.from.id} and ${comparison.to.id} hold the same files.`}

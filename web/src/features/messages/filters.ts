@@ -56,11 +56,6 @@ export function waitingCount(threads: readonly ThreadView[]): number {
   return threads.filter((t) => t.awaiting_human).length;
 }
 
-/** The waiting filter's text, with the number of threads it shows. */
-export function waitingLabel(count: number): string {
-  return count === 0 ? "Waits for you" : `Waits for you · ${String(count)}`;
-}
-
 /** What each filter can pick, taken from the threads themselves. */
 export function filterOptions(threads: ThreadView[]): {
   agents: string[];
@@ -98,17 +93,17 @@ export function replyTargets(thread: ThreadView): string[] {
   return thread.participants.filter((p) => !isHumanName(p) && p !== "fold");
 }
 
-/** The reply box's placeholder: `Reply to @frontend/ui, @backend…`, or `Reply…` when the thread has no agent. */
-export function replyPlaceholder(thread: ThreadView): string {
-  const targets = replyTargets(thread);
-  return targets.length > 0
-    ? `Reply to ${targets.map(atName).join(", ")}…`
-    : "Reply…";
-}
+/** The keys of the reply box, which the wide layout names in the placeholder. */
+export const REPLY_KEYS = "Enter sends, Shift+Enter adds a line";
 
-/** The filter button's text: `Agent` while it shows every thread, `Agent: frontend` once set. */
-export function filterLabel(label: string, value: string | undefined): string {
-  return value === undefined ? label : `${label}: ${value}`;
+/** The reply box's placeholder: `Reply to @frontend/ui, @backend…`, or `Reply…` when the thread has no agent; `keys` adds how the box sends. */
+export function replyPlaceholder(thread: ThreadView, keys = false): string {
+  const targets = replyTargets(thread);
+  const reply =
+    targets.length > 0
+      ? `Reply to ${targets.map(atName).join(", ")}…`
+      : "Reply…";
+  return keys ? `${reply}  ${REPLY_KEYS}` : reply;
 }
 
 /** The threads whose title, messages, people, task, proposal or id hold every word of `query`, without case. */
@@ -136,7 +131,7 @@ export function searchThreads(
   });
 }
 
-/** The chip row above the thread list shows all threads or one kind of them. */
+/** The Show choice of the filter menu: all threads or one kind of them. */
 export type ShowFilter = "all" | "waiting" | "questions" | "mine";
 
 export function showFilter(filter: ThreadFilter): ShowFilter {
@@ -159,20 +154,54 @@ export function withShow<T extends ThreadFilter>(
   };
 }
 
-export interface ShowChip {
+const SHOW_LABELS: Record<ShowFilter, string> = {
+  all: "All threads",
+  waiting: "Waits for you",
+  questions: "Questions",
+  mine: "Mine",
+};
+
+export interface ShowOption {
   show: ShowFilter;
   label: string;
+  /** The threads that wait for you, as the Messages tab badge counts them; null for the other choices. */
+  count: number | null;
 }
 
-/** The chips: All, the waiting count the Messages tab badge also counts, Questions, and Mine while a human is signed in. */
-export function showChips(
+/** The Show choices: all threads, the waiting threads with their count, questions, and Mine while a human is signed in. */
+export function showOptions(
   threads: readonly ThreadView[],
   you: string | null,
-): ShowChip[] {
-  return [
-    { show: "all", label: "All" },
-    { show: "waiting", label: waitingLabel(waitingCount(threads)) },
-    { show: "questions", label: "Questions" },
-    ...(you === null ? [] : [{ show: "mine" as const, label: "Mine" }]),
-  ];
+): ShowOption[] {
+  const shows: ShowFilter[] = ["all", "waiting", "questions"];
+  if (you !== null) shows.push("mine");
+  return shows.map((show) => ({
+    show,
+    label: SHOW_LABELS[show],
+    count: show === "waiting" ? waitingCount(threads) : null,
+  }));
+}
+
+/** The filter button's text: the Show choice, then how many of the agent, task and proposal filters are set: `Waits for you · 2 more`. */
+export function filterSummary(filter: ThreadFilter): string {
+  const set = [filter.agent, filter.task, filter.proposal].filter(
+    (value) => value !== undefined,
+  ).length;
+  const show = SHOW_LABELS[showFilter(filter)];
+  return set === 0 ? show : `${show} · ${String(set)} more`;
+}
+
+/** `1 thread`, `5 threads`. */
+export function threadCount(count: number): string {
+  return `${String(count)} ${count === 1 ? "thread" : "threads"}`;
+}
+
+/** The choices of one narrowing menu, with the value the address sets even when no listed thread holds it, so the menu shows what the list narrows to. */
+export function choicesWith(
+  options: readonly string[],
+  value: string | undefined,
+): string[] {
+  return value === undefined || options.includes(value)
+    ? [...options]
+    : [...options, value];
 }

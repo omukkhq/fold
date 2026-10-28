@@ -10,6 +10,7 @@ import type {
 } from "@/api/requests";
 import type { TaskStatus } from "@/api/board";
 import { formatAsOfMinute, formatSince } from "@/format/time";
+import type { ChipTone } from "@/components/badge/chips";
 import { isHumanName } from "@/people/names";
 import {
   actorSegment,
@@ -17,64 +18,44 @@ import {
   type Segment,
   type Segments,
 } from "@/people/segments";
+import { isRequester } from "./actions";
 
-export interface StateSpec {
+export const STATE_LABELS: Record<RequestState, string> = {
+  open: "Open",
+  drafting: "Drafting",
+  draft_ready: "Draft ready",
+  changes_requested: "Changes requested",
+  approved: "Approved",
+  closed: "Closed",
+};
+
+export interface StateChip {
   label: string;
-  /** The pill's fill and text. */
-  pill: string;
-  /** The dot's fill. */
-  dot: string;
+  tone: ChipTone;
 }
 
-export const STATE_SPECS: Record<RequestState, StateSpec> = {
-  open: {
-    label: "Open",
-    pill: "bg-sunken text-text-2",
-    dot: "bg-status-todo",
-  },
-  drafting: {
-    label: "Drafting",
-    pill: "bg-accent-soft text-accent",
-    dot: "bg-status-progress",
-  },
-  draft_ready: {
-    label: "Draft ready",
-    pill: "bg-warn-soft text-warn",
-    dot: "bg-status-review",
-  },
-  changes_requested: {
-    label: "Changes requested",
-    pill: "bg-warn-soft text-warn",
-    dot: "bg-warn",
-  },
-  approved: {
-    label: "Approved",
-    pill: "bg-ok-soft text-text",
-    dot: "bg-ok",
-  },
-  closed: {
-    label: "Closed",
-    pill: "bg-sunken text-text-2",
-    dot: "bg-status-backlog",
-  },
-};
+/** The state as a chip: gold only for a draft that waits for the signed-in requester, green once approved, the neutral fill otherwise. */
+export function stateChip(
+  request: RequestSummary,
+  human: string | null,
+): StateChip {
+  if (request.state === "draft_ready" && isRequester(request, human)) {
+    return { label: "Draft ready · waits for you", tone: "warn" };
+  }
+  return {
+    label: STATE_LABELS[request.state],
+    tone: request.state === "approved" ? "ok" : "neutral",
+  };
+}
 
 /** A request no orchestrator has sorted yet is `unsorted`. */
 export type KindKey = RequestKind | "unsorted";
 
-export interface KindSpec {
-  label: string;
-  classes: string;
-}
-
-export const KIND_SPECS: Record<KindKey, KindSpec> = {
-  bug: { label: "Bug", classes: "bg-bad-soft text-bad" },
-  feature: { label: "Feature", classes: "bg-accent-soft text-accent" },
-  question: {
-    label: "Question",
-    classes: "bg-warn-soft text-warn",
-  },
-  unsorted: { label: "Unsorted", classes: "bg-sunken text-text-2" },
+export const KIND_LABELS: Record<KindKey, string> = {
+  bug: "Bug",
+  feature: "Feature",
+  question: "Question",
+  unsorted: "Unsorted",
 };
 
 export function kindOf(request: RequestSummary): KindKey {
@@ -84,13 +65,27 @@ export function kindOf(request: RequestSummary): KindKey {
 export interface Heading {
   text: string;
   /** The start of the message stands in for a title no orchestrator has written yet. */
-  muted: boolean;
+  excerpt: boolean;
 }
 
+/** A list row's title: the title, or the start of the message while the request has none. */
 export function headingOf(request: RequestSummary): Heading {
   return request.title === null
-    ? { text: request.excerpt, muted: true }
-    : { text: request.title, muted: false };
+    ? { text: request.excerpt, excerpt: true }
+    : { text: request.title, excerpt: false };
+}
+
+/** The request page's title: the title, or `Request RQ-4` while the request has none, so its message shows only once below. */
+export function pageTitle(request: RequestSummary): string {
+  return request.title ?? `Request ${request.id}`;
+}
+
+/** The line under a row's title: `RQ-4 · Bug`, then `· no title yet` or the age when given. */
+export function rowSubLine(request: RequestSummary, age?: string): string {
+  const parts = [request.id, KIND_LABELS[kindOf(request)]];
+  if (age !== undefined) parts.push(age);
+  else if (request.title === null) parts.push("no title yet");
+  return parts.join(" · ");
 }
 
 /** `18 KiB`, `14.2 MiB`: the sizes the dialog checks are binary units. */
@@ -106,19 +101,30 @@ export function joinIds(ids: readonly string[]): string {
   return `${ids.slice(0, -1).join(", ")} and ${ids.at(-1) ?? ""}`;
 }
 
-function stateClause(detail: RequestDetail, now: number): Segments {
+/** The status block's heading: what the request waits for and who acts next. */
+export function statusHeading(
+  detail: RequestDetail,
+  human: string | null,
+  now: number,
+): Segments {
   const r = detail.request;
   const latest = r.latest_version;
   const v = latest === null ? "" : `v${String(latest)}`;
   switch (r.state) {
     case "open":
-      return ["no orchestrator has claimed it yet"];
+      return ["No orchestrator has claimed it yet"];
     case "drafting":
-      return seg`${drafterSegment(r.drafter)} is drafting${v ? ` the version after ${v}` : " the cards"}`;
+      return r.drafter === null
+        ? [
+            `An orchestrator is drafting${v ? ` the version after ${v}` : " the cards"}`,
+          ]
+        : seg`${actorSegment(r.drafter)} is drafting${v ? ` the version after ${v}` : " the cards"}`;
     case "draft_ready":
-      return [`${v} waits for the requester`];
+      return isRequester(r, human)
+        ? [`${v} waits for your decision`]
+        : seg`${v} waits for ${actorSegment(r.requester)}`;
     case "changes_requested":
-      return [`${v} went back to the drafter`];
+      return seg`${v} went back to ${drafterSegment(r.drafter)}`;
     case "approved": {
       const tasks = detail.tasks;
       const made =
@@ -128,7 +134,7 @@ function stateClause(detail: RequestDetail, now: number): Segments {
       return seg`${actorSegment(r.requester)} approved ${v} at ${formatAsOfMinute(now, r.updated_at)}${made}`;
     }
     case "closed":
-      return [`closed ${formatSince(now, r.updated_at)}`];
+      return [`Closed ${formatSince(now, r.updated_at)}`];
   }
 }
 
@@ -137,22 +143,11 @@ export function drafterSegment(drafter: string | null): Segment {
   return drafter === null ? "an orchestrator" : actorSegment(drafter);
 }
 
-/** The line under the heading: who asked and when, who drafts, and who acts next. */
+/** The line under the page title: who asked and when, and that the request has no title yet. */
 export function metaLine(detail: RequestDetail, now: number): Segment[] {
   const r = detail.request;
-  const parts: Segments[] = [
-    seg`Requested by ${actorSegment(r.requester)} ${formatSince(now, r.created_at)}`,
-  ];
-  if (
-    r.drafter !== null &&
-    (r.state === "draft_ready" || r.state === "changes_requested")
-  ) {
-    parts.push(seg`${actorSegment(r.drafter)} is the drafter`);
-  }
-  parts.push(stateClause(detail, now));
-  return parts.flatMap((part, index) =>
-    index === 0 ? part : [" · ", ...part],
-  );
+  const asked = seg`Requested by ${actorSegment(r.requester)} ${formatSince(now, r.created_at)}`;
+  return r.title === null ? [...asked, " · No title yet"] : asked;
 }
 
 export function versionText(
@@ -216,16 +211,26 @@ export function threadSummary(count: number, id: string): string {
   return `${String(count)} ${count === 1 ? "message" : "messages"} in the thread of ${id}`;
 }
 
-/** `7 requests · 1 needs a human`: a draft waits for a human requester. */
-export function listSummary(requests: readonly RequestSummary[]): string {
+export interface ListSummary {
+  /** `7 requests`. */
+  total: string;
+  /** `1 needs a human` while a draft waits for a human requester, else null. */
+  waiting: string | null;
+}
+
+/** `7 requests` and `1 needs a human`: a draft waits for a human requester. */
+export function listSummary(requests: readonly RequestSummary[]): ListSummary {
   const n = requests.length;
-  const total = `${String(n)} ${n === 1 ? "request" : "requests"}`;
   const waiting = requests.filter(
     (r) => r.state === "draft_ready" && isHumanName(r.requester),
   ).length;
-  return waiting === 0
-    ? total
-    : `${total} · ${String(waiting)} ${waiting === 1 ? "needs" : "need"} a human`;
+  return {
+    total: `${String(n)} ${n === 1 ? "request" : "requests"}`,
+    waiting:
+      waiting === 0
+        ? null
+        : `${String(waiting)} ${waiting === 1 ? "needs" : "need"} a human`,
+  };
 }
 
 /** The draft the screen shows: the chosen version, or the latest when none is chosen or the choice is gone. */

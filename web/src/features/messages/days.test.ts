@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { message } from "@/test/messages";
-import { dayLabel, withDays } from "./days";
+import { dayLabel, rowTime, withDays } from "./days";
 
 const local = (y: number, m: number, d: number, h = 12, min = 0) =>
   new Date(y, m, d, h, min).getTime();
@@ -19,6 +19,14 @@ describe("dayLabel", () => {
     expect(dayLabel(local(2026, 10, 1, 9), local(2026, 9, 31, 22))).toBe(
       "Yesterday",
     );
+  });
+});
+
+describe("rowTime", () => {
+  it("shows the clock today and the day before today", () => {
+    expect(rowTime(NOW, local(2026, 9, 22, 9, 5))).toBe("09:05");
+    expect(rowTime(NOW, local(2026, 9, 21, 9, 5))).toBe("Yesterday");
+    expect(rowTime(NOW, local(2026, 9, 2))).toBe("Oct 2");
   });
 });
 

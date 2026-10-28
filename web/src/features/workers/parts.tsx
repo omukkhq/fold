@@ -14,7 +14,7 @@ export function StatePill({ pill }: { pill: Pill }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-6 rounded-s px-8 py-2 text-13 leading-normal font-medium whitespace-nowrap",
+        "inline-flex items-center gap-6 rounded-pill px-9 py-2 text-13 leading-tight font-medium whitespace-nowrap",
         spec.fill,
         spec.text,
       )}
@@ -28,37 +28,53 @@ export function StatePill({ pill }: { pill: Pill }) {
   );
 }
 
-export function StepText({ step }: { step: Step }) {
+/** The step after the state; `warn` draws it in gold, for a worker that waits for a person's answer. */
+export function StepText({
+  step,
+  warn = false,
+}: {
+  step: Step;
+  warn?: boolean;
+}) {
   return (
-    <span className="flex max-w-(--width-search) min-w-0 items-center gap-6 text-13">
+    <span
+      className={cn(
+        "flex max-w-full min-w-0 items-center gap-6 text-13 leading-tight",
+        warn ? "text-warn" : "text-text-2",
+      )}
+    >
       {step.tool ? (
-        <span className="font-medium text-text">{step.tool}</span>
-      ) : null}
-      {step.text ? (
         <span
-          className={cn("truncate", step.faint ? "text-text-2" : "text-text-2")}
-          title={step.text}
+          className={cn("shrink-0 font-semibold", warn ? null : "text-text")}
         >
-          {step.text}
+          {step.tool}
         </span>
       ) : null}
+      {step.text ? <span className="truncate">{step.text}</span> : null}
     </span>
   );
 }
 
-/** A worker's last error under its step: what it means, Claude Code's text cut to the cell with the whole text as its tooltip, and the hint. */
+/** What a worker's last error means, in the place of its step once the process has ended. */
+export function ErrorTitle({ error }: { error: RowError }) {
+  return (
+    <span className="flex min-w-0 items-center gap-6 text-13 leading-tight font-medium text-bad">
+      <CircleAlert aria-hidden="true" size={14} className="shrink-0" />
+      <span className="truncate">{error.title}</span>
+    </span>
+  );
+}
+
+/** A worker's last error in its open row: what it means, Claude Code's text as data, and the daemon's hint. */
 export function RowErrorText({ error }: { error: RowError }) {
   return (
-    <span className="mt-2 flex w-search min-w-0 flex-col gap-2 text-13">
-      <span className="flex items-center gap-4 font-medium text-bad">
-        <CircleAlert aria-hidden="true" size={12} className="shrink-0" />
-        {error.title}
-      </span>
-      <span className="truncate font-mono text-text-2" title={error.text}>
+    <span className="flex min-w-0 flex-col gap-4 text-14">
+      <span className="font-medium text-bad">{error.title}</span>
+      <span className="font-mono text-13 wrap-anywhere text-text">
         {error.text}
       </span>
       {error.hint === null ? null : (
-        <span className="text-text-2">
+        <span className="text-13 text-text-2">
           <CodeText text={error.hint} caption />
         </span>
       )}

@@ -8,8 +8,8 @@ import {
   requestSummary,
 } from "@/test/requests";
 import {
-  KIND_SPECS,
-  STATE_SPECS,
+  KIND_LABELS,
+  STATE_LABELS,
   authorLine,
   commentsSummary,
   createdTasks,
@@ -22,7 +22,11 @@ import {
   kindOf,
   listSummary,
   metaLine as metaLineSegments,
+  pageTitle,
+  rowSubLine,
   shownDraft,
+  stateChip,
+  statusHeading as statusHeadingSegments,
   threadSummary,
   versionText,
 } from "./present";
@@ -30,18 +34,34 @@ import { segmentsText } from "@/people/segments";
 
 const metaLine = (...args: Parameters<typeof metaLineSegments>) =>
   segmentsText(metaLineSegments(...args));
+const statusHeading = (...args: Parameters<typeof statusHeadingSegments>) =>
+  segmentsText(statusHeadingSegments(...args));
 
 const HOUR = 3_600_000;
 
 describe("state and kind", () => {
-  it("names every state and kind with token classes", () => {
-    expect(STATE_SPECS.draft_ready).toEqual({
-      label: "Draft ready",
-      pill: "bg-warn-soft text-warn",
-      dot: "bg-status-review",
+  it("names every state and kind", () => {
+    expect(STATE_LABELS.draft_ready).toBe("Draft ready");
+    expect(KIND_LABELS.unsorted).toBe("Unsorted");
+  });
+
+  it("marks in gold only a draft that waits for the signed-in requester", () => {
+    const ready = requestSummary("RQ-4", { state: "draft_ready" });
+    expect(stateChip(ready, "tanim")).toEqual({
+      label: "Draft ready · waits for you",
+      tone: "warn",
     });
-    expect(STATE_SPECS.changes_requested.pill).toBe("bg-warn-soft text-warn");
-    expect(KIND_SPECS.unsorted.label).toBe("Unsorted");
+    expect(stateChip(ready, "rafeed")).toEqual({
+      label: "Draft ready",
+      tone: "neutral",
+    });
+    expect(
+      stateChip(requestSummary("RQ-4", { state: "approved" }), "tanim"),
+    ).toEqual({ label: "Approved", tone: "ok" });
+    expect(stateChip(requestSummary("RQ-4"), null)).toEqual({
+      label: "Open",
+      tone: "neutral",
+    });
   });
 
   it("shows a request no orchestrator sorted as unsorted", () => {
@@ -49,17 +69,36 @@ describe("state and kind", () => {
     expect(kindOf(requestSummary("RQ-1", { kind: "bug" }))).toBe("bug");
   });
 
-  it("uses the excerpt, muted, until the request has a title", () => {
+  it("uses the excerpt in a row until the request has a title", () => {
     expect(headingOf(requestSummary("RQ-7"))).toEqual({
       text: "Message of RQ-7",
-      muted: true,
+      excerpt: true,
     });
     expect(
       headingOf(requestSummary("RQ-4", { title: "Report export" })),
     ).toEqual({
       text: "Report export",
-      muted: false,
+      excerpt: false,
     });
+  });
+
+  it("names an untitled request by its id on its page", () => {
+    expect(pageTitle(requestSummary("RQ-7"))).toBe("Request RQ-7");
+    expect(pageTitle(requestSummary("RQ-4", { title: "Report export" }))).toBe(
+      "Report export",
+    );
+  });
+
+  it("writes the id and kind under a row's title", () => {
+    expect(rowSubLine(requestSummary("RQ-7"))).toBe(
+      "RQ-7 · Unsorted · no title yet",
+    );
+    expect(
+      rowSubLine(requestSummary("RQ-4", { kind: "bug", title: "x" })),
+    ).toBe("RQ-4 · Bug");
+    expect(rowSubLine(requestSummary("RQ-7"), "2 d")).toBe(
+      "RQ-7 · Unsorted · 2 d",
+    );
   });
 });
 
@@ -80,39 +119,65 @@ describe("formatSize and joinIds", () => {
 
 describe("metaLine", () => {
   const now = T0 + 3 * HOUR;
+  it("says who asked and when, and that a title is missing", () => {
+    expect(metaLine(requestDetail(requestSummary("RQ-4")), now)).toBe(
+      "Requested by @tanim 3 h ago · No title yet",
+    );
+    expect(
+      metaLine(
+        requestDetail(requestSummary("RQ-4", { title: "Report export" })),
+        now,
+      ),
+    ).toBe("Requested by @tanim 3 h ago");
+  });
+});
+
+describe("statusHeading", () => {
+  const now = T0 + 3 * HOUR;
   const line = (
     fields: Parameters<typeof requestSummary>[1],
     tasks: string[] = [],
-  ) => metaLine(requestDetail(requestSummary("RQ-4", fields), { tasks }), now);
+    human: string | null = "tanim",
+  ) =>
+    statusHeading(
+      requestDetail(requestSummary("RQ-4", fields), { tasks }),
+      human,
+      now,
+    );
 
   it("says who acts next in each state", () => {
-    expect(line({})).toBe(
-      "Requested by @tanim 3 h ago · no orchestrator has claimed it yet",
-    );
+    expect(line({})).toBe("No orchestrator has claimed it yet");
     expect(line({ state: "drafting", drafter: "backend" })).toBe(
-      "Requested by @tanim 3 h ago · @backend is drafting the cards",
+      "@backend is drafting the cards",
     );
     expect(
       line({ state: "drafting", drafter: "backend", latest_version: 1 }),
-    ).toBe(
-      "Requested by @tanim 3 h ago · @backend is drafting the version after v1",
+    ).toBe("@backend is drafting the version after v1");
+    expect(line({ state: "drafting" })).toBe(
+      "An orchestrator is drafting the cards",
+    );
+    expect(line({ state: "drafting", latest_version: 2 })).toBe(
+      "An orchestrator is drafting the version after v2",
     );
     expect(
       line({ state: "draft_ready", drafter: "backend", latest_version: 2 }),
-    ).toBe(
-      "Requested by @tanim 3 h ago · @backend is the drafter · v2 waits for the requester",
-    );
+    ).toBe("v2 waits for your decision");
+    expect(
+      line(
+        { state: "draft_ready", drafter: "backend", latest_version: 2 },
+        [],
+        "rafeed",
+      ),
+    ).toBe("v2 waits for @tanim");
     expect(
       line({
         state: "changes_requested",
         drafter: "backend",
         latest_version: 1,
       }),
-    ).toBe(
-      "Requested by @tanim 3 h ago · @backend is the drafter · v1 went back to the drafter",
-    );
+    ).toBe("v1 went back to @backend");
     expect(line({ state: "closed", updated_at: now - 60_000 })).toBe(
-      "Requested by @tanim 3 h ago · closed 1 min ago",
+      "Closed 1 min ago",
     );
   });
 
@@ -123,11 +188,10 @@ describe("metaLine", () => {
       updated_at: T0,
     };
     expect(line(approved, ["T-12", "T-13"])).toMatch(
-      /^Requested by @tanim 3 h ago · @tanim approved v2 at .+ · T-12 and T-13 were created$/,
+      /^@tanim approved v2 at .+ · T-12 and T-13 were created$/,
     );
     expect(line(approved, ["T-12"])).toMatch(/T-12 was created$/);
     expect(line(approved)).toMatch(/approved v2 at [^·]+$/);
-    expect(line({ state: "drafting" })).toMatch(/an orchestrator is drafting/);
   });
 });
 
@@ -200,21 +264,21 @@ describe("summaries", () => {
   });
 
   it("counts requests and the drafts that wait for a human", () => {
-    expect(listSummary([])).toBe("0 requests");
-    expect(listSummary([requestSummary("RQ-1")])).toBe("1 request");
+    expect(listSummary([])).toEqual({ total: "0 requests", waiting: null });
+    expect(listSummary([requestSummary("RQ-1")]).total).toBe("1 request");
     expect(
       listSummary([
         requestSummary("RQ-1", { state: "draft_ready" }),
         requestSummary("RQ-2", { state: "draft_ready", requester: "backend" }),
         requestSummary("RQ-3"),
       ]),
-    ).toBe("3 requests · 1 needs a human");
+    ).toEqual({ total: "3 requests", waiting: "1 needs a human" });
     expect(
       listSummary([
         requestSummary("RQ-1", { state: "draft_ready" }),
         requestSummary("RQ-2", { state: "draft_ready" }),
       ]),
-    ).toBe("2 requests · 2 need a human");
+    ).toEqual({ total: "2 requests", waiting: "2 need a human" });
   });
 });
 
