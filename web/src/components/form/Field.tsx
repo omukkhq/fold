@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { createContext, use, useId, type ReactNode } from "react";
 import { describedBy, fieldIds } from "./describedBy";
 
 export interface FieldProps {
@@ -6,6 +6,12 @@ export interface FieldProps {
   hint?: string;
   error?: string;
 }
+
+/** The hint under a control: a 13px note by default; a form whose hints are whole sentences gives them 14px within the measure. */
+export const FieldHintClass = createContext("text-13 text-text-2");
+
+/** The hint style of a form whose hints are sentences that explain a choice. */
+export const SENTENCE_HINT = "max-w-measure text-14 leading-normal text-text-2";
 
 export interface ControlProps {
   id: string;
@@ -26,6 +32,7 @@ export function Field({
   children: (control: ControlProps) => ReactNode;
 }) {
   const ids = fieldIds(useId());
+  const hintClass = use(FieldHintClass);
   const labelNode = (
     <label
       htmlFor={ids.input}
@@ -60,7 +67,7 @@ export function Field({
         </>
       )}
       {hint ? (
-        <p id={ids.hint} className="text-13 text-text-2">
+        <p id={ids.hint} className={hintClass}>
           {hint}
         </p>
       ) : null}

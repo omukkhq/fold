@@ -7,7 +7,7 @@ import type { BoardLabel } from "@/api/board";
 import { workersQuery } from "@/api/queries";
 import { labelsQuery } from "@/api/tasks";
 import { IconButton } from "@/components/button/Button";
-import { controlClasses } from "@/components/form/Field";
+import { controlClasses, SENTENCE_HINT } from "@/components/form/Field";
 import { labelColors } from "@/components/label/labelColors";
 import { menuContent, menuItem } from "@/components/overlay/menuStyles";
 import { cn } from "@/lib/cn";
@@ -24,8 +24,10 @@ import {
   type AreaRef,
 } from "./areas";
 
-const FIELD_LABEL = "text-14 leading-tight font-semibold text-text";
-const FIELD_HINT = "text-13 leading-normal text-text-2";
+// The same label and help text as the shared form fields around them.
+const FIELD_LABEL =
+  "font-title text-13 leading-tight font-semibold text-text-2";
+const FIELD_HINT = SENTENCE_HINT;
 
 /** The project's areas, with the built-in area Main first, and its labels. The areas are null until the worker list is read; a refused read leaves them empty, so every label counts as one that is no area, and sets `failed`. */
 export function useAreas(slug: string): {

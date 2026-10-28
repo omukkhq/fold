@@ -1142,7 +1142,7 @@ describe("creating a task", () => {
     const { router } = setup("/p/demo/t/new");
     const dialog = await screen.findByRole("dialog", {}, WAIT);
     expect(
-      within(dialog).getByText("Usually a request works better"),
+      within(dialog).getByText(/^Usually a request works better: a lead plans/),
     ).toBeTruthy();
     await userEvent.click(
       within(dialog).getByRole("button", { name: "New request" }),
