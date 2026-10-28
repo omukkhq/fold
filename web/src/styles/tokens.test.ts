@@ -219,6 +219,62 @@ describe("raw literal guard", () => {
   });
 });
 
+/** The colour, size and shape names the theme used before the current tokens. Tailwind drops a class it does not know without a word, so a screen that still names one renders unstyled and every check stays green. */
+const COLOUR_UTILITIES =
+  "bg|text|border|ring|inset-ring|outline|fill|stroke|decoration|divide|placeholder|caret|from|via|to|shadow";
+const REMOVED_COLOURS =
+  "muted|faint|border|border-subtle|raised|primary|primary-strong|primary-muted|primary-text|primary-soft|focus-ring|on-primary|secondary|secondary-text|secondary-soft|success|success-text|success-soft|danger|danger-soft|warning|warning-soft|ink-soft|text-muted|text-faint";
+const REMOVED_OTHER =
+  "text-(?:page|screen|wordmark|item-title|section|card|body|bar|micro|caption|meta|code|label|overline)|shadow-card|rounded-(?:chip|xs)|leading-snug|tracking-overline|font-ui";
+const REMOVED_NAME = new RegExp(
+  `(?<![\\w-])(?:(?:${COLOUR_UTILITIES})-(?:${REMOVED_COLOURS})|${REMOVED_OTHER})(?![\\w-])`,
+  "g",
+);
+
+describe("removed token names", () => {
+  it("refuses each removed name, with a variant too", () => {
+    for (const name of [
+      "text-text-muted",
+      "hover:text-text-faint",
+      "border-border-subtle",
+      "bg-raised",
+      "bg-primary-soft",
+      "text-on-primary",
+      "text-secondary-text",
+      "bg-success-soft",
+      "text-danger",
+      "bg-warning-soft",
+      "bg-ink-soft",
+      "inset-ring-border",
+      "outline-focus-ring",
+      "text-meta",
+      "text-body",
+      "md:text-section",
+      "shadow-card",
+      "rounded-chip",
+      "leading-snug",
+      "tracking-overline",
+      "font-ui",
+    ]) {
+      expect(`className="${name}"`.match(REMOVED_NAME), name).toEqual([
+        name.replace(/^[a-z]+:/, ""),
+      ]);
+    }
+  });
+  it("lets the current names through", () => {
+    const current =
+      'className="text-text-2 bg-fill border-line bg-accent-soft text-on-ink bg-warn-soft bg-label-ink-soft text-label-sage text-13 font-title rounded-pill shadow-pop leading-tight inset-ring-line outline-accent"';
+    expect(current.match(REMOVED_NAME)).toBeNull();
+  });
+  it("finds none in the sources", () => {
+    for (const [path, text] of Object.entries(sources)) {
+      if (/\.test\.tsx?$/.test(path) || path.endsWith("/styles/tokens.css"))
+        continue;
+      expect(text.match(REMOVED_NAME), path).toBeNull();
+    }
+  });
+});
+
 describe("contrast", () => {
   const pairs: [string, string][] = [
     ["text", "surface"],
