@@ -11,6 +11,6 @@ describe("Wordmark", () => {
     expect(screen.getByLabelText("fold").textContent).toBe("fold.");
     const dot = container.querySelector("[aria-hidden]");
     expect(dot?.textContent).toBe(".");
-    expect(dot?.classList.contains("text-primary")).toBe(true);
+    expect(dot?.classList.contains("text-accent")).toBe(true);
   });
 });

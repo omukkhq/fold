@@ -35,9 +35,7 @@ export function SectionHead({
 }) {
   return (
     <div className="flex items-center gap-10">
-      <h3 className="text-section leading-snug font-semibold text-text">
-        {title}
-      </h3>
+      <h3 className="text-16 leading-tight font-semibold text-text">{title}</h3>
       {children}
     </div>
   );
@@ -55,7 +53,7 @@ export function SideGroup({
   children: ReactNode;
 }) {
   const heading = (
-    <h3 className="text-overline leading-snug font-semibold text-primary-text uppercase">
+    <h3 className="font-title text-13 leading-tight font-semibold text-text-2">
       {title}
     </h3>
   );
@@ -77,10 +75,8 @@ export function SideGroup({
 export function KeyValue({ name, value }: { name: string; value: string }) {
   return (
     <div className="flex items-center gap-8">
-      <span className="w-skeleton-s shrink-0 text-bar text-text-muted">
-        {name}
-      </span>
-      <span className="min-w-0 truncate font-mono text-meta text-text">
+      <span className="w-skeleton-s shrink-0 text-14 text-text-2">{name}</span>
+      <span className="min-w-0 truncate font-mono text-13 text-text">
         {value}
       </span>
     </div>
@@ -90,7 +86,7 @@ export function KeyValue({ name, value }: { name: string; value: string }) {
 export function StatusMark({ status }: { status: TaskStatus }) {
   const look = statusLook(status);
   return (
-    <span className="inline-flex shrink-0 items-center gap-5 text-meta text-text-muted">
+    <span className="inline-flex shrink-0 items-center gap-5 text-13 text-text-2">
       <span
         aria-hidden="true"
         className={cn("size-7 rounded-full", look.dot)}
@@ -120,7 +116,7 @@ export function LinkButton({
       <Icon
         aria-hidden="true"
         size={15}
-        className={variant === "secondary" ? "text-text-muted" : undefined}
+        className={variant === "secondary" ? "text-text-2" : undefined}
       />
       {children}
     </HrefLink>
@@ -148,7 +144,7 @@ export function SmallAction({
       disabled={isInert(disabled, pending)}
       aria-busy={pending ? true : undefined}
       className={cn(
-        "inline-flex items-center gap-6 rounded-m px-6 py-3 text-meta font-medium text-text-muted hover:bg-sunken",
+        "inline-flex items-center gap-6 rounded-m px-6 py-3 text-13 font-medium text-text-2 hover:bg-sunken",
         focusRing,
         className,
       )}
@@ -170,14 +166,14 @@ export function WriteError({ error }: { error: Error | null }) {
   }
   if (view) {
     return (
-      <p role="alert" className="text-meta font-medium text-danger">
+      <p role="alert" className="text-13 font-medium text-bad">
         {view.text}
       </p>
     );
   }
   return (
     <ErrorBanner
-      className="rounded-m border-b-0 px-12 inset-ring inset-ring-border"
+      className="rounded-m border-b-0 px-12 inset-ring inset-ring-line"
       title="The change was refused."
       message={
         error instanceof ApiError && error.message !== ""

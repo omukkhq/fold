@@ -30,19 +30,19 @@ export function PausedBanner({
     <div
       role="status"
       className={cn(
-        "flex items-center gap-10 border-b border-border-subtle bg-warning-soft px-24 pt-9 pb-8",
+        "flex items-center gap-10 border-b border-line bg-warn-soft px-24 pt-9 pb-8",
         className,
       )}
     >
       <CirclePause
         aria-hidden="true"
         size={15}
-        className="shrink-0 text-warning"
+        className="shrink-0 text-warn"
       />
-      <p className="text-bar leading-snug font-semibold text-text">
+      <p className="text-14 leading-tight font-semibold text-text">
         <ActorText segments={text.title} />
       </p>
-      <p className="min-w-0 flex-1 text-bar leading-snug text-secondary-text">
+      <p className="min-w-0 flex-1 text-14 leading-tight text-warn">
         {text.detail}
       </p>
     </div>

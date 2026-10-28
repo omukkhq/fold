@@ -18,7 +18,7 @@ const STYLES: Record<DiffLineKind, DiffLineStyle> = {
     sign: "+",
     description: "Added line",
     row: "bg-diff-add",
-    signClass: "text-primary-text",
+    signClass: "text-accent",
     header: false,
   },
   removed: {
@@ -26,21 +26,21 @@ const STYLES: Record<DiffLineKind, DiffLineStyle> = {
     sign: "\u2212",
     description: "Removed line",
     row: "bg-diff-del",
-    signClass: "text-danger",
+    signClass: "text-bad",
     header: false,
   },
   context: {
     sign: " ",
     description: "Unchanged line",
     row: "bg-diff-context",
-    signClass: "text-text-muted",
+    signClass: "text-text-2",
     header: false,
   },
   hunk: {
     sign: "",
     description: "Hunk header",
     row: "bg-diff-hunk",
-    signClass: "text-text-muted",
+    signClass: "text-text-2",
     header: true,
   },
 };
@@ -54,7 +54,7 @@ export function diffLineStyle(kind: DiffLineKind): DiffLineStyle {
  * their place.
  */
 const SELECTED_ROW =
-  "relative bg-diff-selected before:absolute before:inset-y-0 before:left-0 before:w-3 before:bg-primary";
+  "relative bg-diff-selected before:absolute before:inset-y-0 before:left-0 before:w-3 before:bg-accent";
 
 /** The row fill: a selected row overrides the kind's fill. */
 export function diffRowClass(kind: DiffLineKind, selected: boolean): string {
@@ -63,5 +63,5 @@ export function diffRowClass(kind: DiffLineKind, selected: boolean): string {
 
 /** A selected row's line numbers are in primary text and semibold. */
 export function diffNumberClass(selected: boolean): string {
-  return selected ? "font-semibold text-primary-text" : "text-text-muted";
+  return selected ? "font-semibold text-accent" : "text-text-2";
 }

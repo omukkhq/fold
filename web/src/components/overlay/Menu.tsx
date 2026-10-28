@@ -39,7 +39,7 @@ export function Menu({ trigger, items, align = "start" }: MenuProps) {
                 className={cn(
                   menuItem,
                   "data-[disabled]:opacity-60",
-                  item.danger && "text-danger",
+                  item.danger && "text-bad",
                 )}
               >
                 {Icon ? <Icon aria-hidden="true" size={15} /> : null}

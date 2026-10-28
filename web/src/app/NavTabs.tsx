@@ -73,7 +73,7 @@ export function NavTabs({ slug }: { slug: string }) {
                   <span
                     role="status"
                     aria-label={`${String(reviews)} ${reviews === 1 ? "proposal waits" : "proposals wait"} for your review`}
-                    className="rounded-s bg-ink px-6 py-2 text-caption leading-snug font-semibold text-on-ink"
+                    className="rounded-s bg-ink px-6 py-2 text-13 leading-tight font-semibold text-on-ink"
                   >
                     {reviews}
                   </span>
@@ -84,7 +84,7 @@ export function NavTabs({ slug }: { slug: string }) {
                   <span
                     role="status"
                     aria-label={`${String(awaiting)} ${awaiting === 1 ? "thread waits" : "threads wait"} for your answer`}
-                    className="rounded-s bg-ink px-6 py-2 text-caption leading-snug font-semibold text-on-ink"
+                    className="rounded-s bg-ink px-6 py-2 text-13 leading-tight font-semibold text-on-ink"
                   >
                     {awaiting}
                   </span>

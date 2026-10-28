@@ -150,10 +150,10 @@ export function RepositoryScreen({
         className="flex flex-col gap-12 lg:w-history lg:shrink-0"
       >
         <div className="flex flex-col gap-4">
-          <h1 className="text-screen leading-snug font-semibold text-text">
+          <h1 className="text-24 leading-tight font-semibold text-text">
             Repository
           </h1>
-          <p className="text-body text-text-muted">
+          <p className="text-15 text-text-2">
             Accepted history only. Each revision is one integration.
           </p>
         </div>
@@ -164,12 +164,12 @@ export function RepositoryScreen({
           onSelect={onSelectRevision}
         />
         {more ? (
-          <p className="text-bar text-text-muted">
+          <p className="text-14 text-text-2">
             {olderNotListed(history.length, "revisions")}
           </p>
         ) : null}
         {onlyFirst ? (
-          <p className="text-bar text-text-muted">
+          <p className="text-14 text-text-2">
             Only r1 exists, so there is nothing to compare yet.
           </p>
         ) : null}
@@ -180,7 +180,7 @@ export function RepositoryScreen({
       >
         <div className="flex min-h-32 flex-wrap items-center justify-between gap-10">
           <span className="flex items-center gap-10">
-            <Mono className="text-bar font-semibold text-text">{selected}</Mono>
+            <Mono className="text-14 font-semibold text-text">{selected}</Mono>
             <CommitId commit={selectedCommit} />
           </span>
           {onlyFirst ? null : (
@@ -204,7 +204,7 @@ export function RepositoryScreen({
           <FileView slug={slug} revision={selected} path={openPath} />
         )}
         {mainCopy === null ? null : (
-          <p className="flex items-center gap-8 rounded-m bg-sunken px-12 py-10 text-bar text-text-muted">
+          <p className="flex items-center gap-8 rounded-m bg-sunken px-12 py-10 text-14 text-text-2">
             {folderWaits(repository.data) ? (
               <FolderClock aria-hidden size={15} className="shrink-0" />
             ) : (

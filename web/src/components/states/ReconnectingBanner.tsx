@@ -33,16 +33,12 @@ export function ReconnectingBanner({
     <div
       role="status"
       className={cn(
-        "flex items-center gap-10 border-b border-border-subtle bg-surface px-24 pt-9 pb-8",
+        "flex items-center gap-10 border-b border-line bg-surface px-24 pt-9 pb-8",
         className,
       )}
     >
-      <WifiOff
-        aria-hidden="true"
-        size={15}
-        className="shrink-0 text-secondary-text"
-      />
-      <p className="min-w-0 flex-1 text-bar leading-snug text-text">
+      <WifiOff aria-hidden="true" size={15} className="shrink-0 text-warn" />
+      <p className="min-w-0 flex-1 text-14 leading-tight text-text">
         {text.paused}{" "}
         {text.countdown !== null && (
           <span aria-hidden="true">{text.countdown} </span>

@@ -135,11 +135,11 @@ export function reviewPill(
 }
 
 export const PILL_CLASSES: Record<PillTone, string> = {
-  danger: "bg-danger-soft text-danger",
-  human: "bg-secondary-soft text-secondary-text",
-  approved: "bg-primary-soft text-primary-text",
-  neutral: "bg-sunken text-text-muted",
-  done: "bg-ink-soft text-text",
+  danger: "bg-bad-soft text-bad",
+  human: "bg-warn-soft text-warn",
+  approved: "bg-accent-soft text-accent",
+  neutral: "bg-sunken text-text-2",
+  done: "bg-fill text-text",
 };
 
 /** Whose turn it is: an actor, or null for any human when the human-review mark names no one. */

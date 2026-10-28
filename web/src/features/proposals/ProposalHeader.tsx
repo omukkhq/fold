@@ -53,14 +53,11 @@ export function ProposalHeader({
   return (
     <header className="flex flex-col gap-10 px-16 pt-18 md:px-24">
       <nav aria-label="Breadcrumb">
-        <ol className="flex items-center gap-8 text-bar">
+        <ol className="flex items-center gap-8 text-14">
           <li>
             <HrefLink
               href={projectPath(slug, "proposals")}
-              className={cn(
-                "rounded-s text-text-muted hover:text-text",
-                focusRing,
-              )}
+              className={cn("rounded-s text-text-2 hover:text-text", focusRing)}
             >
               Proposals
             </HrefLink>
@@ -69,7 +66,7 @@ export function ProposalHeader({
             <ChevronRight
               aria-hidden="true"
               size={13}
-              className="text-text-faint"
+              className="text-text-2"
             />
             <span aria-current="page" className="font-mono text-text">
               {summary.id}
@@ -78,7 +75,7 @@ export function ProposalHeader({
         </ol>
       </nav>
       <div className="flex flex-wrap items-center gap-12">
-        <h1 className="min-w-0 text-screen leading-snug font-semibold wrap-anywhere text-text">
+        <h1 className="min-w-0 text-24 leading-tight font-semibold wrap-anywhere text-text">
           {summary.title}
         </h1>
         <ReviewPill
@@ -91,9 +88,9 @@ export function ProposalHeader({
           large
         />
       </div>
-      <div className="flex flex-wrap items-center gap-x-16 gap-y-4 text-bar text-text-muted">
+      <div className="flex flex-wrap items-center gap-x-16 gap-y-4 text-14 text-text-2">
         <span className="flex items-center gap-6 text-text">
-          <PersonName name={summary.author} className="text-meta" />
+          <PersonName name={summary.author} className="text-13" />
         </span>
         <span>
           for{" "}
@@ -116,7 +113,7 @@ export function ProposalHeader({
       {wait === null ? null : (
         <p
           data-plan-wait={wait.state}
-          className="flex items-start gap-6 self-start rounded-s bg-secondary-soft px-10 py-5 text-meta leading-normal text-secondary-text"
+          className="flex items-start gap-6 self-start rounded-s bg-warn-soft px-10 py-5 text-13 leading-normal text-warn"
         >
           <Hourglass aria-hidden="true" size={13} className="mt-2 shrink-0" />
           <span>

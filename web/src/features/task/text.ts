@@ -28,20 +28,20 @@ const STATUS: Record<TaskStatus, StatusLook> = {
   backlog: {
     text: "Backlog",
     dot: "bg-status-backlog",
-    pill: "bg-sunken text-text-muted",
+    pill: "bg-sunken text-text-2",
   },
   todo: { text: "Todo", dot: "bg-status-todo", pill: "bg-sunken text-text" },
   in_progress: {
     text: "In Progress",
     dot: "bg-status-progress",
-    pill: "bg-primary-soft text-primary-strong",
+    pill: "bg-accent-soft text-accent",
   },
   review: {
     text: "Review",
     dot: "bg-status-review",
-    pill: "bg-secondary-soft text-secondary-text",
+    pill: "bg-warn-soft text-warn",
   },
-  done: { text: "Done", dot: "bg-status-done", pill: "bg-ink-soft text-text" },
+  done: { text: "Done", dot: "bg-status-done", pill: "bg-fill text-text" },
 };
 
 export function statusLook(status: TaskStatus): StatusLook {

@@ -70,16 +70,16 @@ function WorkspaceSide({
   return (
     <aside className="flex w-side-panel shrink-0 flex-col gap-20">
       <section className="flex flex-col gap-8">
-        <h2 className="text-overline leading-snug font-semibold text-primary-text uppercase">
+        <h2 className="font-title text-13 leading-tight font-semibold text-text-2">
           This view
         </h2>
-        <p className="text-bar leading-snug text-text-muted">
+        <p className="text-14 leading-tight text-text-2">
           {workingNote(comparison)}
         </p>
       </section>
       {options.length > 0 ? (
         <nav aria-label="Compare with" className="flex flex-col gap-8">
-          <h2 className="text-overline leading-snug font-semibold text-primary-text uppercase">
+          <h2 className="font-title text-13 leading-tight font-semibold text-text-2">
             Compare with
           </h2>
           <ul className="flex flex-col gap-8">
@@ -89,7 +89,7 @@ function WorkspaceSide({
                   href={option.href}
                   aria-current={option.current ? "page" : undefined}
                   className={cn(
-                    "rounded-s text-body text-text hover:text-primary-text",
+                    "rounded-s text-15 text-text hover:text-accent",
                     option.current && "font-semibold",
                     focusRing,
                   )}

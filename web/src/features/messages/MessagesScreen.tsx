@@ -80,7 +80,7 @@ const FILTERS = [
 ] as const;
 
 const CHIP =
-  "inline-flex items-center gap-6 rounded-chip bg-surface px-10 py-3 text-code whitespace-nowrap inset-ring inset-ring-border max-sm:min-h-44";
+  "inline-flex items-center gap-6 rounded-pill bg-surface px-10 py-3 text-13 whitespace-nowrap inset-ring inset-ring-line max-sm:min-h-44";
 
 export function MessagesScreen({ slug, search }: MessagesScreenProps) {
   const { data: listing, dataUpdatedAt } = useSuspenseQuery(
@@ -130,18 +130,18 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
     <div className="flex min-h-0 flex-1 flex-col items-stretch overflow-hidden lg:flex-row">
       <div
         className={cn(
-          "min-h-0 flex-1 flex-col lg:flex lg:w-thread-list lg:flex-none lg:border-r lg:border-border-subtle",
+          "min-h-0 flex-1 flex-col lg:flex lg:w-thread-list lg:flex-none lg:border-r lg:border-line",
           search.thread === undefined ? "flex" : "hidden",
         )}
       >
         <h1 className="sr-only">Messages</h1>
-        <div className="flex shrink-0 flex-col gap-12 border-b border-border-subtle px-16 pt-16 pb-12">
+        <div className="flex shrink-0 flex-col gap-12 border-b border-line px-16 pt-16 pb-12">
           <div className="flex items-center gap-8">
-            <label className="flex min-w-0 flex-1 items-center gap-8 rounded-m bg-surface px-10 py-7 inset-ring inset-ring-border has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-focus-ring max-sm:min-h-44">
+            <label className="flex min-w-0 flex-1 items-center gap-8 rounded-m bg-surface px-10 py-7 inset-ring inset-ring-line has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent max-sm:min-h-44">
               <Search
                 aria-hidden="true"
                 size={15}
-                className="shrink-0 text-text-faint"
+                className="shrink-0 text-text-2"
               />
               <input
                 type="search"
@@ -151,7 +151,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
                 onChange={(event) => {
                   setQuery(event.target.value);
                 }}
-                className="min-w-0 flex-1 bg-transparent text-body leading-snug text-text outline-none placeholder:text-text-faint"
+                className="min-w-0 flex-1 bg-transparent text-15 leading-tight text-text outline-none placeholder:text-text-2"
               />
             </label>
             <Tooltip content="Send feedback">
@@ -185,7 +185,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
                   show === chip.show
                     ? "bg-ink font-semibold text-on-ink inset-ring-ink"
                     : chip.show === "waiting"
-                      ? "text-warning hover:bg-sunken"
+                      ? "text-warn hover:bg-sunken"
                       : "text-text hover:bg-sunken",
                   focusRing,
                 )}
@@ -213,8 +213,8 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
                       className={cn(
                         CHIP,
                         value === undefined
-                          ? "text-text-muted hover:bg-sunken"
-                          : "bg-primary-soft text-primary-text inset-ring-primary",
+                          ? "text-text-2 hover:bg-sunken"
+                          : "bg-accent-soft text-accent inset-ring-accent",
                         focusRing,
                       )}
                     >
@@ -270,7 +270,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
             />
           )}
           {listing.more ? (
-            <p className="px-16 py-12 text-bar text-text-muted">
+            <p className="px-16 py-12 text-14 text-text-2">
               {olderNotListed(data.length, "threads")}
             </p>
           ) : null}

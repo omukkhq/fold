@@ -42,19 +42,19 @@ interface RequestsScreenProps {
 }
 
 const HEAD =
-  "px-6 py-9 text-left text-overline leading-snug font-semibold tracking-overline whitespace-nowrap text-text-muted uppercase first:pl-16 last:pr-16";
+  "px-6 py-9 text-left font-title text-13 leading-tight font-semibold whitespace-nowrap text-text-2 first:pl-16 last:pr-16";
 const CELL = "px-6 py-12 align-middle first:pl-16 last:pr-16";
-const MONO = "font-mono text-code whitespace-nowrap text-text-muted";
+const MONO = "font-mono text-13 whitespace-nowrap text-text-2";
 const COLUMNS = ["Id", "Kind", "Title", "Requester", "State", "Drafter", "Age"];
 
 function Header({ onNew }: { onNew: () => void }) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-12">
       <div className="flex flex-col gap-4">
-        <h1 className="text-screen leading-snug font-semibold text-text">
+        <h1 className="text-24 leading-tight font-semibold text-text">
           Requests
         </h1>
-        <p className="text-body text-text-muted">
+        <p className="text-15 text-text-2">
           Problems, ideas and questions from people and agents. An orchestrator
           drafts the cards; the requester approves them.
         </p>
@@ -106,10 +106,10 @@ function Filters({
               href={listHref(slug, { ...search, state })}
               aria-current={current ? "page" : undefined}
               className={cn(
-                "rounded-s px-12 py-5 text-bar leading-snug",
+                "rounded-s px-12 py-5 text-14 leading-tight",
                 current
-                  ? "bg-surface font-semibold text-text inset-ring inset-ring-border-subtle"
-                  : "font-medium text-text-muted hover:text-text",
+                  ? "bg-surface font-semibold text-text inset-ring inset-ring-line"
+                  : "font-medium text-text-2 hover:text-text",
                 focusRing,
               )}
             >
@@ -146,7 +146,7 @@ function Filters({
       >
         Mine
       </Button>
-      <p className="ml-auto text-bar text-text-muted">{summary}</p>
+      <p className="ml-auto text-14 text-text-2">{summary}</p>
     </div>
   );
 }
@@ -155,10 +155,10 @@ function SkeletonRows() {
   return (
     <tbody aria-busy="true" aria-label="Loading requests">
       {[0, 1, 2, 3, 4].map((row) => (
-        <tr key={row} className="border-b border-border-subtle last:border-b-0">
+        <tr key={row} className="border-b border-line last:border-b-0">
           {COLUMNS.map((column) => (
             <td key={column} className={CELL}>
-              <span className="block h-12 animate-pulse rounded-xs bg-sunken motion-reduce:animate-none" />
+              <span className="block h-12 animate-pulse rounded-s bg-sunken motion-reduce:animate-none" />
             </td>
           ))}
         </tr>
@@ -169,10 +169,10 @@ function SkeletonRows() {
 
 function Table({ children }: { children: ReactNode }) {
   return (
-    <div className="overflow-x-auto rounded-l border border-border-subtle bg-surface">
+    <div className="overflow-x-auto rounded-l border border-line bg-surface">
       <table className="w-full border-collapse">
         <thead className="bg-bg">
-          <tr className="border-b border-border-subtle">
+          <tr className="border-b border-line">
             {COLUMNS.map((column) => (
               <th
                 key={column}
@@ -244,13 +244,13 @@ export function RequestsScreen({
           aria-label={
             data.length === 0 ? "No requests yet" : "No request matches"
           }
-          className="flex flex-col items-center gap-10 rounded-l px-24 py-40 text-center inset-ring inset-ring-border"
+          className="flex flex-col items-center gap-10 rounded-l px-24 py-40 text-center inset-ring inset-ring-line"
         >
-          <Inbox aria-hidden="true" size={24} className="text-text-muted" />
-          <h2 className="text-section leading-snug font-semibold text-text">
+          <Inbox aria-hidden="true" size={24} className="text-text-2" />
+          <h2 className="text-16 leading-tight font-semibold text-text">
             {data.length === 0 ? "No requests yet" : "No request matches"}
           </h2>
-          <p className="w-thread-list max-w-full text-body text-text-muted">
+          <p className="w-thread-list max-w-full text-15 text-text-2">
             {data.length === 0
               ? "Anyone can report a problem, ask for a feature or ask a question. An orchestrator drafts the cards, and the requester approves them."
               : isNarrowed(search)
@@ -268,7 +268,7 @@ export function RequestsScreen({
               >
                 New request
               </Button>
-              <p className="text-meta text-text-faint">
+              <p className="text-13 text-text-2">
                 An agent creates one with the create_request tool.
               </p>
             </>
@@ -282,7 +282,7 @@ export function RequestsScreen({
               return (
                 <tr
                   key={r.id}
-                  className="border-b border-border-subtle last:border-b-0 hover:bg-bg"
+                  className="border-b border-line last:border-b-0 hover:bg-bg"
                 >
                   <td className={cn(CELL, MONO)}>{r.id}</td>
                   <td className={CELL}>
@@ -292,10 +292,8 @@ export function RequestsScreen({
                     <HrefLink
                       href={projectPath(slug, "requests", r.id)}
                       className={cn(
-                        "block truncate rounded-s text-body leading-snug hover:underline",
-                        heading.muted
-                          ? "text-text-muted"
-                          : "font-medium text-text",
+                        "block truncate rounded-s text-15 leading-tight hover:underline",
+                        heading.muted ? "text-text-2" : "font-medium text-text",
                         focusRing,
                       )}
                     >
@@ -318,7 +316,7 @@ export function RequestsScreen({
                   <td
                     className={cn(
                       CELL,
-                      "text-code whitespace-nowrap text-text-muted",
+                      "text-13 whitespace-nowrap text-text-2",
                     )}
                   >
                     {formatAge(now, r.created_at)}

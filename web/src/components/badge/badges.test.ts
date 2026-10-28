@@ -6,20 +6,16 @@ describe("badgeSpec", () => {
     const spec = badgeSpec(tone);
     expect(spec.text.length).toBeGreaterThan(0);
     expect(spec.icon).toBeDefined();
-    expect(spec.classes).toMatch(/^bg-[a-z-]+ text-[a-z-]+$/);
-    expect(spec.shape).toMatch(/^px-\d+ py-\d+ text-[a-z]+ leading-snug$/);
+    expect(spec.classes).toMatch(/^bg-[a-z0-9-]+ text-[a-z0-9-]+$/);
+    expect(spec.shape).toMatch(/^px-\d+ py-\d+ text-\d+ leading-tight$/);
   });
 
   it("draws the blocked mark 3 by 8 at 11px", () => {
-    expect(badgeSpec("blocked").shape).toBe(
-      "px-8 py-3 text-caption leading-snug",
-    );
+    expect(badgeSpec("blocked").shape).toBe("px-8 py-3 text-13 leading-tight");
   });
 
   it("draws a requested change in the danger tone, as the proposal list does", () => {
-    expect(badgeSpec("proposal-changes").classes).toBe(
-      "bg-danger-soft text-danger",
-    );
+    expect(badgeSpec("proposal-changes").classes).toBe("bg-bad-soft text-bad");
   });
 
   it("shows every tone with its own text", () => {

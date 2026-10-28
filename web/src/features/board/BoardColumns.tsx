@@ -44,12 +44,12 @@ function Column({
             aria-hidden="true"
             className={cn("size-8 shrink-0 rounded-full", spec.dot)}
           />
-          <h2 className="text-card leading-snug font-semibold text-text">
+          <h2 className="text-16 leading-tight font-semibold text-text">
             {spec.name}
           </h2>
-          <span className="text-body font-medium text-text-faint">{count}</span>
+          <span className="text-15 font-medium text-text-2">{count}</span>
         </div>
-        <p className="text-meta leading-snug text-text-faint">{hint}</p>
+        <p className="text-13 leading-tight text-text-2">{hint}</p>
       </header>
       <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto p-4">
         {children}
@@ -108,7 +108,7 @@ function MoreLink({ slug, text }: { slug: string; text: string | null }) {
     <HrefLink
       href={projectPath(slug, "repository")}
       className={cn(
-        "self-start rounded-s text-meta font-medium text-primary-text hover:underline",
+        "self-start rounded-s text-13 font-medium text-accent hover:underline",
         focusRing,
       )}
     >
@@ -143,7 +143,7 @@ export function EmptyColumns({ slug }: { slug: string }) {
               title="No tasks yet"
               action={
                 <>
-                  <Mono className="block text-code text-text">fld claude</Mono>
+                  <Mono className="block text-13 text-text">fld claude</Mono>
                   <HrefLink
                     href={newTaskPath(slug)}
                     className={cn(
@@ -155,7 +155,7 @@ export function EmptyColumns({ slug }: { slug: string }) {
                     <Plus
                       aria-hidden="true"
                       size={15}
-                      className="text-text-muted"
+                      className="text-text-2"
                     />
                     New task
                   </HrefLink>

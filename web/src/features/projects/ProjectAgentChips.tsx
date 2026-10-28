@@ -5,7 +5,7 @@ import { PersonName } from "@/people/PersonName";
 import { fittingChips, moreLabel, moreTitle } from "./chipFit";
 
 const CHIP =
-  "flex shrink-0 items-center gap-5 rounded-full px-8 py-2 text-code whitespace-nowrap inset-ring inset-ring-border";
+  "flex shrink-0 items-center gap-5 rounded-full px-8 py-2 text-13 whitespace-nowrap inset-ring inset-ring-line";
 
 type Agent = ProjectOverview["agents"][number];
 
@@ -55,7 +55,7 @@ export function ProjectAgentChips({
   if (agents.length === 0) {
     return (
       <div className={cn("flex min-w-0 items-center", className)}>
-        <span className="truncate text-code text-text-muted">
+        <span className="truncate text-13 text-text-2">
           no agents connected
         </span>
       </div>
@@ -75,7 +75,7 @@ export function ProjectAgentChips({
       ))}
       {hidden.length > 0 ? (
         // The card is one link, so the chip cannot take focus; a screen reader reads the hidden names in the link's text.
-        <span className={cn(CHIP, "text-text-muted")} title={moreTitle(hidden)}>
+        <span className={cn(CHIP, "text-text-2")} title={moreTitle(hidden)}>
           <span aria-hidden>{moreLabel(hidden.length)}</span>
           <span className="sr-only">{moreTitle(hidden)}</span>
         </span>

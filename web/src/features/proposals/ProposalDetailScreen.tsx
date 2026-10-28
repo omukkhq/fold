@@ -97,7 +97,7 @@ function TabTrigger({
     <RadixTabs.Trigger value={value} className={cn(TAB_BY_STATE, focusRing)}>
       {label}
       {count === null ? null : (
-        <span className="rounded-s bg-sunken px-6 text-caption font-medium text-text-muted">
+        <span className="rounded-s bg-sunken px-6 text-13 font-medium text-text-2">
           {count}
         </span>
       )}

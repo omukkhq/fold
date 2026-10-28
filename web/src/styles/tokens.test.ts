@@ -32,26 +32,23 @@ const DESIGN_COLOURS = [
   "bg",
   "surface",
   "sunken",
-  "raised",
-  "border",
-  "border-subtle",
+  "line",
+  "fill",
   "text",
-  "text-muted",
-  "text-faint",
-  "primary",
-  "primary-strong",
-  "primary-soft",
-  "on-primary",
-  "primary-muted",
-  "primary-text",
-  "secondary",
-  "secondary-soft",
-  "secondary-text",
-  "success",
-  "success-soft",
-  "success-text",
-  "danger",
-  "danger-soft",
+  "text-2",
+  "accent",
+  "accent-soft",
+  "warn",
+  "warn-soft",
+  "ok",
+  "ok-soft",
+  "bad",
+  "bad-soft",
+  "ink",
+  "on-ink",
+  "scrim",
+  "shade-near",
+  "shade-far",
   "status-backlog",
   "status-todo",
   "status-progress",
@@ -61,56 +58,36 @@ const DESIGN_COLOURS = [
   "diff-add-strong",
   "diff-del",
   "diff-del-strong",
-  "ink",
-  "on-ink",
-  "label-sage",
-  "label-gold",
-  "label-moss",
-  "label-slate",
-  "label-plum",
-  "label-teal",
-  "label-stone",
-  "label-ink",
-  "warning",
-  "warning-soft",
-  "focus-ring",
-  "scrim",
-  "presence-active",
-  "presence-idle",
-  "presence-offline",
-  "ink-soft",
-  "label-sage-soft",
-  "label-slate-soft",
-  "label-teal-soft",
-  "label-ink-soft",
-  "label-gold-soft",
-  "label-moss-soft",
-  "label-plum-soft",
-  "label-stone-soft",
   "diff-context",
   "diff-hunk",
   "diff-selected",
   "diff-comment-marker",
   "diff-outdated",
+  ...["sage", "slate", "teal", "ink", "gold", "moss", "plum", "stone"].flatMap(
+    (hue) => [`label-${hue}`, `label-${hue}-soft`],
+  ),
+  "presence-active",
+  "presence-idle",
+  "presence-offline",
   ...SYNTAX.map((kind) => `syntax-${kind}`),
 ];
 const DESIGN_OTHER = [
-  "font-ui",
-  "font-mono",
-  "radius-xs",
-  "radius-s",
-  "radius-m",
-  "radius-l",
-  "radius-chip",
-  "size-micro",
-  "size-caption",
-  "size-code",
-  "size-bar",
-  "size-wordmark",
-  "size-screen",
-  "size-item-title",
+  "title",
+  "body",
+  "mono",
+  ...[12, 13, 14, 15, 16, 18, 21, 24, 28].map((n) => `fs-${String(n)}`),
+  "lh",
+  "lh-tight",
+  "r-s",
+  "r-m",
+  "r-l",
+  "r-pill",
+  "measure",
+  "icon-inline",
+  "icon-control",
   "tracking-wordmark",
   "height-bar",
+  "height-bar-compact",
   "width-skeleton-s",
   "width-skeleton-l",
   "width-diff-number",
@@ -124,6 +101,9 @@ const DESIGN_OTHER = [
   "width-dialog",
   "width-review-panel",
   "width-event-stream",
+  "width-inbox",
+  "width-agents",
+  "width-menu",
   ...[
     0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 16, 18, 20, 22, 24, 28, 32, 40,
     44,
@@ -173,13 +153,22 @@ describe("token contract", () => {
     for (const n of DESIGN_COLOURS) expect(light.has(n), n).toBe(true);
     for (const n of DESIGN_OTHER) expect(root.has(n), n).toBe(true);
   });
-  it("defines the elevations once, outside the theme blocks, the same for both themes", () => {
-    expect(root.get("elevation-card")).toBe("0 1px 2px #1a1a1f14");
+  it("defines the elevations once, outside the theme blocks, with the popover's shades taken from each theme", () => {
+    expect(root.get("elevation-pop")?.replace(/\s+/g, " ")).toBe(
+      "0 0 0 1px var(--line), 0 4px 12px var(--shade-near), 0 18px 44px var(--shade-far)",
+    );
     expect(root.get("elevation-dialog")).toBe("0 16px 48px #0a0a0b40");
     for (const set of [light, dark, auto]) {
-      expect(set.has("elevation-card")).toBe(false);
+      expect(set.has("elevation-pop")).toBe(false);
       expect(set.has("elevation-dialog")).toBe(false);
     }
+  });
+  it("keeps the type scale to nine sizes, 12px only for count badges", () => {
+    const sizes = [...root.keys()].filter((k) => k.startsWith("fs-"));
+    expect(sizes).toEqual(
+      [12, 13, 14, 15, 16, 18, 21, 24, 28].map((n) => `fs-${String(n)}`),
+    );
+    for (const k of sizes) expect(root.get(k)).toBe(`${k.slice(3)}px`);
   });
   it("keeps system-dark values equal to the explicit dark values", () => {
     expect(auto).toEqual(dark);
@@ -193,6 +182,16 @@ describe("token contract", () => {
 });
 
 describe("fonts", () => {
+  it("bundles the body face in the weights the screens use", () => {
+    const weights = [
+      ...fontsCss.matchAll(/atkinson-hyperlegible-next\/latin-(\d+)\.css/g),
+    ].map((m) => m[1]);
+    expect(weights).toEqual(["400", "500", "600"]);
+  });
+  it("sets the body in Atkinson Hyperlegible Next and the titles in Barlow", () => {
+    expect(root.get("body")).toMatch(/^"Atkinson Hyperlegible Next"/);
+    expect(root.get("title")).toMatch(/^"Barlow"/);
+  });
   it("bundles JetBrains Mono in the weights the screens use", () => {
     const weights = [
       ...fontsCss.matchAll(/jetbrains-mono\/latin-(\d+)\.css/g),
@@ -230,23 +229,26 @@ describe("contrast", () => {
   const pairs: [string, string][] = [
     ["text", "surface"],
     ["text", "bg"],
-    ["text-muted", "surface"],
-    ["text-muted", "bg"],
-    ["text-faint", "surface"],
-    ["primary-text", "primary-soft"],
-    ["secondary-text", "secondary-soft"],
+    ["text", "sunken"],
+    ["text", "fill"],
+    ["text-2", "surface"],
+    ["text-2", "bg"],
+    ["text-2", "sunken"],
+    ["text-2", "fill"],
+    ["text-2", "warn-soft"],
+    ["text-2", "accent-soft"],
+    ["text-2", "diff-context"],
+    ["text-2", "diff-hunk"],
+    ["text-2", "diff-selected"],
+    ["accent", "surface"],
+    ["accent", "accent-soft"],
+    ["warn", "surface"],
+    ["warn", "warn-soft"],
+    ["ok", "surface"],
+    ["ok", "ok-soft"],
+    ["bad", "surface"],
+    ["bad", "bad-soft"],
     ["on-ink", "ink"],
-    ["warning", "warning-soft"],
-    ["success-text", "surface"],
-    ["success-text", "success-soft"],
-    ["warning", "surface"],
-    ["danger", "surface"],
-    ["danger", "danger-soft"],
-    ["text-muted", "warning-soft"],
-    ["text-muted", "ink-soft"],
-    ["text-muted", "diff-context"],
-    ["text-muted", "diff-hunk"],
-    ["text-muted", "diff-selected"],
     ...["sage", "slate", "teal", "ink", "gold", "moss", "plum", "stone"].map(
       (hue): [string, string] => [`label-${hue}`, `label-${hue}-soft`],
     ),
@@ -255,39 +257,20 @@ describe("contrast", () => {
     ),
   ];
   const nonText: [string, string][] = [
-    ["focus-ring", "bg"],
-    ["focus-ring", "surface"],
+    ["accent", "bg"],
+    ["accent", "surface"],
     ["presence-active", "surface"],
     ["presence-idle", "surface"],
     ["presence-offline", "surface"],
     ["diff-comment-marker", "surface"],
     ["diff-outdated", "surface"],
   ];
-  // The product owner accepted these light pairs below 4.5:1, so their exact
-  // values are pinned instead of a ratio.
-  const acceptedLight: [string, string, string, string][] = [
-    ["on-primary", "primary", "#ffffff", "#6b8f8a"],
-    ["success", "success-soft", "#6a9e7a", "#f0f7f2"],
-    ["text-faint", "sunken", "#72716b", "#f3f1ed"],
-  ];
-  const darkOnly = acceptedLight.map(([fg, bg]) => [fg, bg] as const);
   const ratio = (set: Map<string, string>, fg: string, bg: string) => {
     const surface = parseHex(set.get("surface") ?? "");
     const under = composite(parseHex(set.get(bg) ?? ""), surface);
     const top = composite(parseHex(set.get(fg) ?? ""), under);
     return contrastRatio(top, under);
   };
-  for (const [fg, bg, fgHex, bgHex] of acceptedLight) {
-    it(`light: ${fg} on ${bg} keeps its accepted values`, () => {
-      expect(light.get(fg)).toBe(fgHex);
-      expect(light.get(bg)).toBe(bgHex);
-    });
-  }
-  for (const [fg, bg] of darkOnly) {
-    it(`dark: ${fg} on ${bg} is at least 4.5:1`, () => {
-      expect(ratio(dark, fg, bg)).toBeGreaterThanOrEqual(4.5);
-    });
-  }
   for (const [theme, set] of [
     ["light", light],
     ["dark", dark],

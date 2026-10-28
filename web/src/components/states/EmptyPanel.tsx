@@ -24,17 +24,15 @@ export function EmptyPanel({
     <section
       aria-label={title}
       className={cn(
-        "flex flex-col items-start gap-10 rounded-m px-14 py-18 inset-ring inset-ring-border",
+        "flex flex-col items-start gap-10 rounded-m px-14 py-18 inset-ring inset-ring-line",
         className,
       )}
     >
       {Icon ? (
-        <Icon aria-hidden="true" size={18} className="text-text-faint" />
+        <Icon aria-hidden="true" size={18} className="text-text-2" />
       ) : null}
-      <h2 className="text-card leading-snug font-semibold text-text">
-        {title}
-      </h2>
-      <p className="text-bar leading-snug text-text-muted">
+      <h2 className="text-16 leading-tight font-semibold text-text">{title}</h2>
+      <p className="text-14 leading-tight text-text-2">
         <CodeText text={children} />
       </p>
       {action}

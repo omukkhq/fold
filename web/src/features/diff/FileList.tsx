@@ -27,7 +27,7 @@ export function FileList({
       className="flex w-file-list shrink-0 flex-col gap-2"
     >
       {title ? (
-        <h2 className="text-overline leading-snug font-semibold text-primary-text uppercase">
+        <h2 className="font-title text-13 leading-tight font-semibold text-text-2">
           {title}
         </h2>
       ) : null}
@@ -53,33 +53,31 @@ export function FileList({
               >
                 <span
                   className={cn(
-                    "flex size-18 shrink-0 items-center justify-center rounded-s font-mono text-caption font-bold",
+                    "flex size-18 shrink-0 items-center justify-center rounded-s font-mono text-13 font-bold",
                     badge.classes,
                   )}
                 >
                   <span aria-hidden="true">{badge.letter}</span>
                   <span className="sr-only">{badge.label}</span>
                 </span>
-                <span className="min-w-0 flex-1 truncate font-mono text-label text-text">
+                <span className="min-w-0 flex-1 truncate font-mono text-13 text-text">
                   {file.path}
                 </span>
                 {warned ? (
-                  <span className="font-mono text-meta text-secondary-text">
+                  <span className="font-mono text-13 text-warn">
                     {warningMark(warned)}
                   </span>
                 ) : null}
                 {file.binary ? (
-                  <span className="font-mono text-meta text-text-muted">
-                    bin
-                  </span>
+                  <span className="font-mono text-13 text-text-2">bin</span>
                 ) : null}
                 {counts.added ? (
-                  <span className="font-mono text-meta text-primary-text">
+                  <span className="font-mono text-13 text-accent">
                     {counts.added}
                   </span>
                 ) : null}
                 {counts.removed ? (
-                  <span className="font-mono text-meta text-danger">
+                  <span className="font-mono text-13 text-bad">
                     {counts.removed}
                   </span>
                 ) : null}
@@ -105,13 +103,13 @@ export function FileList({
                     focusRing,
                   )}
                 >
-                  <span className="flex size-18 shrink-0 items-center justify-center rounded-s bg-secondary-soft text-secondary-text">
+                  <span className="flex size-18 shrink-0 items-center justify-center rounded-s bg-warn-soft text-warn">
                     <TriangleAlert aria-hidden="true" size={12} />
                   </span>
-                  <span className="min-w-0 flex-1 truncate font-mono text-label text-text">
+                  <span className="min-w-0 flex-1 truncate font-mono text-13 text-text">
                     {warning.path}
                   </span>
-                  <span className="font-mono text-meta text-text-muted">
+                  <span className="font-mono text-13 text-text-2">
                     {warningMark(warning)}
                   </span>
                 </button>

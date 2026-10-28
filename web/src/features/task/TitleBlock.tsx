@@ -78,33 +78,33 @@ function Strip({ strip }: { strip: LiveStrip }) {
       aria-label="Live"
       className={cn(
         "flex min-w-0 items-center gap-10 rounded-m px-12 py-8",
-        strip.stalled ? "bg-secondary-soft" : "bg-primary-soft",
+        strip.stalled ? "bg-warn-soft" : "bg-accent-soft",
       )}
     >
       <span
         aria-hidden="true"
         className={cn(
           "size-8 shrink-0 rounded-full",
-          strip.stalled ? "bg-secondary" : "bg-primary",
+          strip.stalled ? "bg-warn" : "bg-accent",
         )}
       />
-      <span className="shrink-0 text-bar">
+      <span className="shrink-0 text-14">
         <PersonName name={strip.worker} />
       </span>
       <span
         className={cn(
-          "shrink-0 text-bar",
-          strip.stalled ? "text-secondary-text" : "text-primary-text",
+          "shrink-0 text-14",
+          strip.stalled ? "text-warn" : "text-accent",
         )}
       >
         {strip.verb}
       </span>
       {strip.file ? (
-        <span className="min-w-0 truncate font-mono text-meta font-semibold text-primary-text">
+        <span className="min-w-0 truncate font-mono text-13 font-semibold text-accent">
           {strip.file}
         </span>
       ) : null}
-      <span className="min-w-0 flex-1 truncate text-bar text-text-muted">
+      <span className="min-w-0 flex-1 truncate text-14 text-text-2">
         {strip.rest}
       </span>
     </div>
@@ -121,19 +121,19 @@ function ProposalStrip({ slug, task }: { slug: string; task: TaskDetail }) {
       aria-label="Proposal"
       className={cn(
         "flex min-w-0 items-center gap-10 rounded-m py-8 pr-8 pl-12",
-        strip.waitsForYou ? "bg-secondary-soft" : "bg-sunken",
+        strip.waitsForYou ? "bg-warn-soft" : "bg-sunken",
       )}
     >
       <GitPullRequest
         aria-hidden="true"
         size={15}
-        className="shrink-0 text-secondary-text"
+        className="shrink-0 text-warn"
       />
-      <span className="shrink-0 text-bar font-semibold text-text">
+      <span className="shrink-0 text-14 font-semibold text-text">
         {strip.lead}
       </span>
       {strip.rest ? (
-        <span className="min-w-0 flex-1 truncate text-bar text-text-muted">
+        <span className="min-w-0 flex-1 truncate text-14 text-text-2">
           {strip.rest}
         </span>
       ) : (
@@ -167,7 +167,7 @@ export function TitleBlock({ slug, task, strip }: Props) {
         </>
       ) : (
         <div className="flex items-start gap-8">
-          <RadixDialog.Title className="min-w-0 flex-1 text-page leading-snug font-semibold wrap-anywhere text-text">
+          <RadixDialog.Title className="min-w-0 flex-1 text-28 leading-tight font-semibold wrap-anywhere text-text">
             {task.title}
           </RadixDialog.Title>
           <IconButton
@@ -183,7 +183,7 @@ export function TitleBlock({ slug, task, strip }: Props) {
       <div className="flex flex-wrap items-center gap-10">
         <span
           className={cn(
-            "inline-flex items-center gap-6 rounded-s px-9 py-3 text-meta font-semibold",
+            "inline-flex items-center gap-6 rounded-s px-9 py-3 text-13 font-semibold",
             look.pill,
           )}
         >
@@ -194,11 +194,11 @@ export function TitleBlock({ slug, task, strip }: Props) {
           {look.text}
         </span>
         {task.blocked ? (
-          <span className="text-bar font-medium text-danger">Blocked</span>
+          <span className="text-14 font-medium text-bad">Blocked</span>
         ) : null}
         {/* An empty reason draws nothing, so the line is left out for a task read without one. */}
         {task.status_reason ? (
-          <RadixDialog.Description className="text-bar text-text-muted">
+          <RadixDialog.Description className="text-14 text-text-2">
             {task.status_reason}
           </RadixDialog.Description>
         ) : null}

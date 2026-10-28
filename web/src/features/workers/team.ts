@@ -32,29 +32,29 @@ export interface PillSpec {
 
 const PILLS: Record<PillTone, PillSpec> = {
   working: {
-    fill: "bg-primary-soft",
-    dot: "bg-primary",
-    text: "text-primary-strong",
+    fill: "bg-accent-soft",
+    dot: "bg-accent",
+    text: "text-accent",
   },
   stopping: {
-    fill: "bg-warning-soft",
-    dot: "bg-warning",
-    text: "text-warning",
+    fill: "bg-warn-soft",
+    dot: "bg-warn",
+    text: "text-warn",
   },
-  idle: { fill: "bg-sunken", dot: "bg-presence-idle", text: "text-text-muted" },
-  failed: { fill: "bg-danger-soft", dot: "bg-danger", text: "text-danger" },
+  idle: { fill: "bg-sunken", dot: "bg-presence-idle", text: "text-text-2" },
+  failed: { fill: "bg-bad-soft", dot: "bg-bad", text: "text-bad" },
   starting: {
     fill: "bg-sunken",
-    dot: "bg-text-faint",
-    text: "text-text-muted",
+    dot: "bg-text-2",
+    text: "text-text-2",
   },
   stopped: {
     fill: "bg-sunken",
     dot: "bg-presence-offline",
-    text: "text-text-faint",
+    text: "text-text-2",
   },
-  ready: { fill: "bg-success-soft", dot: "bg-success", text: "text-success" },
-  paused: { fill: "bg-warning-soft", dot: "bg-warning", text: "text-text" },
+  ready: { fill: "bg-ok-soft", dot: "bg-ok", text: "text-ok" },
+  paused: { fill: "bg-warn-soft", dot: "bg-warn", text: "text-text" },
 };
 
 export function pillSpec(tone: PillTone): PillSpec {

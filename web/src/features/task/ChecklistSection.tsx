@@ -221,7 +221,7 @@ function StepRow({
   return (
     <li data-item={item.id} className="flex flex-col gap-4">
       <div className="group flex items-center gap-10 px-6 py-5">
-        <div className={cn("min-w-0 flex-1", item.done && "text-text-muted")}>
+        <div className={cn("min-w-0 flex-1", item.done && "text-text-2")}>
           <Checkbox
             label={item.text}
             checked={item.done}
@@ -233,7 +233,7 @@ function StepRow({
           />
         </div>
         {tick.isPending ? (
-          <span className="text-meta text-text-muted">Saving…</span>
+          <span className="text-13 text-text-2">Saving…</span>
         ) : null}
         <RowMenu
           name={item.text}
@@ -275,26 +275,22 @@ function LinkedRow({
         {/* fold ticks a linked item; the mark shows the state and takes no input. */}
         <span
           aria-hidden="true"
-          className="inline-flex size-16 shrink-0 items-center justify-center rounded-s bg-sunken text-text-muted"
+          className="inline-flex size-16 shrink-0 items-center justify-center rounded-s bg-sunken text-text-2"
         >
           {item.done ? <Check size={12} /> : null}
         </span>
-        <Link2
-          aria-hidden="true"
-          size={14}
-          className="shrink-0 text-text-muted"
-        />
+        <Link2 aria-hidden="true" size={14} className="shrink-0 text-text-2" />
         <HrefLink
           href={taskPath(slug, item.task, filters)}
           className={cn(
-            "inline-flex min-w-0 flex-1 items-center gap-8 rounded-s text-body text-text hover:underline",
+            "inline-flex min-w-0 flex-1 items-center gap-8 rounded-s text-15 text-text hover:underline",
             focusRing,
           )}
         >
-          <Mono className="text-meta text-text-muted">{item.task}</Mono>
+          <Mono className="text-13 text-text-2">{item.task}</Mono>
           <span className="truncate">{item.title}</span>
         </HrefLink>
-        <span className="inline-flex shrink-0 items-center gap-5 text-meta text-text-muted">
+        <span className="inline-flex shrink-0 items-center gap-5 text-13 text-text-2">
           <span
             aria-hidden="true"
             className={cn("size-7 rounded-full", look.dot)}
@@ -323,9 +319,7 @@ function LinkedRow({
           aria-label={`Remove the link to ${item.task}`}
           className="flex flex-col gap-8 rounded-m bg-sunken px-12 py-10"
         >
-          <p className="text-bar text-text">
-            {linkRemoveText(task, item.task)}
-          </p>
+          <p className="text-14 text-text">{linkRemoveText(task, item.task)}</p>
           <div className="flex gap-8">
             <Button
               variant="danger"
@@ -456,7 +450,7 @@ function ChecklistBlock({
   return (
     <section aria-label={checklist.name} className="flex flex-col gap-10">
       <SectionHead title={checklist.name}>
-        <span className="text-bar text-text-muted">{p.text}</span>
+        <span className="text-14 text-text-2">{p.text}</span>
         <div
           role="progressbar"
           aria-label={`${checklist.name} progress`}
@@ -466,7 +460,7 @@ function ChecklistBlock({
           className="h-6 flex-1 overflow-hidden rounded-full bg-sunken"
         >
           <div
-            className="h-full rounded-full bg-primary"
+            className="h-full rounded-full bg-accent"
             style={{ width: `${String(p.percent)}%` }}
           />
         </div>
@@ -497,7 +491,7 @@ function ChecklistBlock({
           )}
         </ul>
         {count === 0 ? (
-          <p className="px-6 text-bar text-text-muted">No items yet.</p>
+          <p className="px-6 text-14 text-text-2">No items yet.</p>
         ) : null}
         {adding ? (
           <AddItemForm
@@ -511,7 +505,7 @@ function ChecklistBlock({
         ) : (
           <SmallAction
             icon={Plus}
-            className="self-start px-6 py-5 text-bar"
+            className="self-start px-6 py-5 text-14"
             onClick={() => {
               setAdding(true);
             }}

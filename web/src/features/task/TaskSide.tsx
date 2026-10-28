@@ -125,7 +125,7 @@ function MoreToggle({
 }
 
 function Note({ children }: { children: string }) {
-  return <p className="text-bar leading-normal text-text-muted">{children}</p>;
+  return <p className="text-14 leading-normal text-text-2">{children}</p>;
 }
 
 function Responsible({ task, now }: { task: TaskDetail; now: number }) {
@@ -138,12 +138,12 @@ function Responsible({ task, now }: { task: TaskDetail; now: number }) {
       {implementation ? (
         <>
           <span className="inline-flex items-center gap-6">
-            <PersonName name={implementation.holder} className="text-body" />
+            <PersonName name={implementation.holder} className="text-15" />
           </span>
           <p
             className={cn(
-              "text-meta leading-normal",
-              implementation.stale ? "text-secondary-text" : "text-text-muted",
+              "text-13 leading-normal",
+              implementation.stale ? "text-warn" : "text-text-2",
             )}
           >
             {claimNote(implementation, now)}
@@ -153,8 +153,8 @@ function Responsible({ task, now }: { task: TaskDetail; now: number }) {
         <Note>Nobody holds the implementation claim.</Note>
       )}
       {review ? (
-        <p className="text-meta leading-normal text-text-muted">
-          Review claim: <PersonName name={review.holder} className="text-bar" />{" "}
+        <p className="text-13 leading-normal text-text-2">
+          Review claim: <PersonName name={review.holder} className="text-14" />{" "}
           · {claimNote(review, now)}
         </p>
       ) : null}
@@ -192,7 +192,7 @@ function Workspace({
             }
           />
           {ws.behind > 0 ? (
-            <p className="flex items-center gap-6 self-start rounded-s bg-sunken px-8 py-5 text-meta text-text-muted">
+            <p className="flex items-center gap-6 self-start rounded-s bg-sunken px-8 py-5 text-13 text-text-2">
               <GitPullRequestArrow aria-hidden="true" size={13} />
               Main moved {ws.behind}{" "}
               {ws.behind === 1 ? "revision" : "revisions"} since this base
@@ -219,13 +219,13 @@ function Checkpoints({ task, live, now }: Props) {
             <Bookmark
               aria-hidden="true"
               size={13}
-              className="shrink-0 text-text-faint"
+              className="shrink-0 text-text-2"
             />
-            <Mono className="text-meta text-text-muted">{ck.id}</Mono>
-            <span className="min-w-0 flex-1 truncate text-bar text-text">
+            <Mono className="text-13 text-text-2">{ck.id}</Mono>
+            <span className="min-w-0 flex-1 truncate text-14 text-text">
               {checkpointText(ck)}
             </span>
-            <span className="shrink-0 text-meta text-text-faint">
+            <span className="shrink-0 text-13 text-text-2">
               {formatAge(now, ck.created_at)}
             </span>
           </li>
@@ -253,13 +253,13 @@ function Changesets({ task, now }: Props) {
             <GitCommitHorizontal
               aria-hidden="true"
               size={14}
-              className="shrink-0 text-text-muted"
+              className="shrink-0 text-text-2"
             />
-            <Mono className="text-meta text-text-muted">{cs.id}</Mono>
-            <span className="min-w-0 flex-1 truncate text-bar text-text">
+            <Mono className="text-13 text-text-2">{cs.id}</Mono>
+            <span className="min-w-0 flex-1 truncate text-14 text-text">
               {cs.message}
             </span>
-            <span className="shrink-0 text-meta text-text-faint">
+            <span className="shrink-0 text-13 text-text-2">
               {formatAge(now, cs.created_at)}
             </span>
           </li>
@@ -275,9 +275,9 @@ function Proposal({ slug, task }: { slug: string; task: TaskDetail }) {
     <SideGroup title="Proposal">
       {proposal ? (
         <>
-          <p className="flex items-center gap-8 text-bar text-text">
+          <p className="flex items-center gap-8 text-14 text-text">
             <Mono href={proposalPath(slug, proposal.id)}>{proposal.id}</Mono>
-            <span className="text-text-muted">
+            <span className="text-text-2">
               {proposalStateText(
                 proposal.state,
                 proposal.version,
@@ -290,11 +290,11 @@ function Proposal({ slug, task }: { slug: string; task: TaskDetail }) {
               {proposal.reviews.map((review) => (
                 <li
                   key={`${review.reviewer}-${String(review.at)}`}
-                  className="text-meta text-text-muted"
+                  className="text-13 text-text-2"
                 >
                   <ActorText
                     segments={reviewText(review)}
-                    personClassName="text-bar"
+                    personClassName="text-14"
                   />
                 </li>
               ))}
@@ -310,7 +310,7 @@ function Proposal({ slug, task }: { slug: string; task: TaskDetail }) {
         </Note>
       )}
       {integration ? (
-        <p className="text-meta text-text-muted">
+        <p className="text-13 text-text-2">
           Integrated as{" "}
           <Mono href={revisionPath(slug, integration.revision)}>
             {integration.revision}
@@ -318,7 +318,7 @@ function Proposal({ slug, task }: { slug: string; task: TaskDetail }) {
           <CommitId commit={integration.commit} />{" "}
           <ActorText
             segments={integrationText(integration)}
-            personClassName="text-bar"
+            personClassName="text-14"
           />
         </p>
       ) : null}
@@ -408,8 +408,8 @@ function LeadCheck({
     <SideGroup title="Lead check">
       <p
         className={cn(
-          "flex items-center gap-6 text-bar font-medium",
-          check.state === "waiting" ? "text-secondary-text" : "text-text",
+          "flex items-center gap-6 text-14 font-medium",
+          check.state === "waiting" ? "text-warn" : "text-text",
         )}
       >
         <ClipboardCheck aria-hidden="true" size={13} />
@@ -419,29 +419,29 @@ function LeadCheck({
         <Note>{KIND_NOTE}</Note>
       ) : (
         <>
-          <p className="text-meta text-text-muted">
+          <p className="text-13 text-text-2">
             <ActorText
               segments={reportedText(report, now)}
-              personClassName="text-bar"
+              personClassName="text-14"
             />
           </p>
           <p
             className={cn(
-              "text-bar leading-normal text-text",
+              "text-14 leading-normal text-text",
               textFlow("prose"),
             )}
           >
             {report.note}
           </p>
           {resolved ? (
-            <p className="text-meta text-text-muted">
-              <ActorText segments={resolved} personClassName="text-bar" />
+            <p className="text-13 text-text-2">
+              <ActorText segments={resolved} personClassName="text-14" />
             </p>
           ) : null}
           {report.send_back_note === null ? null : (
             <p
               className={cn(
-                "text-bar leading-normal text-text",
+                "text-14 leading-normal text-text",
                 textFlow("prose"),
               )}
             >
@@ -585,9 +585,7 @@ function HumanReview({ slug, task }: { slug: string; task: TaskDetail }) {
           />
         ) : (
           <div className="flex items-center gap-8">
-            <span className="flex-1 text-bar text-text-muted">
-              Not required
-            </span>
+            <span className="flex-1 text-14 text-text-2">Not required</span>
             {editable ? (
               <SmallAction
                 icon={UserCheck}
@@ -601,7 +599,7 @@ function HumanReview({ slug, task }: { slug: string; task: TaskDetail }) {
           </div>
         )}
         {note === null ? null : (
-          <p className="text-meta leading-normal text-text-muted">{note}</p>
+          <p className="text-13 leading-normal text-text-2">{note}</p>
         )}
       </SideGroup>
     );
@@ -609,22 +607,22 @@ function HumanReview({ slug, task }: { slug: string; task: TaskDetail }) {
   const lines = humanReviewLines(mark, task.human_review_set_at);
   return (
     <SideGroup title="Human review">
-      <p className="flex items-center gap-6 text-bar font-medium text-secondary-text">
+      <p className="flex items-center gap-6 text-14 font-medium text-warn">
         <UserCheck aria-hidden="true" size={13} />
         Required ·
         {lines.reviewer === null ? (
           "any human"
         ) : (
-          <PersonName name={lines.reviewer} className="text-body" />
+          <PersonName name={lines.reviewer} className="text-15" />
         )}
       </p>
-      <p className="flex flex-wrap items-center gap-x-6 text-meta text-text-muted">
-        Set by <PersonName name={lines.setBy} className="text-bar" />
+      <p className="flex flex-wrap items-center gap-x-6 text-13 text-text-2">
+        Set by <PersonName name={lines.setBy} className="text-14" />
         {lines.at === null ? null : ` · ${lines.at}`}
       </p>
-      <p className="text-bar leading-normal text-text">{mark.reason}</p>
+      <p className="text-14 leading-normal text-text">{mark.reason}</p>
       {note === null ? null : (
-        <p className="text-meta leading-normal text-text-muted">{note}</p>
+        <p className="text-13 leading-normal text-text-2">{note}</p>
       )}
       {editable ? (
         <Button
@@ -739,7 +737,7 @@ function Blocker({
     return (
       <SideGroup title="Blocker">
         <div className="flex items-center gap-8">
-          <span className="flex-1 text-bar text-text-muted">None</span>
+          <span className="flex-1 text-14 text-text-2">None</span>
           {controls.canSet ? (
             <SmallAction
               icon={Hand}
@@ -756,18 +754,18 @@ function Blocker({
   }
   return (
     <SideGroup title="Blocker">
-      <div className="flex flex-col gap-6 rounded-m bg-warning-soft px-12 py-10">
-        <p className="flex items-center gap-6 text-bar font-semibold text-warning">
+      <div className="flex flex-col gap-6 rounded-m bg-warn-soft px-12 py-10">
+        <p className="flex items-center gap-6 text-14 font-semibold text-warn">
           <Hand aria-hidden="true" size={13} />
           No agent takes this task
         </p>
         <p
-          className={cn("text-bar leading-normal text-text", textFlow("prose"))}
+          className={cn("text-14 leading-normal text-text", textFlow("prose"))}
         >
           {view.reason}
         </p>
-        <p className="text-meta text-text-muted">
-          <ActorText segments={view.setBy} personClassName="text-bar" />
+        <p className="text-13 text-text-2">
+          <ActorText segments={view.setBy} personClassName="text-14" />
         </p>
       </div>
       {controls.canClear || controls.canSet ? (
@@ -827,11 +825,11 @@ function EdgeRow({
           focusRing,
         )}
       >
-        <Mono className="text-meta text-text-muted">{row.task}</Mono>
+        <Mono className="text-13 text-text-2">{row.task}</Mono>
         <span
           className={cn(
-            "min-w-0 flex-1 truncate text-bar",
-            row.unfinished ? "text-text" : "text-text-muted",
+            "min-w-0 flex-1 truncate text-14",
+            row.unfinished ? "text-text" : "text-text-2",
           )}
         >
           {row.title}
@@ -920,7 +918,7 @@ function Dependencies({ slug, task }: { slug: string; task: TaskDetail }) {
   const editable = canEditDependencies(task.status);
   return (
     <SideGroup title="Dependencies">
-      <h4 className="text-meta font-semibold text-text-muted">
+      <h4 className="text-13 font-semibold text-text-2">
         {needsTitle(groups)}
       </h4>
       {groups.needs.length === 0 ? <Note>No prerequisites.</Note> : null}
@@ -942,7 +940,7 @@ function Dependencies({ slug, task }: { slug: string; task: TaskDetail }) {
         ))}
       </ul>
       <WriteError error={remove.error} />
-      <h4 className="text-meta font-semibold text-text-muted">Needed by</h4>
+      <h4 className="text-13 font-semibold text-text-2">Needed by</h4>
       {groups.neededBy.length === 0 ? (
         <Note>No task waits for this one.</Note>
       ) : null}
@@ -969,7 +967,7 @@ function Dependencies({ slug, task }: { slug: string; task: TaskDetail }) {
         ) : (
           <SmallAction
             icon={Plus}
-            className="self-start px-0 py-4 text-bar"
+            className="self-start px-0 py-4 text-14"
             onClick={() => {
               setAdding(true);
             }}
@@ -989,13 +987,10 @@ function History({ task }: { task: TaskDetail }) {
     <SideGroup title="History">
       <ul className="flex flex-col gap-8">
         {list.shown.map((event) => (
-          <li
-            key={event.seq}
-            className="text-meta leading-normal text-text-muted"
-          >
+          <li key={event.seq} className="text-13 leading-normal text-text-2">
             <ActorText
               segments={historyText(event)}
-              personClassName="text-bar"
+              personClassName="text-14"
             />
           </li>
         ))}
@@ -1014,7 +1009,7 @@ function History({ task }: { task: TaskDetail }) {
 /** The side column, top to bottom. */
 export function TaskSide({ slug, task, live, now }: Props) {
   return (
-    <aside className="flex w-full shrink-0 flex-col gap-20 border-border-subtle md:w-side-panel md:border-l md:pt-2 md:pl-20">
+    <aside className="flex w-full shrink-0 flex-col gap-20 border-line md:w-side-panel md:border-l md:pt-2 md:pl-20">
       <LabelsSide slug={slug} task={task} />
       <Responsible task={task} now={now} />
       {needsProposal(task) ? (

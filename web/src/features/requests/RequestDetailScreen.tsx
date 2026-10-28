@@ -336,7 +336,7 @@ export function RequestDetailScreen({
         </div>
         <aside
           aria-label="Request actions"
-          className="flex w-full shrink-0 flex-col gap-20 border-border-subtle lg:w-side-panel lg:border-l lg:pl-20"
+          className="flex w-full shrink-0 flex-col gap-20 border-line lg:w-side-panel lg:border-l lg:pl-20"
         >
           {kind === "approved" ? (
             <CreatedTasksPanel

@@ -12,7 +12,7 @@ import { linkify } from "./linkify";
 export function MessageBody({ body, slug }: { body: string; slug: string }) {
   const people = usePeople(slug);
   return (
-    <p className={cn("text-body leading-normal text-text", textFlow("prose"))}>
+    <p className={cn("text-15 leading-normal text-text", textFlow("prose"))}>
       {splitMentions(body, undefined, people).map((part, index) => (
         <Fragment key={index}>
           {part.mention ? (
@@ -28,7 +28,7 @@ export function MessageBody({ body, slug }: { body: string; slug: string }) {
                 <HrefLink
                   key={at}
                   href={segment.href}
-                  className="font-mono text-code text-primary-text hover:underline"
+                  className="font-mono text-13 text-accent hover:underline"
                 >
                   {segment.text}
                 </HrefLink>

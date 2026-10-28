@@ -58,30 +58,29 @@ import {
 } from "./present";
 import { detailHref, type DetailSearch, type DetailView } from "./view";
 
-const OVERLINE =
-  "text-overline leading-snug font-semibold text-text-muted uppercase";
-const CARD = "rounded-l bg-surface inset-ring inset-ring-border-subtle";
-const LINK = cn("rounded-s text-primary-text hover:underline", focusRing);
+const OVERLINE = "font-title text-13 leading-tight font-semibold text-text-2";
+const CARD = "rounded-l bg-surface inset-ring inset-ring-line";
+const LINK = cn("rounded-s text-accent hover:underline", focusRing);
 
 const GATE_ICONS: Record<
   GateStatus,
   { icon: LucideIcon; label: string; className: string }
 > = {
-  met: { icon: CircleCheck, label: "met", className: "text-primary-text" },
-  unmet: { icon: CircleX, label: "not met", className: "text-danger" },
+  met: { icon: CircleCheck, label: "met", className: "text-accent" },
+  unmet: { icon: CircleX, label: "not met", className: "text-bad" },
   checked_at_integration: {
     icon: CircleDashed,
     label: "checked at integration",
-    className: "text-text-muted",
+    className: "text-text-2",
   },
 };
 
 const VERDICT_ICONS: Record<Verdict, { icon: LucideIcon; className: string }> =
   {
-    approve: { icon: CircleCheck, className: "text-primary-text" },
-    request_changes: { icon: CircleAlert, className: "text-danger" },
-    reject: { icon: CircleSlash, className: "text-danger" },
-    comment: { icon: MessageSquare, className: "text-text-muted" },
+    approve: { icon: CircleCheck, className: "text-accent" },
+    request_changes: { icon: CircleAlert, className: "text-bad" },
+    reject: { icon: CircleSlash, className: "text-bad" },
+    comment: { icon: MessageSquare, className: "text-text-2" },
   };
 
 function Notice({
@@ -96,9 +95,9 @@ function Notice({
   return (
     <p
       className={cn(
-        "flex items-start gap-8 rounded-m px-12 py-9 text-code leading-snug",
-        tone === "danger" && "bg-danger-soft text-danger",
-        tone === "muted" && "bg-sunken text-text-muted",
+        "flex items-start gap-8 rounded-m px-12 py-9 text-13 leading-tight",
+        tone === "danger" && "bg-bad-soft text-bad",
+        tone === "muted" && "bg-sunken text-text-2",
       )}
     >
       <Icon aria-hidden="true" size={14} className="mt-2 shrink-0" />
@@ -137,11 +136,11 @@ function IntegrationCard({
       className={cn(CARD, "flex flex-col gap-14 p-20")}
     >
       <div className="flex flex-wrap items-center gap-x-12 gap-y-6">
-        <h2 className="text-section leading-snug font-semibold text-text">
+        <h2 className="text-16 leading-tight font-semibold text-text">
           Integration
         </h2>
         {integration ? (
-          <p className="ml-auto flex flex-wrap items-center gap-x-6 text-code text-text-muted">
+          <p className="ml-auto flex flex-wrap items-center gap-x-6 text-13 text-text-2">
             <GitMerge aria-hidden="true" size={14} />v{integration.version}{" "}
             {integration.batch === null ? (
               "integrated as "
@@ -185,7 +184,7 @@ function IntegrationCard({
                 size={15}
                 className={cn("mt-2 shrink-0", spec.className)}
               />
-              <span className="min-w-0 flex-1 text-bar leading-snug text-text">
+              <span className="min-w-0 flex-1 text-14 leading-tight text-text">
                 <ActorText
                   segments={gateText(gate, proposal, main)}
                   slot="gate"
@@ -233,13 +232,13 @@ function ReviewCommentItem({
 }) {
   return (
     <li className="flex flex-col gap-4 rounded-m bg-sunken px-12 py-9">
-      <span className="font-mono text-caption text-text-muted">
+      <span className="font-mono text-13 text-text-2">
         {comment.id} · {reviewCommentWhere(comment)}
       </span>
       <MentionText
         text={comment.body}
         slug={slug}
-        className="text-code leading-normal"
+        className="text-13 leading-normal"
       />
     </li>
   );
@@ -262,14 +261,14 @@ function FullReview({
       trigger={
         <button
           type="button"
-          className={cn("self-start text-meta font-semibold", LINK)}
+          className={cn("self-start text-13 font-semibold", LINK)}
         >
           Read the full review
         </button>
       }
     >
       <div className="flex w-dialog max-w-full flex-col gap-10">
-        <p className="text-code text-text-muted">
+        <p className="text-13 text-text-2">
           <PersonName name={item.review.reviewer} /> ·{" "}
           {formatAsOfMinute(now, item.review.created_at)}
           {item.scope === null ? "" : ` · ${item.scope}`}
@@ -278,7 +277,7 @@ function FullReview({
           <MentionText
             text={item.review.body.trim() || item.head}
             slug={slug}
-            className="text-body leading-normal"
+            className="text-15 leading-normal"
           />
           {item.comments.length === 0 ? null : (
             <section
@@ -317,7 +316,7 @@ function RunLine({
   const spec = RUN_ICONS[run.state];
   const Icon = spec.icon;
   return (
-    <li className="flex flex-wrap items-center gap-x-8 gap-y-2 text-code">
+    <li className="flex flex-wrap items-center gap-x-8 gap-y-2 text-13">
       <Icon
         role="img"
         aria-label={spec.label}
@@ -330,11 +329,11 @@ function RunLine({
           run: run.id,
           ...(run.version === null ? {} : { version }),
         })}
-        className={cn("font-mono text-meta", LINK)}
+        className={cn("font-mono text-13", LINK)}
       >
         {run.id}
       </HrefLink>
-      <span className="text-text-muted">
+      <span className="text-text-2">
         {run.stage === "integration" ? `integration on ${run.base} · ` : ""}
         {runSummary(run)}
       </span>
@@ -366,13 +365,13 @@ function VersionCard({
       aria-label={`Version v${String(v.version)}`}
       className={cn(CARD, "flex flex-col")}
     >
-      <header className="flex flex-wrap items-center gap-x-12 gap-y-6 border-b border-border-subtle px-18 py-12">
-        <h3 className="font-mono text-body font-semibold text-text">
+      <header className="flex flex-wrap items-center gap-x-12 gap-y-6 border-b border-line px-18 py-12">
+        <h3 className="font-mono text-15 font-semibold text-text">
           v{v.version}
         </h3>
         <span
           className={cn(
-            "rounded-s px-8 py-2 text-caption font-semibold",
+            "rounded-s px-8 py-2 text-13 font-semibold",
             entry.verdict === "approved"
               ? PILL_CLASSES.approved
               : entry.verdict === "changes requested" ||
@@ -383,37 +382,37 @@ function VersionCard({
         >
           {entry.verdict}
         </span>
-        <span className="text-code text-text-muted">
+        <span className="text-13 text-text-2">
           {ORIGIN_WORDS[entry.origin]} <PersonName name={v.created_by} />
           {entry.mergedMain === null
             ? ""
             : ` · merge of main ${entry.mergedMain}`}
           {v.review_again ? " · sent for review again" : ""} ·{" "}
           {formatAsOfMinute(now, v.created_at)} ·{" "}
-          <span className="font-mono text-meta">
+          <span className="font-mono text-13">
             {v.changeset} on {v.base}
           </span>
         </span>
         <HrefLink
           href={detailHref(slug, id, entry.diff.search)}
-          className={cn("ml-auto text-code", LINK)}
+          className={cn("ml-auto text-13", LINK)}
         >
           {entry.diff.label}
         </HrefLink>
       </header>
       <div className="flex flex-col gap-12 px-18 py-12">
         <div className="flex gap-10">
-          <span className="w-fact-label shrink-0 text-code text-text-faint">
+          <span className="w-fact-label shrink-0 text-13 text-text-2">
             Checks
           </span>
           {entry.runsFailed ? (
-            <p role="alert" className="text-code font-medium text-danger">
+            <p role="alert" className="text-13 font-medium text-bad">
               The checks could not be read.
             </p>
           ) : entry.runs === null ? (
-            <p className="text-code text-text-muted">Reading the checks…</p>
+            <p className="text-13 text-text-2">Reading the checks…</p>
           ) : entry.runs.length === 0 ? (
-            <p className="text-code text-text-muted">
+            <p className="text-13 text-text-2">
               fold ran no check on this version.
             </p>
           ) : (
@@ -439,11 +438,11 @@ function VersionCard({
               data-verdict={item.review.verdict}
               className="flex gap-10"
             >
-              <span className="w-fact-label shrink-0 text-code text-text-faint">
+              <span className="w-fact-label shrink-0 text-13 text-text-2">
                 Review
               </span>
               <div className="flex min-w-0 flex-1 flex-col gap-2">
-                <p className="flex flex-wrap items-center gap-x-6 text-code">
+                <p className="flex flex-wrap items-center gap-x-6 text-13">
                   <Icon
                     aria-hidden="true"
                     size={14}
@@ -453,7 +452,7 @@ function VersionCard({
                     {item.head}
                   </span>
                   <PersonName name={item.review.reviewer} />
-                  <span className="text-text-faint">
+                  <span className="text-text-2">
                     {item.scope === null ? "" : `· ${item.scope} `}·{" "}
                     {formatAsOfMinute(now, item.review.created_at)}
                   </span>
@@ -463,7 +462,7 @@ function VersionCard({
                     text={item.excerpt.text}
                     slug={slug}
                     className={cn(
-                      "text-code leading-normal text-text-muted",
+                      "text-13 leading-normal text-text-2",
                       textFlow("lines"),
                     )}
                   />
@@ -481,7 +480,7 @@ function VersionCard({
           <details className="group flex flex-col gap-6">
             <summary
               className={cn(
-                "cursor-pointer self-start text-code font-semibold text-primary-text",
+                "cursor-pointer self-start text-13 font-semibold text-accent",
                 focusRing,
               )}
             >
@@ -489,14 +488,14 @@ function VersionCard({
             </summary>
             <pre
               className={cn(
-                "mt-6 flex min-w-0 flex-col gap-2 rounded-m bg-sunken px-12 py-10 font-mono text-label",
+                "mt-6 flex min-w-0 flex-col gap-2 rounded-m bg-sunken px-12 py-10 font-mono text-13",
                 textFlow("prose"),
               )}
             >
               {evidenceLines(v.evidence).map((line, index) => (
                 <span
                   key={index}
-                  className={line.command ? "text-text" : "text-text-muted"}
+                  className={line.command ? "text-text" : "text-text-2"}
                 >
                   <MentionInline text={line.text} slug={slug} />
                 </span>
@@ -512,7 +511,7 @@ function VersionCard({
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex gap-12">
-      <dt className="w-fact-label shrink-0 text-text-faint">{label}</dt>
+      <dt className="w-fact-label shrink-0 text-text-2">{label}</dt>
       <dd className="min-w-0 flex-1 text-text">{children}</dd>
     </div>
   );
@@ -544,7 +543,7 @@ function SideColumn({
         className={cn(CARD, "flex flex-col gap-12 p-18")}
       >
         <h2 className={OVERLINE}>About</h2>
-        <dl className="flex flex-col gap-8 text-code">
+        <dl className="flex flex-col gap-8 text-13">
           <Fact label="Author">
             <PersonName name={summary.author} />
           </Fact>
@@ -595,13 +594,13 @@ function SideColumn({
           <h2 className={OVERLINE}>Changed folders</h2>
           <HrefLink
             href={onTab({ tab: "changes" })}
-            className={cn("ml-auto text-meta", LINK)}
+            className={cn("ml-auto text-13", LINK)}
           >
             Open changes
           </HrefLink>
         </div>
         {folders.length === 0 ? (
-          <p className="text-code text-text-muted">
+          <p className="text-13 text-text-2">
             The current version changes no file.
           </p>
         ) : (
@@ -611,20 +610,20 @@ function SideColumn({
                 <HrefLink
                   href={onTab({ tab: "changes", path: folder.first })}
                   className={cn(
-                    "flex items-center gap-10 rounded-s text-code hover:bg-sunken",
+                    "flex items-center gap-10 rounded-s text-13 hover:bg-sunken",
                     focusRing,
                   )}
                 >
-                  <span className="min-w-0 flex-1 truncate font-mono text-meta text-text">
+                  <span className="min-w-0 flex-1 truncate font-mono text-13 text-text">
                     {folder.path === "" ? "project root" : folder.path}
                   </span>
-                  <span className="shrink-0 text-meta text-text-faint">
+                  <span className="shrink-0 text-13 text-text-2">
                     {filesWord(folder.totals.files)}
                   </span>
-                  <span className="shrink-0 font-mono text-meta text-primary-text">
+                  <span className="shrink-0 font-mono text-13 text-accent">
                     +{folder.totals.added}
                   </span>
-                  <span className="shrink-0 font-mono text-meta text-danger">
+                  <span className="shrink-0 font-mono text-13 text-bad">
                     −{folder.totals.removed}
                   </span>
                 </HrefLink>
@@ -641,15 +640,15 @@ function SideColumn({
           <h2 className={OVERLINE}>Conversation</h2>
           <HrefLink
             href={onTab({ tab: "conversation" })}
-            className={cn("ml-auto text-meta", LINK)}
+            className={cn("ml-auto text-13", LINK)}
           >
             Open the conversation
           </HrefLink>
         </div>
         {latest === null ? (
-          <p className="text-code text-text-muted">Reading the threads…</p>
+          <p className="text-13 text-text-2">Reading the threads…</p>
         ) : latest.length === 0 ? (
-          <p className="text-code text-text-muted">No thread yet.</p>
+          <p className="text-13 text-text-2">No thread yet.</p>
         ) : (
           <ul className="flex flex-col">
             {latest.map((thread) => {
@@ -657,9 +656,9 @@ function SideColumn({
               return (
                 <li
                   key={thread.key}
-                  className="flex flex-col gap-2 border-t border-border-subtle py-8 text-code"
+                  className="flex flex-col gap-2 border-t border-line py-8 text-13"
                 >
-                  <span className="truncate font-mono text-caption text-text-faint">
+                  <span className="truncate font-mono text-13 text-text-2">
                     {whereText(thread)}
                   </span>
                   <span className="min-w-0 text-text">
@@ -669,7 +668,7 @@ function SideColumn({
                       </>
                     )}
                     <MentionInline text={line.text} slug={slug} /> ·{" "}
-                    <span className="text-text-muted">{thread.stateText}</span>
+                    <span className="text-text-2">{thread.stateText}</span>
                   </span>
                 </li>
               );
@@ -741,7 +740,7 @@ export function OverviewTab({
         <section aria-label="History" className="flex flex-col gap-12">
           <div className="flex flex-wrap items-baseline gap-x-12">
             <h2 className={OVERLINE}>History</h2>
-            <span className="text-meta text-text-faint">
+            <span className="text-13 text-text-2">
               newest first · each version with its checks and reviews
             </span>
           </div>

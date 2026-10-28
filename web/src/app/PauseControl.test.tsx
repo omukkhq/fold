@@ -96,7 +96,7 @@ describe("PauseControl", () => {
     );
     const name = screen.getByText("@tanim");
     expect(name.getAttribute("data-person")).toBe("human");
-    expect(name.className).toContain("text-primary-text");
+    expect(name.className).toContain("text-accent");
   });
 
   it("keeps the write in flight and its refusal when the control mounts again", async () => {

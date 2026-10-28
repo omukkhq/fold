@@ -47,13 +47,13 @@ import { KindBadge, StatePill } from "./RequestPills";
 import { projectPath } from "@/routes/paths";
 
 export const OVERLINE =
-  "text-overline leading-snug font-semibold tracking-overline text-primary-text uppercase";
+  "font-title text-13 leading-tight font-semibold text-text-2";
 
 export function Crumb({ slug, id }: { slug: string; id: string }) {
   return (
     <nav
       aria-label="Breadcrumb"
-      className="flex items-center gap-8 text-bar text-text-muted"
+      className="flex items-center gap-8 text-14 text-text-2"
     >
       <HrefLink
         href={projectPath(slug, "requests")}
@@ -62,7 +62,7 @@ export function Crumb({ slug, id }: { slug: string; id: string }) {
         Requests
       </HrefLink>
       <ChevronRight aria-hidden="true" size={13} />
-      <span className="font-mono text-code text-text">{id}</span>
+      <span className="font-mono text-13 text-text">{id}</span>
     </nav>
   );
 }
@@ -79,8 +79,8 @@ export function RequestHeader({
     <header className="flex flex-col gap-8">
       <h1
         className={cn(
-          "text-page leading-snug font-semibold",
-          heading.muted ? "text-text-muted" : "text-text",
+          "text-28 leading-tight font-semibold",
+          heading.muted ? "text-text-2" : "text-text",
         )}
       >
         {heading.text}
@@ -88,10 +88,10 @@ export function RequestHeader({
       <div className="flex flex-wrap items-center gap-8">
         <StatePill state={detail.request.state} />
         <KindBadge kind={kindOf(detail.request)} />
-        <p className="text-bar text-text-muted">
+        <p className="text-14 text-text-2">
           <ActorText
             segments={metaLine(detail, now)}
-            personClassName="text-body"
+            personClassName="text-15"
           />
         </p>
       </div>
@@ -113,11 +113,11 @@ function Section({
   return (
     <section aria-label={title} className="flex flex-col gap-10">
       <div className="flex items-center gap-10">
-        <h2 className="text-section leading-snug font-semibold text-text">
+        <h2 className="text-16 leading-tight font-semibold text-text">
           {title}
         </h2>
         {note ? (
-          <p className="min-w-0 flex-1 text-meta text-text-muted">{note}</p>
+          <p className="min-w-0 flex-1 text-13 text-text-2">{note}</p>
         ) : (
           <span className="flex-1" />
         )}
@@ -141,12 +141,12 @@ function AttachmentRow({
     ? ImageIcon
     : FileText;
   return (
-    <li className="flex items-center gap-10 rounded-m bg-surface px-12 py-8 inset-ring inset-ring-border-subtle">
-      <Icon aria-hidden="true" size={15} className="shrink-0 text-text-muted" />
-      <span className="min-w-0 flex-1 truncate text-body text-text">
+    <li className="flex items-center gap-10 rounded-m bg-surface px-12 py-8 inset-ring inset-ring-line">
+      <Icon aria-hidden="true" size={15} className="shrink-0 text-text-2" />
+      <span className="min-w-0 flex-1 truncate text-15 text-text">
         {attachment.name}
       </span>
-      <span className="font-mono text-meta text-text-muted">
+      <span className="font-mono text-13 text-text-2">
         {formatSize(attachment.size)}
       </span>
       <a
@@ -154,7 +154,7 @@ function AttachmentRow({
         download={attachment.name}
         aria-label={`Download ${attachment.name}`}
         className={cn(
-          "inline-flex items-center gap-4 rounded-s text-meta text-text-muted hover:text-text",
+          "inline-flex items-center gap-4 rounded-s text-13 text-text-2 hover:text-text",
           focusRing,
         )}
       >
@@ -226,10 +226,10 @@ export function VersionTabs({
               onShow(d.version);
             }}
             className={cn(
-              "rounded-s px-12 py-3 font-mono text-code disabled:opacity-60",
+              "rounded-s px-12 py-3 font-mono text-13 disabled:opacity-60",
               current
-                ? "bg-surface font-semibold text-text inset-ring inset-ring-border-subtle"
-                : "text-text-muted hover:text-text",
+                ? "bg-surface font-semibold text-text inset-ring inset-ring-line"
+                : "text-text-2 hover:text-text",
               focusRing,
             )}
           >
@@ -259,7 +259,7 @@ export function DraftView({
   if (draft === null) {
     return (
       <Section title="Draft">
-        <p className="rounded-m bg-surface px-14 py-12 text-body text-text-muted inset-ring inset-ring-border-subtle">
+        <p className="rounded-m bg-surface px-14 py-12 text-15 text-text-2 inset-ring inset-ring-line">
           {detail.request.drafter === null ? (
             "No orchestrator has claimed the request yet. The cards appear here once one drafts them."
           ) : (
@@ -280,21 +280,21 @@ export function DraftView({
         note={versionText(draft.version, latest, detail.request.state)}
         aside={tabs}
       >
-        <p className="flex items-center gap-8 text-meta text-text-muted">
-          <PersonName name={draft.author} className="text-body" />
+        <p className="flex items-center gap-8 text-13 text-text-2">
+          <PersonName name={draft.author} className="text-15" />
           {authorLine(draft, now)}
         </p>
         <ol className="flex flex-col gap-10">
           {draft.cards.map((card) => (
             <li
               key={card.key}
-              className="flex flex-col gap-8 rounded-m bg-surface px-14 py-12 inset-ring inset-ring-border-subtle"
+              className="flex flex-col gap-8 rounded-m bg-surface px-14 py-12 inset-ring inset-ring-line"
             >
               <p className="flex items-center gap-10">
-                <span className="rounded-s bg-sunken px-6 py-2 font-mono text-meta text-text-muted">
+                <span className="rounded-s bg-sunken px-6 py-2 font-mono text-13 text-text-2">
                   {card.key}
                 </span>
-                <span className="text-card leading-snug font-semibold text-text">
+                <span className="text-16 leading-tight font-semibold text-text">
                   {card.title}
                 </span>
               </p>
@@ -311,14 +311,14 @@ export function DraftView({
                 key={`${edge.dependent}>${edge.prerequisite}`}
                 className="flex items-baseline gap-8"
               >
-                <span className="font-mono text-code text-text">
+                <span className="font-mono text-13 text-text">
                   {edge.dependent}
                 </span>
-                <span className="text-meta text-text-muted">needs</span>
-                <span className="font-mono text-code text-text">
+                <span className="text-13 text-text-2">needs</span>
+                <span className="font-mono text-13 text-text">
                   {edge.prerequisite}
                 </span>
-                <span className="text-meta text-text-muted">{edge.text}</span>
+                <span className="text-13 text-text-2">{edge.text}</span>
               </li>
             ))}
           </ul>
@@ -340,11 +340,11 @@ function CommentCard({
   now: number;
 }) {
   return (
-    <li className="flex flex-col gap-6 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
-      <p className="flex items-center gap-8 text-meta text-text-muted">
-        <PersonName name={comment.author} className="text-bar" />
+    <li className="flex flex-col gap-6 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-line">
+      <p className="flex items-center gap-8 text-13 text-text-2">
+        <PersonName name={comment.author} className="text-14" />
         asked for changes on v{comment.version}
-        <span className="ml-auto text-text-faint">
+        <span className="ml-auto text-text-2">
           {formatAsOfMinute(now, comment.created_at)}
         </span>
       </p>
@@ -398,17 +398,17 @@ function MessageCard({
   now: number;
 }) {
   return (
-    <li className="flex flex-col gap-6 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
-      <p className="flex items-center gap-8 font-mono text-caption text-text-muted">
+    <li className="flex flex-col gap-6 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-line">
+      <p className="flex items-center gap-8 font-mono text-13 text-text-2">
         <PersonName name={message.sender} slot="messageHead" />
         <ArrowRight
           aria-label="to"
           role="img"
           size={12}
-          className="shrink-0 text-text-faint"
+          className="shrink-0 text-text-2"
         />
-        <PersonList names={recipientActors(message)} nameClassName="text-bar" />
-        <span className="ml-auto font-ui text-meta text-text-faint">
+        <PersonList names={recipientActors(message)} nameClassName="text-14" />
+        <span className="ml-auto text-13 text-text-2">
           {formatAsOfMinute(now, message.sent_at)}
         </span>
       </p>
@@ -515,17 +515,15 @@ export function ThreadSection({
           </Button>
         </div>
         {errors.body ? (
-          <p className="text-meta font-medium text-danger">
-            {errors.body.message}
-          </p>
+          <p className="text-13 font-medium text-bad">{errors.body.message}</p>
         ) : null}
         {failure ? (
-          <p role="alert" className="text-meta font-medium text-danger">
+          <p role="alert" className="text-13 font-medium text-bad">
             The message was not sent. {failure.text}{" "}
             <span className="font-mono">code: {failure.code ?? "none"}</span>
           </p>
         ) : null}
-        <p className="text-meta text-text-faint">
+        <p className="text-13 text-text-2">
           {closed ??
             "A message never changes the state of the request. Only the actions on the right do."}
         </p>

@@ -31,17 +31,17 @@ export interface NewTaskDialogProps {
 /** Points to a request first: a lead plans the tasks of a request, with their areas, dependencies and checks. */
 function RequestHint({ onRequest }: { onRequest: () => void }) {
   return (
-    <div className="flex items-start gap-12 rounded-m bg-primary-soft px-14 py-12 inset-ring inset-ring-primary-muted">
+    <div className="flex items-start gap-12 rounded-m bg-accent-soft px-14 py-12 inset-ring inset-ring-accent">
       <Lightbulb
         aria-hidden="true"
         size={18}
-        className="mt-2 shrink-0 text-primary-text"
+        className="mt-2 shrink-0 text-accent"
       />
       <div className="flex min-w-0 flex-1 flex-col gap-3">
-        <p className="text-bar font-semibold text-primary-text">
+        <p className="text-14 font-semibold text-accent">
           Usually a request works better
         </p>
-        <p className="text-meta leading-normal text-text-muted">
+        <p className="text-13 leading-normal text-text-2">
           Describe what you want. The main agent or an area lead plans the
           tasks, with areas, dependencies and checks, and you approve the draft.
           Make a task here only when you know exactly what one worker must do.
@@ -102,10 +102,10 @@ export function NewTaskDialog({
           }}
         />
         <div className="flex flex-col gap-4">
-          <RadixDialog.Title className="text-page leading-snug font-semibold text-text">
+          <RadixDialog.Title className="text-28 leading-tight font-semibold text-text">
             New task
           </RadixDialog.Title>
-          <RadixDialog.Description className="text-bar text-text-muted">
+          <RadixDialog.Description className="text-14 text-text-2">
             fold calculates its status. Add checklists and dependencies once it
             exists.
           </RadixDialog.Description>
@@ -128,7 +128,7 @@ export function NewTaskDialog({
               rows={8}
               disabled={create.isPending}
               error={form.formState.errors.description?.message}
-              className="font-mono text-meta"
+              className="font-mono text-13"
               ref={field.ref}
               value={field.value}
               onValueChange={field.onChange}
@@ -168,7 +168,7 @@ export function NewTaskDialog({
           name="kind"
           render={({ field }) => (
             <fieldset className="flex flex-col gap-8">
-              <legend className="mb-8 text-bar leading-snug font-semibold text-text">
+              <legend className="mb-8 text-14 leading-tight font-semibold text-text">
                 Who does the work
               </legend>
               {KIND_OPTIONS.map((option) => {
@@ -177,10 +177,10 @@ export function NewTaskDialog({
                   <label
                     key={option.value}
                     className={cn(
-                      "flex cursor-pointer gap-10 rounded-m px-12 py-9 inset-ring has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-focus-ring",
+                      "flex cursor-pointer gap-10 rounded-m px-12 py-9 inset-ring has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-accent",
                       chosen
                         ? "bg-sunken inset-ring-ink"
-                        : "bg-surface inset-ring-border-subtle",
+                        : "bg-surface inset-ring-line",
                       create.isPending && "cursor-default opacity-60",
                     )}
                   >
@@ -197,10 +197,10 @@ export function NewTaskDialog({
                       className="mt-2 size-16 shrink-0 accent-ink"
                     />
                     <span className="flex min-w-0 flex-col gap-2">
-                      <span className="text-bar font-medium text-text">
+                      <span className="text-14 font-medium text-text">
                         {option.title}
                       </span>
-                      <span className="text-meta leading-normal text-text-muted">
+                      <span className="text-13 leading-normal text-text-2">
                         {option.hint}
                       </span>
                     </span>

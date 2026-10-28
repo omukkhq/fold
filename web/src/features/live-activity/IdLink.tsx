@@ -12,7 +12,7 @@ export function IdLink({
     <HrefLink
       {...rest}
       className={cn(
-        "rounded-s font-mono text-meta text-text-muted underline-offset-2 hover:text-text hover:underline",
+        "rounded-s font-mono text-13 text-text-2 underline-offset-2 hover:text-text hover:underline",
         focusRing,
         className,
       )}

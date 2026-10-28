@@ -47,7 +47,7 @@ function DescriptionEditor({
             autoFocus
             disabled={write.isPending}
             error={form.formState.errors.description?.message}
-            className="font-mono text-meta"
+            className="font-mono text-13"
             ref={field.ref}
             value={field.value}
             onValueChange={field.onChange}
@@ -106,7 +106,7 @@ export function DescriptionSection({
           }}
         />
       ) : task.description.trim() === "" ? (
-        <p className="text-body text-text-muted">No description yet.</p>
+        <p className="text-15 text-text-2">No description yet.</p>
       ) : (
         <Markdown mentions={{ slug }}>{task.description}</Markdown>
       )}

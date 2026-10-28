@@ -76,7 +76,7 @@ function AreaGroup({ slug, task, areas, labels, controls }: GroupProps) {
             pending={write.isPending}
             disabled={!controls.area}
             pendingLabel="Changing area…"
-            className="text-primary-text"
+            className="text-accent"
           >
             Change
           </SmallAction>
@@ -86,23 +86,23 @@ function AreaGroup({ slug, task, areas, labels, controls }: GroupProps) {
       {task.areas_conflict ? (
         <p
           role="note"
-          className="flex items-start gap-10 rounded-m bg-warning-soft px-12 py-10 text-meta leading-normal text-text-muted"
+          className="flex items-start gap-10 rounded-m bg-warn-soft px-12 py-10 text-13 leading-normal text-text-2"
         >
           <CircleAlert
             aria-hidden="true"
             size={16}
-            className="mt-2 shrink-0 text-warning"
+            className="mt-2 shrink-0 text-warn"
           />
           This task has the labels of two areas, but a task belongs to one. Use
           Change to keep one area; fold refuses other label changes until then.
         </p>
       ) : null}
       {view.areas.length === 0 ? (
-        <p className="flex items-start gap-10 rounded-m bg-warning-soft px-12 py-10 text-meta leading-normal text-text-muted">
+        <p className="flex items-start gap-10 rounded-m bg-warn-soft px-12 py-10 text-13 leading-normal text-text-2">
           <CircleAlert
             aria-hidden="true"
             size={16}
-            className="mt-2 shrink-0 text-warning"
+            className="mt-2 shrink-0 text-warn"
           />
           No area yet: the main agent chooses one. Pick an area to give it to
           that lead at once.
@@ -112,9 +112,7 @@ function AreaGroup({ slug, task, areas, labels, controls }: GroupProps) {
           {view.areas.map((area) => (
             <li key={area.name} className="flex items-center gap-8">
               <Label color={area.label.color}>{area.label.name}</Label>
-              <span className="text-meta text-text-faint">
-                {ownerLine(area)}
-              </span>
+              <span className="text-13 text-text-2">{ownerLine(area)}</span>
             </li>
           ))}
         </ul>
@@ -160,7 +158,7 @@ function AddLabelPanel({ slug, task, areas, labels, controls }: GroupProps) {
                 pending={attach.isPending && attach.variables === label.name}
                 pendingLabel={`Adding ${label.name}…`}
                 disabled={!controls.labels}
-                className="w-full text-bar text-text"
+                className="w-full text-14 text-text"
                 onClick={() => {
                   attach.mutate(label.name);
                 }}
@@ -254,7 +252,7 @@ function LabelsGroup(props: GroupProps) {
               type="button"
               disabled={!controls.labels}
               className={cn(
-                "inline-flex items-center gap-4 rounded-s border border-dashed border-border bg-surface px-7 py-2 text-label leading-snug font-medium text-text-muted hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-60",
+                "inline-flex items-center gap-4 rounded-s border border-dashed border-line bg-surface px-7 py-2 text-13 leading-tight font-medium text-text-2 hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-60",
                 focusRing,
               )}
             >
@@ -281,7 +279,7 @@ export function LabelsSide({ slug, task }: { slug: string; task: TaskDetail }) {
     return (
       <SideGroup title="Area">
         <ErrorBanner
-          className="rounded-m border-b-0 px-12 inset-ring inset-ring-border"
+          className="rounded-m border-b-0 px-12 inset-ring inset-ring-line"
           title="The areas could not load."
           message="The daemon did not answer."
           onRetry={retry}
@@ -292,7 +290,7 @@ export function LabelsSide({ slug, task }: { slug: string; task: TaskDetail }) {
   if (areas === null) {
     return (
       <SideGroup title="Area">
-        <p className="text-bar text-text-muted">Reading the areas…</p>
+        <p className="text-14 text-text-2">Reading the areas…</p>
       </SideGroup>
     );
   }

@@ -20,17 +20,17 @@ export function SignedInName() {
           type="button"
           aria-label={`Signed in as ${atName(actor)}`}
           className={cn(
-            "flex shrink-0 items-center gap-6 rounded-m px-8 py-5 text-text-muted hover:bg-sunken max-lg:size-44 max-lg:justify-center max-lg:p-0",
+            "flex shrink-0 items-center gap-6 rounded-m px-8 py-5 text-text-2 hover:bg-sunken max-lg:size-44 max-lg:justify-center max-lg:p-0",
             focusRing,
           )}
         >
           <UserRound size={15} aria-hidden />
-          <PersonName name={actor} className="hidden text-bar lg:inline" />
+          <PersonName name={actor} className="hidden text-14 lg:inline" />
         </button>
       }
     >
-      <p className="text-meta text-text-muted">
-        Signed in as <PersonName name={actor} className="text-bar" />
+      <p className="text-13 text-text-2">
+        Signed in as <PersonName name={actor} className="text-14" />
       </p>
     </Popover>
   );

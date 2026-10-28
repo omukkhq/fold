@@ -81,9 +81,7 @@ function RequestChangesForm({
         )}
       />
       {errors.body ? (
-        <p className="text-meta font-medium text-danger">
-          {errors.body.message}
-        </p>
+        <p className="text-13 font-medium text-bad">{errors.body.message}</p>
       ) : null}
       <div className="flex flex-wrap gap-8">
         <Button
@@ -132,17 +130,17 @@ export function HumanActions({
       <div
         className={cn(
           "flex flex-wrap items-center gap-x-10 gap-y-4",
-          !compact && "border-t border-border-subtle pt-12",
+          !compact && "border-t border-line pt-12",
         )}
       >
-        <p className="text-code leading-snug text-text-muted">
+        <p className="text-13 leading-tight text-text-2">
           v{view.version} is an earlier version. A version never changes, so it
           takes no verdict.
         </p>
         <HrefLink
           href={detailHref(slug, proposal.summary.id, { tab: "changes" })}
           className={cn(
-            "text-code font-semibold text-primary-text hover:underline",
+            "text-13 font-semibold text-accent hover:underline",
             focusRing,
           )}
         >
@@ -163,18 +161,16 @@ export function HumanActions({
   const notes = (
     <>
       {approveLine ? (
-        <p id={approveBlockId} className="text-meta text-text-muted">
+        <p id={approveBlockId} className="text-13 text-text-2">
           {actions.approveBlock}
         </p>
       ) : null}
       {shows("integrate") && actions.integrateBlock !== null ? (
-        <p id={blockId} className="text-meta text-text-muted">
+        <p id={blockId} className="text-13 text-text-2">
           {actions.integrateBlock}
         </p>
       ) : null}
-      {kept !== null ? (
-        <p className="text-meta text-text-muted">{kept}</p>
-      ) : null}
+      {kept !== null ? <p className="text-13 text-text-2">{kept}</p> : null}
     </>
   );
   return (
@@ -183,13 +179,11 @@ export function HumanActions({
       aria-label="Your review"
       className={cn(
         "flex flex-col gap-8",
-        !compact && "border-t border-border-subtle pt-12",
+        !compact && "border-t border-line pt-12",
       )}
     >
       {compact ? null : (
-        <p className="text-code text-text-muted">
-          You are reviewing as {human}
-        </p>
+        <p className="text-13 text-text-2">You are reviewing as {human}</p>
       )}
       {requesting ? (
         <RequestChangesForm
@@ -267,7 +261,7 @@ export function HumanActions({
       )}
       {requesting ? null : notes}
       {actions.failure ? (
-        <p role="alert" className="text-meta font-medium text-danger">
+        <p role="alert" className="text-13 font-medium text-bad">
           {actions.failure}
         </p>
       ) : null}

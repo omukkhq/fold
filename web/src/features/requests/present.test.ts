@@ -37,12 +37,10 @@ describe("state and kind", () => {
   it("names every state and kind with token classes", () => {
     expect(STATE_SPECS.draft_ready).toEqual({
       label: "Draft ready",
-      pill: "bg-secondary-soft text-secondary-text",
+      pill: "bg-warn-soft text-warn",
       dot: "bg-status-review",
     });
-    expect(STATE_SPECS.changes_requested.pill).toBe(
-      "bg-warning-soft text-warning",
-    );
+    expect(STATE_SPECS.changes_requested.pill).toBe("bg-warn-soft text-warn");
     expect(KIND_SPECS.unsorted.label).toBe("Unsorted");
   });
 

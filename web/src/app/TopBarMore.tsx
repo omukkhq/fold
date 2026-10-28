@@ -32,7 +32,7 @@ export function TopBarMore({
           type="button"
           aria-label={moreLabel(alert)}
           className={cn(
-            "relative grid size-44 shrink-0 place-items-center rounded-m text-text-muted hover:bg-sunken",
+            "relative grid size-44 shrink-0 place-items-center rounded-m text-text-2 hover:bg-sunken",
             focusRing,
             MORE_TRIGGER_CLASS,
           )}
@@ -55,7 +55,7 @@ export function TopBarMore({
           sideOffset={6}
           collisionPadding={16}
           aria-label="More"
-          className="z-10 flex w-notifications max-w-(--width-popover-max) flex-col gap-12 rounded-m border border-border bg-raised p-12 shadow-card outline-none"
+          className="z-10 flex w-agents max-w-(--width-popover-max) flex-col gap-12 rounded-m border border-line bg-surface p-12 shadow-pop outline-none"
         >
           {children(() => {
             setOpen(false);

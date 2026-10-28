@@ -37,7 +37,7 @@ function CopyLog({ log }: { log: string }) {
         Copy log
       </Button>
       {state === "idle" ? null : (
-        <span role="status" className="text-meta text-text-muted">
+        <span role="status" className="text-13 text-text-2">
           {state === "copied" ? "Copied." : "The browser refused the copy."}
         </span>
       )}
@@ -72,8 +72,8 @@ function LogPanel({
           size={16}
           className={cn("shrink-0", spec.className)}
         />
-        <h2 className="font-mono text-section font-medium text-text">{step}</h2>
-        <span className="text-code text-text-muted">
+        <h2 className="font-mono text-16 font-medium text-text">{step}</h2>
+        <span className="text-13 text-text-2">
           {listed ? outcomeText(listed) : ""} · run{" "}
           <span className="font-mono">{item.run.id}</span> on v{item.version},
           base {item.run.base}
@@ -97,34 +97,34 @@ function LogPanel({
       {query.isPending ? (
         <Skeleton />
       ) : query.isError ? (
-        <p role="alert" className="text-meta font-medium text-danger">
+        <p role="alert" className="text-13 font-medium text-bad">
           The log could not be read.
         </p>
       ) : !result || lines.length === 0 ? (
-        <p className="text-code text-text-muted">No log is stored.</p>
+        <p className="text-13 text-text-2">No log is stored.</p>
       ) : (
         <div
           className={cn(
             CODE_BOX,
-            "rounded-l bg-surface py-10 inset-ring inset-ring-border-subtle",
+            "rounded-l bg-surface py-10 inset-ring inset-ring-line",
           )}
         >
           {result.truncated ? (
-            <p className="px-14 pb-6 text-meta text-text-faint">
+            <p className="px-14 pb-6 text-13 text-text-2">
               fold keeps only the end of a long log.
             </p>
           ) : null}
-          <ol className="font-mono text-code leading-snug">
+          <ol className="font-mono text-13 leading-tight">
             {lines.map((line) => (
               <li
                 key={line.n}
                 id={`log-line-${String(line.n)}`}
                 data-error={line.error || undefined}
-                className={cn("flex", line.error && "bg-danger-soft")}
+                className={cn("flex", line.error && "bg-bad-soft")}
               >
                 <span
                   aria-hidden="true"
-                  className="w-diff-number shrink-0 pr-12 text-right text-text-faint select-none"
+                  className="w-diff-number shrink-0 pr-12 text-right text-text-2 select-none"
                 >
                   {line.n}
                 </span>
@@ -132,7 +132,7 @@ function LogPanel({
                   className={cn(
                     "pr-14",
                     textFlow("code"),
-                    line.error ? "text-danger" : "text-text",
+                    line.error ? "text-bad" : "text-text",
                   )}
                 >
                   {line.text}
@@ -194,18 +194,18 @@ export function ChecksTab({ slug, id, items, search, now }: ChecksTabProps) {
                   size={15}
                   className={cn("shrink-0", spec.className)}
                 />
-                <h3 className="text-bar font-semibold text-text">
+                <h3 className="text-14 font-semibold text-text">
                   {runTitle(item)}
                 </h3>
-                <span className="font-mono text-caption text-text-faint">
+                <span className="font-mono text-13 text-text-2">
                   {item.run.id}
                 </span>
-                <span className="ml-auto text-meta text-text-faint">
+                <span className="ml-auto text-13 text-text-2">
                   {formatAsOfMinute(now, item.run.created_at)}
                 </span>
               </div>
               {item.run.reason === null ? null : (
-                <p className="px-4 text-meta text-text-muted">
+                <p className="px-4 text-13 text-text-2">
                   {reasonText(item.run.reason)}
                 </p>
               )}
@@ -230,8 +230,8 @@ export function ChecksTab({ slug, id, items, search, now }: ChecksTabProps) {
                           current &&
                             (result.outcome === "failed" ||
                             result.outcome === "timed_out"
-                              ? "bg-danger-soft hover:bg-danger-soft"
-                              : "bg-primary-soft hover:bg-primary-soft"),
+                              ? "bg-bad-soft hover:bg-bad-soft"
+                              : "bg-accent-soft hover:bg-accent-soft"),
                           focusRing,
                         )}
                       >
@@ -240,10 +240,10 @@ export function ChecksTab({ slug, id, items, search, now }: ChecksTabProps) {
                           size={14}
                           className={cn("shrink-0", step.className)}
                         />
-                        <span className="min-w-0 flex-1 truncate font-mono text-code text-text">
+                        <span className="min-w-0 flex-1 truncate font-mono text-13 text-text">
                           {result.name}
                         </span>
-                        <span className="shrink-0 text-meta text-text-faint">
+                        <span className="shrink-0 text-13 text-text-2">
                           {stepMeta(result)}
                         </span>
                       </HrefLink>
@@ -254,7 +254,7 @@ export function ChecksTab({ slug, id, items, search, now }: ChecksTabProps) {
             </section>
           );
         })}
-        <p className="px-4 text-meta leading-normal text-text-faint">
+        <p className="px-4 text-13 leading-normal text-text-2">
           Newest run first. The failed step of the newest failed run opens on
           its own.
         </p>

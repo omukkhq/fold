@@ -48,13 +48,13 @@ export function AgentChips({
             title={chipErrorTitle(agent)}
             onClick={onOpen}
             className={cn(
-              "inline-flex items-center gap-6 rounded-chip bg-surface px-9 py-3 text-meta inset-ring inset-ring-border hover:bg-sunken max-lg:flex max-lg:min-h-44 max-lg:px-14",
+              "inline-flex items-center gap-6 rounded-pill bg-surface px-9 py-3 text-13 inset-ring inset-ring-line hover:bg-sunken max-lg:flex max-lg:min-h-44 max-lg:px-14",
               focusRing,
             )}
           >
-            <PersonName name={agent.name} className="text-bar" />
+            <PersonName name={agent.name} className="text-14" />
             <PresenceDot state={chipPresence(agent, paused)} />
-            <span className="text-meta text-text-muted">
+            <span className="text-13 text-text-2">
               {chipStateText(agent, status, now, paused)}
             </span>
           </HrefLink>

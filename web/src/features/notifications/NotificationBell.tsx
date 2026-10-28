@@ -38,7 +38,7 @@ function Entry({
 }) {
   const text = moveText(entry);
   return (
-    <li className={cn("flex items-center", fresh && "bg-primary-soft")}>
+    <li className={cn("flex items-center", fresh && "bg-accent-soft")}>
       <HrefLink
         href={idHref(slug, "task", entry.task)}
         onClick={onOpen}
@@ -49,11 +49,11 @@ function Entry({
       >
         <span
           aria-hidden="true"
-          className={cn("size-8 shrink-0 rounded-chip", DOTS.get(entry.to))}
+          className={cn("size-8 shrink-0 rounded-pill", DOTS.get(entry.to))}
         />
         <span className="flex min-w-0 flex-1 flex-col gap-2">
-          <span className="text-body text-text">{text}</span>
-          <span className="flex min-w-0 items-center gap-6 text-meta text-text-muted">
+          <span className="text-15 text-text">{text}</span>
+          <span className="flex min-w-0 items-center gap-6 text-13 text-text-2">
             {entry.title === null ? null : (
               <span className="min-w-0 truncate">{entry.title}</span>
             )}
@@ -71,7 +71,7 @@ function Entry({
           notificationStore.clear(slug, entryKey(entry));
         }}
         className={cn(
-          "mr-8 rounded-s p-6 text-text-faint hover:bg-sunken hover:text-text",
+          "mr-8 rounded-s p-6 text-text-2 hover:bg-sunken hover:text-text",
           focusRing,
         )}
       >
@@ -101,7 +101,7 @@ function MoveToasts({ slug }: { slug: string }) {
             size={15}
             className="mt-2 shrink-0"
           />
-          <Toast.Description className="min-w-0 flex-1 text-body">
+          <Toast.Description className="min-w-0 flex-1 text-15">
             {toast.parts.map((part, index) => (
               <span key={part}>
                 {index > 0 ? " · " : null}
@@ -159,7 +159,7 @@ export function NotificationBell({ slug }: { slug: string }) {
             type="button"
             aria-label={bellLabel(unread)}
             className={cn(
-              "relative flex shrink-0 items-center rounded-m px-10 py-7 text-text-muted hover:bg-sunken max-lg:size-44 max-lg:justify-center max-lg:p-0",
+              "relative flex shrink-0 items-center rounded-m px-10 py-7 text-text-2 hover:bg-sunken max-lg:size-44 max-lg:justify-center max-lg:p-0",
               focusRing,
             )}
           >
@@ -167,7 +167,7 @@ export function NotificationBell({ slug }: { slug: string }) {
             {unread > 0 ? (
               <span
                 aria-hidden="true"
-                className="absolute top-2 right-2 flex h-16 max-lg:top-4 max-lg:right-4 min-w-16 items-center justify-center rounded-chip bg-primary px-4 text-micro font-semibold text-on-primary"
+                className="absolute top-2 right-2 flex h-16 max-lg:top-4 max-lg:right-4 min-w-16 items-center justify-center rounded-pill bg-accent px-4 text-12 font-semibold text-on-ink"
               >
                 {unread}
               </span>
@@ -180,10 +180,10 @@ export function NotificationBell({ slug }: { slug: string }) {
             sideOffset={6}
             collisionPadding={16}
             aria-label="Notifications"
-            className="z-10 flex w-notifications max-w-(--width-popover-max) flex-col rounded-m border border-border bg-raised shadow-card outline-none"
+            className="z-10 flex w-agents max-w-(--width-popover-max) flex-col rounded-m border border-line bg-surface shadow-pop outline-none"
           >
-            <div className="flex items-center gap-8 border-b border-border-subtle px-16 py-12">
-              <h2 className="flex-1 text-card font-semibold text-text">
+            <div className="flex items-center gap-8 border-b border-line px-16 py-12">
+              <h2 className="flex-1 text-16 font-semibold text-text">
                 Card moves
               </h2>
               {feed.length > 0 ? (
@@ -193,7 +193,7 @@ export function NotificationBell({ slug }: { slug: string }) {
                     notificationStore.clearAll(slug);
                   }}
                   className={cn(
-                    "rounded-s px-6 py-2 text-code text-primary-text hover:bg-sunken",
+                    "rounded-s px-6 py-2 text-13 text-accent hover:bg-sunken",
                     focusRing,
                   )}
                 >
@@ -202,9 +202,7 @@ export function NotificationBell({ slug }: { slug: string }) {
               ) : null}
             </div>
             {feed.length === 0 ? (
-              <p className="px-16 py-14 text-body text-text-muted">
-                No card moves
-              </p>
+              <p className="px-16 py-14 text-15 text-text-2">No card moves</p>
             ) : (
               <ul className="py-4">
                 {feed.map((entry) => (

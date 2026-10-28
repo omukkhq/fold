@@ -51,10 +51,10 @@ export function moreAlert(
   paused: boolean,
 ): { label: string; dot: string } | null {
   if (stream === "reconnecting") {
-    return { label: "Reconnecting", dot: "bg-secondary" };
+    return { label: "Reconnecting", dot: "bg-warn" };
   }
   if (paused) {
-    return { label: "Agents paused", dot: "bg-warning" };
+    return { label: "Agents paused", dot: "bg-warn" };
   }
   return null;
 }

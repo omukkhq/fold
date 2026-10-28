@@ -14,7 +14,7 @@ describe("tabClasses", () => {
     const classes = tabClasses(false).split(" ");
     expect(classes).toContain("after:h-2");
     expect(classes).toContain("after:bg-transparent");
-    expect(classes).toContain("text-text-muted");
+    expect(classes).toContain("text-text-2");
   });
 
   it("marks the current Radix tab with the same underline", () => {

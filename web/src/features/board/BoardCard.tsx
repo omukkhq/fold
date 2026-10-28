@@ -48,9 +48,9 @@ import {
 
 const PROPOSAL_ICON: Record<ProposalLook, { icon: LucideIcon; color: string }> =
   {
-    attention: { icon: GitPullRequest, color: "text-danger" },
-    active: { icon: GitPullRequest, color: "text-primary-text" },
-    merged: { icon: GitMerge, color: "text-text-muted" },
+    attention: { icon: GitPullRequest, color: "text-bad" },
+    active: { icon: GitPullRequest, color: "text-accent" },
+    merged: { icon: GitMerge, color: "text-text-2" },
   };
 
 function Meta({
@@ -64,7 +64,7 @@ function Meta({
   label?: string;
 }) {
   return (
-    <span className="inline-flex items-center gap-4 text-meta text-text-muted">
+    <span className="inline-flex items-center gap-4 text-13 text-text-2">
       <Icon aria-hidden="true" size={13} />
       {text}
       {label ? <span className="sr-only">{label}</span> : null}
@@ -83,7 +83,7 @@ function ProposalPill({
   const { icon: Icon, color } = PROPOSAL_ICON[proposalLook(proposal)];
   const wait = planWaitText(proposal, now);
   const pill = (
-    <span className="inline-flex items-center gap-4 self-start rounded-s bg-surface px-7 py-2 text-meta font-medium text-text inset-ring inset-ring-border">
+    <span className="inline-flex items-center gap-4 self-start rounded-s bg-surface px-7 py-2 text-13 font-medium text-text inset-ring inset-ring-line">
       <Icon aria-hidden="true" size={12} className={color} />
       {proposalText(proposal)}
     </span>
@@ -94,7 +94,7 @@ function ProposalPill({
   return (
     <div className="flex flex-col gap-4">
       {pill}
-      <p className="flex items-start gap-4 text-meta leading-normal text-text-muted">
+      <p className="flex items-start gap-4 text-13 leading-normal text-text-2">
         <Hourglass aria-hidden="true" size={12} className="mt-2 shrink-0" />
         <span className="min-w-0">{wait}</span>
       </p>
@@ -106,15 +106,11 @@ function ProposalPill({
 function LeadCheckPill({ mark }: { mark: LeadCheckMark }) {
   return (
     <div className="flex flex-col gap-4">
-      <span className="inline-flex items-center gap-4 self-start rounded-s bg-surface px-7 py-2 text-meta font-medium text-text inset-ring inset-ring-border">
-        <ClipboardCheck
-          aria-hidden="true"
-          size={12}
-          className="text-secondary-text"
-        />
+      <span className="inline-flex items-center gap-4 self-start rounded-s bg-surface px-7 py-2 text-13 font-medium text-text inset-ring inset-ring-line">
+        <ClipboardCheck aria-hidden="true" size={12} className="text-warn" />
         {mark.text}
       </span>
-      <p className="line-clamp-2 text-meta leading-normal wrap-anywhere text-text-muted">
+      <p className="line-clamp-2 text-13 leading-normal wrap-anywhere text-text-2">
         {mark.note}
       </p>
     </div>
@@ -125,11 +121,11 @@ function LeadCheckPill({ mark }: { mark: LeadCheckMark }) {
 function BlockerPill({ mark }: { mark: BlockerMark }) {
   return (
     <div className="flex flex-col gap-4">
-      <span className="inline-flex items-center gap-5 self-start rounded-s bg-warning-soft px-8 py-3 text-caption font-semibold text-warning">
+      <span className="inline-flex items-center gap-5 self-start rounded-s bg-warn-soft px-8 py-3 text-13 font-semibold text-warn">
         <Hand aria-hidden="true" size={12} />
         {mark.text}
       </span>
-      <p className="line-clamp-2 text-meta leading-normal wrap-anywhere text-text-muted">
+      <p className="line-clamp-2 text-13 leading-normal wrap-anywhere text-text-2">
         {mark.reason}
       </p>
     </div>
@@ -141,27 +137,25 @@ function Activity({ line }: { line: ActivityLine }) {
     <div
       className={cn(
         "flex items-center gap-6 rounded-s px-8 py-5",
-        line.stalled
-          ? "bg-bg inset-ring inset-ring-border-subtle"
-          : "bg-primary-soft",
+        line.stalled ? "bg-bg inset-ring inset-ring-line" : "bg-accent-soft",
       )}
     >
       <span
         aria-hidden="true"
         className={cn(
           "size-7 shrink-0 rounded-full",
-          line.stalled ? "bg-secondary" : "bg-primary",
+          line.stalled ? "bg-warn" : "bg-accent",
         )}
       />
       <span
         className={cn(
-          "min-w-0 flex-1 truncate text-meta",
-          line.stalled ? "text-secondary-text" : "font-mono text-primary-text",
+          "min-w-0 flex-1 truncate text-13",
+          line.stalled ? "text-warn" : "font-mono text-accent",
         )}
       >
         {line.text}
       </span>
-      <span className="shrink-0 text-meta text-text-muted">{line.since}</span>
+      <span className="shrink-0 text-13 text-text-2">{line.since}</span>
     </div>
   );
 }
@@ -205,7 +199,7 @@ export function BoardCard({
   return (
     <Card
       data-task={card.task}
-      className="relative has-[a:focus-visible]:outline-2 has-[a:focus-visible]:outline-offset-2 has-[a:focus-visible]:outline-focus-ring"
+      className="relative has-[a:focus-visible]:outline-2 has-[a:focus-visible]:outline-offset-2 has-[a:focus-visible]:outline-accent"
     >
       {mark ? (
         <div className="flex flex-wrap items-center gap-6">
@@ -213,7 +207,7 @@ export function BoardCard({
             <span
               tabIndex={0}
               aria-label={`Needs you: ${mark.tooltip}`}
-              className="relative z-10 self-start rounded-s focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="relative z-10 self-start rounded-s focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             >
               <Badge tone="needs-you" icon={mark.icon}>
                 {mark.text}
@@ -241,7 +235,7 @@ export function BoardCard({
       <HrefLink
         href={taskPath(slug, card.task, filters)}
         draggable={false}
-        className="text-card leading-snug font-medium wrap-anywhere text-text outline-none after:absolute after:inset-0 after:rounded-m"
+        className="text-16 leading-tight font-medium wrap-anywhere text-text outline-none after:absolute after:inset-0 after:rounded-m"
       >
         {card.title}
       </HrefLink>
@@ -251,8 +245,8 @@ export function BoardCard({
         </Badge>
       ) : null}
       {blocker ? <BlockerPill mark={blocker} /> : null}
-      <div className="flex flex-wrap items-center gap-x-10 gap-y-4 leading-snug">
-        <Mono className="text-caption text-text-faint">{card.task}</Mono>
+      <div className="flex flex-wrap items-center gap-x-10 gap-y-4 leading-tight">
+        <Mono className="text-13 text-text-2">{card.task}</Mono>
         {kind ? (
           <Meta
             icon={card.kind === "human" ? UserRound : ClipboardCheck}
@@ -277,9 +271,9 @@ export function BoardCard({
       ) : null}
       {leadCheck ? <LeadCheckPill mark={leadCheck} /> : null}
       {hasFooter ? (
-        <div className="flex items-center justify-between gap-8 border-t border-border-subtle pt-7">
+        <div className="flex items-center justify-between gap-8 border-t border-line pt-7">
           {card.worker ? (
-            <span className="min-w-0 truncate text-meta">
+            <span className="min-w-0 truncate text-13">
               <PersonName name={card.worker} />
             </span>
           ) : (
@@ -289,10 +283,10 @@ export function BoardCard({
             {stale ? <Badge tone="stale" /> : null}
             {stalled ? <Badge tone="stalled" /> : null}
             {filesText ? (
-              <span className="inline-flex items-center gap-6 rounded-s bg-primary-soft px-8 py-2 text-caption font-medium text-primary-strong">
+              <span className="inline-flex items-center gap-6 rounded-s bg-accent-soft px-8 py-2 text-13 font-medium text-accent">
                 <span
                   aria-hidden="true"
-                  className="size-7 rounded-full bg-primary"
+                  className="size-7 rounded-full bg-accent"
                 />
                 {filesText}
               </span>

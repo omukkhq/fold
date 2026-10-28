@@ -22,7 +22,7 @@ export function StatePill({ state }: { state: RequestState }) {
     <span
       data-state={state}
       className={cn(
-        "inline-flex items-center gap-5 rounded-s px-9 py-3 text-meta leading-snug font-semibold whitespace-nowrap",
+        "inline-flex items-center gap-5 rounded-s px-9 py-3 text-13 leading-tight font-semibold whitespace-nowrap",
         spec.pill,
       )}
     >
@@ -42,7 +42,7 @@ export function KindBadge({ kind }: { kind: KindKey }) {
     <span
       data-kind={kind}
       className={cn(
-        "inline-flex items-center gap-5 rounded-s px-8 py-2 text-meta leading-snug font-semibold whitespace-nowrap",
+        "inline-flex items-center gap-5 rounded-s px-8 py-2 text-13 leading-tight font-semibold whitespace-nowrap",
         spec.classes,
       )}
     >

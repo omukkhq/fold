@@ -21,16 +21,16 @@ export function ErrorBanner({
     <div
       role="alert"
       className={cn(
-        "flex items-center gap-10 border-b border-border-subtle bg-surface px-24 pt-9 pb-8",
+        "flex items-center gap-10 border-b border-line bg-surface px-24 pt-9 pb-8",
         className,
       )}
     >
       <TriangleAlert
         aria-hidden="true"
         size={15}
-        className="shrink-0 text-danger"
+        className="shrink-0 text-bad"
       />
-      <p className="min-w-0 flex-1 text-bar leading-snug text-text">
+      <p className="min-w-0 flex-1 text-14 leading-tight text-text">
         <strong className="font-semibold">{title}</strong> {message}
       </p>
       {onRetry ? (

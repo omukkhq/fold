@@ -14,7 +14,7 @@ export function Mono(props: MonoProps) {
       <a
         {...rest}
         className={cn(
-          "rounded-s font-mono text-code text-primary-text underline-offset-2 hover:underline",
+          "rounded-s font-mono text-13 text-accent underline-offset-2 hover:underline",
           focusRing,
           className,
         )}
@@ -22,5 +22,5 @@ export function Mono(props: MonoProps) {
     );
   }
   const { className, ...rest } = props;
-  return <span {...rest} className={cn("font-mono text-code", className)} />;
+  return <span {...rest} className={cn("font-mono text-13", className)} />;
 }

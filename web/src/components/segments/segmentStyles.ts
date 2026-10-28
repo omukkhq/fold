@@ -3,6 +3,6 @@ export const SEGMENT_LIST = "flex flex-wrap gap-2 rounded-m bg-sunken p-3";
 
 export function segmentClasses(current: boolean): string {
   return current
-    ? "rounded-s px-12 py-5 text-bar leading-snug bg-surface font-semibold text-text inset-ring inset-ring-border-subtle"
-    : "rounded-s px-12 py-5 text-bar leading-snug font-medium text-text-muted hover:text-text";
+    ? "rounded-s px-12 py-5 text-14 leading-tight bg-surface font-semibold text-text inset-ring inset-ring-line"
+    : "rounded-s px-12 py-5 text-14 leading-tight font-medium text-text-2 hover:text-text";
 }

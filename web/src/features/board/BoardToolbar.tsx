@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 import { toggleValue, type BoardSearch } from "./search";
 import { needsYouLook } from "./view";
 
-const PRESSED = "bg-primary-soft text-primary-text inset-ring-primary";
+const PRESSED = "bg-accent-soft text-accent inset-ring-accent";
 
 interface ToolbarProps {
   search: BoardSearch;
@@ -63,11 +63,11 @@ export function BoardToolbar({
         aria-label="Filters"
         className="flex flex-wrap items-center gap-8"
       >
-        <label className="flex w-search items-center gap-8 rounded-m bg-surface px-10 py-7 inset-ring inset-ring-border has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-focus-ring">
+        <label className="flex w-search items-center gap-8 rounded-m bg-surface px-10 py-7 inset-ring inset-ring-line has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent">
           <Search
             aria-hidden="true"
             size={15}
-            className="shrink-0 text-text-faint"
+            className="shrink-0 text-text-2"
           />
           <input
             type="search"
@@ -77,7 +77,7 @@ export function BoardToolbar({
             onChange={(event) => {
               set({ q: event.target.value });
             }}
-            className="min-w-0 flex-1 bg-transparent text-body leading-snug text-text outline-none placeholder:text-text-faint"
+            className="min-w-0 flex-1 bg-transparent text-15 leading-tight text-text outline-none placeholder:text-text-2"
           />
         </label>
         <Button
@@ -89,15 +89,15 @@ export function BoardToolbar({
           }}
           className={cn(
             "px-12",
-            needs.pill === null && "text-text-muted",
-            search.needs && "outline-2 outline-offset-2 outline-primary",
+            needs.pill === null && "text-text-2",
+            search.needs && "outline-2 outline-offset-2 outline-accent",
           )}
         >
           Attention
           {needs.pill === null ? (
             " · 0"
           ) : (
-            <span className="rounded-full bg-on-ink px-6 text-meta font-bold text-ink">
+            <span className="rounded-full bg-on-ink px-6 text-13 font-bold text-ink">
               {needs.pill}
             </span>
           )}
@@ -149,7 +149,7 @@ export function BoardToolbar({
           Blocked only
         </Button>
       </div>
-      <p className="text-bar text-text-muted">{summary}</p>
+      <p className="text-14 text-text-2">{summary}</p>
     </div>
   );
 }

@@ -52,13 +52,13 @@ export interface DiffRowsProps {
 
 // A row spans the panel, so its focus ring sits inside the row instead of outside it.
 const ROW_FOCUS =
-  "cursor-pointer focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring";
+  "cursor-pointer focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 
 /** A block under a line, indented past the number and sign columns. */
 function UnderLine({ children }: { children: ReactNode }) {
   return (
     <div role="row">
-      <div role="gridcell" className="flex border-y border-border-subtle bg-bg">
+      <div role="gridcell" className="flex border-y border-line bg-bg">
         <span aria-hidden="true" className="w-diff-number shrink-0" />
         <span aria-hidden="true" className="w-diff-number shrink-0" />
         <span aria-hidden="true" className="w-24 shrink-0" />
@@ -174,10 +174,7 @@ export function DiffRows({
           >
             {lineTokens ? <SyntaxTokens tokens={lineTokens} /> : row.text}
             {row.noNewline ? (
-              <span
-                aria-hidden="true"
-                className="ml-8 text-meta text-text-muted"
-              >
+              <span aria-hidden="true" className="ml-8 text-13 text-text-2">
                 {NO_NEWLINE}
               </span>
             ) : null}
@@ -224,7 +221,7 @@ export function DiffRows({
                   onExpand(row.key);
                 }}
                 className={cn(
-                  "flex flex-1 items-center gap-6 px-14 py-4 text-left font-mono text-label text-text-muted hover:text-text",
+                  "flex flex-1 items-center gap-6 px-14 py-4 text-left font-mono text-13 text-text-2 hover:text-text",
                   ROW_FOCUS,
                 )}
               >

@@ -29,32 +29,32 @@ export interface StateSpec {
 export const STATE_SPECS: Record<RequestState, StateSpec> = {
   open: {
     label: "Open",
-    pill: "bg-sunken text-text-muted",
+    pill: "bg-sunken text-text-2",
     dot: "bg-status-todo",
   },
   drafting: {
     label: "Drafting",
-    pill: "bg-primary-soft text-primary-text",
+    pill: "bg-accent-soft text-accent",
     dot: "bg-status-progress",
   },
   draft_ready: {
     label: "Draft ready",
-    pill: "bg-secondary-soft text-secondary-text",
+    pill: "bg-warn-soft text-warn",
     dot: "bg-status-review",
   },
   changes_requested: {
     label: "Changes requested",
-    pill: "bg-warning-soft text-warning",
-    dot: "bg-warning",
+    pill: "bg-warn-soft text-warn",
+    dot: "bg-warn",
   },
   approved: {
     label: "Approved",
-    pill: "bg-success-soft text-text",
-    dot: "bg-success",
+    pill: "bg-ok-soft text-text",
+    dot: "bg-ok",
   },
   closed: {
     label: "Closed",
-    pill: "bg-sunken text-text-muted",
+    pill: "bg-sunken text-text-2",
     dot: "bg-status-backlog",
   },
 };
@@ -68,13 +68,13 @@ export interface KindSpec {
 }
 
 export const KIND_SPECS: Record<KindKey, KindSpec> = {
-  bug: { label: "Bug", classes: "bg-danger-soft text-danger" },
-  feature: { label: "Feature", classes: "bg-primary-soft text-primary-text" },
+  bug: { label: "Bug", classes: "bg-bad-soft text-bad" },
+  feature: { label: "Feature", classes: "bg-accent-soft text-accent" },
   question: {
     label: "Question",
-    classes: "bg-secondary-soft text-secondary-text",
+    classes: "bg-warn-soft text-warn",
   },
-  unsorted: { label: "Unsorted", classes: "bg-sunken text-text-muted" },
+  unsorted: { label: "Unsorted", classes: "bg-sunken text-text-2" },
 };
 
 export function kindOf(request: RequestSummary): KindKey {

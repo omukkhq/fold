@@ -49,7 +49,7 @@ interface ThreadPanelProps {
 }
 
 const CHIP =
-  "hidden items-center gap-6 rounded-chip bg-surface px-10 py-3 text-code text-text-muted inset-ring inset-ring-border hover:text-text lg:inline-flex";
+  "hidden items-center gap-6 rounded-pill bg-surface px-10 py-3 text-13 text-text-2 inset-ring inset-ring-line hover:text-text lg:inline-flex";
 
 export function ThreadPanel({
   slug,
@@ -129,7 +129,7 @@ export function ThreadPanel({
       aria-label={title}
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-bg"
     >
-      <header className="flex shrink-0 items-center gap-8 border-b border-border-subtle py-6 pr-8 pl-4 lg:items-start lg:gap-16 lg:px-28 lg:py-16">
+      <header className="flex shrink-0 items-center gap-8 border-b border-line py-6 pr-8 pl-4 lg:items-start lg:gap-16 lg:px-28 lg:py-16">
         {backHref === undefined ? null : (
           <HrefLink
             href={backHref}
@@ -143,17 +143,17 @@ export function ThreadPanel({
           </HrefLink>
         )}
         <div className="flex min-w-0 flex-1 flex-col gap-2 lg:gap-8">
-          <h2 className="truncate text-card leading-snug font-semibold text-text lg:text-section lg:whitespace-normal">
+          <h2 className="truncate text-16 leading-tight font-semibold text-text lg:text-16 lg:whitespace-normal">
             {title}
           </h2>
-          <p className="flex flex-wrap items-center gap-x-8 gap-y-4 text-meta text-text-faint">
+          <p className="flex flex-wrap items-center gap-x-8 gap-y-4 text-13 text-text-2">
             {thread.task ? (
               <HrefLink
                 href={projectPath(slug, "t", thread.task)}
                 className={cn(CHIP, focusRing)}
               >
                 <SquareKanban aria-hidden="true" size={13} />
-                <span className="font-mono text-meta">{thread.task}</span>
+                <span className="font-mono text-13">{thread.task}</span>
               </HrefLink>
             ) : null}
             {thread.proposal ? (
@@ -162,7 +162,7 @@ export function ThreadPanel({
                 className={cn(CHIP, focusRing)}
               >
                 <GitPullRequest aria-hidden="true" size={13} />
-                <span className="font-mono text-meta">{thread.proposal}</span>
+                <span className="font-mono text-13">{thread.proposal}</span>
               </HrefLink>
             ) : null}
             <span className="hidden font-mono lg:inline">{thread.id}</span>
@@ -173,7 +173,7 @@ export function ThreadPanel({
               names={thread.participants}
               you={you}
               youWord
-              nameClassName="text-meta lg:text-bar"
+              nameClassName="text-13 lg:text-14"
             />
           </p>
         </div>
@@ -219,17 +219,11 @@ export function ThreadPanel({
           {withDays(thread.messages, now).map((item) =>
             item.kind === "day" ? (
               <li key={item.key} className="flex items-center gap-12">
-                <span
-                  aria-hidden="true"
-                  className="h-px flex-1 bg-border-subtle"
-                />
-                <span className="text-meta font-medium text-text-faint">
+                <span aria-hidden="true" className="h-px flex-1 bg-line" />
+                <span className="text-13 font-medium text-text-2">
                   {item.label}
                 </span>
-                <span
-                  aria-hidden="true"
-                  className="h-px flex-1 bg-border-subtle"
-                />
+                <span aria-hidden="true" className="h-px flex-1 bg-line" />
               </li>
             ) : (
               <MessageItem

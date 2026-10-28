@@ -30,10 +30,9 @@ import { projectPath } from "@/routes/paths";
 
 /** At phone width the agents and the change time go below the name, each on its own line; from `md` they are columns beside it. */
 const LINE = "flex flex-col gap-10 md:flex-row md:items-center md:gap-20";
-const ROW =
-  "rounded-l bg-surface py-16 pr-12 pl-20 inset-ring inset-ring-border-subtle";
+const ROW = "rounded-l bg-surface py-16 pr-12 pl-20 inset-ring inset-ring-line";
 const CARD =
-  "flex flex-col overflow-hidden rounded-l bg-surface inset-ring inset-ring-border-subtle";
+  "flex flex-col overflow-hidden rounded-l bg-surface inset-ring inset-ring-line";
 
 export function ProjectsScreen() {
   const { data: projects } = useSuspenseQuery(projectsQuery());
@@ -45,7 +44,7 @@ export function ProjectsScreen() {
   const searching = query.trim() !== "";
   return (
     <div className="flex min-h-screen flex-col bg-bg">
-      <header className="flex h-bar items-center justify-between border-b border-border-subtle bg-surface px-16 md:px-24">
+      <header className="flex h-bar items-center justify-between border-b border-line bg-surface px-16 md:px-24">
         <Wordmark />
         <div className="flex items-center gap-8">
           <SignedInName />
@@ -56,39 +55,39 @@ export function ProjectsScreen() {
         <div className="flex min-w-0 flex-col gap-20">
           <div className="flex flex-wrap items-end justify-between gap-16">
             <div className="flex flex-col gap-4">
-              <h1 className="text-page leading-snug font-semibold text-text">
+              <h1 className="text-28 leading-tight font-semibold text-text">
                 Projects
               </h1>
-              <p className="text-body text-text-muted">
+              <p className="text-15 text-text-2">
                 Every project this fold daemon serves on this machine.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-16">
               {projects.length > 0 ? (
                 <p className="flex flex-col md:items-end">
-                  <span className="text-meta text-text-muted">
+                  <span className="text-13 text-text-2">
                     Cost of all projects
                   </span>
-                  <span className="text-item-title leading-snug font-semibold text-text tabular-nums">
+                  <span className="text-18 leading-tight font-semibold text-text tabular-nums">
                     {total.cost}
                   </span>
-                  <span className="text-meta text-text-muted tabular-nums">
+                  <span className="text-13 text-text-2 tabular-nums">
                     {total.tokens}
                   </span>
                 </p>
               ) : null}
-              <p className="flex items-center gap-8 rounded-m bg-sunken px-12 py-7 text-bar text-text-muted">
+              <p className="flex items-center gap-8 rounded-m bg-sunken px-12 py-7 text-14 text-text-2">
                 Add a project:
                 <Mono className="text-text">fld init &lt;dir&gt;</Mono>
               </p>
             </div>
           </div>
           {projects.length > 0 ? (
-            <label className="flex items-center gap-8 rounded-m bg-surface px-12 py-9 inset-ring inset-ring-border has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-focus-ring">
+            <label className="flex items-center gap-8 rounded-m bg-surface px-12 py-9 inset-ring inset-ring-line has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent">
               <Search
                 aria-hidden="true"
                 size={15}
-                className="shrink-0 text-text-faint"
+                className="shrink-0 text-text-2"
               />
               <input
                 type="search"
@@ -98,7 +97,7 @@ export function ProjectsScreen() {
                 onChange={(event) => {
                   setQuery(event.target.value);
                 }}
-                className="min-w-0 flex-1 bg-transparent text-body leading-snug text-text outline-none placeholder:text-text-faint"
+                className="min-w-0 flex-1 bg-transparent text-15 leading-tight text-text outline-none placeholder:text-text-2"
               />
             </label>
           ) : null}
@@ -152,29 +151,24 @@ function ProjectCard({
     <>
       <div className="flex min-w-0 flex-1 flex-col gap-4">
         <span className="flex min-w-0 flex-wrap items-center gap-x-10 gap-y-4">
-          <span className="min-w-0 truncate text-item-title leading-snug font-semibold text-text">
+          <span className="min-w-0 truncate text-18 leading-tight font-semibold text-text">
             {project.name}
           </span>
-          <Mono className="text-meta text-text-muted">{project.slug}</Mono>
+          <Mono className="text-13 text-text-2">{project.slug}</Mono>
           {mark !== null ? (
-            <span className="rounded-full bg-sunken px-8 py-2 text-meta leading-snug font-medium text-text-muted inset-ring inset-ring-border">
+            <span className="rounded-full bg-sunken px-8 py-2 text-13 leading-tight font-medium text-text-2 inset-ring inset-ring-line">
               {mark}
             </span>
           ) : null}
         </span>
-        <span className="text-bar text-text-muted">
-          {summaryLine(project, now)}
-        </span>
+        <span className="text-14 text-text-2">{summaryLine(project, now)}</span>
         {showsRoot(project, query) ? (
-          <Mono
-            className="truncate text-meta text-text-muted"
-            title={project.root}
-          >
+          <Mono className="truncate text-13 text-text-2" title={project.root}>
             {project.root}
           </Mono>
         ) : null}
         {blocker !== null ? (
-          <span className="text-bar text-text-muted">
+          <span className="text-14 text-text-2">
             <CodeText text={blocker} />
           </span>
         ) : null}
@@ -186,21 +180,19 @@ function ProjectCard({
               agents={overview.agents}
               className="w-full md:w-project-agents md:shrink-0"
             />
-            <span className="flex shrink-0 items-center gap-6 text-code whitespace-nowrap md:w-project-state md:justify-end">
+            <span className="flex shrink-0 items-center gap-6 text-13 whitespace-nowrap md:w-project-state md:justify-end">
               <span
                 aria-hidden
                 className={cn(
                   "size-7 rounded-full",
                   overview.agents.length > 0
-                    ? "bg-primary"
+                    ? "bg-accent"
                     : "bg-status-backlog",
                 )}
               />
               <span
                 className={
-                  overview.agents.length > 0
-                    ? "text-primary-text"
-                    : "text-text-muted"
+                  overview.agents.length > 0 ? "text-accent" : "text-text-2"
                 }
               >
                 {lastChangeLine(overview, now)}
@@ -208,13 +200,13 @@ function ProjectCard({
             </span>
             {cost ? (
               <span className="flex shrink-0 flex-col md:items-end">
-                <span className="text-item-title leading-snug font-semibold text-text tabular-nums">
+                <span className="text-18 leading-tight font-semibold text-text tabular-nums">
                   {cost.total}
                 </span>
-                <span className="text-meta whitespace-nowrap text-text-muted">
+                <span className="text-13 whitespace-nowrap text-text-2">
                   {cost.recent}
                 </span>
-                <span className="text-meta whitespace-nowrap text-text-muted tabular-nums">
+                <span className="text-13 whitespace-nowrap text-text-2 tabular-nums">
                   {cost.tokens}
                 </span>
               </span>
@@ -223,7 +215,7 @@ function ProjectCard({
           <ChevronRight
             aria-hidden
             size={16}
-            className="hidden shrink-0 text-text-faint md:block"
+            className="hidden shrink-0 text-text-2 md:block"
           />
         </>
       ) : null}
@@ -258,7 +250,7 @@ function ProjectCard({
         </div>
         <GitStatus
           slug={project.slug}
-          className="mx-20 border-t border-border-subtle pt-12 pb-16"
+          className="mx-20 border-t border-line pt-12 pb-16"
         />
       </div>
     );

@@ -420,7 +420,7 @@ describe("Requests list", () => {
     const excerpt = screen.getByRole("link", {
       name: "Product wants the board as a spreadsheet",
     });
-    expect(excerpt.className).toContain("text-text-muted");
+    expect(excerpt.className).toContain("text-text-2");
     const unsorted = excerpt.closest("tr");
     expect(unsorted && within(unsorted).getByText("Unsorted")).toBeTruthy();
     expect(unsorted && within(unsorted).getByText("unclaimed")).toBeTruthy();

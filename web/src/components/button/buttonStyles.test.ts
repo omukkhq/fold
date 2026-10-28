@@ -25,8 +25,8 @@ describe("buttonClasses", () => {
   );
 
   it("makes the small size smaller", () => {
-    expect(buttonClasses("ghost", "sm")).toContain("text-code");
-    expect(buttonClasses("ghost", "md")).toContain("text-body");
+    expect(buttonClasses("ghost", "sm")).toContain("text-13");
+    expect(buttonClasses("ghost", "md")).toContain("text-15");
   });
 });
 
@@ -39,14 +39,14 @@ describe("button geometry", () => {
   });
 
   it("draws the secondary stroke inside the box", () => {
-    expect(buttonClasses("secondary", "md")).toContain("inset-ring-border");
+    expect(buttonClasses("secondary", "md")).toContain("inset-ring-line");
     expect(buttonClasses("secondary", "md").split(" ")).not.toContain("border");
   });
 });
 
 describe("buttonIconClass", () => {
   it("mutes only the secondary icon", () => {
-    expect(buttonIconClass("secondary")).toContain("text-text-muted");
+    expect(buttonIconClass("secondary")).toContain("text-text-2");
     expect(buttonIconClass("primary")).not.toContain("text-");
     expect(buttonIconClass("ghost")).not.toContain("text-");
   });

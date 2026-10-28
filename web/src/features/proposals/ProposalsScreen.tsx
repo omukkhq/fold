@@ -51,9 +51,9 @@ const STATE_LABELS = {
 } as const;
 
 const HEAD =
-  "px-6 py-9 text-left text-overline leading-snug font-semibold whitespace-nowrap text-text-muted uppercase first:pl-16 last:pr-16";
+  "px-6 py-9 text-left font-title text-13 leading-tight font-semibold whitespace-nowrap text-text-2 first:pl-16 last:pr-16";
 const CELL = "px-6 py-12 align-middle first:pl-16 last:pr-16";
-const MONO = "font-mono text-code whitespace-nowrap text-text-muted";
+const MONO = "font-mono text-13 whitespace-nowrap text-text-2";
 
 const CLAIMS: readonly (ClaimFilter | undefined)[] = [
   undefined,
@@ -82,10 +82,10 @@ export function ProposalsScreen({
     <div className="flex flex-col gap-16 px-24 pt-20 pb-24">
       <div className="flex flex-wrap items-end justify-between gap-12">
         <div className="flex flex-col gap-4">
-          <h1 className="text-screen leading-snug font-semibold text-text">
+          <h1 className="text-24 leading-tight font-semibold text-text">
             Proposals
           </h1>
-          <p className="text-body text-text-muted">
+          <p className="text-15 text-text-2">
             Proposals waiting on reviewers, waiting on authors, and recently
             integrated.
           </p>
@@ -123,8 +123,7 @@ export function ProposalsScreen({
             aria-pressed={search.conflicted === true}
             icon={<GitMerge aria-hidden="true" size={15} />}
             className={cn(
-              search.conflicted &&
-                "bg-danger-soft text-danger inset-ring-danger",
+              search.conflicted && "bg-bad-soft text-bad inset-ring-bad",
             )}
             onClick={() => {
               onSearch({
@@ -147,10 +146,10 @@ export function ProposalsScreen({
                   href={listHref(slug, { ...search, state: s })}
                   aria-current={current ? "page" : undefined}
                   className={cn(
-                    "rounded-s px-12 py-5 text-bar leading-snug",
+                    "rounded-s px-12 py-5 text-14 leading-tight",
                     current
-                      ? "bg-surface font-semibold text-text inset-ring inset-ring-border-subtle"
-                      : "font-medium text-text-muted hover:text-text",
+                      ? "bg-surface font-semibold text-text inset-ring inset-ring-line"
+                      : "font-medium text-text-2 hover:text-text",
                     focusRing,
                   )}
                 >
@@ -182,10 +181,10 @@ export function ProposalsScreen({
               : "Pick another state to see more proposals."}
         </EmptyPanel>
       ) : (
-        <div className="overflow-x-auto rounded-l border border-border-subtle bg-surface">
+        <div className="overflow-x-auto rounded-l border border-line bg-surface">
           <table className="w-full border-collapse">
             <thead className="bg-bg">
-              <tr className="border-b border-border-subtle">
+              <tr className="border-b border-line">
                 <th className={HEAD}>Id</th>
                 <th className={cn(HEAD, "w-full")}>Title</th>
                 <th className={HEAD}>Task</th>
@@ -202,7 +201,7 @@ export function ProposalsScreen({
                 return (
                   <tr
                     key={p.id}
-                    className="border-b border-border-subtle last:border-b-0 hover:bg-bg"
+                    className="border-b border-line last:border-b-0 hover:bg-bg"
                   >
                     <td className={cn(CELL, MONO)}>{p.id}</td>
                     <td className={CELL}>
@@ -210,7 +209,7 @@ export function ProposalsScreen({
                         <HrefLink
                           href={projectPath(slug, "proposals", p.id)}
                           className={cn(
-                            "min-w-0 rounded-s text-body leading-snug font-medium wrap-anywhere text-text hover:underline",
+                            "min-w-0 rounded-s text-15 leading-tight font-medium wrap-anywhere text-text hover:underline",
                             focusRing,
                           )}
                         >
@@ -237,7 +236,7 @@ export function ProposalsScreen({
                       {waiting ? (
                         <WaitingChip waiting={waiting} />
                       ) : (
-                        <span className="text-meta text-text-faint">—</span>
+                        <span className="text-13 text-text-2">—</span>
                       )}
                     </td>
                     <td className={CELL}>
@@ -248,7 +247,7 @@ export function ProposalsScreen({
                           })}
                           className="whitespace-nowrap"
                         />
-                        <span className="font-mono text-caption whitespace-nowrap text-text-muted">
+                        <span className="font-mono text-13 whitespace-nowrap text-text-2">
                           <ActorText segments={claimLine(p)} />
                         </span>
                       </span>
@@ -256,7 +255,7 @@ export function ProposalsScreen({
                     <td
                       className={cn(
                         CELL,
-                        "text-code whitespace-nowrap text-text-muted",
+                        "text-13 whitespace-nowrap text-text-2",
                       )}
                     >
                       {formatSince(now, p.updated_at)}

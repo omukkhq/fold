@@ -46,20 +46,20 @@ import { useTaskWrite } from "./useTaskWrite";
 
 function Message({ slug, message }: { slug: string; message: TaskMessage }) {
   return (
-    <li className="flex flex-col gap-4 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
+    <li className="flex flex-col gap-4 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-line">
       <div className="flex items-center gap-8">
         <PersonName name={message.sender} slot="messageHead" />
-        <ArrowRight aria-label="to" size={12} className="text-text-faint" />
+        <ArrowRight aria-label="to" size={12} className="text-text-2" />
         <PersonList
           names={message.recipients.map((r) => r.name)}
-          className="font-mono text-caption text-text-muted"
-          nameClassName="text-bar"
+          className="font-mono text-13 text-text-2"
+          nameClassName="text-14"
         />
         <HrefLink
           href={threadPath(slug, message.thread)}
           aria-label={`Open the thread of ${message.id}, sent ${clockTime(message.sent_at)}`}
           className={cn(
-            "ml-auto rounded-s text-meta text-text-faint hover:underline",
+            "ml-auto rounded-s text-13 text-text-2 hover:underline",
             focusRing,
           )}
         >
@@ -198,7 +198,7 @@ function FeedbackBox({
         </Button>
       </div>
       {(errors.to?.message ?? errors.body?.message) ? (
-        <p className="text-meta font-medium text-danger">
+        <p className="text-13 font-medium text-bad">
           {errors.to?.message ?? errors.body?.message}
         </p>
       ) : null}
@@ -243,7 +243,7 @@ export function MessagesSection({
   return (
     <section aria-label="Messages" className="flex flex-col gap-10">
       <div className="flex flex-wrap items-center gap-10">
-        <h3 className="text-section leading-snug font-semibold text-text">
+        <h3 className="text-16 leading-tight font-semibold text-text">
           <button
             type="button"
             aria-expanded={open}
@@ -256,12 +256,12 @@ export function MessagesSection({
               setOpen(!open);
             }}
           >
-            <Chevron aria-hidden="true" size={16} className="text-text-muted" />
+            <Chevron aria-hidden="true" size={16} className="text-text-2" />
             Messages
           </button>
         </h3>
         {query.isSuccess ? (
-          <span className="text-bar text-text-muted">{count.count}</span>
+          <span className="text-14 text-text-2">{count.count}</span>
         ) : null}
         {query.isSuccess && count.waiting !== null ? (
           <Badge tone="needs-you" icon={MessageCircle}>
@@ -286,7 +286,7 @@ export function MessagesSection({
           </ul>
         ) : null}
         {query.data?.more ? (
-          <p className="text-bar text-text-muted">
+          <p className="text-14 text-text-2">
             {olderNotListed(threads.length, "threads")}
           </p>
         ) : null}

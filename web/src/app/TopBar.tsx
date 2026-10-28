@@ -45,7 +45,7 @@ function part(
 
 export function TopBar({ slug }: { slug: string }) {
   return (
-    <header className="flex h-bar shrink-0 items-center justify-between gap-8 overflow-x-auto border-b border-border-subtle bg-surface px-16 md:px-24 lg:gap-16">
+    <header className="flex h-bar shrink-0 items-center justify-between gap-8 overflow-x-auto border-b border-line bg-surface px-16 md:px-24 lg:gap-16">
       <div className="flex shrink-0 items-center gap-14 max-lg:contents">
         <HrefLink
           href="/projects"
@@ -57,7 +57,7 @@ export function TopBar({ slug }: { slug: string }) {
         >
           <Wordmark />
         </HrefLink>
-        <span className="h-20 w-px bg-border max-lg:hidden" aria-hidden />
+        <span className="h-20 w-px bg-line max-lg:hidden" aria-hidden />
         <ProjectSwitcher slug={slug} />
       </div>
       <div className="flex shrink-0 items-center lg:gap-16">

@@ -32,7 +32,7 @@ function CopyText({
         setState("idle");
       }}
       className={cn(
-        "inline-flex min-w-0 items-center gap-4 rounded-s font-mono text-meta whitespace-nowrap text-text-muted hover:text-text",
+        "inline-flex min-w-0 items-center gap-4 rounded-s font-mono text-13 whitespace-nowrap text-text-2 hover:text-text",
         focusRing,
         className,
       )}
@@ -41,7 +41,7 @@ function CopyText({
       {state === "copied" ? (
         <Check aria-hidden size={12} className="shrink-0" />
       ) : (
-        <Copy aria-hidden size={12} className="shrink-0 text-text-faint" />
+        <Copy aria-hidden size={12} className="shrink-0 text-text-2" />
       )}
       <span role="status" className="sr-only">
         {state === "copied" ? "Copied" : state === "failed" ? "Not copied" : ""}
@@ -57,7 +57,7 @@ export function SessionLine({ session }: { session: SessionView }) {
     <span className="flex min-w-0 items-center gap-8">
       <CopyText target={sessionCopy(session)}>session {session.short}</CopyText>
       {transcript === null ? (
-        <span className="text-meta whitespace-nowrap text-text-faint">
+        <span className="text-13 whitespace-nowrap text-text-2">
           transcript path unknown
         </span>
       ) : (

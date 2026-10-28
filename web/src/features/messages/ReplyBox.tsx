@@ -32,7 +32,7 @@ interface ReplyBoxProps {
 
 function Key({ children }: { children: string }) {
   return (
-    <kbd className="rounded-s px-5 font-mono text-caption text-text-muted inset-ring inset-ring-border">
+    <kbd className="rounded-s px-5 font-mono text-13 text-text-2 inset-ring inset-ring-line">
       {children}
     </kbd>
   );
@@ -69,11 +69,11 @@ export function ReplyBox({
     <form
       onSubmit={onSubmit}
       noValidate
-      className="flex shrink-0 flex-col gap-6 border-t border-border-subtle bg-bg px-16 pt-8 pb-14 lg:px-28 lg:pt-12 lg:pb-18"
+      className="flex shrink-0 flex-col gap-6 border-t border-line bg-bg px-16 pt-8 pb-14 lg:px-28 lg:pt-12 lg:pb-18"
     >
-      <div className="flex w-full max-w-thread-column flex-col gap-6 sm:gap-0 sm:rounded-l sm:bg-surface sm:shadow-card sm:inset-ring sm:inset-ring-border sm:has-[textarea:focus-visible]:outline-2 sm:has-[textarea:focus-visible]:outline-offset-2 sm:has-[textarea:focus-visible]:outline-focus-ring">
+      <div className="flex w-full max-w-thread-column flex-col gap-6 sm:gap-0 sm:rounded-l sm:bg-surface sm:shadow-pop sm:inset-ring sm:inset-ring-line sm:has-[textarea:focus-visible]:outline-2 sm:has-[textarea:focus-visible]:outline-offset-2 sm:has-[textarea:focus-visible]:outline-accent">
         {answering === null ? null : (
-          <p className="flex items-center gap-6 text-code text-warning sm:px-14 sm:pt-8">
+          <p className="flex items-center gap-6 text-13 text-warn sm:px-14 sm:pt-8">
             <CornerDownLeft aria-hidden="true" size={13} className="shrink-0" />
             <span>
               Your own answer to the question of <PersonName name={answering} />
@@ -94,7 +94,7 @@ export function ReplyBox({
             value={value}
             onValueChange={onValueChange}
             onBlur={onBlur}
-            className="min-w-0 flex-1 rounded-xl px-14 py-10 sm:flex-none sm:rounded-none sm:bg-transparent sm:pt-8 sm:pb-4 sm:inset-ring-0 sm:focus-visible:outline-0"
+            className="min-w-0 flex-1 rounded-l px-14 py-10 sm:flex-none sm:rounded-none sm:bg-transparent sm:pt-8 sm:pb-4 sm:inset-ring-0 sm:focus-visible:outline-0"
           />
           <div className="contents sm:flex sm:items-center sm:gap-8 sm:py-8 sm:pr-8 sm:pl-10">
             <IconButton
@@ -112,7 +112,7 @@ export function ReplyBox({
             >
               <AtSign aria-hidden="true" size={16} />
             </IconButton>
-            <span className="hidden text-meta text-text-faint sm:inline">
+            <span className="hidden text-13 text-text-2 sm:inline">
               <Key>Enter</Key> to send · <Key>Shift</Key> + <Key>Enter</Key> for
               a new line
             </span>
@@ -144,13 +144,13 @@ export function ReplyBox({
         </div>
       </div>
       {invalid === null ? null : (
-        <p className="text-meta font-medium text-danger">{invalid}</p>
+        <p className="text-13 font-medium text-bad">{invalid}</p>
       )}
       {failure === null ? null : (
         <div className="flex flex-wrap items-center gap-x-8 gap-y-2">
           <p
             role="alert"
-            className="flex items-center gap-6 text-meta font-medium text-danger"
+            className="flex items-center gap-6 text-13 font-medium text-bad"
           >
             <CircleAlert aria-hidden="true" size={13} className="shrink-0" />
             Not sent: {failure}
@@ -159,7 +159,7 @@ export function ReplyBox({
             type="submit"
             disabled={pending}
             className={cn(
-              "rounded-s text-meta font-semibold text-text underline underline-offset-3",
+              "rounded-s text-13 font-semibold text-text underline underline-offset-3",
               focusRing,
             )}
           >

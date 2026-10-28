@@ -15,9 +15,9 @@ import {
 import { LinkButton, SectionHead } from "./parts";
 
 const TONES: Record<ChangeTone, string> = {
-  added: "bg-primary-soft text-primary-text",
-  deleted: "bg-danger-soft text-danger",
-  other: "bg-surface text-text-muted",
+  added: "bg-accent-soft text-accent",
+  deleted: "bg-bad-soft text-bad",
+  other: "bg-surface text-text-2",
 };
 
 function FileRow({
@@ -43,26 +43,22 @@ function FileRow({
         <span
           aria-hidden="true"
           className={cn(
-            "inline-flex size-18 shrink-0 items-center justify-center rounded-s font-mono text-caption font-bold",
+            "inline-flex size-18 shrink-0 items-center justify-center rounded-s font-mono text-13 font-bold",
             TONES[changeTone(file.change)],
           )}
         >
           {changeLetter(file.change)}
         </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-meta text-text">
+        <span className="min-w-0 flex-1 truncate font-mono text-13 text-text">
           {file.previous_path
             ? `${file.previous_path} → ${file.path}`
             : file.path}
         </span>
         {counts.added ? (
-          <span className="font-mono text-meta text-primary-text">
-            {counts.added}
-          </span>
+          <span className="font-mono text-13 text-accent">{counts.added}</span>
         ) : null}
         {counts.removed ? (
-          <span className="font-mono text-meta text-danger">
-            {counts.removed}
-          </span>
+          <span className="font-mono text-13 text-bad">{counts.removed}</span>
         ) : null}
       </HrefLink>
     </li>
@@ -90,25 +86,25 @@ export function WorkingChanges({
       <SectionHead title="Working changes">
         {workspace && live ? (
           <>
-            <span className="inline-flex items-center gap-6 rounded-s bg-primary-soft px-8 py-2 text-caption font-medium text-primary-strong">
+            <span className="inline-flex items-center gap-6 rounded-s bg-accent-soft px-8 py-2 text-13 font-medium text-accent">
               <span
                 aria-hidden="true"
-                className="size-7 rounded-full bg-primary"
+                className="size-7 rounded-full bg-accent"
               />
               {liveChipText(live, now)}
             </span>
-            <span className="text-bar text-text-muted">
+            <span className="text-14 text-text-2">
               {changesNote(live, info)}
             </span>
           </>
         ) : null}
       </SectionHead>
       {workspace === null ? (
-        <p className="text-bar text-text-muted">
+        <p className="text-14 text-text-2">
           No workspace yet. A worker opens one when it starts the task.
         </p>
       ) : live === null || live.files.length === 0 ? (
-        <p className="text-bar text-text-muted">
+        <p className="text-14 text-text-2">
           No working changes in {workspace}.
         </p>
       ) : (

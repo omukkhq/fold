@@ -117,8 +117,8 @@ const keys = themeKeys(themeCss);
 describe("utility guard", () => {
   it("reads the token scale from the Tailwind theme", () => {
     expect(keys.get("spacing")?.has("9")).toBe(true);
-    expect(keys.get("text")?.has("wordmark")).toBe(true);
-    expect(keys.get("text")?.has("wordmark--letter-spacing")).toBe(false);
+    expect(keys.get("text")?.has("15")).toBe(true);
+    expect(keys.get("text")?.has("11")).toBe(false);
     expect(keys.get("height")?.has("bar")).toBe(true);
     expect(keys.get("width")?.has("skeleton-s")).toBe(true);
     expect(keys.get("font-weight")?.has("semibold")).toBe(true);
@@ -152,7 +152,7 @@ describe("utility guard", () => {
   it("accepts utilities that resolve to a token", () => {
     const ok = [
       'className="p-9 gap-16 md:px-22 -mt-2 p-4! h-bar min-h-bar w-skeleton-l"',
-      'cx("text-wordmark", on && "hover:text-primary/50 text-muted text-center")',
+      'cx("text-21", on && "hover:text-accent/50 text-text-2 text-center")',
       '"w-full w-1/2 basis-1/3 mx-auto size-6 inset-0 top-1/2"',
       "// gap-15 in a comment",
       '"T-12 · ws-9 · src/text-files/a.ts"',
@@ -169,9 +169,9 @@ describe("utility guard", () => {
       "w-[70px]",
       "max-w-70",
       "size-[3px]",
-      "text-13",
+      "text-11",
       "text-[13px]",
-      "text-primay",
+      "text-acent",
       "p-1/2",
     ];
     for (const word of bad)

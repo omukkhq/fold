@@ -85,7 +85,7 @@ function Toolbar({
   const checks = checksWord(runs);
   const StateIcon = approval.tone === "approved" ? CheckCircle2 : CircleAlert;
   return (
-    <div className="flex flex-col gap-10 border-b border-border-subtle px-16 py-12 md:px-24">
+    <div className="flex flex-col gap-10 border-b border-line px-16 py-12 md:px-24">
       <div className="flex flex-wrap items-center gap-x-12 gap-y-8">
         <Menu
           trigger={
@@ -118,17 +118,17 @@ function Toolbar({
             ))}
           </nav>
         )}
-        <p className="flex min-w-0 flex-wrap items-center gap-x-6 text-code text-text-muted md:ml-auto">
+        <p className="flex min-w-0 flex-wrap items-center gap-x-6 text-13 text-text-2 md:ml-auto">
           <StateIcon
             aria-hidden="true"
             size={14}
             className={cn(
               "shrink-0",
               approval.tone === "approved"
-                ? "text-primary-text"
+                ? "text-accent"
                 : approval.tone === "changes"
-                  ? "text-danger"
-                  : "text-text-faint",
+                  ? "text-bad"
+                  : "text-text-2",
             )}
           />
           <span>
@@ -136,10 +136,7 @@ function Toolbar({
             {checks === null ? "" : ` · ${checks}`} ·{" "}
             <HrefLink
               href={detailHref(slug, id, {})}
-              className={cn(
-                "rounded-s text-primary-text hover:underline",
-                focusRing,
-              )}
+              className={cn("rounded-s text-accent hover:underline", focusRing)}
             >
               Overview
             </HrefLink>
@@ -368,7 +365,7 @@ function ChangeBody({
       )}
       {unplaced.length > 0 ? (
         <section aria-label="Other comments" className="flex flex-col gap-10">
-          <h2 className="text-overline leading-snug font-semibold text-primary-text uppercase">
+          <h2 className="font-title text-13 leading-tight font-semibold text-text-2">
             Other comments
           </h2>
           {unplaced.map((thread) => (

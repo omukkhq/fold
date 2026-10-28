@@ -54,12 +54,12 @@ export function PauseControl({ slug }: { slug: string }) {
           <Icon
             aria-hidden="true"
             size={13}
-            className={view.paused ? "text-warning" : "text-text-muted"}
+            className={view.paused ? "text-warn" : "text-text-2"}
           />
         }
         className={cn(
           "max-lg:min-h-44 max-lg:px-14",
-          view.paused && "bg-warning-soft inset-ring-warning",
+          view.paused && "bg-warn-soft inset-ring-warn",
         )}
         onClick={() => {
           write.mutate(view.action);
@@ -68,7 +68,7 @@ export function PauseControl({ slug }: { slug: string }) {
         {view.label}
       </Button>
       {last.error === null ? null : (
-        <span role="alert" className="text-meta text-danger">
+        <span role="alert" className="text-13 text-bad">
           {failureText(last.error)}
         </span>
       )}

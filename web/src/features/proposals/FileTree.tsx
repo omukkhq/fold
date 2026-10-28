@@ -21,12 +21,12 @@ function Counts({ added, removed }: { added: number; removed: number }) {
   return (
     <>
       {counts.added ? (
-        <span className="shrink-0 font-mono text-caption text-primary-text">
+        <span className="shrink-0 font-mono text-13 text-accent">
           {counts.added}
         </span>
       ) : null}
       {counts.removed ? (
-        <span className="shrink-0 font-mono text-caption text-danger">
+        <span className="shrink-0 font-mono text-13 text-bad">
           {counts.removed}
         </span>
       ) : null}
@@ -64,14 +64,14 @@ function Row({
           <Chevron
             aria-hidden="true"
             size={13}
-            className="shrink-0 text-text-faint"
+            className="shrink-0 text-text-2"
           />
           <Folder
             aria-hidden="true"
             size={13}
-            className="shrink-0 text-primary-muted"
+            className="shrink-0 text-accent"
           />
-          <span className="min-w-0 flex-1 truncate font-mono text-label text-text-muted">
+          <span className="min-w-0 flex-1 truncate font-mono text-13 text-text-2">
             {node.name}/
           </span>
           <Counts added={node.totals.added} removed={node.totals.removed} />
@@ -90,7 +90,7 @@ function Row({
         style={indent(row.depth)}
         className={cn(
           ROW,
-          selected && "bg-primary-soft hover:bg-primary-soft",
+          selected && "bg-accent-soft hover:bg-accent-soft",
           focusRing,
         )}
         onClick={() => {
@@ -100,7 +100,7 @@ function Row({
         <span aria-hidden="true" className="size-13 shrink-0" />
         <span
           className={cn(
-            "flex size-16 shrink-0 items-center justify-center rounded-s font-mono text-caption font-bold",
+            "flex size-16 shrink-0 items-center justify-center rounded-s font-mono text-13 font-bold",
             badge.classes,
           )}
         >
@@ -109,15 +109,15 @@ function Row({
         </span>
         <span
           className={cn(
-            "min-w-0 flex-1 truncate font-mono text-label",
-            viewed ? "text-text-faint" : "text-text",
+            "min-w-0 flex-1 truncate font-mono text-13",
+            viewed ? "text-text-2" : "text-text",
           )}
         >
           {node.name}
           {viewed ? <span className="sr-only"> (viewed)</span> : null}
         </span>
         {node.file.binary ? (
-          <span className="font-mono text-caption text-text-muted">bin</span>
+          <span className="font-mono text-13 text-text-2">bin</span>
         ) : null}
         <Counts
           added={node.file.added_lines}
@@ -160,7 +160,7 @@ export function FileTree({
   const id = useId();
   const rows = treeRows(nodes, closed, filter);
   const action = cn(
-    "rounded-s text-meta font-medium text-primary-text hover:underline",
+    "rounded-s text-13 font-medium text-accent hover:underline",
     focusRing,
   );
   return (
@@ -170,7 +170,7 @@ export function FileTree({
     >
       <label
         htmlFor={id}
-        className="text-overline leading-snug font-semibold text-text-muted uppercase"
+        className="font-title text-13 leading-tight font-semibold text-text-2"
       >
         Files
       </label>
@@ -188,16 +188,16 @@ export function FileTree({
         <button type="button" className={action} onClick={onExpandAll}>
           Expand all
         </button>
-        <span aria-hidden="true" className="text-text-faint">
+        <span aria-hidden="true" className="text-text-2">
           ·
         </span>
         <button type="button" className={action} onClick={onCollapseAll}>
           Collapse all
         </button>
-        <span className="ml-auto text-meta text-text-faint">{viewedText}</span>
+        <span className="ml-auto text-13 text-text-2">{viewedText}</span>
       </div>
       {rows.length === 0 ? (
-        <p className="px-4 text-code text-text-muted">No file matches.</p>
+        <p className="px-4 text-13 text-text-2">No file matches.</p>
       ) : (
         <ul className="flex flex-col">
           {rows.map((row) => (

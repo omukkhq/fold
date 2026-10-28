@@ -40,13 +40,13 @@ describe("the More button's alert", () => {
 
   it("tells a reconnecting stream before a pause", () => {
     const alert = moreAlert("reconnecting", true);
-    expect(alert).toEqual({ label: "Reconnecting", dot: "bg-secondary" });
+    expect(alert).toEqual({ label: "Reconnecting", dot: "bg-warn" });
     expect(moreLabel(alert)).toBe("More, Reconnecting");
   });
 
   it("tells paused agents", () => {
     const alert = moreAlert("live", true);
-    expect(alert).toEqual({ label: "Agents paused", dot: "bg-warning" });
+    expect(alert).toEqual({ label: "Agents paused", dot: "bg-warn" });
     expect(moreLabel(alert)).toBe("More, Agents paused");
   });
 });

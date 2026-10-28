@@ -40,9 +40,9 @@ const HEADS = [
 
 const COLUMNS = HEADS.length + 1;
 const HEAD =
-  "px-6 py-9 text-left text-label leading-snug font-semibold tracking-overline whitespace-nowrap text-text-muted uppercase first:pl-16 last:pr-16";
+  "px-6 py-9 text-left font-title text-13 leading-tight font-semibold whitespace-nowrap text-text-2 first:pl-16 last:pr-16";
 const CELL = "px-6 py-10 align-middle first:pl-16 last:pr-16";
-const NUMBER = "text-code whitespace-nowrap text-text-muted";
+const NUMBER = "text-13 whitespace-nowrap text-text-2";
 const HEAD_LINE = "flex min-w-0 flex-wrap items-center gap-x-12 gap-y-4";
 
 function BoundCell({ slug, row }: { slug: string; row: TeamRow }) {
@@ -52,13 +52,13 @@ function BoundCell({ slug, row }: { slug: string; row: TeamRow }) {
   }
   if (bound.kind === "text") {
     return (
-      <span className="text-code whitespace-nowrap text-text-muted">
+      <span className="text-13 whitespace-nowrap text-text-2">
         {bound.text}
       </span>
     );
   }
   const text = (
-    <span className="font-mono text-label whitespace-nowrap text-text">
+    <span className="font-mono text-13 whitespace-nowrap text-text">
       {bound.text}
     </span>
   );
@@ -122,23 +122,23 @@ function Row({
   human: string | null;
 }) {
   return (
-    <tr className="border-b border-border-subtle last:border-b-0">
+    <tr className="border-b border-line last:border-b-0">
       <td className={cn(CELL, "w-full")}>
         <div className={cn("flex items-center gap-8", row.child && "pl-22")}>
           {row.child ? (
             <CornerDownRight
               aria-hidden="true"
               size={13}
-              className="shrink-0 text-text-faint"
+              className="shrink-0 text-text-2"
             />
           ) : null}
           <div className="flex min-w-0 flex-col gap-2">
             <PersonName
               name={row.name}
               slot="teamRow"
-              className="leading-snug"
+              className="leading-tight"
             />
-            <span className="text-meta text-text-muted">{row.roleLine}</span>
+            <span className="text-13 text-text-2">{row.roleLine}</span>
             {row.session === null ? null : (
               <SessionLine session={row.session} />
             )}
@@ -153,7 +153,7 @@ function Row({
               role="img"
               aria-label="waits for a permission answer"
               size={14}
-              className="shrink-0 text-warning"
+              className="shrink-0 text-warn"
             />
           ) : null}
           {row.olderFold ? <OlderFoldMark /> : null}
@@ -180,7 +180,7 @@ function Row({
 /** The worker's session still holds the skill of an older fold, until its next turn tells it to load the skill again. */
 function OlderFoldMark() {
   return (
-    <span className="flex shrink-0 items-center gap-4 whitespace-nowrap text-meta text-text-muted">
+    <span className="flex shrink-0 items-center gap-4 whitespace-nowrap text-13 text-text-2">
       <History aria-hidden="true" size={12} />
       older fold
     </span>
@@ -199,7 +199,7 @@ function GroupHead({
     content = (
       <span className={HEAD_LINE}>
         <span className="font-semibold text-text">Main agent</span>
-        <span className="text-text-muted">
+        <span className="text-text-2">
           {mainNote(group)} ·{" "}
           {human === null || isSupervisedMain(group) ? null : (
             <>
@@ -214,7 +214,7 @@ function GroupHead({
     content = (
       <span className={HEAD_LINE}>
         <span className="font-semibold text-text">Review</span>
-        <span className="text-text-muted">
+        <span className="text-text-2">
           review lead · gives open proposals to reviewers
         </span>
       </span>
@@ -226,9 +226,9 @@ function GroupHead({
           {group.label ? (
             <Label color={group.label.color}>{group.label.name}</Label>
           ) : null}
-          <span className="text-text-muted">{areaNote(group)}</span>
+          <span className="text-text-2">{areaNote(group)}</span>
           {group.profile.facts.map((fact) => (
-            <span key={fact} className="whitespace-nowrap text-text-muted">
+            <span key={fact} className="whitespace-nowrap text-text-2">
               {fact}
             </span>
           ))}
@@ -237,7 +237,7 @@ function GroupHead({
           <ClampText
             lines={2}
             subject={instructionsSubject(group)}
-            className="text-text-faint"
+            className="text-text-2"
           >
             {group.profile.instructions}
           </ClampText>
@@ -246,13 +246,13 @@ function GroupHead({
     );
   }
   return (
-    <tr className="border-b border-border-subtle bg-bg">
+    <tr className="border-b border-line bg-bg">
       <th
         colSpan={COLUMNS}
         scope="colgroup"
         className="max-w-0 px-16 py-7 text-left font-regular"
       >
-        <div className="sticky left-16 flex w-group-head flex-col gap-4 text-code">
+        <div className="sticky left-16 flex w-group-head flex-col gap-4 text-13">
           {content}
         </div>
       </th>
@@ -278,10 +278,10 @@ export function TeamTable({
   onStartLead: (() => void) | null;
 }) {
   return (
-    <div className="@container min-w-0 flex-1 overflow-x-auto rounded-l border border-border-subtle bg-surface">
+    <div className="@container min-w-0 flex-1 overflow-x-auto rounded-l border border-line bg-surface">
       <table className="w-full border-collapse" aria-label="Team">
         <thead className="bg-bg">
-          <tr className="border-b border-border-subtle">
+          <tr className="border-b border-line">
             {HEADS.map((head) => (
               <th key={head} scope="col" className={HEAD}>
                 {head}
@@ -307,15 +307,11 @@ export function TeamTable({
             <tr>
               <td colSpan={COLUMNS} className="px-24 py-40">
                 <div className="flex flex-col items-center gap-10 text-center">
-                  <Users
-                    aria-hidden="true"
-                    size={28}
-                    className="text-text-faint"
-                  />
-                  <h2 className="text-item-title leading-snug font-semibold text-text">
+                  <Users aria-hidden="true" size={28} className="text-text-2" />
+                  <h2 className="text-18 leading-tight font-semibold text-text">
                     No leads yet
                   </h2>
-                  <p className="text-body text-text-muted">
+                  <p className="text-15 text-text-2">
                     Ask <PersonName name={mainName} slot="teamNote" /> to plan
                     the work, or start a lead for an area or for review.
                   </p>

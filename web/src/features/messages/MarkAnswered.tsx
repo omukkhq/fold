@@ -44,11 +44,11 @@ export function MarkAnswered({
         Mark answered
       </Button>
       {mark.error ? (
-        <span role="alert" className="text-meta font-medium text-danger">
+        <span role="alert" className="text-13 font-medium text-bad">
           {failureText(mark.error)}
         </span>
       ) : null}
-      {note ? <span className="text-meta text-text-muted">{note}</span> : null}
+      {note ? <span className="text-13 text-text-2">{note}</span> : null}
     </span>
   );
 }

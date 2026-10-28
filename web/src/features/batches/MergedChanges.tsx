@@ -60,36 +60,30 @@ function MergedBody({
   return (
     <div className="flex min-w-0 flex-col gap-16">
       {line === null ? null : (
-        <p className="flex flex-wrap items-center gap-x-8 gap-y-4 text-bar text-text-muted">
+        <p className="flex flex-wrap items-center gap-x-8 gap-y-4 text-14 text-text-2">
           <GitMerge aria-hidden="true" size={14} className="shrink-0" />
-          <span className="font-mono text-code text-text">{line}</span>
+          <span className="font-mono text-13 text-text">{line}</span>
           {diff.files.length === 0 ? null : (
-            <span className="font-mono text-code">
-              {countsText(diff.totals)}
-            </span>
+            <span className="font-mono text-13">{countsText(diff.totals)}</span>
           )}
           {integrates === null ? null : (
-            <span className="text-bar text-text-muted">· {integrates}</span>
+            <span className="text-14 text-text-2">· {integrates}</span>
           )}
         </p>
       )}
       {conflict === null || diff.conflict === null ? null : (
         <div
           role="alert"
-          className="flex flex-wrap items-start gap-12 rounded-m bg-danger-soft px-16 py-12"
+          className="flex flex-wrap items-start gap-12 rounded-m bg-bad-soft px-16 py-12"
         >
           <GitMerge
             aria-hidden="true"
             size={16}
-            className="mt-2 shrink-0 text-danger"
+            className="mt-2 shrink-0 text-bad"
           />
           <div className="flex min-w-0 flex-1 flex-col gap-4">
-            <p className="text-body font-semibold text-danger">
-              {conflict.title}
-            </p>
-            <p className="text-bar wrap-anywhere text-text-muted">
-              {conflict.text}
-            </p>
+            <p className="text-15 font-semibold text-bad">{conflict.title}</p>
+            <p className="text-14 wrap-anywhere text-text-2">{conflict.text}</p>
           </div>
           <HrefLink
             href={detailHref(slug, diff.conflict.proposal, {})}

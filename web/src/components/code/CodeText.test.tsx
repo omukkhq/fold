@@ -12,11 +12,11 @@ describe("CodeText", () => {
     );
     const code = screen.getByText("fld doctor");
     expect(code.tagName).toBe("CODE");
-    expect(code.className).toContain("text-code");
+    expect(code.className).toContain("text-13");
     expect(container.textContent).toBe("Run fld doctor to see why.");
   });
   it("takes the caption size inside caption text", () => {
     render(<CodeText text="`fld record`" caption />);
-    expect(screen.getByText("fld record").className).toContain("text-caption");
+    expect(screen.getByText("fld record").className).toContain("text-13");
   });
 });

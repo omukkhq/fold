@@ -25,23 +25,23 @@ export function streamView(status: LiveStatus, now: number): StreamView {
       return {
         label: "Connecting…",
         detail: null,
-        dot: "bg-text-faint",
-        tone: "text-text-muted",
+        dot: "bg-text-2",
+        tone: "text-text-2",
       };
     case "reconnecting":
       return {
         label: "Reconnecting…",
         detail: null,
-        dot: "bg-secondary",
-        tone: "text-secondary-text",
+        dot: "bg-warn",
+        tone: "text-warn",
       };
     case "live": {
       const at = syncedAt(status);
       return {
         label: "Live",
         detail: at === null ? "synced" : `synced ${formatSince(now, at)}`,
-        dot: "bg-success",
-        tone: "text-text-muted",
+        dot: "bg-ok",
+        tone: "text-text-2",
       };
     }
   }

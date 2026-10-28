@@ -45,7 +45,7 @@ export function ReviewPill({
     <span
       data-tone={pill.tone}
       className={cn(
-        "inline-flex items-center rounded-s text-meta leading-snug font-semibold",
+        "inline-flex items-center rounded-s text-13 leading-tight font-semibold",
         large ? "gap-6 px-9 py-3" : "gap-5 px-8 py-2",
         PILL_CLASSES[pill.tone],
         className,
@@ -66,7 +66,7 @@ export function WaitingChip({ waiting }: { waiting: Waiting }) {
   const human = actor === null || isHumanName(actor);
   const Icon = human ? User : Bot;
   return (
-    <span className="inline-flex items-center gap-5 rounded-s bg-sunken px-8 py-2 text-meta leading-snug text-text-muted">
+    <span className="inline-flex items-center gap-5 rounded-s bg-sunken px-8 py-2 text-13 leading-tight text-text-2">
       <Icon
         role="img"
         aria-label={human ? "human" : "agent"}

@@ -14,7 +14,7 @@ export function Label({ children, color, className }: LabelProps) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-5 rounded-s py-2 pr-7 pl-6 text-label leading-snug font-medium text-text-muted inset-ring inset-ring-border",
+        "inline-flex items-center gap-5 rounded-s py-2 pr-7 pl-6 text-13 leading-tight font-medium text-text-2 inset-ring inset-ring-line",
         colors.soft,
         className,
       )}

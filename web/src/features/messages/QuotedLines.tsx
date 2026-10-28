@@ -19,8 +19,8 @@ export function QuotedLines({
   const head = lineRefText(lines);
   const note = cutNote(lines);
   return (
-    <figure className="flex flex-col overflow-hidden rounded-s inset-ring inset-ring-border-subtle">
-      <figcaption className="flex items-center gap-6 border-b border-border-subtle bg-bg px-10 py-6 font-mono text-caption text-text-muted">
+    <figure className="flex flex-col overflow-hidden rounded-s inset-ring inset-ring-line">
+      <figcaption className="flex items-center gap-6 border-b border-line bg-bg px-10 py-6 font-mono text-13 text-text-2">
         <FileCode aria-hidden="true" size={13} className="shrink-0" />
         {proposal === null ? (
           <span className="min-w-0 truncate">{head}</span>
@@ -28,7 +28,7 @@ export function QuotedLines({
           <HrefLink
             href={lineRefHref(slug, proposal, lines)}
             className={cn(
-              "min-w-0 truncate rounded-s text-primary-text hover:underline",
+              "min-w-0 truncate rounded-s text-accent hover:underline",
               focusRing,
             )}
           >
@@ -39,14 +39,14 @@ export function QuotedLines({
       <pre
         className={cn(
           CODE_BOX,
-          "bg-surface py-6 font-mono text-code leading-snug text-text",
+          "bg-surface py-6 font-mono text-13 leading-tight text-text",
         )}
       >
         {quotedLines(lines).map((line) => (
           <div key={line.number} className="flex">
             <span
               aria-hidden="true"
-              className="w-diff-number shrink-0 pr-8 text-right text-text-faint select-none"
+              className="w-diff-number shrink-0 pr-8 text-right text-text-2 select-none"
             >
               {line.number}
             </span>
@@ -55,7 +55,7 @@ export function QuotedLines({
         ))}
       </pre>
       {note === null ? null : (
-        <p className="border-t border-border-subtle px-10 py-4 text-meta text-text-muted">
+        <p className="border-t border-line px-10 py-4 text-13 text-text-2">
           {note}
         </p>
       )}

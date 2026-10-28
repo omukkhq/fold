@@ -23,8 +23,8 @@ export function ThemeToggle({
       }}
       className={cn(
         variant === "row"
-          ? "flex min-h-44 items-center gap-8 rounded-m px-14 text-bar text-text hover:bg-sunken"
-          : "flex shrink-0 items-center gap-6 rounded-m px-10 py-7 text-text-muted hover:bg-sunken max-lg:size-44 max-lg:justify-center max-lg:p-0",
+          ? "flex min-h-44 items-center gap-8 rounded-m px-14 text-14 text-text hover:bg-sunken"
+          : "flex shrink-0 items-center gap-6 rounded-m px-10 py-7 text-text-2 hover:bg-sunken max-lg:size-44 max-lg:justify-center max-lg:p-0",
         focusRing,
       )}
     >

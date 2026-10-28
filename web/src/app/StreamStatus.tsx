@@ -13,7 +13,7 @@ export function StreamStatus() {
         aria-hidden
         className={cn("inline-block size-7 shrink-0 rounded-full", view.dot)}
       />
-      <span className={cn("text-meta", view.tone)}>
+      <span className={cn("text-13", view.tone)}>
         <span role="status">{view.label}</span>
         {view.detail !== null && ` · ${view.detail}`}
       </span>

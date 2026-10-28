@@ -28,8 +28,8 @@ export function LiveActivityScreen({ slug }: { slug: string }) {
         <div className="flex min-w-0 flex-1 flex-col gap-16">
           <div className="flex flex-wrap items-end justify-between gap-14">
             <div className="flex flex-col gap-4">
-              <h1 className="text-screen font-semibold text-text">Activity</h1>
-              <p className="text-body text-text-muted">
+              <h1 className="text-24 font-semibold text-text">Activity</h1>
+              <p className="text-15 text-text-2">
                 What every worker is doing now. Working changes are not in main
                 until a proposal is integrated.
               </p>

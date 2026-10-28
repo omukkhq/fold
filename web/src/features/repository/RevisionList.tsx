@@ -22,7 +22,7 @@ export function RevisionList({
   return (
     <ul
       aria-label="Main revisions"
-      className="flex flex-col overflow-hidden rounded-l bg-surface inset-ring inset-ring-border-subtle"
+      className="flex flex-col overflow-hidden rounded-l bg-surface inset-ring inset-ring-line"
     >
       {revisions.map((revision) => {
         const lines = describeRevision(revision, now);
@@ -30,7 +30,7 @@ export function RevisionList({
         return (
           <li
             key={revision.id}
-            className="border-b border-border-subtle last:border-b-0"
+            className="border-b border-line last:border-b-0"
           >
             <button
               type="button"
@@ -40,29 +40,29 @@ export function RevisionList({
               }}
               className={cn(
                 "flex w-full items-start gap-12 px-14 py-10 text-left",
-                current ? "bg-primary-soft" : "hover:bg-sunken",
+                current ? "bg-accent-soft" : "hover:bg-sunken",
                 focusRing,
               )}
             >
               <Mono
                 className={cn(
                   "w-32 shrink-0 font-semibold",
-                  current ? "text-primary-text" : "text-text",
+                  current ? "text-accent" : "text-text",
                 )}
               >
                 {revision.id}
               </Mono>
               <span className="flex min-w-0 flex-1 flex-col gap-3">
-                <span className="truncate text-bar leading-snug font-medium text-text">
+                <span className="truncate text-14 leading-tight font-medium text-text">
                   {lines.title}
                 </span>
-                <Mono className="truncate text-label text-text-muted">
+                <Mono className="truncate text-13 text-text-2">
                   <ActorText segments={lines.meta} />
                   {revision.commit === null ? null : " · "}
                   <CommitId
                     commit={revision.commit}
                     copy={false}
-                    className="text-label"
+                    className="text-13"
                   />
                 </Mono>
               </span>

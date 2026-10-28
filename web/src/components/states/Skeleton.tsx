@@ -13,7 +13,7 @@ export function Skeleton({ className }: SkeletonProps) {
       aria-busy="true"
       aria-label="Loading"
       className={cn(
-        "flex flex-col gap-8 rounded-m bg-surface p-12 inset-ring inset-ring-border-subtle",
+        "flex flex-col gap-8 rounded-m bg-surface p-12 inset-ring inset-ring-line",
         className,
       )}
     >
@@ -21,7 +21,7 @@ export function Skeleton({ className }: SkeletonProps) {
         <div
           key={index}
           className={cn(
-            "animate-pulse rounded-xs bg-sunken motion-reduce:animate-none",
+            "animate-pulse rounded-s bg-sunken motion-reduce:animate-none",
             bar.height,
             bar.width,
           )}

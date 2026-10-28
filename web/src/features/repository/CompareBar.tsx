@@ -27,7 +27,7 @@ const REASONS = {
 } as const;
 
 // The comparison is one button in the tree's bar, so the two choices sit inline at the button's height.
-const SELECT = cn(controlClasses, focusRing, "w-auto py-7 font-mono text-bar");
+const SELECT = cn(controlClasses, focusRing, "w-auto py-7 font-mono text-14");
 
 export function CompareBar({ slug, revisions, selected }: CompareBarProps) {
   const router = useRouter();
@@ -68,7 +68,7 @@ export function CompareBar({ slug, revisions, selected }: CompareBarProps) {
       }}
     >
       {error === undefined ? null : (
-        <p id={errorId} className="text-meta font-medium text-danger">
+        <p id={errorId} className="text-13 font-medium text-bad">
           {error}
         </p>
       )}
@@ -82,7 +82,7 @@ export function CompareBar({ slug, revisions, selected }: CompareBarProps) {
       >
         {options}
       </select>
-      <ArrowRight aria-hidden size={13} className="text-text-faint" />
+      <ArrowRight aria-hidden size={13} className="text-text-2" />
       <select
         {...control}
         aria-label="To"

@@ -20,14 +20,14 @@ function Card({
   return (
     <section
       aria-label={title}
-      className="flex w-sign-in max-w-full flex-col gap-16 rounded-l bg-surface p-32 inset-ring inset-ring-border-subtle"
+      className="flex w-sign-in max-w-full flex-col gap-16 rounded-l bg-surface p-32 inset-ring inset-ring-line"
     >
       <Wordmark />
       <div className="flex flex-col gap-4">
-        <h1 className="text-screen leading-snug font-semibold text-text">
+        <h1 className="text-24 leading-tight font-semibold text-text">
           {title}
         </h1>
-        <p className="text-body text-text-muted">{description}</p>
+        <p className="text-15 text-text-2">{description}</p>
       </div>
       {children}
     </section>
@@ -65,7 +65,7 @@ export function TokenCard({ pending, error, onSubmit }: CardProps) {
           type="password"
           placeholder="43 characters from fld token create"
           error={form.formState.errors.token?.message ?? error}
-          className="font-mono text-meta"
+          className="font-mono text-13"
           autoComplete="off"
           spellCheck={false}
           autoFocus
@@ -82,7 +82,7 @@ export function TokenCard({ pending, error, onSubmit }: CardProps) {
           Sign in
         </Button>
       </form>
-      <Mono className="text-meta text-text-muted">
+      <Mono className="text-13 text-text-2">
         fld web · fld token create &lt;username&gt;
       </Mono>
     </Card>
@@ -113,7 +113,7 @@ export function LinkCard({ error, onUseToken }: LinkCardProps) {
   }
   return (
     <Card title="Sign in" description={error}>
-      <Mono className="text-meta text-text-muted">fld web</Mono>
+      <Mono className="text-13 text-text-2">fld web</Mono>
       <Button className="w-full" onClick={onUseToken}>
         Sign in with a token
       </Button>

@@ -175,7 +175,7 @@ describe("NeedsYou", () => {
     const branch = within(list).getByRole("region", { name: "Git branch" });
     const command = within(branch).getByText("git switch main");
     expect(command.tagName).toBe("CODE");
-    expect(command.className).toContain("text-caption");
+    expect(command.className).toContain("text-13");
     const folder = within(list).getByRole("region", { name: "Project folder" });
     expect(within(folder).getByText("a`b`.md").tagName).toBe("SPAN");
   });

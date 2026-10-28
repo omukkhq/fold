@@ -478,7 +478,7 @@ describe("ThreadPanel question", () => {
     const marked = within(choices).getAllByRole("img", { name: "chosen" });
     expect(marked).toHaveLength(1);
     expect(marked[0]?.closest("button")?.textContent).toContain("Recharts");
-    expect(marked[0]?.parentElement?.className).toContain("text-success-text");
+    expect(marked[0]?.parentElement?.className).toContain("text-ok");
     for (const button of within(choices).getAllByRole("button")) {
       expect(button.className).not.toContain("opacity");
       expect(button).toHaveProperty("disabled", true);

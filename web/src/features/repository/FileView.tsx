@@ -23,11 +23,11 @@ export function FileView({ slug, revision, path }: FileViewProps) {
   return (
     <section
       aria-label={`File ${path}`}
-      className="flex flex-col overflow-hidden rounded-l bg-surface inset-ring inset-ring-border-subtle"
+      className="flex flex-col overflow-hidden rounded-l bg-surface inset-ring inset-ring-line"
     >
-      <header className="flex items-center gap-10 border-b border-border-subtle px-14 py-10">
-        <Mono className="text-bar font-semibold text-text">{path}</Mono>
-        <Mono className="text-label text-text-muted">{revision}</Mono>
+      <header className="flex items-center gap-10 border-b border-line px-14 py-10">
+        <Mono className="text-14 font-semibold text-text">{path}</Mono>
+        <Mono className="text-13 text-text-2">{revision}</Mono>
       </header>
       {file.isPending ? <Skeleton className="m-12" /> : null}
       {file.isError ? (
@@ -41,14 +41,14 @@ export function FileView({ slug, revision, path }: FileViewProps) {
         <pre
           className={cn(
             CODE_BOX,
-            "px-14 py-12 font-mono text-code leading-normal text-text",
+            "px-14 py-12 font-mono text-13 leading-normal text-text",
           )}
         >
           <SyntaxText code={shown.text} language={languageForPath(path)} />
         </pre>
       ) : null}
       {shown?.kind === "symlink" ? (
-        <p className="flex items-center gap-8 px-14 py-12 text-bar text-text-muted">
+        <p className="flex items-center gap-8 px-14 py-12 text-14 text-text-2">
           <Link2 aria-hidden size={15} />
           <Mono className="text-text">{`→ ${shown.target}`}</Mono>
         </p>
@@ -56,7 +56,7 @@ export function FileView({ slug, revision, path }: FileViewProps) {
       {file.data &&
       (shown?.kind === "binary" || shown?.kind === "too_large") ? (
         <div className="flex flex-col gap-6 px-14 py-12">
-          <p className="flex items-center gap-8 text-bar text-text-muted">
+          <p className="flex items-center gap-8 text-14 text-text-2">
             {shown.kind === "binary" ? (
               <FileX aria-hidden size={15} />
             ) : (
@@ -66,7 +66,7 @@ export function FileView({ slug, revision, path }: FileViewProps) {
               ? "Binary file, no content shown."
               : "File too large, no content shown."}
           </p>
-          <Mono className="text-label text-text-muted">
+          <Mono className="text-13 text-text-2">
             {`${formatSize(file.data.size)} · ${file.data.hash}`}
           </Mono>
         </div>

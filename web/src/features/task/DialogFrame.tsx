@@ -38,18 +38,18 @@ export function DialogFrame({
         <RadixDialog.Overlay className="fixed inset-0 z-10 flex justify-center overflow-y-auto bg-scrim px-16 py-32">
           <RadixDialog.Content
             {...(described ? {} : { "aria-describedby": undefined })}
-            className="flex h-max w-dialog max-w-full flex-col rounded-l bg-surface shadow-dialog inset-ring inset-ring-border outline-none"
+            className="flex h-max w-dialog max-w-full flex-col rounded-l bg-surface shadow-dialog inset-ring inset-ring-line outline-none"
           >
-            <div className="flex items-center justify-between gap-12 border-b border-border-subtle py-12 pr-16 pl-24">
+            <div className="flex items-center justify-between gap-12 border-b border-line py-12 pr-16 pl-24">
               <nav
                 aria-label="Breadcrumb"
-                className="flex items-center gap-8 text-bar text-text-muted"
+                className="flex items-center gap-8 text-14 text-text-2"
               >
                 <span>Board</span>
                 <ChevronRight
                   aria-hidden="true"
                   size={13}
-                  className="text-text-faint"
+                  className="text-text-2"
                 />
                 <span className={cn("text-text", crumbIsId && "font-mono")}>
                   {crumb}

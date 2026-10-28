@@ -38,7 +38,7 @@ export function RemoveProject({ project }: { project: ProjectSummary }) {
         <Button
           variant="ghost"
           size="sm"
-          className="text-danger hover:bg-danger-soft"
+          className="text-bad hover:bg-bad-soft"
           icon={<FolderMinus aria-hidden="true" size={13} />}
           aria-label={`Remove ${project.name} from fold`}
         >
@@ -47,9 +47,9 @@ export function RemoveProject({ project }: { project: ProjectSummary }) {
       </RadixDialog.Trigger>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="fixed inset-0 bg-scrim" />
-        <RadixDialog.Content className="fixed top-1/2 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-raised shadow-dialog inset-ring inset-ring-border outline-none">
-          <div className="flex items-center justify-between gap-12 border-b border-border-subtle py-12 pr-16 pl-24">
-            <RadixDialog.Title className="min-w-0 truncate text-section leading-snug font-semibold text-text">
+        <RadixDialog.Content className="fixed top-1/2 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-surface shadow-dialog inset-ring inset-ring-line outline-none">
+          <div className="flex items-center justify-between gap-12 border-b border-line py-12 pr-16 pl-24">
+            <RadixDialog.Title className="min-w-0 truncate text-16 leading-tight font-semibold text-text">
               Remove {project.name} from fold?
             </RadixDialog.Title>
             <RadixDialog.Close asChild>
@@ -63,14 +63,12 @@ export function RemoveProject({ project }: { project: ProjectSummary }) {
             </RadixDialog.Close>
           </div>
           <div className="flex flex-col gap-12 px-24 pt-18 pb-20">
-            <RadixDialog.Description className="text-bar text-text-muted">
+            <RadixDialog.Description className="text-14 text-text-2">
               fold closes the project and stops showing it. Nothing in the
               folder is deleted: its data stays in .fold.
             </RadixDialog.Description>
-            <Mono className="text-meta break-all text-text">
-              {project.root}
-            </Mono>
-            <p className="text-bar text-text-muted">
+            <Mono className="text-13 break-all text-text">{project.root}</Mono>
+            <p className="text-14 text-text-2">
               To bring it back, run <InlineCode>fld claude</InlineCode>,{" "}
               <InlineCode>fld new</InlineCode> or{" "}
               <InlineCode>fld init</InlineCode> in that folder, or search for it
@@ -80,7 +78,7 @@ export function RemoveProject({ project }: { project: ProjectSummary }) {
               <ErrorNote failure={removeFailure(remove.error)} />
             ) : null}
           </div>
-          <div className="flex items-center justify-end gap-8 border-t border-border-subtle px-24 py-12">
+          <div className="flex items-center justify-end gap-8 border-t border-line px-24 py-12">
             <Button disabled={remove.isPending} onClick={close}>
               Cancel
             </Button>

@@ -55,7 +55,7 @@ function FailureLine({ failure }: { failure: Failure | null }) {
   return (
     <p
       role="alert"
-      className="flex flex-col gap-2 text-meta font-medium text-danger"
+      className="flex flex-col gap-2 text-13 font-medium text-bad"
     >
       {failure.text}
       {failure.code ? (
@@ -118,11 +118,11 @@ export function DecisionPanel({
   const has = (a: RequestAction) => actions.includes(a);
   return (
     <Block title="Your decision">
-      <p className="text-bar leading-snug text-text-muted">
+      <p className="text-14 leading-tight text-text-2">
         {decisionText(r, actions, busy)}
       </p>
       {olderDraft ? (
-        <p className="text-meta text-text-muted">{OLDER_DRAFT_NOTE}</p>
+        <p className="text-13 text-text-2">{OLDER_DRAFT_NOTE}</p>
       ) : null}
       {has("approve") ? (
         <>
@@ -136,7 +136,7 @@ export function DecisionPanel({
           >
             Approve {v}
           </Button>
-          <p className="text-meta text-text-muted">
+          <p className="text-13 text-text-2">
             {pending === "approve"
               ? pendingText("approve", r, cards)
               : `Creates ${String(cards)} ${cards === 1 ? "task" : "tasks"} on the board.`}
@@ -151,7 +151,7 @@ export function DecisionPanel({
         >
           <label
             htmlFor="request-changes"
-            className="text-bar leading-snug font-semibold text-text"
+            className="text-14 leading-tight font-semibold text-text"
           >
             Comment for {v}
           </label>
@@ -174,7 +174,7 @@ export function DecisionPanel({
             )}
           />
           {errors.comment ? (
-            <p className="text-meta font-medium text-danger">
+            <p className="text-13 font-medium text-bad">
               {errors.comment.message}
             </p>
           ) : null}
@@ -188,7 +188,7 @@ export function DecisionPanel({
             Request changes
           </Button>
           {pending === "request_changes" ? (
-            <p className="text-meta text-text-muted">
+            <p className="text-13 text-text-2">
               {pendingText("request_changes", r, cards)}
             </p>
           ) : null}
@@ -207,7 +207,7 @@ export function DecisionPanel({
         ) : null}
         {has("close") ? (
           <Button
-            className="flex-1 text-danger"
+            className="flex-1 text-bad"
             pending={pending === "close"}
             pendingLabel="Closing…"
             disabled={busy}
@@ -219,9 +219,7 @@ export function DecisionPanel({
         ) : null}
       </div>
       {pending === "close" ? (
-        <p className="text-meta text-text-muted">
-          {pendingText("close", r, cards)}
-        </p>
+        <p className="text-13 text-text-2">{pendingText("close", r, cards)}</p>
       ) : null}
       <FailureLine failure={failure} />
     </Block>
@@ -231,7 +229,7 @@ export function DecisionPanel({
 export function ViewerPanel({ detail }: { detail: RequestDetail }) {
   return (
     <Block title="Decision">
-      <p className="flex items-start gap-8 rounded-m bg-sunken px-12 py-10 text-bar leading-snug text-text-muted">
+      <p className="flex items-start gap-8 rounded-m bg-sunken px-12 py-10 text-14 leading-tight text-text-2">
         <Lock aria-hidden="true" size={15} className="mt-2 shrink-0" />
         <ActorText segments={viewerText(detail.request)} />
       </p>
@@ -266,13 +264,13 @@ export function EditingPanel({
   return (
     <>
       <Block title="Editing">
-        <p className="text-bar leading-snug text-text-muted">
+        <p className="text-14 leading-tight text-text-2">
           Edit the cards and the edges, then save. fold keeps v{latest} and adds
           your changes as {next}, which starts unapproved.
         </p>
         <label
           htmlFor="draft-note"
-          className="text-bar leading-snug font-semibold text-text"
+          className="text-14 leading-tight font-semibold text-text"
         >
           Note for {next}
         </label>
@@ -302,7 +300,7 @@ export function EditingPanel({
           Cancel
         </Button>
         {saving ? (
-          <p className="text-meta text-text-muted">
+          <p className="text-13 text-text-2">
             Waiting for fold to save {next}. The cards and edges stay locked
             until it answers.
           </p>
@@ -310,7 +308,7 @@ export function EditingPanel({
         <FailureLine failure={failure} />
       </Block>
       <Block title="A draft needs">
-        <ul className="flex list-disc flex-col gap-4 pl-16 text-meta text-text-muted">
+        <ul className="flex list-disc flex-col gap-4 pl-16 text-13 text-text-2">
           <li>1 to 20 cards</li>
           <li>A title of up to 200 characters on every card</li>
           <li>A description on every card</li>
@@ -331,7 +329,7 @@ export function CreatedTasksPanel({
 }) {
   return (
     <Block title="Created tasks">
-      <p className="text-bar leading-snug text-text-muted">
+      <p className="text-14 leading-tight text-text-2">
         The cards are tasks now. Their columns are calculated like every other
         task.
       </p>
@@ -343,21 +341,19 @@ export function CreatedTasksPanel({
               <HrefLink
                 href={projectPath(slug, "t", t.task)}
                 className={cn(
-                  "flex flex-col gap-4 rounded-m bg-surface px-10 py-8 inset-ring inset-ring-border-subtle hover:bg-bg",
+                  "flex flex-col gap-4 rounded-m bg-surface px-10 py-8 inset-ring inset-ring-line hover:bg-bg",
                   focusRing,
                 )}
               >
                 <span className="flex items-center gap-8">
-                  <span className="font-mono text-code font-semibold text-text">
+                  <span className="font-mono text-13 font-semibold text-text">
                     {t.task}
                   </span>
                   {t.key ? (
-                    <span className="text-meta text-text-muted">
-                      from {t.key}
-                    </span>
+                    <span className="text-13 text-text-2">from {t.key}</span>
                   ) : null}
                   {column ? (
-                    <span className="ml-auto flex items-center gap-4 text-meta text-text-muted">
+                    <span className="ml-auto flex items-center gap-4 text-13 text-text-2">
                       <span
                         aria-hidden="true"
                         className={cn("size-6 rounded-full", column.dot)}
@@ -366,7 +362,7 @@ export function CreatedTasksPanel({
                     </span>
                   ) : null}
                 </span>
-                <span className="text-bar text-text">{t.title}</span>
+                <span className="text-14 text-text">{t.title}</span>
               </HrefLink>
             </li>
           );
@@ -396,7 +392,7 @@ export function ClosedPanel({
 }) {
   return (
     <Block title="Closed">
-      <p className="text-bar leading-snug text-text-muted">
+      <p className="text-14 leading-tight text-text-2">
         <PersonName name={detail.request.requester} /> closed the request. It
         only reads now.
       </p>
@@ -405,7 +401,7 @@ export function ClosedPanel({
           text={detail.close_reason}
           slug={slug}
           known={known}
-          className="text-bar"
+          className="text-14"
         />
       ) : null}
     </Block>
@@ -423,15 +419,15 @@ export function DrafterBlock({
   return (
     <Block title="Drafter">
       {drafter === null ? (
-        <p className="text-bar text-text-muted">
+        <p className="text-14 text-text-2">
           No orchestrator has claimed the request.
         </p>
       ) : (
         <>
           <p className="flex items-center gap-8">
-            <PersonName name={drafter} className="text-body" />
+            <PersonName name={drafter} className="text-15" />
           </p>
-          <p className="text-meta text-text-muted">
+          <p className="text-13 text-text-2">
             {drafterLine(detail.drafts, drafter, now)}
           </p>
         </>
@@ -458,28 +454,28 @@ export function VersionsBlock({
         {[...detail.drafts].reverse().map((d) => (
           <li
             key={d.version}
-            className="flex items-baseline gap-8 font-mono text-code"
+            className="flex items-baseline gap-8 font-mono text-13"
           >
             <span
               className={cn(
                 d.version === latest
                   ? "font-semibold text-text"
-                  : "text-text-muted",
+                  : "text-text-2",
               )}
             >
               v{d.version}
             </span>
-            <span className="min-w-0 flex-1 truncate text-text-muted">
-              <PersonName name={d.author} className="text-bar" />
+            <span className="min-w-0 flex-1 truncate text-text-2">
+              <PersonName name={d.author} className="text-14" />
             </span>
-            <span className="font-ui text-meta text-text-muted">
+            <span className="text-13 text-text-2">
               {d.version === latest ? "current · " : ""}
               {formatAsOfMinute(now, d.created_at)}
             </span>
           </li>
         ))}
       </ul>
-      <p className="text-meta text-text-muted">
+      <p className="text-13 text-text-2">
         <ActorText segments={versionsNote(detail.request, human)} />
       </p>
     </Block>

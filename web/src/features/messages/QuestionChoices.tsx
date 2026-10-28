@@ -51,11 +51,11 @@ export function QuestionChoices({
 
   return (
     <div className="flex max-w-measure flex-col gap-6">
-      <div className="overflow-hidden rounded-m bg-surface inset-ring inset-ring-border">
+      <div className="overflow-hidden rounded-m bg-surface inset-ring inset-ring-line">
         <p
           className={cn(
-            "flex flex-wrap items-center gap-x-8 gap-y-2 border-b border-border-subtle px-14 py-9 text-code",
-            answer === null ? "bg-warning-soft" : "bg-success-soft",
+            "flex flex-wrap items-center gap-x-8 gap-y-2 border-b border-line px-14 py-9 text-13",
+            answer === null ? "bg-warn-soft" : "bg-ok-soft",
           )}
         >
           {answer === null ? (
@@ -63,9 +63,9 @@ export function QuestionChoices({
               <CircleHelp
                 aria-hidden="true"
                 size={14}
-                className="shrink-0 text-warning"
+                className="shrink-0 text-warn"
               />
-              <span className="font-semibold text-warning">
+              <span className="font-semibold text-warn">
                 {asksYou(question, you)
                   ? "Waits for your answer"
                   : "Waits for an answer"}
@@ -76,10 +76,10 @@ export function QuestionChoices({
               <CircleCheck
                 aria-hidden="true"
                 size={14}
-                className="shrink-0 text-success-text"
+                className="shrink-0 text-ok"
               />
-              <span className="font-semibold text-success-text">Answered</span>
-              <span className="text-text-muted">
+              <span className="font-semibold text-ok">Answered</span>
+              <span className="text-text-2">
                 by{" "}
                 {isYou(answer.sender, you) ? (
                   "you"
@@ -91,7 +91,7 @@ export function QuestionChoices({
             </>
           )}
           {question.header === null ? null : (
-            <span className="ml-auto rounded-s bg-sunken px-6 py-2 text-label font-medium text-text-muted">
+            <span className="ml-auto rounded-s bg-sunken px-6 py-2 text-13 font-medium text-text-2">
               {question.header}
             </span>
           )}
@@ -100,10 +100,7 @@ export function QuestionChoices({
           {question.choices.map(({ label, description }) => {
             const chosen = state.chosen === label;
             return (
-              <li
-                key={label}
-                className="border-t border-border-subtle first:border-t-0"
-              >
+              <li key={label} className="border-t border-line first:border-t-0">
                 <button
                   type="button"
                   disabled={answer !== null || pending}
@@ -119,29 +116,27 @@ export function QuestionChoices({
                   {answer === null ? (
                     <span
                       aria-hidden="true"
-                      className="size-16 shrink-0 rounded-full inset-ring-2 inset-ring-border"
+                      className="size-16 shrink-0 rounded-full inset-ring-2 inset-ring-line"
                     />
                   ) : null}
                   <span className="flex min-w-0 flex-1 flex-col items-start gap-2">
-                    <span className="flex items-center gap-8 text-body font-semibold text-text">
+                    <span className="flex items-center gap-8 text-15 font-semibold text-text">
                       {label}
                       {sending === label ? (
                         <Loader2
                           aria-label="sending"
                           role="img"
                           size={13}
-                          className="animate-spin text-text-muted motion-reduce:animate-none"
+                          className="animate-spin text-text-2 motion-reduce:animate-none"
                         />
                       ) : null}
                     </span>
                     {description === null ? null : (
-                      <span className="text-bar text-text-muted">
-                        {description}
-                      </span>
+                      <span className="text-14 text-text-2">{description}</span>
                     )}
                   </span>
                   {chosen ? (
-                    <span className="inline-flex shrink-0 items-center gap-6 text-code font-semibold text-success-text">
+                    <span className="inline-flex shrink-0 items-center gap-6 text-13 font-semibold text-ok">
                       <Check
                         aria-label="chosen"
                         role="img"
@@ -165,7 +160,7 @@ export function QuestionChoices({
             onClick={onWriteOwn}
             className={cn(
               ROW,
-              "min-h-44 border-t border-border-subtle text-bar text-primary-text enabled:hover:bg-sunken disabled:cursor-default",
+              "min-h-44 border-t border-line text-14 text-accent enabled:hover:bg-sunken disabled:cursor-default",
               insetFocusRing,
             )}
           >
@@ -175,16 +170,16 @@ export function QuestionChoices({
         ) : null}
       </div>
       {pending && sending === null ? (
-        <p role="status" className="text-meta text-text-faint">
+        <p role="status" className="text-13 text-text-2">
           fold sends your answer. The question shows it when the daemon confirms
           it.
         </p>
       ) : null}
       {failure === null ? null : (
-        <p role="alert" className="text-meta font-medium text-danger">
+        <p role="alert" className="text-13 font-medium text-bad">
           The answer was not sent. {failureText(failure)}
           {apiErrorCode(failure) ? (
-            <span className="font-mono text-text-muted">
+            <span className="font-mono text-text-2">
               {" "}
               code: {apiErrorCode(failure)}
             </span>

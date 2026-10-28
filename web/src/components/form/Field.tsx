@@ -31,8 +31,8 @@ export function Field({
       htmlFor={ids.input}
       className={
         inline
-          ? "text-body leading-snug text-text"
-          : "text-bar leading-snug font-semibold text-text"
+          ? "text-15 leading-tight text-text"
+          : "text-14 leading-tight font-semibold text-text"
       }
     >
       {label}
@@ -60,12 +60,12 @@ export function Field({
         </>
       )}
       {hint ? (
-        <p id={ids.hint} className="text-meta text-text-muted">
+        <p id={ids.hint} className="text-13 text-text-2">
           {hint}
         </p>
       ) : null}
       {error ? (
-        <p id={ids.error} className="text-meta font-medium text-danger">
+        <p id={ids.error} className="text-13 font-medium text-bad">
           {error}
         </p>
       ) : null}
@@ -74,4 +74,4 @@ export function Field({
 }
 
 export const controlClasses =
-  "w-full rounded-m bg-surface px-12 py-10 text-body leading-snug text-text inset-ring inset-ring-border placeholder:text-text-faint aria-[invalid=true]:inset-ring-danger disabled:cursor-not-allowed disabled:opacity-60";
+  "w-full rounded-m bg-surface px-12 py-10 text-15 leading-tight text-text inset-ring inset-ring-line placeholder:text-text-2 aria-[invalid=true]:inset-ring-bad disabled:cursor-not-allowed disabled:opacity-60";

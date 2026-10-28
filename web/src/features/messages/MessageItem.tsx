@@ -31,10 +31,10 @@ function Avatar({ sender, small }: { sender: string; small: boolean }) {
       aria-hidden="true"
       className={cn(
         "grid shrink-0 place-items-center font-bold",
-        small ? "size-24 text-caption" : "size-28 text-meta",
+        small ? "size-24 text-13" : "size-28 text-13",
         agent
-          ? "rounded-m bg-secondary-soft text-secondary-text"
-          : "rounded-full bg-primary-soft text-primary-text",
+          ? "rounded-m bg-warn-soft text-warn"
+          : "rounded-full bg-accent-soft text-accent",
       )}
     >
       {agent ? <Bot size={small ? 13 : 16} /> : initial(sender)}
@@ -45,8 +45,8 @@ function Avatar({ sender, small }: { sender: string; small: boolean }) {
 function ChosenAnswer({ body, own }: { body: string; own: boolean }) {
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-body font-semibold text-text">{body.trim()}</p>
-      <p className="text-code text-text-muted">
+      <p className="text-15 font-semibold text-text">{body.trim()}</p>
+      <p className="text-13 text-text-2">
         {own
           ? "Your answer to the question above"
           : "Chosen option of the question above"}
@@ -70,7 +70,7 @@ export function MessageItem({
   const time = (
     <time
       dateTime={new Date(message.sent_at).toISOString()}
-      className="text-meta text-text-faint"
+      className="text-13 text-text-2"
     >
       {formatClock(message.sent_at)}
     </time>
@@ -90,12 +90,10 @@ export function MessageItem({
         <article className="flex min-w-0 max-w-measure flex-col items-end gap-6">
           <p className="flex items-baseline gap-8">
             {time}
-            <span className="text-body font-semibold text-primary-text">
-              You
-            </span>
+            <span className="text-15 font-semibold text-accent">You</span>
           </p>
           {lines}
-          <div className="max-w-full rounded-chip rounded-br-s bg-primary-soft px-14 py-10 inset-ring inset-ring-primary-muted">
+          <div className="max-w-full rounded-pill rounded-br-s bg-accent-soft px-14 py-10 inset-ring inset-ring-accent">
             {chosen ? (
               <ChosenAnswer body={message.body} own />
             ) : (
@@ -120,19 +118,19 @@ export function MessageItem({
           </span>
           <span
             className={cn(
-              "text-body font-semibold",
-              side === "agent" ? "text-secondary-text" : "text-primary-text",
+              "text-15 font-semibold",
+              side === "agent" ? "text-text" : "text-accent",
             )}
           >
             {bareName(message.sender)}
           </span>
           {message.recipients.length > 0 ? (
-            <span className="hidden text-code text-text-faint sm:inline">
+            <span className="hidden text-13 text-text-2 sm:inline">
               <ActorText segments={recipientsPhrase(message, you)} you={you} />
             </span>
           ) : null}
           {freeAskWaitsForYou(thread, message, you) ? (
-            <span className="inline-flex items-center gap-5 rounded-chip bg-warning-soft px-8 py-2 text-label font-semibold text-warning">
+            <span className="inline-flex items-center gap-5 rounded-pill bg-warn-soft px-8 py-2 text-13 font-semibold text-warn">
               <CircleHelp aria-hidden="true" size={12} strokeWidth={2.2} />
               Waits for your answer
             </span>

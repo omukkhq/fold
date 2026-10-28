@@ -75,15 +75,15 @@ type BodyProps = Omit<
 function HeadPath({ path, split }: { path: string; split: boolean }) {
   if (!split) {
     return (
-      <h2 className="min-w-0 flex-1 truncate font-mono text-code font-semibold text-text">
+      <h2 className="min-w-0 flex-1 truncate font-mono text-13 font-semibold text-text">
         {path}
       </h2>
     );
   }
   const cut = path.lastIndexOf("/") + 1;
   return (
-    <h2 className="min-w-0 flex-1 font-mono text-code break-all text-text">
-      <span className="font-regular text-text-faint">{path.slice(0, cut)}</span>
+    <h2 className="min-w-0 flex-1 font-mono text-13 break-all text-text">
+      <span className="font-regular text-text-2">{path.slice(0, cut)}</span>
       <span className="font-semibold">{path.slice(cut)}</span>
     </h2>
   );
@@ -92,10 +92,8 @@ function HeadPath({ path, split }: { path: string; split: boolean }) {
 function Hash({ side, hash }: { side: string; hash: string | null }) {
   return (
     <div className="flex gap-10">
-      <dt className="w-diff-number shrink-0 text-bar text-text-muted">
-        {side}
-      </dt>
-      <dd className="min-w-0 font-mono text-code break-all text-text">
+      <dt className="w-diff-number shrink-0 text-14 text-text-2">{side}</dt>
+      <dd className="min-w-0 font-mono text-13 break-all text-text">
         {hash ?? "no file"}
       </dd>
     </div>
@@ -113,7 +111,7 @@ function HashOnly({
 }) {
   return (
     <div className="flex flex-col gap-8 px-14 py-12">
-      <p className="text-bar text-text-muted">{note}</p>
+      <p className="text-14 text-text-2">{note}</p>
       <dl className="flex flex-col gap-4">
         <Hash side="old" hash={oldHash} />
         <Hash side="new" hash={newHash} />
@@ -143,7 +141,7 @@ function FileBody({
   }
   if (body === "unchanged") {
     return (
-      <p className="px-14 py-12 text-bar text-text-muted">
+      <p className="px-14 py-12 text-14 text-text-2">
         The content did not change.
       </p>
     );
@@ -175,9 +173,7 @@ function FileBody({
   });
   if (layout.rows.length === 0) {
     return (
-      <p className="px-14 py-12 text-bar text-text-muted">
-        The file has no lines.
-      </p>
+      <p className="px-14 py-12 text-14 text-text-2">The file has no lines.</p>
     );
   }
   return (
@@ -191,7 +187,7 @@ function FileBody({
         }}
       />
       {layout.remaining > 0 ? (
-        <div className="border-t border-border-subtle px-14 py-8">
+        <div className="border-t border-line px-14 py-8">
           <Button
             variant="ghost"
             size="sm"
@@ -241,18 +237,18 @@ export function DiffViewer({
         {list}
         <section
           aria-label={shown.warning.path}
-          className="min-w-0 flex-1 overflow-hidden rounded-l border border-border-subtle bg-surface"
+          className="min-w-0 flex-1 overflow-hidden rounded-l border border-line bg-surface"
         >
-          <header className="flex items-center gap-10 border-b border-border-subtle bg-bg px-14 py-9">
-            <h2 className="min-w-0 flex-1 truncate font-mono text-code font-semibold text-text">
+          <header className="flex items-center gap-10 border-b border-line bg-bg px-14 py-9">
+            <h2 className="min-w-0 flex-1 truncate font-mono text-13 font-semibold text-text">
               {shown.warning.path}
             </h2>
           </header>
-          <p className="flex items-start gap-8 px-14 py-12 text-bar text-text-muted">
+          <p className="flex items-start gap-8 px-14 py-12 text-14 text-text-2">
             <TriangleAlert
               aria-hidden="true"
               size={14}
-              className="mt-2 shrink-0 text-secondary-text"
+              className="mt-2 shrink-0 text-warn"
             />
             {warningNote(shown.warning)}
           </p>
@@ -268,24 +264,20 @@ export function DiffViewer({
       {list}
       <section
         aria-label={file.path}
-        className="min-w-0 flex-1 overflow-hidden rounded-l border border-border-subtle bg-surface"
+        className="min-w-0 flex-1 overflow-hidden rounded-l border border-line bg-surface"
       >
         {/* The rows' fills would cover an inset ring, so the panel has a real border; the head's padding gives up a pixel to each border, so the borders do not change the head's height. */}
-        <header className="flex items-center gap-10 border-b border-border-subtle bg-bg px-14 py-9">
+        <header className="flex items-center gap-10 border-b border-line bg-bg px-14 py-9">
           <HeadPath path={file.path} split={split} />
           {counts.added ? (
-            <span className="font-mono text-meta text-primary-text">
+            <span className="font-mono text-13 text-accent">
               {counts.added}
             </span>
           ) : null}
           {counts.removed ? (
-            <span className="font-mono text-meta text-danger">
-              {counts.removed}
-            </span>
+            <span className="font-mono text-13 text-bad">{counts.removed}</span>
           ) : null}
-          {note ? (
-            <span className="text-meta text-text-muted">{note}</span>
-          ) : null}
+          {note ? <span className="text-13 text-text-2">{note}</span> : null}
           {headExtra?.(file.path)}
         </header>
         <FileBody key={file.path} file={file} {...body} />

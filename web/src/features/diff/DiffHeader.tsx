@@ -41,8 +41,8 @@ function StateChip({
 }) {
   const Icon = STATE_ICONS[state.kind];
   return (
-    <span className="inline-flex items-center gap-6 rounded-m bg-surface px-14 py-7 text-body leading-snug font-medium text-text inset-ring inset-ring-border">
-      <Icon aria-hidden="true" size={15} className="text-text-muted" />
+    <span className="inline-flex items-center gap-6 rounded-m bg-surface px-14 py-7 text-15 leading-tight font-medium text-text inset-ring inset-ring-line">
+      <Icon aria-hidden="true" size={15} className="text-text-2" />
       {stateLabel(state, comparison)}
     </span>
   );
@@ -68,21 +68,21 @@ export function DiffHeader({
   return (
     <header className="flex flex-col gap-8 px-24 pt-18 pb-12">
       <nav aria-label="Breadcrumb">
-        <ol className="flex items-center gap-8 text-bar">
+        <ol className="flex items-center gap-8 text-14">
           {crumbs.map((crumb, index) => (
             <li key={crumb.label} className="flex items-center gap-8">
               {index > 0 ? (
                 <ChevronRight
                   aria-hidden="true"
                   size={13}
-                  className="text-text-faint"
+                  className="text-text-2"
                 />
               ) : null}
               {crumb.href ? (
                 <HrefLink
                   href={crumb.href}
                   className={cn(
-                    "rounded-s text-text-muted hover:text-text",
+                    "rounded-s text-text-2 hover:text-text",
                     focusRing,
                   )}
                 >
@@ -101,14 +101,14 @@ export function DiffHeader({
         </ol>
       </nav>
       <div className="flex items-center gap-12">
-        <h1 className="text-screen leading-snug font-semibold text-text">
+        <h1 className="text-24 leading-tight font-semibold text-text">
           {comparisonTitle(comparison)}
         </h1>
         {readAt === null ? null : (
-          <span className="inline-flex items-center gap-6 rounded-s bg-primary-soft px-8 py-2 text-caption font-medium text-primary-strong">
+          <span className="inline-flex items-center gap-6 rounded-s bg-accent-soft px-8 py-2 text-13 font-medium text-accent">
             <span
               aria-hidden="true"
-              className="size-7 rounded-full bg-primary"
+              className="size-7 rounded-full bg-accent"
             />
             live · read {formatAsOf(now, readAt)}
           </span>
@@ -116,9 +116,9 @@ export function DiffHeader({
       </div>
       <div className="flex flex-wrap items-center gap-10">
         <StateChip state={comparison.to} comparison={comparison} />
-        <span className="text-body text-text-muted">vs</span>
+        <span className="text-15 text-text-2">vs</span>
         <StateChip state={comparison.from} comparison={comparison} />
-        <span className="text-bar text-text-muted">
+        <span className="text-14 text-text-2">
           {comparisonNote(comparison, files)}
         </span>
       </div>

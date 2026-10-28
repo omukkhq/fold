@@ -49,9 +49,9 @@ import { mainAgentNote } from "./note";
 const TOP_TASKS = 8;
 
 const PANEL =
-  "flex min-w-0 flex-col gap-12 rounded-l bg-surface p-16 inset-ring inset-ring-border-subtle";
+  "flex min-w-0 flex-col gap-12 rounded-l bg-surface p-16 inset-ring inset-ring-line";
 
-const PANEL_TITLE = "text-section leading-snug font-semibold text-text";
+const PANEL_TITLE = "text-16 leading-tight font-semibold text-text";
 
 export function CostTab({ slug, range }: { slug: string; range: CostRange }) {
   // The range starts at the viewer's midnight, which the display clock moves past once a day.
@@ -96,7 +96,7 @@ export function CostTab({ slug, range }: { slug: string; range: CostRange }) {
         <CostContent slug={slug} view={view} range={range} now={now} />
       )}
       {note === null ? null : (
-        <p className="flex items-start gap-8 text-bar text-text-muted">
+        <p className="flex items-start gap-8 text-14 text-text-2">
           <Info aria-hidden="true" size={15} className="mt-2 shrink-0" />
           {note}
         </p>
@@ -124,19 +124,19 @@ function CostContent({
       >
         {costTiles(view).map((tile, index) => (
           <li key={tile.label} className={cn(PANEL, "gap-4")}>
-            <span className="text-overline leading-snug font-semibold text-text-muted uppercase">
+            <span className="font-title text-13 leading-tight font-semibold text-text-2">
               {tile.label}
             </span>
             <span
               className={cn(
-                "leading-snug font-semibold text-text tabular-nums",
-                index === 0 ? "text-page" : "text-screen",
+                "leading-tight font-semibold text-text tabular-nums",
+                index === 0 ? "text-28" : "text-24",
               )}
             >
               {tile.amount}
             </span>
-            <span className="text-meta text-text-muted">{tile.detail}</span>
-            <span className="text-meta text-text-muted tabular-nums">
+            <span className="text-13 text-text-2">{tile.detail}</span>
+            <span className="text-13 text-text-2 tabular-nums">
               {tile.tokens.map((part, at) => (
                 <Fragment key={part}>
                   {at > 0 ? " · " : null}
@@ -196,7 +196,7 @@ function Chart({
       </div>
       <RadixTooltip.Provider delayDuration={0}>
         <div className="flex flex-col gap-6">
-          <div className="flex h-chart items-end gap-2 border-b border-border-subtle">
+          <div className="flex h-chart items-end gap-2 border-b border-line">
             {chart.bars.map((bar) => (
               <ChartBar key={bar.start} bar={bar} />
             ))}
@@ -205,7 +205,7 @@ function Chart({
             {chart.bars.map((bar, index) => (
               <span
                 key={bar.start}
-                className="min-w-0 flex-1 truncate text-center text-caption text-text-faint"
+                className="min-w-0 flex-1 truncate text-center text-13 text-text-2"
               >
                 {showsTick(index, chart.bars.length) ? bar.tick : ""}
               </span>
@@ -231,7 +231,7 @@ function ChartBar({ bar }: { bar: CostBar }) {
           )}
         >
           <span
-            className="w-full rounded-t-s bg-primary"
+            className="w-full rounded-t-s bg-accent"
             style={{ height: `${String(bar.height * 100)}%` }}
           />
         </button>
@@ -239,7 +239,7 @@ function ChartBar({ bar }: { bar: CostBar }) {
       <RadixTooltip.Portal>
         <RadixTooltip.Content
           sideOffset={4}
-          className="z-10 flex flex-col gap-2 rounded-s bg-ink px-8 py-6 text-meta text-on-ink"
+          className="z-10 flex flex-col gap-2 rounded-s bg-ink px-8 py-6 text-13 text-on-ink"
         >
           <span className="font-semibold">
             {bar.title} · {costText(bar.cost)} · {tokensText(bar.tokens)} tokens
@@ -259,10 +259,10 @@ function ChartBar({ bar }: { bar: CostBar }) {
 }
 
 const TOKEN_FILL: Record<TokenPart["key"], string> = {
-  cache_read: "bg-primary",
-  cache_write: "bg-primary-muted",
-  output: "bg-secondary",
-  input: "bg-text-faint",
+  cache_read: "bg-accent",
+  cache_write: "bg-accent",
+  output: "bg-warn",
+  input: "bg-text-2",
 };
 
 function TokensPanel({ view }: { view: ProjectCost }) {
@@ -271,12 +271,12 @@ function TokensPanel({ view }: { view: ProjectCost }) {
     <section aria-label="Tokens" className={PANEL}>
       <div className="flex flex-wrap items-baseline justify-between gap-12">
         <h2 className={PANEL_TITLE}>Tokens</h2>
-        <span className="text-screen leading-snug font-semibold text-text tabular-nums">
+        <span className="text-24 leading-tight font-semibold text-text tabular-nums">
           {card.total}
         </span>
       </div>
       {card.cacheLine === null ? (
-        <p className="text-bar text-text-muted">
+        <p className="text-14 text-text-2">
           No turn in this range reported its tokens.
         </p>
       ) : (
@@ -306,20 +306,20 @@ function TokenParts({ card }: { card: TokensCard }) {
       <dl className="grid grid-cols-2 gap-12 lg:grid-cols-4">
         {card.parts.map((part) => (
           <div key={part.key} className="flex flex-col gap-2">
-            <dt className="flex items-center gap-6 text-meta text-text-muted">
+            <dt className="flex items-center gap-6 text-13 text-text-2">
               <span
                 aria-hidden="true"
                 className={cn("size-7 rounded-full", TOKEN_FILL[part.key])}
               />
               {part.label}
             </dt>
-            <dd className="text-body font-semibold text-text tabular-nums">
+            <dd className="text-15 font-semibold text-text tabular-nums">
               {part.amount}
             </dd>
           </div>
         ))}
       </dl>
-      <p className="text-meta text-text-muted">{card.cacheLine}</p>
+      <p className="text-13 text-text-2">{card.cacheLine}</p>
     </>
   );
 }
@@ -331,18 +331,18 @@ function Breakdown({ title, rows }: { title: string; rows: BreakdownRow[] }) {
       <ul className="flex flex-col gap-10">
         {rows.map((row) => (
           <li key={row.key} className="flex flex-col gap-4">
-            <span className="flex items-baseline gap-8 text-bar">
+            <span className="flex items-baseline gap-8 text-14">
               <span className="min-w-0 flex-1 truncate font-medium text-text">
                 {row.name}
               </span>
-              <span className="text-meta text-text-muted">{row.count}</span>
+              <span className="text-13 text-text-2">{row.count}</span>
               <span className="font-semibold text-text tabular-nums">
                 {row.amount}
               </span>
             </span>
             <span className="h-4 rounded-full bg-sunken">
               <span
-                className="block h-4 rounded-full bg-primary"
+                className="block h-4 rounded-full bg-accent"
                 style={{ width: `${String(row.fill * 100)}%` }}
               />
             </span>
@@ -354,8 +354,8 @@ function Breakdown({ title, rows }: { title: string; rows: BreakdownRow[] }) {
 }
 
 const TH =
-  "px-12 py-8 text-left text-overline leading-snug font-semibold text-text-muted uppercase";
-const TD = "px-12 py-9 text-bar leading-snug whitespace-nowrap text-text";
+  "px-12 py-8 text-left font-title text-13 leading-tight font-semibold text-text-2";
+const TD = "px-12 py-9 text-14 leading-tight whitespace-nowrap text-text";
 const NUM = "text-right tabular-nums";
 
 function TasksTable({ slug, view }: { slug: string; view: ProjectCost }) {
@@ -369,7 +369,7 @@ function TasksTable({ slug, view }: { slug: string; view: ProjectCost }) {
           <button
             type="button"
             className={cn(
-              "rounded-s text-bar font-medium text-primary-text hover:underline",
+              "rounded-s text-14 font-medium text-accent hover:underline",
               focusRing,
             )}
             onClick={() => {
@@ -383,14 +383,14 @@ function TasksTable({ slug, view }: { slug: string; view: ProjectCost }) {
         ) : null}
       </div>
       {rows.length === 0 ? (
-        <p className="px-16 text-bar text-text-muted">
+        <p className="px-16 text-14 text-text-2">
           No turn in this range worked on a task.
         </p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full border-collapse">
             <thead>
-              <tr className="border-b border-border-subtle">
+              <tr className="border-b border-line">
                 <th className={TH}>Task</th>
                 <th className={TH}>Area</th>
                 <th className={cn(TH, NUM)}>Build</th>
@@ -403,7 +403,7 @@ function TasksTable({ slug, view }: { slug: string; view: ProjectCost }) {
               {rows.map((row) => (
                 <tr
                   key={row.task}
-                  className="border-b border-border-subtle last:border-b-0"
+                  className="border-b border-line last:border-b-0"
                 >
                   <td className={cn(TD, "min-w-0")}>
                     <HrefLink
@@ -413,7 +413,7 @@ function TasksTable({ slug, view }: { slug: string; view: ProjectCost }) {
                         focusRing,
                       )}
                     >
-                      <Mono className="shrink-0 text-meta text-primary-text">
+                      <Mono className="shrink-0 text-13 text-accent">
                         {row.task}
                       </Mono>
                       <span className="truncate hover:underline">
@@ -421,15 +421,11 @@ function TasksTable({ slug, view }: { slug: string; view: ProjectCost }) {
                       </span>
                     </HrefLink>
                   </td>
-                  <td className={cn(TD, "text-text-muted")}>{row.area}</td>
+                  <td className={cn(TD, "text-text-2")}>{row.area}</td>
                   <td className={cn(TD, NUM)}>{row.build}</td>
-                  <td className={cn(TD, NUM, "text-text-muted")}>
-                    {row.review}
-                  </td>
+                  <td className={cn(TD, NUM, "text-text-2")}>{row.review}</td>
                   <td className={cn(TD, NUM, "font-semibold")}>{row.total}</td>
-                  <td className={cn(TD, NUM, "text-text-muted")}>
-                    {row.tokens}
-                  </td>
+                  <td className={cn(TD, NUM, "text-text-2")}>{row.tokens}</td>
                 </tr>
               ))}
             </tbody>
@@ -446,14 +442,14 @@ function WorkersTable({ view }: { view: ProjectCost }) {
     <section aria-label="Workers" className={cn(PANEL, "px-0 pb-4")}>
       <div className="flex flex-col gap-2 px-16">
         <h2 className={PANEL_TITLE}>Workers</h2>
-        <p className="text-meta text-text-muted">
+        <p className="text-13 text-text-2">
           Stopped, restarted and removed workers stay counted.
         </p>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full border-collapse">
           <thead>
-            <tr className="border-b border-border-subtle">
+            <tr className="border-b border-line">
               <th className={TH}>Worker</th>
               <th className={TH}>Role</th>
               <th className={TH}>Area</th>
@@ -468,26 +464,24 @@ function WorkersTable({ view }: { view: ProjectCost }) {
             {rows.map((row) => (
               <tr
                 key={row.name}
-                className="border-b border-border-subtle last:border-b-0"
+                className="border-b border-line last:border-b-0"
               >
                 <td className={TD}>
                   <span className="flex items-baseline gap-8">
-                    <Mono className="text-meta text-text">{row.name}</Mono>
+                    <Mono className="text-13 text-text">{row.name}</Mono>
                     {row.ended ? (
-                      <span className="text-caption text-text-faint">
-                        stopped
-                      </span>
+                      <span className="text-13 text-text-2">stopped</span>
                     ) : null}
                   </span>
                 </td>
-                <td className={cn(TD, "text-text-muted")}>{row.role}</td>
-                <td className={cn(TD, "text-text-muted")}>{row.area}</td>
-                <td className={cn(TD, "text-text-muted")}>
-                  <Mono className="text-meta">{row.model}</Mono>
+                <td className={cn(TD, "text-text-2")}>{row.role}</td>
+                <td className={cn(TD, "text-text-2")}>{row.area}</td>
+                <td className={cn(TD, "text-text-2")}>
+                  <Mono className="text-13">{row.model}</Mono>
                 </td>
                 <td className={cn(TD, NUM)}>{row.turns}</td>
-                <td className={cn(TD, NUM, "text-text-muted")}>{row.tokens}</td>
-                <td className={cn(TD, NUM, "text-text-muted")}>{row.output}</td>
+                <td className={cn(TD, NUM, "text-text-2")}>{row.tokens}</td>
+                <td className={cn(TD, NUM, "text-text-2")}>{row.output}</td>
                 <td className={cn(TD, NUM, "font-semibold")}>{row.cost}</td>
               </tr>
             ))}

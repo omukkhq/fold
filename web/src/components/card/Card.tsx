@@ -23,10 +23,8 @@ export function Card({
       aria-current={selected ? true : undefined}
       data-selected={selected ? "" : undefined}
       className={cn(
-        "flex flex-col gap-8 rounded-m bg-surface px-12 py-10 shadow-card inset-ring",
-        selected
-          ? "bg-primary-soft inset-ring-primary"
-          : "inset-ring-border-subtle",
+        "flex flex-col gap-8 rounded-m bg-surface px-12 py-10 shadow-pop inset-ring",
+        selected ? "bg-accent-soft inset-ring-accent" : "inset-ring-line",
         focusRing,
         className,
       )}
@@ -35,7 +33,7 @@ export function Card({
       {children}
       {/* The top padding gives one pixel to the 1px border, so the border does not change the footer's height. */}
       {footer ? (
-        <div className="flex items-center justify-between gap-8 border-t border-border-subtle pt-7">
+        <div className="flex items-center justify-between gap-8 border-t border-line pt-7">
           {footer}
         </div>
       ) : null}

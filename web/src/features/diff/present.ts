@@ -21,27 +21,27 @@ const BADGES: Record<ChangeKind, ChangeBadge> = {
   added: {
     letter: "A",
     label: "Added",
-    classes: "bg-primary-soft text-primary-text",
+    classes: "bg-accent-soft text-accent",
   },
   modified: {
     letter: "M",
     label: "Modified",
-    classes: "bg-sunken text-text-muted",
+    classes: "bg-sunken text-text-2",
   },
   deleted: {
     letter: "D",
     label: "Deleted",
-    classes: "bg-danger-soft text-danger",
+    classes: "bg-bad-soft text-bad",
   },
   renamed: {
     letter: "R",
     label: "Renamed",
-    classes: "bg-secondary-soft text-secondary-text",
+    classes: "bg-warn-soft text-warn",
   },
   mode_changed: {
     letter: "T",
     label: "Mode changed",
-    classes: "bg-sunken text-text-muted",
+    classes: "bg-sunken text-text-2",
   },
 };
 

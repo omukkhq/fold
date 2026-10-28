@@ -69,14 +69,14 @@ function Line({
   const row = "flex items-center gap-10 px-16 py-8";
   const content = (
     <>
-      <Icon aria-hidden="true" size={15} className="shrink-0 text-text-muted" />
+      <Icon aria-hidden="true" size={15} className="shrink-0 text-text-2" />
       <span className="flex min-w-0 flex-1 flex-col gap-2">
-        <span className="flex items-center gap-5 text-body text-text">
+        <span className="flex items-center gap-5 text-15 text-text">
           {line.person ? (
             <PersonName name={line.person} slot="needsYouLine" />
           ) : null}
           {line.chip ? (
-            <span className="inline-flex items-center gap-4 rounded-s bg-sunken px-6 py-2 font-mono text-code text-primary-text">
+            <span className="inline-flex items-center gap-4 rounded-s bg-sunken px-6 py-2 font-mono text-13 text-accent">
               <Icon aria-hidden="true" size={12} />
               {line.chip}
             </span>
@@ -85,9 +85,9 @@ function Line({
             <CodeText text={line.text} />
           </span>
         </span>
-        <span className="flex items-center gap-6 text-meta text-text-muted">
+        <span className="flex items-center gap-6 text-13 text-text-2">
           {line.task ? (
-            <span className="font-mono text-label">{line.task}</span>
+            <span className="font-mono text-13">{line.task}</span>
           ) : null}
           {line.title ? (
             <span className="min-w-0 truncate">
@@ -96,7 +96,7 @@ function Line({
           ) : null}
           <span>{formatAsOfMinute(now, line.since)}</span>
           {line.hint ? (
-            <span className="text-text-faint">· {line.hint}</span>
+            <span className="text-text-2">· {line.hint}</span>
           ) : null}
         </span>
       </span>
@@ -117,11 +117,7 @@ function Line({
         className={cn(row, "hover:bg-sunken", focusRing)}
       >
         {content}
-        <ChevronRight
-          aria-hidden="true"
-          size={14}
-          className="text-text-faint"
-        />
+        <ChevronRight aria-hidden="true" size={14} className="text-text-2" />
       </HrefLink>
     </li>
   );
@@ -145,16 +141,16 @@ export function NeedsYou({ slug }: { slug: string }) {
         <button
           type="button"
           className={cn(
-            "inline-flex shrink-0 items-center rounded-chip max-lg:min-h-44",
+            "inline-flex shrink-0 items-center rounded-pill max-lg:min-h-44",
             focusRing,
           )}
         >
-          <span className="inline-flex items-center gap-6 rounded-chip bg-warning-soft px-9 py-3 inset-ring inset-ring-border">
-            <ListTodo aria-hidden="true" size={13} className="text-warning" />
-            <span className="text-code font-medium text-text max-lg:sr-only">
+          <span className="inline-flex items-center gap-6 rounded-pill bg-warn-soft px-9 py-3 inset-ring inset-ring-line">
+            <ListTodo aria-hidden="true" size={13} className="text-warn" />
+            <span className="text-13 font-medium text-text max-lg:sr-only">
               Needs you
             </span>
-            <span className="text-code font-semibold text-warning">
+            <span className="text-13 font-semibold text-warn">
               {items.length}
             </span>
           </span>
@@ -166,17 +162,17 @@ export function NeedsYou({ slug }: { slug: string }) {
           sideOffset={6}
           collisionPadding={16}
           aria-label="Needs you"
-          className="z-10 flex w-needs-you max-w-(--width-popover-max) flex-col rounded-m border border-border bg-raised shadow-card outline-none"
+          className="z-10 flex w-inbox max-w-(--width-popover-max) flex-col rounded-m border border-line bg-surface shadow-pop outline-none"
         >
-          <div className="flex items-center gap-8 border-b border-border-subtle px-16 py-12">
-            <h2 className="text-card font-semibold text-text">Needs you</h2>
-            <span className="text-code text-text-muted">
+          <div className="flex items-center gap-8 border-b border-line px-16 py-12">
+            <h2 className="text-16 font-semibold text-text">Needs you</h2>
+            <span className="text-13 text-text-2">
               {waitingText(items.length)}
             </span>
           </div>
           {groups.map((group) => (
             <section key={group.kind} aria-label={group.title}>
-              <h3 className="px-16 pt-10 pb-2 text-caption font-semibold tracking-overline text-text-faint uppercase">
+              <h3 className="px-16 pt-10 pb-2 font-title text-13 font-semibold text-text-2">
                 {group.title}
               </h3>
               <ul>

@@ -87,8 +87,8 @@ describe("pills", () => {
     expect(mainPill("active")).toEqual({ label: "active", tone: "working" });
     expect(mainPill("idle")).toEqual({ label: "idle", tone: "idle" });
     expect(mainPill("offline")).toEqual({ label: "offline", tone: "stopped" });
-    expect(pillSpec("failed").fill).toBe("bg-danger-soft");
-    expect(pillSpec("ready").text).toBe("text-success");
+    expect(pillSpec("failed").fill).toBe("bg-bad-soft");
+    expect(pillSpec("ready").text).toBe("text-ok");
   });
 
   it("names every role", () => {
@@ -258,7 +258,7 @@ describe("steps", () => {
       step: { text: "paused · resumes in its own session" },
       stop: null,
     });
-    expect(pillSpec("paused").fill).toBe("bg-warning-soft");
+    expect(pillSpec("paused").fill).toBe("bg-warn-soft");
     const [running] = teamGroups(input({ workers: workerList({ workers }) }));
     expect(running?.rows[0]?.pill).toEqual(workerPill("working"));
   });

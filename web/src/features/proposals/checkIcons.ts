@@ -16,18 +16,18 @@ export const RUN_ICONS: Record<
   running: {
     icon: LoaderCircle,
     label: "running",
-    className: "text-text-muted",
+    className: "text-text-2",
   },
   passed: {
     icon: CircleCheck,
     label: "passed",
-    className: "text-primary-text",
+    className: "text-accent",
   },
-  failed: { icon: CircleX, label: "failed", className: "text-danger" },
+  failed: { icon: CircleX, label: "failed", className: "text-bad" },
   stopped: {
     icon: CircleMinus,
     label: "stopped",
-    className: "text-text-muted",
+    className: "text-text-2",
   },
 };
 
@@ -35,9 +35,9 @@ export const OUTCOME_ICONS: Record<
   CheckOutcome,
   { icon: LucideIcon; className: string }
 > = {
-  passed: { icon: CircleCheck, className: "text-primary-text" },
-  failed: { icon: CircleX, className: "text-danger" },
-  timed_out: { icon: Clock, className: "text-danger" },
-  skipped: { icon: CircleDashed, className: "text-text-muted" },
-  not_run: { icon: CircleMinus, className: "text-text-muted" },
+  passed: { icon: CircleCheck, className: "text-accent" },
+  failed: { icon: CircleX, className: "text-bad" },
+  timed_out: { icon: Clock, className: "text-bad" },
+  skipped: { icon: CircleDashed, className: "text-text-2" },
+  not_run: { icon: CircleMinus, className: "text-text-2" },
 };

@@ -14,14 +14,11 @@ function Title({ hidden }: { hidden: boolean }) {
       <ScanEye
         aria-hidden="true"
         size={15}
-        className={cn("text-text-muted", hidden && "invisible")}
+        className={cn("text-text-2", hidden && "invisible")}
       />
       <span
         aria-hidden={hidden}
-        className={cn(
-          "text-bar font-semibold text-text",
-          hidden && "invisible",
-        )}
+        className={cn("text-14 font-semibold text-text", hidden && "invisible")}
       >
         Review checkouts
       </span>
@@ -43,11 +40,11 @@ export function ReviewCheckouts({ slug }: { slug: string }) {
   return (
     <section
       aria-label="Review checkouts"
-      className="flex flex-col divide-y divide-border-subtle rounded-l bg-surface inset-ring inset-ring-border-subtle"
+      className="flex flex-col divide-y divide-line rounded-l bg-surface inset-ring inset-ring-line"
     >
       {checkouts.status === "pending" ? (
         <Message>
-          <p role="status" className="text-bar text-text-muted">
+          <p role="status" className="text-14 text-text-2">
             Loading
           </p>
         </Message>
@@ -56,13 +53,13 @@ export function ReviewCheckouts({ slug }: { slug: string }) {
         <Message>
           <p
             role="alert"
-            className="flex items-center gap-8 text-bar text-text-muted"
+            className="flex items-center gap-8 text-14 text-text-2"
           >
             Review checkouts could not load.
             <button
               type="button"
               onClick={checkouts.retry}
-              className="rounded-s text-primary-text underline"
+              className="rounded-s text-accent underline"
             >
               Retry
             </button>
@@ -71,22 +68,20 @@ export function ReviewCheckouts({ slug }: { slug: string }) {
       ) : null}
       {checkouts.status === "ready" && checkouts.rows.length === 0 ? (
         <Message>
-          <p className="text-bar text-text-muted">
-            No review checkout is open.
-          </p>
+          <p className="text-14 text-text-2">No review checkout is open.</p>
         </Message>
       ) : null}
       {checkouts.rows.map((row, index) => (
         <div key={row.workspace} className={ROW}>
           <Title hidden={index > 0} />
-          <span className="flex items-center gap-6 font-mono text-meta text-text">
+          <span className="flex items-center gap-6 font-mono text-13 text-text">
             {row.worker === null ? (
               "no worker"
             ) : (
-              <PersonName name={row.worker} className="text-bar" />
+              <PersonName name={row.worker} className="text-14" />
             )}
           </span>
-          <p className="min-w-0 flex-1 text-bar text-text-muted">
+          <p className="min-w-0 flex-1 text-14 text-text-2">
             {checkoutText(row)}
           </p>
         </div>

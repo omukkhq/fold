@@ -161,7 +161,7 @@ describe("files", () => {
   it("gives each change kind a letter, a name and its colours", () => {
     expect(changeBadge("added")).toMatchObject({ letter: "A", label: "Added" });
     expect(changeBadge("modified").letter).toBe("M");
-    expect(changeBadge("deleted").classes).toContain("text-danger");
+    expect(changeBadge("deleted").classes).toContain("text-bad");
     expect(changeBadge("renamed").letter).toBe("R");
   });
 

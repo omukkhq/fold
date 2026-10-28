@@ -46,23 +46,22 @@ import { NAME_NOTE } from "./lineQuestions";
 import { commentNote } from "./threadsModel";
 import { detailHref } from "./view";
 
-const OVERLINE =
-  "text-overline leading-snug font-semibold text-text-muted uppercase";
-const CARD = "rounded-l bg-surface inset-ring inset-ring-border-subtle";
-const LINK = cn("rounded-s text-primary-text hover:underline", focusRing);
+const OVERLINE = "font-title text-13 leading-tight font-semibold text-text-2";
+const CARD = "rounded-l bg-surface inset-ring inset-ring-line";
+const LINK = cn("rounded-s text-accent hover:underline", focusRing);
 
 const KIND_CLASSES: Record<ConversationKind, string> = {
-  to_author: "bg-primary-soft text-primary-text",
-  to_you: "bg-secondary-soft text-secondary-text",
+  to_author: "bg-accent-soft text-accent",
+  to_you: "bg-warn-soft text-warn",
   review: "bg-sunken text-text",
-  agent: "bg-sunken text-text-muted",
+  agent: "bg-sunken text-text-2",
 };
 
 const STATE_CLASSES: Record<ConversationState, string> = {
-  needs_answer: "bg-secondary-soft text-secondary-text",
-  waits_author: "bg-primary-soft text-primary-text",
-  open: "bg-secondary-soft text-secondary-text",
-  closed: "bg-sunken text-text-muted",
+  needs_answer: "bg-warn-soft text-warn",
+  waits_author: "bg-accent-soft text-accent",
+  open: "bg-warn-soft text-warn",
+  closed: "bg-sunken text-text-2",
 };
 
 function FilterGroup<T>({
@@ -86,15 +85,15 @@ function FilterGroup<T>({
             onPick(option.value);
           }}
           className={cn(
-            "flex items-center gap-8 rounded-m px-10 py-6 text-left text-bar",
+            "flex items-center gap-8 rounded-m px-10 py-6 text-left text-14",
             option.selected
               ? "bg-sunken font-semibold text-text"
-              : "text-text-muted hover:bg-sunken hover:text-text",
+              : "text-text-2 hover:bg-sunken hover:text-text",
             focusRing,
           )}
         >
           <span className="min-w-0 flex-1">{option.label}</span>
-          <span className="rounded-s bg-sunken px-6 text-caption font-medium text-text-muted">
+          <span className="rounded-s bg-sunken px-6 text-13 font-medium text-text-2">
             {option.count}
           </span>
         </button>
@@ -145,7 +144,7 @@ function AskWholeProposal({
         Ask the author about the whole proposal
       </p>
       {human === null ? (
-        <p className="text-code text-text-muted">{NAME_NOTE}</p>
+        <p className="text-13 text-text-2">{NAME_NOTE}</p>
       ) : (
         <>
           <Controller
@@ -166,17 +165,17 @@ function AskWholeProposal({
             )}
           />
           {errors.body ? (
-            <p className="text-meta font-medium text-danger">
+            <p className="text-13 font-medium text-bad">
               {errors.body.message}
             </p>
           ) : null}
           {errors.root ? (
-            <p role="alert" className="text-meta font-medium text-danger">
+            <p role="alert" className="text-13 font-medium text-bad">
               The question was not sent. {errors.root.message}
             </p>
           ) : null}
           <div className="flex flex-wrap items-center gap-10">
-            <span className="text-meta text-text-faint">
+            <span className="text-13 text-text-2">
               To ask about some lines, select them in{" "}
               <HrefLink href={changesHref} className={LINK}>
                 Changes
@@ -260,7 +259,7 @@ function ReplyForm({
         </Button>
       </div>
       {failure ? (
-        <p role="alert" className="text-meta font-medium text-danger">
+        <p role="alert" className="text-13 font-medium text-bad">
           {failure}
         </p>
       ) : null}
@@ -321,7 +320,7 @@ function CommentLines({
     <pre
       className={cn(
         CODE_BOX,
-        "border-b border-border-subtle bg-bg py-6 font-mono text-code leading-snug text-text",
+        "border-b border-line bg-bg py-6 font-mono text-13 leading-tight text-text",
       )}
     >
       {lines.map((line) => (
@@ -335,7 +334,7 @@ function CommentLines({
         >
           <span
             aria-hidden="true"
-            className="w-diff-number shrink-0 pr-8 text-right text-text-faint select-none"
+            className="w-diff-number shrink-0 pr-8 text-right text-text-2 select-none"
           >
             {line.n}
           </span>
@@ -382,25 +381,25 @@ function ThreadCard({
       data-state={thread.state}
       className={cn(CARD, "flex flex-col overflow-hidden")}
     >
-      <header className="flex flex-wrap items-center gap-x-10 gap-y-6 border-b border-border-subtle px-16 py-10">
+      <header className="flex flex-wrap items-center gap-x-10 gap-y-6 border-b border-line px-16 py-10">
         <span
           className={cn(
-            "rounded-s px-8 py-2 text-caption font-semibold",
+            "rounded-s px-8 py-2 text-13 font-semibold",
             KIND_CLASSES[thread.kind],
           )}
         >
           {KIND_TEXT[thread.kind]}
         </span>
-        <span className="min-w-0 font-mono text-meta break-all text-text">
+        <span className="min-w-0 font-mono text-13 break-all text-text">
           {whereText(thread)}
         </span>
         {version === null ? null : (
-          <span className="text-meta text-text-faint">{version}</span>
+          <span className="text-13 text-text-2">{version}</span>
         )}
         <span className="flex flex-wrap items-center gap-x-10 gap-y-4 md:ml-auto">
           <span
             className={cn(
-              "rounded-s px-8 py-2 text-caption font-semibold",
+              "rounded-s px-8 py-2 text-13 font-semibold",
               STATE_CLASSES[thread.state],
             )}
           >
@@ -413,14 +412,14 @@ function ThreadCard({
             )}
           </span>
           {diffHref === null ? null : (
-            <HrefLink href={diffHref} className={cn("text-code", LINK)}>
+            <HrefLink href={diffHref} className={cn("text-13", LINK)}>
               Show in diff
             </HrefLink>
           )}
           {source.type === "message" ? (
             <HrefLink
               href={idHref(slug, "message", source.thread.id)}
-              className={cn("text-code", LINK)}
+              className={cn("text-13", LINK)}
             >
               Open in Messages
             </HrefLink>
@@ -434,16 +433,16 @@ function ThreadCard({
               message.sender === "fold" ? (
                 <li
                   key={message.id}
-                  className="border-b border-border-subtle py-8 text-meta text-text-faint italic last:border-b-0"
+                  className="border-b border-line py-8 text-13 text-text-2 italic last:border-b-0"
                 >
                   <MentionText text={message.body} slug={slug} />
                 </li>
               ) : (
                 <li
                   key={message.id}
-                  className="flex flex-col gap-6 border-b border-border-subtle py-12 last:border-b-0"
+                  className="flex flex-col gap-6 border-b border-line py-12 last:border-b-0"
                 >
-                  <p className="flex flex-wrap items-center gap-x-8 text-code text-text-muted">
+                  <p className="flex flex-wrap items-center gap-x-8 text-13 text-text-2">
                     <PersonName
                       name={message.sender}
                       className="font-semibold"
@@ -452,10 +451,10 @@ function ThreadCard({
                       aria-label="to"
                       role="img"
                       size={12}
-                      className="shrink-0 text-text-faint"
+                      className="shrink-0 text-text-2"
                     />
                     <PersonList names={recipientActors(message)} />
-                    <span className="text-text-faint">
+                    <span className="text-text-2">
                       · {formatAsOfMinute(now, message.sent_at)}
                     </span>
                   </p>
@@ -471,7 +470,7 @@ function ThreadCard({
               ),
             )}
           </ol>
-          <div className="flex flex-col gap-8 border-t border-border-subtle px-16 py-10">
+          <div className="flex flex-col gap-8 border-t border-line px-16 py-10">
             {threadCanMarkAnswered(source.thread) ? (
               <MarkAnswered slug={slug} scope={{ thread: source.thread.id }} />
             ) : null}
@@ -494,14 +493,14 @@ function ThreadCard({
             {source.thread.comments.map((entry) => (
               <li
                 key={entry.comment.id}
-                className="flex flex-col gap-4 border-b border-border-subtle py-12 last:border-b-0"
+                className="flex flex-col gap-4 border-b border-line py-12 last:border-b-0"
               >
-                <p className="flex flex-wrap items-center gap-x-8 text-code text-text-muted">
+                <p className="flex flex-wrap items-center gap-x-8 text-13 text-text-2">
                   <PersonName
                     name={entry.comment.author}
                     className="font-semibold"
                   />
-                  <span className="text-text-faint">
+                  <span className="text-text-2">
                     · {commentNote(source.thread, entry)} ·{" "}
                     {formatAsOfMinute(now, entry.comment.created_at)}
                   </span>
@@ -511,7 +510,7 @@ function ThreadCard({
             ))}
           </ol>
           {human !== null && proposal.summary.state === "open" ? (
-            <div className="border-t border-border-subtle px-16 py-10">
+            <div className="border-t border-line px-16 py-10">
               <ReplyForm
                 slug={slug}
                 label={`Reply to ${source.thread.id}`}
@@ -617,7 +616,7 @@ export function ConversationTab({
           ))
         )}
         {olderNote === null ? null : (
-          <p className="text-meta text-text-muted">{olderNote}</p>
+          <p className="text-13 text-text-2">{olderNote}</p>
         )}
       </div>
     </div>

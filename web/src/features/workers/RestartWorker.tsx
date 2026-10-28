@@ -9,7 +9,7 @@ import { MentionTextarea } from "@/mentions/MentionTextarea";
 import { ErrorNote } from "./parts";
 import { restartBody, restartFailure } from "./restart";
 
-const FIELD_LABEL = "text-bar leading-snug font-semibold text-text";
+const FIELD_LABEL = "text-14 leading-tight font-semibold text-text";
 
 /** The button that starts one worker again in a new Claude Code session, and the dialog that asks first. The confirm stays pending until the daemon answers. */
 export function RestartWorker({
@@ -58,9 +58,9 @@ export function RestartWorker({
       </RadixDialog.Trigger>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="fixed inset-0 bg-scrim" />
-        <RadixDialog.Content className="fixed top-1/2 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-raised shadow-dialog inset-ring inset-ring-border outline-none">
-          <div className="flex items-center justify-between border-b border-border-subtle py-12 pr-16 pl-24">
-            <RadixDialog.Title className="text-section leading-snug font-semibold text-text">
+        <RadixDialog.Content className="fixed top-1/2 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-surface shadow-dialog inset-ring inset-ring-line outline-none">
+          <div className="flex items-center justify-between border-b border-line py-12 pr-16 pl-24">
+            <RadixDialog.Title className="text-16 leading-tight font-semibold text-text">
               Start {name} in a new session
             </RadixDialog.Title>
             <RadixDialog.Close asChild>
@@ -82,14 +82,14 @@ export function RestartWorker({
             className="flex flex-col"
           >
             <div className="flex flex-col gap-16 px-24 pt-18 pb-20">
-              <RadixDialog.Description className="text-bar text-text-muted">
+              <RadixDialog.Description className="text-14 text-text-2">
                 fold stops the worker when it runs, then starts it with a new
                 Claude Code session and its role's first turn. It forgets its
                 current session but keeps its name, its claims and the workers
                 it started.
               </RadixDialog.Description>
               {previousSessions.length > 0 ? (
-                <p className="text-meta text-text-faint">
+                <p className="text-13 text-text-2">
                   Earlier sessions:{" "}
                   <span className="font-mono">
                     {previousSessions.join(", ")}
@@ -114,7 +114,7 @@ export function RestartWorker({
                 <ErrorNote failure={restartFailure(restart.error)} />
               ) : null}
             </div>
-            <div className="flex items-center justify-end gap-8 border-t border-border-subtle px-24 py-12">
+            <div className="flex items-center justify-end gap-8 border-t border-line px-24 py-12">
               <Button disabled={restart.isPending} onClick={close}>
                 Cancel
               </Button>

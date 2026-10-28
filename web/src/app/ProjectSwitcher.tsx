@@ -28,32 +28,24 @@ export function ProjectSwitcher({ slug }: { slug: string }) {
       >
         <FolderGit2
           size={15}
-          className="shrink-0 text-text-muted max-lg:hidden"
+          className="shrink-0 text-text-2 max-lg:hidden"
           aria-hidden
         />
-        <span className="truncate text-card font-semibold text-text">
-          {slug}
-        </span>
-        <ChevronDown
-          size={14}
-          className="shrink-0 text-text-muted"
-          aria-hidden
-        />
+        <span className="truncate text-16 font-semibold text-text">{slug}</span>
+        <ChevronDown size={14} className="shrink-0 text-text-2" aria-hidden />
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Content align="start" sideOffset={6} className={menuContent}>
           {projects.isPending && (
-            <div className="px-8 py-6 text-body text-text-muted">Loading</div>
+            <div className="px-8 py-6 text-15 text-text-2">Loading</div>
           )}
           {projects.isError && (
-            <div className="px-8 py-6 text-body text-danger">
+            <div className="px-8 py-6 text-15 text-bad">
               Could not load projects
             </div>
           )}
           {projects.data?.length === 0 && (
-            <div className="px-8 py-6 text-body text-text-muted">
-              No projects
-            </div>
+            <div className="px-8 py-6 text-15 text-text-2">No projects</div>
           )}
           <Menu.RadioGroup
             value={slug}
@@ -65,16 +57,16 @@ export function ProjectSwitcher({ slug }: { slug: string }) {
               <Menu.RadioItem key={p.slug} value={p.slug} className={menuItem}>
                 <span className="truncate">{p.name}</span>
                 {p.detail !== null ? (
-                  <Mono className="text-meta font-regular text-text-muted">
+                  <Mono className="text-13 font-regular text-text-2">
                     {p.detail}
                   </Mono>
                 ) : null}
               </Menu.RadioItem>
             ))}
           </Menu.RadioGroup>
-          <Menu.Separator className="my-4 h-px bg-border-subtle" />
+          <Menu.Separator className="my-4 h-px bg-line" />
           <Menu.Item
-            className={cn(menuItem, "text-primary-text")}
+            className={cn(menuItem, "text-accent")}
             onSelect={() => {
               void router.navigate({ href: "/projects" });
             }}

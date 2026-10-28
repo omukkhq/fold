@@ -46,17 +46,17 @@ function FileRow({
     <li
       className={cn(
         "flex items-center gap-10 rounded-m bg-surface px-12 py-8 inset-ring",
-        problem ? "inset-ring-danger" : "inset-ring-border",
+        problem ? "inset-ring-bad" : "inset-ring-line",
       )}
     >
-      <Icon aria-hidden="true" size={15} className="shrink-0 text-text-muted" />
-      <span className="min-w-0 flex-1 truncate text-body text-text">
+      <Icon aria-hidden="true" size={15} className="shrink-0 text-text-2" />
+      <span className="min-w-0 flex-1 truncate text-15 text-text">
         {file.name}
       </span>
       <span
         className={cn(
-          "font-mono text-meta",
-          problem ? "text-danger" : "text-text-muted",
+          "font-mono text-13",
+          problem ? "text-bad" : "text-text-2",
         )}
       >
         {formatSize(file.size)}
@@ -136,9 +136,9 @@ export function NewRequestDialog({
       <RadixDialog.Portal>
         {/* z-10 matches the task dialog, so the request dialog opened from New task draws over it. */}
         <RadixDialog.Overlay className="fixed inset-0 z-10 bg-scrim" />
-        <RadixDialog.Content className="fixed top-1/2 z-10 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-raised shadow-dialog inset-ring inset-ring-border outline-none">
-          <div className="flex items-center justify-between border-b border-border-subtle px-24 py-16">
-            <RadixDialog.Title className="text-section leading-snug font-semibold text-text">
+        <RadixDialog.Content className="fixed top-1/2 z-10 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-surface shadow-dialog inset-ring inset-ring-line outline-none">
+          <div className="flex items-center justify-between border-b border-line px-24 py-16">
+            <RadixDialog.Title className="text-16 leading-tight font-semibold text-text">
               New request
             </RadixDialog.Title>
             <RadixDialog.Close asChild>
@@ -153,7 +153,7 @@ export function NewRequestDialog({
             className="flex flex-col"
           >
             <div className="flex flex-col gap-16 px-24 pt-20 pb-20">
-              <RadixDialog.Description className="text-bar text-text-muted">
+              <RadixDialog.Description className="text-14 text-text-2">
                 An orchestrator reads your message, writes the title, sets the
                 kind and drafts the cards for you to approve.
               </RadixDialog.Description>
@@ -167,7 +167,7 @@ export function NewRequestDialog({
               <div className="flex flex-col gap-6">
                 <label
                   htmlFor={`${hintId}-body`}
-                  className="text-bar leading-snug font-semibold text-text"
+                  className="text-14 leading-tight font-semibold text-text"
                 >
                   What do you need?
                 </label>
@@ -191,20 +191,20 @@ export function NewRequestDialog({
                     />
                   )}
                 />
-                <p id={hintId} className="text-meta text-text-muted">
+                <p id={hintId} className="text-13 text-text-2">
                   Markdown is allowed · # for tasks, proposals and requests · @
                   for files
                 </p>
                 {errors.body ? (
-                  <p className="text-meta font-medium text-danger">
+                  <p className="text-13 font-medium text-bad">
                     {errors.body.message}
                   </p>
                 ) : null}
               </div>
               <div className="flex flex-col gap-8">
-                <p className="text-bar leading-snug font-semibold text-text">
+                <p className="text-14 leading-tight font-semibold text-text">
                   Attachments{" "}
-                  <span className="font-regular text-text-muted">optional</span>
+                  <span className="font-regular text-text-2">optional</span>
                 </p>
                 <button
                   type="button"
@@ -223,8 +223,8 @@ export function NewRequestDialog({
                     if (!isSubmitting) take([...event.dataTransfer.files]);
                   }}
                   className={cn(
-                    "flex items-center justify-center gap-8 rounded-m bg-sunken px-12 py-12 text-bar text-text-muted inset-ring inset-ring-border disabled:cursor-not-allowed disabled:opacity-60",
-                    dragging && "inset-ring-primary",
+                    "flex items-center justify-center gap-8 rounded-m bg-sunken px-12 py-12 text-14 text-text-2 inset-ring inset-ring-line disabled:cursor-not-allowed disabled:opacity-60",
+                    dragging && "inset-ring-accent",
                     focusRing,
                   )}
                 >
@@ -261,14 +261,14 @@ export function NewRequestDialog({
                   </ul>
                 ) : null}
                 {blocking || refused > 0 ? (
-                  <p role="alert" className="text-meta font-medium text-danger">
+                  <p role="alert" className="text-13 font-medium text-bad">
                     {blocking ?? refusedText(refused)}
                   </p>
                 ) : null}
               </div>
             </div>
-            <div className="flex items-center gap-12 border-t border-border-subtle px-24 py-14">
-              <p className="flex min-w-0 flex-1 items-center gap-6 text-bar text-text-muted">
+            <div className="flex items-center gap-12 border-t border-line px-24 py-14">
+              <p className="flex min-w-0 flex-1 items-center gap-6 text-14 text-text-2">
                 <UserRound aria-hidden="true" size={15} className="shrink-0" />
                 {human === null
                   ? "Tell fold your name first, then create the request."

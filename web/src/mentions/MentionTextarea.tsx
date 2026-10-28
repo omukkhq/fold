@@ -41,9 +41,9 @@ import {
 } from "./suggest";
 
 const LOOKS: Record<OptionLook, string> = {
-  mono: "font-mono text-code text-primary-text",
-  human: "font-ui text-bar font-medium text-primary-text",
-  agent: "font-ui text-bar font-medium text-secondary-text",
+  mono: "font-mono text-13 text-accent",
+  human: "text-14 font-medium text-accent",
+  agent: "text-14 font-medium text-text",
 };
 
 /** Reads the lists a `#` or `@` needs only while one is being typed, from the same cached queries the screens use. */
@@ -229,7 +229,7 @@ export const MentionTextarea = forwardRef<
           onInteractOutside={(event) => {
             if (event.target === inner.current) event.preventDefault();
           }}
-          className="z-20 flex w-side-panel flex-col rounded-m bg-raised py-6 shadow-dialog inset-ring inset-ring-border outline-none"
+          className="z-20 flex w-side-panel flex-col rounded-m bg-surface py-6 shadow-dialog inset-ring inset-ring-line outline-none"
         >
           <ul
             id={listId}
@@ -239,7 +239,7 @@ export const MentionTextarea = forwardRef<
           >
             {groupRuns(suggestions).map((run) => (
               <li key={run.group} role="presentation" className="flex flex-col">
-                <p className="px-12 pt-6 pb-4 text-overline leading-snug font-semibold tracking-overline text-text-muted uppercase">
+                <p className="px-12 pt-6 pb-4 font-title text-13 leading-tight font-semibold text-text-2">
                   {GROUP_LABELS[run.group]}
                 </p>
                 <ul role="presentation" className="flex flex-col px-4">
@@ -263,7 +263,7 @@ export const MentionTextarea = forwardRef<
                         {optionMark(run.group)}
                         {suggestion.label}
                       </span>
-                      <span className="min-w-0 truncate text-bar text-text-muted">
+                      <span className="min-w-0 truncate text-14 text-text-2">
                         {suggestion.detail}
                       </span>
                     </li>
@@ -272,7 +272,7 @@ export const MentionTextarea = forwardRef<
               </li>
             ))}
           </ul>
-          <p className="mt-4 flex items-center gap-4 border-t border-border-subtle px-12 pt-6 text-caption text-text-faint">
+          <p className="mt-4 flex items-center gap-4 border-t border-line px-12 pt-6 text-13 text-text-2">
             <ArrowUp aria-hidden="true" size={11} />
             <ArrowDown aria-hidden="true" size={11} />
             to move · Enter to insert · Esc to close
@@ -288,7 +288,5 @@ const ROW_ICONS = { user: User, bot: Bot, file: FileText, folder: Folder };
 function RowIconView({ icon }: { icon: RowIcon | null }) {
   if (icon === null) return null;
   const Icon = ROW_ICONS[icon];
-  return (
-    <Icon aria-hidden="true" size={13} className="shrink-0 text-text-muted" />
-  );
+  return <Icon aria-hidden="true" size={13} className="shrink-0 text-text-2" />;
 }

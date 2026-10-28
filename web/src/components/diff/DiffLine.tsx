@@ -21,7 +21,7 @@ interface DiffLineProps extends Omit<ComponentProps<"div">, "children"> {
 }
 
 const NUMBER_CLASSES =
-  "w-diff-number shrink-0 select-none text-right font-mono text-label";
+  "w-diff-number shrink-0 select-none text-right font-mono text-13";
 
 export function DiffLine({
   kind,
@@ -47,7 +47,7 @@ export function DiffLine({
     >
       <span className="sr-only">{style.description}</span>
       {style.header ? (
-        <code className="min-w-0 flex-1 px-14 py-4 font-mono text-label leading-snug whitespace-pre-wrap wrap-anywhere text-text-muted">
+        <code className="min-w-0 flex-1 px-14 py-4 font-mono text-13 leading-tight whitespace-pre-wrap wrap-anywhere text-text-2">
           {children}
         </code>
       ) : (
@@ -67,13 +67,13 @@ export function DiffLine({
           <span
             aria-hidden="true"
             className={cn(
-              "w-24 shrink-0 select-none text-center font-mono text-code",
+              "w-24 shrink-0 select-none text-center font-mono text-13",
               style.signClass,
             )}
           >
             {style.sign}
           </span>
-          <code className="min-w-0 flex-1 font-mono text-code leading-loose whitespace-pre-wrap wrap-anywhere text-text">
+          <code className="min-w-0 flex-1 font-mono text-13 leading-normal whitespace-pre-wrap wrap-anywhere text-text">
             {children}
           </code>
         </>

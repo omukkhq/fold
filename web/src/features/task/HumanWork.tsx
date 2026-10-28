@@ -18,13 +18,13 @@ export function HumanWork({ slug, task }: { slug: string; task: TaskDetail }) {
   return (
     <section
       aria-label="Human task"
-      className="flex flex-col gap-12 rounded-m bg-sunken px-16 py-14 inset-ring inset-ring-border-subtle"
+      className="flex flex-col gap-12 rounded-m bg-sunken px-16 py-14 inset-ring inset-ring-line"
     >
-      <h2 className="flex items-center gap-8 text-bar font-semibold text-text">
-        <UserRound aria-hidden="true" size={15} className="text-text-muted" />
+      <h2 className="flex items-center gap-8 text-14 font-semibold text-text">
+        <UserRound aria-hidden="true" size={15} className="text-text-2" />
         Human task
       </h2>
-      <p className="text-bar leading-normal text-text-muted">{work.note}</p>
+      <p className="text-14 leading-normal text-text-2">{work.note}</p>
       {showButton ? (
         <div className="flex items-center gap-10">
           <Button
@@ -40,7 +40,7 @@ export function HumanWork({ slug, task }: { slug: string; task: TaskDetail }) {
             Mark Done
           </Button>
           {work.waitsFor.length > 0 ? (
-            <span className="text-meta text-text-faint">
+            <span className="text-13 text-text-2">
               Waits for {work.waitsFor.join(", ")}
             </span>
           ) : null}

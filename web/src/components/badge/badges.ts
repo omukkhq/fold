@@ -34,27 +34,27 @@ export interface BadgeSpec {
 
 // The proposal pill, the attention mark and the Blocked mark. The leading follows the size, because
 // tailwind-merge drops a leading that comes before a size.
-const PILL = "px-8 py-2 text-meta leading-snug";
-const ATTENTION = "px-7 py-2 text-meta leading-snug";
-const BLOCKED = "px-8 py-3 text-caption leading-snug";
+const PILL = "px-8 py-2 text-13 leading-tight";
+const ATTENTION = "px-7 py-2 text-13 leading-tight";
+const BLOCKED = "px-8 py-3 text-13 leading-tight";
 
 const SPECS: Record<BadgeTone, BadgeSpec> = {
   "proposal-changes": {
     icon: CircleAlert,
     text: "Changes requested",
-    classes: "bg-danger-soft text-danger",
+    classes: "bg-bad-soft text-bad",
     shape: PILL,
   },
   "proposal-conflict": {
     icon: GitMerge,
     text: "Conflict",
-    classes: "bg-danger-soft text-danger",
+    classes: "bg-bad-soft text-bad",
     shape: PILL,
   },
   "human-review": {
     icon: UserCheck,
     text: "Human review",
-    classes: "bg-secondary-soft text-secondary-text",
+    classes: "bg-warn-soft text-warn",
     shape: PILL,
   },
   "needs-you": {
@@ -66,25 +66,25 @@ const SPECS: Record<BadgeTone, BadgeSpec> = {
   blocked: {
     icon: OctagonAlert,
     text: "Blocked",
-    classes: "bg-danger-soft text-danger",
+    classes: "bg-bad-soft text-bad",
     shape: BLOCKED,
   },
   stalled: {
     icon: Clock,
     text: "Stalled",
-    classes: "bg-secondary-soft text-secondary-text",
+    classes: "bg-warn-soft text-warn",
     shape: PILL,
   },
   stale: {
     icon: History,
     text: "Stale",
-    classes: "bg-ink-soft text-text-muted",
+    classes: "bg-fill text-text-2",
     shape: PILL,
   },
   outdated: {
     icon: History,
     text: "Outdated",
-    classes: "bg-sunken text-text-muted",
+    classes: "bg-sunken text-text-2",
     shape: PILL,
   },
 };
