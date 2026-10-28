@@ -529,28 +529,28 @@ describe("A not-found inside an open project", () => {
     });
   }
 
-  /** The not-found state under the project's top bar and tabs, never the project not-found state. */
+  /** The not-found state under the project's top bar and tabs, never the project not-found state, and no failure. */
   async function missingInShell(title: string, back: string) {
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain(title);
+    const panel = await screen.findByRole("region", { name: title });
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(
-      within(alert)
+      within(panel)
         .getAllByRole("link")
         .map((link) => [link.textContent, link.getAttribute("href")]),
     ).toEqual([[expect.stringContaining("Back to") as string, back]]);
     expect(screen.getByRole("navigation", { name: "Project" })).toBeTruthy();
     expect(screen.queryByText("Project not found")).toBeNull();
-    return alert;
+    return panel;
   }
 
   it("says a batch the daemon does not have is not found and leads to the proposals", async () => {
     stubProject();
     renderAt("/p/demo/batches/rb-1");
-    const alert = await missingInShell(
+    const panel = await missingInShell(
       "Batch rb-1 not found",
       "/p/demo/proposals",
     );
-    expect(alert.textContent).toContain("code: review_batch_not_found");
+    expect(panel.textContent).toContain("no review batch with this id");
   });
 
   it("shows the error state, not a missing batch, when the daemon fails to answer for the batch", async () => {
