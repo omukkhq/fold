@@ -14,21 +14,15 @@ export interface MissingState {
   linkText: string;
 }
 
-const NOUNS = {
-  task: "task",
-  proposal: "proposal",
-  request: "request",
-  batch: "review batch",
+/** The noun of each kind and the screen its back link opens. A batch leads to the proposals, where its members are found. */
+const KINDS = {
+  task: { title: "Task", noun: "task", list: "board" },
+  proposal: { title: "Proposal", noun: "proposal", list: "proposals" },
+  request: { title: "Request", noun: "request", list: "requests" },
+  batch: { title: "Batch", noun: "review batch", list: "proposals" },
 } as const;
 
-const TITLES = {
-  task: "Task",
-  proposal: "Proposal",
-  request: "Request",
-  batch: "Batch",
-} as const;
-
-/** The not-found state inside an open project. A batch leads back to the proposals, where its members are found; everything else leads back to the board. */
+/** The not-found state inside an open project, for a malformed id and for an id the daemon does not have alike. Each item leads back to the list where it is found; a task and a page lead back to the board. */
 export function missingState(slug: string, missing: Missing): MissingState {
   if (missing.kind === "page") {
     return {
@@ -39,22 +33,16 @@ export function missingState(slug: string, missing: Missing): MissingState {
       linkText: "Back to board",
     };
   }
-  const where =
-    "The id may be mistyped, or the link may come from another project.";
-  if (missing.kind === "batch") {
-    return {
-      title: `${TITLES.batch} ${missing.id} not found`,
-      text: `This project has no ${NOUNS.batch} with this id. ${where} Open the proposals to find the batch.`,
-      code: "review_batch_not_found",
-      href: projectPath(slug, "proposals"),
-      linkText: "Back to proposals",
-    };
-  }
+  const kind = KINDS[missing.kind];
+  const next =
+    missing.kind === "task"
+      ? "Open the board to continue."
+      : `Open the ${kind.list} to find the ${kind.noun}.`;
   return {
-    title: `${TITLES[missing.kind]} ${missing.id} not found`,
-    text: `This project has no ${NOUNS[missing.kind]} with this id. ${where} Open the board to continue.`,
-    code: null,
-    href: projectPath(slug, "board"),
-    linkText: "Back to board",
+    title: `${kind.title} ${missing.id} not found`,
+    text: `This project has no ${kind.noun} with this id. The id may be mistyped, or the link may come from another project. ${next}`,
+    code: missing.kind === "batch" ? "review_batch_not_found" : null,
+    href: projectPath(slug, kind.list),
+    linkText: `Back to ${kind.list}`,
   };
 }

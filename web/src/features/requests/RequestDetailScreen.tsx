@@ -18,6 +18,7 @@ import {
   type RequestDetail,
 } from "@/api/requests";
 import { HrefLink } from "@/app/HrefLink";
+import { missingState } from "@/app/missingState";
 import { Button } from "@/components/button/Button";
 import {
   buttonClasses,
@@ -67,7 +68,6 @@ import {
   VersionsBlock,
   ViewerPanel,
 } from "./SidePanel";
-import { projectPath } from "@/routes/paths";
 
 interface RequestDetailScreenProps {
   slug: string;
@@ -199,18 +199,15 @@ export function RequestDetailScreen({
   if (query.isPending) return <RequestDetailPending slug={slug} id={id} />;
   if (query.isError || detail === null) {
     const missing = detail === null && !query.isError;
+    const absent = missingState(slug, { kind: "request", id });
     return (
       <div className="flex flex-col gap-16 px-24 pt-18 pb-24">
         <Crumb slug={slug} id={id} />
         <FailurePanel
-          title={
-            missing
-              ? `${id} does not exist in this project`
-              : `Could not load ${id}`
-          }
+          title={missing ? absent.title : `Could not load ${id}`}
           text={
             missing
-              ? "The id may be mistyped, or the link may come from another project. Open the list to find the request."
+              ? absent.text
               : "The daemon answered with an error. Nothing is lost; try again."
           }
           code={
@@ -219,13 +216,13 @@ export function RequestDetailScreen({
           action={
             missing ? (
               <HrefLink
-                href={projectPath(slug, "requests")}
+                href={absent.href}
                 className={cn(buttonClasses("secondary", "md"), focusRing)}
               >
                 <span className={buttonIconClass("secondary")}>
                   <ArrowLeft aria-hidden="true" size={15} />
                 </span>
-                Back to requests
+                {absent.linkText}
               </HrefLink>
             ) : (
               <Button

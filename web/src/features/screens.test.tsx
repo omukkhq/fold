@@ -547,22 +547,31 @@ describe("A not-found inside an open project", () => {
     expect(alert.textContent).toContain("code: review_batch_not_found");
   });
 
+  it("shows the error state, not a missing batch, when the daemon fails to answer for the batch", async () => {
+    stubProject(errorReply(500, "internal"));
+    renderAt("/p/demo/batches/rb-1");
+    expect(await screen.findByText("This screen could not load.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "Project" })).toBeTruthy();
+    expect(screen.queryByText(/not found/)).toBeNull();
+  });
+
   it("says the same of an id that is no batch id", async () => {
     stubProject();
     renderAt("/p/demo/batches/P-1");
     await missingInShell("Batch P-1 not found", "/p/demo/proposals");
   });
 
-  it("names a malformed task, proposal or request id and leads to the board", async () => {
+  it("names a malformed task, proposal or request id and leads to the board or its list", async () => {
     stubProject();
     renderAt("/p/demo/t/abc");
     await missingInShell("Task abc not found", "/p/demo/board");
     cleanup();
     renderAt("/p/demo/proposals/xyz");
-    await missingInShell("Proposal xyz not found", "/p/demo/board");
+    await missingInShell("Proposal xyz not found", "/p/demo/proposals");
     cleanup();
     renderAt("/p/demo/requests/RQ-x");
-    await missingInShell("Request RQ-x not found", "/p/demo/board");
+    await missingInShell("Request RQ-x not found", "/p/demo/requests");
   });
 
   it("says a page the project does not have is not found", async () => {

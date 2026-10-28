@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { missingState } from "./missingState";
 
 describe("missingState", () => {
-  it("names a missing item by its id and leads back to the board", () => {
+  it("names a missing task by its id and leads back to the board", () => {
     expect(missingState("demo", { kind: "task", id: "T-999" })).toEqual({
       title: "Task T-999 not found",
       text: expect.stringContaining("no task with this id") as string,
@@ -10,12 +10,27 @@ describe("missingState", () => {
       href: "/p/demo/board",
       linkText: "Back to board",
     });
-    expect(missingState("demo", { kind: "proposal", id: "P-77" }).title).toBe(
-      "Proposal P-77 not found",
-    );
-    expect(missingState("demo", { kind: "request", id: "RQ-x" }).title).toBe(
-      "Request RQ-x not found",
-    );
+  });
+
+  it("leads a missing proposal or request back to its own list", () => {
+    expect(missingState("demo", { kind: "proposal", id: "P-77" })).toEqual({
+      title: "Proposal P-77 not found",
+      text: expect.stringContaining(
+        "Open the proposals to find the proposal.",
+      ) as string,
+      code: null,
+      href: "/p/demo/proposals",
+      linkText: "Back to proposals",
+    });
+    expect(missingState("demo", { kind: "request", id: "RQ-x" })).toEqual({
+      title: "Request RQ-x not found",
+      text: expect.stringContaining(
+        "Open the requests to find the request.",
+      ) as string,
+      code: null,
+      href: "/p/demo/requests",
+      linkText: "Back to requests",
+    });
   });
 
   it("leads a missing batch back to the proposals with the daemon's code", () => {

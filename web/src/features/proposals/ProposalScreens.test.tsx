@@ -1488,7 +1488,7 @@ describe("Proposal detail", () => {
   it("says when the project has no such proposal", async () => {
     renderAt("/p/demo/proposals/P-99");
     expect(
-      await screen.findByRole("region", { name: "No proposal P-99" }),
+      await screen.findByRole("region", { name: "Proposal P-99 not found" }),
     ).toBeTruthy();
   });
 });
