@@ -709,8 +709,13 @@ describe("Repository screen", () => {
       "r2",
       "r1",
     ]);
-    expect(within(revisions).getByText(/pull · 9f2c1ab/)).toBeTruthy();
-    expect(within(revisions).getByText(/P-5 · Change 5/)).toBeTruthy();
+    expect(
+      within(revisions).getByText("Pull of the remote commit 9f2c1ab"),
+    ).toBeTruthy();
+    expect(within(revisions).getByText("Change 5")).toBeTruthy();
+    expect(within(revisions).getByText(/P-5 for T-/)).toBeTruthy();
+    expect(within(rows[0] ?? revisions).getByText("head of main")).toBeTruthy();
+    expect(within(revisions).getAllByText("head of main")).toHaveLength(1);
   });
 
   it("names main's head from the repository route under the tree", async () => {

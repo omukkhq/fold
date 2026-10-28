@@ -93,3 +93,15 @@ export function addBackFailure(error: unknown): Failure {
   }
   return { code, text: failureText(error) };
 }
+
+/** How many folders a short path keeps. */
+const SHORT_FOLDERS = 2;
+
+/** `…/programming/nobs` for `/home/tanim/programming/nobs`: the last folders of a long absolute path, which the screen pairs with the whole path. The daemon sends no home folder, so the path never starts with `~`. */
+export function shortPath(path: string): string {
+  const parts = path.split("/").filter((part) => part !== "");
+  if (parts.length <= SHORT_FOLDERS + 1) {
+    return path;
+  }
+  return `…/${parts.slice(-SHORT_FOLDERS).join("/")}`;
+}

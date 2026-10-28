@@ -10,6 +10,7 @@ import {
   projectMark,
   removeFailure,
   showsRoot,
+  shortPath,
   shownProjects,
 } from "./projectsHome";
 
@@ -122,5 +123,16 @@ describe("failed writes", () => {
     expect(addBackFailure(new ApiError("internal_error", "")).code).toBe(
       "internal_error",
     );
+  });
+});
+
+describe("shortPath", () => {
+  it("keeps the last two folders of a long path and leaves a short one whole", () => {
+    expect(shortPath("/home/tanim/programming/nobs")).toBe(
+      "…/programming/nobs",
+    );
+    expect(shortPath("/srv/nobs/.git")).toBe("/srv/nobs/.git");
+    expect(shortPath("/srv/nobs")).toBe("/srv/nobs");
+    expect(shortPath("/home/tanim/code/nobs/.git")).toBe("…/nobs/.git");
   });
 });
