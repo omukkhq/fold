@@ -10,6 +10,7 @@ use fold_core::{
 use fold_store::Store;
 use fold_store::workspaces::{self, WorkspaceState};
 use fold_vcs::batch::{BatchConflict, BatchMember, MergedBatch, merged_batch_state};
+use fold_vcs::browse::FileContent;
 use fold_vcs::compare::{self as vcs, CarriedState, FileChange, FileDiff, State, Totals};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::RepoPath;
@@ -468,6 +469,23 @@ impl WorkspaceService {
             let objects = open_objects(&paths)?;
             let view = batch_merge_view(&merges, &objects, main, members)?;
             vcs::file_diff(&objects, &view.from, &view.merged.state, &path)
+        })
+        .await
+    }
+
+    /// One file of the merged tree of [`WorkspaceService::compare_batch_merge`], from the same cached merge, so a line-merged file the store does not hold is read from memory. It writes nothing.
+    pub async fn read_batch_merge_file(
+        &self,
+        main: ObjectHash,
+        members: Vec<BatchMember>,
+        path: RepoPath,
+    ) -> Result<FileContent, WorkspaceError> {
+        let paths = self.paths.clone();
+        let merges = Arc::clone(&self.batch_merges);
+        blocking(move || {
+            let objects = open_objects(&paths)?;
+            let view = batch_merge_view(&merges, &objects, main, members)?;
+            vcs::read_state_file(&objects, &view.merged.state, &path)
         })
         .await
     }

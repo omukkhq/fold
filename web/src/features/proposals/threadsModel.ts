@@ -1,5 +1,11 @@
 import type { Hunk } from "@/api/diff";
 import type { ReviewComment } from "@/api/proposals";
+import {
+  fileLineSet,
+  gapText,
+  type FileTextView,
+  type LineSet,
+} from "@/features/diff/gaps";
 import type { DiffSelection, DiffThread } from "@/features/diff/selection";
 
 export interface ThreadComment {
@@ -211,6 +217,23 @@ export function heldLines(hunks: readonly Hunk[]): Set<string> {
 }
 
 /**
+ * The lines a thread can sit under in a file whose hunks are read: every line of both sides once the file's text fits the hunks, as the gaps
+ * around them can show each one; the hunks' lines when the file has no text to read or its read failed; null while the text loads, as nothing
+ * is known yet.
+ */
+export function heldFileLines(
+  hunks: readonly Hunk[],
+  newHash: string | null,
+  fileText: FileTextView | undefined,
+): LineSet | null {
+  if (fileText === undefined || hunks.length === 0) return heldLines(hunks);
+  const text = gapText(hunks, newHash, fileText);
+  if (text?.status === "pending") return null;
+  if (text?.status === "ready") return fileLineSet(hunks, text.lines.length);
+  return heldLines(hunks);
+}
+
+/**
  * Places threads on a diff of `listedPaths`. Without the old side, as on a change since an earlier version whose old lines no comment reads, a thread on the old side joins the threads the diff cannot place.
  * `held` names the lines the hunks of the files already read hold: a thread whose end is on no such line has no row to sit under and joins the threads the diff cannot place. A listed file with no entry in `held` has not been read, so its threads stay with the diff.
  */
@@ -218,7 +241,7 @@ export function placeThreads(
   threads: readonly CommentThread[],
   listedPaths: readonly string[],
   oldSide: boolean,
-  held: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+  held: ReadonlyMap<string, LineSet> = new Map(),
 ): PlacedThreads {
   const listed = new Set(listedPaths);
   const onDiff = (t: CommentThread) => {
