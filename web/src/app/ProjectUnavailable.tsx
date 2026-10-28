@@ -44,18 +44,18 @@ export function ProjectUnavailable({
         action={
           <div className="flex shrink-0 gap-8">
             <Button
-              variant="secondary"
-              icon={<RotateCw aria-hidden="true" size={15} />}
+              variant="quiet"
+              icon={<RotateCw aria-hidden="true" size={16} />}
               onClick={onRetry}
             >
               Retry
             </Button>
             <HrefLink
               href="/projects"
-              className={cn(buttonClasses("secondary", "md"), focusRing)}
+              className={cn(buttonClasses("quiet", "md"), focusRing)}
             >
-              <span className={buttonIconClass("secondary")}>
-                <ArrowLeft aria-hidden="true" size={15} />
+              <span className={buttonIconClass("quiet")}>
+                <ArrowLeft aria-hidden="true" size={16} />
               </span>
               Back to projects
             </HrefLink>

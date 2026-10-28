@@ -49,9 +49,9 @@ function GonePanel({
         action={
           <HrefLink
             href="/projects"
-            className={cn(buttonClasses("secondary", "md"), focusRing)}
+            className={cn(buttonClasses("quiet", "md"), focusRing)}
           >
-            <span className={buttonIconClass("secondary")}>
+            <span className={buttonIconClass("quiet")}>
               <ArrowLeft aria-hidden="true" size={15} />
             </span>
             Back to projects

@@ -3,7 +3,7 @@ import { bareName, isHumanName, isYou } from "./names";
 import { type PersonSlot, slotSize } from "./sizes";
 
 /**
- * A person as `@name` text: a human in the link-text colour, an agent or worker in the secondary colour, always Barlow 500.
+ * A person as `@name` text: a human in the link-text colour, an agent or worker in the text colour, always the body face at 500. Gold stays free for what waits for a person.
  * It takes the size of the text around it; where a name has its own size, the caller names the `slot` and the size follows the person's kind, a human and an agent each at the size the slot gives them. The font, weight and colour come after `className`, so a caller's mono or muted classes never change them.
  */
 export function PersonName({
@@ -30,13 +30,13 @@ export function PersonName({
       className={cn(
         className,
         slot && slotSize(slot, human ? "human" : "agent"),
-        "font-ui font-medium",
-        human ? "text-primary-text" : "text-secondary-text",
+        "font-body font-medium",
+        human ? "text-accent" : "text-text",
       )}
     >
       {own && youWord ? "you" : `@${bareName(name)}`}
       {own && !youWord ? (
-        <span className="font-regular text-text-muted"> (you)</span>
+        <span className="font-regular text-text-2"> (you)</span>
       ) : null}
     </span>
   );

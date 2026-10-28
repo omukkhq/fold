@@ -1,4 +1,12 @@
 import {
+  TABLE_CELL,
+  TABLE_HEAD,
+  TABLE_ROW,
+} from "@/components/table/tableStyles";
+import { Id } from "@/components/id/Id";
+import { IdText } from "@/components/text/IdText";
+import { IdLink } from "@/components/id/IdLink";
+import {
   skipToken,
   useMutation,
   useQueries,
@@ -9,7 +17,6 @@ import {
 import * as RadixTabs from "@radix-ui/react-tabs";
 import { useState } from "react";
 import {
-  Bot,
   Check,
   ChevronRight,
   Copy,
@@ -41,7 +48,7 @@ import {
   segmentClasses,
 } from "@/components/segments/segmentStyles";
 import { Skeleton } from "@/components/states/Skeleton";
-import { TAB_BY_STATE, TAB_LIST } from "@/components/overlay/tabStyles";
+import { BAR_TAB } from "@/features/proposals/barTab";
 import { detailHref } from "@/features/proposals/view";
 import { cn } from "@/lib/cn";
 import { focusRing, insetFocusRing } from "@/lib/focus";
@@ -77,27 +84,22 @@ import {
 import { MergedChanges } from "./MergedChanges";
 import { projectPath } from "@/routes/paths";
 
-const HEAD =
-  "px-6 py-9 text-left text-label leading-snug font-semibold tracking-overline whitespace-nowrap text-text-muted uppercase first:pl-16 last:pr-16";
-const CELL = "px-6 py-12 align-top first:pl-16 last:pr-16";
-const MONO = "font-mono text-code whitespace-nowrap text-text-muted";
-const OVERLINE =
-  "text-label leading-snug font-semibold tracking-overline text-primary-text uppercase";
-const CARD =
-  "flex flex-col gap-12 rounded-l border border-border-subtle bg-surface p-16";
+const HEAD = cn(TABLE_HEAD, "px-14 pt-10 pb-6 whitespace-nowrap");
+const CELL = cn(TABLE_CELL, "px-14 py-12");
+const CARD = "flex flex-col gap-10 rounded-m bg-surface px-16 py-14";
 
 const VERDICT_LOOK: Record<
   VerdictKind,
   { icon: LucideIcon | null; className: string }
 > = {
-  approved: { icon: Check, className: "bg-success-soft text-success" },
-  changes: { icon: null, className: "bg-warning-soft text-warning" },
-  rejected: { icon: null, className: "bg-danger-soft text-danger" },
-  commented: { icon: null, className: "bg-sunken text-text-muted" },
-  conflict: { icon: GitMerge, className: "bg-danger-soft text-danger" },
-  reviewing: { icon: Loader2, className: "bg-sunken text-text-muted" },
-  left: { icon: null, className: "bg-sunken text-text-faint" },
-  none: { icon: null, className: "bg-sunken text-text-faint" },
+  approved: { icon: Check, className: "bg-ok-soft text-ok" },
+  changes: { icon: null, className: "bg-bad-soft text-bad" },
+  rejected: { icon: null, className: "bg-bad-soft text-bad" },
+  commented: { icon: null, className: "bg-fill text-text" },
+  conflict: { icon: GitMerge, className: "bg-bad-soft text-bad" },
+  reviewing: { icon: Loader2, className: "bg-fill text-text" },
+  left: { icon: null, className: "bg-fill text-text" },
+  none: { icon: null, className: "bg-fill text-text" },
 };
 
 function VerdictCell({ row }: { row: MemberRow }) {
@@ -107,25 +109,21 @@ function VerdictCell({ row }: { row: MemberRow }) {
     <div className="flex flex-col items-start gap-4">
       <span
         className={cn(
-          "inline-flex items-center gap-5 rounded-s px-8 py-2 text-meta font-semibold whitespace-nowrap",
+          "inline-flex items-center gap-6 rounded-pill px-9 py-2 text-13 leading-tight font-medium whitespace-nowrap",
           look.className,
         )}
       >
-        {Icon ? <Icon aria-hidden="true" size={12} /> : null}
+        {Icon ? <Icon aria-hidden="true" size={14} /> : null}
         {VERDICT_TEXT[row.verdict]}
       </span>
       {row.needsHuman === null ? null : (
-        <span className="flex items-center gap-4 text-meta text-text-muted">
-          <UserCheck
-            aria-hidden="true"
-            size={12}
-            className="text-primary-text"
-          />
+        <span className="flex items-center gap-4 text-13 text-text-2">
+          <UserCheck aria-hidden="true" size={14} className="text-text-2" />
           needs
           {row.needsHuman === "" ? (
             " a human"
           ) : (
-            <PersonName name={row.needsHuman} className="text-bar" />
+            <PersonName name={row.needsHuman} />
           )}
         </span>
       )}
@@ -141,10 +139,10 @@ const CHANGE_OPTIONS: { mode: ChangeMode; label: string }[] = [
 function ChangeCell({ change }: { change: MemberChange | undefined }) {
   return (
     <div className="flex flex-col gap-2">
-      <span className="font-mono text-code whitespace-nowrap text-text">
+      <span className="text-14 whitespace-nowrap text-text tabular-nums">
         {change?.counts ?? "…"}
       </span>
-      <span className="text-meta whitespace-nowrap text-text-muted">
+      <span className="text-13 whitespace-nowrap text-text-2">
         {change?.note}
       </span>
     </div>
@@ -199,18 +197,22 @@ function BatchIntegration({
   return (
     <section
       aria-label="Integration"
-      className="flex flex-wrap items-center gap-12"
+      className="flex flex-wrap items-center gap-12 rounded-m bg-surface py-12 pr-12 pl-16"
     >
-      <p className="flex min-w-0 flex-1 items-center gap-6 text-bar text-text-muted">
-        <GitMerge aria-hidden="true" size={14} className="shrink-0" />
-        {note.text}
+      <p className="flex min-w-0 flex-1 items-start gap-10 text-15 text-text">
+        <GitMerge
+          aria-hidden="true"
+          size={16}
+          className="mt-4 shrink-0 text-text-2"
+        />
+        <IdText text={note.text} />
       </p>
       {human && note.canIntegrate ? (
         <Button
           variant="primary"
           pending={integrate.isPending}
           pendingLabel="Integrating…"
-          icon={<GitMerge aria-hidden="true" size={15} />}
+          icon={<GitMerge aria-hidden="true" size={16} />}
           onClick={() => {
             integrate.mutate();
           }}
@@ -219,7 +221,7 @@ function BatchIntegration({
         </Button>
       ) : null}
       {integrate.isError ? (
-        <p role="alert" className="w-full text-meta font-medium text-danger">
+        <p role="alert" className="w-full text-13 font-medium text-bad">
           {integrateFailure(integrate.error)}
         </p>
       ) : null}
@@ -272,11 +274,11 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
     <div className="flex min-w-0 flex-col gap-16 px-16 pt-20 pb-24 md:px-24">
       <div className="flex flex-wrap items-start justify-between gap-16">
         <div className="flex min-w-0 flex-col gap-4">
-          <nav aria-label="Breadcrumb" className="flex items-center gap-8">
+          <nav aria-label="Breadcrumb" className="flex items-center gap-6">
             <HrefLink
               href={projectPath(slug, "proposals")}
               className={cn(
-                "rounded-s text-bar text-text-muted hover:text-text",
+                "rounded-s text-14 text-text-2 hover:text-text",
                 focusRing,
               )}
             >
@@ -284,28 +286,26 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
             </HrefLink>
             <ChevronRight
               aria-hidden="true"
-              size={13}
-              className="text-text-faint"
+              size={14}
+              className="text-text-2"
             />
-            <span className="font-mono text-bar text-text">{batch.id}</span>
-          </nav>
-          <h1 className="flex items-baseline gap-10">
-            <span className="text-screen leading-snug font-semibold text-text">
-              Review batch
-            </span>
-            <span className="font-mono text-section text-text-muted">
+            <Id aria-current="page" className="text-14 font-medium text-text">
               {batch.id}
-            </span>
+            </Id>
+          </nav>
+          <h1 className="text-24 leading-tight font-semibold text-text">
+            Review batch{" "}
+            <Id className="font-title font-medium text-text-2">{batch.id}</Id>
           </h1>
-          <p className="text-body text-text-muted">
+          <p className="mt-2 text-14 text-text-2">
             {lead === null ? null : (
               <>
-                Grouped by <PersonName name={lead} slot="batchHead" />
-                {"  ·  "}
+                Grouped by <PersonName name={lead} />
+                {" · "}
               </>
             )}
-            reviewed by <PersonName name={batch.holder} slot="batchHead" />
-            {"  ·  "}
+            reviewed by <PersonName name={batch.holder} />
+            {" · "}
             {memberCountText(batch)}
           </p>
         </div>
@@ -324,17 +324,14 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
         }}
         className="flex min-w-0 flex-col gap-16"
       >
-        <RadixTabs.List aria-label="Batch" className={TAB_LIST}>
-          <RadixTabs.Trigger
-            value="members"
-            className={cn(TAB_BY_STATE, focusRing)}
-          >
+        <RadixTabs.List
+          aria-label="Batch"
+          className="flex gap-2 self-start rounded-m bg-surface p-6"
+        >
+          <RadixTabs.Trigger value="members" className={cn(BAR_TAB, focusRing)}>
             Members
           </RadixTabs.Trigger>
-          <RadixTabs.Trigger
-            value="changes"
-            className={cn(TAB_BY_STATE, focusRing)}
-          >
+          <RadixTabs.Trigger value="changes" className={cn(BAR_TAB, focusRing)}>
             Merged changes
           </RadixTabs.Trigger>
         </RadixTabs.List>
@@ -349,24 +346,24 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
           />
         </RadixTabs.Content>
         <RadixTabs.Content value="members" className={insetFocusRing}>
-          <div className="flex min-w-0 flex-col gap-16 lg:flex-row lg:items-start">
+          <div className="flex min-w-0 flex-col gap-20 lg:flex-row lg:items-start">
             <div className="flex min-w-0 flex-1 flex-col gap-16">
               {conflicts.map((proposal) => (
                 <div
                   key={proposal}
                   role="alert"
-                  className="flex items-start gap-12 rounded-m bg-danger-soft px-16 py-12"
+                  className="flex flex-wrap items-start gap-12 rounded-m bg-bad-soft px-16 py-14"
                 >
                   <GitMerge
                     aria-hidden="true"
                     size={16}
-                    className="mt-2 shrink-0 text-danger"
+                    className="mt-4 shrink-0 text-bad"
                   />
-                  <div className="flex min-w-0 flex-1 flex-col gap-4">
-                    <p className="text-body font-semibold text-danger">
+                  <div className="flex min-w-0 flex-1 flex-col gap-2">
+                    <p className="text-15 font-semibold text-bad">
                       {proposal} conflicts with main
                     </p>
-                    <p className="text-bar text-text-muted">
+                    <p className="max-w-measure text-15 text-text">
                       The other members keep their verdicts. fold resumes the
                       task worker of {proposal} to resolve the conflict, then
                       the reviewer checks the batch again.
@@ -374,10 +371,14 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
                   </div>
                   <HrefLink
                     href={projectPath(slug, "proposals", proposal)}
-                    className={cn(buttonClasses("secondary", "md"), focusRing)}
+                    className={cn(
+                      buttonClasses("quiet", "md"),
+                      "ml-auto bg-surface hover:bg-surface",
+                      focusRing,
+                    )}
                   >
-                    <span className={buttonIconClass("secondary")}>
-                      <Diff aria-hidden="true" size={15} />
+                    <span className={buttonIconClass("quiet")}>
+                      <Diff aria-hidden="true" size={16} />
                     </span>
                     Show conflict
                   </HrefLink>
@@ -407,68 +408,65 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
                       </button>
                     ))}
                   </div>
-                  <p className="text-bar text-text-muted">
+                  <p className="max-w-measure text-14 text-text-2">
                     A member with a newer version shows only what changed after
                     the newest earlier version that got a verdict.
                   </p>
                 </div>
               ) : null}
-              <div className="overflow-x-auto rounded-l border border-border-subtle bg-surface">
+              <div className="overflow-x-auto rounded-m bg-surface">
                 <table className="w-full border-collapse" aria-label="Members">
-                  <thead className="bg-bg">
-                    <tr className="border-b border-border-subtle">
-                      {[
-                        "Proposal",
-                        "Title",
-                        "Task",
-                        "Author",
-                        "Version",
-                        "Change",
-                        "Verdict",
-                      ].map((head) => (
-                        <th key={head} scope="col" className={HEAD}>
-                          {head}
-                        </th>
-                      ))}
+                  <thead>
+                    <tr>
+                      {["Proposal", "Author", "Change", "Verdict"].map(
+                        (head) => (
+                          <th
+                            key={head}
+                            scope="col"
+                            className={cn(
+                              HEAD,
+                              head === "Proposal" && "w-full",
+                            )}
+                          >
+                            {head}
+                          </th>
+                        ),
+                      )}
                     </tr>
                   </thead>
                   <tbody>
                     {rows.map((row) => (
-                      <tr
-                        key={row.proposal}
-                        className="border-b border-border-subtle last:border-b-0"
-                      >
-                        <td className={cn(CELL, MONO)}>
-                          <HrefLink
-                            href={detailHref(
-                              slug,
-                              row.proposal,
-                              memberSearch(changes.get(row.proposal)),
-                            )}
-                            className={cn(
-                              "rounded-s underline-offset-2 hover:underline",
-                              focusRing,
-                            )}
-                          >
-                            {row.proposal}
-                          </HrefLink>
+                      <tr key={row.proposal} className={TABLE_ROW}>
+                        <td className={cn(CELL, "min-w-(--width-column)")}>
+                          <div className="flex min-w-0 flex-col gap-2">
+                            <span className="flex min-w-0 items-baseline gap-12">
+                              <IdLink
+                                className="min-w-32 shrink-0"
+                                href={detailHref(
+                                  slug,
+                                  row.proposal,
+                                  memberSearch(changes.get(row.proposal)),
+                                )}
+                              >
+                                {row.proposal}
+                              </IdLink>
+                              <span className="min-w-0 text-15 font-medium wrap-anywhere text-text">
+                                {row.title ?? row.proposal}
+                              </span>
+                            </span>
+                            <span className="pl-44 text-13 text-text-2">
+                              for <Id>{row.task}</Id> ·{" "}
+                              <span>{row.version}</span>
+                            </span>
+                          </div>
                         </td>
-                        <td
-                          className={cn(CELL, "w-full min-w-(--width-column)")}
-                        >
-                          <span className="text-body font-medium text-text">
-                            {row.title ?? row.proposal}
-                          </span>
-                        </td>
-                        <td className={cn(CELL, MONO)}>{row.task}</td>
-                        <td className={CELL}>
+                        <td className={cn(CELL, "whitespace-nowrap")}>
                           {row.author === null ? (
-                            <span className="text-code text-text-faint">-</span>
+                            <span className="text-13 text-text-2">-</span>
                           ) : (
-                            <PersonName name={row.author} slot="authorCell" />
+                            <PersonName name={row.author} />
                           )}
                         </td>
-                        <td className={cn(CELL, MONO)}>{row.version}</td>
                         <td className={CELL}>
                           <ChangeCell change={changes.get(row.proposal)} />
                         </td>
@@ -489,34 +487,31 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
             </div>
             <div className="flex min-w-0 flex-col gap-16 lg:w-review-panel lg:shrink-0">
               <section aria-label="Batch checkout" className={CARD}>
-                <h2 className="flex items-center gap-8">
-                  <GitMerge
-                    aria-hidden="true"
-                    size={15}
-                    className="text-text-muted"
-                  />
-                  <span className={OVERLINE}>Batch checkout</span>
+                <h2 className="text-16 leading-tight font-semibold text-text">
+                  Batch checkout
                 </h2>
                 <p className="flex flex-wrap items-center gap-8">
                   <StatePill pill={checkout} />
                   {checkout.line ? (
-                    <span className="font-mono text-meta text-text">
+                    <span className="text-14 text-text tabular-nums">
                       {checkout.line}
                     </span>
                   ) : null}
                 </p>
-                <p className="text-bar text-text-muted">
+                <p className="text-15 text-text">
                   The checkout holds main with every proposal of the batch
                   applied, so the reviewer runs the tests on the whole.
                 </p>
                 {checkout.path ? (
-                  <p className="flex items-center gap-8 rounded-m bg-sunken px-10 py-7">
-                    <span className="min-w-0 flex-1 truncate font-mono text-meta text-text">
+                  <p className="flex items-center gap-8 rounded-s bg-sunken py-6 pr-6 pl-12">
+                    <span className="min-w-0 flex-1 truncate font-mono text-13 text-text">
                       {checkout.path}
                     </span>
                     <IconButton
                       aria-label="Copy the path"
                       size="sm"
+                      // The path row is sunken, which the quiet fill matches, so the button takes the surface to keep an edge.
+                      className="bg-surface hover:bg-line"
                       onClick={() => {
                         void navigator.clipboard
                           .writeText(checkout.path ?? "")
@@ -530,25 +525,20 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
               </section>
               {reviewer ? (
                 <section aria-label="Reviewer" className={CARD}>
-                  <h2 className="flex items-center gap-8">
-                    <Bot
-                      aria-hidden="true"
-                      size={15}
-                      className="text-text-muted"
-                    />
-                    <span className={OVERLINE}>Reviewer</span>
+                  <h2 className="text-16 leading-tight font-semibold text-text">
+                    Reviewer
                   </h2>
-                  <div className="flex items-center justify-between gap-8">
+                  <div className="flex items-start justify-between gap-8">
                     <div className="flex flex-col gap-2">
-                      <PersonName name={reviewer.name} slot="panelName" />
-                      <span className="text-meta text-text-muted">
+                      <PersonName name={reviewer.name} />
+                      <span className="text-13 text-text-2">
                         {reviewerLine(reviewer)}
                       </span>
                     </div>
                     <StatePill pill={workerPill(reviewer.state)} />
                   </div>
                   <StepText step={workerStep(reviewer, steps.data ?? {})} />
-                  <p className="text-code text-text-muted">
+                  <p className="text-13 text-text-2">
                     {workerTotals(reviewer)}
                   </p>
                 </section>

@@ -35,6 +35,10 @@ import {
   type TargetDraft,
 } from "./notifyModel";
 
+/** The label of a group of choices, in the style of a field's label. */
+const FIELD_LABEL =
+  "font-title text-13 leading-tight font-semibold text-text-2";
+
 function Segments<T extends string>({
   label,
   options,
@@ -50,8 +54,12 @@ function Segments<T extends string>({
 }) {
   return (
     <div className="flex flex-col gap-6">
-      <span className="text-meta font-semibold text-text-muted">{label}</span>
-      <div role="group" aria-label={label} className={SEGMENT_LIST}>
+      <span className={FIELD_LABEL}>{label}</span>
+      <div
+        role="group"
+        aria-label={label}
+        className={cn(SEGMENT_LIST, "self-start")}
+      >
         {options.map((option) => (
           <button
             key={option.value}
@@ -71,7 +79,7 @@ function Segments<T extends string>({
   );
 }
 
-/** Adds a target to `scope`, or changes `editing`. A change of `scope` keeps what the person typed. Every write stays pending until the settings are read again; the add's body leaves the mutation cache once it is done, as its answer holds a signing secret. */
+/** Adds a target to `scope`, or changes `editing`. It draws no ground of its own: it sits on the surface of the panel or the target that holds it. A change of `scope` keeps what the person typed. Every write stays pending until the settings are read again; the add's body leaves the mutation cache once it is done, as its answer holds a signing secret. */
 export function TargetForm({
   scope,
   editing,
@@ -129,9 +137,11 @@ export function TargetForm({
       noValidate
       aria-label={title}
       onSubmit={submit}
-      className="flex flex-col gap-14 rounded-m bg-sunken px-16 py-14"
+      className="flex flex-col gap-16"
     >
-      <h3 className="text-bar leading-snug font-semibold text-text">{title}</h3>
+      <h3 className="font-title text-16 leading-tight font-semibold text-text">
+        {title}
+      </h3>
       <TextField
         label="Name"
         autoComplete="off"
@@ -206,7 +216,7 @@ export function TargetForm({
         ))}
       </div>
       {errors.events ? (
-        <p className="text-meta text-danger">{errors.events}</p>
+        <p className="text-13 font-medium text-bad">{errors.events}</p>
       ) : null}
       {choosesMoves(draft) ? (
         <div
@@ -214,9 +224,7 @@ export function TargetForm({
           aria-label="Card moves to"
           className="flex flex-col gap-6"
         >
-          <span className="text-meta font-semibold text-text-muted">
-            Card moves to
-          </span>
+          <span className={FIELD_LABEL}>Card moves to</span>
           <div className="flex flex-wrap gap-x-16 gap-y-6">
             {COLUMN_OPTIONS.map((option) => (
               <Checkbox
@@ -252,15 +260,15 @@ export function TargetForm({
           ) : null}
           <Button
             type="submit"
-            variant="primary"
+            variant={editing ? "quiet" : "primary"}
             disabled={!canWrite}
             pending={save.isPending}
             pendingLabel="Saving…"
             icon={
               editing ? (
-                <Save aria-hidden="true" size={15} />
+                <Save aria-hidden="true" size={16} />
               ) : (
-                <Plus aria-hidden="true" size={15} />
+                <Plus aria-hidden="true" size={16} />
               )
             }
           >

@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { createContext, use, useId, type ReactNode } from "react";
 import { describedBy, fieldIds } from "./describedBy";
 
 export interface FieldProps {
@@ -6,6 +6,12 @@ export interface FieldProps {
   hint?: string;
   error?: string;
 }
+
+/** The hint under a control: a 13px note by default; a form whose hints are whole sentences gives them 14px within the measure. */
+export const FieldHintClass = createContext("text-13 text-text-2");
+
+/** The hint style of a form whose hints are sentences that explain a choice. */
+export const SENTENCE_HINT = "max-w-measure text-14 leading-normal text-text-2";
 
 export interface ControlProps {
   id: string;
@@ -26,13 +32,14 @@ export function Field({
   children: (control: ControlProps) => ReactNode;
 }) {
   const ids = fieldIds(useId());
+  const hintClass = use(FieldHintClass);
   const labelNode = (
     <label
       htmlFor={ids.input}
       className={
         inline
-          ? "text-body leading-snug text-text"
-          : "text-bar leading-snug font-semibold text-text"
+          ? "text-15 leading-tight text-text"
+          : "font-title text-13 leading-tight font-semibold text-text-2"
       }
     >
       {label}
@@ -60,12 +67,12 @@ export function Field({
         </>
       )}
       {hint ? (
-        <p id={ids.hint} className="text-meta text-text-muted">
+        <p id={ids.hint} className={hintClass}>
           {hint}
         </p>
       ) : null}
       {error ? (
-        <p id={ids.error} className="text-meta font-medium text-danger">
+        <p id={ids.error} className="text-13 font-medium text-bad">
           {error}
         </p>
       ) : null}
@@ -74,4 +81,4 @@ export function Field({
 }
 
 export const controlClasses =
-  "w-full rounded-m bg-surface px-12 py-10 text-body leading-snug text-text inset-ring inset-ring-border placeholder:text-text-faint aria-[invalid=true]:inset-ring-danger disabled:cursor-not-allowed disabled:opacity-60";
+  "w-full rounded-s bg-fill px-12 py-9 text-15 leading-tight text-text placeholder:text-text-2 aria-[invalid=true]:inset-ring aria-[invalid=true]:inset-ring-bad disabled:cursor-not-allowed disabled:opacity-60";

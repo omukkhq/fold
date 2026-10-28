@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { needsItem } from "@/test/workers";
 import {
+  GROUP_OF,
   fullTitle,
   itemsFor,
   needsYouGroups,
@@ -8,7 +9,7 @@ import {
   pathsText,
   questionText,
   titleText,
-  waitingText,
+  type NeedsYouGroup,
 } from "./needsYouModel";
 
 const items = [
@@ -87,40 +88,50 @@ describe("reviewsWaitingFor", () => {
   });
 });
 
+const allLines = (groups: NeedsYouGroup[]) => groups.flatMap((g) => g.lines);
+const lineKinds = (groups: NeedsYouGroup[]) =>
+  allLines(groups).map((line) => line.kind);
+
 describe("needsYouGroups", () => {
   it("groups in group order and links each item to its screen", () => {
     const groups = needsYouGroups("demo", items);
     expect(groups.map((g) => g.title)).toEqual([
-      "Questions",
-      "Permissions",
-      "Reviews",
-      "Request drafts",
+      "Agents ask you",
+      "Waiting for you",
     ]);
-    const [questions, permissions, reviews, drafts] = groups;
-    expect(questions?.lines.map((l) => [l.text, l.href])).toEqual([
-      ["asks you to choose", "/p/demo/messages?thread=m-30"],
-      ["asks a question", "/p/demo/messages?thread=m-40"],
+    const [ask, wait] = groups;
+    expect(ask?.lines.map((l) => [l.kind, l.text, l.href])).toEqual([
+      ["question", "asks you to choose", "/p/demo/messages?thread=m-30"],
+      ["question", "asks a question", "/p/demo/messages?thread=m-40"],
+      ["permission", "asks to run Bash", "/p/demo/agents?question=pq-3"],
     ]);
-    expect(permissions?.lines[0]).toMatchObject({
+    expect(ask?.lines[2]).toMatchObject({
       person: "web-worker",
-      text: "asks to run Bash",
       task: "T-12",
-      hint: "opens the permission panel",
-      href: "/p/demo/agents?question=pq-3",
+      inline: false,
     });
-    expect(reviews?.lines[0]).toMatchObject({
+    expect(wait?.lines[0]).toMatchObject({
       chip: "P-4",
       person: null,
       text: "needs your review",
       title: "Database schema for reports",
+      inline: true,
       href: "/p/demo/proposals/P-4",
     });
-    expect(drafts?.lines[0]).toMatchObject({
+    expect(wait?.lines[1]).toMatchObject({
       chip: "RQ-5",
       text: "has a draft ready to approve",
       title: "Can the board show who changed a card?",
+      inline: true,
       href: "/p/demo/requests/RQ-5",
     });
+  });
+
+  it("places every kind in one of the three groups", () => {
+    expect(new Set(Object.values(GROUP_OF))).toEqual(
+      new Set(["ask", "wait", "project"]),
+    );
+    expect(Object.keys(GROUP_OF)).toHaveLength(15);
   });
 
   it("drops an empty group and words a missing tool", () => {
@@ -133,12 +144,13 @@ describe("needsYouGroups", () => {
   });
 
   it("links a review or draft without its id to the list it belongs to", () => {
-    const [review, draft] = needsYouGroups("demo", [
+    const [group] = needsYouGroups("demo", [
       needsItem({ kind: "human_review" }),
       needsItem({ kind: "request_draft" }),
     ]);
-    expect(review?.lines[0]?.href).toBe("/p/demo/proposals/");
-    expect(draft?.lines[0]?.href).toBe("/p/demo/requests/");
+    const [review, draft] = group?.lines ?? [];
+    expect(review?.href).toBe("/p/demo/proposals/");
+    expect(draft?.href).toBe("/p/demo/requests/");
     expect(needsYouGroups("demo", [needsItem()])[0]?.lines[0]?.href).toBe(
       "/p/demo/messages",
     );
@@ -184,21 +196,19 @@ describe("needsYouGroups", () => {
       }),
     ]);
     expect(groups.map((g) => g.title)).toEqual([
-      "Questions",
-      "Human tasks",
-      "Blockers",
+      "Agents ask you",
+      "Waiting for you",
     ]);
-    expect(groups[1]?.lines[0]).toMatchObject({
+    expect(allLines(groups)[1]).toMatchObject({
       key: "human_task:T-1",
       chip: "T-1",
       person: null,
       task: null,
       text: "is ready for a person to do",
       title: "Verify the app on Meta",
-      hint: "opens the task",
       href: "/p/demo/t/T-1",
     });
-    expect(groups[2]?.lines[0]).toMatchObject({
+    expect(allLines(groups)[2]).toMatchObject({
       key: "blocker:T-2",
       chip: "T-2",
       task: null,
@@ -225,7 +235,7 @@ describe("needsYouGroups", () => {
         paths: ["README.md", "src/lib.rs"],
       }),
     ]);
-    expect(group?.title).toBe("Your changes");
+    expect(group?.title).toBe("Project");
     expect(group?.lines[0]).toMatchObject({
       key: "human_change:9f2c4e1a7b3d5f6e8a0c2b4d6f8e0a1c3b5d7f9e",
       chip: "9f2c4e1",
@@ -256,7 +266,7 @@ describe("needsYouGroups", () => {
         reason: "run `git switch main` in the project folder",
       }),
     ]);
-    expect(group?.title).toBe("Git branch");
+    expect(group?.title).toBe("Project");
     expect(group?.lines[0]).toMatchObject({
       person: null,
       chip: null,
@@ -275,13 +285,12 @@ describe("needsYouGroups", () => {
         paths: ["README.md", "src/app.ts"],
       }),
     ]);
-    expect(group?.title).toBe("Project folder");
+    expect(group?.title).toBe("Project");
     expect(group?.lines[0]).toMatchObject({
       person: null,
       chip: null,
       title: "README.md and 1 more",
       text: "Changes were made in your project. Undo the changes or save them using `fld record`",
-      hint: "opens the history of main",
       href: "/p/demo/repository",
     });
   });
@@ -296,14 +305,13 @@ describe("needsYouGroups", () => {
         paths: ["src/forms/index.ts", "src/forms/a.ts", "src/forms/b.ts"],
       }),
     ]);
-    expect(group?.title).toBe("Unstash conflict");
+    expect(group?.title).toBe("Project");
     expect(group?.lines[0]).toMatchObject({
       person: null,
       chip: null,
       task: null,
       title: "src/forms/index.ts and 2 more",
       text: "Unstash conflicts. Fix the files and run `fld record`",
-      hint: null,
       href: null,
     });
   });
@@ -317,25 +325,24 @@ describe("needsYouGroups", () => {
         paths: ["fold-checks.toml"],
       }),
     ]);
-    expect(group?.title).toBe("Checks file");
+    expect(group?.title).toBe("Project");
     expect(group?.lines[0]).toMatchObject({
       person: null,
       chip: null,
       task: null,
       title: "fold-checks.toml line 12: unknown field \\`tiemout\\`",
       text: "Integrations wait until the checks file on main is fixed",
-      hint: null,
       href: null,
     });
   });
 
-  it("puts an unstash conflict, then main's checks file, last of the groups", () => {
+  it("puts an unstash conflict, then main's checks file, after the blockers", () => {
     const groups = needsYouGroups("demo", [
       needsItem({ kind: "checks_file_invalid_on_main", paths: ["a.toml"] }),
       needsItem({ kind: "unstash_conflicted", paths: ["a.md"] }),
       needsItem({ kind: "blocker", task: "T-3" }),
     ]);
-    expect(groups.map((group) => group.kind)).toEqual([
+    expect(lineKinds(groups)).toEqual([
       "blocker",
       "unstash_conflicted",
       "checks_file_invalid_on_main",
@@ -352,18 +359,17 @@ describe("needsYouGroups", () => {
       }),
       needsItem({ kind: "checks_file_invalid_on_main", paths: ["a.toml"] }),
     ]);
-    expect(groups.map((group) => group.kind)).toEqual([
+    expect(lineKinds(groups)).toEqual([
       "checks_file_invalid_on_main",
       "worker_unreachable",
     ]);
-    expect(groups[1]?.title).toBe("Worker connection");
-    expect(groups[1]?.lines[0]).toMatchObject({
+    expect(groups.map((g) => g.title)).toEqual(["Project"]);
+    expect(allLines(groups)[1]).toMatchObject({
       person: "backend-lead",
       chip: null,
       task: null,
       title: "run `fld restart`; the daemon then resumes the worker",
       text: "cannot reach fold and stopped",
-      hint: "opens the agents",
       href: "/p/demo/agents",
     });
   });
@@ -380,21 +386,21 @@ describe("needsYouGroups", () => {
       needsItem({ kind: "worker_unreachable", agent: "api-lead" }),
       needsItem({ kind: "worker_model_unreachable", agent: "api-worker" }),
     ]);
-    expect(groups.map((group) => group.kind)).toEqual([
+    expect(lineKinds(groups)).toEqual([
       "worker_unreachable",
       "worker_model_unreachable",
+      "worker_model_unreachable",
     ]);
-    expect(groups[1]?.title).toBe("Model access");
-    expect(groups[1]?.lines[0]).toMatchObject({
+    expect(groups.map((g) => g.title)).toEqual(["Project"]);
+    expect(allLines(groups)[1]).toMatchObject({
       person: "web-lead",
       chip: null,
       task: null,
       title: "Invalid \\`key\\`",
       text: "cannot reach the model: check the sign-in, or run `fld doctor`",
-      hint: "opens the agents",
       href: "/p/demo/agents",
     });
-    expect(groups[1]?.lines[1]).toMatchObject({
+    expect(allLines(groups)[2]).toMatchObject({
       person: "api-worker",
       title: null,
       text: "cannot reach the model",
@@ -416,23 +422,22 @@ describe("needsYouGroups", () => {
         reason: "run `fld restart`",
       }),
     ]);
-    expect(groups.map((group) => group.kind)).toEqual([
+    expect(lineKinds(groups)).toEqual([
       "worker_unreachable",
       "claude_not_found",
     ]);
-    expect(groups[1]?.title).toBe("Claude Code");
-    expect(groups[1]?.lines[0]).toMatchObject({
+    expect(groups.map((g) => g.title)).toEqual(["Project"]);
+    expect(allLines(groups)[1]).toMatchObject({
       person: "web-worker",
       chip: null,
       task: null,
       title: "install Claude Code, then run `fld restart`",
       text: "cannot start: the daemon finds no claude",
-      hint: "opens the agents",
       href: "/p/demo/agents",
     });
   });
 
-  it("shows a notice target fold turned off with a link to the settings, last", () => {
+  it("shows a notice target fold turned off in the project group, last, with a link to the settings", () => {
     const groups = needsYouGroups("demo", [
       needsItem({
         kind: "notify_target_off",
@@ -440,24 +445,26 @@ describe("needsYouGroups", () => {
         target: "nt-3",
         title: "Release bot",
       }),
+      needsItem({
+        kind: "claude_not_found",
+        screen: "worker",
+        agent: "web-worker",
+      }),
       needsItem({ kind: "blocker", screen: "task", task: "T-1" }),
     ]);
-    expect(groups.map((group) => group.kind)).toEqual([
-      "blocker",
+    expect(groups.map((g) => g.id)).toEqual(["wait", "project"]);
+    expect(groups[1]?.lines.map((line) => line.kind)).toEqual([
+      "claude_not_found",
       "notify_target_off",
     ]);
-    expect(groups[1]?.title).toBe("Notice targets");
-    expect(groups[1]?.lines[0]).toMatchObject({
+    expect(groups[1]?.lines[1]).toMatchObject({
       person: null,
       chip: "nt-3",
+      task: null,
       title: "Release bot",
-      hint: "opens the settings",
       href: "/p/demo/settings",
     });
-  });
-
-  it("counts what waits", () => {
-    expect(waitingText(4)).toBe("4 waiting");
+    expect(groups[1]?.lines[1]).not.toHaveProperty("hint");
   });
 });
 

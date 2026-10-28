@@ -31,7 +31,7 @@ export function QuestionMarker({
       }}
       className={cn(
         "inline-flex rounded-s",
-        answered ? "text-text-muted" : "text-secondary-text",
+        answered ? "text-text-2" : "text-warn",
         focusRing,
       )}
     >

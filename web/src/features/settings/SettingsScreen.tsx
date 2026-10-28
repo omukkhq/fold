@@ -26,6 +26,9 @@ import {
 import { TargetForm } from "./TargetForm";
 import { TargetList, useRefreshNotify } from "./TargetList";
 
+/** A panel on the surface for the settings that are not a target. */
+const PANEL = "flex flex-col gap-16 rounded-l bg-surface px-16 py-14 md:px-20";
+
 function Section({
   title,
   text,
@@ -36,15 +39,12 @@ function Section({
   children: ReactNode;
 }) {
   return (
-    <section
-      aria-label={title}
-      className="flex flex-col gap-14 rounded-l bg-surface px-20 py-18 inset-ring inset-ring-border-subtle"
-    >
+    <section aria-label={title} className="flex flex-col gap-12">
       <div className="flex flex-col gap-4">
-        <h2 className="text-section leading-snug font-semibold text-text">
+        <h2 className="font-title text-18 leading-tight font-semibold text-text">
           {title}
         </h2>
-        <p className="text-bar text-text-muted">{text}</p>
+        <p className="max-w-measure text-15 text-text-2">{text}</p>
       </div>
       {children}
     </section>
@@ -62,14 +62,14 @@ function SecretPanel({
   const [copy, setCopy] = useState<CopyState>("idle");
   const secret = added.secret ?? "";
   return (
-    <div className="flex items-start justify-between gap-12 rounded-m bg-warning-soft px-14 py-12">
+    <div className="flex items-start justify-between gap-12 rounded-m bg-warn-soft px-14 py-12">
       <div className="flex min-w-0 flex-col gap-6">
-        <p className="flex items-center gap-6 text-bar font-semibold text-warning">
-          <KeyRound aria-hidden="true" size={14} />
+        <p className="flex items-center gap-6 font-title text-15 font-semibold text-warn">
+          <KeyRound aria-hidden="true" size={16} />
           Signing secret of {added.target.name}
         </p>
-        <Mono className="text-meta break-all text-text">{secret}</Mono>
-        <p className="text-meta text-text-muted">
+        <Mono className="text-13 break-all text-text">{secret}</Mono>
+        <p className="max-w-measure text-14 text-text">
           fold shows it only now. Give it to the receiver, which checks the
           webhook-signature header with it.
         </p>
@@ -82,16 +82,16 @@ function SecretPanel({
           }}
         >
           {copy === "copied" ? (
-            <Check aria-hidden="true" size={15} />
+            <Check aria-hidden="true" size={16} />
           ) : (
-            <Copy aria-hidden="true" size={15} />
+            <Copy aria-hidden="true" size={16} />
           )}
         </IconButton>
         <span role="status" className="sr-only">
           {copy === "copied" ? "Copied" : copy === "failed" ? "Not copied" : ""}
         </span>
-        <IconButton aria-label="Close" onClick={onClose}>
-          <X aria-hidden="true" size={15} />
+        <IconButton aria-label="Close" variant="ghost" onClick={onClose}>
+          <X aria-hidden="true" size={16} />
         </IconButton>
       </div>
     </div>
@@ -178,7 +178,7 @@ function WebUrlForm({
         disabled={!canWrite}
         pending={save.isPending}
         pendingLabel="Saving…"
-        icon={<Save aria-hidden="true" size={15} />}
+        icon={<Save aria-hidden="true" size={16} />}
       >
         Save
       </Button>
@@ -201,19 +201,19 @@ export function SettingsScreen({ slug }: { slug: string }) {
     if (added?.secret) setSecret(added);
   };
   return (
-    <div className="px-24 pt-20 pb-24">
+    <div className="px-16 pt-20 pb-24 md:px-24">
       <div className="mx-auto flex w-content max-w-full flex-col gap-16">
         <div className="flex flex-col gap-4">
-          <h1 className="text-screen leading-snug font-semibold text-text">
+          <h1 className="font-title text-24 leading-tight font-semibold text-text md:text-28">
             Settings
           </h1>
-          <p className="text-body text-text-muted">
+          <p className="max-w-measure text-15 text-text-2">
             fold sends a notice to a webhook, Slack or Discord when something on
             the project changes. A notice names ids, titles, columns and links,
             never a message, a review text or a diff.
           </p>
           {canWrite ? null : (
-            <p className="text-bar text-warning">
+            <p className="max-w-measure text-15 text-text-2">
               Sign in as a person first: only a person changes where notices go.
             </p>
           )}
@@ -242,7 +242,7 @@ export function SettingsScreen({ slug }: { slug: string }) {
               code={apiErrorCode(project.error)}
               action={
                 <Button
-                  icon={<RefreshCw aria-hidden="true" size={15} />}
+                  icon={<RefreshCw aria-hidden="true" size={16} />}
                   onClick={() => void project.refetch()}
                 >
                   Try again
@@ -253,11 +253,13 @@ export function SettingsScreen({ slug }: { slug: string }) {
             <Skeleton />
           ) : (
             <>
-              <HostTargetsSwitch
-                slug={slug}
-                settings={project.data}
-                canWrite={canWrite}
-              />
+              <div className={PANEL}>
+                <HostTargetsSwitch
+                  slug={slug}
+                  settings={project.data}
+                  canWrite={canWrite}
+                />
+              </div>
               <TargetList
                 slug={slug}
                 targets={[
@@ -268,26 +270,30 @@ export function SettingsScreen({ slug }: { slug: string }) {
                 canWrite={canWrite}
                 onSecret={showSecret}
               />
-              <Checkbox
-                label="Add the new target to the host"
-                hint="A host target gets the notices of every project that uses the host targets."
-                checked={host}
-                disabled={!canWrite}
-                onCheckedChange={setHost}
-              />
-              <TargetForm
-                scope={host ? { kind: "host" } : { kind: "project", slug }}
-                canWrite={canWrite}
-                onSaved={async (added) => {
-                  showSecret(added);
-                  await refresh();
-                }}
-              />
-              <WebUrlForm
-                key={project.data.web_url ?? ""}
-                webUrl={project.data.web_url}
-                canWrite={canWrite}
-              />
+              <div className={PANEL}>
+                <Checkbox
+                  label="Add the new target to the host"
+                  hint="A host target gets the notices of every project that uses the host targets."
+                  checked={host}
+                  disabled={!canWrite}
+                  onCheckedChange={setHost}
+                />
+                <TargetForm
+                  scope={host ? { kind: "host" } : { kind: "project", slug }}
+                  canWrite={canWrite}
+                  onSaved={async (added) => {
+                    showSecret(added);
+                    await refresh();
+                  }}
+                />
+              </div>
+              <div className={PANEL}>
+                <WebUrlForm
+                  key={project.data.web_url ?? ""}
+                  webUrl={project.data.web_url}
+                  canWrite={canWrite}
+                />
+              </div>
             </>
           )}
         </Section>

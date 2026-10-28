@@ -21,13 +21,13 @@ export function Badge({ tone, children, icon, after, className }: BadgeProps) {
     <span
       data-tone={tone}
       className={cn(
-        "inline-flex items-center gap-5 rounded-s font-semibold",
+        "inline-flex items-center gap-6 rounded-pill font-medium whitespace-nowrap",
         spec.shape,
         spec.classes,
         className,
       )}
     >
-      <Icon aria-hidden="true" size={12} />
+      <Icon aria-hidden="true" size={14} />
       {badgeText(tone, children)}
       {after}
     </span>

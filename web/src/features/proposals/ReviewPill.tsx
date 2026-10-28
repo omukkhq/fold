@@ -1,24 +1,15 @@
 import {
-  Bot,
   CircleAlert,
   CircleCheck,
   CircleDashed,
   CircleSlash,
   GitMerge,
-  User,
   UserCheck,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { ActorText } from "@/people/ActorText";
-import { isHumanName } from "@/people/names";
-import { PersonName } from "@/people/PersonName";
-import {
-  PILL_CLASSES,
-  type Pill,
-  type PillIcon,
-  type Waiting,
-} from "./present";
+import { PILL_CLASSES, type Pill, type PillIcon } from "./present";
 
 const ICONS: Record<PillIcon, LucideIcon> = {
   conflict: GitMerge,
@@ -45,39 +36,20 @@ export function ReviewPill({
     <span
       data-tone={pill.tone}
       className={cn(
-        "inline-flex items-center rounded-s text-meta leading-snug font-semibold",
-        large ? "gap-6 px-9 py-3" : "gap-5 px-8 py-2",
+        "inline-flex items-center gap-6 rounded-pill leading-tight font-medium",
+        large ? "px-12 py-4 text-14" : "px-9 py-2 text-13",
         PILL_CLASSES[pill.tone],
         className,
       )}
     >
-      <Icon aria-hidden="true" size={large ? 13 : 12} className="shrink-0" />
-      {pill.segments ? (
-        <ActorText segments={pill.segments} slot="waitingChip" />
-      ) : (
-        pill.text
-      )}
-    </span>
-  );
-}
-
-export function WaitingChip({ waiting }: { waiting: Waiting }) {
-  const { actor } = waiting;
-  const human = actor === null || isHumanName(actor);
-  const Icon = human ? User : Bot;
-  return (
-    <span className="inline-flex items-center gap-5 rounded-s bg-sunken px-8 py-2 text-meta leading-snug text-text-muted">
-      <Icon
-        role="img"
-        aria-label={human ? "human" : "agent"}
-        size={12}
-        className="shrink-0"
-      />
-      {actor === null ? (
-        <span className="font-semibold">a human</span>
-      ) : (
-        <PersonName name={actor} slot="waitingChip" />
-      )}
+      <Icon aria-hidden="true" size={14} className="shrink-0" />
+      <span className="min-w-0">
+        {pill.segments ? (
+          <ActorText segments={pill.segments} slot="waitingChip" />
+        ) : (
+          pill.text
+        )}
+      </span>
     </span>
   );
 }

@@ -1,5 +1,6 @@
 import type {
   ComparisonTotals,
+  HumanReviewMark,
   ProposalDetail,
   ProposalSummary,
   ProposalVersion,
@@ -134,13 +135,52 @@ export function reviewPill(
   return { tone: "neutral", icon: "waiting", text: "Waiting for review" };
 }
 
+/** Gold is only for a wait on a person; a waiting review and an end state are quiet. */
 export const PILL_CLASSES: Record<PillTone, string> = {
-  danger: "bg-danger-soft text-danger",
-  human: "bg-secondary-soft text-secondary-text",
-  approved: "bg-primary-soft text-primary-text",
-  neutral: "bg-sunken text-text-muted",
-  done: "bg-ink-soft text-text",
+  danger: "bg-bad-soft text-bad",
+  human: "bg-warn-soft text-warn",
+  approved: "bg-ok-soft text-ok",
+  neutral: "bg-fill text-text",
+  done: "bg-fill text-text",
 };
+
+/**
+ * The list's one state chip: the review state and whose turn it is, such as `Changes requested · waits for @web-7`. Gold is only for a proposal that waits for the signed-in human (`waitsForYou`); a review that waits for someone else is quiet, and an integrated or closed proposal shows its end state.
+ */
+export function listPill(
+  p: ProposalSummary,
+  context: { revision?: string | null; waitsForYou?: boolean } = {},
+): Pill {
+  const pill = reviewPill(p, { revision: context.revision ?? null });
+  if (p.state !== "open") return pill;
+  const head = pill.icon === "human" ? "Agent approved" : pill.text;
+  if (context.waitsForYou === true) {
+    return { tone: "human", icon: pill.icon, text: `${head} · waits for you` };
+  }
+  const tone = pill.tone === "human" ? "neutral" : pill.tone;
+  const waiting = waitingOn(p);
+  if (waiting === null) return { tone, icon: pill.icon, text: head };
+  const who = waiting.actor === null ? "a human" : actorSegment(waiting.actor);
+  const segments =
+    pill.icon === "waiting"
+      ? seg`${head} · ${who}`
+      : seg`${head} · waits for ${who}`;
+  return { tone, icon: pill.icon, text: segmentsText(segments), segments };
+}
+
+/** The list's line under a proposal's title, after its task: the version, the review claim of an open proposal and the human review mark. */
+export function listMeta(p: ProposalSummary): Segments {
+  const parts: Segments[] = [[versionText(p)]];
+  if (p.state === "open") parts.push(claimLine(p));
+  if (p.human_review) {
+    parts.push(
+      seg`human review by ${reviewerSegment(p.human_review.reviewer, "any human")}`,
+    );
+  }
+  return parts.flatMap((part, index) =>
+    index === 0 ? part : [" · ", ...part],
+  );
+}
 
 /** Whose turn it is: an actor, or null for any human when the human-review mark names no one. */
 export interface Waiting {
@@ -262,10 +302,9 @@ export function filesText(
   return `${files} · +${String(totals.added_lines)} −${String(totals.removed_lines)}`;
 }
 
-export function claimText(p: ProposalSummary): Segments {
-  return p.review_claim
-    ? seg`review claimed by ${actorSegment(p.review_claim)}`
-    : ["review not claimed"];
+/** `@dev, marked by @backend-lead`: who approves for the human review mark, and who set it. */
+export function humanReviewFact(mark: HumanReviewMark): Segments {
+  return seg`${reviewerSegment(mark.reviewer, "any human")}, marked by ${actorSegment(mark.set_by)}`;
 }
 
 /** The list's claim line under the pill. */

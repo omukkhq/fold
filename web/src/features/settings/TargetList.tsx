@@ -25,8 +25,12 @@ import {
 import { notifySendsQuery } from "@/api/queries";
 import { Button, IconButton } from "@/components/button/Button";
 import { Checkbox } from "@/components/form/controls";
-import { Mono } from "@/components/mono/Mono";
+import { Chip } from "@/components/badge/Chip";
+import type { ChipTone } from "@/components/badge/chips";
+import { Id } from "@/components/id/Id";
 import { Skeleton } from "@/components/states/Skeleton";
+import { TABLE_ROW } from "@/components/table/tableStyles";
+import { IdText } from "@/components/text/IdText";
 import { cn } from "@/lib/cn";
 import { useNow } from "@/live/useNow";
 import { ErrorNote } from "../workers/parts";
@@ -41,16 +45,16 @@ import {
 } from "./notifyModel";
 import { TargetForm } from "./TargetForm";
 
-const TONES: Record<Tone, string> = {
-  ok: "bg-success-soft text-success-text",
-  bad: "bg-danger-soft text-danger",
-  muted: "bg-sunken text-text-muted",
+const CHIP_TONES: Record<Tone, ChipTone> = {
+  ok: "ok",
+  bad: "bad",
+  muted: "neutral",
 };
 
 const ANSWER_TONES: Record<Tone, string> = {
-  ok: "text-success-text",
-  bad: "text-danger",
-  muted: "text-text-muted",
+  ok: "text-ok",
+  bad: "text-bad",
+  muted: "text-text-2",
 };
 
 /** Reads the notice settings, the send logs and Needs you again after a person's own write. */
@@ -81,15 +85,27 @@ function SendRow({
   });
   const view = sendView(send, now);
   return (
-    <li className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-10 gap-y-2 border-t border-border-subtle py-6 text-meta sm:grid-cols-[auto_minmax(0,1fr)_auto_auto]">
-      <span className="text-text-faint tabular-nums">{view.time}</span>
-      <span className="truncate text-text">{view.summary}</span>
-      <span className="col-start-2 flex flex-wrap items-baseline gap-x-10 gap-y-2 sm:contents">
-        <Mono
-          className={cn("text-meta whitespace-nowrap", ANSWER_TONES[view.tone])}
+    <li
+      className={cn(
+        "grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-10 gap-y-4 rounded-s px-10 py-8 text-14 sm:grid-cols-[auto_minmax(0,1fr)_auto_auto]",
+        TABLE_ROW,
+      )}
+    >
+      <span className="text-13 whitespace-nowrap text-text-2 tabular-nums">
+        {view.time}
+      </span>
+      <span className="min-w-0 break-words text-text">
+        <IdText text={view.summary} />
+      </span>
+      <span className="col-start-2 flex flex-wrap items-baseline gap-x-10 gap-y-4 sm:contents">
+        <span
+          className={cn(
+            "text-13 whitespace-nowrap tabular-nums",
+            ANSWER_TONES[view.tone],
+          )}
         >
           {view.answer} · {view.tries}
-        </Mono>
+        </span>
         {view.canSendAgain ? (
           <Button
             size="sm"
@@ -97,7 +113,7 @@ function SendRow({
             disabled={!canWrite}
             pending={again.isPending}
             pendingLabel="Sending…"
-            icon={<RotateCw aria-hidden="true" size={13} />}
+            icon={<RotateCw aria-hidden="true" size={14} />}
             aria-label={`Send ${send.id} again`}
             onClick={() => {
               again.mutate();
@@ -139,10 +155,10 @@ function SendLog({
   return (
     <section
       aria-label={`Recent sends of ${target.name}`}
-      className="flex flex-col"
+      className="flex flex-col gap-6"
     >
       {sends.data.length === 0 ? (
-        <p className="text-meta text-text-muted">No sends yet.</p>
+        <p className="text-14 text-text-2">No sends yet.</p>
       ) : (
         <ul className="flex flex-col">
           {sends.data.map((send) => (
@@ -156,7 +172,7 @@ function SendLog({
           ))}
         </ul>
       )}
-      <p className="pt-6 text-meta text-text-muted">
+      <p className="text-13 text-text-2">
         fold keeps the last 50 sends of each target.
       </p>
     </section>
@@ -199,9 +215,9 @@ function RemoveTarget({
         <Button
           size="sm"
           variant="ghost"
-          className="text-danger hover:bg-danger-soft"
+          className="text-bad hover:bg-bad-soft"
           disabled={!canWrite}
-          icon={<Trash2 aria-hidden="true" size={13} />}
+          icon={<Trash2 aria-hidden="true" size={14} />}
           aria-label={`Remove ${target.name}`}
         >
           Remove
@@ -209,23 +225,23 @@ function RemoveTarget({
       </RadixDialog.Trigger>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="fixed inset-0 bg-scrim" />
-        <RadixDialog.Content className="fixed top-1/2 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-raised shadow-dialog inset-ring inset-ring-border outline-none">
-          <div className="flex items-center justify-between gap-12 border-b border-border-subtle py-12 pr-16 pl-24">
-            <RadixDialog.Title className="min-w-0 truncate text-section leading-snug font-semibold text-text">
+        <RadixDialog.Content className="fixed top-1/2 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-surface shadow-dialog outline-none">
+          <div className="flex items-center justify-between gap-12 pt-18 pr-16 pb-6 pl-24">
+            <RadixDialog.Title className="min-w-0 font-title text-21 leading-tight font-semibold text-text">
               Remove {target.name}?
             </RadixDialog.Title>
             <RadixDialog.Close asChild>
               <IconButton
                 aria-label="Close"
-                size="sm"
+                variant="ghost"
                 disabled={remove.isPending}
               >
-                <X aria-hidden="true" size={13} />
+                <X aria-hidden="true" size={16} />
               </IconButton>
             </RadixDialog.Close>
           </div>
-          <div className="flex flex-col gap-12 px-24 pt-18 pb-20">
-            <RadixDialog.Description className="text-bar text-text-muted">
+          <div className="flex flex-col gap-12 px-24 pt-8 pb-4">
+            <RadixDialog.Description className="max-w-measure text-15 text-text">
               {target.host
                 ? "fold stops sending notices to it from every project and deletes its URL"
                 : "fold stops sending this project's notices to it and deletes its URL"}
@@ -236,7 +252,7 @@ function RemoveTarget({
               <ErrorNote failure={notifyFailure(remove.error)} />
             ) : null}
           </div>
-          <div className="flex items-center justify-end gap-8 border-t border-border-subtle px-24 py-12">
+          <div className="flex items-center justify-end gap-8 px-24 pt-18 pb-20">
             <Button disabled={remove.isPending} onClick={close}>
               Cancel
             </Button>
@@ -244,7 +260,7 @@ function RemoveTarget({
               variant="danger"
               pending={remove.isPending}
               pendingLabel="Removing…"
-              icon={<Trash2 aria-hidden="true" size={15} />}
+              icon={<Trash2 aria-hidden="true" size={16} />}
               onClick={() => {
                 remove.mutate();
               }}
@@ -334,45 +350,40 @@ function TargetRow({
   return (
     <li
       aria-label={view.title}
-      className="flex flex-col gap-10 rounded-m px-14 py-12 inset-ring inset-ring-border-subtle"
+      className="flex flex-col gap-12 rounded-l bg-surface px-16 py-14 md:px-20"
     >
       <div className="flex flex-wrap items-start justify-between gap-12">
         <div className="flex min-w-0 flex-col gap-4">
           <p
             className={cn(
-              "flex flex-wrap items-center gap-8 text-body leading-snug font-semibold",
-              view.unused ? "text-text-muted" : "text-text",
+              "flex flex-wrap items-center gap-8 font-title text-16 leading-tight font-semibold",
+              view.unused ? "text-text-2" : "text-text",
             )}
           >
-            {view.title}
-            <span
-              className={cn(
-                "rounded-s px-8 py-2 text-meta font-medium",
-                TONES[view.unused ? "muted" : view.state.tone],
-              )}
-            >
+            <span className="min-w-0 break-words">{view.title}</span>
+            <Chip tone={CHIP_TONES[view.unused ? "muted" : view.state.tone]}>
               {view.state.label}
-            </span>
+            </Chip>
             {view.health ? (
-              <span className="text-meta font-normal text-text-muted">
+              <span className="font-body text-13 font-regular text-text-2">
                 {view.health}
               </span>
             ) : null}
           </p>
-          <p className="text-meta break-all text-text-muted">
-            <Mono className="text-meta text-text-muted">{target.id}</Mono>
+          <p className="text-14 break-all text-text-2">
+            <Id className="text-text">{target.id}</Id>
             {" · "}
             {view.detail}
           </p>
-          <p className="text-meta text-text-faint">{view.scope}</p>
+          <p className="text-13 text-text-2">{view.scope}</p>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-8">
+        <div className="flex min-w-0 flex-wrap items-center gap-8">
           <Button
             size="sm"
             disabled={!canWrite}
             pending={test.isPending}
             pendingLabel="Sending…"
-            icon={<Send aria-hidden="true" size={13} />}
+            icon={<Send aria-hidden="true" size={14} />}
             aria-label={`Send a test through ${target.name}`}
             onClick={() => {
               test.mutate();
@@ -385,7 +396,7 @@ function TargetRow({
             variant="ghost"
             aria-pressed={open === "log"}
             aria-label={`Sends of ${target.name}`}
-            icon={<ListOrdered aria-hidden="true" size={13} />}
+            icon={<ListOrdered aria-hidden="true" size={14} />}
             onClick={() => {
               setOpen(open === "log" ? null : "log");
             }}
@@ -397,7 +408,7 @@ function TargetRow({
             variant="ghost"
             disabled={!canWrite}
             aria-pressed={open === "edit"}
-            icon={<Pencil aria-hidden="true" size={13} />}
+            icon={<Pencil aria-hidden="true" size={14} />}
             aria-label={`Edit ${target.name}`}
             onClick={() => {
               setOpen(open === "edit" ? null : "edit");
@@ -412,7 +423,7 @@ function TargetRow({
               disabled={!canWrite}
               pending={rotate.isPending}
               pendingLabel="Rotating…"
-              icon={<KeyRound aria-hidden="true" size={13} />}
+              icon={<KeyRound aria-hidden="true" size={14} />}
               aria-label={`New signing secret for ${target.name}`}
               onClick={() => {
                 rotate.mutate();
@@ -426,11 +437,8 @@ function TargetRow({
       </div>
       <EnabledSwitch scope={scope} target={target} canWrite={canWrite} />
       {test.isSuccess ? (
-        <p
-          role="status"
-          className="flex items-center gap-6 text-bar text-success-text"
-        >
-          <CircleCheck aria-hidden="true" size={14} />
+        <p role="status" className="flex items-center gap-6 text-15 text-ok">
+          <CircleCheck aria-hidden="true" size={16} />
           The receiver took the test.
         </p>
       ) : null}
@@ -475,7 +483,7 @@ export function TargetList({
 }) {
   if (targets.length === 0) {
     return (
-      <p className="text-bar text-text-muted">No targets yet. Add one below.</p>
+      <p className="text-15 text-text-2">No targets yet. Add one below.</p>
     );
   }
   return (

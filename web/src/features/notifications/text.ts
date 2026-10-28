@@ -62,10 +62,3 @@ export function toastText(
 ): string {
   return toastParts(moves).join(", ");
 }
-
-/** The accessible name of the bell button. */
-export function bellLabel(unread: number): string {
-  return unread === 0
-    ? "Notifications"
-    : `Notifications, ${String(unread)} unread`;
-}

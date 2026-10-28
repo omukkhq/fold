@@ -9,19 +9,19 @@ interface LabelProps {
   className?: string;
 }
 
+/** An area label as a coloured dot before its name: no chip and no outline, so a card holds one less box. */
 export function Label({ children, color, className }: LabelProps) {
   const colors = labelColors(color);
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-5 rounded-s py-2 pr-7 pl-6 text-label leading-snug font-medium text-text-muted inset-ring inset-ring-border",
-        colors.soft,
+        "inline-flex items-center gap-6 text-13 leading-tight whitespace-nowrap text-text-2",
         className,
       )}
     >
       <span
         aria-hidden="true"
-        className={cn("size-6 rounded-full", colors.dot)}
+        className={cn("size-8 shrink-0 rounded-full", colors.dot)}
       />
       {children}
     </span>

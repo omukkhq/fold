@@ -3,10 +3,9 @@ import type { ProjectAgent } from "../api/agentBar";
 import { agent as baseAgent, claim, worker } from "../test/agents";
 import { INITIAL_STATUS, type LiveStatus } from "../live/status";
 import {
-  MAX_CHIPS,
   agentBoardPath,
   agentStateText,
-  chipAgents,
+  panelAgents,
   chipPresence,
   chipStateText,
   failedText,
@@ -243,14 +242,14 @@ describe("isPaused", () => {
   });
 });
 
-describe("chipAgents", () => {
+describe("panelAgents", () => {
   it("puts connected agents first and keeps the API order inside each group, without changing the input", () => {
     const input = [
       agent({ name: "review", presence: "offline" }),
       agent({ name: "zed", presence: "idle" }),
       agent({ name: "backend", presence: "active" }),
     ];
-    expect(chipAgents(input, false).map((a) => a.name)).toEqual([
+    expect(panelAgents(input, false).map((a) => a.name)).toEqual([
       "zed",
       "backend",
       "review",
@@ -267,8 +266,8 @@ describe("chipAgents", () => {
       agent({ name: "frontend", presence: "idle" }),
       agent({ name: "backend", presence: "active" }),
     ];
-    expect(chipAgents(after, false).map((a) => a.name)).toEqual(
-      chipAgents(before, false).map((a) => a.name),
+    expect(panelAgents(after, false).map((a) => a.name)).toEqual(
+      panelAgents(before, false).map((a) => a.name),
     );
   });
 
@@ -278,7 +277,7 @@ describe("chipAgents", () => {
       agent({ name: "main", presence: "offline" }),
       { ...supervised("idle"), name: "api-lead" },
     ];
-    expect(chipAgents(input, false).map((a) => a.name)).toEqual([
+    expect(panelAgents(input, false).map((a) => a.name)).toEqual([
       "api-lead",
       "web-lead",
       "main",
@@ -291,14 +290,14 @@ describe("chipAgents", () => {
       { ...agent({ name: "main", presence: "active" }), tags: ["main"] },
       { ...supervised("idle"), name: "api-lead" },
     ];
-    expect(chipAgents(input, true).map((a) => a.name)).toEqual([
+    expect(panelAgents(input, true).map((a) => a.name)).toEqual([
       "main",
       "web-lead",
       "api-lead",
     ]);
   });
 
-  it("draws at most the chips the top bar has room for, connected ones first", () => {
+  it("lists every agent, connected ones first", () => {
     const input = [
       agent({ name: "a", presence: "offline" }),
       agent({ name: "b" }),
@@ -306,9 +305,8 @@ describe("chipAgents", () => {
       agent({ name: "d" }),
       agent({ name: "e" }),
     ];
-    const shown = chipAgents(input, false);
-    expect(shown).toHaveLength(MAX_CHIPS);
-    expect(shown.map((a) => a.name)).toEqual(["b", "c", "d"]);
+    const shown = panelAgents(input, false);
+    expect(shown.map((a) => a.name)).toEqual(["b", "c", "d", "e", "a"]);
   });
 });
 

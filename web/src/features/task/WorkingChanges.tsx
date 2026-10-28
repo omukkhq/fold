@@ -1,6 +1,7 @@
 import { FileDiff, GitCompare } from "lucide-react";
 import type { LiveWorkspace, TaskWorkspaceInfo } from "@/api/tasks";
 import { HrefLink } from "@/app/HrefLink";
+import { Chip } from "@/components/badge/Chip";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { diffPath } from "./links";
@@ -15,9 +16,9 @@ import {
 import { LinkButton, SectionHead } from "./parts";
 
 const TONES: Record<ChangeTone, string> = {
-  added: "bg-primary-soft text-primary-text",
-  deleted: "bg-danger-soft text-danger",
-  other: "bg-surface text-text-muted",
+  added: "text-ok",
+  deleted: "text-bad",
+  other: "text-text-2",
 };
 
 function FileRow({
@@ -35,7 +36,7 @@ function FileRow({
       <HrefLink
         href={diffPath(slug, { to: workspace, path: file.path })}
         className={cn(
-          "flex items-center gap-10 rounded-s px-10 py-6 hover:bg-surface",
+          "flex items-center gap-10 rounded-s px-14 py-7 hover:bg-fill",
           focusRing,
         )}
       >
@@ -43,24 +44,22 @@ function FileRow({
         <span
           aria-hidden="true"
           className={cn(
-            "inline-flex size-18 shrink-0 items-center justify-center rounded-s font-mono text-caption font-bold",
+            "w-16 shrink-0 font-mono text-13",
             TONES[changeTone(file.change)],
           )}
         >
           {changeLetter(file.change)}
         </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-meta text-text">
+        <span className="min-w-0 flex-1 truncate font-mono text-13 text-text">
           {file.previous_path
             ? `${file.previous_path} → ${file.path}`
             : file.path}
         </span>
         {counts.added ? (
-          <span className="font-mono text-meta text-primary-text">
-            {counts.added}
-          </span>
+          <span className="text-13 text-ok tabular-nums">{counts.added}</span>
         ) : null}
         {counts.removed ? (
-          <span className="font-mono text-meta text-danger">
+          <span className="text-13 text-bad tabular-nums">
             {counts.removed}
           </span>
         ) : null}
@@ -90,29 +89,25 @@ export function WorkingChanges({
       <SectionHead title="Working changes">
         {workspace && live ? (
           <>
-            <span className="inline-flex items-center gap-6 rounded-s bg-primary-soft px-8 py-2 text-caption font-medium text-primary-strong">
-              <span
-                aria-hidden="true"
-                className="size-7 rounded-full bg-primary"
-              />
+            <Chip className="bg-accent-soft text-accent">
               {liveChipText(live, now)}
-            </span>
-            <span className="text-bar text-text-muted">
+            </Chip>
+            <span className="text-14 text-text-2">
               {changesNote(live, info)}
             </span>
           </>
         ) : null}
       </SectionHead>
       {workspace === null ? (
-        <p className="text-bar text-text-muted">
+        <p className="text-14 text-text-2">
           No workspace yet. A worker opens one when it starts the task.
         </p>
       ) : live === null || live.files.length === 0 ? (
-        <p className="text-bar text-text-muted">
+        <p className="text-14 text-text-2">
           No working changes in {workspace}.
         </p>
       ) : (
-        <ul className="flex flex-col rounded-m bg-sunken p-6">
+        <ul className="flex flex-col rounded-m bg-bg py-4">
           {live.files.map((file) => (
             <FileRow
               key={file.path}

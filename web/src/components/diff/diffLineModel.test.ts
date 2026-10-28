@@ -28,9 +28,9 @@ describe("diff rows", () => {
     ]);
   });
 
-  it("signs an addition in primary text and a removal in danger", () => {
-    expect(diffLineStyle("added").signClass).toBe("text-primary-text");
-    expect(diffLineStyle("removed").signClass).toBe("text-danger");
+  it("signs an addition in the ok tone and a removal in danger", () => {
+    expect(diffLineStyle("added").signClass).toBe("text-ok");
+    expect(diffLineStyle("removed").signClass).toBe("text-bad");
   });
 });
 
@@ -44,7 +44,7 @@ describe("diffRowClass", () => {
       const classes = diffRowClass(kind, true).split(" ");
       expect(classes).toContain("bg-diff-selected");
       expect(classes).toContain("before:w-3");
-      expect(classes).toContain("before:bg-primary");
+      expect(classes).toContain("before:bg-accent");
       expect(classes).toContain("before:left-0");
       expect(classes).toContain("relative");
     }
@@ -53,7 +53,7 @@ describe("diffRowClass", () => {
 
 describe("diffNumberClass", () => {
   it("writes a selected row's numbers in semibold primary text and the others muted", () => {
-    expect(diffNumberClass(true)).toBe("font-semibold text-primary-text");
-    expect(diffNumberClass(false)).toBe("text-text-muted");
+    expect(diffNumberClass(true)).toBe("font-semibold text-accent");
+    expect(diffNumberClass(false)).toBe("text-text-2");
   });
 });

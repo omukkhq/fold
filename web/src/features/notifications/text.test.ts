@@ -3,7 +3,6 @@ import type { TaskStatus } from "@/api/board";
 import type { CardMove } from "./moves";
 import {
   TOAST_TITLE,
-  bellLabel,
   moveText,
   toastLine,
   toastParts,
@@ -45,7 +44,7 @@ describe("toastText", () => {
     ).toBe("2 cards moved to Done");
     expect(
       toastText([move(1, "T-1", "todo", "backlog"), move(2, "T-2", "done")]),
-    ).toBe("1 card moved to Todo, 1 moved to Done");
+    ).toBe("1 card moved to To do, 1 moved to Done");
   });
 
   it("keeps the board's column order, whatever the order of the moves", () => {
@@ -103,10 +102,5 @@ describe("labels", () => {
     expect(moveText({ task: "T-7", to: "backlog" })).toBe(
       "T-7 moved to Backlog",
     );
-  });
-
-  it("gives the bell a name with the unread count", () => {
-    expect(bellLabel(0)).toBe("Notifications");
-    expect(bellLabel(3)).toBe("Notifications, 3 unread");
   });
 });

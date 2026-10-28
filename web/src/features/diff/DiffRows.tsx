@@ -1,6 +1,6 @@
 import {
-  ChevronDown,
-  ChevronUp,
+  ArrowDownToLine,
+  ArrowUpToLine,
   MessageSquare,
   RotateCw,
   UnfoldVertical,
@@ -27,7 +27,9 @@ import {
   NO_NEWLINE,
   hiddenLinesText,
   lineLabel,
+  showAllText,
   showLinesText,
+  unchangedLinesText,
 } from "./present";
 import { diffSyntax, rowTokens } from "./syntax";
 import {
@@ -72,17 +74,33 @@ export interface DiffRowsProps {
 
 // A row spans the panel, so its focus ring sits inside the row instead of outside it.
 const ROW_FOCUS =
-  "cursor-pointer focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring";
+  "cursor-pointer focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 
-/** A block under a line, indented past the number and sign columns. */
-function UnderLine({ children }: { children: ReactNode }) {
+/**
+ * A block under a line, indented past the number and sign columns. A review thread is a quiet block with an accent edge on its left; the selection's menu and forms sit in the same indent without a block, so the lines around them stay one surface.
+ */
+function UnderLine({
+  thread = false,
+  children,
+}: {
+  thread?: boolean;
+  children: ReactNode;
+}) {
   return (
     <div role="row">
-      <div role="gridcell" className="flex border-y border-border-subtle bg-bg">
+      <div role="gridcell" className="flex py-8 pr-16">
         <span aria-hidden="true" className="w-diff-number shrink-0" />
         <span aria-hidden="true" className="w-diff-number shrink-0" />
         <span aria-hidden="true" className="w-24 shrink-0" />
-        <div className="min-w-0 flex-1 pt-10 pr-14 pb-12">{children}</div>
+        <div
+          className={cn(
+            "min-w-0 flex-1",
+            thread &&
+              "max-w-measure rounded-r-m border-l-3 border-accent bg-sunken/55 px-14 py-10",
+          )}
+        >
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -133,75 +151,79 @@ export function DiffRows({
       <div role="row" key={row.key}>
         <div
           role="gridcell"
-          className="flex min-h-28 items-center bg-diff-hunk"
+          aria-label={unchangedLinesText(row.hidden)}
+          className="flex min-h-32 flex-wrap items-center gap-x-4 gap-y-2 bg-diff-hunk py-3 pr-10 pl-6 text-13 text-text-2"
         >
-          <span className="flex w-diff-number shrink-0 justify-end">
-            {row.up && row.status !== "error" ? (
-              <Tooltip content={up}>
-                <IconButton
-                  size="sm"
-                  aria-label={up}
-                  pending={pending}
-                  pendingLabel="Loading lines…"
-                  onClick={() => {
-                    expand(row, "up");
-                  }}
-                >
-                  <ChevronUp aria-hidden="true" size={14} />
-                </IconButton>
-              </Tooltip>
-            ) : null}
-          </span>
-          <span className="flex w-diff-number shrink-0 justify-start">
-            {row.down && row.status !== "error" ? (
-              <Tooltip content={down}>
-                <IconButton
-                  size="sm"
-                  aria-label={down}
-                  pending={pending}
-                  pendingLabel="Loading lines…"
-                  onClick={() => {
-                    expand(row, "down");
-                  }}
-                >
-                  <ChevronDown aria-hidden="true" size={14} />
-                </IconButton>
-              </Tooltip>
-            ) : null}
-          </span>
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-10 gap-y-2 py-2 pr-14">
-            {row.status === "error" ? (
-              <>
-                <span className="text-label text-text-muted">{GAP_ERROR}</span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  icon={<RotateCw aria-hidden="true" size={13} />}
-                  onClick={onGapRetry}
-                >
-                  Retry
-                </Button>
-              </>
-            ) : (
+          {row.status === "error" ? (
+            <>
+              <span className="pl-8">{GAP_ERROR}</span>
               <Button
                 variant="ghost"
                 size="sm"
-                icon={<UnfoldVertical aria-hidden="true" size={13} />}
+                icon={<RotateCw aria-hidden="true" size={14} />}
+                onClick={onGapRetry}
+              >
+                Retry
+              </Button>
+            </>
+          ) : (
+            <>
+              {row.up ? (
+                <Tooltip content={up}>
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    aria-label={up}
+                    pending={pending}
+                    pendingLabel="Loading lines…"
+                    onClick={() => {
+                      expand(row, "up");
+                    }}
+                  >
+                    <ArrowUpToLine aria-hidden="true" size={14} />
+                  </IconButton>
+                </Tooltip>
+              ) : null}
+              {row.down ? (
+                <Tooltip content={down}>
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    aria-label={down}
+                    pending={pending}
+                    pendingLabel="Loading lines…"
+                    onClick={() => {
+                      expand(row, "down");
+                    }}
+                  >
+                    <ArrowDownToLine aria-hidden="true" size={14} />
+                  </IconButton>
+                </Tooltip>
+              ) : null}
+              <span aria-hidden="true" className="ml-6">
+                {unchangedLinesText(row.hidden)}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label={pending ? undefined : showAllText(row.hidden)}
+                className="text-accent hover:bg-surface hover:text-accent"
+                icon={<UnfoldVertical aria-hidden="true" size={14} />}
                 pending={pending}
                 pendingLabel="Loading unchanged lines…"
                 onClick={() => {
                   expand(row, "all");
                 }}
               >
-                {hiddenLinesText(row.hidden)}
+                Show all
               </Button>
-            )}
-            {row.header === null ? null : (
-              <code className="min-w-0 font-mono text-label leading-snug wrap-anywhere text-text-muted">
-                {row.header}
-              </code>
-            )}
-          </div>
+            </>
+          )}
+          {row.header === null ? null : (
+            <code className="min-w-0 font-mono text-13 leading-tight wrap-anywhere text-text-2">
+              {row.header}
+            </code>
+          )}
         </div>
       </div>
     );
@@ -293,10 +315,7 @@ export function DiffRows({
           >
             {lineTokens ? <SyntaxTokens tokens={lineTokens} /> : row.text}
             {row.noNewline ? (
-              <span
-                aria-hidden="true"
-                className="ml-8 text-meta text-text-muted"
-              >
+              <span aria-hidden="true" className="ml-8 text-13 text-text-2">
                 {NO_NEWLINE}
               </span>
             ) : null}
@@ -304,7 +323,9 @@ export function DiffRows({
         </div>
         {renderThread
           ? ending.map((thread) => (
-              <UnderLine key={thread.id}>{renderThread(thread)}</UnderLine>
+              <UnderLine key={thread.id} thread>
+                {renderThread(thread)}
+              </UnderLine>
             ))
           : null}
         {renderComposer &&
@@ -344,11 +365,11 @@ export function DiffRows({
                   onExpand(row.key);
                 }}
                 className={cn(
-                  "flex flex-1 items-center gap-6 px-14 py-4 text-left font-mono text-label text-text-muted hover:text-text",
+                  "flex min-h-32 flex-1 items-center gap-6 px-14 py-3 text-left text-13 font-semibold text-accent hover:text-text",
                   ROW_FOCUS,
                 )}
               >
-                <UnfoldVertical aria-hidden="true" size={13} />
+                <UnfoldVertical aria-hidden="true" size={14} />
                 {hiddenLinesText(row.hidden)}
               </button>
             </div>

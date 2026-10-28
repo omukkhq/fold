@@ -6,7 +6,6 @@ import { Button } from "../button/Button";
 import { Dialog } from "./Dialog";
 import { Menu } from "./Menu";
 import { Popover } from "./Popover";
-import { Tabs } from "./Tabs";
 import { Tooltip } from "./Tooltip";
 
 beforeAll(() => {
@@ -97,42 +96,6 @@ describe("Popover", () => {
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(trigger);
-  });
-});
-
-describe("Tabs", () => {
-  const items = [
-    { value: "a", label: "Board", content: <p>Board panel</p> },
-    { value: "b", label: "Activity", content: <p>Activity panel</p> },
-  ];
-
-  it("selects the first tab and moves with the arrow keys", async () => {
-    render(<Tabs aria-label="Views" items={items} />);
-    const board = screen.getByRole("tab", { name: "Board" });
-    expect(board.getAttribute("aria-selected")).toBe("true");
-    board.focus();
-    await userEvent.keyboard("{ArrowRight}");
-    expect(
-      screen
-        .getByRole("tab", { name: "Activity" })
-        .getAttribute("aria-selected"),
-    ).toBe("true");
-    expect(screen.getByRole("tabpanel").textContent).toBe("Activity panel");
-  });
-
-  it("can be controlled", async () => {
-    const onValueChange = vi.fn();
-    render(
-      <Tabs
-        aria-label="Views"
-        items={items}
-        value="b"
-        onValueChange={onValueChange}
-      />,
-    );
-    expect(screen.getByRole("tabpanel").textContent).toBe("Activity panel");
-    await userEvent.click(screen.getByRole("tab", { name: "Board" }));
-    expect(onValueChange).toHaveBeenCalledWith("a");
   });
 });
 

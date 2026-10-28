@@ -22,7 +22,7 @@ export function isTaskStatus(value: unknown): value is TaskStatus {
   return typeof value === "string" && NAMES.has(value);
 }
 
-/** The board column's name, such as `In Progress`. */
+/** The board column's name, such as `In progress`. */
 export function columnName(status: TaskStatus): string {
   return NAMES.get(status) ?? status;
 }

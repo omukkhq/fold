@@ -19,7 +19,7 @@ describe("Card", () => {
 
   it("omits the footer row without a footer", () => {
     const { container } = render(<Card>Body</Card>);
-    expect(container.querySelector(".border-t")).toBeNull();
+    expect(container.querySelector(".pt-4")).toBeNull();
   });
 
   it("marks the selected card", () => {

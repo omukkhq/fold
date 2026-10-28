@@ -16,7 +16,7 @@ export function Popover({ trigger, children, align = "start" }: PopoverProps) {
         <RadixPopover.Content
           align={align}
           sideOffset={4}
-          className="z-10 rounded-m border border-border bg-raised p-12 text-body text-text shadow-card outline-none"
+          className="z-10 rounded-m bg-surface p-12 text-14 text-text shadow-pop outline-none"
         >
           {children}
         </RadixPopover.Content>

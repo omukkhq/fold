@@ -41,7 +41,7 @@ export type ButtonProps = NativeProps &
   };
 
 export function Button({
-  variant = "secondary",
+  variant = "quiet",
   size = "md",
   pending,
   pendingLabel,

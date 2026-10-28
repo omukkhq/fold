@@ -3,6 +3,7 @@ import { ApiError } from "@/api/errors";
 import type { ProjectSummary } from "@/api/projects";
 import {
   addBackBlocker,
+  agentsLine,
   addBackFailure,
   inFold,
   matchesSearch,
@@ -10,6 +11,7 @@ import {
   projectMark,
   removeFailure,
   showsRoot,
+  shortPath,
   shownProjects,
 } from "./projectsHome";
 
@@ -122,5 +124,32 @@ describe("failed writes", () => {
     expect(addBackFailure(new ApiError("internal_error", "")).code).toBe(
       "internal_error",
     );
+  });
+});
+
+describe("shortPath", () => {
+  it("keeps the last two folders of a long path and leaves a short one whole", () => {
+    expect(shortPath("/home/tanim/programming/nobs")).toBe(
+      "…/programming/nobs",
+    );
+    expect(shortPath("/srv/nobs/.git")).toBe("/srv/nobs/.git");
+    expect(shortPath("/srv/nobs")).toBe("/srv/nobs");
+    expect(shortPath("/home/tanim/code/nobs/.git")).toBe("…/nobs/.git");
+  });
+});
+
+describe("agentsLine", () => {
+  it("names the first three agents and counts the rest", () => {
+    expect(agentsLine([])).toEqual({ named: [], more: null, all: "" });
+    expect(agentsLine(["web-lead"])).toEqual({
+      named: ["web-lead"],
+      more: null,
+      all: "@web-lead",
+    });
+    expect(agentsLine(["a", "b", "c", "d", "e"])).toEqual({
+      named: ["a", "b", "c"],
+      more: "and 2 more",
+      all: "@a, @b, @c, @d and @e",
+    });
   });
 });

@@ -2,7 +2,6 @@ import * as RadixTabs from "@radix-ui/react-tabs";
 import { skipToken, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Bot, Terminal, UserPlus } from "lucide-react";
 import { useState } from "react";
-import { PausedBanner } from "@/app/PausedBanner";
 import { boardCards, boardQuery } from "@/api/board";
 import { keys } from "@/api/keys";
 import {
@@ -88,14 +87,13 @@ export function AgentsScreen({
 
   return (
     <div className="flex flex-col">
-      <PausedBanner slug={slug} />
-      <div className="flex flex-col gap-16 px-24 pt-20 pb-24">
+      <div className="flex flex-col gap-16 px-16 pt-20 pb-24 md:px-24">
         <div className="flex items-start justify-between gap-16">
           <div className="flex flex-col gap-4">
-            <h1 className="text-screen leading-snug font-semibold text-text">
+            <h1 className="text-24 leading-tight font-semibold text-text">
               Agents
             </h1>
-            <p className="text-body text-text-muted">
+            <p className="max-w-measure text-15 text-text-2">
               The main agent, the area leads, the review lead and their
               short-lived workers. fold starts, watches and stops every worker;
               the agents decide what to start.
@@ -103,7 +101,7 @@ export function AgentsScreen({
           </div>
           {startLead === null ? null : (
             <Button
-              icon={<UserPlus aria-hidden="true" size={15} />}
+              icon={<UserPlus aria-hidden="true" size={16} />}
               onClick={startLead}
             >
               Start a lead
@@ -163,7 +161,7 @@ export function AgentsScreen({
             {isEmptyTeam(groups) ? (
               <EmptyTeam onStartLead={startLead} />
             ) : (
-              <div className="flex items-start gap-16">
+              <div className="flex flex-col gap-16 lg:flex-row lg:items-start">
                 <TeamTable
                   slug={slug}
                   groups={groups}
@@ -210,33 +208,33 @@ function EmptyTeam({ onStartLead }: { onStartLead: (() => void) | null }) {
   return (
     <section
       aria-label="No agents yet"
-      className="flex flex-col items-center gap-12 rounded-l border border-border-subtle bg-surface px-24 py-40 text-center"
+      className="flex flex-col items-center gap-12 rounded-m bg-surface px-24 py-40 text-center"
     >
-      <Bot aria-hidden="true" size={28} className="text-text-faint" />
-      <h2 className="text-item-title leading-snug font-semibold text-text">
+      <Bot aria-hidden="true" size={28} className="text-text-2" />
+      <h2 className="text-18 leading-tight font-semibold text-text">
         No agents yet
       </h2>
-      <p className="text-body text-text-muted">
+      <p className="max-w-measure text-15 text-text-2">
         The main agent is your own Claude Code session. Run this in a terminal
         of the project, then ask it to plan the work. It starts the leads.
       </p>
-      <p className="flex items-center gap-10 rounded-m bg-sunken px-14 py-8 inset-ring inset-ring-border">
-        <Terminal aria-hidden="true" size={15} className="text-text-muted" />
-        <code className="font-mono text-body text-text">fld claude</code>
+      <p className="flex items-center gap-10 rounded-m bg-fill px-14 py-8">
+        <Terminal aria-hidden="true" size={16} className="text-text-2" />
+        <code className="font-mono text-14 text-text">fld claude</code>
       </p>
       {onStartLead === null ? null : (
         <div className="flex items-center gap-10">
-          <span className="text-code text-text-faint">or</span>
+          <span className="text-13 text-text-2">or</span>
           <Button
             variant="primary"
-            icon={<UserPlus aria-hidden="true" size={15} />}
+            icon={<UserPlus aria-hidden="true" size={16} />}
             onClick={onStartLead}
           >
             Start a lead
           </Button>
         </div>
       )}
-      <p className="text-meta text-text-faint">
+      <p className="text-13 text-text-2">
         fold stops a worker when its work is done or it has been idle.
       </p>
     </section>

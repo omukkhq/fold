@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { segmentsText } from "@/people/segments";
 import { message, recipient, thread } from "@/test/messages";
-import { rowLine, rowPreview } from "./threadRow";
+import { rowLine, rowPreview, rowSecond } from "./threadRow";
 
 const ask = message("m-2", {
   sender: "web-worker-39",
@@ -75,5 +75,40 @@ describe("rowPreview", () => {
     expect(segmentsText(rowPreview(ask, "tanim", "main"))).toBe(
       "@web-worker-39: Use null?",
     );
+  });
+});
+
+describe("rowSecond", () => {
+  const second = (...args: Parameters<typeof rowSecond>) => {
+    const result = rowSecond(...args);
+    return { text: segmentsText(result.segments), asks: result.asks };
+  };
+  const reply = message("m-7", { sender: "human:tanim", body: "Use null." });
+
+  it("says who asks you while the thread waits for you", () => {
+    expect(
+      second(
+        thread("m-1", { awaiting_human: true, messages: [first, ask] }),
+        "tanim",
+      ),
+    ).toEqual({ text: "@web-worker-39 asks you", asks: true });
+  });
+
+  it("shows the route of a thread whose one message is its title", () => {
+    expect(second(thread("m-1", { messages: [first] }), "tanim")).toEqual({
+      text: "@main to @backend-lead, @web-lead",
+      asks: false,
+    });
+    expect(second(thread("m-5"), null)).toEqual({ text: "", asks: false });
+  });
+
+  it("shows the newest message with its sender once the thread has a reply", () => {
+    expect(
+      second(thread("m-1", { messages: [first, ask, reply] }), "tanim"),
+    ).toEqual({ text: "You: Use null.", asks: false });
+    expect(second(thread("m-1", { messages: [first, ask] }), "tanim")).toEqual({
+      text: "@web-worker-39: Use null?",
+      asks: false,
+    });
   });
 });

@@ -149,10 +149,12 @@ export function personSuggestions(query: string, people: People): Suggestion[] {
 }
 
 /** How a row shows its label: an id or a path in the mono face, a person as `@name` in Barlow in the colour of their kind. */
-export type OptionLook = "mono" | "human" | "agent";
+export type OptionLook = "path" | "id" | "human" | "agent";
 
+/** A file path in the mono face, an item's id in the body face as every id reads, and a person in the colour of their kind. */
 export function optionLook(suggestion: Suggestion): OptionLook {
-  if (suggestion.group !== "people") return "mono";
+  if (suggestion.group === "files") return "path";
+  if (suggestion.group !== "people") return "id";
   return suggestion.detail === "human" ? "human" : "agent";
 }
 

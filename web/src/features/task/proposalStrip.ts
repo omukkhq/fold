@@ -6,7 +6,7 @@ export interface ProposalStrip {
   proposal: string;
   /** `P-7 v2 waits for your review`, `P-7 v2 is approved`, `P-7 v2 is with @review-lead` or `P-7 v2 waits for a reviewer`. */
   lead: string;
-  /** `· Add the form · 3 files`; empty while the read names neither. */
+  /** `Add the form · 3 files`, the line under the lead; empty while the read names neither. */
   rest: string;
   /** True while the version waits for this human; the strip is gold then and neutral otherwise. */
   waitsForYou: boolean;
@@ -45,7 +45,7 @@ export function proposalStrip(
   return {
     proposal: proposal.id,
     lead: `${version} ${wait}`,
-    rest: parts.map((part) => `· ${part}`).join(" "),
+    rest: parts.join(" · "),
     waitsForYou,
   };
 }

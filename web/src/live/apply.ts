@@ -370,7 +370,7 @@ function invalidationKeys(
     case "label":
       return [board, keys.labels(slug), ...taskKey];
     case "task": {
-      // Needs you lists human tasks in Todo and tasks with a blocker, which any task event can add or remove; the human review mark also decides which proposals wait for the human. A change of the labels can move the task to another area, whose lead reads its feedback.
+      // Needs you lists human tasks in To do and tasks with a blocker, which any task event can add or remove; the human review mark also decides which proposals wait for the human. A change of the labels can move the task to another area, whose lead reads its feedback.
       const readers = task === null ? [] : [keys.taskReaders(slug, task)];
       return type === "task.human_review_set" ||
         type === "task.human_review_cleared"

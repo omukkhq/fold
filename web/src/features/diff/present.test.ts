@@ -9,10 +9,13 @@ import {
   changeNote,
   comparisonCrumbs,
   comparisonSides,
+  namesSides,
   comparisonNote,
   comparisonTitle,
   hiddenLinesText,
+  showAllText,
   showLinesText,
+  unchangedLinesText,
   wholeFileText,
   isWorkingChanges,
   lineCounts,
@@ -113,8 +116,8 @@ describe("comparisonSides", () => {
 describe("comparisonCrumbs", () => {
   it("leads a workspace back to Activity", () => {
     expect(comparisonCrumbs("demo", working)).toEqual([
-      { label: "Activity", href: "/p/demo/activity", mono: false },
-      { label: "ws-7", href: null, mono: true },
+      { label: "Activity", href: "/p/demo/activity" },
+      { label: "ws-7", href: null },
     ]);
   });
 
@@ -126,9 +129,17 @@ describe("comparisonCrumbs", () => {
 
   it("leads revisions back to Repository", () => {
     expect(comparisonCrumbs("demo", revisions)).toEqual([
-      { label: "Repository", href: "/p/demo/repository", mono: false },
-      { label: "r7 → r8", href: null, mono: true },
+      { label: "Repository", href: "/p/demo/repository" },
+      { label: "r7 → r8", href: null },
     ]);
+  });
+});
+
+describe("namesSides", () => {
+  it("names the sides of a workspace comparison only", () => {
+    expect(namesSides(working)).toBe(true);
+    expect(namesSides(revisions)).toBe(false);
+    expect(namesSides(checkpoint)).toBe(false);
   });
 });
 
@@ -175,7 +186,7 @@ describe("files", () => {
   it("gives each change kind a letter, a name and its colours", () => {
     expect(changeBadge("added")).toMatchObject({ letter: "A", label: "Added" });
     expect(changeBadge("modified").letter).toBe("M");
-    expect(changeBadge("deleted").classes).toContain("text-danger");
+    expect(changeBadge("deleted").classes).toContain("text-bad");
     expect(changeBadge("renamed").letter).toBe("R");
   });
 
@@ -243,6 +254,9 @@ describe("row text", () => {
   it("counts hidden lines and remaining rows", () => {
     expect(hiddenLinesText(1)).toBe("Show 1 unchanged line");
     expect(hiddenLinesText(12)).toBe("Show 12 unchanged lines");
+    expect(unchangedLinesText(1)).toBe("1 unchanged line");
+    expect(unchangedLinesText(17)).toBe("17 unchanged lines");
+    expect(showAllText(17)).toBe("Show all 17 unchanged lines");
     expect(showLinesText(4, 4)).toBe("Show line 4");
     expect(showLinesText(14, 33)).toBe("Show lines 14–33");
     expect(wholeFileText(false)).toBe("Show whole file");

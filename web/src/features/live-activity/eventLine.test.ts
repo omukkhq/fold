@@ -112,10 +112,10 @@ describe("eventLine", () => {
       eventLine(event(type, { data })).text;
     expect(
       line("task.status_changed", { from: "todo", to: "in_progress" }),
-    ).toBe("T-12 moved to In Progress");
+    ).toBe("T-12 moved to In progress");
     expect(
       line("task.status_changed", { from: "review", to: "in_progress" }),
-    ).toBe("T-12 back to In Progress");
+    ).toBe("T-12 back to In progress");
     expect(line("task.status_changed", { to: "done" })).toBe(
       "T-12 moved to Done",
     );

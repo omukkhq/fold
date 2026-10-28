@@ -1,42 +1,48 @@
-import { ActorText } from "@/people/ActorText";
-import { HumanReviewBadge } from "@/people/HumanReviewBadge";
-import { PersonName } from "@/people/PersonName";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
-import {
-  Check,
-  GitMerge,
-  GitPullRequest,
-  UserCheck,
-  UserRoundCheck,
-} from "lucide-react";
+import { Check, ChevronDown, Filter, GitPullRequest, X } from "lucide-react";
 import { proposalsQuery, proposalsWaitingQuery } from "@/api/queries";
-import { Badge } from "@/components/badge/Badge";
+import { revisionsQuery } from "@/api/repositoryQueries";
 import { HrefLink } from "@/app/HrefLink";
+import { FILTER_COUNT_CLASSES } from "@/components/badge/chips";
 import { Button } from "@/components/button/Button";
-import { Menu } from "@/components/overlay/Menu";
+import { Id } from "@/components/id/Id";
+import { menuContent, menuItem } from "@/components/overlay/menuStyles";
+import {
+  SEGMENT_LIST,
+  segmentClasses,
+} from "@/components/segments/segmentStyles";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { Skeleton } from "@/components/states/Skeleton";
-import { revisionsQuery } from "@/api/repositoryQueries";
+import {
+  TABLE_CELL,
+  TABLE_HEAD,
+  TABLE_LINK_ROW,
+} from "@/components/table/tableStyles";
 import { formatSince } from "@/format/time";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { useNow } from "@/live/useNow";
+import { ActorText } from "@/people/ActorText";
+import { PersonName } from "@/people/PersonName";
+import { projectPath } from "@/routes/paths";
 import {
   STATES,
+  activeFilters,
   claimLabel,
   countByState,
   filterProposals,
   isNarrowed,
   listHref,
+  menuCounts,
   shownState,
-  waitingLabel,
   type ClaimFilter,
   type ListSearch,
 } from "./filters";
+import { IdLink } from "@/components/id/IdLink";
 import { integratedRevisions } from "./integration";
-import { claimLine, reviewPill, versionText, waitingOn } from "./present";
-import { ReviewPill, WaitingChip } from "./ReviewPill";
-import { projectPath } from "@/routes/paths";
+import { listMeta, listPill } from "./present";
+import { ReviewPill } from "./ReviewPill";
 
 interface ProposalsScreenProps {
   slug: string;
@@ -50,16 +56,125 @@ const STATE_LABELS = {
   closed: "Closed",
 } as const;
 
-const HEAD =
-  "px-6 py-9 text-left text-overline leading-snug font-semibold whitespace-nowrap text-text-muted uppercase first:pl-16 last:pr-16";
-const CELL = "px-6 py-12 align-middle first:pl-16 last:pr-16";
-const MONO = "font-mono text-code whitespace-nowrap text-text-muted";
-
 const CLAIMS: readonly (ClaimFilter | undefined)[] = [
   undefined,
   "claimed",
   "unclaimed",
 ];
+
+const MENU_HEAD =
+  "px-10 pt-8 pb-4 font-title text-13 font-semibold text-text-2";
+const MENU_ROW = cn(menuItem, "gap-10");
+
+function Tick() {
+  return (
+    <span className="inline-flex size-16 shrink-0 items-center justify-center">
+      <DropdownMenu.ItemIndicator>
+        <Check aria-hidden="true" size={16} />
+      </DropdownMenu.ItemIndicator>
+    </span>
+  );
+}
+
+/** One Filter menu for the toggles and the claim filter; the state segment stays beside it. The menu stays open while the reader picks, so several filters take one visit. */
+function FilterMenu({
+  search,
+  counts,
+  onSearch,
+}: {
+  search: ListSearch;
+  counts: { waiting: number; conflicted: number };
+  onSearch: (next: ListSearch) => void;
+}) {
+  const active = activeFilters(search).length;
+  return (
+    <DropdownMenu.Root modal={false}>
+      <DropdownMenu.Trigger asChild>
+        <Button icon={<Filter aria-hidden="true" size={16} />}>
+          Filter
+          {active > 0 ? (
+            <span className={FILTER_COUNT_CLASSES}>
+              {active}
+              <span className="sr-only"> active</span>
+            </span>
+          ) : null}
+          <ChevronDown aria-hidden="true" size={14} className="text-text-2" />
+        </Button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          sideOffset={8}
+          className={cn(menuContent, "w-menu max-w-(--width-popover-max)")}
+        >
+          <DropdownMenu.Label className={MENU_HEAD}>
+            Show only
+          </DropdownMenu.Label>
+          <DropdownMenu.CheckboxItem
+            className={MENU_ROW}
+            checked={search.waiting === true}
+            onCheckedChange={(checked) => {
+              onSearch({ ...search, waiting: checked ? true : undefined });
+            }}
+            onSelect={(event) => {
+              event.preventDefault();
+            }}
+          >
+            <Tick />
+            Waits for you{" "}
+            <span className="ml-auto text-13 text-text-2 tabular-nums">
+              {counts.waiting}
+            </span>
+          </DropdownMenu.CheckboxItem>
+          <DropdownMenu.CheckboxItem
+            className={MENU_ROW}
+            checked={search.conflicted === true}
+            onCheckedChange={(checked) => {
+              onSearch({ ...search, conflicted: checked ? true : undefined });
+            }}
+            onSelect={(event) => {
+              event.preventDefault();
+            }}
+          >
+            <Tick />
+            Conflicted{" "}
+            <span className="ml-auto text-13 text-text-2 tabular-nums">
+              {counts.conflicted}
+            </span>
+          </DropdownMenu.CheckboxItem>
+          <DropdownMenu.Label className={MENU_HEAD}>
+            Review claim
+          </DropdownMenu.Label>
+          <DropdownMenu.RadioGroup
+            value={search.claim ?? "any"}
+            onValueChange={(value) => {
+              onSearch({
+                ...search,
+                claim: CLAIMS.find((claim) => claim === value),
+              });
+            }}
+          >
+            {CLAIMS.map((claim) => (
+              <DropdownMenu.RadioItem
+                key={claim ?? "any"}
+                value={claim ?? "any"}
+                className={MENU_ROW}
+                onSelect={(event) => {
+                  event.preventDefault();
+                }}
+              >
+                <Tick />
+                {claimLabel(claim)}
+              </DropdownMenu.RadioItem>
+            ))}
+          </DropdownMenu.RadioGroup>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+const CELL = cn(TABLE_CELL, "px-14 py-12");
 
 export function ProposalsScreen({
   slug,
@@ -77,68 +192,22 @@ export function ProposalsScreen({
     enabled: state === "integrated",
   });
   const integrated = integratedRevisions(revisions.data?.items ?? []);
+  const active = activeFilters(search);
 
   return (
-    <div className="flex flex-col gap-16 px-24 pt-20 pb-24">
-      <div className="flex flex-wrap items-end justify-between gap-12">
+    <div className="flex flex-col gap-16 px-16 pt-20 pb-28 md:px-24">
+      <div className="flex flex-wrap items-end justify-between gap-x-20 gap-y-12">
         <div className="flex flex-col gap-4">
-          <h1 className="text-screen leading-snug font-semibold text-text">
+          <h1 className="text-24 leading-tight font-semibold text-text">
             Proposals
           </h1>
-          <p className="text-body text-text-muted">
+          <p className="max-w-measure text-15 text-text-2">
             Proposals waiting on reviewers, waiting on authors, and recently
             integrated.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-8">
-          <Menu
-            align="end"
-            trigger={
-              <Button icon={<UserRoundCheck aria-hidden="true" size={15} />}>
-                {claimLabel(search.claim)}
-              </Button>
-            }
-            items={CLAIMS.map((claim) => ({
-              label: claimLabel(claim),
-              icon: claim === search.claim ? Check : undefined,
-              onSelect: () => {
-                onSearch({ ...search, claim });
-              },
-            }))}
-          />
-          <Button
-            aria-pressed={search.waiting === true}
-            variant={search.waiting === true ? "primary" : "secondary"}
-            icon={<UserCheck aria-hidden="true" size={15} />}
-            onClick={() => {
-              onSearch({
-                ...search,
-                waiting: search.waiting ? undefined : true,
-              });
-            }}
-          >
-            {waitingLabel(waitingForYou.length)}
-          </Button>
-          <Button
-            aria-pressed={search.conflicted === true}
-            icon={<GitMerge aria-hidden="true" size={15} />}
-            className={cn(
-              search.conflicted &&
-                "bg-danger-soft text-danger inset-ring-danger",
-            )}
-            onClick={() => {
-              onSearch({
-                ...search,
-                conflicted: search.conflicted ? undefined : true,
-              });
-            }}
-          >
-            Conflicted
-          </Button>
-          <nav
-            aria-label="Proposal state"
-            className="flex gap-2 rounded-m bg-sunken p-3"
-          >
+          <nav aria-label="Proposal state" className={SEGMENT_LIST}>
             {STATES.map((s) => {
               const current = s === state;
               return (
@@ -146,23 +215,51 @@ export function ProposalsScreen({
                   key={s}
                   href={listHref(slug, { ...search, state: s })}
                   aria-current={current ? "page" : undefined}
-                  className={cn(
-                    "rounded-s px-12 py-5 text-bar leading-snug",
-                    current
-                      ? "bg-surface font-semibold text-text inset-ring inset-ring-border-subtle"
-                      : "font-medium text-text-muted hover:text-text",
-                    focusRing,
-                  )}
+                  className={cn(segmentClasses(current), focusRing)}
                 >
-                  {s === "open"
-                    ? `${STATE_LABELS[s]} · ${String(counts.open)}`
-                    : STATE_LABELS[s]}
+                  {STATE_LABELS[s]}
+                  {s === "open" ? (
+                    <>
+                      {" "}
+                      <span className="font-body text-13 font-medium text-text-2 tabular-nums">
+                        {counts.open}
+                      </span>
+                    </>
+                  ) : null}
                 </HrefLink>
               );
             })}
           </nav>
+          <FilterMenu
+            search={search}
+            counts={menuCounts(data, search, waitingForYou)}
+            onSearch={onSearch}
+          />
         </div>
       </div>
+
+      {active.length === 0 ? null : (
+        <div className="flex flex-wrap items-center gap-8 text-14">
+          <span className="text-text-2">Filters:</span>
+          {active.map((filter) => (
+            <button
+              key={filter.key}
+              type="button"
+              aria-label={`Remove the filter ${filter.label}`}
+              onClick={() => {
+                onSearch(filter.without);
+              }}
+              className={cn(
+                "inline-flex items-center gap-6 rounded-pill bg-accent-soft py-4 pr-8 pl-12 text-14 font-semibold text-accent",
+                focusRing,
+              )}
+            >
+              {filter.label}
+              <X aria-hidden="true" size={14} />
+            </button>
+          ))}
+        </div>
+      )}
 
       {rows.length === 0 ? (
         <EmptyPanel
@@ -182,88 +279,77 @@ export function ProposalsScreen({
               : "Pick another state to see more proposals."}
         </EmptyPanel>
       ) : (
-        <div className="overflow-x-auto rounded-l border border-border-subtle bg-surface">
-          <table className="w-full border-collapse">
-            <thead className="bg-bg">
-              <tr className="border-b border-border-subtle">
-                <th className={HEAD}>Id</th>
-                <th className={cn(HEAD, "w-full")}>Title</th>
-                <th className={HEAD}>Task</th>
-                <th className={HEAD}>Author</th>
-                <th className={HEAD}>Proposal</th>
-                <th className={HEAD}>Waiting on</th>
-                <th className={HEAD}>Review</th>
-                <th className={HEAD}>Updated</th>
+        <div className="overflow-x-auto rounded-m bg-surface max-md:overflow-visible max-md:bg-transparent">
+          {/* On a phone each row becomes a block of two lines: the title, then the state chip and the time. */}
+          <table className="w-full border-collapse max-md:block">
+            <thead className="max-md:sr-only">
+              <tr>
+                <th className={cn(TABLE_HEAD, "w-full px-14 pt-10 pb-6")}>
+                  Proposal
+                </th>
+                <th className={cn(TABLE_HEAD, "px-14 pt-10 pb-6")}>Author</th>
+                <th className={cn(TABLE_HEAD, "px-14 pt-10 pb-6")}>State</th>
+                <th className={cn(TABLE_HEAD, "px-14 pt-10 pb-6 text-right")}>
+                  Updated
+                </th>
               </tr>
             </thead>
-            <tbody>
-              {rows.map((p) => {
-                const waiting = waitingOn(p);
-                return (
-                  <tr
-                    key={p.id}
-                    className="border-b border-border-subtle last:border-b-0 hover:bg-bg"
-                  >
-                    <td className={cn(CELL, MONO)}>{p.id}</td>
-                    <td className={CELL}>
-                      <span className="flex min-w-(--width-search) flex-wrap items-center gap-8">
+            <tbody className="max-md:flex max-md:flex-col max-md:gap-8">
+              {rows.map((p) => (
+                <tr
+                  key={p.id}
+                  className={cn(
+                    TABLE_LINK_ROW,
+                    "max-md:grid max-md:grid-cols-[minmax(0,1fr)_auto] max-md:items-center max-md:gap-x-10 max-md:gap-y-6 max-md:rounded-m max-md:bg-surface max-md:px-14 max-md:py-12 max-md:even:bg-surface max-md:hover:bg-surface",
+                  )}
+                >
+                  <td className={cn(CELL, "max-md:col-span-2 max-md:p-0")}>
+                    <div className="flex min-w-0 flex-col gap-2">
+                      <span className="flex min-w-0 items-baseline gap-12">
+                        <Id className="min-w-32 shrink-0 text-14 text-text-2">
+                          {p.id}
+                        </Id>
                         <HrefLink
                           href={projectPath(slug, "proposals", p.id)}
                           className={cn(
-                            "min-w-0 rounded-s text-body leading-snug font-medium wrap-anywhere text-text hover:underline",
+                            "min-w-0 rounded-s text-15 leading-tight font-medium wrap-anywhere text-text hover:underline",
                             focusRing,
                           )}
                         >
                           {p.title}
                         </HrefLink>
-                        {p.human_review ? (
-                          <HumanReviewBadge
-                            reviewer={p.human_review.reviewer}
-                          />
-                        ) : null}
-                        {waitingForYou.includes(p.id) ? (
-                          <Badge tone="needs-you" icon={UserCheck}>
-                            Waits for you
-                          </Badge>
-                        ) : null}
                       </span>
-                    </td>
-                    <td className={cn(CELL, MONO)}>{p.task}</td>
-                    <td className={cn(CELL, MONO)}>
-                      <PersonName name={p.author} slot="authorCell" />
-                    </td>
-                    <td className={cn(CELL, MONO)}>{versionText(p)}</td>
-                    <td className={CELL}>
-                      {waiting ? (
-                        <WaitingChip waiting={waiting} />
-                      ) : (
-                        <span className="text-meta text-text-faint">—</span>
-                      )}
-                    </td>
-                    <td className={CELL}>
-                      <span className="flex flex-col items-start gap-4">
-                        <ReviewPill
-                          pill={reviewPill(p, {
-                            revision: integrated.get(p.id) ?? null,
-                          })}
-                          className="whitespace-nowrap"
-                        />
-                        <span className="font-mono text-caption whitespace-nowrap text-text-muted">
-                          <ActorText segments={claimLine(p)} />
-                        </span>
+                      <span className="pl-44 text-13 text-text-2 max-md:hidden">
+                        for{" "}
+                        <IdLink href={projectPath(slug, "t", p.task)}>
+                          {p.task}
+                        </IdLink>{" "}
+                        · <ActorText segments={listMeta(p)} />
                       </span>
-                    </td>
-                    <td
-                      className={cn(
-                        CELL,
-                        "text-code whitespace-nowrap text-text-muted",
-                      )}
-                    >
-                      {formatSince(now, p.updated_at)}
-                    </td>
-                  </tr>
-                );
-              })}
+                    </div>
+                  </td>
+                  <td className={cn(CELL, "whitespace-nowrap max-md:hidden")}>
+                    <PersonName name={p.author} />
+                  </td>
+                  <td className={cn(CELL, "max-md:p-0")}>
+                    <ReviewPill
+                      pill={listPill(p, {
+                        revision: integrated.get(p.id) ?? null,
+                        waitsForYou: waitingForYou.includes(p.id),
+                      })}
+                      className="md:whitespace-nowrap"
+                    />
+                  </td>
+                  <td
+                    className={cn(
+                      CELL,
+                      "text-right text-13 whitespace-nowrap text-text-2 tabular-nums max-md:p-0",
+                    )}
+                  >
+                    {formatSince(now, p.updated_at)}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -274,7 +360,7 @@ export function ProposalsScreen({
 
 export function ProposalsPending() {
   return (
-    <div className="flex flex-col gap-16 px-24 pt-20 pb-24">
+    <div className="flex flex-col gap-16 px-16 pt-20 pb-28 md:px-24">
       <Skeleton />
     </div>
   );

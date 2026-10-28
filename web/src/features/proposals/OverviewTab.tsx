@@ -19,8 +19,12 @@ import type {
   Verdict,
 } from "@/api/proposals";
 import { HrefLink } from "@/app/HrefLink";
+import { Chip } from "@/components/badge/Chip";
+import type { ChipTone } from "@/components/badge/chips";
+import { Id } from "@/components/id/Id";
 import { CommitId } from "@/components/mono/CommitId";
 import { Dialog } from "@/components/overlay/Dialog";
+import { IdText } from "@/components/text/IdText";
 import { textFlow } from "@/components/text/textFlow";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
@@ -32,14 +36,9 @@ import { idHref, projectPath } from "@/routes/paths";
 import { RUN_ICONS } from "./checkIcons";
 import { checksFailedNote } from "./checkRuns";
 import { ConflictBlock } from "./ConflictBlock";
-import {
-  lastLine,
-  latestThreads,
-  whereText,
-  type ConversationThread,
-} from "./conversation";
+import { conversationFact, type ConversationThread } from "./conversation";
 import { changedFolders, changeTree, filesWord } from "./folderTree";
-import { gateText, shownGates, waitingSummary } from "./gates";
+import { checklistGates, gateText, waitingSummary } from "./gates";
 import {
   historyEntries,
   reviewCommentWhere,
@@ -47,41 +46,40 @@ import {
   type HistoryEntry,
   type HistoryReview,
 } from "./history";
-import { HumanActions, type ActionHandlers } from "./HumanActions";
+import { IdLink } from "@/components/id/IdLink";
 import type { IntegrationView } from "./integration";
 import {
   currentVersion,
   evidenceLines,
   evidenceSource,
   filesText,
-  PILL_CLASSES,
+  humanReviewFact,
 } from "./present";
-import { detailHref, type DetailSearch, type DetailView } from "./view";
+import { detailHref, type DetailSearch } from "./view";
 
-const OVERLINE =
-  "text-overline leading-snug font-semibold text-text-muted uppercase";
-const CARD = "rounded-l bg-surface inset-ring inset-ring-border-subtle";
-const LINK = cn("rounded-s text-primary-text hover:underline", focusRing);
+const LABEL = "font-title text-13 leading-tight font-semibold text-text-2";
+const CARD = "rounded-m bg-surface";
+const LINK = cn("rounded-s text-accent hover:underline", focusRing);
 
 const GATE_ICONS: Record<
   GateStatus,
   { icon: LucideIcon; label: string; className: string }
 > = {
-  met: { icon: CircleCheck, label: "met", className: "text-primary-text" },
-  unmet: { icon: CircleX, label: "not met", className: "text-danger" },
+  met: { icon: CircleCheck, label: "met", className: "text-ok" },
+  unmet: { icon: CircleX, label: "not met", className: "text-bad" },
   checked_at_integration: {
     icon: CircleDashed,
     label: "checked at integration",
-    className: "text-text-muted",
+    className: "text-text-2",
   },
 };
 
 const VERDICT_ICONS: Record<Verdict, { icon: LucideIcon; className: string }> =
   {
-    approve: { icon: CircleCheck, className: "text-primary-text" },
-    request_changes: { icon: CircleAlert, className: "text-danger" },
-    reject: { icon: CircleSlash, className: "text-danger" },
-    comment: { icon: MessageSquare, className: "text-text-muted" },
+    approve: { icon: CircleCheck, className: "text-ok" },
+    request_changes: { icon: CircleAlert, className: "text-bad" },
+    reject: { icon: CircleSlash, className: "text-bad" },
+    comment: { icon: MessageSquare, className: "text-text-2" },
   };
 
 function Notice({
@@ -96,12 +94,18 @@ function Notice({
   return (
     <p
       className={cn(
-        "flex items-start gap-8 rounded-m px-12 py-9 text-code leading-snug",
-        tone === "danger" && "bg-danger-soft text-danger",
-        tone === "muted" && "bg-sunken text-text-muted",
+        "flex max-w-measure items-start gap-10 rounded-s px-12 py-10 text-15 leading-normal text-text",
+        tone === "danger" ? "bg-bad-soft" : "bg-sunken",
       )}
     >
-      <Icon aria-hidden="true" size={14} className="mt-2 shrink-0" />
+      <Icon
+        aria-hidden="true"
+        size={16}
+        className={cn(
+          "mt-4 shrink-0",
+          tone === "danger" ? "text-bad" : "text-text-2",
+        )}
+      />
       <span className="min-w-0">{children}</span>
     </p>
   );
@@ -110,23 +114,17 @@ function Notice({
 function IntegrationCard({
   slug,
   proposal,
-  human,
   now,
   main,
   integration,
   queued,
-  actions,
-  actionView,
 }: {
   slug: string;
   proposal: ProposalDetail;
-  human: string | null;
   now: number;
   main: string | null;
   integration: IntegrationView | null;
   queued: string | null;
-  actions: ActionHandlers;
-  actionView: DetailView;
 }) {
   const summary = proposal.summary;
   const waiting = waitingSummary(proposal);
@@ -134,35 +132,29 @@ function IntegrationCard({
   return (
     <section
       aria-label="Integration"
-      className={cn(CARD, "flex flex-col gap-14 p-20")}
+      className={cn(CARD, "flex flex-col gap-12 px-16 py-14")}
     >
       <div className="flex flex-wrap items-center gap-x-12 gap-y-6">
-        <h2 className="text-section leading-snug font-semibold text-text">
+        <h2 className="text-18 leading-tight font-semibold text-text">
           Integration
         </h2>
         {integration ? (
-          <p className="ml-auto flex flex-wrap items-center gap-x-6 text-code text-text-muted">
+          <p className="ml-auto flex flex-wrap items-center gap-x-6 text-13 text-text-2">
             <GitMerge aria-hidden="true" size={14} />v{integration.version}{" "}
             {integration.batch === null ? (
               "integrated as "
             ) : (
               <>
                 integrated with batch{" "}
-                <HrefLink
-                  href={projectPath(slug, "batches", integration.batch)}
-                  className={cn("font-mono", LINK)}
-                >
+                <IdLink href={projectPath(slug, "batches", integration.batch)}>
                   {integration.batch}
-                </HrefLink>{" "}
+                </IdLink>{" "}
                 as{" "}
               </>
             )}
-            <HrefLink
-              href={idHref(slug, "revision", integration.revision)}
-              className={cn("font-mono", LINK)}
-            >
+            <IdLink href={idHref(slug, "revision", integration.revision)}>
               {integration.revision}
-            </HrefLink>
+            </IdLink>
             <CommitId commit={integration.commit} />
             <span>· {formatAsOfMinute(now, integration.at)}</span>
             {integration.actor ? (
@@ -173,19 +165,23 @@ function IntegrationCard({
           </p>
         ) : null}
       </div>
-      <ul className="grid grid-cols-1 gap-x-24 gap-y-10 md:grid-cols-2">
-        {shownGates(proposal.gates).map((gate) => {
+      <ul className="flex flex-col gap-8">
+        {checklistGates(proposal.gates).map((gate) => {
           const spec = GATE_ICONS[gate.status];
           const Icon = spec.icon;
           return (
-            <li key={gate.gate} data-state={gate.status} className="flex gap-8">
+            <li
+              key={gate.gate}
+              data-state={gate.status}
+              className="flex max-w-measure gap-10"
+            >
               <Icon
                 role="img"
                 aria-label={spec.label}
-                size={15}
-                className={cn("mt-2 shrink-0", spec.className)}
+                size={16}
+                className={cn("mt-4 shrink-0", spec.className)}
               />
-              <span className="min-w-0 flex-1 text-bar leading-snug text-text">
+              <span className="min-w-0 flex-1 text-15 leading-normal text-text">
                 <ActorText
                   segments={gateText(gate, proposal, main)}
                   slot="gate"
@@ -211,15 +207,6 @@ function IntegrationCard({
       {proposal.conflict ? (
         <ConflictBlock report={proposal.conflict} proposal={proposal} />
       ) : null}
-      {human !== null && summary.state === "open" ? (
-        <HumanActions
-          proposal={proposal}
-          human={human}
-          view={actionView}
-          slug={slug}
-          actions={actions}
-        />
-      ) : null}
     </section>
   );
 }
@@ -232,14 +219,15 @@ function ReviewCommentItem({
   comment: ReviewComment;
 }) {
   return (
-    <li className="flex flex-col gap-4 rounded-m bg-sunken px-12 py-9">
-      <span className="font-mono text-caption text-text-muted">
-        {comment.id} · {reviewCommentWhere(comment)}
+    <li className="flex flex-col gap-4 rounded-s bg-sunken px-12 py-10">
+      <span className="text-13 text-text-2">
+        <Id>{comment.id}</Id> ·{" "}
+        <span className="font-mono">{reviewCommentWhere(comment)}</span>
       </span>
       <MentionText
         text={comment.body}
         slug={slug}
-        className="text-code leading-normal"
+        className="text-13 leading-normal"
       />
     </li>
   );
@@ -262,14 +250,14 @@ function FullReview({
       trigger={
         <button
           type="button"
-          className={cn("self-start text-meta font-semibold", LINK)}
+          className={cn("self-start text-14 font-semibold", LINK)}
         >
           Read the full review
         </button>
       }
     >
       <div className="flex w-dialog max-w-full flex-col gap-10">
-        <p className="text-code text-text-muted">
+        <p className="text-13 text-text-2">
           <PersonName name={item.review.reviewer} /> ·{" "}
           {formatAsOfMinute(now, item.review.created_at)}
           {item.scope === null ? "" : ` · ${item.scope}`}
@@ -278,14 +266,14 @@ function FullReview({
           <MentionText
             text={item.review.body.trim() || item.head}
             slug={slug}
-            className="text-body leading-normal"
+            className="text-15 leading-normal"
           />
           {item.comments.length === 0 ? null : (
             <section
               aria-label="Comments of the review"
               className="flex flex-col gap-8"
             >
-              <h3 className={OVERLINE}>Comments</h3>
+              <h3 className={LABEL}>Comments</h3>
               <ul className="flex flex-col gap-8">
                 {item.comments.map((comment) => (
                   <ReviewCommentItem
@@ -317,24 +305,23 @@ function RunLine({
   const spec = RUN_ICONS[run.state];
   const Icon = spec.icon;
   return (
-    <li className="flex flex-wrap items-center gap-x-8 gap-y-2 text-code">
+    <li className="flex flex-wrap items-center gap-x-8 gap-y-2 text-14">
       <Icon
         role="img"
         aria-label={spec.label}
         size={14}
         className={cn("shrink-0", spec.className)}
       />
-      <HrefLink
+      <IdLink
         href={detailHref(slug, id, {
           tab: "checks",
           run: run.id,
           ...(run.version === null ? {} : { version }),
         })}
-        className={cn("font-mono text-meta", LINK)}
       >
         {run.id}
-      </HrefLink>
-      <span className="text-text-muted">
+      </IdLink>
+      <span className="text-text-2">
         {run.stage === "integration" ? `integration on ${run.base} · ` : ""}
         {runSummary(run)}
       </span>
@@ -347,6 +334,28 @@ const ORIGIN_WORDS: Record<HistoryEntry["origin"], string> = {
   review_fix: "review fix by",
   human_edit: "human edit by",
 };
+
+const VERDICT_TONES: Record<string, ChipTone> = {
+  approved: "ok",
+  "changes requested": "bad",
+  rejected: "bad",
+};
+
+/** A fact of a version: its label in the left column, the fact beside it. */
+function VersionFact({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <>
+      <dt className={cn(LABEL, "pt-2")}>{label}</dt>
+      <dd className="min-w-0">{children}</dd>
+    </>
+  );
+}
 
 function VersionCard({
   slug,
@@ -366,56 +375,44 @@ function VersionCard({
       aria-label={`Version v${String(v.version)}`}
       className={cn(CARD, "flex flex-col")}
     >
-      <header className="flex flex-wrap items-center gap-x-12 gap-y-6 border-b border-border-subtle px-18 py-12">
-        <h3 className="font-mono text-body font-semibold text-text">
+      <header className="flex flex-wrap items-center gap-x-10 gap-y-6 px-16 pt-14 pb-4">
+        <h3 className="font-title text-16 font-semibold text-text tabular-nums">
           v{v.version}
         </h3>
-        <span
-          className={cn(
-            "rounded-s px-8 py-2 text-caption font-semibold",
-            entry.verdict === "approved"
-              ? PILL_CLASSES.approved
-              : entry.verdict === "changes requested" ||
-                  entry.verdict === "rejected"
-                ? PILL_CLASSES.danger
-                : PILL_CLASSES.neutral,
-          )}
-        >
+        <Chip tone={VERDICT_TONES[entry.verdict] ?? "neutral"}>
           {entry.verdict}
-        </span>
-        <span className="text-code text-text-muted">
+        </Chip>
+        <span className="min-w-0 flex-1 text-13 text-text-2 max-sm:order-last max-sm:basis-full">
           {ORIGIN_WORDS[entry.origin]} <PersonName name={v.created_by} />
-          {entry.mergedMain === null
-            ? ""
-            : ` · merge of main ${entry.mergedMain}`}
+          {entry.mergedMain === null ? (
+            ""
+          ) : (
+            <>
+              {" "}
+              · merge of main <IdText text={entry.mergedMain} />
+            </>
+          )}
           {v.review_again ? " · sent for review again" : ""} ·{" "}
           {formatAsOfMinute(now, v.created_at)} ·{" "}
-          <span className="font-mono text-meta">
-            {v.changeset} on {v.base}
-          </span>
+          <IdText text={`${v.changeset} on ${v.base}`} />
         </span>
         <HrefLink
           href={detailHref(slug, id, entry.diff.search)}
-          className={cn("ml-auto text-code", LINK)}
+          className={cn("text-14 max-sm:ml-auto", LINK)}
         >
           {entry.diff.label}
         </HrefLink>
       </header>
-      <div className="flex flex-col gap-12 px-18 py-12">
-        <div className="flex gap-10">
-          <span className="w-fact-label shrink-0 text-code text-text-faint">
-            Checks
-          </span>
+      <dl className="grid grid-cols-[var(--width-fact-label)_minmax(0,1fr)] gap-x-14 gap-y-10 px-16 pt-8 pb-14 text-14">
+        <VersionFact label="Checks">
           {entry.runsFailed ? (
-            <p role="alert" className="text-code font-medium text-danger">
+            <p role="alert" className="font-medium text-bad">
               The checks could not be read.
             </p>
           ) : entry.runs === null ? (
-            <p className="text-code text-text-muted">Reading the checks…</p>
+            <p className="text-text-2">Reading the checks…</p>
           ) : entry.runs.length === 0 ? (
-            <p className="text-code text-text-muted">
-              fold ran no check on this version.
-            </p>
+            <p className="text-text-2">fold ran no check on this version.</p>
           ) : (
             <ul className="flex min-w-0 flex-col gap-4">
               {entry.runs.map((run) => (
@@ -429,21 +426,17 @@ function VersionCard({
               ))}
             </ul>
           )}
-        </div>
+        </VersionFact>
         {entry.reviews.map((item, index) => {
           const spec = VERDICT_ICONS[item.review.verdict];
           const Icon = spec.icon;
           return (
-            <div
-              key={index}
-              data-verdict={item.review.verdict}
-              className="flex gap-10"
-            >
-              <span className="w-fact-label shrink-0 text-code text-text-faint">
-                Review
-              </span>
-              <div className="flex min-w-0 flex-1 flex-col gap-2">
-                <p className="flex flex-wrap items-center gap-x-6 text-code">
+            <VersionFact key={index} label="Review">
+              <div
+                data-verdict={item.review.verdict}
+                className="flex min-w-0 flex-col gap-4"
+              >
+                <p className="flex flex-wrap items-center gap-x-8">
                   <Icon
                     aria-hidden="true"
                     size={14}
@@ -453,8 +446,8 @@ function VersionCard({
                     {item.head}
                   </span>
                   <PersonName name={item.review.reviewer} />
-                  <span className="text-text-faint">
-                    {item.scope === null ? "" : `· ${item.scope} `}·{" "}
+                  <span className="text-13 text-text-2">
+                    {item.scope === null ? "" : `${item.scope} · `}
                     {formatAsOfMinute(now, item.review.created_at)}
                   </span>
                 </p>
@@ -463,7 +456,7 @@ function VersionCard({
                     text={item.excerpt.text}
                     slug={slug}
                     className={cn(
-                      "text-code leading-normal text-text-muted",
+                      "max-w-measure text-15 leading-normal text-text",
                       textFlow("lines"),
                     )}
                   />
@@ -474,51 +467,56 @@ function VersionCard({
                   <FullReview slug={slug} entry={entry} item={item} now={now} />
                 ) : null}
               </div>
-            </div>
+            </VersionFact>
           );
         })}
         {v.evidence ? (
-          <details className="group flex flex-col gap-6">
-            <summary
-              className={cn(
-                "cursor-pointer self-start text-code font-semibold text-primary-text",
-                focusRing,
-              )}
-            >
-              Evidence from {evidenceSource(v)}
-            </summary>
-            <pre
-              className={cn(
-                "mt-6 flex min-w-0 flex-col gap-2 rounded-m bg-sunken px-12 py-10 font-mono text-label",
-                textFlow("prose"),
-              )}
-            >
-              {evidenceLines(v.evidence).map((line, index) => (
-                <span
-                  key={index}
-                  className={line.command ? "text-text" : "text-text-muted"}
+          <>
+            <dt />
+            <dd className="min-w-0">
+              <details className="group flex flex-col gap-6">
+                <summary
+                  className={cn(
+                    "cursor-pointer self-start text-14 font-semibold text-accent",
+                    focusRing,
+                  )}
                 >
-                  <MentionInline text={line.text} slug={slug} />
-                </span>
-              ))}
-            </pre>
-          </details>
+                  Evidence from {evidenceSource(v)}
+                </summary>
+                <pre
+                  className={cn(
+                    "mt-8 flex min-w-0 flex-col gap-2 rounded-s bg-sunken px-12 py-10 font-mono text-13 leading-normal",
+                    textFlow("prose"),
+                  )}
+                >
+                  {evidenceLines(v.evidence).map((line, index) => (
+                    <span
+                      key={index}
+                      className={line.command ? "text-text" : "text-text-2"}
+                    >
+                      <MentionInline text={line.text} slug={slug} />
+                    </span>
+                  ))}
+                </pre>
+              </details>
+            </dd>
+          </>
         ) : null}
-      </div>
+      </dl>
     </article>
   );
 }
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex gap-12">
-      <dt className="w-fact-label shrink-0 text-text-faint">{label}</dt>
-      <dd className="min-w-0 flex-1 text-text">{children}</dd>
-    </div>
+    <>
+      <dt className="pt-2 text-13 text-text-2">{label}</dt>
+      <dd className="min-w-0 text-text">{children}</dd>
+    </>
   );
 }
 
-function SideColumn({
+function AboutCard({
   slug,
   proposal,
   main,
@@ -536,146 +534,130 @@ function SideColumn({
   const summary = proposal.summary;
   const current = currentVersion(proposal);
   const folders = changedFolders(changeTree(proposal.files));
-  const latest = threads === null ? null : latestThreads(threads);
+  const talk = threads === null ? null : conversationFact(threads);
+  const mark = summary.human_review;
   return (
     <aside className="flex min-w-0 flex-col gap-20 lg:w-side-panel lg:shrink-0">
       <section
         aria-label="About"
-        className={cn(CARD, "flex flex-col gap-12 p-18")}
+        className={cn(CARD, "flex flex-col gap-12 px-16 py-14")}
       >
-        <h2 className={OVERLINE}>About</h2>
-        <dl className="flex flex-col gap-8 text-code">
+        <h2 className="text-16 leading-tight font-semibold text-text">About</h2>
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-16 gap-y-8 text-14">
           <Fact label="Author">
             <PersonName name={summary.author} />
           </Fact>
           <Fact label="Task">
-            <HrefLink
-              href={projectPath(slug, "t", summary.task)}
-              className={cn("font-mono", LINK)}
-            >
+            <IdLink href={projectPath(slug, "t", summary.task)}>
               {summary.task}
-            </HrefLink>{" "}
+            </IdLink>{" "}
             · {proposal.task.title}
           </Fact>
           {area === null ? null : <Fact label="Area">{area}</Fact>}
           {current ? (
             <Fact label="Base">
-              <span className="font-mono">
-                {current.base}
-                {main ? ` → main ${main}` : ""}
-              </span>
+              <IdText
+                text={main ? `${current.base} → main ${main}` : current.base}
+              />
             </Fact>
           ) : null}
           {current ? (
             <Fact label="Size">{filesText(current, proposal.totals)}</Fact>
           ) : null}
+          {summary.state === "open" ? (
+            <Fact label="Review claim">
+              {summary.review_claim === null ? (
+                <span className="text-text-2">not claimed</span>
+              ) : (
+                <PersonName name={summary.review_claim} />
+              )}
+            </Fact>
+          ) : null}
+          {mark === null ? null : (
+            <Fact label="Human review">
+              <ActorText segments={humanReviewFact(mark)} />
+            </Fact>
+          )}
           {proposal.prerequisites.length > 0 ? (
             <Fact label="Needs">
               {proposal.prerequisites.map((t, index) => (
                 <span key={t.task}>
                   {index > 0 ? ", " : ""}
-                  <HrefLink
-                    href={projectPath(slug, "t", t.task)}
-                    className={cn("font-mono", LINK)}
-                  >
+                  <IdLink href={projectPath(slug, "t", t.task)}>
                     {t.task}
-                  </HrefLink>{" "}
+                  </IdLink>{" "}
                   ({t.status})
                 </span>
               ))}
             </Fact>
           ) : null}
-        </dl>
-      </section>
-      <section
-        aria-label="Changed folders"
-        className={cn(CARD, "flex flex-col gap-10 p-18")}
-      >
-        <div className="flex items-center gap-8">
-          <h2 className={OVERLINE}>Changed folders</h2>
-          <HrefLink
-            href={onTab({ tab: "changes" })}
-            className={cn("ml-auto text-meta", LINK)}
-          >
-            Open changes
-          </HrefLink>
-        </div>
-        {folders.length === 0 ? (
-          <p className="text-code text-text-muted">
-            The current version changes no file.
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-6">
-            {folders.map((folder) => (
-              <li key={folder.path}>
+          <Fact label="Conversation">
+            {talk === null ? (
+              <span className="text-text-2">
+                {threads === null ? "Reading the threads…" : "No thread yet."}
+              </span>
+            ) : (
+              <>
                 <HrefLink
-                  href={onTab({ tab: "changes", path: folder.first })}
-                  className={cn(
-                    "flex items-center gap-10 rounded-s text-code hover:bg-sunken",
-                    focusRing,
-                  )}
+                  href={onTab({ tab: "conversation" })}
+                  className={LINK}
                 >
-                  <span className="min-w-0 flex-1 truncate font-mono text-meta text-text">
-                    {folder.path === "" ? "project root" : folder.path}
-                  </span>
-                  <span className="shrink-0 text-meta text-text-faint">
-                    {filesWord(folder.totals.files)}
-                  </span>
-                  <span className="shrink-0 font-mono text-meta text-primary-text">
-                    +{folder.totals.added}
-                  </span>
-                  <span className="shrink-0 font-mono text-meta text-danger">
-                    −{folder.totals.removed}
-                  </span>
+                  {talk.threads}
                 </HrefLink>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-      <section
-        aria-label="Latest threads"
-        className={cn(CARD, "flex flex-col gap-10 p-18")}
-      >
-        <div className="flex items-center gap-8">
-          <h2 className={OVERLINE}>Conversation</h2>
-          <HrefLink
-            href={onTab({ tab: "conversation" })}
-            className={cn("ml-auto text-meta", LINK)}
-          >
-            Open the conversation
-          </HrefLink>
-        </div>
-        {latest === null ? (
-          <p className="text-code text-text-muted">Reading the threads…</p>
-        ) : latest.length === 0 ? (
-          <p className="text-code text-text-muted">No thread yet.</p>
-        ) : (
-          <ul className="flex flex-col">
-            {latest.map((thread) => {
-              const line = lastLine(thread);
-              return (
-                <li
-                  key={thread.key}
-                  className="flex flex-col gap-2 border-t border-border-subtle py-8 text-code"
-                >
-                  <span className="truncate font-mono text-caption text-text-faint">
-                    {whereText(thread)}
-                  </span>
-                  <span className="min-w-0 text-text">
-                    {line.author === "" ? null : (
-                      <>
-                        <PersonName name={line.author} />:{" "}
-                      </>
+                {talk.waiting === null ? null : (
+                  <>
+                    {" "}
+                    · <span className="text-warn">{talk.waiting}</span>
+                  </>
+                )}
+              </>
+            )}
+          </Fact>
+        </dl>
+        <div aria-hidden="true" className="my-4 h-px bg-line" />
+        <section aria-label="Changed folders" className="flex flex-col gap-8">
+          <div className="flex items-baseline justify-between gap-8">
+            <h3 className={LABEL}>Changed folders</h3>
+            <HrefLink
+              href={onTab({ tab: "changes" })}
+              className={cn("text-13", LINK)}
+            >
+              Open changes
+            </HrefLink>
+          </div>
+          {folders.length === 0 ? (
+            <p className="text-13 text-text-2">
+              The current version changes no file.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-4">
+              {folders.map((folder) => (
+                <li key={folder.path}>
+                  <HrefLink
+                    href={onTab({ tab: "changes", path: folder.first })}
+                    className={cn(
+                      "-mx-6 flex items-center gap-10 rounded-s px-6 py-4 text-13 hover:bg-sunken",
+                      focusRing,
                     )}
-                    <MentionInline text={line.text} slug={slug} /> ·{" "}
-                    <span className="text-text-muted">{thread.stateText}</span>
-                  </span>
+                  >
+                    <span className="min-w-0 flex-1 truncate font-mono text-13 text-text">
+                      {folder.path === "" ? "project root" : folder.path}
+                    </span>
+                    <span className="shrink-0 text-text-2">
+                      {filesWord(folder.totals.files)}
+                    </span>
+                    <span className="shrink-0 font-mono text-ok">
+                      +{folder.totals.added}
+                    </span>
+                    <span className="shrink-0 font-mono text-bad">
+                      −{folder.totals.removed}
+                    </span>
+                  </HrefLink>
                 </li>
-              );
-            })}
-          </ul>
-        )}
+              ))}
+            </ul>
+          )}
+        </section>
       </section>
     </aside>
   );
@@ -684,14 +666,10 @@ function SideColumn({
 export interface OverviewTabProps {
   slug: string;
   proposal: ProposalDetail;
-  human: string | null;
   now: number;
   main: string | null;
   integration: IntegrationView | null;
   queued: string | null;
-  actions: ActionHandlers;
-  /** The current version, which the human actions act on. */
-  actionView: DetailView;
   runs: ReadonlyMap<number, readonly CheckRun[]>;
   /** The versions whose read of their runs failed. */
   failedVersions: ReadonlySet<number>;
@@ -706,13 +684,10 @@ export interface OverviewTabProps {
 export function OverviewTab({
   slug,
   proposal,
-  human,
   now,
   main,
   integration,
   queued,
-  actions,
-  actionView,
   runs,
   failedVersions,
   comments,
@@ -725,24 +700,23 @@ export function OverviewTab({
     failed: failedVersions,
   });
   return (
-    <div className="flex min-w-0 flex-col gap-24 px-16 py-20 md:px-24 lg:flex-row lg:items-start">
-      <div className="flex min-w-0 flex-1 flex-col gap-24">
+    <div className="flex min-w-0 flex-col gap-20 px-16 pt-20 pb-28 md:px-24 lg:flex-row lg:items-start">
+      <div className="flex min-w-0 flex-1 flex-col gap-20">
         <IntegrationCard
           slug={slug}
           proposal={proposal}
-          human={human}
           now={now}
           main={main}
           integration={integration}
           queued={queued}
-          actions={actions}
-          actionView={actionView}
         />
         <section aria-label="History" className="flex flex-col gap-12">
           <div className="flex flex-wrap items-baseline gap-x-12">
-            <h2 className={OVERLINE}>History</h2>
-            <span className="text-meta text-text-faint">
-              newest first · each version with its checks and reviews
+            <h2 className="text-18 leading-tight font-semibold text-text">
+              History
+            </h2>
+            <span className="text-13 text-text-2">
+              Newest first. Each version with its checks and reviews.
             </span>
           </div>
           {entries.map((entry) => (
@@ -756,7 +730,7 @@ export function OverviewTab({
           ))}
         </section>
       </div>
-      <SideColumn
+      <AboutCard
         slug={slug}
         proposal={proposal}
         main={main}

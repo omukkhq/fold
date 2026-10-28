@@ -13,8 +13,8 @@ export function InlineCode({
   return (
     <code
       className={cn(
-        "rounded-xs bg-sunken px-5 font-mono text-text [font-variant-ligatures:none]",
-        caption ? "text-caption" : "text-code",
+        "rounded-s bg-sunken px-5 font-mono text-text [font-variant-ligatures:none]",
+        caption ? "text-13" : "text-13",
       )}
     >
       {children}

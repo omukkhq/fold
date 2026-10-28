@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Checkbox } from "@/components/form/controls";
 import { DiffViewer, type DiffViewerProps } from "@/features/diff/DiffViewer";
 import type { ChangedFilesState } from "./changedFilesState";
@@ -10,10 +11,16 @@ export type ChangedFilesProps = Omit<
   "fileNav" | "headExtra"
 > & {
   state: ChangedFilesState;
+  /** An action in the file's head before its viewed mark, such as a human's edit. */
+  headAction?: (path: string) => ReactNode;
 };
 
 /** The changed files of one comparison: the folder tree with its filter and viewed marks beside the diff viewer. Selecting a file in the tree marks it viewed. */
-export function ChangedFiles({ state, ...viewer }: ChangedFilesProps) {
+export function ChangedFiles({
+  state,
+  headAction,
+  ...viewer
+}: ChangedFilesProps) {
   const tree = changeTree(viewer.comparison.files);
   const paths = treeFiles(tree).map((f) => f.path);
   return (
@@ -44,13 +51,16 @@ export function ChangedFiles({ state, ...viewer }: ChangedFilesProps) {
         />
       }
       headExtra={(path) => (
-        <Checkbox
-          label="Viewed"
-          checked={state.viewed.has(path)}
-          onCheckedChange={() => {
-            state.toggleViewed(path);
-          }}
-        />
+        <>
+          {headAction?.(path)}
+          <Checkbox
+            label="Viewed"
+            checked={state.viewed.has(path)}
+            onCheckedChange={() => {
+              state.toggleViewed(path);
+            }}
+          />
+        </>
       )}
     />
   );

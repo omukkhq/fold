@@ -16,11 +16,13 @@ export function AddBackProject({ project }: { project: ProjectSummary }) {
   });
   return (
     <div className="flex flex-col items-end gap-8">
+      {/* A removed project's card is on the sunken tone, which a quiet button's fill matches in light mode. */}
       <Button
         size="sm"
+        className="bg-surface hover:bg-line"
         pending={restore.isPending}
         pendingLabel="Adding back…"
-        icon={<FolderPlus aria-hidden="true" size={13} />}
+        icon={<FolderPlus aria-hidden="true" size={14} />}
         aria-label={`Add ${project.name} back to fold`}
         onClick={() => {
           restore.mutate();

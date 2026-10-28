@@ -148,8 +148,8 @@ describe("historyMoves", () => {
 
 describe("columnName", () => {
   it("names the board column", () => {
-    expect(columnName("in_progress")).toBe("In Progress");
-    expect(columnName("todo")).toBe("Todo");
+    expect(columnName("in_progress")).toBe("In progress");
+    expect(columnName("todo")).toBe("To do");
   });
 });
 

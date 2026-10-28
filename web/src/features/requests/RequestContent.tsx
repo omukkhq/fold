@@ -21,6 +21,9 @@ import {
 } from "@/api/requests";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
+import { buttonClasses } from "@/components/button/buttonStyles";
+import { Id } from "@/components/id/Id";
+import { IdText } from "@/components/text/IdText";
 import { recipientActors } from "@/features/messages/delivery";
 import { Markdown } from "@/features/task/Markdown";
 import { formatAsOfMinute } from "@/format/time";
@@ -37,23 +40,23 @@ import {
   edgeLines,
   edgesSummary,
   formatSize,
-  headingOf,
   kindOf,
   metaLine,
+  pageTitle,
   threadSummary,
   versionText,
 } from "./present";
-import { KindBadge, StatePill } from "./RequestPills";
+import { KindLabel } from "./RequestPills";
 import { projectPath } from "@/routes/paths";
 
 export const OVERLINE =
-  "text-overline leading-snug font-semibold tracking-overline text-primary-text uppercase";
+  "font-title text-13 leading-tight font-semibold text-text-2";
 
 export function Crumb({ slug, id }: { slug: string; id: string }) {
   return (
     <nav
       aria-label="Breadcrumb"
-      className="flex items-center gap-8 text-bar text-text-muted"
+      className="flex items-center gap-8 text-14 text-text-2"
     >
       <HrefLink
         href={projectPath(slug, "requests")}
@@ -61,8 +64,8 @@ export function Crumb({ slug, id }: { slug: string; id: string }) {
       >
         Requests
       </HrefLink>
-      <ChevronRight aria-hidden="true" size={13} />
-      <span className="font-mono text-code text-text">{id}</span>
+      <ChevronRight aria-hidden="true" size={14} />
+      <Id className="font-medium text-text">{id}</Id>
     </nav>
   );
 }
@@ -74,27 +77,23 @@ export function RequestHeader({
   detail: RequestDetail;
   now: number;
 }) {
-  const heading = headingOf(detail.request);
   return (
-    <header className="flex flex-col gap-8">
-      <h1
-        className={cn(
-          "text-page leading-snug font-semibold",
-          heading.muted ? "text-text-muted" : "text-text",
-        )}
-      >
-        {heading.text}
+    <header className="flex flex-col gap-6">
+      <h1 className="max-w-measure font-title text-24 leading-tight font-semibold text-text md:text-28">
+        <IdText text={pageTitle(detail.request)} />
       </h1>
-      <div className="flex flex-wrap items-center gap-8">
-        <StatePill state={detail.request.state} />
-        <KindBadge kind={kindOf(detail.request)} />
-        <p className="text-bar text-text-muted">
+      <p className="flex flex-wrap items-center gap-x-8 gap-y-4 text-14 text-text-2">
+        <KindLabel kind={kindOf(detail.request)} />
+        <span aria-hidden="true" className="max-sm:hidden">
+          ·
+        </span>
+        <span>
           <ActorText
             segments={metaLine(detail, now)}
-            personClassName="text-body"
+            personClassName="text-14"
           />
-        </p>
-      </div>
+        </span>
+      </p>
     </header>
   );
 }
@@ -112,12 +111,14 @@ function Section({
 }) {
   return (
     <section aria-label={title} className="flex flex-col gap-10">
-      <div className="flex items-center gap-10">
-        <h2 className="text-section leading-snug font-semibold text-text">
+      <div className="flex flex-wrap items-baseline gap-x-12 gap-y-4">
+        <h2 className="font-title text-18 leading-tight font-semibold text-text">
           {title}
         </h2>
         {note ? (
-          <p className="min-w-0 flex-1 text-meta text-text-muted">{note}</p>
+          <p className="min-w-0 flex-1 text-13 text-text-2">
+            <IdText text={note} />
+          </p>
         ) : (
           <span className="flex-1" />
         )}
@@ -141,24 +142,21 @@ function AttachmentRow({
     ? ImageIcon
     : FileText;
   return (
-    <li className="flex items-center gap-10 rounded-m bg-surface px-12 py-8 inset-ring inset-ring-border-subtle">
-      <Icon aria-hidden="true" size={15} className="shrink-0 text-text-muted" />
-      <span className="min-w-0 flex-1 truncate text-body text-text">
+    <li className="flex max-w-measure items-center gap-10 rounded-m bg-surface py-8 pr-8 pl-12">
+      <Icon aria-hidden="true" size={16} className="shrink-0 text-text-2" />
+      <span className="min-w-0 flex-1 truncate text-14 text-text">
         {attachment.name}
       </span>
-      <span className="font-mono text-meta text-text-muted">
+      <span className="text-13 text-text-2 tabular-nums">
         {formatSize(attachment.size)}
       </span>
       <a
         href={attachmentHref(slug, id, attachment.position)}
         download={attachment.name}
         aria-label={`Download ${attachment.name}`}
-        className={cn(
-          "inline-flex items-center gap-4 rounded-s text-meta text-text-muted hover:text-text",
-          focusRing,
-        )}
+        className={cn(buttonClasses("quiet", "sm"), focusRing)}
       >
-        <Download aria-hidden="true" size={13} />
+        <Download aria-hidden="true" size={14} />
         Download
       </a>
     </li>
@@ -212,7 +210,7 @@ export function VersionTabs({
     <div
       role="group"
       aria-label="Draft version"
-      className="flex gap-2 rounded-m bg-sunken p-3"
+      className="flex gap-2 rounded-s bg-fill p-3"
     >
       {drafts.map((d) => {
         const current = d.version === shown;
@@ -226,10 +224,10 @@ export function VersionTabs({
               onShow(d.version);
             }}
             className={cn(
-              "rounded-s px-12 py-3 font-mono text-code disabled:opacity-60",
+              "rounded-s px-12 py-3 text-14 tabular-nums disabled:opacity-60",
               current
-                ? "bg-surface font-semibold text-text inset-ring inset-ring-border-subtle"
-                : "text-text-muted hover:text-text",
+                ? "bg-surface font-semibold text-text"
+                : "text-text-2 hover:text-text",
               focusRing,
             )}
           >
@@ -259,7 +257,7 @@ export function DraftView({
   if (draft === null) {
     return (
       <Section title="Draft">
-        <p className="rounded-m bg-surface px-14 py-12 text-body text-text-muted inset-ring inset-ring-border-subtle">
+        <p className="max-w-measure rounded-m bg-fill px-14 py-12 text-15 text-text">
           {detail.request.drafter === null ? (
             "No orchestrator has claimed the request yet. The cards appear here once one drafts them."
           ) : (
@@ -280,21 +278,21 @@ export function DraftView({
         note={versionText(draft.version, latest, detail.request.state)}
         aside={tabs}
       >
-        <p className="flex items-center gap-8 text-meta text-text-muted">
-          <PersonName name={draft.author} className="text-body" />
-          {authorLine(draft, now)}
+        <p className="text-14 text-text">
+          <PersonName name={draft.author} />{" "}
+          <span className="text-13 text-text-2">{authorLine(draft, now)}</span>
         </p>
         <ol className="flex flex-col gap-10">
           {draft.cards.map((card) => (
             <li
               key={card.key}
-              className="flex flex-col gap-8 rounded-m bg-surface px-14 py-12 inset-ring inset-ring-border-subtle"
+              className="flex flex-col gap-4 rounded-m bg-surface px-16 py-14"
             >
-              <p className="flex items-center gap-10">
-                <span className="rounded-s bg-sunken px-6 py-2 font-mono text-meta text-text-muted">
+              <p className="flex items-baseline gap-10">
+                <span className="rounded-s bg-fill px-7 py-2 text-13 font-semibold text-text-2 tabular-nums">
                   {card.key}
                 </span>
-                <span className="text-card leading-snug font-semibold text-text">
+                <span className="text-16 leading-tight font-semibold text-text">
                   {card.title}
                 </span>
               </p>
@@ -305,20 +303,20 @@ export function DraftView({
       </Section>
       <Section title="Dependencies" note={edgesSummary(draft.edges.length)}>
         {draft.edges.length > 0 ? (
-          <ul aria-label="Dependencies" className="flex flex-col gap-8">
+          <ul aria-label="Dependencies" className="flex flex-col gap-6 text-14">
             {edgeLines(draft.edges, draft.cards).map((edge) => (
               <li
                 key={`${edge.dependent}>${edge.prerequisite}`}
                 className="flex items-baseline gap-8"
               >
-                <span className="font-mono text-code text-text">
+                <span className="font-semibold text-text tabular-nums">
                   {edge.dependent}
                 </span>
-                <span className="text-meta text-text-muted">needs</span>
-                <span className="font-mono text-code text-text">
+                <span className="text-text-2">needs</span>
+                <span className="font-semibold text-text tabular-nums">
                   {edge.prerequisite}
                 </span>
-                <span className="text-meta text-text-muted">{edge.text}</span>
+                <span className="text-text-2">· {edge.text}</span>
               </li>
             ))}
           </ul>
@@ -340,11 +338,11 @@ function CommentCard({
   now: number;
 }) {
   return (
-    <li className="flex flex-col gap-6 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
-      <p className="flex items-center gap-8 text-meta text-text-muted">
-        <PersonName name={comment.author} className="text-bar" />
+    <li className="flex max-w-measure flex-col gap-6 rounded-m bg-surface px-14 py-10">
+      <p className="flex flex-wrap items-baseline gap-x-8 text-13 text-text-2">
+        <PersonName name={comment.author} className="text-14" />
         asked for changes on v{comment.version}
-        <span className="ml-auto text-text-faint">
+        <span className="ml-auto text-text-2 tabular-nums">
           {formatAsOfMinute(now, comment.created_at)}
         </span>
       </p>
@@ -398,17 +396,17 @@ function MessageCard({
   now: number;
 }) {
   return (
-    <li className="flex flex-col gap-6 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle">
-      <p className="flex items-center gap-8 font-mono text-caption text-text-muted">
-        <PersonName name={message.sender} slot="messageHead" />
+    <li className="flex flex-col gap-2">
+      <p className="flex flex-wrap items-baseline gap-x-8 text-13 text-text-2">
+        <PersonName name={message.sender} className="text-14 font-semibold" />
         <ArrowRight
           aria-label="to"
           role="img"
-          size={12}
-          className="shrink-0 text-text-faint"
+          size={14}
+          className="shrink-0 self-center text-text-2"
         />
-        <PersonList names={recipientActors(message)} nameClassName="text-bar" />
-        <span className="ml-auto font-ui text-meta text-text-faint">
+        <PersonList names={recipientActors(message)} nameClassName="text-13" />
+        <span className="ml-auto text-13 text-text-2 tabular-nums">
           {formatAsOfMinute(now, message.sent_at)}
         </span>
       </p>
@@ -467,7 +465,10 @@ export function ThreadSection({
       note={threadSummary(detail.thread?.messages ?? 0, id)}
     >
       {messages && messages.length > 0 ? (
-        <ul aria-label="Clarification thread" className="flex flex-col gap-8">
+        <ul
+          aria-label="Clarification thread"
+          className="flex max-w-measure flex-col gap-14"
+        >
           {messages.map((m) => (
             <MessageCard
               key={m.id}
@@ -484,7 +485,7 @@ export function ThreadSection({
         onSubmit={(event) => void submit(event)}
         className="flex flex-col gap-6"
       >
-        <div className="flex items-end gap-8">
+        <div className="flex max-w-measure items-end gap-8 rounded-m bg-surface py-8 pr-8 pl-14 has-[textarea:focus-visible]:outline-2 has-[textarea:focus-visible]:outline-offset-2 has-[textarea:focus-visible]:outline-accent">
           <Controller
             control={control}
             name="body"
@@ -500,34 +501,32 @@ export function ThreadSection({
                 pending={isSubmitting}
                 aria-invalid={errors.body ? true : undefined}
                 placeholder={`Reply to ${target} about ${id}…`}
+                className="min-w-0 flex-1 bg-transparent px-0 py-6 leading-normal focus-visible:outline-0"
               />
             )}
           />
           <Button
             type="submit"
-            variant="primary"
             pending={isSubmitting}
             pendingLabel="Sending…"
             disabled={closed !== null}
-            icon={<Send aria-hidden="true" size={13} />}
+            icon={<Send aria-hidden="true" size={14} />}
           >
             Send
           </Button>
         </div>
         {errors.body ? (
-          <p className="text-meta font-medium text-danger">
-            {errors.body.message}
-          </p>
+          <p className="text-13 font-medium text-bad">{errors.body.message}</p>
         ) : null}
         {failure ? (
-          <p role="alert" className="text-meta font-medium text-danger">
+          <p role="alert" className="text-13 font-medium text-bad">
             The message was not sent. {failure.text}{" "}
             <span className="font-mono">code: {failure.code ?? "none"}</span>
           </p>
         ) : null}
-        <p className="text-meta text-text-faint">
+        <p className="text-13 text-text-2">
           {closed ??
-            "A message never changes the state of the request. Only the actions on the right do."}
+            "A message never changes the state of the request. Only the request actions do."}
         </p>
       </form>
     </Section>

@@ -228,8 +228,8 @@ describe("targetView", () => {
   it("names the board's columns as the board does", () => {
     expect(COLUMN_OPTIONS.map((option) => option.label)).toEqual([
       "Backlog",
-      "Todo",
-      "In Progress",
+      "To do",
+      "In progress",
       "Review",
       "Done",
     ]);

@@ -15,11 +15,11 @@ import type { DeliveryTone } from "./delivery";
 import { detailRow, receipts } from "./receiptLine";
 
 const TONES: Record<DeliveryTone, { icon: LucideIcon; className: string }> = {
-  failed: { icon: CircleAlert, className: "text-danger" },
-  waiting: { icon: Clock, className: "text-warning" },
-  forwarded: { icon: CircleAlert, className: "text-text-faint" },
-  delivered: { icon: Check, className: "text-text-faint" },
-  read: { icon: CheckCheck, className: "text-primary-text" },
+  failed: { icon: CircleAlert, className: "text-bad" },
+  waiting: { icon: Clock, className: "text-warn" },
+  forwarded: { icon: CircleAlert, className: "text-text-2" },
+  delivered: { icon: Check, className: "text-text-2" },
+  read: { icon: CheckCheck, className: "text-accent" },
 };
 
 /** The receipts of a message as one line; a folded line opens the per-recipient list in place. */
@@ -49,7 +49,7 @@ export function Receipts({
     >
       <p
         className={cn(
-          "flex flex-wrap items-center gap-x-6 gap-y-2 text-meta text-text-faint",
+          "flex flex-wrap items-center gap-x-6 gap-y-2 text-13 text-text-2",
           align === "end" && "justify-end",
         )}
       >
@@ -82,7 +82,7 @@ export function Receipts({
                 setOpen(!open);
               }}
               className={cn(
-                "inline-flex min-h-24 items-center rounded-s px-4 font-medium text-primary-text hover:underline",
+                "inline-flex min-h-24 items-center rounded-s px-4 font-medium text-accent hover:underline",
                 focusRing,
               )}
             >
@@ -95,7 +95,7 @@ export function Receipts({
             return (
               <Fragment key={index}>
                 {index > 0 ? (
-                  <span aria-hidden="true" className="text-border">
+                  <span aria-hidden="true" className="text-line">
                     |
                   </span>
                 ) : null}
@@ -124,14 +124,14 @@ export function Receipts({
         <ul
           id={listId}
           aria-label="Delivery"
-          className="flex w-full max-w-measure flex-col rounded-m bg-surface py-4 inset-ring inset-ring-border-subtle"
+          className="flex w-full max-w-measure flex-col rounded-m bg-surface py-4"
         >
           {details.map(detailRow).map((row) => {
             const { icon: Icon, className } = TONES[row.tone];
             return (
               <li
                 key={row.actor}
-                className="flex flex-wrap items-center gap-x-6 gap-y-2 px-12 py-4 text-meta text-text-faint"
+                className="flex flex-wrap items-center gap-x-6 gap-y-2 px-12 py-4 text-13 text-text-2"
               >
                 <Icon
                   aria-hidden="true"

@@ -3,10 +3,10 @@ export function Wordmark() {
     <span
       role="img"
       aria-label="fold"
-      className="text-wordmark font-bold text-text"
+      className="font-title text-21 font-bold tracking-wordmark text-text"
     >
       fold
-      <span aria-hidden className="text-primary">
+      <span aria-hidden className="text-accent">
         .
       </span>
     </span>

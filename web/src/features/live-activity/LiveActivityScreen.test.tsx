@@ -168,12 +168,10 @@ describe("LiveActivityScreen", () => {
     expect(
       within(panel).getByRole("heading", { name: "Recorded changes" }),
     ).toBeTruthy();
-    expect(within(panel).getByRole("heading", { name: "Main" })).toBeTruthy();
-    expect(
-      await within(panel).findByText(
-        "Main is at r9; base r7 is 2 revisions behind.",
-      ),
-    ).toBeTruthy();
+    expect(within(panel).queryByRole("heading", { name: "Main" })).toBeNull();
+    expect(await within(panel).findByText("2 behind")).toBeTruthy();
+    const legend = screen.getByRole("list", { name: "Legend" });
+    expect(within(legend).getByText("Main is at r9")).toBeTruthy();
     expect(
       await within(panel).findByRole("heading", { name: "Title T-1" }),
     ).toBeTruthy();
@@ -266,9 +264,7 @@ describe("LiveActivityScreen", () => {
     daemon.list = () => answer([entry("ws-1")]);
     mount();
     const panel = await screen.findByRole("region", { name: "Workspace ws-1" });
-    await within(panel).findByText(
-      "Main is at r9; base r7 is 2 revisions behind.",
-    );
+    await within(panel).findByText("2 behind");
     const before = calls.length;
     act(() => {
       applyEvent(client, "demo", {

@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Folder } from "lucide-react";
+import { ChevronDown, ChevronRight, Folder, Search } from "lucide-react";
 import { useId } from "react";
 import { controlClasses } from "@/components/form/Field";
 import { changeBadge, lineCounts } from "@/features/diff/present";
@@ -7,7 +7,7 @@ import { focusRing } from "@/lib/focus";
 import { treeRows, type ChangeNode, type TreeRow } from "./folderTree";
 
 const ROW =
-  "flex w-full min-w-0 items-center gap-8 rounded-s py-5 pr-8 text-left hover:bg-sunken";
+  "flex w-full min-w-0 items-center gap-8 rounded-s py-5 pr-8 text-left hover:bg-surface/60";
 
 /** Each level of the tree steps in by the same space. */
 function indent(depth: number): { paddingInlineStart: string } {
@@ -21,12 +21,12 @@ function Counts({ added, removed }: { added: number; removed: number }) {
   return (
     <>
       {counts.added ? (
-        <span className="shrink-0 font-mono text-caption text-primary-text">
+        <span className="shrink-0 font-mono text-13 text-ok">
           {counts.added}
         </span>
       ) : null}
       {counts.removed ? (
-        <span className="shrink-0 font-mono text-caption text-danger">
+        <span className="shrink-0 font-mono text-13 text-bad">
           {counts.removed}
         </span>
       ) : null}
@@ -63,15 +63,15 @@ function Row({
         >
           <Chevron
             aria-hidden="true"
-            size={13}
-            className="shrink-0 text-text-faint"
+            size={14}
+            className="shrink-0 text-text-2"
           />
           <Folder
             aria-hidden="true"
-            size={13}
-            className="shrink-0 text-primary-muted"
+            size={14}
+            className="shrink-0 text-text-2"
           />
-          <span className="min-w-0 flex-1 truncate font-mono text-label text-text-muted">
+          <span className="min-w-0 flex-1 truncate font-mono text-13 text-text-2">
             {node.name}/
           </span>
           <Counts added={node.totals.added} removed={node.totals.removed} />
@@ -90,17 +90,17 @@ function Row({
         style={indent(row.depth)}
         className={cn(
           ROW,
-          selected && "bg-primary-soft hover:bg-primary-soft",
+          selected && "bg-surface hover:bg-surface",
           focusRing,
         )}
         onClick={() => {
           onSelect(node.path);
         }}
       >
-        <span aria-hidden="true" className="size-13 shrink-0" />
+        <span aria-hidden="true" className="size-14 shrink-0" />
         <span
           className={cn(
-            "flex size-16 shrink-0 items-center justify-center rounded-s font-mono text-caption font-bold",
+            "w-14 shrink-0 text-center font-title text-13 font-bold",
             badge.classes,
           )}
         >
@@ -109,15 +109,15 @@ function Row({
         </span>
         <span
           className={cn(
-            "min-w-0 flex-1 truncate font-mono text-label",
-            viewed ? "text-text-faint" : "text-text",
+            "min-w-0 flex-1 truncate font-mono text-13",
+            viewed ? "text-text-2" : "text-text",
           )}
         >
           {node.name}
           {viewed ? <span className="sr-only"> (viewed)</span> : null}
         </span>
         {node.file.binary ? (
-          <span className="font-mono text-caption text-text-muted">bin</span>
+          <span className="font-mono text-13 text-text-2">bin</span>
         ) : null}
         <Counts
           added={node.file.added_lines}
@@ -160,44 +160,52 @@ export function FileTree({
   const id = useId();
   const rows = treeRows(nodes, closed, filter);
   const action = cn(
-    "rounded-s text-meta font-medium text-primary-text hover:underline",
+    "rounded-s text-13 font-semibold text-accent hover:underline",
     focusRing,
   );
   return (
     <nav
       aria-label="Changed files"
-      className="flex min-w-0 flex-col gap-8 lg:sticky lg:top-0 lg:w-review-panel lg:shrink-0"
+      className="flex min-w-0 flex-col gap-10 lg:sticky lg:w-review-panel lg:shrink-0"
+      // Held in view under the page's bar while the diff scrolls; the proposal page measures its bar, and a page without one holds the tree at the top.
+      style={{ top: "calc(var(--decision-bar-height, 0px) + var(--space-14))" }}
     >
-      <label
-        htmlFor={id}
-        className="text-overline leading-snug font-semibold text-text-muted uppercase"
-      >
-        Files
-      </label>
-      <input
-        id={id}
-        type="search"
-        value={filter}
-        placeholder="Filter files"
-        onChange={(event) => {
-          onFilter(event.target.value);
-        }}
-        className={cn(controlClasses, focusRing)}
-      />
-      <div className="flex flex-wrap items-center gap-x-8 gap-y-2 px-4">
+      <div className="flex items-baseline justify-between gap-8">
+        <label
+          htmlFor={id}
+          className="font-title text-16 leading-tight font-semibold text-text"
+        >
+          Files
+        </label>
+        <span className="text-13 text-text-2">{viewedText}</span>
+      </div>
+      <div className="relative">
+        <Search
+          aria-hidden="true"
+          size={14}
+          className="pointer-events-none absolute top-1/2 left-12 -translate-y-1/2 text-text-2"
+        />
+        <input
+          id={id}
+          type="search"
+          value={filter}
+          placeholder="Filter files"
+          onChange={(event) => {
+            onFilter(event.target.value);
+          }}
+          className={cn(controlClasses, "bg-surface pl-32 text-14", focusRing)}
+        />
+      </div>
+      <div className="flex flex-wrap items-center gap-x-12 gap-y-2 px-4">
         <button type="button" className={action} onClick={onExpandAll}>
           Expand all
         </button>
-        <span aria-hidden="true" className="text-text-faint">
-          ·
-        </span>
         <button type="button" className={action} onClick={onCollapseAll}>
           Collapse all
         </button>
-        <span className="ml-auto text-meta text-text-faint">{viewedText}</span>
       </div>
       {rows.length === 0 ? (
-        <p className="px-4 text-code text-text-muted">No file matches.</p>
+        <p className="px-4 text-13 text-text-2">No file matches.</p>
       ) : (
         <ul className="flex flex-col">
           {rows.map((row) => (

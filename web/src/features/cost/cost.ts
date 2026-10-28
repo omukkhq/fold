@@ -91,8 +91,13 @@ export interface CostTile {
   label: string;
   amount: string;
   detail: string;
-  /** Its tokens and their output, such as `1.2M tokens` and `98.0k output`, which a narrow tile wraps between, never inside. */
+  /** Its tokens and their output, such as `1.2M tokens` and `98.0k output`. */
   tokens: string[];
+}
+
+/** The tile's hover text: its token counts, which the Tokens card splits further. */
+export function tileHoverText(tile: CostTile): string {
+  return tile.tokens.join(" · ");
 }
 
 /** The four totals: everything, then the task workers, the reviews (the review lead and the reviewers) and the leads (the area leads and the supervised main agent), each with its share and its workers. */
@@ -169,6 +174,8 @@ export interface CostBar {
   start: number;
   /** The short tick under the bar. */
   tick: string;
+  /** The tick on a phone, where a day is its number alone. */
+  narrowTick: string;
   /** The bar's hour or day in words, for its tooltip. */
   title: string;
   cost: number;
@@ -187,6 +194,66 @@ export function barLabel(bar: CostBar): string {
 export interface CostChart {
   title: string;
   bars: CostBar[];
+  /** The value axis the bars stand on; each bar's height is a part of its top. */
+  axis: ChartAxis;
+}
+
+export interface AxisTick {
+  label: string;
+  /** Where the tick sits, from 0 at the base to 1 at the top. */
+  at: number;
+}
+
+export interface ChartAxis {
+  top: number;
+  ticks: AxisTick[];
+}
+
+/** The steps between the base of the value axis and its top. */
+const AXIS_STEPS = 4;
+
+/** The smallest step each measure labels apart: a cent, which is 10,000 millionths of a dollar, or one token. */
+const MIN_STEP: Record<ChartMeasure, number> = { cost: 10_000, tokens: 1 };
+
+/** The amount a label of `value` shows exactly: cents for a cost; one token below a thousand, a tenth of a thousand below a million, and a tenth of a million above. */
+function labelResolution(value: number, measure: ChartMeasure): number {
+  if (measure === "cost") return MIN_STEP.cost;
+  if (value < 1000) return 1;
+  if (value < 1_000_000) return 100;
+  return 100_000;
+}
+
+/** Whether every tick of a step of `step` has a label that names its value exactly, so `$0.025` never reads `$0.03`. */
+function labelsExactly(step: number, measure: ChartMeasure): boolean {
+  return Array.from(
+    { length: AXIS_STEPS + 1 },
+    (_, index) => step * index,
+  ).every((value) => Number.isInteger(value / labelResolution(value, measure)));
+}
+
+/** A value axis of round steps (1, 2, 2.5 or 5 times a power of ten, each tick labelled exactly) whose top is at or above `max`; an empty chart has its base only. */
+export function chartAxis(max: number, measure: ChartMeasure): ChartAxis {
+  const label = (value: number) =>
+    measure === "cost" ? costText(value) : tokensText(value);
+  if (max <= 0) {
+    return { top: 0, ticks: [{ label: label(0), at: 0 }] };
+  }
+  const raw = max / AXIS_STEPS;
+  const power = 10 ** Math.floor(Math.log10(raw));
+  const round = [1, 2, 2.5, 5]
+    .map((factor) => factor * power)
+    .filter((candidate) => labelsExactly(candidate, measure));
+  const step = Math.max(
+    round.find((candidate) => candidate >= raw) ?? 10 * power,
+    MIN_STEP[measure],
+  );
+  return {
+    top: step * AXIS_STEPS,
+    ticks: Array.from({ length: AXIS_STEPS + 1 }, (_, index) => ({
+      label: label(step * index),
+      at: index / AXIS_STEPS,
+    })),
+  };
 }
 
 /** The most days a chart draws a bar for each; a longer range draws a bar for each week. */
@@ -260,7 +327,10 @@ export function costChart(
       { cost: 0, tokens: 0 },
     ),
   );
-  const max = Math.max(0, ...totals.map((total) => total[measure]));
+  const axis = chartAxis(
+    Math.max(0, ...totals.map((total) => total[measure])),
+    measure,
+  );
   const bars = starts.map((start, index) => {
     const bin = sums[index] ?? new Map<WorkerRole, Sum>();
     const total = totals[index] ?? { cost: 0, tokens: 0 };
@@ -272,6 +342,12 @@ export function costChart(
           : unit === "day" && range === "week"
             ? weekdayText(start)
             : dayText(start),
+      narrowTick:
+        unit === "hour"
+          ? hourText(start).slice(0, 2)
+          : unit === "day" && range === "week"
+            ? weekdayText(start)
+            : String(new Date(start).getDate()),
       title:
         unit === "hour"
           ? `${hourText(start)} today`
@@ -284,13 +360,14 @@ export function costChart(
         const part = bin.get(role);
         return part ? [{ role, cost: part.cost, tokens: part.tokens }] : [];
       }),
-      height: fraction(total[measure], max),
+      height: fraction(total[measure], axis.top),
     };
   });
   const what = measure === "cost" ? "Cost" : "Tokens";
   return {
     title: `${what} by ${unit}`,
     bars,
+    axis,
   };
 }
 

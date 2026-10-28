@@ -7,7 +7,7 @@ import type { BoardLabel } from "@/api/board";
 import { workersQuery } from "@/api/queries";
 import { labelsQuery } from "@/api/tasks";
 import { IconButton } from "@/components/button/Button";
-import { controlClasses } from "@/components/form/Field";
+import { controlClasses, SENTENCE_HINT } from "@/components/form/Field";
 import { labelColors } from "@/components/label/labelColors";
 import { menuContent, menuItem } from "@/components/overlay/menuStyles";
 import { cn } from "@/lib/cn";
@@ -24,8 +24,10 @@ import {
   type AreaRef,
 } from "./areas";
 
-const FIELD_LABEL = "text-bar leading-snug font-semibold text-text";
-const FIELD_HINT = "text-meta leading-normal text-text-faint";
+// The same label and help text as the shared form fields around them.
+const FIELD_LABEL =
+  "font-title text-13 leading-tight font-semibold text-text-2";
+const FIELD_HINT = SENTENCE_HINT;
 
 /** The project's areas, with the built-in area Main first, and its labels. The areas are null until the worker list is read; a refused read leaves them empty, so every label counts as one that is no area, and sets `failed`. */
 export function useAreas(slug: string): {
@@ -65,12 +67,10 @@ function AreaRow({ option }: { option: AreaOption }) {
   return (
     <>
       <LabelDot color={option.label.color} />
-      <span className="min-w-0 flex-1 truncate text-bar text-text">
+      <span className="min-w-0 flex-1 truncate text-14 text-text">
         {option.label.name}
       </span>
-      <span className="shrink-0 text-caption text-text-faint">
-        {ownerText(option)}
-      </span>
+      <span className="shrink-0 text-13 text-text-2">{ownerText(option)}</span>
     </>
   );
 }
@@ -103,11 +103,11 @@ export function AreaMenu({
               <DropdownMenu.RadioItem
                 key={option?.name ?? NO_AREA}
                 value={option?.name ?? NO_AREA}
-                className={cn(menuItem, "text-bar")}
+                className={cn(menuItem, "text-14")}
               >
-                <span className="flex w-12 shrink-0 justify-center">
+                <span className="flex w-14 shrink-0 justify-center">
                   <DropdownMenu.ItemIndicator>
-                    <Check aria-hidden="true" size={12} />
+                    <Check aria-hidden="true" size={14} />
                   </DropdownMenu.ItemIndicator>
                 </span>
                 {option === null ? (
@@ -152,7 +152,7 @@ export function AreaField({
           className={cn(
             controlClasses,
             focusRing,
-            "flex items-center gap-8 py-9 text-left text-bar",
+            "flex items-center gap-8 py-9 text-left text-14",
           )}
         >
           <span id={`${ids}-value`} className="flex min-w-0 flex-1 gap-8">
@@ -167,7 +167,7 @@ export function AreaField({
           <ChevronDown
             aria-hidden="true"
             size={14}
-            className="shrink-0 text-text-muted"
+            className="shrink-0 text-text-2"
           />
         </button>
       </AreaMenu>
@@ -195,7 +195,7 @@ export function RemovableLabel({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-5 rounded-s py-2 pr-4 pl-6 text-label leading-snug font-medium text-text-muted inset-ring inset-ring-border",
+        "inline-flex items-center gap-5 rounded-pill py-2 pr-4 pl-8 text-13 leading-tight font-medium text-text",
         labelColors(label.color).soft,
       )}
     >
@@ -207,10 +207,10 @@ export function RemovableLabel({
         pending={pending}
         pendingLabel={`Removing ${label.name}…`}
         disabled={disabled}
-        className="size-auto rounded-xs p-2 text-text-faint"
+        className="size-auto rounded-s p-2 text-text-2"
         onClick={onRemove}
       >
-        <X aria-hidden="true" size={11} />
+        <X aria-hidden="true" size={14} />
       </IconButton>
     </span>
   );
@@ -266,7 +266,7 @@ export function LabelsField({
           <div
             ref={box}
             className={cn(
-              "flex flex-wrap items-center gap-6 rounded-m bg-surface px-8 py-7 inset-ring inset-ring-border has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-focus-ring",
+              "flex flex-wrap items-center gap-6 rounded-s bg-fill px-8 py-7 has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent",
               disabled && "opacity-60",
             )}
           >
@@ -301,7 +301,7 @@ export function LabelsField({
               }
               value={query}
               disabled={disabled}
-              className="w-skeleton-s flex-1 bg-transparent text-bar text-text outline-none placeholder:text-text-faint"
+              className="w-label-input flex-1 bg-transparent text-14 text-text outline-none placeholder:text-text-2"
               onFocus={() => {
                 setFocused(true);
               }}
@@ -361,7 +361,7 @@ export function LabelsField({
             className={cn(menuContent, "z-20 w-side-panel")}
           >
             {choices.length === 0 ? (
-              <p className="px-8 py-6 text-bar text-text-muted">
+              <p className="px-8 py-6 text-14 text-text-2">
                 {query.trim() === ""
                   ? "No more labels that are not areas."
                   : "No label matches."}
@@ -380,7 +380,7 @@ export function LabelsField({
                     role="option"
                     aria-selected={at === current}
                     className={cn(
-                      "flex cursor-pointer items-center gap-8 rounded-s px-8 py-6 text-bar text-text",
+                      "flex cursor-pointer items-center gap-8 rounded-s px-8 py-6 text-14 text-text",
                       at === current && "bg-sunken",
                     )}
                     onMouseDown={(event) => {

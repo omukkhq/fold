@@ -104,7 +104,8 @@ describe("liveStrip", () => {
       worker: "frontend/ui",
       verb: "is editing",
       file: "src/routes/login.tsx",
-      rest: "· 1 file · ck-31 3 min ago · base r7 (main r8)",
+      wait: null,
+      details: "1 file · ck-31 3 min ago · base r7 (main r8)",
       stalled: false,
     });
   });
@@ -116,13 +117,13 @@ describe("liveStrip", () => {
       two,
       NOW,
     );
-    expect(strip?.rest).toBe("· 2 files · base r8 (main)");
+    expect(strip?.details).toBe("2 files · base r8 (main)");
   });
 
   it("falls back to the claim holder before the stream reports the workspace", () => {
     const strip = liveStrip(task({ activity: null }), null, NOW);
     expect(strip).toMatchObject({ worker: "frontend/ui", file: null });
-    expect(strip?.rest).toBe("· ck-31 3 min ago · base r7 (main r8)");
+    expect(strip?.details).toBe("ck-31 3 min ago · base r7 (main r8)");
   });
 
   it("says how long the worker has been quiet while the daemon reports it stalled", () => {
@@ -173,7 +174,8 @@ describe("liveStrip", () => {
       worker: "frontend/ui",
       verb: "sent P-1 v1",
       file: null,
-      rest: "· waits for review · ck-31 3 min ago · base r7 (main r8)",
+      wait: "waits for review",
+      details: "ck-31 3 min ago · base r7 (main r8)",
       stalled: false,
     });
     const frame = live({ proposal: "P-1", edits_after_version: true });
@@ -186,8 +188,11 @@ describe("liveStrip", () => {
         task({ proposal, edits_after_version: true }),
         live({ proposal: "P-1", edits_after_version: false }),
         NOW,
-      )?.rest,
-    ).toBe("· waits for review · 1 file · ck-31 3 min ago · base r7 (main r8)");
+      ),
+    ).toMatchObject({
+      wait: "waits for review",
+      details: "1 file · ck-31 3 min ago · base r7 (main r8)",
+    });
   });
 
   it("says the stall and the wait while a sent version is back with its author", () => {
@@ -208,7 +213,8 @@ describe("liveStrip", () => {
     expect(liveStrip(back, null, NOW)).toMatchObject({
       verb: "no edits for 12 s",
       file: null,
-      rest: "· conflicts with main · ck-31 3 min ago · base r7 (main r8)",
+      wait: "conflicts with main",
+      details: "ck-31 3 min ago · base r7 (main r8)",
       stalled: true,
     });
     expect(
@@ -254,10 +260,11 @@ describe("liveStrip without the task details", () => {
       worker: "frontend/ui",
       verb: "is editing",
       file: "a.ts",
-      rest: "· 1 file · base r7",
+      wait: null,
+      details: "1 file · base r7",
       stalled: false,
     });
-    expect(liveStrip(bare, null, NOW)?.rest).toBe("");
+    expect(liveStrip(bare, null, NOW)?.details).toBeNull();
   });
 });
 

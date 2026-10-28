@@ -82,11 +82,6 @@ export function isNarrowed(search: ListSearch): boolean {
   );
 }
 
-/** The waiting filter's text, with the number of proposals that wait for your review. */
-export function waitingLabel(count: number): string {
-  return count === 0 ? "Waits for you" : `Waits for you (${String(count)})`;
-}
-
 export function listHref(slug: string, search: ListSearch): string {
   const params = new URLSearchParams();
   if (search.state && search.state !== "open")
@@ -101,4 +96,59 @@ export function claimLabel(claim: ClaimFilter | undefined): string {
   if (claim === "claimed") return "Claimed";
   if (claim === "unclaimed") return "Unclaimed";
   return "Any claim";
+}
+
+/** A filter the list applies besides the state segment, with the address that drops it. */
+export interface ActiveFilter {
+  key: "waiting" | "conflicted" | "claim";
+  label: string;
+  without: ListSearch;
+}
+
+/** The filters that narrow the list, in the order the Filter menu lists them, each with the address that removes it. */
+export function activeFilters(search: ListSearch): ActiveFilter[] {
+  const out: ActiveFilter[] = [];
+  if (search.waiting) {
+    out.push({
+      key: "waiting",
+      label: "Waits for you",
+      without: { ...search, waiting: undefined },
+    });
+  }
+  if (search.conflicted) {
+    out.push({
+      key: "conflicted",
+      label: "Conflicted",
+      without: { ...search, conflicted: undefined },
+    });
+  }
+  if (search.claim !== undefined) {
+    out.push({
+      key: "claim",
+      label: claimLabel(search.claim),
+      without: { ...search, claim: undefined },
+    });
+  }
+  return out;
+}
+
+/** The open proposals each toggle of the Filter menu would keep, with the claim filter as it is. */
+export function menuCounts(
+  proposals: readonly ProposalSummary[],
+  search: ListSearch,
+  waitingForYou: readonly string[],
+): { waiting: number; conflicted: number } {
+  const base = { state: search.state, claim: search.claim };
+  return {
+    waiting: filterProposals(
+      proposals,
+      { ...base, waiting: true },
+      waitingForYou,
+    ).length,
+    conflicted: filterProposals(
+      proposals,
+      { ...base, conflicted: true },
+      waitingForYou,
+    ).length,
+  };
 }

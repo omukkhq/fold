@@ -3,12 +3,14 @@ import { focusRing } from "../lib/focus";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter, useRouterState } from "@tanstack/react-router";
-import { ArrowRight, ChevronDown, FolderGit2 } from "lucide-react";
+import { ArrowRight, ChevronDown } from "lucide-react";
 import { projectsQuery } from "../api/queries";
 import { switchProjectPath } from "../routes/nav";
 import { menuContent, menuItem } from "../components/overlay/menuStyles";
 import { Mono } from "../components/mono/Mono";
 import { recentProjects } from "./projectSwitcherModel";
+import { switcherTooltip } from "./topBarLayout";
+import { Tooltip } from "../components/overlay/Tooltip";
 
 /** The current project and a menu of the most recently used ones, with the way to every project on the projects page. */
 export function ProjectSwitcher({ slug }: { slug: string }) {
@@ -16,44 +18,38 @@ export function ProjectSwitcher({ slug }: { slug: string }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const projects = useQuery(projectsQuery());
   const recent = projects.data ? recentProjects(projects.data, slug) : [];
+  const cut = switcherTooltip(slug);
+
+  const trigger = (
+    <Menu.Trigger
+      aria-label={`Project ${slug}, switch project`}
+      className={cn(
+        "flex min-w-0 max-w-switcher shrink items-center gap-6 rounded-s px-8 py-6 hover:bg-sunken max-wide:min-h-44 max-wide:px-6",
+        focusRing,
+      )}
+    >
+      <span className="truncate font-title text-15 font-semibold text-text">
+        {slug}
+      </span>
+      <ChevronDown size={16} className="shrink-0 text-text-2" aria-hidden />
+    </Menu.Trigger>
+  );
 
   return (
     <Menu.Root>
-      <Menu.Trigger
-        aria-label={`Project ${slug}, switch project`}
-        className={cn(
-          "flex min-w-0 items-center gap-6 rounded-m px-8 py-5 hover:bg-sunken max-lg:mr-auto max-lg:min-h-44 max-lg:min-w-44 max-lg:px-6",
-          focusRing,
-        )}
-      >
-        <FolderGit2
-          size={15}
-          className="shrink-0 text-text-muted max-lg:hidden"
-          aria-hidden
-        />
-        <span className="truncate text-card font-semibold text-text">
-          {slug}
-        </span>
-        <ChevronDown
-          size={14}
-          className="shrink-0 text-text-muted"
-          aria-hidden
-        />
-      </Menu.Trigger>
+      {cut === null ? trigger : <Tooltip content={cut}>{trigger}</Tooltip>}
       <Menu.Portal>
         <Menu.Content align="start" sideOffset={6} className={menuContent}>
           {projects.isPending && (
-            <div className="px-8 py-6 text-body text-text-muted">Loading</div>
+            <div className="px-8 py-6 text-15 text-text-2">Loading</div>
           )}
           {projects.isError && (
-            <div className="px-8 py-6 text-body text-danger">
+            <div className="px-8 py-6 text-15 text-bad">
               Could not load projects
             </div>
           )}
           {projects.data?.length === 0 && (
-            <div className="px-8 py-6 text-body text-text-muted">
-              No projects
-            </div>
+            <div className="px-8 py-6 text-15 text-text-2">No projects</div>
           )}
           <Menu.RadioGroup
             value={slug}
@@ -65,16 +61,16 @@ export function ProjectSwitcher({ slug }: { slug: string }) {
               <Menu.RadioItem key={p.slug} value={p.slug} className={menuItem}>
                 <span className="truncate">{p.name}</span>
                 {p.detail !== null ? (
-                  <Mono className="text-meta font-regular text-text-muted">
+                  <Mono className="text-13 font-regular text-text-2">
                     {p.detail}
                   </Mono>
                 ) : null}
               </Menu.RadioItem>
             ))}
           </Menu.RadioGroup>
-          <Menu.Separator className="my-4 h-px bg-border-subtle" />
+          <Menu.Separator className="my-4 h-px bg-line" />
           <Menu.Item
-            className={cn(menuItem, "text-primary-text")}
+            className={cn(menuItem, "text-accent")}
             onSelect={() => {
               void router.navigate({ href: "/projects" });
             }}

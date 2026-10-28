@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { INITIAL_STATUS, type LiveStatus } from "../live/status";
-import { streamView, syncedAt } from "./streamStatusModel";
+import { streamLabel, streamView, syncedAt } from "./streamStatusModel";
 
 const status = (patch: Partial<LiveStatus>): LiveStatus => ({
   ...INITIAL_STATUS,
@@ -24,8 +24,8 @@ describe("streamView", () => {
     expect(streamView(INITIAL_STATUS, 0)).toEqual({
       label: "Connecting…",
       detail: null,
-      dot: "bg-text-faint",
-      tone: "text-text-muted",
+      dot: "bg-text-2",
+      tone: "text-text-2",
     });
   });
 
@@ -33,7 +33,7 @@ describe("streamView", () => {
     const view = streamView(status({ state: "live", lastEventAt: 1000 }), 3000);
     expect(view.label).toBe("Live");
     expect(view.detail).toBe("synced 2 s ago");
-    expect(view.dot).toBe("bg-success");
+    expect(view.dot).toBe("bg-ok");
   });
 
   it("shows live without a time before the first event", () => {
@@ -44,8 +44,19 @@ describe("streamView", () => {
     expect(streamView(status({ state: "reconnecting" }), 0)).toEqual({
       label: "Reconnecting…",
       detail: null,
-      dot: "bg-secondary",
-      tone: "text-secondary-text",
+      dot: "bg-warn",
+      tone: "text-warn",
     });
+  });
+});
+
+describe("streamLabel", () => {
+  it("names each connection state as the stream status shows it", () => {
+    expect(streamLabel("connecting")).toBe("Connecting…");
+    expect(streamLabel("reconnecting")).toBe("Reconnecting…");
+    expect(streamLabel("live")).toBe("Live");
+    expect(streamView(status({ state: "live" }), 0).label).toBe(
+      streamLabel("live"),
+    );
   });
 });

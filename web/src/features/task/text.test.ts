@@ -29,14 +29,14 @@ const MINUTE = 60_000;
 describe("statusLook", () => {
   it("names every status and takes its dot from the status token", () => {
     expect(statusLook("in_progress")).toMatchObject({
-      text: "In Progress",
+      text: "In progress",
       dot: "bg-status-progress",
     });
     expect(
       (["backlog", "todo", "review", "done"] as const).map(
         (s) => statusLook(s).text,
       ),
-    ).toEqual(["Backlog", "Todo", "Review", "Done"]);
+    ).toEqual(["Backlog", "To do", "Review", "Done"]);
   });
 });
 

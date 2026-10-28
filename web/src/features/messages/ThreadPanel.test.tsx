@@ -20,7 +20,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { expectMentionPopover } from "@/test/mentionBox";
 import { mentionRoutes } from "@/test/mentionRoutes";
-import { daemon } from "@/test/daemon";
+import { daemon, refuse } from "@/test/daemon";
 import { message, recipient, thread as baseThread } from "@/test/messages";
 import { ApiError } from "@/api/errors";
 import type { ThreadView } from "@/api/messages";
@@ -30,6 +30,7 @@ import { ThreadPanel } from "./ThreadPanel";
 afterEach(() => {
   cleanup();
   daemon.reset();
+  vi.unstubAllGlobals();
 });
 
 vi.mock("@/api/client", async (importOriginal) => {
@@ -104,6 +105,40 @@ describe("ThreadPanel", () => {
     ).toEqual({ thread: MESSAGE });
   });
 
+  it("shows a refused mark under the thread's bar, so a long error never squeezes the title", async () => {
+    daemon.on(
+      "POST /api/v1/projects/demo/asks/answered",
+      refuse(409, "ask_closed"),
+    );
+    await setup(() => Promise.resolve());
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark answered" }),
+    );
+    const alert = await screen.findByRole("alert");
+    expect(alert.closest("header")).toBeNull();
+    expect(alert.parentElement?.previousElementSibling?.tagName).toBe("HEADER");
+  });
+
+  it("names the keys in the reply placeholder only on the wide layout", async () => {
+    await setup(() => Promise.resolve());
+    expect(screen.getByLabelText("Reply").getAttribute("placeholder")).toBe(
+      "Reply to @frontend/ui…",
+    );
+    cleanup();
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    await setup(() => Promise.resolve());
+    expect(screen.getByLabelText("Reply").getAttribute("placeholder")).toBe(
+      "Reply to @frontend/ui…  Enter sends, Shift+Enter adds a line",
+    );
+  });
+
   it("offers only the reply box while only a worker's question waits", async () => {
     await setup(() => Promise.resolve(), { ...thread, closable: false });
     expect(screen.queryByRole("button", { name: "Mark answered" })).toBeNull();
@@ -140,9 +175,8 @@ describe("ThreadPanel", () => {
     const chip = screen
       .getAllByRole("link")
       .find((link) => link.textContent === "T-12");
-    expect(chip?.querySelector("span")?.className).toContain(
-      "whitespace-nowrap",
-    );
+    expect(chip?.className).toContain("whitespace-nowrap");
+    expect(chip?.className).not.toContain("font-mono");
   });
 
   it("says a message to humans was delivered, marks the signed-in human and marks the thread read for them", async () => {
@@ -484,7 +518,7 @@ describe("ThreadPanel question", () => {
     const marked = within(choices).getAllByRole("img", { name: "chosen" });
     expect(marked).toHaveLength(1);
     expect(marked[0]?.closest("button")?.textContent).toContain("Recharts");
-    expect(marked[0]?.parentElement?.className).toContain("text-success-text");
+    expect(marked[0]?.parentElement?.className).toContain("text-ok");
     for (const button of within(choices).getAllByRole("button")) {
       expect(button.className).not.toContain("opacity");
       expect(button).toHaveProperty("disabled", true);

@@ -7,29 +7,29 @@ import { focusRing } from "../../lib/focus";
 import type { LiveWorkspace } from "../../live/envelope";
 import { ChangedFileRow } from "./ChangedFileRow";
 import { visibleFiles } from "./files";
-import { IdLink } from "./IdLink";
+import { IdLink } from "@/components/id/IdLink";
 import type { RecordedItem } from "./recorded";
 import { summarize } from "./summary";
 
 export type ZoneTone = "working" | "recorded" | "main";
 
 const SWATCH: Record<ZoneTone, string> = {
-  working: "bg-primary",
-  recorded: "bg-text-muted",
+  working: "bg-accent",
+  recorded: "bg-text-2",
   main: "bg-ink",
 };
 
 const HEAD_TEXT: Record<ZoneTone, string> = {
-  working: "text-primary-text",
-  recorded: "text-text-muted",
-  main: "text-text-muted",
+  working: "text-accent",
+  recorded: "text-text",
+  main: "text-text",
 };
 
 function Swatch({ tone }: { tone: ZoneTone }) {
   return (
     <span
       aria-hidden="true"
-      className={`size-10 shrink-0 rounded-xs ${SWATCH[tone]}`}
+      className={`size-10 shrink-0 rounded-s ${SWATCH[tone]}`}
     />
   );
 }
@@ -43,7 +43,12 @@ export function LegendItem({
   children: string;
 }) {
   return (
-    <li className="flex items-center gap-6 text-meta text-text-muted">
+    <li
+      className={cn(
+        "flex items-center gap-8 text-14",
+        tone === "main" ? "font-medium text-text" : "text-text-2",
+      )}
+    >
       <Swatch tone={tone} />
       {children}
     </li>
@@ -60,7 +65,9 @@ export function ZoneHead({
   return (
     <div className="flex items-center gap-8">
       <Swatch tone={tone} />
-      <h3 className={`text-meta font-semibold ${HEAD_TEXT[tone]}`}>
+      <h3
+        className={`font-title text-13 leading-tight font-semibold ${HEAD_TEXT[tone]}`}
+      >
         {children}
       </h3>
     </div>
@@ -82,10 +89,13 @@ export function WorkingZone({ slug, entry, live }: WorkingZoneProps) {
       className="flex min-w-0 flex-1 flex-col gap-4"
     >
       <ZoneHead tone="working">
-        Working changes · not recorded · {summarize(live.files)}
+        Working changes, not recorded{" "}
+        <span className="font-body font-regular text-text-2">
+          · {summarize(live.files)}
+        </span>
       </ZoneHead>
       {live.files.length === 0 ? (
-        <p className="text-bar text-text-muted">No edits yet.</p>
+        <p className="text-14 text-text-2">No edits yet.</p>
       ) : (
         <ul className="flex flex-col">
           {shown.map((file) => (
@@ -106,7 +116,7 @@ export function WorkingZone({ slug, entry, live }: WorkingZoneProps) {
             setExpanded(true);
           }}
           className={cn(
-            "self-start rounded-s text-meta text-text-muted hover:text-text",
+            "self-start rounded-s text-13 text-accent hover:underline",
             focusRing,
           )}
         >
@@ -127,46 +137,28 @@ export function RecordedZone({ entry, items, now }: RecordedZoneProps) {
   return (
     <section
       aria-label={`Recorded changes in ${entry.id}`}
-      className="flex w-full flex-col gap-6 md:w-1/3"
+      className="flex min-w-0 flex-col gap-4"
     >
       <ZoneHead tone="recorded">Recorded changes</ZoneHead>
       {items.length === 0 ? (
-        <p className="text-bar text-text-muted">Nothing recorded yet.</p>
+        <p className="text-14 text-text-2">Nothing recorded yet.</p>
       ) : (
-        <ul className="flex flex-col gap-6">
+        <ul className="flex flex-col gap-4">
           {items.map((item) => (
-            <li key={item.id} className="flex items-center gap-8">
+            <li key={item.id} className="flex items-baseline gap-10 text-14">
               <Tooltip content={item.text}>
                 <IdLink href={item.href}>{item.id}</IdLink>
               </Tooltip>
-              <span className="min-w-0 flex-1 truncate text-bar text-text">
+              <span className="min-w-0 flex-1 truncate text-14 text-text">
                 {item.text}
               </span>
-              <span className="text-meta whitespace-nowrap text-text-muted">
+              <span className="text-13 whitespace-nowrap text-text-2">
                 {formatSince(now, item.at)}
               </span>
             </li>
           ))}
         </ul>
       )}
-    </section>
-  );
-}
-
-export function MainZone({
-  entry,
-  text,
-}: {
-  entry: WorkspaceEntry;
-  text: string;
-}) {
-  return (
-    <section
-      aria-label={`Main for ${entry.id}`}
-      className="flex items-center gap-8 border-t border-border-subtle px-16 py-8"
-    >
-      <ZoneHead tone="main">Main</ZoneHead>
-      <p className="text-bar text-text-muted">{text}</p>
     </section>
   );
 }

@@ -1,10 +1,10 @@
 import { ActorText } from "@/people/ActorText";
 import { HrefLink } from "@/app/HrefLink";
 import type { ThreadView } from "@/api/messages";
-import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
-import { insetFocusRing } from "@/lib/focus";
-import { rowLine, rowPreview } from "./threadRow";
+import { focusRing } from "@/lib/focus";
+import { rowTime } from "./days";
+import { rowSecond } from "./threadRow";
 import { threadTitle } from "./title";
 
 interface ThreadListProps {
@@ -15,6 +15,7 @@ interface ThreadListProps {
   hrefOf: (thread: ThreadView) => string;
 }
 
+/** The threads as two-line rows that fills separate: the title and its time, then who asks you or the newest message. */
 export function ThreadList({
   threads,
   selected,
@@ -23,60 +24,48 @@ export function ThreadList({
   hrefOf,
 }: ThreadListProps) {
   return (
-    <ul aria-label="Threads" className="flex flex-col">
+    <ul aria-label="Threads" className="flex flex-col gap-6 lg:gap-2">
       {threads.map((thread) => {
-        const last = thread.messages.at(-1);
         const current = thread.id === selected;
-        const line = rowLine(thread, you);
+        const second = rowSecond(thread, you);
         return (
-          <li key={thread.id} className="border-b border-border-subtle">
+          <li key={thread.id}>
             <HrefLink
               href={hrefOf(thread)}
               aria-current={current ? "true" : undefined}
               className={cn(
-                "relative flex flex-col gap-5 px-16 py-12 hover:bg-sunken",
-                current && "bg-primary-soft hover:bg-primary-soft",
-                insetFocusRing,
+                "grid grid-cols-[minmax(0,1fr)_auto] gap-x-12 gap-y-3 rounded-m px-12 py-10",
+                current ? "bg-accent-soft" : "max-lg:bg-surface lg:hover:bg-bg",
+                focusRing,
               )}
             >
-              {current ? (
-                <span
-                  aria-hidden="true"
-                  className="absolute inset-y-0 left-0 w-2 bg-primary"
-                />
-              ) : null}
-              <span className="flex items-baseline gap-8">
-                <span className="min-w-0 flex-1 truncate text-body leading-snug font-semibold text-text">
-                  {threadTitle(thread)}
-                </span>
-                <span className="shrink-0 text-meta text-text-faint">
-                  {formatAsOfMinute(now, thread.last_at)}
-                </span>
+              <span className="truncate font-title text-16 leading-tight font-semibold text-text">
+                {threadTitle(thread)}
               </span>
-              <span className="flex items-center gap-8 text-code text-text-faint">
-                <span className="min-w-0 flex-1 truncate">
-                  <ActorText
-                    segments={line.segments}
-                    personClassName="text-meta"
-                    you={you}
-                  />
-                </span>
+              <span className="self-baseline text-13 whitespace-nowrap text-text-2 tabular-nums">
+                {rowTime(now, thread.last_at)}
+              </span>
+              <span className="col-span-2 flex min-w-0 items-center gap-8 text-14 text-text">
                 {thread.awaiting_human ? (
                   <span
                     role="img"
                     aria-label="waits for you"
-                    className="size-8 shrink-0 rounded-full bg-warning"
+                    className="size-8 shrink-0 rounded-full bg-warn"
                   />
                 ) : null}
-              </span>
-              {last ? (
-                <span className="truncate text-bar text-text-muted">
+                <span
+                  className={cn(
+                    "min-w-0 truncate",
+                    second.asks && "font-semibold text-warn",
+                  )}
+                >
                   <ActorText
-                    segments={rowPreview(last, you, line.sender)}
+                    segments={second.segments}
+                    personClassName="text-14"
                     you={you}
                   />
                 </span>
-              ) : null}
+              </span>
             </HrefLink>
           </li>
         );

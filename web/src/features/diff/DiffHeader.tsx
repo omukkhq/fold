@@ -1,19 +1,5 @@
-import {
-  ArrowRight,
-  Bookmark,
-  ChevronRight,
-  FilePen,
-  FolderTree,
-  GitCommitHorizontal,
-  GitCommitVertical,
-  type LucideIcon,
-} from "lucide-react";
-import type {
-  ComparedFile,
-  ComparedState,
-  Comparison,
-  StateKind,
-} from "@/api/diff";
+import { ArrowRight, ChevronRight } from "lucide-react";
+import type { ComparedFile, Comparison } from "@/api/diff";
 import { HrefLink } from "@/app/HrefLink";
 import { formatAsOf } from "@/format/time";
 import { cn } from "@/lib/cn";
@@ -23,32 +9,9 @@ import {
   comparisonNote,
   comparisonSides,
   comparisonTitle,
+  namesSides,
   stateLabel,
 } from "./present";
-
-const STATE_ICONS: Record<StateKind, LucideIcon> = {
-  revision: GitCommitHorizontal,
-  changeset: GitCommitVertical,
-  checkpoint: Bookmark,
-  workspace: FilePen,
-  tree: FolderTree,
-};
-
-function StateChip({
-  state,
-  comparison,
-}: {
-  state: ComparedState;
-  comparison: Comparison;
-}) {
-  const Icon = STATE_ICONS[state.kind];
-  return (
-    <span className="inline-flex items-center gap-6 rounded-m bg-surface px-14 py-7 text-body leading-snug font-medium text-text inset-ring inset-ring-border">
-      <Icon aria-hidden="true" size={15} className="text-text-muted" />
-      {stateLabel(state, comparison)}
-    </span>
-  );
-}
 
 interface DiffHeaderProps {
   slug: string;
@@ -69,32 +32,23 @@ export function DiffHeader({
   const crumbs = comparisonCrumbs(slug, comparison);
   const [older, newer] = comparisonSides(comparison);
   return (
-    <header className="flex flex-col gap-8 px-24 pt-18 pb-12">
+    <header className="flex flex-col gap-6 px-16 pt-18 pb-14 md:px-24">
       <nav aria-label="Breadcrumb">
-        <ol className="flex items-center gap-8 text-bar">
+        <ol className="flex flex-wrap items-center gap-8 text-14 text-text-2">
           {crumbs.map((crumb, index) => (
             <li key={crumb.label} className="flex items-center gap-8">
-              {index > 0 ? (
-                <ChevronRight
-                  aria-hidden="true"
-                  size={13}
-                  className="text-text-faint"
-                />
-              ) : null}
+              {index > 0 ? <ChevronRight aria-hidden="true" size={14} /> : null}
               {crumb.href ? (
                 <HrefLink
                   href={crumb.href}
-                  className={cn(
-                    "rounded-s text-text-muted hover:text-text",
-                    focusRing,
-                  )}
+                  className={cn("rounded-s hover:text-text", focusRing)}
                 >
                   {crumb.label}
                 </HrefLink>
               ) : (
                 <span
                   aria-current="page"
-                  className={cn("text-text", crumb.mono && "font-mono")}
+                  className="whitespace-nowrap text-text tabular-nums"
                 >
                   {crumb.label}
                 </span>
@@ -103,29 +57,32 @@ export function DiffHeader({
           ))}
         </ol>
       </nav>
-      <div className="flex items-center gap-12">
-        <h1 className="text-screen leading-snug font-semibold text-text">
+      <div className="flex flex-wrap items-center gap-x-12 gap-y-6">
+        <h1 className="text-24 leading-tight font-semibold text-text">
           {comparisonTitle(comparison)}
         </h1>
         {readAt === null ? null : (
-          <span className="inline-flex items-center gap-6 rounded-s bg-primary-soft px-8 py-2 text-caption font-medium text-primary-strong">
+          <span className="inline-flex items-center gap-6 rounded-pill bg-accent-soft px-9 py-2 text-13 font-medium text-accent">
             <span
               aria-hidden="true"
-              className="size-7 rounded-full bg-primary"
+              className="size-7 rounded-full bg-accent"
             />
             live · read {formatAsOf(now, readAt)}
           </span>
         )}
       </div>
-      <div className="flex flex-wrap items-center gap-10">
-        <StateChip state={older} comparison={comparison} />
-        <ArrowRight aria-hidden="true" size={15} className="text-text-muted" />
-        <span className="sr-only">to</span>
-        <StateChip state={newer} comparison={comparison} />
-        <span className="text-bar text-text-muted">
-          {comparisonNote(comparison, files)}
-        </span>
-      </div>
+      <p className="flex flex-wrap items-center gap-x-8 gap-y-2 text-13 text-text-2 tabular-nums">
+        {namesSides(comparison) ? (
+          <>
+            <span>{stateLabel(older, comparison)}</span>
+            <ArrowRight aria-hidden="true" size={14} />
+            <span className="sr-only">to</span>
+            <span>{stateLabel(newer, comparison)}</span>
+            <span aria-hidden="true">·</span>
+          </>
+        ) : null}
+        <span>{comparisonNote(comparison, files)}</span>
+      </p>
     </header>
   );
 }

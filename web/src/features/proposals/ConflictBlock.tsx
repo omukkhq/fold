@@ -1,3 +1,4 @@
+import { IdText } from "@/components/text/IdText";
 import { CODE_BOX, textFlow } from "@/components/text/textFlow";
 import { cn } from "@/lib/cn";
 import { ActorText } from "@/people/ActorText";
@@ -23,36 +24,40 @@ export function ConflictBlock({
   return (
     <section
       aria-label="Conflict report"
-      className="flex flex-col gap-10 rounded-m bg-danger-soft px-12 py-10"
+      className="flex flex-col gap-10 rounded-m bg-bad-soft px-12 py-10"
     >
-      <h3 className="text-bar leading-snug font-semibold text-danger">
+      <h3 className="text-14 leading-tight font-semibold text-bad">
         Conflict report
       </h3>
-      <dl className="flex flex-col gap-2 font-mono text-meta text-text-muted">
+      <dl className="flex flex-col gap-2 text-13 text-text-2">
         {reportTrees(report, ref).map((side) => (
-          <div key={side.label} className="flex gap-6">
-            <dt className="shrink-0">{side.label}</dt>
-            <dd className="min-w-0 truncate">{side.entry}</dd>
+          <div key={side.label} className="flex items-baseline gap-6">
+            <dt className="shrink-0">
+              <IdText text={side.label} />
+            </dt>
+            <dd className="min-w-0 truncate font-mono">{side.entry}</dd>
           </div>
         ))}
       </dl>
       <ul className="flex flex-col gap-12">
         {report.files.map((file) => (
           <li key={file.path} className="flex flex-col gap-4">
-            <p className="font-mono text-code font-semibold break-all text-text">
+            <p className="font-mono text-13 font-semibold break-all text-text">
               {file.path}
             </p>
             <p
               data-kind={file.kind}
-              className="text-code leading-snug text-text"
+              className="text-13 leading-tight text-text"
             >
               {conflictKindText(file.kind)}
             </p>
-            <dl className="flex flex-col gap-2 font-mono text-caption text-text-muted">
+            <dl className="flex flex-col gap-2 text-13 text-text-2">
               {fileSides(file, ref, report).map((side) => (
-                <div key={side.label} className="flex gap-6">
-                  <dt className="shrink-0">{side.label}</dt>
-                  <dd className="min-w-0 truncate">{side.entry}</dd>
+                <div key={side.label} className="flex items-baseline gap-6">
+                  <dt className="shrink-0">
+                    <IdText text={side.label} />
+                  </dt>
+                  <dd className="min-w-0 truncate font-mono">{side.entry}</dd>
                 </div>
               ))}
             </dl>
@@ -61,12 +66,14 @@ export function ConflictBlock({
                 key={index}
                 className={cn(
                   CODE_BOX,
-                  "flex flex-col gap-4 rounded-s bg-surface px-8 py-6 font-mono text-caption",
+                  "flex flex-col gap-4 rounded-s bg-surface px-8 py-6 font-mono text-13",
                 )}
               >
                 {hunkSides(hunk, ref).map(({ label, lines }) => (
                   <div key={label} className="flex flex-col">
-                    <span className="text-text-faint">{label}</span>
+                    <span className="font-body text-text-2">
+                      <IdText text={label} />
+                    </span>
                     {lines.map((text, n) => (
                       <code
                         key={n}
@@ -82,7 +89,7 @@ export function ConflictBlock({
           </li>
         ))}
       </ul>
-      <p className="text-code leading-snug text-text-muted">
+      <p className="text-13 leading-tight text-text-2">
         <ActorText
           segments={nextStepText(proposal.summary.author, report.version)}
           slot="waitingLine"

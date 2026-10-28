@@ -18,33 +18,70 @@ export interface NeedsYouLine {
   /** The second line's title: the proposal title of a review, the request title of a draft, the task title of a human task, the reason of a blocker, the conflicting files of a human change or of an unstash, the files that hold the project folder back, the file, line and problem of main's checks file, the command that brings the Git branch back, lets a worker reach fold again or lets the daemon find claude, Claude Code's error of a worker that cannot reach the model. Marked and escaped as `text` is. */
   title: string | null;
   since: number;
-  /** What the line opens; null for a line that opens nothing, with `href`. */
-  hint: string | null;
+  /** True when the title belongs in the sentence after a colon, as `P-4 needs your review: Audit log`; otherwise it is the second line. */
+  inline: boolean;
+  /** What the line opens; null for a line that opens nothing. */
   href: string | null;
 }
 
+export type NeedsYouGroupId = "ask" | "wait" | "project";
+
 export interface NeedsYouGroup {
-  kind: NeedsYouKind;
+  id: NeedsYouGroupId;
   title: string;
   lines: NeedsYouLine[];
 }
 
-const GROUPS: readonly { kind: NeedsYouKind; title: string }[] = [
-  { kind: "question", title: "Questions" },
-  { kind: "permission", title: "Permissions" },
-  { kind: "human_review", title: "Reviews" },
-  { kind: "request_draft", title: "Request drafts" },
-  { kind: "human_task", title: "Human tasks" },
-  { kind: "blocker", title: "Blockers" },
-  { kind: "human_change", title: "Your changes" },
-  { kind: "head_moved", title: "Git branch" },
-  { kind: "folder_held", title: "Project folder" },
-  { kind: "unstash_conflicted", title: "Unstash conflict" },
-  { kind: "checks_file_invalid_on_main", title: "Checks file" },
-  { kind: "worker_unreachable", title: "Worker connection" },
-  { kind: "worker_model_unreachable", title: "Model access" },
-  { kind: "claude_not_found", title: "Claude Code" },
-  { kind: "notify_target_off", title: "Notice targets" },
+/** The order of the kinds inside their group. */
+const KIND_ORDER: readonly NeedsYouKind[] = [
+  "question",
+  "permission",
+  "human_review",
+  "request_draft",
+  "human_task",
+  "blocker",
+  "human_change",
+  "head_moved",
+  "folder_held",
+  "unstash_conflicted",
+  "checks_file_invalid_on_main",
+  "worker_unreachable",
+  "worker_model_unreachable",
+  "claude_not_found",
+  "notify_target_off",
+];
+
+/** Agents that ask, things that wait for the human's decision, and the project's own state, which includes workers fold cannot run. */
+export const GROUP_OF: Readonly<Record<NeedsYouKind, NeedsYouGroupId>> = {
+  question: "ask",
+  permission: "ask",
+  human_review: "wait",
+  request_draft: "wait",
+  human_task: "wait",
+  blocker: "wait",
+  human_change: "project",
+  head_moved: "project",
+  folder_held: "project",
+  unstash_conflicted: "project",
+  checks_file_invalid_on_main: "project",
+  worker_unreachable: "project",
+  worker_model_unreachable: "project",
+  claude_not_found: "project",
+  notify_target_off: "project",
+};
+
+/** The kinds whose title is the item's own name, which the sentence ends with. */
+const INLINE_KINDS: ReadonlySet<NeedsYouKind> = new Set([
+  "human_review",
+  "request_draft",
+  "human_task",
+  "blocker",
+]);
+
+const GROUPS: readonly { id: NeedsYouGroupId; title: string }[] = [
+  { id: "ask", title: "Agents ask you" },
+  { id: "wait", title: "Waiting for you" },
+  { id: "project", title: "Project" },
 ];
 
 /** The items for this human: an item that waits for another named human is theirs, and a question to named humans is only theirs, as their Messages count is. Before a name, every item shows. */
@@ -110,6 +147,7 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         ? titleText(item.title)
         : null,
     since: item.since,
+    inline: INLINE_KINDS.has(item.kind),
   };
   switch (item.kind) {
     case "human_task":
@@ -120,7 +158,6 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         task: null,
         title: titleText(item.title),
         text: "is ready for a person to do",
-        hint: "opens the task",
         href: taskPath(slug, item.task ?? ""),
       };
     case "blocker":
@@ -131,7 +168,6 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         task: null,
         title: titleText(item.reason),
         text: "has a blocker",
-        hint: "opens the task",
         href: taskPath(slug, item.task ?? ""),
       };
     case "question":
@@ -140,7 +176,6 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         person: item.agent,
         chip: null,
         text: questionText(item),
-        hint: "opens the thread",
         href: messagesHref(slug, {
           thread: item.thread ?? item.message ?? undefined,
         }),
@@ -151,7 +186,6 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         person: item.agent,
         chip: null,
         text: asksText(codeData(item.tool ?? "a tool")),
-        hint: "opens the permission panel",
         href: withQuery(projectPath(slug, "agents"), {
           question: item.question ?? "",
         }),
@@ -164,7 +198,6 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         task: null,
         title: pathsText(item.paths),
         text: "conflicts with main; the main agent explains it",
-        hint: "opens the history of main",
         href: projectPath(slug, "repository"),
       };
     case "head_moved":
@@ -175,7 +208,6 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         task: null,
         title: markedText(item.reason),
         text: "fold does not update the project folder until the Git branch is back",
-        hint: "opens the history of main",
         href: projectPath(slug, "repository"),
       };
     case "folder_held":
@@ -186,7 +218,6 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         task: null,
         title: pathsText(item.paths),
         text: "Changes were made in your project. Undo the changes or save them using `fld record`",
-        hint: "opens the history of main",
         href: projectPath(slug, "repository"),
       };
     case "unstash_conflicted":
@@ -197,7 +228,6 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         task: null,
         title: pathsText(item.paths),
         text: "Unstash conflicts. Fix the files and run `fld record`",
-        hint: null,
         href: null,
       };
     case "checks_file_invalid_on_main":
@@ -208,7 +238,6 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         task: null,
         title: titleText(item.title),
         text: "Integrations wait until the checks file on main is fixed",
-        hint: null,
         href: null,
       };
     case "worker_unreachable":
@@ -219,7 +248,6 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         task: null,
         title: markedText(item.reason),
         text: "cannot reach fold and stopped",
-        hint: "opens the agents",
         href: projectPath(slug, "agents"),
       };
     case "claude_not_found":
@@ -230,7 +258,6 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         task: null,
         title: markedText(item.reason),
         text: "cannot start: the daemon finds no claude",
-        hint: "opens the agents",
         href: projectPath(slug, "agents"),
       };
     case "worker_model_unreachable": {
@@ -245,7 +272,6 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
           check === null
             ? "cannot reach the model"
             : `cannot reach the model: ${check}`,
-        hint: "opens the agents",
         href: projectPath(slug, "agents"),
       };
     }
@@ -257,7 +283,6 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         task: null,
         title: titleText(item.title),
         text: "fold turned this notice target off after its sends failed; a test that gets through turns it on again",
-        hint: "opens the settings",
         href: projectPath(slug, "settings"),
       };
     case "human_review":
@@ -266,7 +291,6 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         person: null,
         chip: item.proposal,
         text: "needs your review",
-        hint: "opens the proposal",
         href: projectPath(slug, "proposals", item.proposal ?? ""),
       };
     default:
@@ -275,29 +299,26 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         person: null,
         chip: item.request,
         text: "has a draft ready to approve",
-        hint: "opens the request",
         href: projectPath(slug, "requests", item.request ?? ""),
       };
   }
 }
 
-/** The list in group order: questions, permissions, reviews, request drafts, human tasks, blockers, human changes, the Git branch, the project folder, an unstash conflict, main's checks file, workers that cannot reach fold, workers that cannot reach the model; a group without items is left out. */
+/** The list in three groups, Agents ask you, Waiting for you and Project, each in kind order and then in the order the daemon lists the items; a group without items is left out. */
 export function needsYouGroups(
   slug: string,
   items: readonly NeedsYouItem[],
 ): NeedsYouGroup[] {
-  const lines = items.map((item, index) => lineOf(slug, item, index));
+  const lines = items
+    .map((item, index) => lineOf(slug, item, index))
+    .sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind));
   return GROUPS.map((group) => ({
     ...group,
-    lines: lines.filter((line) => line.kind === group.kind),
+    lines: lines.filter((line) => GROUP_OF[line.kind] === group.id),
   })).filter((group) => group.lines.length > 0);
 }
 
-export function waitingText(count: number): string {
-  return `${String(count)} waiting`;
-}
-
-/** The second line's title as plain words, for the tooltip and the `title` of a title the line cuts with an ellipsis; null for a line without one. */
+/** The title as plain words, for the tooltip of a title the line cuts; null for a line without one. */
 export function fullTitle(line: Pick<NeedsYouLine, "title">): string | null {
   if (line.title === null) return null;
   return codeParts(line.title)

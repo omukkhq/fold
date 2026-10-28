@@ -1,5 +1,5 @@
 import type { AttentionItem } from "../../api/workspaces";
-import { revisionCount, revisionsAhead } from "../../format/revisions";
+import { revisionsAhead } from "../../format/revisions";
 import { formatQuiet } from "../../format/time";
 
 export interface AttentionView {
@@ -25,23 +25,26 @@ export function attentionView(
   };
 }
 
-/** Where the base stands against main; the base alone until main has been read. */
-export function mainLine(
-  base: string,
-  repository:
-    | {
-        head: string | null;
-        recent: readonly { id: string; parent: string | null }[];
-      }
-    | undefined,
-): string {
+interface MainState {
+  head: string | null;
+  recent: readonly { id: string; parent: string | null }[];
+}
+
+/** `Main is at r9`, said once for every workspace; null until main has been read or while it has no revision. */
+export function mainHeadText(repository: MainState | undefined): string | null {
   const head = repository?.head ?? null;
-  if (repository === undefined || head === null) {
-    return `Base ${base}.`;
+  return head === null ? null : `Main is at ${head}`;
+}
+
+/** `2 behind` beside a base that main has moved past, `3+ behind` when the base is older than the revisions main lists; null for a base that is main, and until main has been read. */
+export function behindTag(
+  base: string,
+  repository: MainState | undefined,
+): string | null {
+  const head = repository?.head ?? null;
+  if (repository === undefined || head === null || head === base) {
+    return null;
   }
-  if (head === base) {
-    return `Base ${base} is current main.`;
-  }
-  const behind = revisionCount(revisionsAhead(repository.recent, base));
-  return `Main is at ${head}; base ${base} is ${behind} behind.`;
+  const ahead = revisionsAhead(repository.recent, base);
+  return `${String(ahead.count)}${ahead.atLeast ? "+" : ""} behind`;
 }

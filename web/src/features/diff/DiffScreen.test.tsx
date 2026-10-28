@@ -176,7 +176,7 @@ describe("DiffScreen", () => {
     );
   });
 
-  it("names two revisions and shows no working-changes note or live pill", async () => {
+  it("names two revisions older to newer in the title and the crumb alone", async () => {
     daemon();
     show(
       { from: "r7", to: "r8" },
@@ -189,14 +189,11 @@ describe("DiffScreen", () => {
     const title = await screen.findByRole("heading", {
       name: "Changes from r7 to r8",
     });
-    const older = screen.getByText("r7", { selector: "span" });
-    const newer = screen.getByText("r8", { selector: "span" });
-    expect(
-      older.compareDocumentPosition(newer) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(title.parentElement?.nextElementSibling?.textContent).toContain(
-      "r7tor8",
-    );
+    expect(title).toBeTruthy();
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(within(crumbs).getByText("r7 → r8")).toBeTruthy();
+    expect(screen.queryByText("r7", { selector: "span" })).toBeNull();
+    expect(screen.queryByText("r8", { selector: "span" })).toBeNull();
     expect(screen.queryByText(/They are not history/)).toBeNull();
     expect(screen.queryByText(/live · read/)).toBeNull();
   });

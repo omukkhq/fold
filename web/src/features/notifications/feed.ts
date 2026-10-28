@@ -131,6 +131,13 @@ export function clearEntry(state: FeedState, key: string): FeedState {
   };
 }
 
+/** The list without the moves of one task, each hidden so the history does not bring it back; the same state when the task has none. */
+export function clearTask(state: FeedState, task: string): FeedState {
+  return state.entries
+    .filter((entry) => entry.task === task)
+    .reduce((next, entry) => clearEntry(next, entryKey(entry)), state);
+}
+
 /** No entry, and every move up to the newest one stays out; the same state when the list is empty. */
 export function clearAll(state: FeedState): FeedState {
   const cleared = markOf(state.entries[0]);

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorReply, stubFetch } from "../test/stubFetch";
 import { isApiError } from "./errors";
-import { getSession, signIn, signInWithLink } from "./session";
+import { getSession, signIn, signInWithLink, signOut } from "./session";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -59,5 +59,21 @@ describe("signIn", () => {
   it("throws a plain error when the body is not the error envelope", async () => {
     stubFetch({ "POST /api/v1/session": { status: 502, body: "bad gateway" } });
     await expect(signIn("x")).rejects.toThrow("the daemon answered 502");
+  });
+});
+
+describe("signOut", () => {
+  it("deletes the session with no body", async () => {
+    const calls = stubFetch({ "DELETE /api/v1/session": { status: 204 } });
+    await signOut();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.path).toBe("/api/v1/session");
+  });
+
+  it("throws the daemon's code when it refuses", async () => {
+    stubFetch({ "DELETE /api/v1/session": errorReply(401, "auth_required") });
+    await expect(signOut()).rejects.toSatisfy((e: unknown) =>
+      isApiError(e, "auth_required"),
+    );
   });
 });

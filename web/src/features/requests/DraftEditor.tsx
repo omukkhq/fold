@@ -27,7 +27,11 @@ interface DraftEditorProps {
   onChange: (form: DraftForm) => void;
 }
 
-const SELECT = cn(controlClasses, focusRing, "w-auto py-5 font-mono text-code");
+const SELECT = cn(
+  controlClasses,
+  focusRing,
+  "w-auto py-5 text-13 tabular-nums",
+);
 
 export function DraftEditor({
   slug,
@@ -41,10 +45,10 @@ export function DraftEditor({
     <>
       <section aria-label="Draft" className="flex flex-col gap-10">
         <div className="flex items-center gap-10">
-          <h2 className="text-section leading-snug font-semibold text-text">
+          <h2 className="text-16 leading-tight font-semibold text-text">
             Draft
           </h2>
-          <p className="text-meta text-text-muted">
+          <p className="text-13 text-text-2">
             Editing · saves as version {next}
           </p>
         </div>
@@ -52,10 +56,10 @@ export function DraftEditor({
           {form.cards.map((card, index) => (
             <li
               key={card.key}
-              className="flex flex-col gap-8 rounded-m bg-surface px-14 py-12 inset-ring inset-ring-border-subtle"
+              className="flex flex-col gap-8 rounded-m bg-surface px-14 py-12"
             >
               <div className="flex items-center gap-10">
-                <span className="rounded-s bg-sunken px-6 py-2 font-mono text-meta text-text-muted">
+                <span className="rounded-s bg-fill px-7 py-2 text-13 font-semibold text-text-2 tabular-nums">
                   {card.key}
                 </span>
                 <input
@@ -90,7 +94,7 @@ export function DraftEditor({
                 <IconButton
                   aria-label={`Remove ${card.key}`}
                   disabled={locked}
-                  className="text-danger"
+                  className="text-bad"
                   onClick={() => {
                     onChange(removeCard(form, card.key));
                   }}
@@ -107,9 +111,9 @@ export function DraftEditor({
                 onValueChange={(description) => {
                   onChange(updateCard(form, card.key, { description }));
                 }}
-                className="font-mono text-code"
+                className="text-14"
               />
-              <p className="text-meta text-text-muted">
+              <p className="text-13 text-text-2">
                 Markdown in the task template shape: Scope, then Acceptance.
               </p>
             </li>
@@ -129,10 +133,10 @@ export function DraftEditor({
       </section>
       <section aria-label="Dependencies" className="flex flex-col gap-10">
         <div className="flex items-center gap-10">
-          <h2 className="text-section leading-snug font-semibold text-text">
+          <h2 className="text-16 leading-tight font-semibold text-text">
             Dependencies
           </h2>
-          <p className="text-meta text-text-muted">
+          <p className="text-13 text-text-2">
             {edgesSummary(form.edges.length)} · each row reads “dependent needs
             prerequisite”
           </p>
@@ -158,7 +162,7 @@ export function DraftEditor({
                   </option>
                 ))}
               </select>
-              <span className="text-meta text-text-muted">needs</span>
+              <span className="text-13 text-text-2">needs</span>
               <select
                 aria-label={`Edge ${String(index + 1)} prerequisite`}
                 value={edge.prerequisite}
