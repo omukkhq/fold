@@ -14,6 +14,8 @@ import {
   claimLine,
   claimText,
   humanReviewFact,
+  listMeta,
+  listPill,
   currentVersion,
   evidenceLines,
   evidenceSource,
@@ -132,6 +134,116 @@ describe("reviewPill", () => {
     expect(reviewPill({ ...p4, latest_verdict: null }).text).toBe(
       "Waiting for review",
     );
+  });
+});
+
+describe("listPill", () => {
+  const text = (p: Parameters<typeof listPill>[0], waitsForYou = false) => {
+    const pill = listPill(p, { waitsForYou });
+    return [pill.tone, pill.text];
+  };
+
+  it("says the review state and whose turn it is in one chip", () => {
+    expect(
+      text(
+        proposalSummary("P-1", {
+          turn: "with_author",
+          latest_verdict: "request_changes",
+          author: "web-7",
+        }),
+      ),
+    ).toEqual(["danger", "Changes requested · waits for @web-7"]);
+    expect(
+      text(
+        proposalSummary("P-2", {
+          conflicted: true,
+          turn: "with_author",
+          author: "api-3",
+        }),
+      ),
+    ).toEqual(["danger", "Conflict · waits for @api-3"]);
+    expect(
+      text(
+        proposalSummary("P-3", {
+          turn: "with_reviewer",
+          review_claim: "review-4",
+        }),
+      ),
+    ).toEqual(["neutral", "Waiting for review · @review-4"]);
+    expect(
+      text(
+        proposalSummary("P-5", { turn: "with_reviewer", review_claim: null }),
+      ),
+    ).toEqual(["neutral", "Waiting for review"]);
+    expect(
+      text(
+        proposalSummary("P-6", {
+          turn: "with_reviewer",
+          latest_verdict: "approve",
+          review_claim: "review-4",
+        }),
+      ),
+    ).toEqual(["approved", "Approved · waits for @review-4"]);
+  });
+
+  it("keeps gold for what waits for you, and names another human or any human quietly", () => {
+    const marked = {
+      turn: "with_reviewer" as const,
+      latest_verdict: "approve" as const,
+      human_approved: false,
+    };
+    expect(
+      text(proposalSummary("P-7", { ...marked, human_review: mark }), true),
+    ).toEqual(["human", "Agent approved · waits for you"]);
+    expect(
+      text(proposalSummary("P-7", { ...marked, human_review: mark })),
+    ).toEqual(["neutral", "Agent approved · waits for @tanim"]);
+    expect(
+      text(
+        proposalSummary("P-8", {
+          ...marked,
+          human_review: { ...mark, reviewer: null },
+        }),
+      ),
+    ).toEqual(["neutral", "Agent approved · waits for a human"]);
+  });
+
+  it("shows the end state of an integrated or closed proposal", () => {
+    expect(
+      listPill(proposalSummary("P-9", { state: "integrated" }), {
+        revision: "r8",
+        waitsForYou: true,
+      }).text,
+    ).toBe("Integrated as r8");
+    expect(listPill(proposalSummary("P-9", { state: "closed" })).text).toBe(
+      "Closed",
+    );
+  });
+});
+
+describe("listMeta", () => {
+  it("names the version, the claim and the human review mark", () => {
+    expect(
+      segmentsText(
+        listMeta(
+          proposalSummary("P-4", {
+            current_version: 2,
+            review_claim: "review-4",
+            human_review: mark,
+          }),
+        ),
+      ),
+    ).toBe("v2 of 2 · claimed by @review-4 · human review by @tanim");
+    expect(
+      segmentsText(
+        listMeta(
+          proposalSummary("P-5", {
+            state: "integrated",
+            human_review: { ...mark, reviewer: null },
+          }),
+        ),
+      ),
+    ).toBe("v1 of 1 · human review by any human");
   });
 });
 

@@ -531,7 +531,7 @@ function rowIds(element: HTMLElement): string[] {
   return within(element)
     .getAllByRole("row")
     .slice(1)
-    .map((row) => row.querySelector("td")?.textContent ?? "");
+    .map((row) => row.querySelector("td span span")?.textContent ?? "");
 }
 
 async function integration() {
@@ -575,27 +575,33 @@ describe("Proposals list", () => {
       .closest("tr");
     if (!p4) throw new Error("no P-4 row");
     const cells = within(p4);
-    expect(cells.getByText("T-3")).toBeTruthy();
+    expect(cells.getByRole("link", { name: "T-3" }).getAttribute("href")).toBe(
+      "/p/demo/t/T-3",
+    );
     expect(cells.getByText("@backend/db")).toBeTruthy();
-    expect(cells.getByText("v2 of 2")).toBeTruthy();
-    expect(cells.getAllByText("@tanim")).toHaveLength(3);
     expect(
-      cells.getByText(byContent("Agent approved · needs @tanim")),
+      cells.getByText(
+        byContent(
+          "for T-3 · v2 of 2 · claimed by @review/quality · human review by @tanim",
+        ),
+      ),
     ).toBeTruthy();
+    expect(cells.getAllByText("@tanim")).toHaveLength(1);
     expect(
-      cells.getByText(byContent("claimed by @review/quality")),
+      cells.getByText(byContent("Agent approved · waits for you")),
     ).toBeTruthy();
-    expect(cells.getByText("Human review").textContent).toContain("tanim");
     const p3 = within(rows)
       .getByRole("link", { name: "Login form styles" })
       .closest("tr");
     if (!p3) throw new Error("no P-3 row");
-    expect(within(p3).getByText("Changes requested")).toBeTruthy();
+    expect(
+      within(p3).getByText(
+        byContent("Changes requested · waits for @frontend/styles"),
+      ),
+    ).toBeTruthy();
     expect(within(p3).getAllByText("@frontend/styles")).toHaveLength(2);
     expect(
-      screen
-        .getByRole("link", { name: "Open · 3" })
-        .getAttribute("aria-current"),
+      screen.getByRole("link", { name: "Open 3" }).getAttribute("aria-current"),
     ).toBe("page");
   });
 
@@ -634,20 +640,31 @@ describe("Proposals list", () => {
     const user = userEvent.setup();
     const { router } = renderAt("/p/demo/proposals");
     await table();
-    await user.click(screen.getByRole("button", { name: "Any claim" }));
+    await user.click(screen.getByRole("button", { name: "Filter" }));
     await user.click(
-      await screen.findByRole("menuitem", { name: "Unclaimed" }),
+      await screen.findByRole("menuitemradio", { name: "Unclaimed" }),
     );
     await waitFor(async () => {
       expect(rowIds(await table())).toEqual(["P-3"]);
     });
     expect(router.state.location.search).toEqual({ claim: "unclaimed" });
-    await user.click(screen.getByRole("button", { name: "Unclaimed" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Claimed" }));
-    await user.click(screen.getByRole("button", { name: "Conflicted" }));
+    await user.click(
+      await screen.findByRole("menuitemradio", { name: "Claimed" }),
+    );
+    await user.click(
+      screen.getByRole("menuitemcheckbox", { name: /^Conflicted/ }),
+    );
     await waitFor(async () => {
       expect(rowIds(await table())).toEqual(["P-6"]);
     });
+    await user.keyboard("{Escape}");
+    await user.click(
+      screen.getByRole("button", { name: "Remove the filter Conflicted" }),
+    );
+    await waitFor(async () => {
+      expect(rowIds(await table())).toEqual(["P-6", "P-4"]);
+    });
+    expect(router.state.location.search).toEqual({ claim: "claimed" });
   });
 
   it("marks the proposals that wait for your review, counts them on the tab and shows only them with the filter", async () => {
@@ -655,8 +672,11 @@ describe("Proposals list", () => {
     const { router } = renderAt("/p/demo/proposals");
     const rows = await table();
     const marked = within(rows)
-      .getAllByText("Waits for you")
-      .map((mark) => mark.closest("tr")?.querySelector("td")?.textContent);
+      .getAllByText(byContent(/ · waits for you$/))
+      .map(
+        (mark) =>
+          mark.closest("tr")?.querySelector("td span span")?.textContent,
+      );
     expect(marked).toEqual(["P-4"]);
     const nav = screen.getByRole("navigation", { name: "Project" });
     expect(
@@ -666,7 +686,10 @@ describe("Proposals list", () => {
         })
       ).textContent,
     ).toBe("1");
-    await user.click(screen.getByRole("button", { name: "Waits for you (1)" }));
+    await user.click(screen.getByRole("button", { name: "Filter" }));
+    await user.click(
+      await screen.findByRole("menuitemcheckbox", { name: "Waits for you 1" }),
+    );
     await waitFor(async () => {
       expect(rowIds(await table())).toEqual(["P-4"]);
     });
