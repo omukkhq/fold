@@ -474,3 +474,73 @@ async fn the_merged_change_of_an_unknown_batch_is_refused() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], "invalid_path");
 }
+
+#[tokio::test]
+async fn a_file_of_the_merged_side_reads_from_the_merge_in_memory() {
+    let fx = batched_with(AROUND_README).await;
+    let before = stored_objects(&fx);
+    let merges = &fx.handle.batch_merges;
+
+    let (status, diff) = get(&fx, "/reviews/batches/rb-1/diff/file?path=README.md").await;
+    assert_eq!(status, StatusCode::OK, "{diff}");
+    let (status, file) = get(&fx, "/reviews/batches/rb-1/file?path=README.md").await;
+
+    assert_eq!(status, StatusCode::OK, "{file}");
+    assert_eq!(file["path"], "README.md");
+    assert_eq!(file["kind"], "file");
+    assert_eq!(file["text"], "intro\n# demo\nend\n");
+    assert_eq!(file["binary"], false);
+    assert_eq!(file["too_large"], false);
+    assert_eq!(file["size"], 17);
+    assert_eq!(
+        file["hash"], diff["new_hash"],
+        "the side the hunks were built on"
+    );
+    assert_eq!(stored_objects(&fx), before, "the read writes nothing");
+    assert_eq!(
+        (merges.misses(), merges.hits()),
+        (1, 1),
+        "one merge serves both reads"
+    );
+
+    let (status, body) = get(&fx, "/reviews/batches/rb-1/file?path=src/none.rs").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"]["code"], "not_found");
+    let (status, body) = get(&fx, "/reviews/batches/rb-1/file?path=..%2Fx").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "invalid_path");
+    let (status, body) = get(&fx, "/reviews/batches/rb-1/file").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "invalid_request");
+    let (status, body) = get(&fx, "/reviews/batches/rb-7/file?path=README.md").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"]["code"], "review_batch_not_found");
+}
+
+#[tokio::test]
+async fn a_file_of_an_integrated_batch_reads_from_the_last_member_revision() {
+    let fx = batched_with(TWO_FILES).await;
+    let review = fx.agent("review").await;
+    let batch = ReviewBatchId::from_number(1).unwrap();
+    let approve = |number: u32| BatchVerdict {
+        proposal: ProposalId::from_number(number).unwrap(),
+        verdict: Verdict::Approve,
+        body: String::new(),
+    };
+    fx.reviews()
+        .submit_batch_review(&review, batch, vec![approve(1), approve(2)], Vec::new())
+        .await
+        .unwrap();
+    fx.reviews()
+        .integrate_review_batch(&crate::proposal_tools_support::human("tanim"), batch)
+        .await
+        .unwrap();
+
+    for path in ["src/one.rs", "src/two.rs"] {
+        let (status, file) = get(&fx, &format!("/reviews/batches/rb-1/file?path={path}")).await;
+        assert_eq!(status, StatusCode::OK, "{file}");
+        assert_eq!(file["text"], "one line\n");
+        let (_, diff) = get(&fx, &format!("/reviews/batches/rb-1/diff/file?path={path}")).await;
+        assert_eq!(file["hash"], diff["new_hash"]);
+    }
+}

@@ -15,7 +15,9 @@ use super::super::actor::Human;
 use super::super::diff::{FileDiffView, file_view};
 use super::super::error::{ApiError, ApiQuery, ErrorEnvelope};
 use super::super::tasks::id;
-use super::super::workspaces::{ChangeSource, ComparedFile, ComparisonTotals};
+use super::super::workspaces::{
+    ChangeSource, ComparedFile, ComparisonTotals, FileContentView, file_view as content_view,
+};
 use super::checks::NextVersionRun;
 use super::{ProposalStateView, ReviewVerdict, service};
 use crate::daemon::AppState;
@@ -31,6 +33,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(integrate_review_batch))
         .routes(routes!(get_review_batch_diff))
         .routes(routes!(get_review_batch_file_diff))
+        .routes(routes!(read_review_batch_file))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
@@ -672,4 +675,42 @@ pub async fn get_review_batch_file_diff(
         .batch_merged_file_diff(batch, &query.path)
         .await?;
     Ok(Json(file_view(ChangeSource::Recorded, diff)))
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ReviewBatchContentQuery {
+    /// A file of the merged change's new side, such as `src/lib.rs`.
+    pub path: String,
+}
+
+/// One file of the new side of the batch's merged change, from the same sides as `get_review_batch_diff`: the members merged onto main's head before the batch's integration, the last member's revision after it. The diff view reads the unchanged lines around the hunks from it. A symlink gives its target text and is never followed.
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{slug}/reviews/batches/{id}/file",
+    operation_id = "read_review_batch_file",
+    params(
+        ("slug" = String, Path, description = "The project slug"),
+        ("id" = String, Path, description = "The review batch id, such as rb-3"),
+        ReviewBatchContentQuery,
+    ),
+    responses(
+        (status = 200, description = "The file", body = FileContentView),
+        (status = 400, description = "`invalid_id`, `invalid_path`, or `invalid_request`: the query string is not valid", body = ErrorEnvelope),
+        (status = 404, description = "`review_batch_not_found`, `not_found`: the new side has no file at the path or the batch compares nothing, `revision_not_found`: main has no revision, or `project_not_found`", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn read_review_batch_file(
+    State(state): State<AppState>,
+    project: Project,
+    Path((_slug, batch)): Path<(String, String)>,
+    ApiQuery(query): ApiQuery<ReviewBatchContentQuery>,
+) -> Result<Json<FileContentView>, ApiError> {
+    let batch: ReviewBatchId = id(&batch)?;
+    let content = service(&state, &project)
+        .batch_merged_file(batch, &query.path)
+        .await?;
+    Ok(Json(content_view(query.path, content)))
 }
