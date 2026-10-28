@@ -2,7 +2,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { ActorText } from "./ActorText";
-import { HumanReviewBadge } from "./HumanReviewBadge";
 import { PersonList, PersonName } from "./PersonName";
 import { actorSegment, seg } from "./segments";
 
@@ -127,19 +126,5 @@ describe("ActorText", () => {
     );
     expect(container.textContent).toBe("Claimed by @frontend/ui · 13:40");
     expect(screen.getByText("@frontend/ui").className).toContain("text-14");
-  });
-});
-
-describe("HumanReviewBadge", () => {
-  it("names the reviewer as @name, or no one", () => {
-    const { container, rerender } = render(
-      <HumanReviewBadge reviewer="tanim" />,
-    );
-    expect(container.textContent).toContain("Human review");
-    expect(container.querySelector('[data-person="human"]')?.textContent).toBe(
-      "@tanim",
-    );
-    rerender(<HumanReviewBadge reviewer={null} />);
-    expect(container.querySelector("[data-person]")).toBeNull();
   });
 });

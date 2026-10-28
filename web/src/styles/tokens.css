@@ -31,8 +31,6 @@
   --r-pill: 999px;
 
   --measure: 70ch;
-  --icon-inline: 14px;
-  --icon-control: 16px;
 
   --elevation-pop:
     0 0 0 1px var(--line), 0 4px 12px var(--shade-near),
@@ -84,20 +82,13 @@
   --width-git-location: 280px;
   --width-git-branch: 72px;
   --width-git-commit: 56px;
-  --width-project-agents: 260px;
-  --width-project-state: 170px;
   --width-inbox: 470px;
   --width-agents: 410px;
   --width-menu: 290px;
   --width-toast: 360px;
-  --width-transcript: 280px;
   --width-column: 224px;
   --width-fact-label: 70px;
-  --width-filter-column: 260px;
-  --width-group-head: calc(100cqw - 2 * var(--space-16));
   --width-popover-max: calc(100vw - 2 * var(--space-16));
-  /* The task dialog's side panel when it scrolls on its own: it carries the dialog's right gutter inside it, so its scroll bar sits at the dialog's edge. */
-  --width-side-panel-scroll: calc(var(--width-side-panel) + var(--space-24));
   /* The task dialog: its side panel of three groups, the label column of a group's rows, and the narrow form of a new task. */
   --width-task-side: 344px;
   --width-side-label: 92px;
@@ -133,14 +124,11 @@
   --status-review: #b89a5a;
   --status-done: #1a1a1f;
   --diff-add: #e7f2ea;
-  --diff-add-strong: #cfe6d6;
   --diff-del: #fbecea;
-  --diff-del-strong: #f3d3cf;
   --diff-context: #f8f7f4;
   --diff-hunk: #e2ecea;
   --diff-selected: #dde9e7;
   --diff-comment-marker: #8a5a10;
-  --diff-outdated: #8a8983;
   --label-sage: #537671;
   --label-slate: #646f7d;
   --label-teal: #3d7873;
@@ -157,7 +145,6 @@
   --label-moss-soft: #f2f4f0;
   --label-plum-soft: #f4f1f3;
   --label-stone-soft: #f6f6f5;
-  --presence-active: #3d6b4c;
   --presence-idle: #6b8f8a;
   --presence-offline: #96948e;
   --syntax-keyword: #7a5874;
@@ -198,14 +185,11 @@
   --status-review: #c9a966;
   --status-done: #e6e6e3;
   --diff-add: #8cc49b17;
-  --diff-add-strong: #8cc49b33;
   --diff-del: #ec8a8317;
-  --diff-del-strong: #ec8a8333;
   --diff-context: #ffffff05;
   --diff-hunk: #8fb8b11f;
   --diff-selected: #8fb8b12e;
   --diff-comment-marker: #e0a458;
-  --diff-outdated: #6e6d68;
   --label-sage: #8ab5b0;
   --label-slate: #a3afbc;
   --label-teal: #7fb3ac;
@@ -222,7 +206,6 @@
   --label-moss-soft: #a3b67e12;
   --label-plum-soft: #c1a0b812;
   --label-stone-soft: #77766f12;
-  --presence-active: #8cc49b;
   --presence-idle: #6d9691;
   --presence-offline: #77766f;
   --syntax-keyword: #c9a3c0;
@@ -264,14 +247,11 @@
     --status-review: #c9a966;
     --status-done: #e6e6e3;
     --diff-add: #8cc49b17;
-    --diff-add-strong: #8cc49b33;
     --diff-del: #ec8a8317;
-    --diff-del-strong: #ec8a8333;
     --diff-context: #ffffff05;
     --diff-hunk: #8fb8b11f;
     --diff-selected: #8fb8b12e;
     --diff-comment-marker: #e0a458;
-    --diff-outdated: #6e6d68;
     --label-sage: #8ab5b0;
     --label-slate: #a3afbc;
     --label-teal: #7fb3ac;
@@ -288,7 +268,6 @@
     --label-moss-soft: #a3b67e12;
     --label-plum-soft: #c1a0b812;
     --label-stone-soft: #77766f12;
-    --presence-active: #8cc49b;
     --presence-idle: #6d9691;
     --presence-offline: #77766f;
     --syntax-keyword: #c9a3c0;

@@ -17,8 +17,6 @@ import {
   linesChanged,
   rangeLines,
   kindOptions,
-  lastLine,
-  latestThreads,
   NO_FILTER,
   stateOptions,
   versionAt,
@@ -310,22 +308,6 @@ describe("words", () => {
     expect(
       versionText({ ...byKey("m-1"), version: null }, 2, false),
     ).toBeNull();
-    expect(lastLine(byKey("m-2"))).toEqual({
-      author: "frontend",
-      text: "The settings say so.",
-    });
-    expect(lastLine(byKey("rc-2"))).toEqual({
-      author: "review/quality",
-      text: "comment 2",
-    });
-  });
-
-  it("lists the newest threads", () => {
-    expect(latestThreads(all()).map((t) => t.key)).toEqual([
-      "m-1",
-      "m-2",
-      "m-4",
-    ]);
   });
 
   it("finds the version current at a time", () => {

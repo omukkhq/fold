@@ -307,12 +307,6 @@ export function humanReviewFact(mark: HumanReviewMark): Segments {
   return seg`${reviewerSegment(mark.reviewer, "any human")}, marked by ${actorSegment(mark.set_by)}`;
 }
 
-export function claimText(p: ProposalSummary): Segments {
-  return p.review_claim
-    ? seg`review claimed by ${actorSegment(p.review_claim)}`
-    : ["review not claimed"];
-}
-
 /** The list's claim line under the pill. */
 export function claimLine(p: ProposalSummary): Segments {
   return p.review_claim

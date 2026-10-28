@@ -17,12 +17,8 @@ describe("badgeSpec", () => {
 
   it("keeps gold for what waits for a person", () => {
     expect(badgeSpec("needs-you").classes).toBe("bg-warn-soft text-warn");
-    expect(badgeSpec("human-review").classes).toBe("bg-warn-soft text-warn");
+    expect(badgeSpec("stalled").classes).toBe("bg-warn-soft text-warn");
     expect(badgeSpec("stale").classes).toBe("bg-fill text-text");
-  });
-
-  it("draws a requested change in the danger tone, as the proposal list does", () => {
-    expect(badgeSpec("proposal-changes").classes).toBe("bg-bad-soft text-bad");
   });
 
   it("shows every tone with its own text", () => {
@@ -33,11 +29,11 @@ describe("badgeSpec", () => {
 
 describe("badgeText", () => {
   it("uses the tone text by default", () => {
-    expect(badgeText("blocked")).toBe("Blocked");
+    expect(badgeText("stalled")).toBe("Stalled");
   });
 
   it("uses the caller's text when given", () => {
-    expect(badgeText("blocked", "Blocked by T-9")).toBe("Blocked by T-9");
+    expect(badgeText("stalled", "Stalled for 4m")).toBe("Stalled for 4m");
   });
 
   it("falls back to the tone text for blank text", () => {

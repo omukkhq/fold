@@ -12,7 +12,6 @@ import {
   authorArea,
   approvers,
   claimLine,
-  claimText,
   humanReviewFact,
   listMeta,
   listPill,
@@ -327,10 +326,6 @@ describe("names and versions", () => {
     expect(filesText(one, { files: 1, added_lines: 1, removed_lines: 0 })).toBe(
       "1 file · +1 −0",
     );
-    expect(
-      claimText(proposalSummary("P-4", { review_claim: "review/quality" })),
-    ).toEqual(["review claimed by ", { actor: "review/quality" }]);
-    expect(claimText(proposalSummary("P-3"))).toEqual(["review not claimed"]);
   });
 
   it("names the human review mark's approver and who set it", () => {

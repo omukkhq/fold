@@ -172,14 +172,6 @@ export function conversationThreads(
   );
 }
 
-/** The newest threads, whatever their state, as the overview lists them. */
-export function latestThreads(
-  threads: readonly ConversationThread[],
-  limit = 3,
-): ConversationThread[] {
-  return [...threads].sort((a, b) => b.at - a.at).slice(0, limit);
-}
-
 export type StateFilter = "all" | ConversationState;
 
 export interface ConversationFilter {
@@ -361,28 +353,6 @@ export function rangeLines(
         : [];
     }),
   );
-}
-
-/** The first line of the newest entry, for the overview's list. */
-export function lastLine(thread: ConversationThread): {
-  author: string;
-  text: string;
-} {
-  const source = thread.source;
-  const entries =
-    source.type === "message"
-      ? source.thread.messages.map((m) => ({ author: m.sender, body: m.body }))
-      : source.thread.comments.map(({ comment }) => ({
-          author: comment.author,
-          body: comment.body,
-        }));
-  let author = "";
-  let body = "";
-  for (const entry of entries) {
-    author = entry.author;
-    body = entry.body;
-  }
-  return { author, text: body.trim().split("\n")[0] ?? "" };
 }
 
 /** The About card's line on the conversation: how many threads it holds and how many wait for the human's answer; null for a proposal nobody wrote about. */

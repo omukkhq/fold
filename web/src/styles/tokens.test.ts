@@ -55,18 +55,14 @@ const DESIGN_COLOURS = [
   "status-review",
   "status-done",
   "diff-add",
-  "diff-add-strong",
   "diff-del",
-  "diff-del-strong",
   "diff-context",
   "diff-hunk",
   "diff-selected",
   "diff-comment-marker",
-  "diff-outdated",
   ...["sage", "slate", "teal", "ink", "gold", "moss", "plum", "stone"].flatMap(
     (hue) => [`label-${hue}`, `label-${hue}-soft`],
   ),
-  "presence-active",
   "presence-idle",
   "presence-offline",
   ...SYNTAX.map((kind) => `syntax-${kind}`),
@@ -83,8 +79,6 @@ const DESIGN_OTHER = [
   "r-l",
   "r-pill",
   "measure",
-  "icon-inline",
-  "icon-control",
   "tracking-wordmark",
   "height-bar",
   "height-bar-compact",
@@ -259,11 +253,9 @@ describe("contrast", () => {
   const nonText: [string, string][] = [
     ["accent", "bg"],
     ["accent", "surface"],
-    ["presence-active", "surface"],
     ["presence-idle", "surface"],
     ["presence-offline", "surface"],
     ["diff-comment-marker", "surface"],
-    ["diff-outdated", "surface"],
   ];
   const ratio = (set: Map<string, string>, fg: string, bg: string) => {
     const surface = parseHex(set.get("surface") ?? "");

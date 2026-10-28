@@ -1,24 +1,6 @@
-import {
-  CircleAlert,
-  Clock,
-  GitMerge,
-  Hand,
-  History,
-  OctagonAlert,
-  UserCheck,
-  type LucideIcon,
-} from "lucide-react";
+import { Clock, Hand, History, type LucideIcon } from "lucide-react";
 
-export const BADGE_TONES = [
-  "proposal-changes",
-  "proposal-conflict",
-  "human-review",
-  "needs-you",
-  "blocked",
-  "stalled",
-  "stale",
-  "outdated",
-] as const;
+export const BADGE_TONES = ["needs-you", "stalled", "stale"] as const;
 
 export type BadgeTone = (typeof BADGE_TONES)[number];
 
@@ -36,34 +18,10 @@ export interface BadgeSpec {
 const CHIP = "px-9 py-2 text-13 leading-tight";
 
 const SPECS: Record<BadgeTone, BadgeSpec> = {
-  "proposal-changes": {
-    icon: CircleAlert,
-    text: "Changes requested",
-    classes: "bg-bad-soft text-bad",
-    shape: CHIP,
-  },
-  "proposal-conflict": {
-    icon: GitMerge,
-    text: "Conflict",
-    classes: "bg-bad-soft text-bad",
-    shape: CHIP,
-  },
-  "human-review": {
-    icon: UserCheck,
-    text: "Human review",
-    classes: "bg-warn-soft text-warn",
-    shape: CHIP,
-  },
   "needs-you": {
     icon: Hand,
     text: "Needs you",
     classes: "bg-warn-soft text-warn",
-    shape: CHIP,
-  },
-  blocked: {
-    icon: OctagonAlert,
-    text: "Blocked",
-    classes: "bg-bad-soft text-bad",
     shape: CHIP,
   },
   stalled: {
@@ -76,12 +34,6 @@ const SPECS: Record<BadgeTone, BadgeSpec> = {
     icon: History,
     text: "Stale",
     classes: "bg-fill text-text",
-    shape: CHIP,
-  },
-  outdated: {
-    icon: History,
-    text: "Outdated",
-    classes: "bg-fill text-text-2",
     shape: CHIP,
   },
 };

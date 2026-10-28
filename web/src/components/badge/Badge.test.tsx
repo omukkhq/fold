@@ -16,9 +16,9 @@ describe("Badge", () => {
   });
 
   it("shows the caller's text", () => {
-    render(<Badge tone="blocked">Blocked by T-9</Badge>);
-    expect(screen.getByText("Blocked by T-9").getAttribute("data-tone")).toBe(
-      "blocked",
+    render(<Badge tone="stalled">Stalled for 4m</Badge>);
+    expect(screen.getByText("Stalled for 4m").getAttribute("data-tone")).toBe(
+      "stalled",
     );
   });
 });

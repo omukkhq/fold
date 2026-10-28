@@ -12,9 +12,3 @@ export const TAB_LIST =
 
 /** The same tab for Radix, which marks the current trigger with `data-state=active`. */
 export const TAB_BY_STATE = `${BASE} font-medium text-text-2 after:bg-transparent hover:text-text data-[state=active]:font-semibold data-[state=active]:text-text data-[state=active]:after:bg-ink`;
-
-export function tabClasses(current: boolean): string {
-  return current
-    ? `${BASE} font-semibold text-text after:bg-ink`
-    : `${BASE} font-medium text-text-2 after:bg-transparent hover:text-text`;
-}
