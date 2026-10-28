@@ -140,9 +140,8 @@ describe("ThreadPanel", () => {
     const chip = screen
       .getAllByRole("link")
       .find((link) => link.textContent === "T-12");
-    expect(chip?.querySelector("span")?.className).toContain(
-      "whitespace-nowrap",
-    );
+    expect(chip?.className).toContain("whitespace-nowrap");
+    expect(chip?.className).not.toContain("font-mono");
   });
 
   it("says a message to humans was delivered, marks the signed-in human and marks the thread read for them", async () => {

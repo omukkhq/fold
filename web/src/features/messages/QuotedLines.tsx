@@ -11,17 +11,25 @@ export function QuotedLines({
   slug,
   proposal,
   lines,
+  onSurface = true,
 }: {
   slug: string;
   proposal: string | null;
   lines: MessageLines;
+  /** The quote sits on a surface, such as a message card, so it takes the fill tone to stand apart; a thread on the page tone shows it on a surface. */
+  onSurface?: boolean;
 }) {
   const head = lineRefText(lines);
   const note = cutNote(lines);
   return (
-    <figure className="flex flex-col overflow-hidden rounded-s inset-ring inset-ring-line">
-      <figcaption className="flex items-center gap-6 border-b border-line bg-bg px-10 py-6 font-mono text-13 text-text-2">
-        <FileCode aria-hidden="true" size={13} className="shrink-0" />
+    <figure
+      className={cn(
+        "flex max-w-measure flex-col overflow-hidden rounded-m",
+        onSurface ? "bg-fill" : "bg-surface",
+      )}
+    >
+      <figcaption className="flex items-center gap-6 px-12 pt-8 pb-4 font-mono text-13 text-text-2">
+        <FileCode aria-hidden="true" size={14} className="shrink-0" />
         {proposal === null ? (
           <span className="min-w-0 truncate">{head}</span>
         ) : (
@@ -39,7 +47,7 @@ export function QuotedLines({
       <pre
         className={cn(
           CODE_BOX,
-          "bg-surface py-6 font-mono text-13 leading-tight text-text",
+          "pt-4 pb-10 font-mono text-13 leading-normal text-text",
         )}
       >
         {quotedLines(lines).map((line) => (
@@ -55,9 +63,7 @@ export function QuotedLines({
         ))}
       </pre>
       {note === null ? null : (
-        <p className="border-t border-line px-10 py-4 text-13 text-text-2">
-          {note}
-        </p>
+        <p className="px-12 pb-8 text-13 text-text-2">{note}</p>
       )}
     </figure>
   );

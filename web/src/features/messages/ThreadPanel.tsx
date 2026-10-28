@@ -3,7 +3,12 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
-import { ArrowLeft, GitPullRequest, SquareKanban } from "lucide-react";
+import {
+  ArrowLeft,
+  GitPullRequest,
+  SquareKanban,
+  type LucideIcon,
+} from "lucide-react";
 import { HrefLink } from "@/app/HrefLink";
 import { markThreadRead, type ThreadView } from "@/api/messages";
 import { sessionQuery } from "@/api/queries";
@@ -11,10 +16,12 @@ import {
   buttonClasses,
   buttonIconClass,
 } from "@/components/button/buttonStyles";
+import { Id } from "@/components/id/Id";
+import { ID_LINK_CLASSES } from "@/components/id/idStyles";
 import { failureText } from "@/format/failure";
 import { cn } from "@/lib/cn";
 import { focusRing, insetFocusRing } from "@/lib/focus";
-import { usePageVisible } from "@/lib/pageState";
+import { useMediaQuery, usePageVisible } from "@/lib/pageState";
 import { replySchema, type ReplyValues } from "./compose";
 import { withDays } from "./days";
 import {
@@ -31,7 +38,7 @@ import { threadCanMarkAnswered } from "./answered";
 import { MessageItem } from "./MessageItem";
 import { chosenAnswers } from "./question";
 import { ReplyBox } from "./ReplyBox";
-import { readDue } from "./readGate";
+import { readDue, WIDE_LAYOUT } from "./readGate";
 import { replyTarget } from "./replyTarget";
 import { threadTitle } from "./title";
 import { projectPath } from "@/routes/paths";
@@ -48,8 +55,30 @@ interface ThreadPanelProps {
   shown?: boolean;
 }
 
-const CHIP =
-  "hidden items-center gap-6 rounded-pill bg-surface px-10 py-3 text-13 text-text-2 inset-ring inset-ring-line hover:text-text lg:inline-flex";
+/** A task or proposal the thread is about, as its icon and id. */
+function IdLink({
+  href,
+  icon: Icon,
+  id,
+}: {
+  href: string;
+  icon: LucideIcon;
+  id: string;
+}) {
+  return (
+    <HrefLink
+      href={href}
+      className={cn(
+        ID_LINK_CLASSES,
+        "inline-flex items-center gap-5 font-medium",
+        focusRing,
+      )}
+    >
+      <Icon aria-hidden="true" size={14} className="shrink-0" />
+      {id}
+    </HrefLink>
+  );
+}
 
 export function ThreadPanel({
   slug,
@@ -65,6 +94,7 @@ export function ThreadPanel({
   const target = replyTarget(thread, you, picked);
   const unread = unreadBy(thread.messages, you);
   const visible = usePageVisible();
+  const wide = useMediaQuery(WIDE_LAYOUT);
   // The `message.acknowledged` event of the call refreshes the thread.
   const marked = useRef<string | null>(null);
   useEffect(() => {
@@ -129,7 +159,7 @@ export function ThreadPanel({
       aria-label={title}
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-bg"
     >
-      <header className="flex shrink-0 items-center gap-8 border-b border-line py-6 pr-8 pl-4 lg:items-start lg:gap-16 lg:px-28 lg:py-16">
+      <header className="flex shrink-0 items-start gap-6 bg-surface py-8 pr-12 pl-6 lg:gap-16 lg:bg-transparent lg:px-28 lg:pt-20 lg:pb-12">
         {backHref === undefined ? null : (
           <HrefLink
             href={backHref}
@@ -142,62 +172,53 @@ export function ThreadPanel({
             <ArrowLeft aria-hidden="true" size={20} />
           </HrefLink>
         )}
-        <div className="flex min-w-0 flex-1 flex-col gap-2 lg:gap-8">
-          <h2 className="truncate text-16 leading-tight font-semibold text-text lg:text-16 lg:whitespace-normal">
+        <div className="flex min-w-0 flex-1 flex-col gap-4 max-lg:py-4 lg:gap-6">
+          <h2 className="line-clamp-2 font-title text-16 leading-tight font-semibold text-text lg:line-clamp-none lg:max-w-measure lg:text-21">
             {title}
           </h2>
-          <p className="flex flex-wrap items-center gap-x-8 gap-y-4 text-13 text-text-2">
+          <p className="flex flex-wrap items-center gap-x-10 gap-y-2 text-13 lg:gap-x-14 lg:gap-y-4 lg:text-14">
             {thread.task ? (
-              <HrefLink
+              <IdLink
                 href={projectPath(slug, "t", thread.task)}
-                className={cn(CHIP, focusRing)}
-              >
-                <SquareKanban aria-hidden="true" size={13} />
-                <span className="font-mono text-13 whitespace-nowrap tabular-nums">
-                  {thread.task}
-                </span>
-              </HrefLink>
+                icon={SquareKanban}
+                id={thread.task}
+              />
             ) : null}
             {thread.proposal ? (
-              <HrefLink
+              <IdLink
                 href={projectPath(slug, "proposals", thread.proposal)}
-                className={cn(CHIP, focusRing)}
-              >
-                <GitPullRequest aria-hidden="true" size={13} />
-                <span className="font-mono text-13 whitespace-nowrap tabular-nums">
-                  {thread.proposal}
-                </span>
-              </HrefLink>
+                icon={GitPullRequest}
+                id={thread.proposal}
+              />
             ) : null}
-            <span className="hidden font-mono whitespace-nowrap tabular-nums lg:inline">
+            <span className="text-text">
+              <PersonList
+                names={thread.participants}
+                you={you}
+                youWord
+                nameClassName="text-13 lg:text-14"
+              />
+            </span>
+            <Id className="hidden text-13 text-text-2 lg:inline">
               {thread.id}
-            </span>
-            <span aria-hidden="true" className="hidden lg:inline">
-              ·
-            </span>
-            <PersonList
-              names={thread.participants}
-              you={you}
-              youWord
-              nameClassName="text-13 lg:text-14"
-            />
+            </Id>
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-8">
+        <div className="flex shrink-0 items-start gap-8">
           {threadCanMarkAnswered(thread) ? (
-            <MarkAnswered slug={slug} scope={{ thread: thread.id }} />
+            <MarkAnswered slug={slug} scope={{ thread: thread.id }} bar />
           ) : null}
           {thread.task ? (
             <HrefLink
               href={projectPath(slug, "t", thread.task)}
               className={cn(
                 buttonClasses("quiet", "md"),
-                "max-lg:size-44 max-lg:bg-transparent max-lg:p-0 max-lg:inset-ring-0",
+                "max-lg:size-44 max-lg:bg-transparent max-lg:p-0",
                 focusRing,
               )}
             >
-              <span className={cn(buttonIconClass("quiet"), "lg:hidden")}>
-                <SquareKanban aria-hidden="true" size={18} />
+              <span className={buttonIconClass("quiet")}>
+                <SquareKanban aria-hidden="true" size={16} />
               </span>
               <span className="max-lg:sr-only">Open {thread.task}</span>
             </HrefLink>
@@ -220,16 +241,15 @@ export function ThreadPanel({
       >
         <ol
           ref={content}
-          className="mt-auto flex w-full max-w-thread-column flex-col gap-18 pt-14 pb-8 lg:gap-22 lg:pt-20"
+          className="flex w-full max-w-thread-column flex-col gap-18 pt-14 pb-12 lg:gap-24 lg:pt-6 lg:pb-20"
         >
           {withDays(thread.messages, now).map((item) =>
             item.kind === "day" ? (
-              <li key={item.key} className="flex items-center gap-12">
-                <span aria-hidden="true" className="h-px flex-1 bg-line" />
-                <span className="text-13 font-medium text-text-2">
-                  {item.label}
-                </span>
-                <span aria-hidden="true" className="h-px flex-1 bg-line" />
+              <li
+                key={item.key}
+                className="font-title text-13 leading-tight font-semibold text-text-2"
+              >
+                {item.label}
               </li>
             ) : (
               <MessageItem
@@ -261,7 +281,7 @@ export function ThreadPanel({
             onValueChange={field.onChange}
             onBlur={field.onBlur}
             boxRef={field.ref}
-            placeholder={replyPlaceholder(thread)}
+            placeholder={replyPlaceholder(thread, wide)}
             pending={isSubmitting}
             answering={target?.answers?.sender ?? null}
             invalid={errors.body?.message ?? null}

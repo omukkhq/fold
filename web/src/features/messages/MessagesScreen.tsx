@@ -7,15 +7,10 @@ import {
 import { useRouter } from "@tanstack/react-router";
 import {
   ArrowLeft,
-  Bot,
-  Check,
-  ChevronDown,
-  GitPullRequest,
   MessageSquarePlus,
   MessagesSquare,
   Search,
   SearchX,
-  SquareKanban,
 } from "lucide-react";
 import { useState } from "react";
 import { keys } from "@/api/keys";
@@ -29,23 +24,22 @@ import { focusRing } from "@/lib/focus";
 import { useMediaQuery } from "@/lib/pageState";
 import { IconButton } from "@/components/button/Button";
 import { Tooltip } from "@/components/overlay/Tooltip";
-import { Menu } from "@/components/overlay/Menu";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
 import {
-  filterLabel,
   filterOptions,
   filterThreads,
   searchThreads,
-  showChips,
-  showFilter,
+  showOptions,
+  threadCount,
   withShow,
   type ThreadFilter,
 } from "./filters";
 import { FeedbackDialog } from "./FeedbackDialog";
 import { isMissingThread, openThread } from "./openThread";
 import { messagesHref, type MessagesSearch } from "./search";
+import { ThreadFilterMenu } from "./ThreadFilterMenu";
 import { ThreadList } from "./ThreadList";
 import { ThreadPanel } from "./ThreadPanel";
 import { paneShown, WIDE_LAYOUT } from "./readGate";
@@ -54,33 +48,6 @@ interface MessagesScreenProps {
   slug: string;
   search: MessagesSearch;
 }
-
-const FILTERS = [
-  {
-    key: "agent",
-    label: "Agent",
-    all: "All agents",
-    icon: Bot,
-    options: "agents",
-  },
-  {
-    key: "task",
-    label: "Task",
-    all: "All tasks",
-    icon: SquareKanban,
-    options: "tasks",
-  },
-  {
-    key: "proposal",
-    label: "Proposal",
-    all: "All proposals",
-    icon: GitPullRequest,
-    options: "proposals",
-  },
-] as const;
-
-const CHIP =
-  "inline-flex items-center gap-6 rounded-pill bg-surface px-10 py-3 text-13 whitespace-nowrap inset-ring inset-ring-line max-sm:min-h-44";
 
 export function MessagesScreen({ slug, search }: MessagesScreenProps) {
   const { data: listing, dataUpdatedAt } = useSuspenseQuery(
@@ -107,7 +74,6 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
     questions: search.questions,
     mine: search.mine,
   };
-  const options = filterOptions(data);
   const visible = filterThreads(data, filter, you);
   const shown = searchThreads(visible, query);
   const target = openThread(data, visible, search.thread);
@@ -119,7 +85,6 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
   const open =
     target.kind === "listed" ? target.thread : (unlisted.data ?? null);
   const paneOnScreen = paneShown(search.thread, useMediaQuery(WIDE_LAYOUT));
-  const show = showFilter(filter);
   const listHref = messagesHref(slug, { ...search, thread: undefined });
 
   function go(next: MessagesSearch) {
@@ -130,17 +95,17 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
     <div className="flex min-h-0 flex-1 flex-col items-stretch overflow-hidden lg:flex-row">
       <div
         className={cn(
-          "min-h-0 flex-1 flex-col lg:flex lg:w-thread-list lg:flex-none lg:border-r lg:border-line",
+          "min-h-0 flex-1 flex-col lg:flex lg:w-thread-list lg:flex-none lg:bg-surface",
           search.thread === undefined ? "flex" : "hidden",
         )}
       >
         <h1 className="sr-only">Messages</h1>
-        <div className="flex shrink-0 flex-col gap-12 border-b border-line px-16 pt-16 pb-12">
+        <div className="flex shrink-0 flex-col gap-10 px-16 pt-12 pb-6 lg:pt-16 lg:pb-8">
           <div className="flex items-center gap-8">
-            <label className="flex min-w-0 flex-1 items-center gap-8 rounded-m bg-surface px-10 py-7 inset-ring inset-ring-line has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent max-sm:min-h-44">
+            <label className="flex min-w-0 flex-1 items-center gap-8 rounded-s bg-fill px-12 py-9 has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent max-sm:min-h-44">
               <Search
                 aria-hidden="true"
-                size={15}
+                size={16}
                 className="shrink-0 text-text-2"
               />
               <input
@@ -163,90 +128,30 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
                   setFeedback(true);
                 }}
               >
-                <MessageSquarePlus aria-hidden="true" size={15} />
+                <MessageSquarePlus aria-hidden="true" size={16} />
               </IconButton>
             </Tooltip>
           </div>
-          <div
-            role="group"
-            aria-label="Show"
-            className="flex flex-wrap items-center gap-6"
-          >
-            {showChips(data, you).map((chip) => (
-              <button
-                key={chip.show}
-                type="button"
-                aria-pressed={show === chip.show}
-                onClick={() => {
-                  go({ ...withShow(search, chip.show), thread: undefined });
-                }}
-                className={cn(
-                  CHIP,
-                  show === chip.show
-                    ? "bg-ink font-semibold text-on-ink inset-ring-ink"
-                    : chip.show === "waiting"
-                      ? "text-warn hover:bg-sunken"
-                      : "text-text hover:bg-sunken",
-                  focusRing,
-                )}
-              >
-                {chip.label}
-              </button>
-            ))}
-          </div>
-          <div
-            role="group"
-            aria-label="Filters"
-            className="flex flex-wrap items-center gap-6"
-          >
-            {FILTERS.map(({ key, label, all, icon: Icon, options: group }) => {
-              const value = search[key];
-              const pick = (next: string | undefined) => {
-                go({ ...search, thread: undefined, [key]: next });
-              };
-              return (
-                <Menu
-                  key={key}
-                  trigger={
-                    <button
-                      type="button"
-                      className={cn(
-                        CHIP,
-                        value === undefined
-                          ? "text-text-2 hover:bg-sunken"
-                          : "bg-accent-soft text-accent inset-ring-accent",
-                        focusRing,
-                      )}
-                    >
-                      <Icon aria-hidden="true" size={13} />
-                      {filterLabel(label, value)}
-                      <ChevronDown aria-hidden="true" size={13} />
-                    </button>
-                  }
-                  items={[
-                    {
-                      label: all,
-                      icon: value === undefined ? Check : undefined,
-                      onSelect: () => {
-                        pick(undefined);
-                      },
-                    },
-                    ...options[group].map((option) => ({
-                      label: option,
-                      icon: option === value ? Check : undefined,
-                      onSelect: () => {
-                        pick(option);
-                      },
-                    })),
-                  ]}
-                />
-              );
-            })}
+          <div className="flex items-center justify-between gap-8">
+            <ThreadFilterMenu
+              filter={filter}
+              shows={showOptions(data, you)}
+              options={filterOptions(data)}
+              onShow={(next) => {
+                go({ ...withShow(search, next), thread: undefined });
+              }}
+              onNarrow={(key, value) => {
+                go({ ...search, thread: undefined, [key]: value });
+              }}
+            />
+            <p className="shrink-0 text-13 text-text-2">
+              {threadCount(shown.length)}
+            </p>
           </div>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-8 pt-4 pb-16">
           {shown.length === 0 ? (
-            <div className="p-16">
+            <div className="px-8 py-8">
               <EmptyPanel
                 icon={MessagesSquare}
                 title={
@@ -270,7 +175,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
             />
           )}
           {listing.more ? (
-            <p className="px-16 py-12 text-14 text-text-2">
+            <p className="px-12 pt-12 text-13 text-text-2">
               {olderNotListed(data.length, "threads")}
             </p>
           ) : null}
