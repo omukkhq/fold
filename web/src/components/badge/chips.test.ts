@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COUNT_CLASSES, chipClasses } from "./chips";
+import { COUNT_CLASSES, FILTER_COUNT_CLASSES, chipClasses } from "./chips";
 
 describe("chipClasses", () => {
   it("draws every tone as a 13px pill without an outline", () => {
@@ -20,9 +20,20 @@ describe("chipClasses", () => {
 });
 
 describe("COUNT_CLASSES", () => {
-  it("is the one 12px element, in gold", () => {
+  it("counts what waits for a person, in gold", () => {
     expect(COUNT_CLASSES).toContain("text-12");
     expect(COUNT_CLASSES).toContain("text-warn");
     expect(COUNT_CLASSES).toContain("tabular-nums");
+  });
+});
+
+describe("FILTER_COUNT_CLASSES", () => {
+  it("draws the count badge's shape in the accent tone, never gold", () => {
+    expect(FILTER_COUNT_CLASSES).toContain("text-12");
+    expect(FILTER_COUNT_CLASSES).toContain("text-accent");
+    expect(FILTER_COUNT_CLASSES).not.toContain("warn");
+    expect(FILTER_COUNT_CLASSES.replace("bg-accent-soft text-accent", "")).toBe(
+      COUNT_CLASSES.replace("bg-warn-soft text-warn", ""),
+    );
   });
 });

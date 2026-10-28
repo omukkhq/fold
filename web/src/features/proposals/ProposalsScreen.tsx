@@ -4,6 +4,7 @@ import { Check, ChevronDown, Filter, GitPullRequest, X } from "lucide-react";
 import { proposalsQuery, proposalsWaitingQuery } from "@/api/queries";
 import { revisionsQuery } from "@/api/repositoryQueries";
 import { HrefLink } from "@/app/HrefLink";
+import { FILTER_COUNT_CLASSES } from "@/components/badge/chips";
 import { Button } from "@/components/button/Button";
 import { Id } from "@/components/id/Id";
 import { menuContent, menuItem } from "@/components/overlay/menuStyles";
@@ -92,7 +93,7 @@ function FilterMenu({
         <Button icon={<Filter aria-hidden="true" size={16} />}>
           Filter
           {active > 0 ? (
-            <span className="inline-grid h-20 min-w-20 place-items-center rounded-pill bg-accent-soft px-6 font-title text-12 font-bold text-accent tabular-nums">
+            <span className={FILTER_COUNT_CLASSES}>
               {active}
               <span className="sr-only"> active</span>
             </span>
