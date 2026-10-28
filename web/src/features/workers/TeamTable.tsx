@@ -174,7 +174,7 @@ function Row({
               variant="ghost"
               aria-label={`Session of @${row.name}`}
               aria-expanded={open}
-              aria-controls={detailId}
+              aria-controls={open ? detailId : undefined}
               onClick={() => {
                 setOpen(!open);
               }}
