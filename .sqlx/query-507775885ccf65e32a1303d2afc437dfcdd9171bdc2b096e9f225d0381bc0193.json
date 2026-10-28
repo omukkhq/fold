@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM notify_sends WHERE state IN ('pending', 'sending')\n         AND target NOT IN (SELECT value FROM json_each(?1))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "507775885ccf65e32a1303d2afc437dfcdd9171bdc2b096e9f225d0381bc0193"
+}

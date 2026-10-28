@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM notify_outbox WHERE target NOT IN (SELECT value FROM json_each(?1))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "be354a6f060bd5134a705b785d5c1cae9b3f4ac9b3b2595d0433e03a67355706"
+}

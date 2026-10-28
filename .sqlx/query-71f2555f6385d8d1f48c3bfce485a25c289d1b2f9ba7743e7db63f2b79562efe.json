@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE notify_sends SET state = 'sending', last_try_at = ?2\n         WHERE number = ?1 AND state IN ('pending', 'sending')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "71f2555f6385d8d1f48c3bfce485a25c289d1b2f9ba7743e7db63f2b79562efe"
+}

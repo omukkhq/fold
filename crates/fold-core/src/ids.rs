@@ -321,6 +321,18 @@ define_id!(
     WebTokenId,
     "wt-"
 );
+define_id!(
+    @prefixed
+    /// The public id of a notice target. One number space covers the host's targets and every project's own, so a target is named without its scope, and a removed target's number is never handed out again.
+    NotifyTargetId,
+    "nt-"
+);
+define_id!(
+    @prefixed
+    /// The public id of one send to a notice target: `notify_sends.number`, unique in the project, so a person names a send of the log to send it again.
+    NotifySendId,
+    "ns-"
+);
 
 #[cfg(test)]
 mod tests {

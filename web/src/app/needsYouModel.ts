@@ -48,6 +48,7 @@ const KIND_ORDER: readonly NeedsYouKind[] = [
   "worker_unreachable",
   "worker_model_unreachable",
   "claude_not_found",
+  "notify_target_off",
 ];
 
 /** Agents that ask, things that wait for the human's decision, and the project's own state, which includes workers fold cannot run. */
@@ -66,6 +67,7 @@ export const GROUP_OF: Readonly<Record<NeedsYouKind, NeedsYouGroupId>> = {
   worker_unreachable: "project",
   worker_model_unreachable: "project",
   claude_not_found: "project",
+  notify_target_off: "project",
 };
 
 /** The kinds whose title is the item's own name, which the sentence ends with. */
@@ -273,6 +275,16 @@ function lineOf(slug: string, item: NeedsYouItem, index: number): NeedsYouLine {
         href: projectPath(slug, "agents"),
       };
     }
+    case "notify_target_off":
+      return {
+        ...base,
+        person: null,
+        chip: item.target,
+        task: null,
+        title: titleText(item.title),
+        text: "fold turned this notice target off after its sends failed; a test that gets through turns it on again",
+        href: projectPath(slug, "settings"),
+      };
     case "human_review":
       return {
         ...base,

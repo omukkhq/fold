@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT last_seq FROM notify_state WHERE id = 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "last_seq",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_state",
+            "name": "last_seq"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0b909c4e01f5f22f598b6ff0e1f8e700d287aae2ef64c88705723e39ad15f476"
+}

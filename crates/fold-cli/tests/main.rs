@@ -40,6 +40,7 @@ mod init;
 mod init_folder;
 mod log;
 mod news;
+mod notify;
 mod remote;
 mod restart;
 #[cfg(feature = "dev-seed")]

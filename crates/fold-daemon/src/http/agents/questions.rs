@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::Path;
+use axum::extract::{Path, State};
 use fold_core::roles::PermissionBehavior;
 use fold_core::{FoldError, PermissionQuestionId};
 use fold_store::agents::QuestionRow;
@@ -14,6 +14,7 @@ use super::super::error::{ApiError, ApiJson, ErrorEnvelope};
 use super::super::messages::MessageChoice;
 use crate::daemon::AppState;
 use crate::services::agents::{NeedsYouItem, NeedsYouKind, Screen, with_folder_attention};
+use crate::services::projects::notify;
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -148,9 +149,11 @@ pub enum NeedsYouItemKind {
     WorkerModelUnreachable,
     /// The worker `agent` failed because the daemon found no `claude` on the `PATH` it gives workers, which it reads from the user's login shell at its start. `reason` says what the human does; a daemon start resumes the worker, and the item ends when the worker runs again.
     ClaudeNotFound,
+    /// fold turned the notice target `target` off: its receiver answered 410 Gone, a send failed every try of its retry schedule (about 8.6 hours), or 20 tries in a row failed. `title` is its name and `reason` says why and what the human does. A test send that gets through turns it on again and ends the item.
+    NotifyTargetOff,
 }
 
-/// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task and `repository` the history of main.
+/// The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task, `repository` the history of main and `settings` the project's notice targets.
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NeedsYouScreen {
@@ -160,6 +163,7 @@ pub enum NeedsYouScreen {
     Request,
     Task,
     Repository,
+    Settings,
 }
 
 /// One item that waits for a human. Only the ids its kind has are set.
@@ -213,6 +217,9 @@ pub struct NeedsYouEntry {
     pub commit: Option<String>,
     /// The files of a `human_change` that conflict with main, those of a `folder_held` that keep the project folder where it is, or those of an `unstash_conflicted` that hold the conflict, in path order; empty otherwise.
     pub paths: Vec<String>,
+    /// The notice target of a `notify_target_off`.
+    #[schema(required = true, example = "nt-3")]
+    pub target: Option<String>,
 }
 
 impl From<NeedsYouItem> for NeedsYouEntry {
@@ -232,6 +239,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             NeedsYouKind::WorkerUnreachable => NeedsYouItemKind::WorkerUnreachable,
             NeedsYouKind::WorkerModelUnreachable => NeedsYouItemKind::WorkerModelUnreachable,
             NeedsYouKind::ClaudeNotFound => NeedsYouItemKind::ClaudeNotFound,
+            NeedsYouKind::NotifyTargetOff => NeedsYouItemKind::NotifyTargetOff,
         };
         let screen = match item.kind.screen() {
             Screen::Messages => NeedsYouScreen::Messages,
@@ -240,6 +248,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             Screen::Request => NeedsYouScreen::Request,
             Screen::Task => NeedsYouScreen::Task,
             Screen::Repository => NeedsYouScreen::Repository,
+            Screen::Settings => NeedsYouScreen::Settings,
         };
         Self {
             kind,
@@ -261,6 +270,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             reason: item.reason,
             commit: item.commit,
             paths: item.paths,
+            target: item.target.map(|target| target.to_string()),
         }
     }
 }
@@ -328,7 +338,7 @@ pub async fn answer_worker_question(
     Ok(Json(answered.into()))
 }
 
-/// Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, and a worker whose turns fail before they reach the model. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, and with the live `worker.output` steps `result` and `result_error`, which end a turn.
+/// Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, a worker whose turns fail before they reach the model, and a notice target fold turned off, which a person's change of the target or a test send that gets through ends. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable` and `notify.target_changed`, and with the live `worker.output` steps `result` and `result_error`, which end a turn.
 #[utoipa::path(
     get,
     path = "/api/v1/projects/{slug}/needs-you",
@@ -341,12 +351,21 @@ pub async fn answer_worker_question(
         (status = 500, description = "Internal error", body = ErrorEnvelope),
     )
 )]
-pub async fn list_needs_you(project: Project) -> Result<Json<NeedsYouList>, ApiError> {
-    let items = with_folder_attention(
+pub async fn list_needs_you(
+    State(state): State<AppState>,
+    project: Project,
+) -> Result<Json<NeedsYouList>, ApiError> {
+    let mut items = with_folder_attention(
         project.0.agents().needs_you().await?,
         project.0.git_attention.head_moved(),
         project.0.git_attention.folder_held(),
     );
+    if let Some(settings) = state.projects.notify() {
+        items = notify::with_notify_attention(
+            items,
+            notify::off_items(settings, &project.0.slug).await?,
+        );
+    }
     Ok(Json(NeedsYouList {
         items: items.into_iter().map(Into::into).collect(),
     }))

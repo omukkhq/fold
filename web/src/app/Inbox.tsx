@@ -2,6 +2,7 @@ import * as RadixPopover from "@radix-ui/react-popover";
 import * as RadixTabs from "@radix-ui/react-tabs";
 import { useQuery } from "@tanstack/react-query";
 import {
+  BellOff,
   ChevronRight,
   CloudOff,
   FileWarning,
@@ -66,6 +67,7 @@ const ICONS: Record<NeedsYouKind, LucideIcon> = {
   worker_unreachable: Unplug,
   worker_model_unreachable: CloudOff,
   claude_not_found: SearchX,
+  notify_target_off: BellOff,
 };
 
 const MINUTE_MS = 60_000;

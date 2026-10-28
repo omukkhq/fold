@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!\", seq, notice, created_at FROM notify_outbox\n           WHERE target = ?1 ORDER BY id LIMIT ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_outbox",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "seq",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_outbox",
+            "name": "seq"
+          }
+        }
+      },
+      {
+        "name": "notice",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "notify_outbox",
+            "name": "notice"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_outbox",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a1518ec1826e5f060cb1f6173c6e28bda76c12c20a2e8801f5feff5fced5e729"
+}

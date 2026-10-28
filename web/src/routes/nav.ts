@@ -7,7 +7,8 @@ export type NavId =
   | "requests"
   | "agents"
   | "messages"
-  | "repository";
+  | "repository"
+  | "settings";
 
 export interface NavEntry {
   id: NavId;
@@ -17,7 +18,7 @@ export interface NavEntry {
 
 const BOARD: NavEntry = { id: "board", label: "Board", segment: "board" };
 
-/** The tabs in the order of the work: the board, what waits for review and answers, the agents, then the history. */
+/** The tabs in the order of the work: the board, what waits for review and answers, the agents, then the history and the settings. */
 export const NAV_ENTRIES: readonly NavEntry[] = [
   BOARD,
   { id: "proposals", label: "Proposals", segment: "proposals" },
@@ -26,6 +27,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   { id: "agents", label: "Agents", segment: "agents" },
   { id: "repository", label: "Repository", segment: "repository" },
   { id: "activity", label: "Activity", segment: "activity" },
+  { id: "settings", label: "Settings", segment: "settings" },
 ];
 
 export function navPath(slug: string, entry: NavEntry): string {

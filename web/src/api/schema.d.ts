@@ -106,6 +106,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The host's notice targets and the web address of links. */
+        get: operations["show_host_notify"];
+        /** A named human sets the web address that links in notices start with. */
+        put: operations["set_host_notify"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notify/targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human adds a host target, which gets the notices of every project that uses the host targets. A generic target's answer holds its signing secret, shown only there. */
+        post: operations["add_host_notify_target"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notify/targets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** A named human changes a host target. A change starts it with a clean health. */
+        put: operations["edit_host_notify_target"];
+        post?: never;
+        /** A named human removes a host target. */
+        delete: operations["remove_host_notify_target"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notify/targets/{id}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human gives a generic host target a new signing secret, shown only in the answer. For a day each post carries a signature with the old secret too. */
+        post: operations["rotate_host_notify_target"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects": {
         parameters: {
             query?: never;
@@ -458,10 +528,131 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, and a worker whose turns fail before they reach the model. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable`, and with the live `worker.output` steps `result` and `result_error`, which end a turn. */
+        /** Every item that waits for a human, oldest first: open asks from agents to a human (messages marked as asking, questions with choices and `AskUserQuestion` calls), workers' permission questions, proposals waiting for a human approval, card drafts waiting for their human requester, a Git branch of the project folder that fold did not move, a project folder that waits on changes of the human's that no revision records, which a waiting conflicted human change stands for while it waits, an unstash whose conflict markers wait in the folder, which stands for the folder too, a worker that failed because it cannot reach fold, a worker whose turns fail before they reach the model, and a notice target fold turned off, which a person's change of the target or a test send that gets through ends. Each item names the screen that answers it. The list changes with the stored events `message.sent`, `message.ask_closed`, `worker.permission_asked`, `worker.permission_answered`, `worker.stopped`, `worker.failed`, `review.submitted`, `task.human_review_set`, `task.human_review_cleared`, `proposal.*`, `request.*`, `git.head_moved`, `git.uncommitted_changes`, `git.attention_cleared`, `stash.conflicted`, `stash.dropped`, `worker.started`, `worker.resumed`, `worker.refreshed` and `worker.model_unreachable` and `notify.target_changed`, and with the live `worker.output` steps `result` and `result_error`, which end a turn. */
         get: operations["list_needs_you"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/notify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Where the project's notices go: its own targets and, while it uses them, the host's. Each target gets the events it selected, grouped in its window. */
+        get: operations["show_project_notify"];
+        /** A named human sets whether the host's targets get the project's notices too. */
+        put: operations["set_project_notify"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/notify/sends/{id}/again": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human sends a finished send again, with its webhook id and body, so a receiver that took it before drops the repeat. The send's target must get the project's notices now. */
+        post: operations["send_notify_again"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/notify/targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human adds a target of the project. A generic target's answer holds its signing secret, shown only there. */
+        post: operations["add_project_notify_target"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/notify/targets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** A named human changes a target of the project. A change starts it with a clean health. */
+        put: operations["edit_project_notify_target"];
+        post?: never;
+        /** A named human removes a target of the project, with every notice that waited for it. */
+        delete: operations["remove_project_notify_target"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/notify/targets/{id}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human gives a generic target of the project a new signing secret, shown only in the answer. For a day each post carries a signature with the old secret too. */
+        post: operations["rotate_project_notify_target"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/notify/targets/{id}/sends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The newest sends of a target of the project or of the host, at most 50: the send log. */
+        get: operations["list_notify_sends"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{slug}/notify/targets/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A named human sends a test notice that names the project through one of its targets or a host target and waits for the answer. The send goes into the target's log; one that gets through turns a target fold turned off on again. */
+        post: operations["test_notify_target"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2525,7 +2716,7 @@ export interface components {
             workspace: string | null;
         };
         /** @enum {string} */
-        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable" | "message.ask_closed" | "review.plan_created" | "review.plan_changed" | "review.plan_joined" | "review.plan_left" | "review.plan_wait_ended" | "review.plan_started" | "review.plan_ended" | "review.batch_integrated" | "review.batch_waiting" | "review.batch_wait_ended" | "review.batch_ready";
+        DurableEventType: "agent.registered" | "worker.registered" | "session.started" | "session.ended" | "agent.tag_added" | "agent.tag_removed" | "task.created" | "task.updated" | "task.deleted" | "task.archived" | "task.completed" | "task.status_changed" | "task.blocked_changed" | "task.human_review_set" | "task.human_review_cleared" | "label.created" | "dependency.added" | "dependency.removed" | "checklist.created" | "checklist.item_added" | "checklist.item_updated" | "checklist.item_done" | "checklist.item_removed" | "claim.acquired" | "claim.released" | "claim.taken_over" | "claim.stale" | "workspace.created" | "workspace.adopted" | "workspace.abandoned" | "workspace.archived" | "workspace.synced" | "workspace.missing" | "workspace.recovered" | "workspace.watch_degraded" | "checkpoint.recorded" | "checkpoint.restored" | "checkpoint.pruned" | "changeset.recorded" | "proposal.opened" | "proposal.version_added" | "proposal.closed" | "proposal.integrated" | "review.submitted" | "review.comment_added" | "review.batch_created" | "review.batch_submitted" | "review.batch_closed" | "integration.succeeded" | "integration.conflicted" | "integration.refused" | "main.advanced" | "remote.pushed" | "remote.push_failed" | "remote.pulled" | "remote.pull_conflicted" | "message.sent" | "message.acknowledged" | "request.created" | "request.claimed" | "request.released" | "request.draft_submitted" | "request.changes_requested" | "request.approved" | "request.closed" | "git.commit_failed" | "git.outside_commits" | "git.uncommitted_changes" | "git.attention_cleared" | "git.committed" | "area.defined" | "worker.started" | "worker.stopped" | "worker.failed" | "worker.refreshed" | "worker.resumed" | "worker.permission_asked" | "worker.permission_answered" | "workers.limits_changed" | "session.bind_refused" | "area.updated" | "task.reported" | "task.sent_back" | "proposal.author_changed" | "project.paused" | "project.resumed" | "task.hold_set" | "task.hold_cleared" | "proposal.human_edited" | "proposal.review_again_requested" | "human_change.recorded" | "human_change.conflicted" | "human_change.resolved" | "git.sync_enabled" | "git.head_moved" | "human_change.withdrawn" | "proposal.reviewer_fixed" | "stash.pushed" | "stash.applied" | "stash.conflicted" | "stash.dropped" | "checks.started" | "checks.finished" | "integration.queued" | "integration.unqueued" | "integration.held" | "review.scope_chosen" | "worker.model_unreachable" | "message.ask_closed" | "review.plan_created" | "review.plan_changed" | "review.plan_joined" | "review.plan_left" | "review.plan_wait_ended" | "review.plan_started" | "review.plan_ended" | "review.batch_integrated" | "review.batch_waiting" | "review.batch_wait_ended" | "review.batch_ready" | "notify.target_changed";
         /**
          * @description `needs`: this task needs the other task. `needed_by`: the other task needs this one.
          * @enum {string}
@@ -2898,6 +3089,13 @@ export interface components {
         };
         /** @enum {string} */
         HeldClaimKind: "implementation" | "review";
+        /** @description The host's notice settings: the targets that every project that uses the host targets sends to, and the web address of links. */
+        HostNotify: {
+            /** @description Oldest first. */
+            targets: components["schemas"]["NotifyTargetEntry"][];
+            /** @description The web address links start with; null when notices carry no links. */
+            web_url: string | null;
+        };
         /** @description The people who use fold on this host. */
         HumanList: {
             /** @description Human names without the `human:` prefix, ordered by name. */
@@ -3212,6 +3410,11 @@ export interface components {
              * @description UTC milliseconds since the item waits.
              */
             since: number;
+            /**
+             * @description The notice target of a `notify_target_off`.
+             * @example nt-3
+             */
+            target: string | null;
             /** @example T-12 */
             task: string | null;
             /**
@@ -3234,16 +3437,16 @@ export interface components {
          * @description Why an item waits for a human.
          * @enum {string}
          */
-        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable" | "worker_model_unreachable" | "claude_not_found";
+        NeedsYouItemKind: "question" | "permission" | "human_review" | "request_draft" | "human_task" | "blocker" | "human_change" | "head_moved" | "folder_held" | "unstash_conflicted" | "checks_file_invalid_on_main" | "worker_unreachable" | "worker_model_unreachable" | "claude_not_found" | "notify_target_off";
         /** @description Every item that waits for a human, oldest first. */
         NeedsYouList: {
             items: components["schemas"]["NeedsYouEntry"][];
         };
         /**
-         * @description The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task and `repository` the history of main.
+         * @description The screen that answers an item: `messages` opens the thread, `worker` the asking worker, `proposal` the proposal, `request` the request, `task` the task, `repository` the history of main and `settings` the project's notice targets.
          * @enum {string}
          */
-        NeedsYouScreen: "messages" | "worker" | "proposal" | "request" | "task" | "repository";
+        NeedsYouScreen: "messages" | "worker" | "proposal" | "request" | "task" | "repository" | "settings";
         /** @description Exactly one of `text` and `linked_task`. */
         NewChecklistItemBody: {
             /** @description The checklist name. Left out, a plain step goes to the task's only checklist, or to `Subtasks` when the task has none; with two or more checklists the request is refused with `checklist_ambiguous`. A new name creates the checklist. */
@@ -3252,6 +3455,25 @@ export interface components {
             linked_task?: string | null;
             /** @description The text of a plain step. */
             text?: string | null;
+        };
+        /** @description A new target: its kind, name and URL, and the fields that take their default when left out. */
+        NewNotifyTargetBody: {
+            enabled?: boolean | null;
+            events?: components["schemas"]["NotifyEventName"][] | null;
+            kind: components["schemas"]["NotifyTargetKind"];
+            /** @description The columns whose card moves the target gets; `review` and `done` when left out. */
+            moves_to?: components["schemas"]["TaskStatus"][] | null;
+            /** @example Team chat */
+            name: string;
+            preset?: components["schemas"]["NotifyPreset"] | null;
+            /** @description The receiver's URL, or the incoming webhook URL Slack or Discord gave: https, or http only to localhost or a loopback address. fold never shows it whole again. */
+            url: string;
+            /**
+             * Format: int32
+             * @description 0 to 3600; 15 when left out.
+             * @example 15
+             */
+            window_seconds?: number | null;
         };
         /** @description The run in progress that makes a proposal's next version when its checks pass. While it goes, the current version is neither approved nor integrated (`update_checks_running`). */
         NextVersionRun: {
@@ -3262,6 +3484,139 @@ export interface components {
         };
         /** @enum {string} */
         NoticeReach: "stdin" | "socket" | "failing" | "unreachable";
+        /**
+         * @description A notice type a target selects. `webhook.test` is the type of a test send, which every target gets.
+         * @enum {string}
+         */
+        NotifyEventName: "needs_you.opened" | "needs_you.closed" | "task.created" | "task.moved" | "task.blocked" | "task.sent_back" | "proposal.opened" | "review.approved" | "review.changes_requested" | "proposal.integrated" | "proposal.closed" | "integration.failed" | "checks.failed" | "worker.failed" | "git.failed" | "message.to_human" | "request.approved" | "project.paused" | "webhook.test";
+        /**
+         * @description A named selection of events: `needs_you_only`, `recommended`, `all`, or `custom` for a selection made event by event.
+         * @enum {string}
+         */
+        NotifyPreset: "needs_you_only" | "recommended" | "all" | "custom";
+        /** @description One send of the send log: when it was made, what it carried and how its newest try went. It never holds the URL, the body or the receiver's answer text. */
+        NotifySendEntry: {
+            /** Format: int32 */
+            count: number;
+            /** Format: int64 */
+            created_at: number;
+            /** Format: int64 */
+            duration_ms: number | null;
+            /** @description `timeout`, `host_not_found`, `tls` or `unreachable` when the newest try got no status. */
+            error: string | null;
+            /** @example ns-12 */
+            id: string;
+            /** Format: int64 */
+            last_try_at: number | null;
+            /** Format: int64 */
+            next_try_at: number | null;
+            /** @description The type and first id of each notice, such as `task.moved T-18`. */
+            notices: string[];
+            /**
+             * @description `pending` waits for its next try, `sending` is in flight, `delivered` got a 2xx, `given_up` failed its last try.
+             * @example delivered
+             */
+            state: string;
+            /**
+             * Format: int32
+             * @description The HTTP status of the newest try.
+             * @example 200
+             */
+            status: number | null;
+            /** @example nt-3 */
+            target: string;
+            /** @description True for a test send. */
+            test: boolean;
+            /** Format: int32 */
+            tries: number;
+            /** @description The `webhook-id` every try of the send carries. */
+            webhook_id: string;
+        };
+        /** @description The send log of a target. */
+        NotifySendList: {
+            /** @description Newest first. */
+            sends: components["schemas"]["NotifySendEntry"][];
+        };
+        /** @description A target as an add or a rotation leaves it, with the signing secret of a generic target, which fold shows only in this answer. */
+        NotifyTargetAdded: {
+            /** @description `whsec_` and base64: the key of each post's `webhook-signature`. Null for Slack and Discord, whose URL is their secret. */
+            secret: string | null;
+            target: components["schemas"]["NotifyTargetEntry"];
+        };
+        /** @description One notice target. Its signing secret never leaves the daemon after its add or rotation, and its URL shows without its path, which can hold a token. */
+        NotifyTargetEntry: {
+            /** Format: int64 */
+            created_at: number;
+            /** @example tanim */
+            created_by: string;
+            /** @description A person's switch. */
+            enabled: boolean;
+            events: components["schemas"]["NotifyEventName"][];
+            /**
+             * Format: int32
+             * @description Failed tries in a row.
+             */
+            failures: number;
+            /** @description True for a target of the host. */
+            host: boolean;
+            /** @example nt-3 */
+            id: string;
+            kind: components["schemas"]["NotifyTargetKind"];
+            /** Format: int64 */
+            last_failed_at: number | null;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of the last try that got through.
+             */
+            last_ok_at: number | null;
+            /** @description The columns whose card moves the target gets. */
+            moves_to: components["schemas"]["TaskStatus"][];
+            /** @example Team chat */
+            name: string;
+            /**
+             * Format: int64
+             * @description UTC milliseconds of this project's next try of a failed send to the target; null on the host's page.
+             */
+            next_try_at: number | null;
+            preset: components["schemas"]["NotifyPreset"];
+            state: components["schemas"]["NotifyTargetState"];
+            /** @description The URL's scheme, host and port, with `/…` when a path or a query follows. */
+            url: string;
+            /**
+             * Format: int32
+             * @description The notices of this many seconds after the first one go in one send; 0 sends each alone.
+             * @example 15
+             */
+            window_seconds: number;
+        };
+        /** @description The fields of a new or changed target. On a change, a field left out keeps its value; on an add it takes the default. */
+        NotifyTargetFields: {
+            enabled?: boolean | null;
+            events?: components["schemas"]["NotifyEventName"][] | null;
+            /** @description The columns whose card moves the target gets; `review` and `done` on an add that leaves it out. */
+            moves_to?: components["schemas"]["TaskStatus"][] | null;
+            /** @example Team chat */
+            name?: string | null;
+            preset?: components["schemas"]["NotifyPreset"] | null;
+            /** @description The receiver's URL, or the incoming webhook URL Slack or Discord gave: https, or http only to localhost or a loopback address. fold never shows it whole again. */
+            url?: string | null;
+            /**
+             * Format: int32
+             * @description 0 to 3600; 15 on an add that leaves it out.
+             * @example 15
+             */
+            window_seconds?: number | null;
+        };
+        /**
+         * @description What a target sends to: `webhook` gets the signed generic JSON, `slack` and `discord` a message for their incoming webhook.
+         * @enum {string}
+         */
+        NotifyTargetKind: "webhook" | "slack" | "discord";
+        /**
+         * @description Whether a target gets notices: `on`; `off`, which a person chose; `gone`, as its receiver answered 410 Gone; or `failing`, as fold turned it off after its sends failed: a send failed every try of its retry schedule, or 20 tries in a row failed. The event `notify.target_changed` names the same states, and `removed` for a target a person removed.
+         * @enum {string}
+         */
+        NotifyTargetState: "on" | "off" | "gone" | "failing";
         OpenProject: {
             /** @description The slug of a project already in the registry. */
             slug: string;
@@ -3378,6 +3733,16 @@ export interface components {
         };
         ProjectList: {
             projects: components["schemas"]["ProjectSummary"][];
+        };
+        /** @description A project's notice settings. */
+        ProjectNotify: {
+            /** @description The host's targets, oldest first, which get the project's notices while `use_host_targets` is on. */
+            host_targets: components["schemas"]["NotifyTargetEntry"][];
+            /** @description The project's own targets, oldest first. */
+            targets: components["schemas"]["NotifyTargetEntry"][];
+            use_host_targets: boolean;
+            /** @description The web address links start with; null when notices carry no links. */
+            web_url: string | null;
         };
         /** @description What the project list shows of an open project. */
         ProjectOverview: {
@@ -4375,6 +4740,14 @@ export interface components {
             authenticated: boolean;
             /** @description The name the request acts under; null before a sign-in gives one. */
             human: string | null;
+        };
+        SetHostNotifyBody: {
+            /** @description The address people open fold at, with its scheme; null or empty for notices without links. */
+            web_url?: string | null;
+        };
+        SetProjectNotifyBody: {
+            /** @description Whether the host's targets get the project's notices too. */
+            use_host_targets: boolean;
         };
         /** @description A change of the worker limits; a limit left out stays as it is. */
         SetWorkerLimitsBody: {
@@ -5768,6 +6141,379 @@ export interface operations {
                 };
             };
             /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    show_host_notify: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The host's settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostNotify"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_settings_io` or internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    set_host_notify: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetHostNotifyBody"];
+            };
+        };
+        responses: {
+            /** @description The host's settings after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostNotify"];
+                };
+            };
+            /** @description `invalid_request` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_settings_io` or internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    add_host_notify_target: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewNotifyTargetBody"];
+            };
+        };
+        responses: {
+            /** @description The new target */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotifyTargetAdded"];
+                };
+            };
+            /** @description `invalid_notify_target`, `plaintext_notify_target` (a plain-text URL off this machine) or `invalid_request` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_settings_io` or internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    edit_host_notify_target: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The target, such as `nt-3` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotifyTargetFields"];
+            };
+        };
+        responses: {
+            /** @description The target after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotifyTargetEntry"];
+                };
+            };
+            /** @description `invalid_notify_target`, `plaintext_notify_target`, `invalid_id` or `invalid_request` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_target_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_settings_io` or internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    remove_host_notify_target: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The target, such as `nt-3` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The target is gone */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_target_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_settings_io` or internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    rotate_host_notify_target: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The target, such as `nt-3` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The target and its new secret */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotifyTargetAdded"];
+                };
+            };
+            /** @description `invalid_notify_target` (a Slack or Discord target) or `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_target_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_settings_io` or internal error */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -7871,6 +8617,730 @@ export interface operations {
             };
             /** @description Internal error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    show_project_notify: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectNotify"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_settings_io` or internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    set_project_notify: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetProjectNotifyBody"];
+            };
+        };
+        responses: {
+            /** @description The project's settings after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectNotify"];
+                };
+            };
+            /** @description `invalid_request` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_settings_io` or internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    send_notify_again: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The send, such as `ns-12` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The send, waiting for its try */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotifySendEntry"];
+                };
+            };
+            /** @description `invalid_id` or `invalid_request` (the send is still open) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_send_not_found`, `notify_target_not_found` (its target is removed) or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_target_inactive`: the send's target gets no notices of the project now */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_settings_io` or internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    add_project_notify_target: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewNotifyTargetBody"];
+            };
+        };
+        responses: {
+            /** @description The new target */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotifyTargetAdded"];
+                };
+            };
+            /** @description `invalid_notify_target`, `plaintext_notify_target` (a plain-text URL off this machine) or `invalid_request` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_settings_io` or internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    edit_project_notify_target: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The target, such as `nt-3` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotifyTargetFields"];
+            };
+        };
+        responses: {
+            /** @description The target after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotifyTargetEntry"];
+                };
+            };
+            /** @description `invalid_notify_target`, `plaintext_notify_target`, `invalid_id` or `invalid_request` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_target_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_settings_io` or internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    remove_project_notify_target: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The target, such as `nt-3` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The target is gone */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_target_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_settings_io` or internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    rotate_project_notify_target: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The target, such as `nt-3` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The target and its new secret */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotifyTargetAdded"];
+                };
+            };
+            /** @description `invalid_notify_target` (a Slack or Discord target) or `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_target_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_settings_io` or internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_notify_sends: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The target, such as `nt-3` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The send log */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotifySendList"];
+                };
+            };
+            /** @description `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_target_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_settings_io` or internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `project_unavailable` */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    test_notify_target: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project slug */
+                slug: string;
+                /** @description The target, such as `nt-3` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The receiver took the test */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotifySendEntry"];
+                };
+            };
+            /** @description `invalid_id` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `human_name_required`; `auth_required`: over TCP, the request has no `fold_session` cookie, or its session is unknown, ended, expired or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `client_header_required`: a write over TCP lacks the `x-fold-client` header; `host_not_allowed`: the `Host`, or the `Origin` of a write, names a host this daemon does not listen on; `worker_peer_refused`: over the socket, the request names a human from the process tree of a worker that fold started or of a check command that fold runs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_target_not_found` or `project_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_settings_io` or internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `notify_send_failed`: the message says how the receiver answered */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

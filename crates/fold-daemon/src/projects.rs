@@ -533,6 +533,8 @@ pub struct Projects {
     away: RwLock<HashSet<String>>,
     /// The daemon's folder of kept push targets, one subfolder per project slug; `None` keeps them in memory only.
     push_files: Option<PathBuf>,
+    /// The notice settings of the host and its projects; `None` sends no notices.
+    notify: Option<crate::services::projects::notify::NotifySettings>,
     folder_files: FolderFiles,
 }
 
@@ -577,6 +579,17 @@ impl Projects {
     pub fn with_folder_files(mut self, files: FolderFiles) -> Self {
         self.folder_files = files;
         self
+    }
+
+    /// Keeps the notice settings of the host and its projects below `dir`.
+    #[must_use]
+    pub fn with_notify_dir(mut self, dir: PathBuf) -> Self {
+        self.notify = Some(crate::services::projects::notify::NotifySettings::new(dir));
+        self
+    }
+
+    pub fn notify(&self) -> Option<&crate::services::projects::notify::NotifySettings> {
+        self.notify.as_ref()
     }
 
     /// Keeps each project's push targets below `dir`, in the folder named by the project's slug.
@@ -690,6 +703,9 @@ impl Projects {
                 tracing::error!(project = %row.slug, code = code_of(&error), "could not restore the kept inbox sockets");
             }
         }
+        if let (Ok(handle), Some(notify)) = (&outcome, &self.notify) {
+            notify.register(handle);
+        }
         let slot = match &outcome {
             Ok(handle) => Slot::Open(handle.clone()),
             Err(_) => Slot::Unavailable,
@@ -755,6 +771,9 @@ impl Projects {
             }
         }
         unpoisoned(self.removed.write()).insert(slug.to_owned(), root.to_owned());
+        if let Some(notify) = &self.notify {
+            notify.forget_project(slug).await;
+        }
         self.mark_away(slug, false);
         let slot = {
             let mut slots = unpoisoned(self.slots.write());
@@ -815,6 +834,9 @@ impl Projects {
         let slot = unpoisoned(self.slots.write()).remove(slug);
         if let Some(Slot::Open(handle)) = slot {
             handle.close().await;
+        }
+        if let Some(notify) = &self.notify {
+            notify.forget_project(slug).await;
         }
         tracing::info!(project = %slug, "a person removed the project from fold");
         Ok(true)

@@ -834,7 +834,8 @@ async fn open(
         registry: project.registry().clone(),
         projects: Projects::default()
             .with_launcher(launcher.clone())
-            .with_registry(project.registry().clone()),
+            .with_registry(project.registry().clone())
+            .with_notify_dir(project.paths().root().parent().unwrap().join("notices")),
         clock: clock.clone(),
         assets: AssetSource::Embedded,
         listen: "127.0.0.1:0".parse().unwrap(),

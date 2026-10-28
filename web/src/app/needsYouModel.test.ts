@@ -132,7 +132,7 @@ describe("needsYouGroups", () => {
     expect(new Set(Object.values(GROUP_OF))).toEqual(
       new Set(["ask", "wait", "project"]),
     );
-    expect(Object.keys(GROUP_OF)).toHaveLength(14);
+    expect(Object.keys(GROUP_OF)).toHaveLength(15);
   });
 
   it("drops an empty group and words a missing tool", () => {
@@ -436,6 +436,36 @@ describe("needsYouGroups", () => {
       text: "cannot start: the daemon finds no claude",
       href: "/p/demo/agents",
     });
+  });
+
+  it("shows a notice target fold turned off in the project group, last, with a link to the settings", () => {
+    const groups = needsYouGroups("demo", [
+      needsItem({
+        kind: "notify_target_off",
+        screen: "settings",
+        target: "nt-3",
+        title: "Release bot",
+      }),
+      needsItem({
+        kind: "claude_not_found",
+        screen: "worker",
+        agent: "web-worker",
+      }),
+      needsItem({ kind: "blocker", screen: "task", task: "T-1" }),
+    ]);
+    expect(groups.map((g) => g.id)).toEqual(["wait", "project"]);
+    expect(groups[1]?.lines.map((line) => line.kind)).toEqual([
+      "claude_not_found",
+      "notify_target_off",
+    ]);
+    expect(groups[1]?.lines[1]).toMatchObject({
+      person: null,
+      chip: "nt-3",
+      task: null,
+      title: "Release bot",
+      href: "/p/demo/settings",
+    });
+    expect(groups[1]?.lines[1]).not.toHaveProperty("hint");
   });
 
   it("counts what waits", () => {

@@ -38,6 +38,7 @@ const DOMAINS = new Set([
   "human_change",
   "stash",
   "checks",
+  "notify",
 ]);
 
 export function domainOf(type: string): string | null {
@@ -500,6 +501,9 @@ function invalidationKeys(
       ];
     case "project":
       return [keys.project(slug), keys.workers(slug), keys.agents(slug)];
+    // A host target's change reaches every open project. The notify key is the prefix of each target's send log, and fold turning a target off or on opens or ends its Needs you item.
+    case "notify":
+      return [keys.notify(slug), keys.needsYou(slug)];
     case "request":
       return type === "request.approved"
         ? [
