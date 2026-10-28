@@ -382,7 +382,7 @@ function VersionCard({
         <Chip tone={VERDICT_TONES[entry.verdict] ?? "neutral"}>
           {entry.verdict}
         </Chip>
-        <span className="min-w-0 flex-1 text-13 text-text-2">
+        <span className="min-w-0 flex-1 text-13 text-text-2 max-sm:order-last max-sm:basis-full">
           {ORIGIN_WORDS[entry.origin]} <PersonName name={v.created_by} />
           {entry.mergedMain === null ? (
             ""
@@ -398,7 +398,7 @@ function VersionCard({
         </span>
         <HrefLink
           href={detailHref(slug, id, entry.diff.search)}
-          className={cn("text-14", LINK)}
+          className={cn("text-14 max-sm:ml-auto", LINK)}
         >
           {entry.diff.label}
         </HrefLink>

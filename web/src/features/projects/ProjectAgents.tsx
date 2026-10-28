@@ -12,8 +12,11 @@ export function ProjectAgents({ agents }: { agents: readonly Agent[] }) {
   }
   const line = agentsLine(agents.map((agent) => agent.name));
   return (
-    <span className="flex min-w-0 items-center gap-8">
-      <span aria-hidden="true" className="size-8 shrink-0 rounded-full bg-ok" />
+    <span className="flex min-w-0 items-start gap-8">
+      <span
+        aria-hidden="true"
+        className="mt-7 size-8 shrink-0 rounded-full bg-ok"
+      />
       <span title={line.more === null ? undefined : line.all}>
         <span aria-hidden={line.more === null ? undefined : true}>
           {line.named.map((name, index) => (

@@ -24,7 +24,7 @@ export function FileList({
   return (
     <nav
       aria-label="Changed files"
-      className="flex w-file-list shrink-0 flex-col gap-2"
+      className="flex shrink-0 flex-col gap-2 md:w-file-list"
     >
       {title ? (
         <h2 className="font-title text-13 leading-tight font-semibold text-text-2">

@@ -367,7 +367,7 @@ export function DiffViewer({
   const split = fileNav !== undefined;
   const frame = split
     ? "flex min-w-0 flex-1 flex-col gap-16 lg:flex-row lg:items-start lg:gap-20"
-    : "flex min-w-0 flex-1 items-start gap-20";
+    : "flex min-w-0 flex-1 flex-col gap-16 md:flex-row md:items-start md:gap-20";
   const list = fileNav ?? (
     <FileList
       files={files}
