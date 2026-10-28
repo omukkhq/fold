@@ -31,7 +31,7 @@ export function reconnectAsOf(
 }
 
 export interface NeedsYouLook {
-  variant: "primary" | "secondary";
+  variant: "primary" | "quiet";
   /** The count pill's text, or null when the button says `· 0` in its label. */
   pill: string | null;
 }
@@ -43,5 +43,5 @@ export function needsYouLook(count: number | null): NeedsYouLook {
   }
   return count > 0
     ? { variant: "primary", pill: String(count) }
-    : { variant: "secondary", pill: null };
+    : { variant: "quiet", pill: null };
 }

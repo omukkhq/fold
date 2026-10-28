@@ -17,7 +17,7 @@ export function EventStream({ slug }: { slug: string }) {
   return (
     <aside
       aria-label="Event stream"
-      className="flex w-full shrink-0 flex-col overflow-hidden rounded-l bg-surface inset-ring inset-ring-line lg:w-event-stream"
+      className="flex w-full shrink-0 flex-col overflow-hidden rounded-l bg-surface lg:w-event-stream"
     >
       <header className="flex items-center gap-8 border-b border-line px-16 py-14">
         <h2 className="flex-1 text-16 font-semibold text-text">Event stream</h2>

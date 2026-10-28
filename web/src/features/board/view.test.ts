@@ -69,6 +69,6 @@ describe("needsYouLook", () => {
   it("is ink with the count, ink with a dash while loading, and plain at zero", () => {
     expect(needsYouLook(3)).toEqual({ variant: "primary", pill: "3" });
     expect(needsYouLook(null)).toEqual({ variant: "primary", pill: "–" });
-    expect(needsYouLook(0)).toEqual({ variant: "secondary", pill: null });
+    expect(needsYouLook(0)).toEqual({ variant: "quiet", pill: null });
   });
 });

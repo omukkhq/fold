@@ -28,64 +28,61 @@ export interface BadgeSpec {
   text: string;
   /** Classes for the fill and the text and icon colour. */
   classes: string;
-  /** Padding and type size; a badge has one of three shapes. */
+  /** Padding and type size, the same for every tone. */
   shape: string;
 }
 
-// The proposal pill, the attention mark and the Blocked mark. The leading follows the size, because
-// tailwind-merge drops a leading that comes before a size.
-const PILL = "px-8 py-2 text-13 leading-tight";
-const ATTENTION = "px-7 py-2 text-13 leading-tight";
-const BLOCKED = "px-8 py-3 text-13 leading-tight";
+/** Every badge is one chip shape: 13px on a pill, no outline. */
+const CHIP = "px-9 py-2 text-13 leading-tight";
 
 const SPECS: Record<BadgeTone, BadgeSpec> = {
   "proposal-changes": {
     icon: CircleAlert,
     text: "Changes requested",
     classes: "bg-bad-soft text-bad",
-    shape: PILL,
+    shape: CHIP,
   },
   "proposal-conflict": {
     icon: GitMerge,
     text: "Conflict",
     classes: "bg-bad-soft text-bad",
-    shape: PILL,
+    shape: CHIP,
   },
   "human-review": {
     icon: UserCheck,
     text: "Human review",
     classes: "bg-warn-soft text-warn",
-    shape: PILL,
+    shape: CHIP,
   },
   "needs-you": {
     icon: Hand,
     text: "Needs you",
-    classes: "bg-ink text-on-ink",
-    shape: ATTENTION,
+    classes: "bg-warn-soft text-warn",
+    shape: CHIP,
   },
   blocked: {
     icon: OctagonAlert,
     text: "Blocked",
     classes: "bg-bad-soft text-bad",
-    shape: BLOCKED,
+    shape: CHIP,
   },
   stalled: {
     icon: Clock,
     text: "Stalled",
     classes: "bg-warn-soft text-warn",
-    shape: PILL,
+    shape: CHIP,
   },
   stale: {
     icon: History,
     text: "Stale",
-    classes: "bg-fill text-text-2",
-    shape: PILL,
+    classes: "bg-fill text-text",
+    shape: CHIP,
   },
   outdated: {
     icon: History,
     text: "Outdated",
-    classes: "bg-sunken text-text-2",
-    shape: PILL,
+    classes: "bg-fill text-text-2",
+    shape: CHIP,
   },
 };
 

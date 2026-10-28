@@ -47,7 +47,7 @@ export function RemoveProject({ project }: { project: ProjectSummary }) {
       </RadixDialog.Trigger>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="fixed inset-0 bg-scrim" />
-        <RadixDialog.Content className="fixed top-1/2 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-surface shadow-dialog inset-ring inset-ring-line outline-none">
+        <RadixDialog.Content className="fixed top-1/2 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-surface shadow-dialog outline-none">
           <div className="flex items-center justify-between gap-12 border-b border-line py-12 pr-16 pl-24">
             <RadixDialog.Title className="min-w-0 truncate text-16 leading-tight font-semibold text-text">
               Remove {project.name} from fold?

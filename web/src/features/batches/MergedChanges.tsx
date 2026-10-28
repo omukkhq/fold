@@ -87,9 +87,9 @@ function MergedBody({
           </div>
           <HrefLink
             href={detailHref(slug, diff.conflict.proposal, {})}
-            className={cn(buttonClasses("secondary", "md"), focusRing)}
+            className={cn(buttonClasses("quiet", "md"), focusRing)}
           >
-            <span className={buttonIconClass("secondary")}>
+            <span className={buttonIconClass("quiet")}>
               <Diff aria-hidden="true" size={15} />
             </span>
             Open {diff.conflict.proposal}

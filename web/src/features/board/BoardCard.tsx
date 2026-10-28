@@ -1,3 +1,4 @@
+import { IdText } from "@/components/id/IdText";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
 import {
@@ -18,7 +19,6 @@ import { HrefLink } from "@/app/HrefLink";
 import { Badge } from "@/components/badge/Badge";
 import { Card } from "@/components/card/Card";
 import { Label } from "@/components/label/Label";
-import { Mono } from "@/components/mono/Mono";
 import { Tooltip } from "@/components/overlay/Tooltip";
 import { cn } from "@/lib/cn";
 import { HumanReviewBadge } from "@/people/HumanReviewBadge";
@@ -246,7 +246,7 @@ export function BoardCard({
       ) : null}
       {blocker ? <BlockerPill mark={blocker} /> : null}
       <div className="flex flex-wrap items-center gap-x-10 gap-y-4 leading-tight">
-        <Mono className="text-13 text-text-2">{card.task}</Mono>
+        <IdText className="text-13 text-text-2">{card.task}</IdText>
         {kind ? (
           <Meta
             icon={card.kind === "human" ? UserRound : ClipboardCheck}

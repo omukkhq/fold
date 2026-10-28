@@ -220,9 +220,9 @@ export function RequestDetailScreen({
             missing ? (
               <HrefLink
                 href={projectPath(slug, "requests")}
-                className={cn(buttonClasses("secondary", "md"), focusRing)}
+                className={cn(buttonClasses("quiet", "md"), focusRing)}
               >
-                <span className={buttonIconClass("secondary")}>
+                <span className={buttonIconClass("quiet")}>
                   <ArrowLeft aria-hidden="true" size={15} />
                 </span>
                 Back to requests

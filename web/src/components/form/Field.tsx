@@ -32,7 +32,7 @@ export function Field({
       className={
         inline
           ? "text-15 leading-tight text-text"
-          : "text-14 leading-tight font-semibold text-text"
+          : "font-title text-13 leading-tight font-semibold text-text-2"
       }
     >
       {label}
@@ -74,4 +74,4 @@ export function Field({
 }
 
 export const controlClasses =
-  "w-full rounded-m bg-surface px-12 py-10 text-15 leading-tight text-text inset-ring inset-ring-line placeholder:text-text-2 aria-[invalid=true]:inset-ring-bad disabled:cursor-not-allowed disabled:opacity-60";
+  "w-full rounded-s bg-fill px-12 py-9 text-15 leading-tight text-text placeholder:text-text-2 aria-[invalid=true]:inset-ring aria-[invalid=true]:inset-ring-bad disabled:cursor-not-allowed disabled:opacity-60";

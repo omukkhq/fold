@@ -1,3 +1,4 @@
+import { IdText } from "@/components/id/IdText";
 import { useQuery } from "@tanstack/react-query";
 import { FileX, Link2, Ruler } from "lucide-react";
 import { SyntaxText } from "@/components/code/SyntaxText";
@@ -27,7 +28,7 @@ export function FileView({ slug, revision, path }: FileViewProps) {
     >
       <header className="flex items-center gap-10 border-b border-line px-14 py-10">
         <Mono className="text-14 font-semibold text-text">{path}</Mono>
-        <Mono className="text-13 text-text-2">{revision}</Mono>
+        <IdText className="text-13 text-text-2">{revision}</IdText>
       </header>
       {file.isPending ? <Skeleton className="m-12" /> : null}
       {file.isError ? (

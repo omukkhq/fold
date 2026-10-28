@@ -6,7 +6,7 @@ type MonoProps =
   | ({ href?: undefined } & ComponentProps<"span">)
   | ({ href: string } & ComponentProps<"a">);
 
-/** An id or a path in the mono face; with `href` it is a link. */
+/** A path, a command or a commit in the mono face; with `href` it is a link. Public ids use `IdText`. */
 export function Mono(props: MonoProps) {
   if (props.href !== undefined) {
     const { className, ...rest } = props;

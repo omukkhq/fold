@@ -1,3 +1,4 @@
+import { TABLE_LINK_ROW, TABLE_ROW } from "@/components/table/tableStyles";
 import { PersonName } from "@/people/PersonName";
 import { useQuery } from "@tanstack/react-query";
 import { Inbox, Plus, RefreshCw, UserRound } from "lucide-react";
@@ -155,7 +156,7 @@ function SkeletonRows() {
   return (
     <tbody aria-busy="true" aria-label="Loading requests">
       {[0, 1, 2, 3, 4].map((row) => (
-        <tr key={row} className="border-b border-line last:border-b-0">
+        <tr key={row} className={TABLE_ROW}>
           {COLUMNS.map((column) => (
             <td key={column} className={CELL}>
               <span className="block h-12 animate-pulse rounded-s bg-sunken motion-reduce:animate-none" />
@@ -172,7 +173,7 @@ function Table({ children }: { children: ReactNode }) {
     <div className="overflow-x-auto rounded-l border border-line bg-surface">
       <table className="w-full border-collapse">
         <thead className="bg-bg">
-          <tr className="border-b border-line">
+          <tr>
             {COLUMNS.map((column) => (
               <th
                 key={column}
@@ -280,10 +281,7 @@ export function RequestsScreen({
             {rows.map((r) => {
               const heading = headingOf(r);
               return (
-                <tr
-                  key={r.id}
-                  className="border-b border-line last:border-b-0 hover:bg-bg"
-                >
+                <tr key={r.id} className={TABLE_LINK_ROW}>
                   <td className={cn(CELL, MONO)}>{r.id}</td>
                   <td className={CELL}>
                     <KindBadge kind={kindOf(r)} />

@@ -8,7 +8,7 @@ interface CardProps extends Omit<ComponentProps<"div">, "title"> {
   selected?: boolean;
 }
 
-/** The board card shell. It has slots and a state, and no data logic. */
+/** The board card shell. It has slots and a state, and no data logic. A card reads on the page ground by its surface alone; only the selected card has a ring. */
 export function Card({
   header,
   footer,
@@ -23,17 +23,16 @@ export function Card({
       aria-current={selected ? true : undefined}
       data-selected={selected ? "" : undefined}
       className={cn(
-        "flex flex-col gap-8 rounded-m bg-surface px-12 py-10 shadow-pop inset-ring",
-        selected ? "bg-accent-soft inset-ring-accent" : "inset-ring-line",
+        "flex flex-col gap-8 rounded-m bg-surface px-14 py-12",
+        selected && "bg-accent-soft inset-ring inset-ring-accent",
         focusRing,
         className,
       )}
     >
       {header}
       {children}
-      {/* The top padding gives one pixel to the 1px border, so the border does not change the footer's height. */}
       {footer ? (
-        <div className="flex items-center justify-between gap-8 border-t border-line pt-7">
+        <div className="flex items-center justify-between gap-8 pt-4">
           {footer}
         </div>
       ) : null}

@@ -185,12 +185,12 @@ export function ThreadPanel({
             <HrefLink
               href={projectPath(slug, "t", thread.task)}
               className={cn(
-                buttonClasses("secondary", "md"),
+                buttonClasses("quiet", "md"),
                 "max-lg:size-44 max-lg:bg-transparent max-lg:p-0 max-lg:inset-ring-0",
                 focusRing,
               )}
             >
-              <span className={cn(buttonIconClass("secondary"), "lg:hidden")}>
+              <span className={cn(buttonIconClass("quiet"), "lg:hidden")}>
                 <SquareKanban aria-hidden="true" size={18} />
               </span>
               <span className="max-lg:sr-only">Open {thread.task}</span>

@@ -44,7 +44,7 @@ export function DialogFrame({
         <RadixDialog.Overlay className="fixed inset-0 z-10 flex justify-center bg-scrim px-16 py-32">
           <RadixDialog.Content
             {...(described ? {} : { "aria-describedby": undefined })}
-            className="flex max-h-full w-dialog max-w-full flex-col self-start overflow-hidden rounded-l bg-surface shadow-dialog inset-ring inset-ring-line outline-none"
+            className="flex max-h-full w-dialog max-w-full flex-col self-start overflow-hidden rounded-l bg-surface shadow-dialog outline-none"
           >
             <div className="flex shrink-0 items-center justify-between gap-12 border-b border-line py-12 pr-16 pl-24">
               <nav

@@ -370,9 +370,9 @@ export function CreatedTasksPanel({
       </ul>
       <HrefLink
         href={projectPath(slug, "board")}
-        className={cn(buttonClasses("secondary", "md"), focusRing)}
+        className={cn(buttonClasses("quiet", "md"), focusRing)}
       >
-        <span className={buttonIconClass("secondary")}>
+        <span className={buttonIconClass("quiet")}>
           <Kanban aria-hidden="true" size={15} />
         </span>
         Open on the board

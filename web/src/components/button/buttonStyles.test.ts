@@ -9,14 +9,16 @@ import {
   type ButtonVariant,
 } from "./buttonStyles";
 
-const VARIANTS: ButtonVariant[] = ["primary", "secondary", "ghost", "danger"];
+const VARIANTS: ButtonVariant[] = ["primary", "quiet", "ghost", "danger"];
 
 describe("buttonClasses", () => {
   it.each(VARIANTS)(
     "styles %s from tokens and differs from the others",
     (variant) => {
       const classes = buttonClasses(variant, "md");
-      expect(classes).toContain("rounded-m");
+      expect(classes).toContain("rounded-s");
+      expect(classes).toContain("font-title");
+      expect(classes).not.toMatch(/inset-ring|border/);
       const others = VARIANTS.filter((other) => other !== variant).map(
         (other) => buttonClasses(other, "md"),
       );
@@ -26,27 +28,27 @@ describe("buttonClasses", () => {
 
   it("makes the small size smaller", () => {
     expect(buttonClasses("ghost", "sm")).toContain("text-13");
-    expect(buttonClasses("ghost", "md")).toContain("text-15");
+    expect(buttonClasses("ghost", "md")).toContain("text-14");
   });
 });
 
 describe("button geometry", () => {
   it("pads a ghost button 10 and the others 14 across", () => {
     expect(buttonClasses("ghost", "md")).toContain("px-10");
-    for (const variant of ["primary", "secondary", "danger"] as const) {
+    for (const variant of ["primary", "quiet", "danger"] as const) {
       expect(buttonClasses(variant, "md")).toContain("px-14");
     }
   });
 
-  it("draws the secondary stroke inside the box", () => {
-    expect(buttonClasses("secondary", "md")).toContain("inset-ring-line");
-    expect(buttonClasses("secondary", "md").split(" ")).not.toContain("border");
+  it("sets a quiet button on the fill tone, with no stroke", () => {
+    expect(buttonClasses("quiet", "md")).toContain("bg-fill");
+    expect(buttonClasses("quiet", "md")).not.toContain("inset-ring");
   });
 });
 
 describe("buttonIconClass", () => {
-  it("mutes only the secondary icon", () => {
-    expect(buttonIconClass("secondary")).toContain("text-text-2");
+  it("draws only the quiet icon in the secondary tone", () => {
+    expect(buttonIconClass("quiet")).toContain("text-text-2");
     expect(buttonIconClass("primary")).not.toContain("text-");
     expect(buttonIconClass("ghost")).not.toContain("text-");
   });
@@ -61,8 +63,8 @@ describe("iconButtonClasses", () => {
 
 describe("iconPixels", () => {
   it("shrinks the icon with the size", () => {
-    expect(iconPixels("md")).toBe(15);
-    expect(iconPixels("sm")).toBe(13);
+    expect(iconPixels("md")).toBe(16);
+    expect(iconPixels("sm")).toBe(14);
   });
 });
 

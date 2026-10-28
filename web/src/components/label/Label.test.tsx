@@ -6,15 +6,18 @@ import { Label } from "./Label";
 afterEach(cleanup);
 
 describe("Label", () => {
-  it("shows the name with the pair of its colour", () => {
+  it("shows the name after a dot of its colour, with no chip around it", () => {
     render(<Label color="teal">phase-1</Label>);
-    const chip = screen.getByText("phase-1");
-    expect(chip.className).toContain("bg-label-teal-soft");
-    expect(chip.querySelector("span")?.className).toContain("bg-label-teal");
+    const label = screen.getByText("phase-1");
+    expect(label.className).not.toContain("inset-ring");
+    expect(label.className).not.toContain("bg-");
+    expect(label.querySelector("span")?.className).toContain("bg-label-teal");
   });
 
   it("falls back to stone for an unknown colour", () => {
     render(<Label color="nope">x</Label>);
-    expect(screen.getByText("x").className).toContain("bg-label-stone-soft");
+    expect(screen.getByText("x").querySelector("span")?.className).toContain(
+      "bg-label-stone",
+    );
   });
 });

@@ -1,3 +1,4 @@
+import { TABLE_ROW } from "@/components/table/tableStyles";
 import {
   CornerDownRight,
   History,
@@ -122,7 +123,7 @@ function Row({
   human: string | null;
 }) {
   return (
-    <tr className="border-b border-line last:border-b-0">
+    <tr className={TABLE_ROW}>
       <td className={cn(CELL, "w-full")}>
         <div className={cn("flex items-center gap-8", row.child && "pl-22")}>
           {row.child ? (
@@ -246,7 +247,7 @@ function GroupHead({
     );
   }
   return (
-    <tr className="border-b border-line bg-bg">
+    <tr className="bg-sunken">
       <th
         colSpan={COLUMNS}
         scope="colgroup"
@@ -281,7 +282,7 @@ export function TeamTable({
     <div className="@container min-w-0 flex-1 overflow-x-auto rounded-l border border-line bg-surface">
       <table className="w-full border-collapse" aria-label="Team">
         <thead className="bg-bg">
-          <tr className="border-b border-line">
+          <tr>
             {HEADS.map((head) => (
               <th key={head} scope="col" className={HEAD}>
                 {head}

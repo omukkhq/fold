@@ -10,8 +10,15 @@ describe("badgeSpec", () => {
     expect(spec.shape).toMatch(/^px-\d+ py-\d+ text-\d+ leading-tight$/);
   });
 
-  it("draws the blocked mark 3 by 8 at 11px", () => {
-    expect(badgeSpec("blocked").shape).toBe("px-8 py-3 text-13 leading-tight");
+  it("draws every tone as the same 13px chip", () => {
+    for (const tone of BADGE_TONES)
+      expect(badgeSpec(tone).shape).toBe("px-9 py-2 text-13 leading-tight");
+  });
+
+  it("keeps gold for what waits for a person", () => {
+    expect(badgeSpec("needs-you").classes).toBe("bg-warn-soft text-warn");
+    expect(badgeSpec("human-review").classes).toBe("bg-warn-soft text-warn");
+    expect(badgeSpec("stale").classes).toBe("bg-fill text-text");
   });
 
   it("draws a requested change in the danger tone, as the proposal list does", () => {

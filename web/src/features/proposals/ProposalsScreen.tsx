@@ -1,3 +1,4 @@
+import { TABLE_LINK_ROW } from "@/components/table/tableStyles";
 import { ActorText } from "@/people/ActorText";
 import { HumanReviewBadge } from "@/people/HumanReviewBadge";
 import { PersonName } from "@/people/PersonName";
@@ -108,7 +109,7 @@ export function ProposalsScreen({
           />
           <Button
             aria-pressed={search.waiting === true}
-            variant={search.waiting === true ? "primary" : "secondary"}
+            variant={search.waiting === true ? "primary" : "quiet"}
             icon={<UserCheck aria-hidden="true" size={15} />}
             onClick={() => {
               onSearch({
@@ -184,7 +185,7 @@ export function ProposalsScreen({
         <div className="overflow-x-auto rounded-l border border-line bg-surface">
           <table className="w-full border-collapse">
             <thead className="bg-bg">
-              <tr className="border-b border-line">
+              <tr>
                 <th className={HEAD}>Id</th>
                 <th className={cn(HEAD, "w-full")}>Title</th>
                 <th className={HEAD}>Task</th>
@@ -199,10 +200,7 @@ export function ProposalsScreen({
               {rows.map((p) => {
                 const waiting = waitingOn(p);
                 return (
-                  <tr
-                    key={p.id}
-                    className="border-b border-line last:border-b-0 hover:bg-bg"
-                  >
+                  <tr key={p.id} className={TABLE_LINK_ROW}>
                     <td className={cn(CELL, MONO)}>{p.id}</td>
                     <td className={CELL}>
                       <span className="flex min-w-(--width-search) flex-wrap items-center gap-8">

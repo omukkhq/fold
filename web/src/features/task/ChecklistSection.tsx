@@ -1,3 +1,4 @@
+import { IdText } from "@/components/id/IdText";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   ArrowDown,
@@ -26,7 +27,6 @@ import {
 import { HrefLink } from "@/app/HrefLink";
 import { Button, IconButton } from "@/components/button/Button";
 import { Checkbox, Select, TextField } from "@/components/form/controls";
-import { Mono } from "@/components/mono/Mono";
 import { Menu, type MenuItem } from "@/components/overlay/Menu";
 import { taskPath } from "@/features/board/card";
 import { cn } from "@/lib/cn";
@@ -287,7 +287,7 @@ function LinkedRow({
             focusRing,
           )}
         >
-          <Mono className="text-13 text-text-2">{item.task}</Mono>
+          <IdText className="text-13 text-text-2">{item.task}</IdText>
           <span className="truncate">{item.title}</span>
         </HrefLink>
         <span className="inline-flex shrink-0 items-center gap-5 text-13 text-text-2">

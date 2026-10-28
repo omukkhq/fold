@@ -99,7 +99,7 @@ export function StatusMark({ status }: { status: TaskStatus }) {
 /** A link drawn as a button, for actions that open another screen. */
 export function LinkButton({
   href,
-  variant = "secondary",
+  variant = "quiet",
   icon: Icon,
   children,
 }: {
@@ -115,8 +115,8 @@ export function LinkButton({
     >
       <Icon
         aria-hidden="true"
-        size={15}
-        className={variant === "secondary" ? "text-text-2" : undefined}
+        size={16}
+        className={variant === "quiet" ? "text-text-2" : undefined}
       />
       {children}
     </HrefLink>

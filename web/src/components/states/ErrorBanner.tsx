@@ -17,17 +17,16 @@ export function ErrorBanner({
   className,
 }: ErrorBannerProps) {
   return (
-    // The bottom padding is 1px less than the top, so the 1px border stays inside the banner's height like an inner stroke.
     <div
       role="alert"
       className={cn(
-        "flex items-center gap-10 border-b border-line bg-surface px-24 pt-9 pb-8",
+        "flex items-center gap-10 bg-bad-soft px-24 py-9",
         className,
       )}
     >
       <TriangleAlert
         aria-hidden="true"
-        size={15}
+        size={16}
         className="shrink-0 text-bad"
       />
       <p className="min-w-0 flex-1 text-14 leading-tight text-text">
@@ -37,7 +36,7 @@ export function ErrorBanner({
         <Button
           variant="ghost"
           size="sm"
-          icon={<RefreshCw aria-hidden="true" size={13} />}
+          icon={<RefreshCw aria-hidden="true" size={14} />}
           onClick={onRetry}
         >
           Retry

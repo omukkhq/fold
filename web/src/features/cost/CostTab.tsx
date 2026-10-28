@@ -1,3 +1,5 @@
+import { TABLE_ROW } from "@/components/table/tableStyles";
+import { IdText } from "@/components/id/IdText";
 import * as RadixTooltip from "@radix-ui/react-tooltip";
 import { useQuery } from "@tanstack/react-query";
 import { CircleDollarSign, Info, RefreshCw } from "lucide-react";
@@ -390,7 +392,7 @@ function TasksTable({ slug, view }: { slug: string; view: ProjectCost }) {
         <div className="overflow-x-auto">
           <table className="w-full border-collapse">
             <thead>
-              <tr className="border-b border-line">
+              <tr>
                 <th className={TH}>Task</th>
                 <th className={TH}>Area</th>
                 <th className={cn(TH, NUM)}>Build</th>
@@ -401,10 +403,7 @@ function TasksTable({ slug, view }: { slug: string; view: ProjectCost }) {
             </thead>
             <tbody>
               {rows.map((row) => (
-                <tr
-                  key={row.task}
-                  className="border-b border-line last:border-b-0"
-                >
+                <tr key={row.task} className={TABLE_ROW}>
                   <td className={cn(TD, "min-w-0")}>
                     <HrefLink
                       href={taskPath(slug, row.task)}
@@ -413,9 +412,9 @@ function TasksTable({ slug, view }: { slug: string; view: ProjectCost }) {
                         focusRing,
                       )}
                     >
-                      <Mono className="shrink-0 text-13 text-accent">
+                      <IdText className="shrink-0 text-13 text-accent">
                         {row.task}
-                      </Mono>
+                      </IdText>
                       <span className="truncate hover:underline">
                         {row.title}
                       </span>
@@ -449,7 +448,7 @@ function WorkersTable({ view }: { view: ProjectCost }) {
       <div className="overflow-x-auto">
         <table className="w-full border-collapse">
           <thead>
-            <tr className="border-b border-line">
+            <tr>
               <th className={TH}>Worker</th>
               <th className={TH}>Role</th>
               <th className={TH}>Area</th>
@@ -462,10 +461,7 @@ function WorkersTable({ view }: { view: ProjectCost }) {
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr
-                key={row.name}
-                className="border-b border-line last:border-b-0"
-              >
+              <tr key={row.name} className={TABLE_ROW}>
                 <td className={TD}>
                   <span className="flex items-baseline gap-8">
                     <Mono className="text-13 text-text">{row.name}</Mono>

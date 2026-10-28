@@ -1,3 +1,4 @@
+import { IdText } from "@/components/id/IdText";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
@@ -33,7 +34,6 @@ import { HrefLink } from "@/app/HrefLink";
 import { Button, IconButton } from "@/components/button/Button";
 import { Textarea, TextField } from "@/components/form/controls";
 import { CommitId } from "@/components/mono/CommitId";
-import { Mono } from "@/components/mono/Mono";
 import { textFlow } from "@/components/text/textFlow";
 import { taskPath } from "@/features/board/card";
 import { TaskCostSection } from "@/features/cost/TaskCostSection";
@@ -221,7 +221,7 @@ function Checkpoints({ task, live, now }: Props) {
               size={13}
               className="shrink-0 text-text-2"
             />
-            <Mono className="text-13 text-text-2">{ck.id}</Mono>
+            <IdText className="text-13 text-text-2">{ck.id}</IdText>
             <span className="min-w-0 flex-1 truncate text-14 text-text">
               {checkpointText(ck)}
             </span>
@@ -255,7 +255,7 @@ function Changesets({ task, now }: Props) {
               size={14}
               className="shrink-0 text-text-2"
             />
-            <Mono className="text-13 text-text-2">{cs.id}</Mono>
+            <IdText className="text-13 text-text-2">{cs.id}</IdText>
             <span className="min-w-0 flex-1 truncate text-14 text-text">
               {cs.message}
             </span>
@@ -276,7 +276,9 @@ function Proposal({ slug, task }: { slug: string; task: TaskDetail }) {
       {proposal ? (
         <>
           <p className="flex items-center gap-8 text-14 text-text">
-            <Mono href={proposalPath(slug, proposal.id)}>{proposal.id}</Mono>
+            <IdText href={proposalPath(slug, proposal.id)}>
+              {proposal.id}
+            </IdText>
             <span className="text-text-2">
               {proposalStateText(
                 proposal.state,
@@ -312,9 +314,9 @@ function Proposal({ slug, task }: { slug: string; task: TaskDetail }) {
       {integration ? (
         <p className="text-13 text-text-2">
           Integrated as{" "}
-          <Mono href={revisionPath(slug, integration.revision)}>
+          <IdText href={revisionPath(slug, integration.revision)}>
             {integration.revision}
-          </Mono>{" "}
+          </IdText>{" "}
           <CommitId commit={integration.commit} />{" "}
           <ActorText
             segments={integrationText(integration)}
@@ -825,7 +827,7 @@ function EdgeRow({
           focusRing,
         )}
       >
-        <Mono className="text-13 text-text-2">{row.task}</Mono>
+        <IdText className="text-13 text-text-2">{row.task}</IdText>
         <span
           className={cn(
             "min-w-0 flex-1 truncate text-14",

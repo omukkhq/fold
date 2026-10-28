@@ -1,3 +1,4 @@
+import { TABLE_ROW } from "@/components/table/tableStyles";
 import {
   skipToken,
   useMutation,
@@ -367,9 +368,9 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
                   </div>
                   <HrefLink
                     href={projectPath(slug, "proposals", proposal)}
-                    className={cn(buttonClasses("secondary", "md"), focusRing)}
+                    className={cn(buttonClasses("quiet", "md"), focusRing)}
                   >
-                    <span className={buttonIconClass("secondary")}>
+                    <span className={buttonIconClass("quiet")}>
                       <Diff aria-hidden="true" size={15} />
                     </span>
                     Show conflict
@@ -409,7 +410,7 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
               <div className="overflow-x-auto rounded-l border border-line bg-surface">
                 <table className="w-full border-collapse" aria-label="Members">
                   <thead className="bg-bg">
-                    <tr className="border-b border-line">
+                    <tr>
                       {[
                         "Proposal",
                         "Title",
@@ -427,10 +428,7 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
                   </thead>
                   <tbody>
                     {rows.map((row) => (
-                      <tr
-                        key={row.proposal}
-                        className="border-b border-line last:border-b-0"
-                      >
+                      <tr key={row.proposal} className={TABLE_ROW}>
                         <td className={cn(CELL, MONO)}>
                           <HrefLink
                             href={detailHref(

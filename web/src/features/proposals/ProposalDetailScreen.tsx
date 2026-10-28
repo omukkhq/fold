@@ -205,7 +205,7 @@ export function ProposalDetailScreen({
           action={
             <HrefLink
               href={projectPath(slug, "proposals")}
-              className={cn(buttonClasses("secondary", "md"), focusRing)}
+              className={cn(buttonClasses("quiet", "md"), focusRing)}
             >
               Open the proposals
             </HrefLink>

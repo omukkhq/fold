@@ -24,28 +24,26 @@ export function FailurePanel({
     <div
       role="alert"
       className={cn(
-        "flex items-start gap-10 rounded-m bg-bad-soft px-14 py-12 inset-ring inset-ring-bad",
+        "flex items-start gap-10 rounded-m bg-bad-soft px-16 py-14",
         className,
       )}
     >
       <CircleAlert
         aria-hidden="true"
-        size={15}
+        size={16}
         className="mt-2 shrink-0 text-bad"
       />
       <div className="flex min-w-0 flex-1 flex-col gap-4">
-        <p className="text-15 leading-tight font-semibold text-text">{title}</p>
-        <p className="text-14 leading-tight text-text-2">
+        <p className="text-15 font-semibold text-text">{title}</p>
+        <p className="max-w-measure text-14 text-text">
           <CodeText text={text} />
         </p>
         {hint ? (
-          <p className="text-14 leading-tight wrap-anywhere text-text">
+          <p className="max-w-measure text-14 wrap-anywhere text-text">
             <CodeText text={hint} />
           </p>
         ) : null}
-        {code ? (
-          <p className="font-mono text-13 text-text-2">code: {code}</p>
-        ) : null}
+        {code ? <p className="text-13 text-text-2">code: {code}</p> : null}
       </div>
       {action}
     </div>

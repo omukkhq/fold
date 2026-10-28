@@ -136,7 +136,7 @@ export function NewRequestDialog({
       <RadixDialog.Portal>
         {/* z-10 matches the task dialog, so the request dialog opened from New task draws over it. */}
         <RadixDialog.Overlay className="fixed inset-0 z-10 bg-scrim" />
-        <RadixDialog.Content className="fixed top-1/2 z-10 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-surface shadow-dialog inset-ring inset-ring-line outline-none">
+        <RadixDialog.Content className="fixed top-1/2 z-10 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-surface shadow-dialog outline-none">
           <div className="flex items-center justify-between border-b border-line px-24 py-16">
             <RadixDialog.Title className="text-16 leading-tight font-semibold text-text">
               New request

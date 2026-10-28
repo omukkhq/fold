@@ -147,7 +147,7 @@ export function EmptyColumns({ slug }: { slug: string }) {
                   <HrefLink
                     href={newTaskPath(slug)}
                     className={cn(
-                      buttonClasses("secondary", "md"),
+                      buttonClasses("quiet", "md"),
                       focusRing,
                       "self-start",
                     )}

@@ -157,7 +157,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
             <Tooltip content="Send feedback">
               <IconButton
                 aria-label="Send feedback"
-                variant="secondary"
+                variant="quiet"
                 className="max-sm:size-44"
                 onClick={() => {
                   setFeedback(true);
@@ -287,7 +287,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
             <HrefLink
               href={listHref}
               className={cn(
-                buttonClasses("secondary", "md"),
+                buttonClasses("quiet", "md"),
                 focusRing,
                 "self-start lg:hidden",
               )}
