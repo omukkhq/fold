@@ -154,6 +154,7 @@
   --width-search: var(--width-search);
   --width-file-list: var(--width-file-list);
   --width-side-panel: var(--width-side-panel);
+  --width-side-panel-scroll: var(--width-side-panel-scroll);
   --width-history: var(--width-history);
   --width-sign-in: var(--width-sign-in);
   --width-thread-list: var(--width-thread-list);

@@ -12,6 +12,8 @@ import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
 import { useLiveStatus } from "@/live/status";
 import { useDataClock } from "@/live/useDataClock";
+import { cn } from "@/lib/cn";
+import { insetFocusRing } from "@/lib/focus";
 import { ArchiveMenu } from "./ArchiveMenu";
 import { ChecklistSection } from "./ChecklistSection";
 import { DescriptionSection } from "./DescriptionSection";
@@ -77,8 +79,16 @@ function Loaded({
   ]);
   const live = task.workspace === null ? null : (streamed ?? null);
   return (
-    <div className="flex flex-col gap-28 px-24 pt-22 pb-24 md:flex-row">
-      <div className="flex min-w-0 flex-1 flex-col gap-24">
+    <div className="flex flex-col md:min-h-0 md:flex-row">
+      <div
+        role="region"
+        aria-label="Task"
+        tabIndex={0}
+        className={cn(
+          "flex min-w-0 flex-1 flex-col gap-24 px-24 pt-22 pb-24 md:overflow-y-auto md:pr-28",
+          insetFocusRing,
+        )}
+      >
         <TitleBlock
           slug={slug}
           task={task}
@@ -170,6 +180,7 @@ export function TaskDialog({ slug, task, onClose }: TaskDialogProps) {
         )
       }
       described={query.isSuccess && Boolean(query.data.status_reason)}
+      split={query.isSuccess}
       onClose={onClose}
     >
       {body}
