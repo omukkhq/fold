@@ -5,6 +5,7 @@ import {
   checkoutRows,
   checkoutText,
   commitsByRevision,
+  eventGroups,
   eventRows,
   liveDot,
 } from "./eventStreamModel";
@@ -32,10 +33,35 @@ describe("eventRows", () => {
     expect(rows.map((row) => row.seq)).toEqual([3, 1]);
     expect(rows[0]).toMatchObject({
       actor: "backend/api",
-      time: "14:12:31",
+      minute: "14:12",
       text: "created T-1",
       emphasis: false,
     });
+  });
+
+  it("puts the rows of one minute under one time, in their order", () => {
+    const at = (minute: number, second: number) =>
+      new Date(2026, 9, 1, 14, minute, second).getTime();
+    const rows = eventRows(
+      [
+        event(1, { created_at: at(10, 5) }),
+        event(2, { created_at: at(12, 1) }),
+        event(3, { created_at: at(12, 59) }),
+        event(4, { created_at: at(13, 0) }),
+      ],
+      NOW,
+    );
+    expect(
+      eventGroups(rows).map((group) => [
+        group.minute,
+        group.rows.map((row) => row.seq),
+      ]),
+    ).toEqual([
+      ["14:13", [4]],
+      ["14:12", [3, 2]],
+      ["14:10", [1]],
+    ]);
+    expect(eventGroups([])).toEqual([]);
   });
 
   it("shows no more than the limit", () => {
