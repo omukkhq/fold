@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TaskStatus } from "@/api/board";
 import type { CardMove } from "./moves";
-import { TOAST_TITLE, bellLabel, moveText, toastLine, toastText } from "./text";
+import { TOAST_TITLE, moveText, toastLine, toastText } from "./text";
 
 function move(
   seq: number,
@@ -56,7 +56,7 @@ describe("toastText", () => {
         move(5, "T-5", "backlog"),
       ]),
     ).toBe(
-      "T-1 moved to Todo · T-2 moved to Todo · T-3 moved to Todo · 2 more",
+      "T-1 moved to To do · T-2 moved to To do · T-3 moved to To do · 2 more",
     );
   });
 
@@ -75,10 +75,5 @@ describe("labels", () => {
     expect(moveText({ task: "T-7", to: "backlog" })).toBe(
       "T-7 moved to Backlog",
     );
-  });
-
-  it("gives the bell a name with the unread count", () => {
-    expect(bellLabel(0)).toBe("Notifications");
-    expect(bellLabel(3)).toBe("Notifications, 3 unread");
   });
 });

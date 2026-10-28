@@ -5,7 +5,7 @@ export function cardCount(columns: readonly ColumnView[]): number {
   return columns.reduce((sum, column) => sum + column.count, 0);
 }
 
-/** `17 tasks · 3 ready`, where ready is the Todo column; an empty board says `0 tasks`. */
+/** `17 tasks · 3 ready`, where ready is the To do column; an empty board says `0 tasks`. */
 export function summaryText(columns: readonly ColumnView[]): string {
   const total = cardCount(columns);
   if (total === 0) {

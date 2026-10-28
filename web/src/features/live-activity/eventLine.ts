@@ -337,7 +337,7 @@ function verdictLook(event: DurableEvent): Look {
   }
 }
 
-/** A move to an earlier board column reads "back to", the way a task returns from Review to In Progress. */
+/** A move to an earlier board column reads "back to", the way a task returns from Review to In progress. */
 function statusText(event: DurableEvent): string {
   const order = (value: unknown) =>
     COLUMNS.findIndex((column) => column.status === value);

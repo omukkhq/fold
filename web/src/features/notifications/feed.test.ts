@@ -6,6 +6,7 @@ import {
   addEntries,
   clearAll,
   clearEntry,
+  clearTask,
   entryKey,
   keeps,
   markRead,
@@ -191,5 +192,22 @@ describe("parseFeed", () => {
     ]) {
       expect(parseFeed(raw)).toEqual(EMPTY_FEED);
     }
+  });
+});
+
+describe("clearTask", () => {
+  it("hides every move of the task and keeps the others", () => {
+    const a = { ...entry(1), task: "T-5" };
+    const b = { ...entry(2), task: "T-7" };
+    const c = { ...entry(3), task: "T-5" };
+    const next = clearTask(withEntries(c, b, a), "T-5");
+    expect(next.entries).toEqual([b]);
+    expect(next.hidden).toEqual([entryKey(a), entryKey(c)]);
+    expect(keeps(next, a)).toBe(false);
+  });
+
+  it("returns the same state for a task with no moves", () => {
+    const state = withEntries(entry(1));
+    expect(clearTask(state, "T-99")).toBe(state);
   });
 });

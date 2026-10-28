@@ -579,7 +579,7 @@ describe("the task dialog route", () => {
     expect(router.state.location.pathname).toBe("/p/demo/t/T-2");
     expect(router.state.location.search).toEqual({ label: "ui" });
 
-    expect(within(dialog).getByText("In Progress")).toBeTruthy();
+    expect(within(dialog).getByText("In progress")).toBeTruthy();
     for (const name of [
       "Description",
       "Subtasks",
@@ -959,14 +959,12 @@ describe("the task dialog route", () => {
 });
 
 describe("creating a task", () => {
-  it("opens the create form from the tab row and opens the created task", async () => {
+  it("opens the create form from the top bar and opens the created task", async () => {
     const { router } = setup("/p/demo/board?label=ui");
-    const nav = await screen.findByRole(
-      "navigation",
-      { name: "Project" },
-      WAIT,
-    );
-    const link = within(nav).getByRole("link", { name: "New task" });
+    const [bar] = await screen.findAllByRole("banner", {}, WAIT);
+    const link = within(bar ?? document.body).getByRole("link", {
+      name: "New task",
+    });
     expect(link.getAttribute("href")).toBe("/p/demo/t/new");
     await userEvent.click(link);
     const dialog = await screen.findByRole("dialog", {}, WAIT);

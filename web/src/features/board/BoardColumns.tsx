@@ -132,7 +132,7 @@ export function LoadingColumns() {
   );
 }
 
-/** Empty: the five columns at zero, and the next step in the Todo column, where new tasks arrive. */
+/** Empty: the five columns at zero, and the next step in the To do column, where new tasks arrive. */
 export function EmptyColumns({ slug }: { slug: string }) {
   return (
     <Row>

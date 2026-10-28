@@ -2,7 +2,6 @@ import * as RadixTabs from "@radix-ui/react-tabs";
 import { skipToken, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Bot, Terminal, UserPlus } from "lucide-react";
 import { useState } from "react";
-import { PausedBanner } from "@/app/PausedBanner";
 import { boardCards, boardQuery } from "@/api/board";
 import { keys } from "@/api/keys";
 import {
@@ -88,7 +87,6 @@ export function AgentsScreen({
 
   return (
     <div className="flex flex-col">
-      <PausedBanner slug={slug} />
       <div className="flex flex-col gap-16 px-24 pt-20 pb-24">
         <div className="flex items-start justify-between gap-16">
           <div className="flex flex-col gap-4">

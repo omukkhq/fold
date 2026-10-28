@@ -17,3 +17,8 @@ export async function signIn(token: string): Promise<void> {
 export async function signInWithLink(link: string): Promise<void> {
   await expectOk(api.POST("/api/v1/session", { body: { link } }));
 }
+
+/** Deletes the session the `fold_session` cookie names, so the cookie stops working even where the browser keeps it. */
+export async function signOut(): Promise<void> {
+  await expectOk(api.DELETE("/api/v1/session"));
+}

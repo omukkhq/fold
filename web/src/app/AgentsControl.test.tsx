@@ -11,14 +11,18 @@ import {
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { ProjectAgent } from "../api/agentBar";
 import { keys } from "../api/keys";
 import { agent, claim, worker } from "../test/agents";
 import { liveStatusStore } from "../live/status";
-import { AgentChips } from "./AgentChips";
+import { AgentsControl } from "./AgentsControl";
 import { StreamStatus } from "./StreamStatus";
 
+beforeAll(() => {
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.releasePointerCapture = () => {};
+});
 afterEach(() => {
   cleanup();
   liveStatusStore.reset();
@@ -42,7 +46,7 @@ async function renderChips(client: QueryClient) {
   const root = createRootRoute({
     component: () => (
       <>
-        <AgentChips slug="demo" />
+        <AgentsControl slug="demo" />
         <Outlet />
       </>
     ),
@@ -65,6 +69,11 @@ async function renderChips(client: QueryClient) {
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   render(<RouterProvider router={router} />, { wrapper: wrap(client) });
+  await userEvent.click(
+    await screen.findByRole("button", {
+      name: /work|Reconnecting|paused|Agents/,
+    }),
+  );
   await screen.findByRole("list", { name: "Agents" });
   return router;
 }
@@ -94,32 +103,48 @@ function chip(
 
 const frontend = chip("frontend", "active", 2);
 
-describe("AgentChips", () => {
-  it("draws nothing for a project with no agents", () => {
-    const client = cacheOnly();
-    client.setQueryData(keys.agentBar("demo"), []);
-    const { container } = render(<AgentChips slug="demo" />, {
-      wrapper: wrap(client),
-    });
-    expect(container.textContent).toBe("");
-  });
-
-  it("draws a chip per agent and follows the cache without a refetch", async () => {
+describe("AgentsControl", () => {
+  it("says no agent works and lists none for a project with no agents", async () => {
     liveStatusStore.set({ state: "live" });
     const client = cacheOnly();
-    client.setQueryData(keys.agentBar("demo"), [frontend]);
+    client.setQueryData(keys.agentBar("demo"), []);
+    render(<AgentsControl slug="demo" />, { wrapper: wrap(client) });
+    await userEvent.click(
+      screen.getByRole("button", { name: "No agents working" }),
+    );
+    expect(
+      screen.getByText("No agent has joined this project yet."),
+    ).toBeTruthy();
+  });
+
+  it("lists every agent and follows the cache without a refetch", async () => {
+    liveStatusStore.set({ state: "live" });
+    const client = cacheOnly();
+    client.setQueryData(keys.agentBar("demo"), [
+      frontend,
+      chip("a", "idle", 0),
+      chip("b", "idle", 0),
+      chip("c", "offline", 0),
+    ]);
     await renderChips(client);
+    expect(
+      screen.getByRole("button", { name: "1 agent working" }),
+    ).toBeTruthy();
     expect(screen.getByText("2 working")).toBeTruthy();
-    expect(screen.getByRole("img", { name: "Active" })).toBeTruthy();
+    expect(screen.getAllByRole("listitem")).toHaveLength(4);
     act(() => {
       client.setQueryData(keys.agentBar("demo"), [
         chip("frontend", "idle", 1, 1),
         chip("review", "offline", 0),
       ]);
     });
-    expect(await screen.findByText("1 working · 1 stalled")).toBeTruthy();
+    const stalled = await screen.findByText("1 working · 1 stalled");
+    expect(stalled.className).toContain("text-warn");
     expect(screen.getByText("not connected")).toBeTruthy();
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    expect(
+      screen.getByRole("button", { name: "No agents working" }),
+    ).toBeTruthy();
   });
 
   it("shows when the counts were true while the stream reconnects", async () => {
@@ -133,18 +158,20 @@ describe("AgentChips", () => {
     });
     expect(screen.getByRole("listitem").textContent).toContain("as of ");
     expect(screen.queryByText("2 working")).toBeNull();
+    expect(screen.getByRole("button", { name: "Reconnecting…" })).toBeTruthy();
   });
 
-  it("opens the board filtered to the agent of the chip", async () => {
+  it("opens the board filtered to the agent of the row and closes", async () => {
     liveStatusStore.set({ state: "live" });
     const client = cacheOnly();
     client.setQueryData(keys.agentBar("demo"), [frontend]);
     const router = await renderChips(client);
-    const chip = screen.getByRole("link", { name: /frontend/ });
-    expect(chip.getAttribute("href")).toBe("/p/demo/board?agent=frontend");
-    await userEvent.click(chip);
+    const row = screen.getByRole("link", { name: /frontend/ });
+    expect(row.getAttribute("href")).toBe("/p/demo/board?agent=frontend");
+    await userEvent.click(row);
     expect(await screen.findByText("Board for frontend")).toBeTruthy();
     expect(router.state.location.pathname).toBe("/p/demo/board");
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
 

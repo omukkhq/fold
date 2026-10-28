@@ -1,79 +1,53 @@
-import { Fragment, type ReactNode } from "react";
-import { AgentChips } from "./AgentChips";
-import { HrefLink } from "./HrefLink";
-import { focusRing } from "../lib/focus";
-import { cn } from "../lib/cn";
-import { NeedsYou } from "./NeedsYou";
-import { PauseControl } from "./PauseControl";
+import { Plus } from "lucide-react";
 import { Wordmark } from "@/components/Wordmark";
-import { NotificationBell } from "@/features/notifications/NotificationBell";
+import { buttonClasses } from "@/components/button/buttonStyles";
+import { newTaskPath } from "@/features/board/card";
+import { cn } from "@/lib/cn";
+import { focusRing } from "@/lib/focus";
+import { AgentsControl } from "./AgentsControl";
+import { AvatarMenu } from "./AvatarMenu";
+import { HrefLink } from "./HrefLink";
+import { Inbox } from "./Inbox";
+import { NavTabs } from "./NavTabs";
+import { PhoneMenu } from "./PhoneMenu";
 import { ProjectSwitcher } from "./ProjectSwitcher";
-import { SignedInName } from "./SignedInName";
-import { StreamStatus } from "./StreamStatus";
-import { ThemeToggle } from "./ThemeToggle";
-import { TopBarMore } from "./TopBarMore";
-import {
-  TOP_BAR_ITEMS,
-  moreItems,
-  rowItemClass,
-  type TopBarItem,
-} from "./topBarLayout";
+import { NARROW_ONLY, WIDE_ONLY } from "./topBarLayout";
 
-/** An item of the top bar; `more` is given when the item sits in the More popover, with the way to close it. */
-function part(
-  item: TopBarItem,
-  slug: string,
-  more?: { close: () => void },
-): ReactNode {
-  switch (item) {
-    case "stream":
-      return <StreamStatus />;
-    case "pause":
-      return <PauseControl slug={slug} />;
-    case "needsYou":
-      return <NeedsYou slug={slug} />;
-    case "agents":
-      return <AgentChips slug={slug} onOpen={more?.close} />;
-    case "bell":
-      return <NotificationBell slug={slug} />;
-    case "name":
-      return <SignedInName />;
-    case "theme":
-      return <ThemeToggle variant={more === undefined ? "icon" : "row"} />;
-  }
-}
-
+/** One bar for every project screen: the wordmark, the project, the tabs, the Agents control, the Inbox, New task and the avatar. Below `xl` the tabs, the agents and the avatar move into the menu. */
 export function TopBar({ slug }: { slug: string }) {
   return (
-    <header className="flex h-bar shrink-0 items-center justify-between gap-8 overflow-x-auto border-b border-line bg-surface px-16 md:px-24 lg:gap-16">
-      <div className="flex shrink-0 items-center gap-14 max-lg:contents">
-        <HrefLink
-          href="/projects"
-          aria-label="fold, all projects"
-          className={cn(
-            "shrink-0 rounded-s max-lg:flex max-lg:min-h-44 max-lg:items-center",
-            focusRing,
-          )}
-        >
-          <Wordmark />
-        </HrefLink>
-        <span className="h-20 w-px bg-line max-lg:hidden" aria-hidden />
-        <ProjectSwitcher slug={slug} />
+    <header className="flex h-bar-compact shrink-0 items-center gap-4 bg-surface pr-6 pl-16 xl:h-bar xl:gap-16 xl:px-20">
+      <HrefLink
+        href="/projects"
+        aria-label="fold, all projects"
+        className={cn(
+          "flex shrink-0 items-center rounded-s max-xl:min-h-44",
+          focusRing,
+        )}
+      >
+        <Wordmark />
+      </HrefLink>
+      <ProjectSwitcher slug={slug} />
+      <NavTabs slug={slug} className={WIDE_ONLY} />
+      <span className="flex-1" />
+      <div className={cn("flex", WIDE_ONLY)}>
+        <AgentsControl slug={slug} />
       </div>
-      <div className="flex shrink-0 items-center lg:gap-16">
-        {TOP_BAR_ITEMS.map((item) => (
-          <div key={item} className={cn("contents", rowItemClass(item))}>
-            {part(item, slug)}
-          </div>
-        ))}
-        <TopBarMore slug={slug}>
-          {(close) =>
-            moreItems().map((item) => (
-              <Fragment key={item}>{part(item, slug, { close })}</Fragment>
-            ))
-          }
-        </TopBarMore>
-      </div>
+      <Inbox slug={slug} />
+      <HrefLink
+        href={newTaskPath(slug)}
+        aria-label="New task"
+        className={cn(
+          buttonClasses("primary", "md"),
+          "shrink-0 max-xl:size-40 max-xl:p-0",
+          focusRing,
+        )}
+      >
+        <Plus aria-hidden="true" size={16} />
+        <span className="max-xl:sr-only">New task</span>
+      </HrefLink>
+      <AvatarMenu className={WIDE_ONLY} />
+      <PhoneMenu slug={slug} className={NARROW_ONLY} />
     </header>
   );
 }

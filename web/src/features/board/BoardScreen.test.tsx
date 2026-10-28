@@ -201,12 +201,12 @@ describe("BoardScreen", () => {
       .map((r) => r.getAttribute("aria-label"));
     expect(regions).toEqual([
       "Backlog",
-      "Todo",
-      "In Progress",
+      "To do",
+      "In progress",
       "Review",
       "Done",
     ]);
-    expect(tasksIn("Todo")).toEqual(["T-1", "T-6"]);
+    expect(tasksIn("To do")).toEqual(["T-1", "T-6"]);
     expect(screen.getByText("12 tasks · 2 ready")).toBeTruthy();
   });
 
@@ -223,7 +223,7 @@ describe("BoardScreen", () => {
     expect(more.getAttribute("href")).toBe("/p/demo/repository");
     expect(within(column("Done")).getByText("5")).toBeTruthy();
     expect(
-      within(column("Todo")).queryByRole("link", {
+      within(column("To do")).queryByRole("link", {
         name: /more in Repository/,
       }),
     ).toBeNull();
@@ -259,7 +259,7 @@ describe("BoardScreen", () => {
   it("shows the message count on a card", async () => {
     setup();
     await screen.findByRole("region", { name: "Backlog" });
-    const card = column("In Progress").querySelector('[data-task="T-2"]');
+    const card = column("In progress").querySelector('[data-task="T-2"]');
     expect(card?.textContent).toContain("2messages");
   });
 
@@ -280,7 +280,7 @@ describe("BoardScreen", () => {
     expect(screen.getAllByLabelText(/^Needs you:/)).toHaveLength(3);
     // A card without an item has no mark, however quiet its worker is.
     expect(
-      column("Todo").querySelector('[data-task="T-1"]')?.textContent,
+      column("To do").querySelector('[data-task="T-1"]')?.textContent,
     ).not.toContain("needs you");
   });
 
@@ -290,10 +290,10 @@ describe("BoardScreen", () => {
     expect(document.body.querySelectorAll('[draggable="true"]')).toHaveLength(
       0,
     );
-    for (const link of within(column("In Progress")).getAllByRole("link")) {
+    for (const link of within(column("In progress")).getAllByRole("link")) {
       expect(link.getAttribute("draggable")).toBe("false");
     }
-    for (const name of ["Backlog", "Todo", "In Progress", "Review", "Done"]) {
+    for (const name of ["Backlog", "To do", "In progress", "Review", "Done"]) {
       // Mark answered closes a question for you; it moves no card.
       const buttons = within(column(name))
         .queryAllByRole("button")
@@ -340,7 +340,7 @@ describe("BoardScreen", () => {
   it("moves a card when the recorded status event arrives, with no reload", async () => {
     const { client } = setup();
     await screen.findByRole("region", { name: "Backlog" });
-    expect(tasksIn("Todo")).toContain("T-1");
+    expect(tasksIn("To do")).toContain("T-1");
     const frame = {
       kind: "event",
       seq: 9,
@@ -358,9 +358,9 @@ describe("BoardScreen", () => {
       applyEvent(client, "demo", frame);
     });
     await waitFor(() => {
-      expect(tasksIn("In Progress")).toContain("T-1");
+      expect(tasksIn("In progress")).toContain("T-1");
     });
-    expect(tasksIn("Todo")).not.toContain("T-1");
+    expect(tasksIn("To do")).not.toContain("T-1");
     // The status was patched into the cache; an unknown status would have invalidated and refetched the board.
     expect(client.getQueryState(keys.board("demo"))?.isInvalidated).toBe(false);
   });
@@ -372,15 +372,15 @@ describe("BoardScreen", () => {
     expect(router.state.location.search).toEqual({ blocked: true });
     expect(router.state.location.href).toContain("blocked=true");
     expect(tasksIn("Backlog")).toEqual(["T-5"]);
-    expect(tasksIn("In Progress")).toEqual([]);
+    expect(tasksIn("In progress")).toEqual([]);
     await userEvent.click(screen.getByRole("button", { name: "Blocked only" }));
     expect(router.state.location.search).toEqual({});
 
     await userEvent.click(screen.getByRole("button", { name: /^Attention/ }));
     expect(router.state.location.search).toEqual({ needs: true });
-    expect(tasksIn("Todo")).toEqual(["T-6"]);
+    expect(tasksIn("To do")).toEqual(["T-6"]);
     expect(tasksIn("Review")).toEqual(["T-3"]);
-    expect(tasksIn("In Progress")).toEqual(["T-7"]);
+    expect(tasksIn("In progress")).toEqual(["T-7"]);
   });
 
   it("filters by an agent from the Agent menu, and the toolbar draws no agent pills", async () => {
@@ -397,7 +397,7 @@ describe("BoardScreen", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "frontend" }));
     expect(router.state.location.search).toEqual({ agent: "frontend" });
     expect(tasksIn("Review")).toEqual([]);
-    expect(tasksIn("In Progress")).toEqual(["T-2"]);
+    expect(tasksIn("In progress")).toEqual(["T-2"]);
     screen.getByRole("button", { name: "Agent: frontend" }).focus();
     await userEvent.keyboard("{Enter}");
     await userEvent.click(screen.getByRole("menuitem", { name: "Any agent" }));
@@ -411,7 +411,7 @@ describe("BoardScreen", () => {
     await userEvent.keyboard("{Enter}");
     await userEvent.click(screen.getByRole("menuitem", { name: "auth" }));
     expect(router.state.location.search).toEqual({ label: "auth" });
-    expect(tasksIn("Todo")).toEqual(["T-1", "T-6"]);
+    expect(tasksIn("To do")).toEqual(["T-1", "T-6"]);
     expect(tasksIn("Backlog")).toEqual([]);
   });
 
@@ -422,20 +422,20 @@ describe("BoardScreen", () => {
     );
     await screen.findByRole("region", { name: "Backlog" });
     // T-6 carries the label but nobody is responsible for it.
-    expect(tasksIn("Todo")).toEqual([]);
-    expect(tasksIn("In Progress")).toEqual(["T-2"]);
+    expect(tasksIn("To do")).toEqual([]);
+    expect(tasksIn("In progress")).toEqual(["T-2"]);
     await userEvent.type(
       screen.getByRole("searchbox", { name: "Search tasks" }),
       "nothing",
     );
     expect(router.state.location.search).toMatchObject({ q: "nothing" });
-    expect(tasksIn("In Progress")).toEqual([]);
+    expect(tasksIn("In progress")).toEqual([]);
   });
 
   it("shows the empty state with the next step for an empty project", async () => {
     setup(boardView([]));
     const panel = await screen.findByRole("region", { name: "No tasks yet" });
-    expect(within(column("Todo")).getByText("No tasks yet")).toBeTruthy();
+    expect(within(column("To do")).getByText("No tasks yet")).toBeTruthy();
     expect(panel.textContent).toContain("fld claude");
     expect(screen.getByText("0 tasks")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Attention · 0" })).toBeTruthy();

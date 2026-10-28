@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { segmentsText } from "@/people/segments";
-import { lastPauseWrite, pauseControl, pausedBanner } from "./pause";
+import { lastPauseWrite, pauseControl, pausedBanner, pauseNote } from "./pause";
 
 const AT = new Date(2026, 9, 17, 23, 40).getTime();
 
@@ -95,5 +95,12 @@ describe("lastPauseWrite", () => {
     expect(
       lastPauseWrite([{ status: "pending", variables: "stop", error: null }]),
     ).toEqual({ sent: null, error: null });
+  });
+});
+
+describe("pauseNote", () => {
+  it("says what a pause keeps, and what a resume starts", () => {
+    expect(pauseNote(false)).toMatch(/^Pause stops every worker/);
+    expect(pauseNote(true)).toMatch(/Resume starts the workers again\.$/);
   });
 });

@@ -30,9 +30,9 @@ const STATUS: Record<TaskStatus, StatusLook> = {
     dot: "bg-status-backlog",
     pill: "bg-sunken text-text-2",
   },
-  todo: { text: "Todo", dot: "bg-status-todo", pill: "bg-sunken text-text" },
+  todo: { text: "To do", dot: "bg-status-todo", pill: "bg-sunken text-text" },
   in_progress: {
-    text: "In Progress",
+    text: "In progress",
     dot: "bg-status-progress",
     pill: "bg-accent-soft text-accent",
   },

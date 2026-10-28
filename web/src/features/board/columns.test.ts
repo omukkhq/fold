@@ -22,8 +22,8 @@ describe("COLUMNS", () => {
     ]);
     expect(COLUMNS.map((c) => c.name)).toEqual([
       "Backlog",
-      "Todo",
-      "In Progress",
+      "To do",
+      "In progress",
       "Review",
       "Done",
     ]);

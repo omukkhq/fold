@@ -6,6 +6,7 @@ import {
   addEntries,
   clearAll,
   clearEntry,
+  clearTask,
   entryKey,
   keeps,
   markRead,
@@ -74,6 +75,8 @@ export interface NotificationStore {
   sync: (key: string | null, value: string | null) => void;
   markRead: (slug: string) => void;
   clear: (slug: string, key: string) => void;
+  /** Clears every move of one task, the Inbox row that groups them. */
+  clearTask: (slug: string, task: string) => void;
   clearAll: (slug: string) => void;
   dismiss: (id: number) => void;
 }
@@ -272,6 +275,9 @@ export function createNotificationStore(
     },
     clear(slug, key) {
       setState(slug, clearEntry(state(slug), key));
+    },
+    clearTask(slug, task) {
+      setState(slug, clearTask(state(slug), task));
     },
     clearAll(slug) {
       setState(slug, clearAll(state(slug)));

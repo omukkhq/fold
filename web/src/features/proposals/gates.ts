@@ -142,7 +142,7 @@ export function waitingSummary(p: ProposalDetail): Segments | null {
   const v = `v${String(s.current_version)}`;
   const author = actorSegment(s.author);
   if (s.conflicted) {
-    return seg`fold sent the report to ${author}. The task is back in In Progress until a new version arrives.`;
+    return seg`fold sent the report to ${author}. The task is back in In progress until a new version arrives.`;
   }
   if (s.turn === "with_author") {
     return seg`Waiting for ${author} to send a new version.`;

@@ -719,7 +719,7 @@ describe("Request detail", () => {
     await waitFor(() => {
       expect(within(created).getByText("Board T-12")).toBeTruthy();
     });
-    expect(within(created).getByText("Todo")).toBeTruthy();
+    expect(within(created).getByText("To do")).toBeTruthy();
     expect(within(created).getAllByText("Backlog")).toHaveLength(2);
     expect(within(created).getByText("from c3")).toBeTruthy();
     expect(screen.getByRole("combobox", { name: "Message" })).toHaveProperty(

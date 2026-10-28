@@ -24,7 +24,7 @@ describe("summaryText", () => {
     );
   });
 
-  it("counts zero without a Todo column", () => {
+  it("counts zero without a To do column", () => {
     expect(summaryText([])).toBe("0 tasks");
   });
 
@@ -32,7 +32,7 @@ describe("summaryText", () => {
     expect(summaryText(groupColumns([]))).toBe("0 tasks");
   });
 
-  it("counts ready as zero when the Todo column is missing", () => {
+  it("counts ready as zero when the To do column is missing", () => {
     const columns = groupColumns([make("T-1", "done")]).filter(
       (column) => column.status !== "todo",
     );

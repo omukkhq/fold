@@ -6,8 +6,7 @@ import { CodeText } from "@/components/code/CodeText";
 import { useNow } from "@/live/useNow";
 import { projectsQuery } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
-import { SignedInName } from "@/app/SignedInName";
-import { ThemeToggle } from "@/app/ThemeToggle";
+import { AvatarMenu } from "@/app/AvatarMenu";
 import { Mono } from "@/components/mono/Mono";
 import { Wordmark } from "@/components/Wordmark";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
@@ -44,12 +43,9 @@ export function ProjectsScreen() {
   const searching = query.trim() !== "";
   return (
     <div className="flex min-h-screen flex-col bg-bg">
-      <header className="flex h-bar items-center justify-between border-b border-line bg-surface px-16 md:px-24">
+      <header className="flex h-bar-compact items-center justify-between bg-surface px-16 xl:h-bar xl:px-20">
         <Wordmark />
-        <div className="flex items-center gap-8">
-          <SignedInName />
-          <ThemeToggle />
-        </div>
+        <AvatarMenu />
       </header>
       <main className="flex flex-col px-16 py-24 md:px-24 md:py-40">
         <div className="flex min-w-0 flex-col gap-20">

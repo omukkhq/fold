@@ -7,7 +7,13 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Suspense, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -635,22 +641,44 @@ describe("The top bar", () => {
   });
 });
 
-describe("The signed-in name", () => {
-  it("names the signed-in human in the top bar and opens the name from the icon", async () => {
-    stubFetch({
+describe("The avatar menu", () => {
+  it("names the signed-in human, holds the theme and signs out to the sign-in screen", async () => {
+    let signedIn = true;
+    const calls = stubFetch({
       ...shellRoutes(["f"]),
+      "GET /api/v1/session": () => ({
+        body: signedIn
+          ? { human: "tanim", authenticated: true }
+          : { human: null, authenticated: false },
+      }),
       "GET /api/v1/projects/f/workers": { body: workerList() },
       "GET /api/v1/projects/f/events": () => new Promise<StubReply>(() => {}),
+      "DELETE /api/v1/session": () => {
+        signedIn = false;
+        return { status: 204 };
+      },
     });
-    renderAt("/p/f/agents");
+    const router = renderAt("/p/f/agents");
     const button = await screen.findByRole("button", {
-      name: "Signed in as @tanim",
+      name: "Your menu, signed in as @tanim",
     });
-    expect(within(button).getByText("@tanim").className).toContain("lg:inline");
+    expect(button.textContent).toBe("TA");
     await userEvent.click(button);
-    expect((await screen.findByRole("dialog")).textContent).toBe(
-      "Signed in as @tanim",
+    const menu = await screen.findByRole("dialog", { name: "Your menu" });
+    expect(menu.textContent).toContain("Signed in as@tanim");
+    const dark = within(menu).getByRole("button", { name: "Dark" });
+    await userEvent.click(dark);
+    expect(dark.getAttribute("aria-pressed")).toBe("true");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    await userEvent.click(within(menu).getByRole("button", { name: "System" }));
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+    await userEvent.click(
+      within(menu).getByRole("button", { name: "Sign out" }),
     );
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/sign-in");
+    });
+    expect(calls.some((c) => c.method === "DELETE")).toBe(true);
   });
 });
 

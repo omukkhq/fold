@@ -3,7 +3,7 @@ import { focusRing } from "../lib/focus";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter, useRouterState } from "@tanstack/react-router";
-import { ArrowRight, ChevronDown, FolderGit2 } from "lucide-react";
+import { ArrowRight, ChevronDown } from "lucide-react";
 import { projectsQuery } from "../api/queries";
 import { switchProjectPath } from "../routes/nav";
 import { menuContent, menuItem } from "../components/overlay/menuStyles";
@@ -22,17 +22,14 @@ export function ProjectSwitcher({ slug }: { slug: string }) {
       <Menu.Trigger
         aria-label={`Project ${slug}, switch project`}
         className={cn(
-          "flex min-w-0 items-center gap-6 rounded-m px-8 py-5 hover:bg-sunken max-lg:mr-auto max-lg:min-h-44 max-lg:min-w-44 max-lg:px-6",
+          "flex min-w-0 shrink items-center gap-6 rounded-s px-8 py-6 hover:bg-sunken max-xl:min-h-44 max-xl:px-6",
           focusRing,
         )}
       >
-        <FolderGit2
-          size={15}
-          className="shrink-0 text-text-2 max-lg:hidden"
-          aria-hidden
-        />
-        <span className="truncate text-16 font-semibold text-text">{slug}</span>
-        <ChevronDown size={14} className="shrink-0 text-text-2" aria-hidden />
+        <span className="truncate font-title text-15 font-semibold text-text">
+          {slug}
+        </span>
+        <ChevronDown size={16} className="shrink-0 text-text-2" aria-hidden />
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Content align="start" sideOffset={6} className={menuContent}>

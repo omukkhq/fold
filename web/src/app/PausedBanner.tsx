@@ -26,23 +26,22 @@ export function PausedBanner({
     return null;
   }
   return (
-    // The bottom padding is 1px less than the top, so the 1px border stays inside the banner's height like an inner stroke.
     <div
       role="status"
       className={cn(
-        "flex items-center gap-10 border-b border-line bg-warn-soft px-24 pt-9 pb-8",
+        "flex shrink-0 flex-wrap items-baseline gap-x-12 gap-y-2 bg-warn-soft px-16 py-10 xl:px-22",
         className,
       )}
     >
       <CirclePause
         aria-hidden="true"
-        size={15}
-        className="shrink-0 text-warn"
+        size={16}
+        className="shrink-0 self-center text-warn"
       />
-      <p className="text-14 leading-tight font-semibold text-text">
+      <p className="text-14 font-semibold text-text">
         <ActorText segments={text.title} />
       </p>
-      <p className="min-w-0 flex-1 text-14 leading-tight text-warn">
+      <p className="min-w-0 flex-1 basis-2/3 text-14 text-text-2">
         {text.detail}
       </p>
     </div>

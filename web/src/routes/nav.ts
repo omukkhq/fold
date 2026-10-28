@@ -17,14 +17,15 @@ export interface NavEntry {
 
 const BOARD: NavEntry = { id: "board", label: "Board", segment: "board" };
 
+/** The tabs in the order of the work: the board, what waits for review and answers, the agents, then the history. */
 export const NAV_ENTRIES: readonly NavEntry[] = [
   BOARD,
-  { id: "activity", label: "Activity", segment: "activity" },
   { id: "proposals", label: "Proposals", segment: "proposals" },
   { id: "requests", label: "Requests", segment: "requests" },
-  { id: "agents", label: "Agents", segment: "agents" },
   { id: "messages", label: "Messages", segment: "messages" },
+  { id: "agents", label: "Agents", segment: "agents" },
   { id: "repository", label: "Repository", segment: "repository" },
+  { id: "activity", label: "Activity", segment: "activity" },
 ];
 
 export function navPath(slug: string, entry: NavEntry): string {
