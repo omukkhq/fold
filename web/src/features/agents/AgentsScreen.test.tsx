@@ -113,12 +113,23 @@ async function setup(
 }
 
 function row(name: string): HTMLElement {
-  const cell = screen
+  const item = screen
     .getAllByText(`@${name}`)
-    .find((element) => element.closest("tbody"));
-  const tr = cell?.closest("tr");
-  if (!tr) throw new Error(`no row for ${name}`);
-  return tr;
+    .map((element) => element.closest("li"))
+    .find((element) => element !== null);
+  if (!item) throw new Error(`no row for ${name}`);
+  return item;
+}
+
+/** Opens a worker's row to its session, where Model, Context and New session are. */
+async function openRow(name: string): Promise<HTMLElement> {
+  const toggle = within(row(name)).getByRole("button", {
+    name: `Session of @${name}`,
+  });
+  if (toggle.getAttribute("aria-expanded") !== "true") {
+    await userEvent.click(toggle);
+  }
+  return row(name);
 }
 
 function startButton(): HTMLElement {
@@ -166,7 +177,7 @@ describe("AgentsScreen", () => {
   it("groups the team under the main agent, the areas and review", async () => {
     stubFetch(routes());
     await setup([agent("main")], team);
-    const table = screen.getByRole("table", { name: "Team" });
+    const table = screen.getByRole("region", { name: "Team" });
     expect(within(table).getByText("Main agent")).toBeTruthy();
     expect(await within(table).findByText("frontend")).toBeTruthy();
     expect(
@@ -178,7 +189,8 @@ describe("AgentsScreen", () => {
     expect(within(lead).getByText("$5.87")).toBeTruthy();
     expect(within(lead).queryByText("91%")).toBeNull();
     expect(within(table).queryByText(/cache/i)).toBeNull();
-    expect(within(lead).getByText("164k")).toBeTruthy();
+    expect(within(lead).queryByText("164k")).toBeNull();
+    expect(within(await openRow("web-lead")).getByText("164k")).toBeTruthy();
     const taskWorker = row("web-worker");
     expect(within(taskWorker).getByText("T-12")).toBeTruthy();
     expect(
@@ -220,12 +232,12 @@ describe("AgentsScreen", () => {
     expect(
       within(row("web-lead")).queryByRole("button", { name: /^Stop/ }),
     ).toBeNull();
+    expect(within(row("web-lead")).getByText("exit code 0")).toBeTruthy();
     expect(
-      within(row("web-lead")).getByRole("button", {
+      within(await openRow("web-lead")).getByRole("button", {
         name: "Start web-lead in a new session",
       }),
     ).toBeTruthy();
-    expect(within(row("web-lead")).getByText("exit code 0")).toBeTruthy();
   });
 
   it("starts a worker in a new session after the human confirms", async () => {
@@ -254,7 +266,7 @@ describe("AgentsScreen", () => {
     );
     await setup([], team);
     await userEvent.click(
-      within(row("web-lead")).getByRole("button", {
+      within(await openRow("web-lead")).getByRole("button", {
         name: "Start web-lead in a new session",
       }),
     );
@@ -289,7 +301,7 @@ describe("AgentsScreen", () => {
     );
     await setup([], team);
     await userEvent.click(
-      within(row("web-lead")).getByRole("button", {
+      within(await openRow("web-lead")).getByRole("button", {
         name: "Start web-lead in a new session",
       }),
     );
@@ -467,11 +479,7 @@ describe("AgentsScreen", () => {
     });
     expect(await within(panel).findByText("Bash")).toBeTruthy();
     expect(within(panel).getByText("Task worker")).toBeTruthy();
-    expect(
-      await within(row("web-worker")).findByRole("img", {
-        name: "waits for a permission answer",
-      }),
-    ).toBeTruthy();
+    expect(await within(row("web-worker")).findByText("asks you")).toBeTruthy();
     await userEvent.click(within(panel).getByRole("button", { name: "Allow" }));
     const status = await within(panel).findByRole("status");
     expect(status.textContent).toContain("Allowed by @tanim");

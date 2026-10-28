@@ -20,6 +20,7 @@ import {
   batchedProposals,
   contextText,
   costText,
+  groupName,
   hasNoLeads,
   heldBatch,
   isPausedWorker,
@@ -30,12 +31,14 @@ import {
   mainNote,
   mainPill,
   noticeStep,
+  opensToSession,
   ownedTasks,
   pillSpec,
   rowError,
   roleModel,
   showsSupervisedMain,
   roleName,
+  sessionsFact,
   stepOf,
   stopControl,
   teamGroups,
@@ -89,6 +92,11 @@ describe("pills", () => {
     expect(mainPill("offline")).toEqual({ label: "offline", tone: "stopped" });
     expect(pillSpec("failed").fill).toBe("bg-bad-soft");
     expect(pillSpec("ready").text).toBe("text-ok");
+    expect(pillSpec("stopped")).toEqual({
+      fill: "bg-fill",
+      dot: "bg-presence-offline",
+      text: "text-text",
+    });
   });
 
   it("names every role", () => {
@@ -296,6 +304,23 @@ describe("steps", () => {
       input({ workers: workerList({ workers: [failing] }) }),
     );
     expect(group?.rows[0]?.error?.title).toBe("cannot reach the model");
+    expect(group?.rows[0]?.errorInStep).toBe(false);
+    const [ended] = teamGroups(
+      input({
+        workers: workerList({
+          workers: [{ ...failing, state: "failed" }],
+        }),
+      }),
+    );
+    expect(ended?.rows[0]?.errorInStep).toBe(true);
+  });
+
+  it("words the earlier sessions of an open row", () => {
+    expect(sessionsFact([])).toBe("first session");
+    expect(sessionsFact(["2a8f6309-aaaa-bbbb"])).toBe("1 earlier: 2a8f6309");
+    expect(sessionsFact(["2a8f6309-aaaa", "d94cb4d2-bbbb"])).toBe(
+      "2 earlier: 2a8f6309, d94cb4d2",
+    );
   });
 
   it("offers Stop to a live process and a pending stop while it stops", () => {
@@ -656,6 +681,31 @@ describe("teamGroups", () => {
     expect(onlyMain[0]?.rows[0]?.bound).toEqual({ kind: "text", text: "-" });
     expect(onlyMain[0]?.rows[0]?.pill.label).toBe("offline");
     expect(mainAgentName([])).toBe("main");
+    const mainRow = onlyMain[0]?.rows[0];
+    expect(mainRow && opensToSession(mainRow)).toBe(false);
+    const groups = teamGroups(
+      input({
+        agents: [agent("main")],
+        labels: [{ name: "frontend", color: "sage" }],
+        workers: workerList({
+          areas: [areaEntry("web", "frontend"), areaEntry("ops", "infra")],
+          workers: [
+            workerProcess("web-lead", { role: "area_lead", area: "web" }),
+            workerProcess("review-lead", { role: "review_lead" }),
+            workerProcess("loose", { role: "task_worker", area: null }),
+          ],
+        }),
+      }),
+    );
+    expect(groups.map(groupName)).toEqual([
+      "Main agent",
+      "frontend",
+      "infra",
+      "No area",
+      "Review",
+    ]);
+    const leadRow = groups[1]?.rows[0];
+    expect(leadRow && opensToSession(leadRow)).toBe(true);
   });
 
   it("finds the row of the worker that asks a question", () => {

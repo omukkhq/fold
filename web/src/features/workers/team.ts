@@ -41,17 +41,17 @@ const PILLS: Record<PillTone, PillSpec> = {
     dot: "bg-warn",
     text: "text-warn",
   },
-  idle: { fill: "bg-sunken", dot: "bg-presence-idle", text: "text-text-2" },
+  idle: { fill: "bg-fill", dot: "bg-presence-idle", text: "text-text" },
   failed: { fill: "bg-bad-soft", dot: "bg-bad", text: "text-bad" },
   starting: {
-    fill: "bg-sunken",
+    fill: "bg-fill",
     dot: "bg-text-2",
-    text: "text-text-2",
+    text: "text-text",
   },
   stopped: {
-    fill: "bg-sunken",
+    fill: "bg-fill",
     dot: "bg-presence-offline",
-    text: "text-text-2",
+    text: "text-text",
   },
   ready: { fill: "bg-ok-soft", dot: "bg-ok", text: "text-ok" },
   paused: { fill: "bg-warn-soft", dot: "bg-warn", text: "text-text" },
@@ -184,6 +184,8 @@ export interface TeamRow {
   context: string;
   step: Step;
   error: RowError | null;
+  /** The row's state line names the error instead of the step: the process has ended, so no live step replaces it. */
+  errorInStep: boolean;
   stop: StopControl;
   /** What the stop control says of what follows a stop; null when the worker is stopped like any other. */
   stopNote: string | null;
@@ -313,6 +315,14 @@ export function workerStep(
       );
   }
 }
+
+/** The Sessions fact of a worker's open row: `first session`, or how many came before with the start of each id, oldest first. */
+export function sessionsFact(previous: readonly string[]): string {
+  if (previous.length === 0) return "first session";
+  return `${String(previous.length)} earlier: ${previous.map((id) => id.slice(0, SESSION_SHORT)).join(", ")}`;
+}
+
+const SESSION_SHORT = 8;
 
 /** A worker that fold is not stopping can start again in a new session; a running one is stopped first. */
 export function canRestart(state: WorkerState): boolean {
@@ -473,6 +483,9 @@ function runningRow(
       waitsForTaskWorkers(worker, input.workers.workers),
     ),
     error: rowError(worker),
+    errorInStep:
+      worker.last_error !== null &&
+      (worker.state === "failed" || worker.state === "stopped"),
     stop: stopControl(worker.state),
     stopNote: worker.role === "main" ? MAIN_STOP_NOTE : null,
     restart: canRestart(worker.state),
@@ -514,6 +527,7 @@ function mainRow(agent: AgentView, human: string | null): TeamRow {
     context: NONE,
     step: noticeStep(agent) ?? faint(NONE),
     error: null,
+    errorInStep: false,
     stop: null,
     stopNote: null,
     restart: false,
@@ -720,4 +734,16 @@ export function askingRow(
   return (
     groups.flatMap((g) => g.rows).find((row) => row.name === worker) ?? null
   );
+}
+
+/** The group's heading: the main agent, the area's label (its name when it has none), or review. */
+export function groupName(group: TeamGroup): string {
+  if (group.kind === "main") return "Main agent";
+  if (group.kind === "review") return "Review";
+  return group.label?.name ?? group.area ?? "No area";
+}
+
+/** A row opens to its session when fold runs the worker; the interactive main agent has no session fold knows. */
+export function opensToSession(row: TeamRow): boolean {
+  return row.session !== null;
 }
