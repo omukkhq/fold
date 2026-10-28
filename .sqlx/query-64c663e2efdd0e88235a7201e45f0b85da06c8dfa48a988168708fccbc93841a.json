@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO notify_state (id, last_seq, next_send) VALUES (1, 0, 2)\n           ON CONFLICT (id) DO UPDATE SET next_send = next_send + 1\n           RETURNING next_send - 1 AS \"number!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "64c663e2efdd0e88235a7201e45f0b85da06c8dfa48a988168708fccbc93841a"
+}

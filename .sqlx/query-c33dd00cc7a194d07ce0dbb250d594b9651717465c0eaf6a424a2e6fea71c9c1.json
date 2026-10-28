@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT MIN(seq) AS \"seq: i64\" FROM events WHERE created_at >= ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "seq: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "c33dd00cc7a194d07ce0dbb250d594b9651717465c0eaf6a424a2e6fea71c9c1"
+}
