@@ -8,8 +8,9 @@ import {
   isNarrowed,
   listHref,
   parseListSearch,
+  activeFilters,
+  menuCounts,
   shownState,
-  waitingLabel,
 } from "./filters";
 
 function summary(
@@ -129,7 +130,41 @@ describe("the waiting filter", () => {
       "/p/demo/proposals?waiting=true",
     );
     expect(isNarrowed({ waiting: true })).toBe(true);
-    expect(waitingLabel(2)).toBe("Waits for you (2)");
-    expect(waitingLabel(0)).toBe("Waits for you");
+  });
+});
+
+describe("the Filter menu", () => {
+  it("names each active filter in menu order with the address that drops it", () => {
+    const search = {
+      state: "open" as const,
+      claim: "claimed" as const,
+      conflicted: true as const,
+      waiting: true as const,
+    };
+    expect(
+      activeFilters(search).map((f) => [f.key, f.label, isNarrowed(f.without)]),
+    ).toEqual([
+      ["waiting", "Waits for you", true],
+      ["conflicted", "Conflicted", true],
+      ["claim", "Claimed", true],
+    ]);
+    expect(activeFilters(search)[2]?.without).toEqual({
+      state: "open",
+      conflicted: true,
+      waiting: true,
+      claim: undefined,
+    });
+    expect(activeFilters({})).toEqual([]);
+  });
+
+  it("counts what each toggle would keep with the claim filter as it is", () => {
+    expect(menuCounts(all, {}, ["P-4", "P-1"])).toEqual({
+      waiting: 1,
+      conflicted: 1,
+    });
+    expect(menuCounts(all, { claim: "unclaimed" }, ["P-4"])).toEqual({
+      waiting: 1,
+      conflicted: 0,
+    });
   });
 });

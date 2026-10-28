@@ -58,18 +58,14 @@ export function updateRunsLine(next: number, fix = false): string {
     : `v${String(next)} is running its checks.`;
 }
 
-const UPDATE_RUNS_LINE = /^v\d+(, a reviewer's fix,)? is running its checks\.$/;
-
-/** Whether the line under Approve shows. After failed integration checks, and while a run makes the next version, Approve and Integrate share one line, which shows once under both buttons. */
+/** Whether the line under Approve shows. When Approve and Integrate are blocked for the same reason, such as failed integration checks or a running update, the decision bar says it once for both buttons. */
 export function showsApproveLine(
   approveBlock: string | null,
   integrateBlock: string | null,
   integrateShown: boolean,
 ): boolean {
   if (approveBlock === null) return false;
-  const shared =
-    approveBlock === CHECKS_FAILED || UPDATE_RUNS_LINE.test(approveBlock);
-  return !(integrateShown && shared && approveBlock === integrateBlock);
+  return !(integrateShown && approveBlock === integrateBlock);
 }
 
 /** The line under a disabled Approve on a task with the human review mark: the human reviews after a reviewer agent. */

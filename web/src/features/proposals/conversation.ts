@@ -384,3 +384,38 @@ export function lastLine(thread: ConversationThread): {
   }
   return { author, text: body.trim().split("\n")[0] ?? "" };
 }
+
+/** The About card's line on the conversation: how many threads it holds and how many wait for the human's answer; null for a proposal nobody wrote about. */
+export function conversationFact(
+  threads: readonly ConversationThread[],
+): { threads: string; waiting: string | null } | null {
+  if (threads.length === 0) return null;
+  const waiting = threads.filter((t) => t.state === "needs_answer").length;
+  return {
+    threads:
+      threads.length === 1 ? "1 thread" : `${String(threads.length)} threads`,
+    waiting:
+      waiting === 0
+        ? null
+        : waiting === 1
+          ? "1 needs your answer"
+          : `${String(waiting)} need your answer`,
+  };
+}
+
+/** The state chips the filter row shows: All, every state that holds a thread, and the chosen state even when it holds none. */
+export function chipStates(
+  options: readonly FilterOption<StateFilter>[],
+): FilterOption<StateFilter>[] {
+  return options.filter(
+    (option) => option.value === "all" || option.count > 0 || option.selected,
+  );
+}
+
+/** The words of a dropdown of the filter row: the chosen option, or the words for every option. */
+export function chosenLabel<T>(
+  options: readonly FilterOption<T>[],
+  none: string,
+): string {
+  return options.find((option) => option.selected)?.label ?? none;
+}

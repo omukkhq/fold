@@ -73,10 +73,10 @@ function MergedBody({
     <div className="flex min-w-0 flex-col gap-16">
       {line === null ? null : (
         <p className="flex flex-wrap items-center gap-x-8 gap-y-4 text-14 text-text-2">
-          <GitMerge aria-hidden="true" size={14} className="shrink-0" />
-          <span className="font-mono text-13 text-text">{line}</span>
+          <GitMerge aria-hidden="true" size={16} className="shrink-0" />
+          <span className="text-text tabular-nums">{line}</span>
           {diff.files.length === 0 ? null : (
-            <span className="font-mono text-13">{countsText(diff.totals)}</span>
+            <span className="tabular-nums">{countsText(diff.totals)}</span>
           )}
           {integrates === null ? null : (
             <span className="text-14 text-text-2">· {integrates}</span>
@@ -86,23 +86,29 @@ function MergedBody({
       {conflict === null || diff.conflict === null ? null : (
         <div
           role="alert"
-          className="flex flex-wrap items-start gap-12 rounded-m bg-bad-soft px-16 py-12"
+          className="flex flex-wrap items-start gap-12 rounded-m bg-bad-soft px-16 py-14"
         >
           <GitMerge
             aria-hidden="true"
             size={16}
-            className="mt-2 shrink-0 text-bad"
+            className="mt-4 shrink-0 text-bad"
           />
-          <div className="flex min-w-0 flex-1 flex-col gap-4">
+          <div className="flex min-w-0 flex-1 flex-col gap-2">
             <p className="text-15 font-semibold text-bad">{conflict.title}</p>
-            <p className="text-14 wrap-anywhere text-text-2">{conflict.text}</p>
+            <p className="max-w-measure text-15 wrap-anywhere text-text">
+              {conflict.text}
+            </p>
           </div>
           <HrefLink
             href={detailHref(slug, diff.conflict.proposal, {})}
-            className={cn(buttonClasses("quiet", "md"), focusRing)}
+            className={cn(
+              buttonClasses("quiet", "md"),
+              "bg-surface hover:bg-surface",
+              focusRing,
+            )}
           >
             <span className={buttonIconClass("quiet")}>
-              <Diff aria-hidden="true" size={15} />
+              <Diff aria-hidden="true" size={16} />
             </span>
             Open {diff.conflict.proposal}
           </HrefLink>

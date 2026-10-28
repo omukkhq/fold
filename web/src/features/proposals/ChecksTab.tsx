@@ -3,10 +3,13 @@ import { Copy, ListChecks } from "lucide-react";
 import { useState } from "react";
 import { checkRunQuery } from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
+import { Chip } from "@/components/badge/Chip";
 import { Button } from "@/components/button/Button";
+import { Id } from "@/components/id/Id";
 import { copyOutcome, type CopyState } from "@/components/mono/commitCopy";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { Skeleton } from "@/components/states/Skeleton";
+import { IdText } from "@/components/text/IdText";
 import { CODE_BOX, textFlow } from "@/components/text/textFlow";
 import { formatAsOfMinute } from "@/format/time";
 import { cn } from "@/lib/cn";
@@ -29,7 +32,7 @@ function CopyLog({ log }: { log: string }) {
     <span className="inline-flex items-center gap-8">
       <Button
         size="sm"
-        icon={<Copy aria-hidden="true" size={13} />}
+        icon={<Copy aria-hidden="true" size={14} />}
         onClick={() => {
           void copyOutcome(log, navigator.clipboard).then(setState);
         }}
@@ -72,11 +75,11 @@ function LogPanel({
           size={16}
           className={cn("shrink-0", spec.className)}
         />
-        <h2 className="font-mono text-16 font-medium text-text">{step}</h2>
+        <h2 className="font-mono text-16 font-regular text-text">{step}</h2>
         <span className="text-13 text-text-2">
-          {listed ? outcomeText(listed) : ""} · run{" "}
-          <span className="font-mono">{item.run.id}</span> on v{item.version},
-          base {item.run.base}
+          <IdText
+            text={`${listed ? outcomeText(listed) : ""} · run ${item.run.id} on v${String(item.version)}, base ${item.run.base}`}
+          />
         </span>
         <span className="flex flex-wrap items-center gap-8 md:ml-auto">
           {error === null ? null : (
@@ -103,18 +106,13 @@ function LogPanel({
       ) : !result || lines.length === 0 ? (
         <p className="text-13 text-text-2">No log is stored.</p>
       ) : (
-        <div
-          className={cn(
-            CODE_BOX,
-            "rounded-l bg-surface py-10 inset-ring inset-ring-line",
-          )}
-        >
+        <div className={cn(CODE_BOX, "rounded-m bg-surface py-10")}>
           {result.truncated ? (
             <p className="px-14 pb-6 text-13 text-text-2">
               fold keeps only the end of a long log.
             </p>
           ) : null}
-          <ol className="font-mono text-13 leading-tight">
+          <ol className="font-mono text-13 leading-normal">
             {lines.map((line) => (
               <li
                 key={line.n}
@@ -124,7 +122,7 @@ function LogPanel({
               >
                 <span
                   aria-hidden="true"
-                  className="w-diff-number shrink-0 pr-12 text-right text-text-2 select-none"
+                  className="w-diff-number shrink-0 pr-14 text-right text-text-2 select-none"
                 >
                   {line.n}
                 </span>
@@ -162,9 +160,11 @@ export function ChecksTab({ slug, id, items, search, now }: ChecksTabProps) {
   }
   if (items.length === 0) {
     return (
-      <div className="px-16 py-20 md:px-24">
+      <div className="px-16 pt-20 pb-28 md:px-24">
         <EmptyPanel icon={ListChecks} title="No check runs">
-          fold ran no check on any version of this proposal.
+          {
+            "fold ran no check on any version of this proposal. A project runs checks when `fold-checks.toml` is at the root of its tree."
+          }
         </EmptyPanel>
       </div>
     );
@@ -172,10 +172,10 @@ export function ChecksTab({ slug, id, items, search, now }: ChecksTabProps) {
   const chosen = chosenStep(items, search);
   const chosenItem = items.find((item) => item.run.id === chosen?.run);
   return (
-    <div className="flex min-w-0 flex-col gap-20 px-16 py-16 md:px-24 lg:flex-row lg:items-start">
+    <div className="flex min-w-0 flex-col gap-24 px-16 pt-20 pb-28 md:px-24 lg:flex-row lg:items-start">
       <nav
         aria-label="Check runs"
-        className="flex min-w-0 flex-col gap-18 lg:w-review-panel lg:shrink-0"
+        className="flex min-w-0 flex-col gap-12 lg:w-history lg:shrink-0"
       >
         {items.map((item) => {
           const spec = RUN_ICONS[item.run.state];
@@ -185,31 +185,30 @@ export function ChecksTab({ slug, id, items, search, now }: ChecksTabProps) {
               key={item.run.id}
               aria-label={`${runTitle(item)} ${item.run.id}`}
               data-state={item.run.state}
-              className="flex flex-col gap-4"
+              className="flex flex-col gap-6 rounded-m bg-surface px-10 pt-12 pb-10"
             >
-              <div className="flex items-center gap-8 px-4 pb-4">
+              <div className="flex flex-wrap items-center gap-8 px-6">
                 <Icon
                   role="img"
                   aria-label={spec.label}
-                  size={15}
+                  size={16}
                   className={cn("shrink-0", spec.className)}
                 />
-                <h3 className="text-14 font-semibold text-text">
+                <h3 className="text-15 font-semibold text-text">
                   {runTitle(item)}
                 </h3>
-                <span className="font-mono text-13 text-text-2">
-                  {item.run.id}
-                </span>
+                <Id className="text-13 text-text-2">{item.run.id}</Id>
+                {item.run.state === "running" ? <Chip>running</Chip> : null}
                 <span className="ml-auto text-13 text-text-2">
                   {formatAsOfMinute(now, item.run.created_at)}
                 </span>
               </div>
               {item.run.reason === null ? null : (
-                <p className="px-4 text-13 text-text-2">
+                <p className="px-6 text-14 text-text">
                   {reasonText(item.run.reason)}
                 </p>
               )}
-              <ul className="flex flex-col">
+              <ul className="flex flex-col gap-2">
                 {item.run.results.map((result) => {
                   const step = OUTCOME_ICONS[result.outcome];
                   const StepIcon = step.icon;
@@ -226,12 +225,12 @@ export function ChecksTab({ slug, id, items, search, now }: ChecksTabProps) {
                         aria-current={current ? "true" : undefined}
                         data-outcome={result.outcome}
                         className={cn(
-                          "flex items-center gap-8 rounded-s px-8 py-5 hover:bg-sunken",
+                          "flex items-center gap-8 rounded-s px-8 py-6 hover:bg-sunken",
                           current &&
                             (result.outcome === "failed" ||
                             result.outcome === "timed_out"
                               ? "bg-bad-soft hover:bg-bad-soft"
-                              : "bg-accent-soft hover:bg-accent-soft"),
+                              : "bg-ok-soft hover:bg-ok-soft"),
                           focusRing,
                         )}
                       >
@@ -254,7 +253,7 @@ export function ChecksTab({ slug, id, items, search, now }: ChecksTabProps) {
             </section>
           );
         })}
-        <p className="px-4 text-13 leading-normal text-text-2">
+        <p className="px-6 text-13 leading-normal text-text-2">
           Newest run first. The failed step of the newest failed run opens on
           its own.
         </p>

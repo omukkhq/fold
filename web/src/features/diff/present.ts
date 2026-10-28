@@ -21,27 +21,27 @@ const BADGES: Record<ChangeKind, ChangeBadge> = {
   added: {
     letter: "A",
     label: "Added",
-    classes: "bg-accent-soft text-accent",
+    classes: "text-ok",
   },
   modified: {
     letter: "M",
     label: "Modified",
-    classes: "bg-sunken text-text-2",
+    classes: "text-accent",
   },
   deleted: {
     letter: "D",
     label: "Deleted",
-    classes: "bg-bad-soft text-bad",
+    classes: "text-bad",
   },
   renamed: {
     letter: "R",
     label: "Renamed",
-    classes: "bg-warn-soft text-warn",
+    classes: "text-accent",
   },
   mode_changed: {
     letter: "T",
     label: "Mode changed",
-    classes: "bg-sunken text-text-2",
+    classes: "text-text-2",
   },
 };
 
@@ -224,6 +224,16 @@ export function showLinesText(first: number, last: number): string {
   return first === last
     ? `Show line ${String(first)}`
     : `Show lines ${String(first)}–${String(last)}`;
+}
+
+/** The words of a gap between hunks, beside its controls. */
+export function unchangedLinesText(hidden: number): string {
+  return plural(hidden, "unchanged line");
+}
+
+/** The name of a gap's control that shows every hidden line of it; it starts with the control's visible words, "Show all". */
+export function showAllText(hidden: number): string {
+  return `Show all ${plural(hidden, "unchanged line")}`;
 }
 
 export const GAP_ERROR = "The unchanged lines could not load.";

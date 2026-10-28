@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { byContent } from "@/test/content";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   RouterProvider,
@@ -309,7 +310,9 @@ describe("BatchScreen", () => {
     const region = screen.getByRole("region", { name: "Integration" });
     expect(
       within(region).getByText(
-        "Ready: P-3, P-4 integrate together, with one run of the integration checks.",
+        byContent(
+          "Ready: P-3, P-4 integrate together, with one run of the integration checks.",
+        ),
       ),
     ).toBeTruthy();
     await userEvent.click(
@@ -323,7 +326,7 @@ describe("BatchScreen", () => {
     release();
     expect(
       await within(region).findByText(
-        "Integrated together: P-3 as r18, P-4 as r19.",
+        byContent("Integrated together: P-3 as r18, P-4 as r19."),
       ),
     ).toBeTruthy();
     expect(within(region).queryByRole("button")).toBeNull();
@@ -486,7 +489,7 @@ describe("BatchScreen", () => {
     });
     await user.click(screen.getByRole("tab", { name: "Merged changes" }));
     await user.click(
-      await screen.findByRole("button", { name: "Show 3 unchanged lines" }),
+      await screen.findByRole("button", { name: "Show all 3 unchanged lines" }),
     );
     expect(
       screen.getByRole("gridcell", {

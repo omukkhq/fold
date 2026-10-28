@@ -18,7 +18,7 @@ const STYLES: Record<DiffLineKind, DiffLineStyle> = {
     sign: "+",
     description: "Added line",
     row: "bg-diff-add",
-    signClass: "text-accent",
+    signClass: "text-ok",
     header: false,
   },
   removed: {

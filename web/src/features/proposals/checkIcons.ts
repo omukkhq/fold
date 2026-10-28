@@ -21,7 +21,7 @@ export const RUN_ICONS: Record<
   passed: {
     icon: CircleCheck,
     label: "passed",
-    className: "text-accent",
+    className: "text-ok",
   },
   failed: { icon: CircleX, label: "failed", className: "text-bad" },
   stopped: {
@@ -35,7 +35,7 @@ export const OUTCOME_ICONS: Record<
   CheckOutcome,
   { icon: LucideIcon; className: string }
 > = {
-  passed: { icon: CircleCheck, className: "text-accent" },
+  passed: { icon: CircleCheck, className: "text-ok" },
   failed: { icon: CircleX, className: "text-bad" },
   timed_out: { icon: Clock, className: "text-bad" },
   skipped: { icon: CircleDashed, className: "text-text-2" },

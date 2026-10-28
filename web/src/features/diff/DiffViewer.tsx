@@ -115,7 +115,7 @@ function HeadPath({ path, split }: { path: string; split: boolean }) {
 function Hash({ side, hash }: { side: string; hash: string | null }) {
   return (
     <div className="flex gap-10">
-      <dt className="w-diff-number shrink-0 text-14 text-text-2">{side}</dt>
+      <dt className="w-diff-number shrink-0 text-13 text-text-2">{side}</dt>
       <dd className="min-w-0 font-mono text-13 break-all text-text">
         {hash ?? "no file"}
       </dd>
@@ -251,11 +251,12 @@ function FileBody({
         onGapRetry={onGapRetry}
       />
       {layout.remaining > 0 ? (
-        <div className="border-t border-line px-14 py-8">
+        <div className="bg-diff-hunk px-8 py-3">
           <Button
             variant="ghost"
             size="sm"
-            icon={<ChevronsDown aria-hidden="true" size={13} />}
+            className="text-accent hover:bg-surface hover:text-accent"
+            icon={<ChevronsDown aria-hidden="true" size={14} />}
             onClick={() => {
               setLimit((old) => old + rowLimit);
             }}
@@ -304,13 +305,12 @@ function FilePanel({ file, split, headExtra, fileText, ...body }: PanelProps) {
   return (
     <section
       aria-label={file.path}
-      className="min-w-0 flex-1 overflow-hidden rounded-l border border-line bg-surface"
+      className="min-w-0 flex-1 overflow-hidden rounded-m bg-surface"
     >
-      {/* The rows' fills would cover an inset ring, so the panel has a real border; the head's padding gives up a pixel to each border, so the borders do not change the head's height. */}
-      <header className="flex flex-wrap items-center gap-x-10 gap-y-4 border-b border-line bg-bg px-14 py-9">
+      <header className="flex flex-wrap items-center gap-x-10 gap-y-4 py-9 pr-10 pl-14">
         <HeadPath path={file.path} split={split} />
         {counts.added ? (
-          <span className="font-mono text-13 text-accent">{counts.added}</span>
+          <span className="font-mono text-13 text-ok">{counts.added}</span>
         ) : null}
         {counts.removed ? (
           <span className="font-mono text-13 text-bad">{counts.removed}</span>
@@ -318,13 +318,12 @@ function FilePanel({ file, split, headExtra, fileText, ...body }: PanelProps) {
         {note ? <span className="text-13 text-text-2">{note}</span> : null}
         {toggle ? (
           <Button
-            variant="ghost"
             size="sm"
             icon={
               whole ? (
-                <FoldVertical aria-hidden="true" size={13} />
+                <FoldVertical aria-hidden="true" size={14} />
               ) : (
-                <UnfoldVertical aria-hidden="true" size={13} />
+                <UnfoldVertical aria-hidden="true" size={14} />
               )
             }
             pending={gaps.status === "pending"}
@@ -386,9 +385,9 @@ export function DiffViewer({
         {list}
         <section
           aria-label={shown.warning.path}
-          className="min-w-0 flex-1 overflow-hidden rounded-l border border-line bg-surface"
+          className="min-w-0 flex-1 overflow-hidden rounded-m bg-surface"
         >
-          <header className="flex items-center gap-10 border-b border-line bg-bg px-14 py-9">
+          <header className="flex items-center gap-10 px-14 py-9">
             <h2 className="min-w-0 flex-1 truncate font-mono text-13 font-semibold text-text">
               {shown.warning.path}
             </h2>

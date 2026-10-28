@@ -33,7 +33,6 @@ import { revisionsQuery } from "@/api/repositoryQueries";
 import { HrefLink } from "@/app/HrefLink";
 import { missingState } from "@/app/missingState";
 import { buttonClasses } from "@/components/button/buttonStyles";
-import { TAB_BY_STATE, TAB_LIST } from "@/components/overlay/tabStyles";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
@@ -56,7 +55,7 @@ import { allRuns } from "./runList";
 import { conversationThreads } from "./conversation";
 import { ConversationTab } from "./ConversationTab";
 import { describeFailure, reloadsProposal } from "./errors";
-import type { ActionHandlers } from "./HumanActions";
+import { DecisionBar, type ActionHandlers } from "./DecisionBar";
 import { integrationOf, mainHead } from "./integration";
 import { lineQuestions } from "./lineQuestions";
 import { OverviewTab } from "./OverviewTab";
@@ -84,6 +83,10 @@ interface ProposalDetailScreenProps {
   onSearch: (next: DetailSearch, history?: "push" | "replace") => void;
 }
 
+/** A tab of the decision bar: a quiet pill that takes the sunken tone when it is the current one. */
+const TAB =
+  "inline-flex shrink-0 items-center gap-6 rounded-s px-12 py-7 font-title text-15 leading-tight font-medium whitespace-nowrap text-text-2 hover:text-text data-[state=active]:bg-sunken data-[state=active]:font-semibold data-[state=active]:text-text";
+
 function TabTrigger({
   value,
   label,
@@ -94,10 +97,10 @@ function TabTrigger({
   count: string | null;
 }) {
   return (
-    <RadixTabs.Trigger value={value} className={cn(TAB_BY_STATE, focusRing)}>
+    <RadixTabs.Trigger value={value} className={cn(TAB, focusRing)}>
       {label}
       {count === null ? null : (
-        <span className="rounded-s bg-sunken px-6 text-13 font-medium text-text-2">
+        <span className="font-body text-13 font-medium text-text-2 tabular-nums">
           {count}
         </span>
       )}
@@ -272,15 +275,14 @@ export function ProposalDetailScreen({
     },
   });
   const tabHref = (next: DetailSearch) => detailHref(slug, id, next);
-  // A panel spans the page, so its ring is drawn inside it where no edge clips it.
-  const content = insetFocusRing;
+  // A panel spans the page, so its ring is drawn inside it where no edge clips it. On a phone the decisions take the bottom of the screen, so the panel leaves room for them under its end.
+  const content = cn(insetFocusRing, "max-md:pb-(--height-bar)");
 
   return (
     <div className="flex min-w-0 flex-col">
       <ProposalHeader
         slug={slug}
         proposal={data}
-        main={main}
         revision={integration?.revision ?? null}
         batch={integration?.batch ?? null}
         now={now}
@@ -299,40 +301,50 @@ export function ProposalDetailScreen({
         }}
         className="flex min-w-0 flex-col"
       >
-        <div className="px-16 pt-8 md:px-24">
-          <RadixTabs.List
-            aria-label="Proposal"
-            className={cn(TAB_LIST, "flex-wrap")}
-          >
-            <TabTrigger value="overview" label="Overview" count={null} />
-            <TabTrigger
-              value="changes"
-              label="Changes"
-              count={String(data.totals.files)}
-            />
-            <TabTrigger
-              value="checks"
-              label="Checks"
-              count={runsCount(runItems?.length ?? null)}
-            />
-            <TabTrigger
-              value="conversation"
-              label="Conversation"
-              count={conversation === null ? null : String(conversation.length)}
-            />
-          </RadixTabs.List>
-        </div>
+        <DecisionBar
+          slug={slug}
+          proposal={data}
+          human={human}
+          view={tab === "changes" ? view : currentView}
+          actions={actionsFor(tab === "changes" ? view : currentView)}
+          changesHref={tabHref({ tab: "changes" })}
+          onAsk={async (body) => {
+            await ask.mutateAsync({ version: current, body });
+          }}
+          tabs={
+            <RadixTabs.List
+              aria-label="Proposal"
+              className="flex min-w-0 gap-2 max-md:-mx-6 max-md:w-full max-md:overflow-x-auto max-md:px-6 md:flex-wrap"
+            >
+              <TabTrigger value="overview" label="Overview" count={null} />
+              <TabTrigger
+                value="changes"
+                label="Changes"
+                count={String(data.totals.files)}
+              />
+              <TabTrigger
+                value="checks"
+                label="Checks"
+                count={runsCount(runItems?.length ?? null)}
+              />
+              <TabTrigger
+                value="conversation"
+                label="Conversation"
+                count={
+                  conversation === null ? null : String(conversation.length)
+                }
+              />
+            </RadixTabs.List>
+          }
+        />
         <RadixTabs.Content value="overview" className={content}>
           <OverviewTab
             slug={slug}
             proposal={data}
-            human={human}
             now={now}
             main={main}
             integration={integration}
             queued={queued}
-            actions={actionsFor(currentView)}
-            actionView={currentView}
             runs={runs}
             failedVersions={failedVersions}
             comments={comments.data ?? []}
@@ -352,7 +364,6 @@ export function ProposalDetailScreen({
             human={human}
             now={now}
             runs={runs.get(view.version) ?? null}
-            actions={actionsFor(view)}
             onSearch={onSearch}
             onComment={async ({ path, side, start_line, end_line, body }) => {
               await comment.mutateAsync({
@@ -402,10 +413,6 @@ export function ProposalDetailScreen({
             }
             human={human}
             now={now}
-            changesHref={tabHref({ tab: "changes" })}
-            onAsk={async (body) => {
-              await ask.mutateAsync({ version: current, body });
-            }}
             onReply={async (replyTo, body) => {
               await reply.mutateAsync({ reply_to: replyTo, body });
             }}

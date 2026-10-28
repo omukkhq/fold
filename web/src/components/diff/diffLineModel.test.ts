@@ -28,8 +28,8 @@ describe("diff rows", () => {
     ]);
   });
 
-  it("signs an addition in primary text and a removal in danger", () => {
-    expect(diffLineStyle("added").signClass).toBe("text-accent");
+  it("signs an addition in the ok tone and a removal in danger", () => {
+    expect(diffLineStyle("added").signClass).toBe("text-ok");
     expect(diffLineStyle("removed").signClass).toBe("text-bad");
   });
 });

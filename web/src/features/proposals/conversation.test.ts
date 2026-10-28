@@ -8,6 +8,9 @@ import {
   reviewComment,
 } from "@/test/proposals";
 import {
+  chipStates,
+  chosenLabel,
+  conversationFact,
   conversationThreads,
   filterConversation,
   laterChange,
@@ -171,6 +174,63 @@ describe("conversationThreads", () => {
     expect(
       summary(conversationThreads(done, [], comments)).map((t) => t[3]),
     ).toEqual(["Closed", "Closed"]);
+  });
+});
+
+describe("conversationFact", () => {
+  it("counts the threads and those that wait for the human's answer", () => {
+    const threads = all();
+    const waiting = threads.filter((t) => t.state === "needs_answer").length;
+    expect(conversationFact(threads)).toEqual({
+      threads: `${String(threads.length)} threads`,
+      waiting:
+        waiting === 1
+          ? "1 needs your answer"
+          : `${String(waiting)} need your answer`,
+    });
+  });
+
+  it("says one thread and no wait in the singular, and nothing for no thread", () => {
+    const one = all()
+      .filter((t) => t.state === "closed")
+      .slice(0, 1);
+    expect(conversationFact(one)).toEqual({
+      threads: "1 thread",
+      waiting: null,
+    });
+    expect(conversationFact([])).toBeNull();
+    const asking = all().filter((t) => t.state === "needs_answer");
+    expect(conversationFact([...asking, ...asking])?.waiting).toBe(
+      `${String(asking.length * 2)} need your answer`,
+    );
+  });
+});
+
+describe("filter row", () => {
+  it("shows All, the states that hold threads and the chosen state", () => {
+    const threads = all();
+    const kind = { ...NO_FILTER, kind: "to_author" as const };
+    expect(chipStates(stateOptions(threads, kind)).map((o) => o.label)).toEqual(
+      ["All", "Waits for the author", "Closed"],
+    );
+    expect(
+      chipStates(stateOptions(threads, { ...kind, state: "open" })).map(
+        (o) => o.label,
+      ),
+    ).toEqual(["All", "Waits for the author", "Open", "Closed"]);
+  });
+
+  it("names a dropdown by its chosen option, or by the words for all", () => {
+    const threads = all();
+    expect(chosenLabel(kindOptions(threads, NO_FILTER), "Any kind")).toBe(
+      "Any kind",
+    );
+    expect(
+      chosenLabel(
+        kindOptions(threads, { ...NO_FILTER, kind: "review" }),
+        "Any kind",
+      ),
+    ).toBe("Review comments");
   });
 });
 
