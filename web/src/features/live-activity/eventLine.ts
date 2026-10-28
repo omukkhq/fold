@@ -2,6 +2,8 @@ import {
   Activity,
   Archive,
   ArchiveRestore,
+  Bell,
+  BellOff,
   Bookmark,
   Bot,
   Check,
@@ -957,6 +959,11 @@ const SPECS: Record<EventType, Spec> = {
         : `the wait of ${batchOf(e)} ended; ${left.join(", ")} left its turn`;
     },
   },
+  "notify.target_changed": {
+    icon: Bell,
+    text: notifyTargetText,
+    look: notifyTargetLook,
+  },
   "review.batch_ready": {
     icon: GitMerge,
     text: (e) => {
@@ -967,6 +974,41 @@ const SPECS: Record<EventType, Spec> = {
     },
   },
 };
+
+/** The line of a notice target's change. The data does not tell a person's add from an edit, so a person's line names the state the target is in. */
+function notifyTargetText(event: DurableEvent): string {
+  const id = text(event.data.target) ?? "";
+  const name = text(event.data.name);
+  const kind =
+    event.data.host === true ? "host notice target" : "notice target";
+  const target = [kind, id, name === null ? "" : `“${name}”`]
+    .filter((part) => part !== "")
+    .join(" ");
+  switch (event.data.state) {
+    case "removed":
+      return `removed ${target}`;
+    case "gone":
+      return `turned off ${target}: its receiver is gone`;
+    case "failing":
+      return `turned off ${target} after its sends failed`;
+    case "on":
+      return event.actor === "fold"
+        ? `turned ${target} on again`
+        : `changed ${target}; it is on`;
+    case "off":
+      return `changed ${target}; it is off`;
+    default:
+      return `changed ${target}`;
+  }
+}
+
+function notifyTargetLook(event: DurableEvent): Look {
+  const state = event.data.state;
+  return {
+    icon: state === "on" ? Bell : BellOff,
+    emphasis: false,
+  };
+}
 
 /** Every stored event type this build writes a line for. */
 export const EVENT_TYPES = Object.keys(SPECS) as EventType[];
