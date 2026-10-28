@@ -1,4 +1,8 @@
 import { Monitor, Moon, Sun, type LucideIcon } from "lucide-react";
+import {
+  SEGMENT_LIST,
+  segmentClasses,
+} from "../components/segments/segmentStyles";
 import { cn } from "../lib/cn";
 import { focusRing } from "../lib/focus";
 import { useTheme } from "../theme/ThemeProvider";
@@ -17,7 +21,7 @@ export function ThemeChoice() {
     <div
       role="group"
       aria-label="Theme"
-      className="flex gap-2 rounded-s bg-fill p-3"
+      className={cn(SEGMENT_LIST, "flex-nowrap")}
     >
       {CHOICES.map(({ value, label, icon: Icon }) => (
         <button
@@ -28,7 +32,8 @@ export function ThemeChoice() {
             setChoice(value);
           }}
           className={cn(
-            "inline-flex min-h-32 flex-1 items-center justify-center gap-6 rounded-s px-4 py-5 font-title text-14 font-semibold text-text-2 aria-pressed:bg-surface aria-pressed:text-text aria-pressed:shadow-pop",
+            segmentClasses(choice === value),
+            "inline-flex min-h-32 flex-1 items-center justify-center gap-6 px-4",
             focusRing,
           )}
         >

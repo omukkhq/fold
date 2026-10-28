@@ -25,7 +25,10 @@ import {
   type AgentDot,
   type AgentsTone,
 } from "./agentsModel";
+import { Tooltip } from "../components/overlay/Tooltip";
 import { HrefLink } from "./HrefLink";
+import { listNote, listState } from "./listNote";
+import { PanelNote } from "./PanelNote";
 import { PauseControl } from "./PauseControl";
 import { pauseNote } from "./pause";
 import { StreamStatus } from "./StreamStatus";
@@ -56,6 +59,11 @@ export function AgentsControl({ slug }: { slug: string }) {
   const [open, setOpen] = useState(false);
   const paused = isPaused(project.data?.overview?.paused_since);
   const list = agents.data ?? [];
+  const note = listNote(listState(agents), list.length, {
+    loading: "Loading the agents",
+    failed: "The agents could not load.",
+    empty: "No agent has joined this project yet.",
+  });
   const view = agentsButton(status.state, paused, workingAgents(list, paused));
   const dot = TONE_DOT[view.tone];
   const close = () => {
@@ -95,7 +103,7 @@ export function AgentsControl({ slug }: { slug: string }) {
           <div className="flex shrink-0 items-center gap-12 px-16 pt-14 pb-8">
             <h2 className="text-16 font-semibold text-text">Agents</h2>
             <span className="ml-auto">
-              <StreamStatus />
+              <StreamStatus announce={false} />
             </span>
           </div>
           {(session.data?.human ?? null) === null ||
@@ -107,10 +115,12 @@ export function AgentsControl({ slug }: { slug: string }) {
               <PauseControl slug={slug} onSunken />
             </div>
           )}
-          {list.length === 0 ? (
-            <p className="px-16 py-10 text-14 text-text-2">
-              No agent has joined this project yet.
-            </p>
+          {note !== null ? (
+            <PanelNote
+              note={note}
+              onRetry={() => void agents.refetch()}
+              className="px-16 py-10"
+            />
           ) : (
             <ul
               aria-label="Agents"
@@ -118,41 +128,48 @@ export function AgentsControl({ slug }: { slug: string }) {
             >
               {panelAgents(list, paused).map((agent) => {
                 const look = agentRowLook(agent, paused);
-                return (
-                  <li key={agent.name}>
-                    <HrefLink
-                      href={agentBoardPath(slug, agent.name)}
-                      onClick={close}
+                const error = chipErrorTitle(agent);
+                const row = (
+                  <HrefLink
+                    href={agentBoardPath(slug, agent.name)}
+                    onClick={close}
+                    className={cn(
+                      "flex items-center gap-12 rounded-s px-10 py-8 text-14 hover:bg-sunken",
+                      insetFocusRing,
+                    )}
+                  >
+                    <span
+                      aria-hidden="true"
                       className={cn(
-                        "flex items-center gap-12 rounded-s px-10 py-8 text-14 hover:bg-sunken",
-                        insetFocusRing,
+                        "size-10 shrink-0 rounded-full",
+                        DOTS[look.dot],
+                      )}
+                    />
+                    <PersonName
+                      name={agent.name}
+                      className="min-w-0 flex-1 truncate"
+                    />
+                    <span
+                      className={cn(
+                        "shrink-0 text-right text-13 whitespace-nowrap",
+                        look.tone === "warn"
+                          ? "font-medium text-warn"
+                          : look.tone === "bad"
+                            ? "font-medium text-bad"
+                            : "text-text-2",
                       )}
                     >
-                      <span
-                        aria-hidden="true"
-                        className={cn(
-                          "size-10 shrink-0 rounded-full",
-                          DOTS[look.dot],
-                        )}
-                      />
-                      <PersonName
-                        name={agent.name}
-                        className="min-w-0 flex-1 truncate"
-                      />
-                      <span
-                        title={chipErrorTitle(agent)}
-                        className={cn(
-                          "shrink-0 text-right text-13 whitespace-nowrap",
-                          look.tone === "warn"
-                            ? "font-medium text-warn"
-                            : look.tone === "bad"
-                              ? "font-medium text-bad"
-                              : "text-text-2",
-                        )}
-                      >
-                        {chipStateText(agent, status, now, paused)}
-                      </span>
-                    </HrefLink>
+                      {chipStateText(agent, status, now, paused)}
+                    </span>
+                  </HrefLink>
+                );
+                return (
+                  <li key={agent.name}>
+                    {error === undefined ? (
+                      row
+                    ) : (
+                      <Tooltip content={error}>{row}</Tooltip>
+                    )}
                   </li>
                 );
               })}

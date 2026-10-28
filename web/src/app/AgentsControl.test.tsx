@@ -17,7 +17,7 @@ import { keys } from "../api/keys";
 import { agent, claim, worker } from "../test/agents";
 import { liveStatusStore } from "../live/status";
 import { AgentsControl } from "./AgentsControl";
-import { StreamStatus } from "./StreamStatus";
+import { StreamAnnouncer, StreamStatus } from "./StreamStatus";
 
 beforeAll(() => {
   Element.prototype.hasPointerCapture = () => false;
@@ -193,5 +193,24 @@ describe("StreamStatus", () => {
     expect(screen.getByRole("status").parentElement?.textContent).toBe(
       "Reconnecting…",
     );
+  });
+});
+
+describe("StreamAnnouncer", () => {
+  it("tells a screen reader the connection state while every panel is closed", () => {
+    render(<StreamAnnouncer />);
+    act(() => {
+      liveStatusStore.set({ state: "live", lastEventAt: Date.now() });
+    });
+    expect(screen.getByRole("status").textContent).toBe("Live");
+    act(() => {
+      liveStatusStore.set({ state: "reconnecting" });
+    });
+    expect(screen.getByRole("status").textContent).toBe("Reconnecting…");
+  });
+
+  it("leaves the announcement to the bar where a panel shows the state", () => {
+    render(<StreamStatus announce={false} />);
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });

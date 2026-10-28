@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { INITIAL_STATUS, type LiveStatus } from "../live/status";
-import { streamView, syncedAt } from "./streamStatusModel";
+import { streamLabel, streamView, syncedAt } from "./streamStatusModel";
 
 const status = (patch: Partial<LiveStatus>): LiveStatus => ({
   ...INITIAL_STATUS,
@@ -47,5 +47,16 @@ describe("streamView", () => {
       dot: "bg-warn",
       tone: "text-warn",
     });
+  });
+});
+
+describe("streamLabel", () => {
+  it("names each connection state as the stream status shows it", () => {
+    expect(streamLabel("connecting")).toBe("Connecting…");
+    expect(streamLabel("reconnecting")).toBe("Reconnecting…");
+    expect(streamLabel("live")).toBe("Live");
+    expect(streamView(status({ state: "live" }), 0).label).toBe(
+      streamLabel("live"),
+    );
   });
 });

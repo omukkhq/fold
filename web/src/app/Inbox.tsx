@@ -27,6 +27,11 @@ import type { NeedsYouKind } from "@/api/workers";
 import { Count } from "@/components/badge/Chip";
 import { buttonClasses } from "@/components/button/buttonStyles";
 import { CodeText } from "@/components/code/CodeText";
+import { ID_CLASSES } from "@/components/id/idStyles";
+import {
+  SEGMENT_LIST,
+  segmentClasses,
+} from "@/components/segments/segmentStyles";
 import { Tooltip } from "@/components/overlay/Tooltip";
 import { columnName } from "@/features/notifications/moves";
 import { unreadCount } from "@/features/notifications/feed";
@@ -44,6 +49,8 @@ import { useNow } from "@/live/useNow";
 import { idHref } from "@/routes/paths";
 import { PersonName } from "@/people/PersonName";
 import { HrefLink } from "./HrefLink";
+import { listNote, listState } from "./listNote";
+import { PanelNote } from "./PanelNote";
 import {
   fullTitle,
   itemsFor,
@@ -74,7 +81,7 @@ const MINUTE_MS = 60_000;
 
 /** One row's frame: the icon, the words that may wrap, the time that stays on one line, and the chevron of a row that opens something. */
 const ROW = "flex items-start gap-10 rounded-s px-10 py-8";
-const ID = "whitespace-nowrap tabular-nums font-semibold";
+const ID = `${ID_CLASSES} font-semibold`;
 
 function NeedLine({
   line,
@@ -134,7 +141,13 @@ function NeedLine({
           {formatAsOfMinute(now, line.since)}
         </span>
         {!line.inline && line.title ? (
-          <span className="min-w-0 basis-full truncate text-13 text-text-2">
+          // A row that opens nothing has no tooltip to give a cut title, so its title wraps whole.
+          <span
+            className={cn(
+              "min-w-0 basis-full text-13 text-text-2",
+              line.href === null ? "wrap-anywhere" : "truncate",
+            )}
+          >
             <CodeText text={line.title} caption />
           </span>
         ) : null}
@@ -250,8 +263,14 @@ function MovesRow({
   );
 }
 
-const TAB =
-  "inline-flex flex-1 items-center justify-center gap-6 rounded-s px-12 py-5 font-title text-14 font-semibold whitespace-nowrap text-text-2 data-[state=active]:bg-surface data-[state=active]:text-text data-[state=active]:shadow-pop";
+/** A tab of the Inbox as a segment of the shared switch, the two sharing the width. */
+function tabClasses(current: boolean): string {
+  return cn(
+    segmentClasses(current),
+    "inline-flex flex-1 items-center justify-center gap-6 whitespace-nowrap",
+    focusRing,
+  );
+}
 
 /** The top bar's one place for what waits for the human (Needs you) and the card moves since they last looked (Updates). Its gold count holds only what waits. */
 export function Inbox({ slug }: { slug: string }) {
@@ -265,6 +284,11 @@ export function Inbox({ slug }: { slug: string }) {
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
   const items = itemsFor(needs.data ?? [], session.data?.human ?? null);
   const groups = needsYouGroups(slug, items);
+  const note = listNote(listState(needs), groups.length, {
+    loading: "Loading what waits for you",
+    failed: "Needs you could not load.",
+    empty: "Nothing waits for you.",
+  });
   const rows = movesByTask(feed);
   const unread = unreadCount(feed);
   const close = () => {
@@ -325,13 +349,22 @@ export function Inbox({ slug }: { slug: string }) {
           >
             <RadixTabs.List
               aria-label="Inbox"
-              className="mx-12 mt-12 mb-4 flex shrink-0 gap-2 rounded-s bg-fill p-3"
+              className={cn(
+                SEGMENT_LIST,
+                "mx-12 mt-12 mb-4 shrink-0 flex-nowrap",
+              )}
             >
-              <RadixTabs.Trigger value="needs" className={cn(TAB, focusRing)}>
+              <RadixTabs.Trigger
+                value="needs"
+                className={tabClasses(tab === "needs")}
+              >
                 Needs you
                 {items.length > 0 ? <Count value={items.length} /> : null}
               </RadixTabs.Trigger>
-              <RadixTabs.Trigger value="updates" className={cn(TAB, focusRing)}>
+              <RadixTabs.Trigger
+                value="updates"
+                className={tabClasses(tab === "updates")}
+              >
                 Updates
                 {newText(unread) === null ? null : (
                   <span className="text-13 font-medium text-text-2">
@@ -347,10 +380,12 @@ export function Inbox({ slug }: { slug: string }) {
                 insetFocusRing,
               )}
             >
-              {groups.length === 0 ? (
-                <p className="px-10 py-12 text-14 text-text-2">
-                  Nothing waits for you.
-                </p>
+              {note !== null ? (
+                <PanelNote
+                  note={note}
+                  onRetry={() => void needs.refetch()}
+                  className="px-10 py-12"
+                />
               ) : (
                 groups.map((group) => (
                   <section key={group.id} aria-label={group.title}>

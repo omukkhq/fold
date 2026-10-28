@@ -11,6 +11,7 @@ import { Inbox } from "./Inbox";
 import { NavTabs } from "./NavTabs";
 import { PhoneMenu } from "./PhoneMenu";
 import { ProjectSwitcher } from "./ProjectSwitcher";
+import { StreamAnnouncer } from "./StreamStatus";
 import { NARROW_ONLY, WIDE_ONLY } from "./topBarLayout";
 
 /** One bar for every project screen: the wordmark, the project, the tabs, the Agents control, the Inbox, New task and the avatar. Below `xl` the tabs, the agents and the avatar move into the menu. */
@@ -48,6 +49,7 @@ export function TopBar({ slug }: { slug: string }) {
       </HrefLink>
       <AvatarMenu className={WIDE_ONLY} />
       <PhoneMenu slug={slug} className={NARROW_ONLY} />
+      <StreamAnnouncer />
     </header>
   );
 }

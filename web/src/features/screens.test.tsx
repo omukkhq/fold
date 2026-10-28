@@ -118,7 +118,7 @@ describe("Projects screen", () => {
     expect(screen.queryByRole("link", { name: /Archive/ })).toBeNull();
   });
 
-  it("names three agents, says how many more, and gives a screen reader every name", async () => {
+  it("names three agents, says how many more, and gives a screen reader and the tooltip every name", async () => {
     stubFetch({
       "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
       "GET /api/v1/projects": {
@@ -160,7 +160,9 @@ describe("Projects screen", () => {
     const more = within(demo).getByText(/and 1 more/);
     expect(more.getAttribute("aria-hidden")).toBe("true");
     expect(within(demo).queryByText("@delta")).toBeNull();
-    expect(more.parentElement?.getAttribute("title")).toBe(
+    expect(more.parentElement?.hasAttribute("title")).toBe(false);
+    await userEvent.hover(more);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
       "@alpha, @beta, @gamma and @delta",
     );
   });

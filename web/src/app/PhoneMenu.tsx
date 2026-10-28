@@ -109,7 +109,7 @@ export function PhoneMenu({
           <div className={cn(GROUP, "flex items-center gap-8")}>
             Agents
             <span className="font-body font-regular">
-              <StreamStatus />
+              <StreamStatus announce={false} />
             </span>
           </div>
           <HrefLink
