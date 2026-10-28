@@ -540,8 +540,15 @@ describe("AgentsScreen", () => {
     expect(within(totals).getByText("60% · 2 workers")).toBeTruthy();
     const since = calls.find((call) => call.path === `${BASE}/cost`)?.search;
     expect(Number(since?.get("since"))).toBeLessThan(Date.now());
-    expect(within(totals).getByText("2.0M tokens")).toBeTruthy();
-    expect(within(totals).getByText("160.0k output")).toBeTruthy();
+    // A tile's tokens are its hover text, which focus opens as well.
+    expect(within(totals).queryByText(/2\.0M tokens/)).toBeNull();
+    const total = within(totals).getByText("Total").closest("li");
+    act(() => {
+      total?.focus();
+    });
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "2.0M tokens · 160.0k output",
+    );
     expect(screen.getByRole("region", { name: "Cost by day" })).toBeTruthy();
     const tokens = screen.getByRole("region", { name: "Tokens" });
     expect(within(tokens).getByText("Cache read")).toBeTruthy();

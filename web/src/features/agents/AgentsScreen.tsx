@@ -87,7 +87,7 @@ export function AgentsScreen({
 
   return (
     <div className="flex flex-col">
-      <div className="flex flex-col gap-16 px-24 pt-20 pb-24">
+      <div className="flex flex-col gap-16 px-16 pt-20 pb-24 md:px-24">
         <div className="flex items-start justify-between gap-16">
           <div className="flex flex-col gap-4">
             <h1 className="text-24 leading-tight font-semibold text-text">
