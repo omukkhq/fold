@@ -538,6 +538,7 @@ describe("invalidation rules", () => {
     expect(refreshes(keys.reviewBatchFileDiff(slug, "rb-3", "a.ts"))).toBe(
       true,
     );
+    expect(refreshes(keys.reviewBatchFile(slug, "rb-3", "a.ts"))).toBe(true);
   });
 
   it("refreshes the review batches for a batch's queued integration and its members' integrations, and not for a single one", () => {

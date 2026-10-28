@@ -8,6 +8,7 @@ import {
   composerTitle,
   diffThreads,
   groupByFile,
+  heldFileLines,
   heldLines,
   linesText,
   placeThreads,
@@ -258,6 +259,43 @@ describe("threads beyond the hunks", () => {
     expect(out.placed.map((t) => t.id)).toEqual(["rc-3", "rc-1"]);
     expect(out.unplaced.map((t) => t.id)).toEqual(["rc-2", "rc-4"]);
     expect(placeThreads(threads, ["a.sql"], true).unplaced).toEqual([]);
+  });
+
+  it("places a thread on any line of either side once the file's text gives the gaps, and waits while it loads", () => {
+    const text = ["1\n", "2\n", "3\n", "a\n", "c\n"]
+      .concat(Array.from({ length: 35 }, () => "z\n"))
+      .join("");
+    const ready = {
+      status: "ready",
+      file: { hash: "h", binary: false, too_large: false, text },
+    } as const;
+    const lines = heldFileLines(hunks, "h", ready);
+    expect(lines?.has("new:40")).toBe(true);
+    expect(lines?.has("old:40")).toBe(true);
+    expect(lines?.has("new:41")).toBe(false);
+    const threads = buildThreads(
+      [
+        comment(2, 1, { start_line: 40, end_line: 40 }),
+        comment(4, 1, { side: "old", start_line: 30, end_line: 30 }),
+      ],
+      1,
+    );
+    const out = placeThreads(
+      threads,
+      ["a.sql"],
+      true,
+      new Map([["a.sql", lines ?? new Set<string>()]]),
+    );
+    expect(out.unplaced).toEqual([]);
+    expect(heldFileLines(hunks, "h", { status: "pending" })).toBeNull();
+    const failed = heldFileLines(hunks, "h", {
+      status: "error",
+      retry: () => undefined,
+    });
+    expect(failed?.has("new:40")).toBe(false);
+    expect(failed?.has("new:5")).toBe(true);
+    expect(heldFileLines(hunks, "other", ready)?.has("new:40")).toBe(false);
+    expect(heldFileLines(hunks, "h", undefined)?.has("new:40")).toBe(false);
   });
 });
 

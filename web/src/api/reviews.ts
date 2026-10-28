@@ -59,6 +59,8 @@ export type ReviewBatchDiff = components["schemas"]["ReviewBatchDiff"];
 export type ReviewBatchDiffConflict =
   components["schemas"]["ReviewBatchDiffConflict"];
 
+export type ReviewBatchFile = components["schemas"]["FileContentView"];
+
 /** The files of a batch's merged change. Rejects with `review_batch_not_found` for an unknown id. */
 export function getReviewBatchDiff(
   slug: string,
@@ -79,6 +81,19 @@ export function getReviewBatchFileDiff(
 ): Promise<FileDiff> {
   return unwrap(
     api.GET("/api/v1/projects/{slug}/reviews/batches/{id}/diff/file", {
+      params: { path: { slug, id }, query: { path } },
+    }),
+  );
+}
+
+/** One file of the new side of a batch's merged change: the file the merged change's hunks were built on. Rejects with `not_found` for a path the side does not hold. */
+export function getReviewBatchFile(
+  slug: string,
+  id: string,
+  path: string,
+): Promise<ReviewBatchFile> {
+  return unwrap(
+    api.GET("/api/v1/projects/{slug}/reviews/batches/{id}/file", {
       params: { path: { slug, id }, query: { path } },
     }),
   );

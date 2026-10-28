@@ -2,7 +2,11 @@ import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, ChevronDown, CircleAlert, Pencil } from "lucide-react";
 import { useState } from "react";
 import type { CheckRun, ProposalDetail, ReviewComment } from "@/api/proposals";
-import { proposalChangesQuery, proposalFileDiffQuery } from "@/api/queries";
+import {
+  proposalChangesQuery,
+  proposalFileDiffQuery,
+  proposalFileQuery,
+} from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
 import { Menu } from "@/components/overlay/Menu";
@@ -13,7 +17,12 @@ import {
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
-import { useFileDiff } from "@/features/diff/fileDiff";
+import {
+  needsFileText,
+  useFileDiff,
+  useFileText,
+} from "@/features/diff/fileDiff";
+import type { LineSet } from "@/features/diff/gaps";
 import { currentFile, fileBody, listedFiles } from "@/features/diff/layout";
 import type { DiffSelection } from "@/features/diff/selection";
 import { cn } from "@/lib/cn";
@@ -37,7 +46,7 @@ import { QuestionMarker } from "./QuestionMarker";
 import { SelectionMenu } from "./SelectionMenu";
 import { approvalLine, checksWord } from "./stateLine";
 import { CommentComposer, ThreadBox } from "./Threads";
-import { buildThreads, heldLines, placeThreads } from "./threadsModel";
+import { buildThreads, heldFileLines, placeThreads } from "./threadsModel";
 import {
   changeOptions,
   detailHref,
@@ -213,14 +222,20 @@ function ChangeBody({
     file !== null && fileBody(file) === "text",
   );
   const version = shownVersion(view);
+  const fileText = useFileText(
+    proposalFileQuery(slug, id, version, file?.path ?? ""),
+    needsFileText(file, fileDiff),
+  );
   const threads = buildThreads(comments, version);
   const byId = new Map(threads.map((t) => [t.id, t]));
   // Only the file on screen has its hunks read; a file whose text is not shown holds no line.
-  const held = new Map<string, ReadonlySet<string>>();
+  const held = new Map<string, LineSet>();
   if (file !== null && fileBody(file) !== "text") {
     held.set(file.path, new Set());
   } else if (file !== null && fileDiff.status === "ready") {
-    held.set(file.path, heldLines(fileDiff.diff.hunks));
+    const diff = fileDiff.diff;
+    const lines = heldFileLines(diff.hunks, diff.new_hash, fileText);
+    if (lines !== null) held.set(file.path, lines);
   }
   const { placed, unplaced } = placeThreads(
     threads,
@@ -290,6 +305,7 @@ function ChangeBody({
           selectedPath={file?.path}
           onSelectFile={showFile}
           fileDiff={fileDiff}
+          fileText={fileText}
           selection={selection}
           onSelect={select}
           threads={placed}
