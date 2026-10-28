@@ -74,8 +74,16 @@ async fn a_notice_waits_in_the_outbox_until_one_send_takes_it() {
             .await
             .unwrap()
     );
+    assert_eq!(
+        store
+            .write(async |tx| notify::reset_sending(tx, at(40), at(50)).await)
+            .await
+            .unwrap(),
+        0,
+        "a try that started after the bound stays in flight"
+    );
     store
-        .write(async |tx| notify::reset_sending(tx, at(50)).await)
+        .write(async |tx| notify::reset_sending(tx, at(41), at(50)).await)
         .await
         .unwrap();
     let reset = notify::get_send(store.read(), send.number)
@@ -260,4 +268,53 @@ async fn seen_items_keep_their_first_time() {
         notify::first_seq_since(store.read(), at(0)).await.unwrap(),
         None
     );
+}
+
+#[tokio::test]
+async fn a_first_send_starts_the_cursor_at_the_newest_event_and_a_started_cursor_stays() {
+    let (_dir, _paths, store) = open().await;
+    let event = fold_core::NewEvent::new(
+        fold_core::events::types::PROJECT_PAUSED,
+        fold_core::EventActor::fold(),
+    )
+    .unwrap();
+    store
+        .write(async |tx| {
+            fold_store::events::append(tx, &event, at(5)).await?;
+            fold_store::events::append(tx, &event, at(6)).await
+        })
+        .await
+        .unwrap();
+    let head = fold_store::events::head_seq(store.read()).await.unwrap();
+    assert!(head > 0);
+    store
+        .write(async |tx| {
+            notify::create_send(
+                tx,
+                &NewSend {
+                    target: nt(1),
+                    webhook_id_prefix: "demo-y",
+                    body: b"{}",
+                    summary: "[]",
+                    notices: 0,
+                    test: true,
+                    outbox: &[],
+                },
+                at(10),
+            )
+            .await
+        })
+        .await
+        .unwrap();
+    assert_eq!(notify::cursor(store.read()).await.unwrap(), Some(head));
+
+    let (_dir, _paths, store) = open().await;
+    store
+        .write(async |tx| {
+            notify::start_cursor(tx, 7).await?;
+            notify::start_cursor(tx, 3).await
+        })
+        .await
+        .unwrap();
+    assert_eq!(notify::cursor(store.read()).await.unwrap(), Some(7));
 }

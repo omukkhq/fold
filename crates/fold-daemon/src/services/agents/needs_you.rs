@@ -47,7 +47,7 @@ pub enum NeedsYouKind {
     WorkerModelUnreachable,
     /// A worker failed because the daemon found no `claude` on the `PATH` it gives workers. The daemon reads that `PATH` from the user's login shell at its start, so `reason` names `fld restart`, after which the daemon start resumes the worker; the item ends when the worker runs again.
     ClaudeNotFound,
-    /// fold turned a notice target off after [`fold_core::projects::notify::OFF_AFTER_FAILURES`] failed sends in a row; `title` holds the target's name and `target` its id. A successful test send turns it on again and ends the item.
+    /// fold turned a notice target off: its receiver answered 410 Gone, a send failed every try of its retry schedule, or [`fold_core::projects::notify::OFF_AFTER_FAILURES`] tries failed in a row. `title` holds the target's name, `target` its id and `reason` what the human does. A successful test send turns it on again and ends the item.
     NotifyTargetOff,
 }
 
@@ -182,16 +182,17 @@ impl NeedsYouItem {
         }
     }
 
-    /// The item of a notice target fold turned off at `since` after its sends failed.
+    /// The item of a notice target fold turned off at `since`, with what the human does about it.
     pub fn notify_target_off(
         since: Timestamp,
         target: fold_core::NotifyTargetId,
         name: &str,
+        reason: &str,
     ) -> Self {
         let mut item = Self::new(NeedsYouKind::NotifyTargetOff, since);
         item.target = Some(target);
         item.title = Some(name.to_owned());
-        item.reason = Some("send a test from the Settings tab or with `fld notify test`; a test that gets through turns the target on again".to_owned());
+        item.reason = Some(reason.to_owned());
         item
     }
 }

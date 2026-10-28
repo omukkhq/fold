@@ -18,7 +18,7 @@ use super::super::tasks::TaskStatus;
 use crate::daemon::AppState;
 use crate::services::error::from_store;
 use crate::services::projects::notify::{
-    self, NotifySettings, OffReason, Scope, Target, TargetFields,
+    self, NotifySettings, Scope, Target, TargetFields, TargetState,
 };
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -206,7 +206,7 @@ impl From<NotifyPreset> for Preset {
     }
 }
 
-/// Whether a target gets notices: `on`; `off`, which a person chose; `gone`, as its receiver answered 410 Gone; or `failing`, as fold turned it off after 20 failed tries in a row.
+/// Whether a target gets notices: `on`; `off`, which a person chose; `gone`, as its receiver answered 410 Gone; or `failing`, as fold turned it off after its sends failed: a send failed every try of its retry schedule, or 20 tries in a row failed. The event `notify.target_changed` names the same states, and `removed` for a target a person removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NotifyTargetState {
@@ -256,11 +256,11 @@ pub struct NotifyTargetEntry {
 
 impl NotifyTargetEntry {
     fn new(target: Target, host: bool, next_try_at: Option<Timestamp>) -> Self {
-        let state = match target.health.off {
-            Some(OffReason::Gone) => NotifyTargetState::Gone,
-            Some(OffReason::Failures) => NotifyTargetState::Failing,
-            None if !target.enabled => NotifyTargetState::Off,
-            None => NotifyTargetState::On,
+        let state = match target.state() {
+            TargetState::On => NotifyTargetState::On,
+            TargetState::Off => NotifyTargetState::Off,
+            TargetState::Gone => NotifyTargetState::Gone,
+            TargetState::Failing => NotifyTargetState::Failing,
         };
         Self {
             id: target.id.to_string(),
@@ -295,7 +295,7 @@ impl NotifyTargetEntry {
 }
 
 /// The fields of a new or changed target. On a change, a field left out keeps its value; on an add it takes the default.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NotifyTargetFields {
     #[schema(example = "Team chat")]
@@ -311,6 +311,20 @@ pub struct NotifyTargetFields {
     #[schema(example = 15)]
     pub window_seconds: Option<u32>,
     pub enabled: Option<bool>,
+}
+
+impl std::fmt::Debug for NotifyTargetFields {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotifyTargetFields")
+            .field("name", &self.name)
+            .field("url", &self.url.as_ref().map(|_| "<redacted>"))
+            .field("preset", &self.preset)
+            .field("events", &self.events)
+            .field("moves_to", &self.moves_to)
+            .field("window_seconds", &self.window_seconds)
+            .field("enabled", &self.enabled)
+            .finish()
+    }
 }
 
 impl TryFrom<NotifyTargetFields> for TargetFields {
@@ -353,7 +367,7 @@ impl TryFrom<NotifyTargetFields> for TargetFields {
 }
 
 /// A new target: its kind, name and URL, and the fields that take their default when left out.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewNotifyTargetBody {
     pub kind: NotifyTargetKind,
@@ -370,6 +384,21 @@ pub struct NewNotifyTargetBody {
     #[schema(example = 15)]
     pub window_seconds: Option<u32>,
     pub enabled: Option<bool>,
+}
+
+impl std::fmt::Debug for NewNotifyTargetBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NewNotifyTargetBody")
+            .field("kind", &self.kind)
+            .field("name", &self.name)
+            .field("url", &"<redacted>")
+            .field("preset", &self.preset)
+            .field("events", &self.events)
+            .field("moves_to", &self.moves_to)
+            .field("window_seconds", &self.window_seconds)
+            .field("enabled", &self.enabled)
+            .finish()
+    }
 }
 
 impl From<NewNotifyTargetBody> for NotifyTargetFields {
@@ -813,12 +842,6 @@ pub async fn remove_project_target(
         id,
     )
     .await?;
-    project
-        .0
-        .store
-        .write(async |tx| outbox::forget_target(tx, id).await)
-        .await
-        .map_err(from_store)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -990,7 +1013,7 @@ pub async fn list_notify_sends(
     }))
 }
 
-/// A named human sends a finished send again, with its webhook id and body, so a receiver that took it before drops the repeat.
+/// A named human sends a finished send again, with its webhook id and body, so a receiver that took it before drops the repeat. The send's target must get the project's notices now.
 #[utoipa::path(
     post,
     path = "/api/v1/projects/{slug}/notify/sends/{id}/again",
@@ -1003,7 +1026,8 @@ pub async fn list_notify_sends(
         (status = 200, description = "The send, waiting for its try", body = NotifySendEntry),
         (status = 400, description = "`invalid_id` or `invalid_request` (the send is still open)", body = ErrorEnvelope),
         (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
-        (status = 404, description = "`notify_send_not_found` or `project_not_found`", body = ErrorEnvelope),
+        (status = 404, description = "`notify_send_not_found`, `notify_target_not_found` (its target is removed) or `project_not_found`", body = ErrorEnvelope),
+        (status = 409, description = "`notify_target_inactive`: the send's target gets no notices of the project now", body = ErrorEnvelope),
         (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
         (status = 500, description = "`notify_settings_io` or internal error", body = ErrorEnvelope),
     )

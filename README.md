@@ -152,7 +152,7 @@ fld notify test "Team Slack"
 fld notify log "Release bot"
 ```
 
-Each target selects its events and the board columns of its card moves. The notices of a target's window (15 seconds by default) go in one send. A generic webhook gets a JSON body signed with Standard Webhooks; fld prints its signing secret once. Slack and Discord get one message with a line per notice. A notice holds ids, titles, columns, names and links, never message text, review text or diffs. fold retries a failed send with the same `webhook-id` for about 8.5 hours, and turns a target off after 20 failed tries in a row, which shows in Needs you. Host targets (`--host`) apply to every project; `fld notify host-targets off` keeps a project to its own targets. Only a person can change targets, never an agent.
+Each target selects its events and the board columns of its card moves. The notices of a target's window (15 seconds by default) go in one send. A generic webhook gets a JSON body signed with Standard Webhooks; fld prints its signing secret once. Slack and Discord get one message with a line per notice. A notice holds ids, titles, columns, names and links, never message text, review text or diffs. fold retries a failed send with the same `webhook-id` for about 8.6 hours. It turns a target off when a send fails all its tries, after 20 failed tries in a row, or at once when the receiver answers 410 Gone; a target fold turned off shows in Needs you with the reason, and a test that gets through turns it on again. Host targets (`--host`) apply to every project; `fld notify host-targets off` keeps a project to its own targets. Only a person can change targets, never an agent.
 
 ## Everyday commands
 

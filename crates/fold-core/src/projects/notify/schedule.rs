@@ -5,7 +5,7 @@ use crate::time::Timestamp;
 /// The longest a send waits for its receiver.
 pub const SEND_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// The waits before the second to the seventh try of a send; after the seventh fold gives the send up, about 8.5 hours after the first.
+/// The waits before the second to the seventh try of a send; after the seventh fold gives the send up, about 8.6 hours after the first, and turns its target off.
 pub const RETRIES: [Duration; 6] = [
     Duration::from_secs(10),
     Duration::from_secs(60),

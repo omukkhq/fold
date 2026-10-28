@@ -703,6 +703,9 @@ impl Projects {
                 tracing::error!(project = %row.slug, code = code_of(&error), "could not restore the kept inbox sockets");
             }
         }
+        if let (Ok(handle), Some(notify)) = (&outcome, &self.notify) {
+            notify.register(handle);
+        }
         let slot = match &outcome {
             Ok(handle) => Slot::Open(handle.clone()),
             Err(_) => Slot::Unavailable,

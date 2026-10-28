@@ -31,6 +31,18 @@ pub async fn set_cursor(tx: &mut WriteTx, seq: u64) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// Starts the cursor at `seq` when it never moved; a cursor that moved stays where it is.
+pub async fn start_cursor(tx: &mut WriteTx, seq: u64) -> Result<(), StoreError> {
+    let seq = i64::try_from(seq).map_err(|_| StoreError::Corrupt("notify_state.last_seq"))?;
+    sqlx::query!(
+        "INSERT INTO notify_state (id, last_seq) VALUES (1, ?1) ON CONFLICT (id) DO NOTHING",
+        seq
+    )
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
 /// The first event at or after `since`, where a cursor that never moved starts: a target hears only of what came after it was added.
 pub async fn first_seq_since(
     executor: impl SqliteExecutor<'_>,
@@ -323,14 +335,15 @@ pub struct NewSend<'a> {
     pub outbox: &'a [i64],
 }
 
-/// Stores a send that waits for its first try now, and takes its notices out of the outbox, in one write, so a notice is in the outbox or in exactly one send.
+/// Stores a send that waits for its first try now, and takes its notices out of the outbox, in one write, so a notice is in the outbox or in exactly one send. A send before the cursor's first move starts the cursor at the newest event.
 pub async fn create_send(
     tx: &mut WriteTx,
     new: &NewSend<'_>,
     now: Timestamp,
 ) -> Result<SendRow, StoreError> {
     let number = sqlx::query_scalar!(
-        r#"INSERT INTO notify_state (id, last_seq, next_send) VALUES (1, 0, 2)
+        r#"INSERT INTO notify_state (id, last_seq, next_send)
+           VALUES (1, (SELECT COALESCE(MAX(seq), 0) FROM events), 2)
            ON CONFLICT (id) DO UPDATE SET next_send = next_send + 1
            RETURNING next_send - 1 AS "number!: i64""#
     )
@@ -546,11 +559,18 @@ pub async fn finish_try(
     Ok(())
 }
 
-/// Puts every send whose try was in flight when the daemon stopped back to wait for a try now, with the same webhook id.
-pub async fn reset_sending(tx: &mut WriteTx, now: Timestamp) -> Result<u64, StoreError> {
+/// Puts every send whose try started at or before `started_by` and is still in flight back to wait for a try now, with the same webhook id: at a start, the tries a stopped daemon left; later, a try whose record never came.
+pub async fn reset_sending(
+    tx: &mut WriteTx,
+    started_by: Timestamp,
+    now: Timestamp,
+) -> Result<u64, StoreError> {
+    let started_by = started_by.as_millis();
     let now = now.as_millis();
     Ok(sqlx::query!(
-        "UPDATE notify_sends SET state = 'pending', next_try_at = ?1 WHERE state = 'sending'",
+        "UPDATE notify_sends SET state = 'pending', next_try_at = ?2
+         WHERE state = 'sending' AND last_try_at <= ?1",
+        started_by,
         now
     )
     .execute(tx.conn())

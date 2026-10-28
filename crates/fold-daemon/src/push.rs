@@ -1003,8 +1003,8 @@ fn remove_target(dir: &Path, agent: &AgentName, socket: &Path) -> io::Result<()>
     }
 }
 
-/// Removes the `.<agent>.json.<pid>.<n>.tmp` files of writes that stopped before their rename.
-fn remove_temporary(dir: &Path) -> io::Result<()> {
+/// Removes the `.<name>.<pid>.<n>.tmp` files of writes that stopped before their rename.
+pub(crate) fn remove_temporary(dir: &Path) -> io::Result<()> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),

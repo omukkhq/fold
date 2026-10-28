@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use fold_core::events::types;
 use fold_core::projects::notify::{
-    EventFacts, Links, Lookup, MAX_NOTICES_PER_SEND, NeedsYouNotice, Notice, NoticeType, cause_of,
-    classify, due_at, needs_you_notice, notice,
+    EventFacts, Links, Lookup, MAX_NOTICES_PER_SEND, NeedsYouNotice, Notice, NoticeType,
+    SEND_TIMEOUT, cause_of, classify, due_at, needs_you_notice, notice,
 };
 use fold_core::{EventFilter, FoldError, LiveEvent, NotifyTargetId, Timestamp, codes};
 use fold_store::projects::notify::{self as outbox, NewSend, SeenItem, SendState};
@@ -27,6 +27,9 @@ const RETRY_AFTER: Duration = Duration::from_secs(60);
 
 /// The events one write of the notifier passes.
 const PAGE: usize = 500;
+
+/// How long a try may stay in flight before a pass sends it again: well past [`SEND_TIMEOUT`], so only a try whose result was never recorded, as after a failed write, goes again.
+pub const STALE_TRY: Duration = Duration::from_secs(SEND_TIMEOUT.as_secs() * 4);
 
 /// The sends one pass makes to one target, so a long queue of a window-0 target does not hold the others back.
 const SENDS_PER_PASS: usize = 20;
@@ -61,28 +64,35 @@ fn store_error(error: StoreError) -> FoldError {
     from_store(error)
 }
 
-/// One pass of the project's notifier: it queues a notice for each new stored event and Needs you change that a target wants, in the same write as the cursor move, then makes and tries the sends that are due. The first pass puts a try that was in flight when the daemon stopped back to go again with the same webhook id. A project without an active target reads nothing more and writes nothing.
+/// One pass of the project's notifier: it queues a notice for each new stored event and Needs you change that a target wants, in the same write as the cursor move, then makes and tries the sends that are due. The first pass puts a try that was in flight when the daemon stopped back to go again with the same webhook id, and every later pass does the same for a try whose record never came within [`STALE_TRY`]. A project without an active target reads nothing more and writes nothing.
 pub async fn notify_pass(
     handle: &ProjectHandle,
     settings: &NotifySettings,
     state: &mut PassState,
 ) -> Result<NotifyPass, FoldError> {
-    if !state.resumed {
-        let now = handle.clock.now();
-        if outbox::open_sends(handle.store.read())
+    let now = handle.clock.now();
+    let started_by = if state.resumed {
+        now.checked_sub(STALE_TRY)
+    } else {
+        Some(now)
+    };
+    if let Some(started_by) = started_by
+        && outbox::open_sends(handle.store.read())
             .await
             .map_err(store_error)?
             .iter()
-            .any(|send| send.state == SendState::Sending)
-        {
-            handle
-                .store
-                .write(async |tx| outbox::reset_sending(tx, now).await)
-                .await
-                .map_err(store_error)?;
-        }
-        state.resumed = true;
+            .any(|send| {
+                send.state == SendState::Sending
+                    && send.last_try_at.is_some_and(|at| at <= started_by)
+            })
+    {
+        handle
+            .store
+            .write(async |tx| outbox::reset_sending(tx, started_by, now).await)
+            .await
+            .map_err(store_error)?;
     }
+    state.resumed = true;
     let active: Vec<Applying> = settings
         .applying(&handle.slug)
         .await?
@@ -118,7 +128,10 @@ pub async fn notify_pass(
 }
 
 /// The cursor, or where a cursor that never moved starts: before the first event since the oldest active target was added.
-async fn start_cursor(handle: &ProjectHandle, active: &[Applying]) -> Result<u64, FoldError> {
+pub(super) async fn start_cursor(
+    handle: &ProjectHandle,
+    active: &[Applying],
+) -> Result<u64, FoldError> {
     let read = handle.store.read();
     if let Some(cursor) = outbox::cursor(read).await.map_err(store_error)? {
         return Ok(cursor);

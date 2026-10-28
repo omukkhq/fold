@@ -456,7 +456,7 @@ async fn auto_integrate(
     while listeners.join_next().await.is_some() {}
 }
 
-/// Starts the notice job: every `tick` it starts a notifier for each open project that has none, which sends the project's notices to the targets that apply to it, as [`notify_project`] describes. Without notice settings it sends nothing. A cycle is a try that a receiver took. It stops when `stop` changes.
+/// Starts the notice job: it first removes the temporary files that a stop left in the notice settings folder, then every `tick` it starts a notifier for each open project that has none, which sends the project's notices to the targets that apply to it, as [`notify_project`] describes. Without notice settings it sends nothing. A cycle is a try that a receiver took. It stops when `stop` changes.
 pub fn spawn_notify(state: AppState, tick: Duration, stop: watch::Receiver<bool>) -> Job {
     let (progress, watcher) = watch::channel(JobProgress::default());
     let task = tokio::spawn(notify(state, tick, stop, Arc::new(progress)));
@@ -476,6 +476,7 @@ async fn notify(
         let _ = stop.changed().await;
         return;
     };
+    settings.remove_leftovers().await;
     let mut listening = HashSet::new();
     let mut notifiers = JoinSet::new();
     let mut ticks = tokio::time::interval(tick);

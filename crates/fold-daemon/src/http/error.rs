@@ -174,6 +174,7 @@ fn status_of(code: &str) -> Option<StatusCode> {
             Some(StatusCode::BAD_REQUEST)
         }
         codes::NOTIFY_SEND_FAILED => Some(StatusCode::BAD_GATEWAY),
+        codes::NOTIFY_TARGET_INACTIVE => Some(StatusCode::CONFLICT),
         codes::NOTIFY_SETTINGS_IO => Some(StatusCode::INTERNAL_SERVER_ERROR),
         _ => None,
     }
@@ -319,6 +320,7 @@ mod tests {
             (codes::INVALID_NOTIFY_TARGET, StatusCode::BAD_REQUEST),
             (codes::PLAINTEXT_NOTIFY_TARGET, StatusCode::BAD_REQUEST),
             (codes::NOTIFY_SEND_FAILED, StatusCode::BAD_GATEWAY),
+            (codes::NOTIFY_TARGET_INACTIVE, StatusCode::CONFLICT),
             (codes::NOTIFY_SETTINGS_IO, StatusCode::INTERNAL_SERVER_ERROR),
             (codes::CHECKS_FILE_INVALID, StatusCode::UNPROCESSABLE_ENTITY),
             (codes::CHECKS_RUNNING, StatusCode::CONFLICT),

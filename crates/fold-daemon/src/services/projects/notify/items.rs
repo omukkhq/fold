@@ -78,7 +78,7 @@ fn title(item: &NeedsYouItem) -> String {
             format!("{agent} cannot start: the daemon finds no claude")
         }
         NeedsYouKind::NotifyTargetOff => format!(
-            "fold turned the notice target {} off after its sends failed",
+            "fold turned the notice target {} off",
             own(&item.title, "a target")
         ),
     }
@@ -206,6 +206,7 @@ mod tests {
             Timestamp::EPOCH,
             NotifyTargetId::from_number(4).unwrap(),
             "Release bot",
+            "check the URL",
         );
         assert_eq!(item_key(&off), "notify_target_off:nt-4");
         let shown = notice_item(&off);

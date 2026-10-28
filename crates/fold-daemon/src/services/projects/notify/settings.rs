@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use fold_core::projects::notify::{
     DEFAULT_WINDOW_SECONDS, NoticeFilter, NoticeType, OFF_AFTER_FAILURES, TargetKind, check_name,
@@ -11,7 +11,8 @@ use fold_core::{FoldError, HumanName, NotifyTargetId, TaskStatus, Timestamp, cod
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
-use crate::push::{read_private, write_private};
+use crate::projects::ProjectHandle;
+use crate::push::{read_private, remove_temporary, write_private};
 use crate::support::lock;
 
 /// A signing secret or a chat's webhook URL, which is a secret of its own. It has no `Display` and a redacted `Debug`, so it reaches no log line or error by formatting; only a send reads it.
@@ -43,6 +44,45 @@ pub enum OffReason {
     Gone,
     /// [`OFF_AFTER_FAILURES`] tries failed in a row.
     Failures,
+    /// A send failed every try of its retry schedule.
+    GaveUp,
+}
+
+impl OffReason {
+    /// What a person does about a target fold turned off for this reason, as its Needs you item says it.
+    pub fn advice(self) -> &'static str {
+        match self {
+            OffReason::Gone => {
+                "the receiver answered 410 Gone, so it says the webhook is removed: check the URL or give a new one, then send a test from the Settings tab or with `fld notify test`; a test that gets through turns the target on again"
+            }
+            OffReason::Failures => {
+                "20 tries in a row failed: check the URL and the receiver, then send a test from the Settings tab or with `fld notify test`; a test that gets through turns the target on again"
+            }
+            OffReason::GaveUp => {
+                "a send failed every try for about 8.6 hours: check the URL and the receiver, then send a test from the Settings tab or with `fld notify test`; a test that gets through turns the target on again"
+            }
+        }
+    }
+}
+
+/// Whether a target gets notices: `on`; `off`, which a person chose; `gone`, as its receiver answered 410 Gone; or `failing`, as fold turned it off after its sends failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetState {
+    On,
+    Off,
+    Gone,
+    Failing,
+}
+
+impl TargetState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TargetState::On => "on",
+            TargetState::Off => "off",
+            TargetState::Gone => "gone",
+            TargetState::Failing => "failing",
+        }
+    }
 }
 
 /// How a target's sends went, across every project that sends to it.
@@ -103,6 +143,16 @@ impl Target {
         self.enabled && self.health.off.is_none()
     }
 
+    /// A target fold turned off shows why, whatever a person's switch says.
+    pub fn state(&self) -> TargetState {
+        match self.health.off {
+            Some(OffReason::Gone) => TargetState::Gone,
+            Some(OffReason::Failures | OffReason::GaveUp) => TargetState::Failing,
+            None if self.enabled => TargetState::On,
+            None => TargetState::Off,
+        }
+    }
+
     pub fn window(&self) -> std::time::Duration {
         std::time::Duration::from_secs(u64::from(self.window_seconds))
     }
@@ -127,7 +177,7 @@ pub enum Scope {
 }
 
 /// What a person sets on a new target or changes on one; a `None` keeps the value, or takes the default on a new target.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct TargetFields {
     pub name: Option<String>,
     pub url: Option<String>,
@@ -135,6 +185,19 @@ pub struct TargetFields {
     pub moves_to: Option<BTreeSet<TaskStatus>>,
     pub window_seconds: Option<u32>,
     pub enabled: Option<bool>,
+}
+
+impl std::fmt::Debug for TargetFields {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TargetFields")
+            .field("name", &self.name)
+            .field("url", &self.url.as_ref().map(|_| "<redacted>"))
+            .field("types", &self.types)
+            .field("moves_to", &self.moves_to)
+            .field("window_seconds", &self.window_seconds)
+            .field("enabled", &self.enabled)
+            .finish()
+    }
 }
 
 fn checked_url(url: &str) -> Result<Secret, FoldError> {
@@ -288,12 +351,22 @@ pub struct Applying {
 }
 
 /// The notice settings of the host and of each project, in files of mode 0600 below a folder of mode 0700 in the daemon's data folder, outside every project folder, which agents can read. A file holds its targets with their secrets and health; the host file also holds the web app's address for links and the next target number. Only the daemon writes them, one change at a time.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct NotifySettings {
     dir: PathBuf,
     writing: Arc<tokio::sync::Mutex<()>>,
     /// Wakes each project's notifier when a person changed a target or asked for a send.
     wakes: Arc<std::sync::Mutex<HashMap<String, Arc<Notify>>>>,
+    /// The projects the daemon opened, whose event streams a change of a host target reaches.
+    peers: Arc<std::sync::Mutex<HashMap<String, Weak<ProjectHandle>>>>,
+}
+
+impl std::fmt::Debug for NotifySettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotifySettings")
+            .field("dir", &self.dir)
+            .finish_non_exhaustive()
+    }
 }
 
 impl NotifySettings {
@@ -302,6 +375,33 @@ impl NotifySettings {
             dir,
             writing: Arc::new(tokio::sync::Mutex::new(())),
             wakes: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            peers: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Keeps `handle` as the open project of its slug, in place of one opened before.
+    pub fn register(&self, handle: &Arc<ProjectHandle>) {
+        lock(&self.peers).insert(handle.slug.clone(), Arc::downgrade(handle));
+    }
+
+    /// The projects that are still open, in slug order.
+    pub fn peers(&self) -> Vec<Arc<ProjectHandle>> {
+        let mut peers = lock(&self.peers);
+        peers.retain(|_, handle| handle.strong_count() > 0);
+        let mut open: Vec<Arc<ProjectHandle>> = peers.values().filter_map(Weak::upgrade).collect();
+        open.sort_by(|a, b| a.slug.cmp(&b.slug));
+        open
+    }
+
+    /// Removes the temporary files of writes that stopped before their rename, which can hold a secret, from the host folder and the project folder.
+    pub async fn remove_leftovers(&self) {
+        for dir in [self.host_dir(), self.project_dir()] {
+            let removed = tokio::task::spawn_blocking(move || remove_temporary(&dir)).await;
+            if !matches!(removed, Ok(Ok(()))) {
+                tracing::warn!(
+                    "the notice settings folder kept a temporary file that could not be removed"
+                );
+            }
         }
     }
 
@@ -543,7 +643,7 @@ impl NotifySettings {
         Ok(target)
     }
 
-    /// Counts one try of the target `id` of the host or of `slug`: a success clears its failures and a target fold turned off, a failure counts, and [`OFF_AFTER_FAILURES`] in a row or `gone` turn it off. Returns the target as it is kept, or `None` when it is gone. A person's switch stays as it is.
+    /// Counts one try of the target `id` of the host or of `slug`: a success clears its failures and a target fold turned off, a failure counts, and [`OFF_AFTER_FAILURES`] in a row, a send that gave up or `gone` turn it off. Returns the target as it is kept with its state before the try, or `None` when it is gone. A person's switch stays as it is.
     pub async fn record_try(
         &self,
         slug: &str,
@@ -551,43 +651,45 @@ impl NotifySettings {
         host: bool,
         outcome: TryOutcome,
         now: Timestamp,
-    ) -> Result<Option<Target>, FoldError> {
+    ) -> Result<Option<Recorded>, FoldError> {
         let scope = if host {
             Scope::Host
         } else {
             Scope::Project(slug.to_owned())
         };
+        let before = Arc::new(std::sync::Mutex::new(TargetState::On));
+        let seen = Arc::clone(&before);
         let updated = self
             .change(&scope, id, move |target| {
+                *lock(&seen) = target.state();
                 let health = &mut target.health;
-                match outcome {
-                    TryOutcome::Delivered => {
-                        health.failures = 0;
-                        health.off = None;
-                        health.off_at = None;
-                        health.last_ok_at = Some(now);
-                    }
-                    TryOutcome::Failed | TryOutcome::Gone => {
-                        health.failures = health.failures.saturating_add(1);
-                        health.last_failed_at = Some(now);
-                        let off = if outcome == TryOutcome::Gone {
-                            Some(OffReason::Gone)
-                        } else if health.failures >= OFF_AFTER_FAILURES {
-                            Some(OffReason::Failures)
-                        } else {
-                            None
-                        };
-                        if let (Some(off), None) = (off, health.off) {
-                            health.off = Some(off);
-                            health.off_at = Some(now);
-                        }
-                    }
+                if outcome == TryOutcome::Delivered {
+                    health.failures = 0;
+                    health.off = None;
+                    health.off_at = None;
+                    health.last_ok_at = Some(now);
+                    return Ok(());
+                }
+                health.failures = health.failures.saturating_add(1);
+                health.last_failed_at = Some(now);
+                let off = match outcome {
+                    TryOutcome::Gone => Some(OffReason::Gone),
+                    TryOutcome::GaveUp => Some(OffReason::GaveUp),
+                    _ if health.failures >= OFF_AFTER_FAILURES => Some(OffReason::Failures),
+                    _ => None,
+                };
+                if let (Some(off), None) = (off, health.off) {
+                    health.off = Some(off);
+                    health.off_at = Some(now);
                 }
                 Ok(())
             })
             .await;
         match updated {
-            Ok(target) => Ok(Some(target)),
+            Ok(target) => Ok(Some(Recorded {
+                before: *lock(&before),
+                target,
+            })),
             Err(error) if error.code() == codes::NOTIFY_TARGET_NOT_FOUND => Ok(None),
             Err(error) => Err(error),
         }
@@ -642,7 +744,24 @@ impl NotifySettings {
 pub enum TryOutcome {
     Delivered,
     Failed,
+    /// The try failed and was the last of its send's retry schedule.
+    GaveUp,
     Gone,
+}
+
+/// A target after a try was counted, with its state before it.
+#[derive(Debug, Clone)]
+pub struct Recorded {
+    pub before: TargetState,
+    pub target: Target,
+}
+
+impl Recorded {
+    /// The new state when the try changed it.
+    pub fn changed(&self) -> Option<TargetState> {
+        let after = self.target.state();
+        (after != self.before).then_some(after)
+    }
 }
 
 pub(crate) fn not_found(id: NotifyTargetId) -> FoldError {
@@ -782,6 +901,39 @@ mod tests {
             format!("{:?}", Secret::new("x".to_owned())),
             "Secret(<redacted>)"
         );
+        let fields = format!("{:?}", fields("https://hooks.example.com/T0/token"));
+        assert!(
+            !fields.contains("token") && fields.contains("<redacted>"),
+            "{fields}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_start_removes_the_temporary_files_a_stop_left() {
+        let temp = tempfile::tempdir().unwrap();
+        let settings = NotifySettings::new(temp.path().join("notices"));
+        settings
+            .add(&Scope::Project("demo".to_owned()), make("https://a/x"))
+            .await
+            .unwrap();
+        let host = temp.path().join("notices/host");
+        let projects = temp.path().join("notices/projects");
+        std::fs::write(host.join(".host.json.7.0.tmp"), "whsec_left").unwrap();
+        std::fs::write(projects.join(".demo.json.7.1.tmp"), "whsec_left").unwrap();
+        settings.remove_leftovers().await;
+        let names = |dir: &Path| -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(names(&host), ["host.json"]);
+        assert_eq!(names(&projects), ["demo.json"]);
+        NotifySettings::new(temp.path().join("none"))
+            .remove_leftovers()
+            .await;
     }
 
     #[test]
@@ -879,40 +1031,53 @@ mod tests {
             .await
             .unwrap();
         let now = Timestamp::from_millis(9).unwrap();
+        let tried = |outcome| {
+            let settings = settings.clone();
+            async move {
+                settings
+                    .record_try("demo", host.id, true, outcome, now)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            }
+        };
         for _ in 1..OFF_AFTER_FAILURES {
-            let kept = settings
-                .record_try("demo", host.id, true, TryOutcome::Failed, now)
-                .await
-                .unwrap()
-                .unwrap();
-            assert!(kept.active());
+            let kept = tried(TryOutcome::Failed).await;
+            assert!(kept.target.active());
+            assert_eq!(kept.changed(), None);
         }
-        let off = settings
-            .record_try("demo", host.id, true, TryOutcome::Failed, now)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(off.health.off, Some(OffReason::Failures));
-        assert_eq!(off.health.off_at, Some(now));
-        let on = settings
-            .record_try("demo", host.id, true, TryOutcome::Delivered, now)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(on.active());
-        assert_eq!(on.health.failures, 0);
-        let gone = settings
-            .record_try("demo", host.id, true, TryOutcome::Gone, now)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(gone.health.off, Some(OffReason::Gone));
+        let off = tried(TryOutcome::Failed).await;
+        assert_eq!(off.target.health.off, Some(OffReason::Failures));
+        assert_eq!(off.target.health.off_at, Some(now));
         assert_eq!(
+            (off.before, off.changed()),
+            (TargetState::On, Some(TargetState::Failing))
+        );
+        let on = tried(TryOutcome::Delivered).await;
+        assert!(on.target.active());
+        assert_eq!(on.target.health.failures, 0);
+        assert_eq!(on.changed(), Some(TargetState::On));
+        let gave_up = tried(TryOutcome::GaveUp).await;
+        assert_eq!(gave_up.target.health.off, Some(OffReason::GaveUp));
+        assert_eq!(gave_up.changed(), Some(TargetState::Failing));
+        tried(TryOutcome::Delivered).await;
+        let gone = tried(TryOutcome::Gone).await;
+        assert_eq!(gone.target.health.off, Some(OffReason::Gone));
+        assert_eq!(gone.changed(), Some(TargetState::Gone));
+        assert_eq!(
+            tried(TryOutcome::GaveUp).await.changed(),
+            None,
+            "the first reason stays"
+        );
+        for reason in [OffReason::Gone, OffReason::Failures, OffReason::GaveUp] {
+            assert!(reason.advice().contains("send a test"));
+        }
+        assert!(
             settings
                 .record_try("demo", id(9), false, TryOutcome::Failed, now)
                 .await
-                .unwrap(),
-            None
+                .unwrap()
+                .is_none()
         );
         assert!(settings.use_host_targets("demo").await.unwrap());
         settings.set_use_host_targets("demo", false).await.unwrap();

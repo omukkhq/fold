@@ -203,6 +203,7 @@ define_codes! {
     NOTIFY_SETTINGS_IO = "notify_settings_io",
     PLAINTEXT_NOTIFY_TARGET = "plaintext_notify_target",
     NOTIFY_SEND_NOT_FOUND = "notify_send_not_found",
+    NOTIFY_TARGET_INACTIVE = "notify_target_inactive",
 }
 
 /// The error every transport reports. The message and details name ids, never content.

@@ -363,6 +363,56 @@ impl Fixture {
         self.project.clock().advance(by).unwrap();
     }
 
+    /// The `notify.target_changed` events of the project, oldest first, as `(actor, data)`.
+    pub async fn target_changes(&self) -> Vec<(String, Value)> {
+        fold_store::events::read_after(
+            self.handle.store.read(),
+            0,
+            &fold_core::EventFilter::default(),
+            10_000,
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.event_type == types::NOTIFY_TARGET_CHANGED)
+        .map(|event| {
+            (
+                event.actor.as_str().to_owned(),
+                serde_json::to_value(&event.data).unwrap(),
+            )
+        })
+        .collect()
+    }
+
+    /// The state of the newest `notify.target_changed` of `target`.
+    pub async fn last_change(&self, target: &str) -> Option<(String, String)> {
+        self.target_changes()
+            .await
+            .into_iter()
+            .rev()
+            .find(|(_, data)| data["target"] == target)
+            .map(|(actor, data)| (actor, data["state"].as_str().unwrap().to_owned()))
+    }
+
+    pub async fn send_log(&self, target: &str) -> Value {
+        let (status, log) = self
+            .call(
+                Method::GET,
+                &format!("/api/v1/projects/demo/notify/targets/{target}/sends"),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{log}");
+        log
+    }
+
+    pub async fn needs_you(&self) -> Vec<Value> {
+        let (_, needs) = self
+            .call(Method::GET, "/api/v1/projects/demo/needs-you", None)
+            .await;
+        needs["items"].as_array().unwrap().clone()
+    }
+
     /// Sends an ask from `frontend` to the humans and returns its id.
     pub async fn ask(&self) -> String {
         MessageService::new(
@@ -726,13 +776,14 @@ async fn a_failed_test_is_one_try_that_never_goes_again() {
 async fn a_gone_receiver_turns_its_target_off_at_once() {
     let mut fx = Fixture::new().await;
     let mut receiver = Receiver::start(&[410]).await;
-    fx.target(
-        "webhook",
-        &receiver.url,
-        false,
-        json!({"window_seconds": 0}),
-    )
-    .await;
+    let (target, _) = fx
+        .target(
+            "webhook",
+            &receiver.url,
+            false,
+            json!({"window_seconds": 0}),
+        )
+        .await;
     fx.moved("in_progress", "review").await;
     fx.moved("review", "done").await;
     fx.pass().await;
@@ -745,10 +796,34 @@ async fn a_gone_receiver_turns_its_target_off_at_once() {
     fx.advance(Duration::from_secs(3600));
     assert_eq!(fx.pass().await, 0);
     assert!(receiver.none_waiting(), "an off target gets nothing more");
-    let (_, needs) = fx
-        .call(Method::GET, "/api/v1/projects/demo/needs-you", None)
-        .await;
-    assert!(needs["items"].as_array().unwrap().is_empty());
+    let needs = fx.needs_you().await;
+    assert_eq!(needs.len(), 1, "{needs:?}");
+    assert_eq!(needs[0]["kind"], "notify_target_off");
+    assert!(
+        needs[0]["reason"].as_str().unwrap().contains("410 Gone"),
+        "{needs:?}"
+    );
+    let log = fx.send_log(&target).await;
+    assert_eq!(
+        (
+            log["sends"][0]["state"].as_str(),
+            log["sends"][0]["status"].as_u64()
+        ),
+        (Some("given_up"), Some(410))
+    );
+    assert_eq!(
+        fx.last_change(&target).await,
+        Some(("fold".to_owned(), "gone".to_owned()))
+    );
+    let change = fx.target_changes().await.pop().unwrap().1;
+    assert_eq!(
+        change,
+        json!({"target": target, "name": "webhook target", "host": false, "state": "gone"})
+    );
+    assert!(
+        !change.to_string().contains("fold-token"),
+        "no URL in the event"
+    );
 }
 
 #[tokio::test]
@@ -781,10 +856,30 @@ async fn twenty_failures_in_a_row_turn_a_target_off_and_into_needs_you() {
         .call(Method::GET, "/api/v1/projects/demo/notify", None)
         .await;
     assert_eq!(shown["host_targets"][0]["state"], "failing");
+    let log = fx.send_log(&target).await;
+    assert_eq!(
+        (
+            log["sends"][0]["state"].as_str(),
+            log["sends"][0]["tries"].as_u64()
+        ),
+        (Some("given_up"), Some(1)),
+        "the send that turned the target off stays in the log"
+    );
+    assert_eq!(
+        fx.last_change(&target).await,
+        Some(("fold".to_owned(), "failing".to_owned()))
+    );
     let (_, needs) = fx
         .call(Method::GET, "/api/v1/projects/demo/needs-you", None)
         .await;
     let item = &needs["items"][0];
+    assert!(
+        item["reason"]
+            .as_str()
+            .unwrap()
+            .contains("20 tries in a row"),
+        "{item}"
+    );
     assert_eq!(
         (item["kind"].as_str(), item["screen"].as_str()),
         (Some("notify_target_off"), Some("settings"))
@@ -812,10 +907,240 @@ async fn twenty_failures_in_a_row_turn_a_target_off_and_into_needs_you() {
         .call(Method::GET, "/api/v1/projects/demo/notify", None)
         .await;
     assert_eq!(shown["host_targets"][0]["state"], "on");
-    let (_, needs) = fx
-        .call(Method::GET, "/api/v1/projects/demo/needs-you", None)
+    assert_eq!(
+        fx.last_change(&target).await,
+        Some(("fold".to_owned(), "on".to_owned())),
+        "a test that gets through turns the target on again"
+    );
+    assert!(fx.needs_you().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_send_that_fails_every_try_turns_its_target_off_and_stays_in_the_log() {
+    let mut fx = Fixture::new().await;
+    let mut receiver = Receiver::start(&[500; 7]).await;
+    let (target, _) = fx
+        .target(
+            "webhook",
+            &receiver.url,
+            false,
+            json!({"window_seconds": 0}),
+        )
         .await;
-    assert!(needs["items"].as_array().unwrap().is_empty());
+    fx.moved("in_progress", "review").await;
+    fx.pass().await;
+    receiver.next().await;
+    for wait in fold_core::projects::notify::RETRIES {
+        assert!(fx.needs_you().await.is_empty(), "a retry waits quietly");
+        fx.advance(wait);
+        fx.pass().await;
+        receiver.next().await;
+    }
+    let log = fx.send_log(&target).await;
+    assert_eq!(
+        (
+            log["sends"][0]["state"].as_str(),
+            log["sends"][0]["tries"].as_u64()
+        ),
+        (Some("given_up"), Some(7))
+    );
+    let (_, shown) = fx
+        .call(Method::GET, "/api/v1/projects/demo/notify", None)
+        .await;
+    assert_eq!(
+        (
+            shown["targets"][0]["state"].as_str(),
+            shown["targets"][0]["failures"].as_u64()
+        ),
+        (Some("failing"), Some(7)),
+        "fold turns the target off at its first send that gave up"
+    );
+    let needs = fx.needs_you().await;
+    assert_eq!(needs.len(), 1, "{needs:?}");
+    assert!(
+        needs[0]["reason"].as_str().unwrap().contains("8.6 hours"),
+        "{needs:?}"
+    );
+    assert_eq!(
+        fx.last_change(&target).await,
+        Some(("fold".to_owned(), "failing".to_owned()))
+    );
+    fx.moved("review", "done").await;
+    fx.advance(Duration::from_secs(3600));
+    assert_eq!(fx.pass().await, 0);
+    assert!(receiver.none_waiting());
+}
+
+#[tokio::test]
+async fn send_again_refuses_a_target_that_gets_no_notices_and_people_s_changes_are_events() {
+    let mut fx = Fixture::new().await;
+    let mut receiver = Receiver::start(&[]).await;
+    let (own, _) = fx
+        .target(
+            "webhook",
+            &receiver.url,
+            false,
+            json!({"window_seconds": 0}),
+        )
+        .await;
+    let (host, _) = fx
+        .target("webhook", &receiver.url, true, json!({"window_seconds": 0}))
+        .await;
+    let human = format!("human:{HUMAN}");
+    assert_eq!(
+        fx.last_change(&own).await,
+        Some((human.clone(), "on".to_owned()))
+    );
+    assert_eq!(
+        fx.target_changes().await.last().unwrap().1["host"],
+        true,
+        "a host target's change reaches the project"
+    );
+    fx.moved("in_progress", "review").await;
+    assert_eq!(fx.pass().await, 2);
+    receiver.next().await;
+    receiver.next().await;
+    let send_of = async |target: &str| {
+        fx.send_log(target).await["sends"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let (own_send, host_send) = (send_of(&own).await, send_of(&host).await);
+    let again = async |send: &str| {
+        fx.call(
+            Method::POST,
+            &format!("/api/v1/projects/demo/notify/sends/{send}/again"),
+            None,
+        )
+        .await
+    };
+
+    let (status, body) = fx
+        .call(
+            Method::PUT,
+            &format!("/api/v1/projects/demo/notify/targets/{own}"),
+            Some(json!({"enabled": false})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        fx.last_change(&own).await,
+        Some((human.clone(), "off".to_owned()))
+    );
+    let (status, refused) = again(&own_send).await;
+    assert_eq!(
+        (status, refused["error"]["code"].as_str()),
+        (StatusCode::CONFLICT, Some("notify_target_inactive")),
+        "{refused}"
+    );
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("off")
+    );
+    assert!(refused["error"]["details"]["hint"].as_str().is_some());
+
+    let (status, _) = fx
+        .call(
+            Method::PUT,
+            "/api/v1/projects/demo/notify",
+            Some(json!({"use_host_targets": false})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, refused) = again(&host_send).await;
+    assert_eq!(
+        (status, refused["error"]["code"].as_str()),
+        (StatusCode::CONFLICT, Some("notify_target_inactive")),
+        "{refused}"
+    );
+    assert!(
+        refused["error"]["details"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("host-targets on")
+    );
+
+    let (status, _) = fx
+        .call(
+            Method::DELETE,
+            &format!("/api/v1/notify/targets/{host}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        fx.last_change(&host).await,
+        Some((human.clone(), "removed".to_owned()))
+    );
+    let (status, refused) = again(&host_send).await;
+    assert_eq!(
+        (status, refused["error"]["code"].as_str()),
+        (StatusCode::NOT_FOUND, Some("notify_send_not_found")),
+        "a removed host target's sends leave the project with it: {refused}"
+    );
+
+    let (status, _) = fx
+        .call(
+            Method::DELETE,
+            &format!("/api/v1/projects/demo/notify/targets/{own}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        fx.last_change(&own).await,
+        Some((human, "removed".to_owned()))
+    );
+    let (status, refused) = again(&own_send).await;
+    assert_eq!(
+        (status, refused["error"]["code"].as_str()),
+        (StatusCode::NOT_FOUND, Some("notify_send_not_found"))
+    );
+    assert!(receiver.none_waiting());
+}
+
+#[tokio::test]
+async fn a_test_sent_again_is_still_one_try() {
+    let mut fx = Fixture::new().await;
+    let mut receiver = Receiver::start(&[503, 500]).await;
+    let (target, _) = fx.target("webhook", &receiver.url, false, json!({})).await;
+    let (status, _) = fx
+        .call(
+            Method::POST,
+            &format!("/api/v1/projects/demo/notify/targets/{target}/test"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    receiver.next().await;
+    let send = fx.send_log(&target).await["sends"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, body) = fx
+        .call(
+            Method::POST,
+            &format!("/api/v1/projects/demo/notify/sends/{send}/again"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(fx.pass().await, 0);
+    receiver.next().await;
+    let log = fx.send_log(&target).await;
+    assert_eq!(
+        (
+            log["sends"][0]["state"].as_str(),
+            log["sends"][0]["tries"].as_u64()
+        ),
+        (Some("given_up"), Some(1))
+    );
+    fx.advance(Duration::from_secs(3600));
+    assert_eq!(fx.pass().await, 0);
+    assert!(receiver.none_waiting());
 }
 
 #[tokio::test]

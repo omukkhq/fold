@@ -1,6 +1,8 @@
 use std::time::{Duration, Instant};
 
-use fold_core::projects::notify::{Answer, SEND_TIMEOUT, TargetKind, signature_header};
+use fold_core::projects::notify::{
+    Answer, SEND_TIMEOUT, TargetKind, is_loopback_host, signature_header, url_host,
+};
 use fold_core::{FoldError, Timestamp};
 
 use super::settings::Target;
@@ -44,7 +46,7 @@ fn retry_after(response: &ureq::http::Response<ureq::Body>) -> Option<Duration> 
         .map(Duration::from_secs)
 }
 
-/// Posts `body` to `target`, blocking until the receiver answers or [`SEND_TIMEOUT`] passes, with the time it took. A redirect is never followed, so the body and its signature go only to the URL a person gave. The answer carries the status alone: no response body or header text of the receiver reaches fold's records.
+/// Posts `body` to `target`, blocking until the receiver answers or [`SEND_TIMEOUT`] passes, with the time it took. A redirect is never followed, so the body and its signature go only to the URL a person gave. A send to a loopback host never goes through a proxy, as an `http` one would cross the network unencrypted; a send to another host goes through the proxy the environment names, which some networks need to reach the internet. The answer carries the status alone: no response body or header text of the receiver reaches fold's records.
 pub fn post(
     target: &Target,
     webhook_id: &str,
@@ -55,12 +57,14 @@ pub fn post(
         TargetKind::Webhook => signed_headers(target, webhook_id, body, now)?,
         TargetKind::Slack | TargetKind::Discord => Vec::new(),
     };
-    let agent: ureq::Agent = ureq::Agent::config_builder()
+    let mut config = ureq::Agent::config_builder()
         .timeout_global(Some(SEND_TIMEOUT))
         .max_redirects(0)
-        .http_status_as_error(false)
-        .build()
-        .into();
+        .http_status_as_error(false);
+    if is_loopback_host(url_host(target.url.expose())) {
+        config = config.proxy(None);
+    }
+    let agent: ureq::Agent = config.build().into();
     let mut request = agent
         .post(post_url(target))
         .header("content-type", "application/json")
