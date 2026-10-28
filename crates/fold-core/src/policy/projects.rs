@@ -4,6 +4,19 @@ use crate::error::codes;
 use super::PolicyDenied;
 use super::workers::Starter;
 
+/// A notice target sends the project's activity to an address outside fold, and its secret signs that channel, so only a named human adds, changes, removes or tests one; an agent that could add a target could send fold's activity anywhere.
+pub fn can_change_notifications(actor: &Actor) -> Result<(), PolicyDenied> {
+    if actor.is_human() {
+        Ok(())
+    } else {
+        Err(PolicyDenied {
+            code: codes::HUMAN_REQUIRED,
+            message: "only a human changes where fold sends its notices",
+            hint: "ask a human to run `fld notify` or open the project's Settings tab in fold's web app",
+        })
+    }
+}
+
 /// Bringing the remote branch into main changes main outside any proposal, so only a named human runs `fld pull`.
 pub fn can_pull(actor: &Actor) -> Result<(), PolicyDenied> {
     if actor.is_human() {
@@ -104,6 +117,20 @@ mod tests {
             let denied = can_remove_project(&actor).unwrap_err();
             assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
             assert_eq!(denied.hint(), "ask a human to do it on the projects page");
+        }
+    }
+
+    #[test]
+    fn only_a_human_changes_the_notice_targets() {
+        assert!(can_change_notifications(&Actor::human(HumanName::parse("ana").unwrap())).is_ok());
+        let agent = Actor::Agent(AgentActor {
+            agent: AgentName::parse("frontend").unwrap(),
+            worker: WorkerName::parse("frontend").unwrap(),
+            tags: Vec::new(),
+        });
+        for actor in [agent, Actor::System] {
+            let denied = can_change_notifications(&actor).unwrap_err();
+            assert_eq!(denied.code(), codes::HUMAN_REQUIRED);
         }
     }
 

@@ -181,3 +181,9 @@ main_not_supervised
 invalid_sign_in_link
 update_checks_running
 path_not_tracked
+notify_target_not_found
+invalid_notify_target
+notify_send_failed
+notify_settings_io
+plaintext_notify_target
+notify_send_not_found
