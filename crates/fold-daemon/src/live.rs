@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use fold_core::events::types;
 use fold_core::object::ObjectHash;
+use fold_core::reviews::checks::Purpose;
 use fold_core::stall::{self, ProposalTurn, WorkspaceFact};
 use fold_core::tree::{ChangeKind as FileChangeKind, ChangeTally, FlatTree};
 use fold_core::{
@@ -32,7 +33,6 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use utoipa::ToSchema;
 
-use crate::http::reviews::checks::CheckPurpose;
 use crate::services::events::{EventBuffer, EventBus};
 use crate::services::workspaces::{WorkspaceError, capabilities};
 use crate::support::{blocking, lock, unpoisoned};
@@ -126,9 +126,32 @@ pub struct LiveWorkspace {
     /// Whether the working files differ from the tree of the open proposal's newest version: false while every file is the same, true from the first file that differs. Null without an open proposal.
     #[schema(required = true)]
     pub edits_after_version: Option<bool>,
-    /// The check run that goes in the workspace: the worker's `run_checks` or the gate of its `create_proposal` or `update_proposal`. The worker waits for its result, so it is not stalled while the run goes, and the stall time counts from the run's end at the earliest. Null while no run goes.
+    /// The check run that goes in the workspace: the worker's `run_checks` or the gate of its `create_proposal` or `update_proposal` in a task workspace, or a reviewer's `review_fix` in a review checkout. The worker waits for its result, so it is not stalled while the run goes, and the stall time counts from the run's end at the earliest. Null while no run goes.
     #[schema(required = true)]
     pub check_run: Option<LiveCheckRun>,
+}
+
+/// What asked for a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckPurpose {
+    Check,
+    CreateProposal,
+    UpdateProposal,
+    Integrate,
+    ReviewFix,
+}
+
+impl From<Purpose> for CheckPurpose {
+    fn from(purpose: Purpose) -> Self {
+        match purpose {
+            Purpose::Check => Self::Check,
+            Purpose::CreateProposal => Self::CreateProposal,
+            Purpose::UpdateProposal => Self::UpdateProposal,
+            Purpose::Integrate => Self::Integrate,
+            Purpose::ReviewFix => Self::ReviewFix,
+        }
+    }
 }
 
 /// A check run that goes in a workspace.
