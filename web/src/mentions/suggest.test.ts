@@ -234,7 +234,7 @@ describe("personSuggestions", () => {
 });
 
 describe("optionLook and optionMark", () => {
-  it("draws a person in the colour of their kind and the rest in the mono face", () => {
+  it("draws a person in the colour of their kind, a path in the mono face and an item as an id", () => {
     const [human, agent] = personSuggestions("", {
       humans: ["tanim"],
       agents: ["frontend"],
@@ -249,7 +249,16 @@ describe("optionLook and optionMark", () => {
         detail: "",
         open: false,
       }),
-    ).toBe("mono");
+    ).toBe("path");
+    expect(
+      optionLook({
+        group: "tasks",
+        insert: "T-12",
+        label: "T-12",
+        detail: "Add PIN sign-in",
+        open: false,
+      }),
+    ).toBe("id");
     expect((["people", "files", "tasks"] as const).map(optionMark)).toEqual([
       "@",
       "@",

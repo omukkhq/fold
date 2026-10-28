@@ -13,6 +13,7 @@ import {
 import { boardCards, boardQuery } from "@/api/board";
 import { proposalsQuery, requestsQuery } from "@/api/queries";
 import { controlClasses } from "@/components/form/Field";
+import { ID_CLASSES } from "@/components/id/idStyles";
 import {
   repositoryQuery,
   revisionsQuery,
@@ -41,7 +42,8 @@ import {
 } from "./suggest";
 
 const LOOKS: Record<OptionLook, string> = {
-  mono: "font-mono text-13 text-accent",
+  path: "font-mono text-13 text-accent",
+  id: `${ID_CLASSES} text-14 text-accent`,
   human: "text-14 font-medium text-accent",
   agent: "text-14 font-medium text-text",
 };
@@ -273,8 +275,8 @@ export const MentionTextarea = forwardRef<
             ))}
           </ul>
           <p className="mt-4 flex items-center gap-4 border-t border-line px-12 pt-6 text-13 text-text-2">
-            <ArrowUp aria-hidden="true" size={11} />
-            <ArrowDown aria-hidden="true" size={11} />
+            <ArrowUp aria-hidden="true" size={14} />
+            <ArrowDown aria-hidden="true" size={14} />
             to move · Enter to insert · Esc to close
           </p>
         </RadixPopover.Content>
@@ -288,5 +290,5 @@ const ROW_ICONS = { user: User, bot: Bot, file: FileText, folder: Folder };
 function RowIconView({ icon }: { icon: RowIcon | null }) {
   if (icon === null) return null;
   const Icon = ROW_ICONS[icon];
-  return <Icon aria-hidden="true" size={13} className="shrink-0 text-text-2" />;
+  return <Icon aria-hidden="true" size={14} className="shrink-0 text-text-2" />;
 }

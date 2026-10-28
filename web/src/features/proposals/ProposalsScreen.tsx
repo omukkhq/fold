@@ -39,7 +39,7 @@ import {
   type ClaimFilter,
   type ListSearch,
 } from "./filters";
-import { IdLink } from "./IdLink";
+import { IdLink } from "@/components/id/IdLink";
 import { integratedRevisions } from "./integration";
 import { listMeta, listPill } from "./present";
 import { ReviewPill } from "./ReviewPill";

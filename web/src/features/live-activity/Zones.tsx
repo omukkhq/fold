@@ -7,7 +7,7 @@ import { focusRing } from "../../lib/focus";
 import type { LiveWorkspace } from "../../live/envelope";
 import { ChangedFileRow } from "./ChangedFileRow";
 import { visibleFiles } from "./files";
-import { IdLink } from "./IdLink";
+import { IdLink } from "@/components/id/IdLink";
 import type { RecordedItem } from "./recorded";
 import { summarize } from "./summary";
 

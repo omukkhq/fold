@@ -6,7 +6,7 @@ import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { PersonName } from "@/people/PersonName";
 import { projectPath } from "@/routes/paths";
-import { IdLink } from "./IdLink";
+import { IdLink } from "@/components/id/IdLink";
 import { planWait } from "./planWait";
 import { reviewPill, versionText } from "./present";
 import { ReviewPill } from "./ReviewPill";

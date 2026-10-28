@@ -5,7 +5,7 @@ import {
 } from "@/components/table/tableStyles";
 import { Id } from "@/components/id/Id";
 import { IdText } from "@/components/text/IdText";
-import { IdLink } from "@/features/proposals/IdLink";
+import { IdLink } from "@/components/id/IdLink";
 import {
   skipToken,
   useMutation,

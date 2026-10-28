@@ -2,10 +2,11 @@ import { useQuery } from "@tanstack/react-query";
 import { TriangleAlert } from "lucide-react";
 import { repositoryQuery } from "@/api/repositoryQueries";
 import { Badge } from "../../components/badge/Badge";
+import { Chip } from "../../components/badge/Chip";
 import { formatSince } from "../../format/time";
 import { PersonName } from "../../people/PersonName";
 import { attentionView, behindTag } from "./attention";
-import { IdLink } from "./IdLink";
+import { IdLink } from "@/components/id/IdLink";
 import { taskHref } from "./links";
 import { lastActivity, panelHeading, workerOf, type Panel } from "./panels";
 import { recordedItems } from "./recorded";
@@ -79,11 +80,7 @@ export function WorkspacePanel({ slug, panel, now }: WorkspacePanelProps) {
           <span className="whitespace-nowrap">{entry.id}</span>
           <Dot />
           <span className="whitespace-nowrap">base {base}</span>
-          {behind === null ? null : (
-            <span className="rounded-pill bg-fill px-8 font-medium whitespace-nowrap text-text">
-              {behind}
-            </span>
-          )}
+          {behind === null ? null : <Chip>{behind}</Chip>}
           <Dot />
           <span className="whitespace-nowrap">
             last edit {formatSince(now, activity)}

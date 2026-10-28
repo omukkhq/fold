@@ -17,7 +17,7 @@ import {
   buttonIconClass,
 } from "@/components/button/buttonStyles";
 import { Id } from "@/components/id/Id";
-import { ID_LINK_CLASSES } from "@/components/id/idStyles";
+import { IdLink } from "@/components/id/IdLink";
 import { failureText } from "@/format/failure";
 import { cn } from "@/lib/cn";
 import { focusRing, insetFocusRing } from "@/lib/focus";
@@ -56,7 +56,7 @@ interface ThreadPanelProps {
 }
 
 /** A task or proposal the thread is about, as its icon and id. */
-function IdLink({
+function SubjectLink({
   href,
   icon: Icon,
   id,
@@ -66,17 +66,10 @@ function IdLink({
   id: string;
 }) {
   return (
-    <HrefLink
-      href={href}
-      className={cn(
-        ID_LINK_CLASSES,
-        "inline-flex items-center gap-5 font-medium",
-        focusRing,
-      )}
-    >
+    <IdLink href={href} className="inline-flex items-center gap-5 font-medium">
       <Icon aria-hidden="true" size={14} className="shrink-0" />
       {id}
-    </HrefLink>
+    </IdLink>
   );
 }
 
@@ -178,14 +171,14 @@ export function ThreadPanel({
           </h2>
           <p className="flex flex-wrap items-center gap-x-10 gap-y-2 text-13 lg:gap-x-14 lg:gap-y-4 lg:text-14">
             {thread.task ? (
-              <IdLink
+              <SubjectLink
                 href={projectPath(slug, "t", thread.task)}
                 icon={SquareKanban}
                 id={thread.task}
               />
             ) : null}
             {thread.proposal ? (
-              <IdLink
+              <SubjectLink
                 href={projectPath(slug, "proposals", thread.proposal)}
                 icon={GitPullRequest}
                 id={thread.proposal}

@@ -46,7 +46,7 @@ import {
   type HistoryEntry,
   type HistoryReview,
 } from "./history";
-import { IdLink } from "./IdLink";
+import { IdLink } from "@/components/id/IdLink";
 import type { IntegrationView } from "./integration";
 import {
   currentVersion,
