@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { LiveWorkspace } from "@/api/tasks";
 import { liveWorkspace, workspaceEntry } from "@/test/payloads";
 import { keys } from "../../api/keys";
-import { attentionView, mainLine } from "./attention";
+import { attentionView, behindTag, mainHeadText } from "./attention";
 import { changeKind, fileLabel, visibleFiles } from "./files";
 import { checkpointHref, taskHref, workingFileHref } from "./links";
 import { createLiveStatesStore, shownAsOf } from "./liveStates";
@@ -88,7 +88,13 @@ describe("files", () => {
   });
 
   it("names the change kinds and both paths of a rename", () => {
-    expect(changeKind("added")).toEqual({ letter: "A", label: "Added" });
+    expect(changeKind("added")).toEqual({
+      letter: "A",
+      label: "Added",
+      tone: "bg-ok-soft text-ok",
+    });
+    expect(changeKind("deleted").tone).toBe("bg-bad-soft text-bad");
+    expect(changeKind("modified").tone).toBe("bg-fill text-text-2");
     expect(changeKind("renamed").letter).toBe("R");
     expect(fileLabel(file("b.ts", "a.ts"))).toBe("a.ts → b.ts");
     expect(fileLabel(file("b.ts"))).toBe("b.ts");
@@ -134,21 +140,18 @@ describe("attention", () => {
         { id: "r7", parent: null },
       ],
     };
-    expect(mainLine("r9", repository)).toBe("Base r9 is current main.");
-    expect(mainLine("r8", repository)).toBe(
-      "Main is at r9; base r8 is 1 revision behind.",
-    );
-    expect(mainLine("r7", repository)).toBe(
-      "Main is at r9; base r7 is 2 revisions behind.",
-    );
-    expect(mainLine("r2", repository)).toBe(
-      "Main is at r9; base r2 is at least 3 revisions behind.",
-    );
+    expect(mainHeadText(repository)).toBe("Main is at r9");
+    expect(behindTag("r9", repository)).toBeNull();
+    expect(behindTag("r8", repository)).toBe("1 behind");
+    expect(behindTag("r7", repository)).toBe("2 behind");
+    expect(behindTag("r2", repository)).toBe("3+ behind");
   });
 
-  it("names the base alone until main is read", () => {
-    expect(mainLine("r7", undefined)).toBe("Base r7.");
-    expect(mainLine("r7", { head: null, recent: [] })).toBe("Base r7.");
+  it("says nothing of main until it is read", () => {
+    expect(mainHeadText(undefined)).toBeNull();
+    expect(mainHeadText({ head: null, recent: [] })).toBeNull();
+    expect(behindTag("r7", undefined)).toBeNull();
+    expect(behindTag("r7", { head: null, recent: [] })).toBeNull();
   });
 });
 

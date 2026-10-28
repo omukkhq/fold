@@ -16,11 +16,13 @@ export function RestartWorker({
   slug,
   name,
   previousSessions,
+  className,
 }: {
   slug: string;
   name: string;
   /** The ids of the worker's earlier sessions, oldest first. */
   previousSessions: readonly string[];
+  className?: string;
 }) {
   const queryClient = useQueryClient();
   const ids = useId();
@@ -50,7 +52,8 @@ export function RestartWorker({
       <RadixDialog.Trigger asChild>
         <Button
           size="sm"
-          icon={<RotateCcw aria-hidden="true" size={13} />}
+          className={className}
+          icon={<RotateCcw aria-hidden="true" size={14} />}
           aria-label={`Start ${name} in a new session`}
         >
           New session

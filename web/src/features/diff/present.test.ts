@@ -9,6 +9,7 @@ import {
   changeNote,
   comparisonCrumbs,
   comparisonSides,
+  namesSides,
   comparisonNote,
   comparisonTitle,
   hiddenLinesText,
@@ -113,8 +114,8 @@ describe("comparisonSides", () => {
 describe("comparisonCrumbs", () => {
   it("leads a workspace back to Activity", () => {
     expect(comparisonCrumbs("demo", working)).toEqual([
-      { label: "Activity", href: "/p/demo/activity", mono: false },
-      { label: "ws-7", href: null, mono: true },
+      { label: "Activity", href: "/p/demo/activity" },
+      { label: "ws-7", href: null },
     ]);
   });
 
@@ -126,9 +127,17 @@ describe("comparisonCrumbs", () => {
 
   it("leads revisions back to Repository", () => {
     expect(comparisonCrumbs("demo", revisions)).toEqual([
-      { label: "Repository", href: "/p/demo/repository", mono: false },
-      { label: "r7 → r8", href: null, mono: true },
+      { label: "Repository", href: "/p/demo/repository" },
+      { label: "r7 → r8", href: null },
     ]);
+  });
+});
+
+describe("namesSides", () => {
+  it("names the sides of a workspace comparison only", () => {
+    expect(namesSides(working)).toBe(true);
+    expect(namesSides(revisions)).toBe(false);
+    expect(namesSides(checkpoint)).toBe(false);
   });
 });
 

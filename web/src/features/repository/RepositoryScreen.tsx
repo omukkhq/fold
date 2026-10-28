@@ -9,7 +9,6 @@ import {
   revisionsQuery,
   treeQuery,
 } from "@/api/repositoryQueries";
-import { Mono } from "@/components/mono/Mono";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
@@ -77,7 +76,7 @@ export function RepositoryScreen({
 
   if (revisions.isPending) {
     return (
-      <div className="px-24 pt-20 pb-24">
+      <div className="px-16 pt-20 pb-24 md:px-24">
         <Skeleton />
       </div>
     );
@@ -95,7 +94,7 @@ export function RepositoryScreen({
   const [newest] = history;
   if (!newest) {
     return (
-      <div className="px-24 pt-20 pb-24">
+      <div className="px-16 pt-20 pb-24 md:px-24">
         <EmptyPanel title="No revisions yet">
           The project has no main history. Integrate a proposal to create r1.
         </EmptyPanel>
@@ -105,7 +104,7 @@ export function RepositoryScreen({
   if (pick?.kind === "unlisted" && !unlisted.data) {
     if (unlisted.isError && isMissingRevision(unlisted.error)) {
       return (
-        <div className="px-24 pt-20 pb-24">
+        <div className="px-16 pt-20 pb-24 md:px-24">
           <EmptyPanel icon={SearchX} title={`${pick.id} does not exist`}>
             The project has no such revision.
           </EmptyPanel>
@@ -122,7 +121,7 @@ export function RepositoryScreen({
       );
     }
     return (
-      <div className="px-24 pt-20 pb-24">
+      <div className="px-16 pt-20 pb-24 md:px-24">
         <Skeleton />
       </div>
     );
@@ -144,16 +143,16 @@ export function RepositoryScreen({
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-20 px-24 pt-20 pb-24 lg:flex-row lg:items-start">
+    <div className="flex flex-1 flex-col gap-22 px-16 pt-20 pb-24 md:px-24 lg:flex-row lg:items-start">
       <section
         aria-label="History"
-        className="flex flex-col gap-12 lg:w-history lg:shrink-0"
+        className="flex flex-col gap-14 lg:w-history lg:shrink-0"
       >
         <div className="flex flex-col gap-4">
           <h1 className="text-24 leading-tight font-semibold text-text">
             Repository
           </h1>
-          <p className="text-15 text-text-2">
+          <p className="max-w-measure text-15 text-text-2">
             Accepted history only. Each revision is one integration.
           </p>
         </div>
@@ -164,23 +163,25 @@ export function RepositoryScreen({
           onSelect={onSelectRevision}
         />
         {more ? (
-          <p className="text-14 text-text-2">
+          <p className="max-w-measure text-14 text-text-2">
             {olderNotListed(history.length, "revisions")}
           </p>
         ) : null}
         {onlyFirst ? (
-          <p className="text-14 text-text-2">
+          <p className="max-w-measure text-14 text-text-2">
             Only r1 exists, so there is nothing to compare yet.
           </p>
         ) : null}
       </section>
       <section
         aria-label="Tree"
-        className="flex min-w-0 flex-1 flex-col gap-12"
+        className="flex min-w-0 flex-1 flex-col gap-14"
       >
-        <div className="flex min-h-32 flex-wrap items-center justify-between gap-10">
+        <div className="flex min-h-40 flex-wrap items-center justify-between gap-12">
           <span className="flex items-center gap-10">
-            <Mono className="text-14 font-semibold text-text">{selected}</Mono>
+            <span className="font-title text-18 leading-tight font-semibold text-text tabular-nums">
+              {selected}
+            </span>
             <CommitId commit={selectedCommit} />
           </span>
           {onlyFirst ? null : (
@@ -204,14 +205,22 @@ export function RepositoryScreen({
           <FileView slug={slug} revision={selected} path={openPath} />
         )}
         {mainCopy === null ? null : (
-          <p className="flex items-center gap-8 rounded-m bg-sunken px-12 py-10 text-14 text-text-2">
+          <div className="flex items-start gap-10 rounded-m bg-sunken px-14 py-10 text-14 text-text">
             {folderWaits(repository.data) ? (
-              <FolderClock aria-hidden size={15} className="shrink-0" />
+              <FolderClock
+                aria-hidden
+                size={16}
+                className="mt-3 shrink-0 text-text-2"
+              />
             ) : (
-              <FolderLock aria-hidden size={15} className="shrink-0" />
+              <FolderLock
+                aria-hidden
+                size={16}
+                className="mt-3 shrink-0 text-text-2"
+              />
             )}
-            {mainCopy}
-          </p>
+            <p className="max-w-measure">{mainCopy}</p>
+          </div>
         )}
         <GitStatus slug={slug} variant="panel" />
       </section>

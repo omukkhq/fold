@@ -21,7 +21,8 @@ describe("SessionLine", () => {
     const session = screen.getByRole("button", {
       name: "Copy session id 0f8e2c1a",
     });
-    expect(session.textContent).toContain("session 0f8e2c1a");
+    expect(session.textContent).toContain("0f8e2c1a");
+    expect(screen.getByText("Session")).toBeTruthy();
     const transcript = screen.getByRole("button", {
       name: "Copy transcript path of session 0f8e2c1a",
     });

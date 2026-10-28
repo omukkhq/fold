@@ -20,6 +20,7 @@ import {
 import { Button, IconButton } from "@/components/button/Button";
 import { textFlow } from "@/components/text/textFlow";
 import { formatAsOfMinute } from "@/format/time";
+import { IdText } from "@/components/text/IdText";
 import { cn } from "@/lib/cn";
 import { PersonName } from "@/people/PersonName";
 import { ErrorNote } from "./parts";
@@ -90,9 +91,9 @@ export function PermissionPanel({
   return (
     <aside
       aria-label="Permission question"
-      className="flex w-review-panel shrink-0 flex-col self-start rounded-l border border-line bg-surface"
+      className="flex w-full shrink-0 flex-col self-start rounded-m bg-surface lg:w-review-panel"
     >
-      <div className="flex items-center justify-between border-b border-line py-12 pr-12 pl-20">
+      <div className="flex items-center justify-between pt-12 pr-12 pl-20">
         <h2 className="text-16 leading-tight font-semibold text-text">
           Permission question
         </h2>
@@ -151,8 +152,8 @@ function QuestionBody({
             <p className="flex items-center gap-8">
               <span className="text-14 text-text-2">{row.role}</span>
               {bound && bound.kind === "ids" ? (
-                <span className="font-mono text-13 text-text">
-                  {bound.text}
+                <span className="text-14 text-text">
+                  <IdText text={bound.text} />
                 </span>
               ) : null}
             </p>
@@ -160,14 +161,14 @@ function QuestionBody({
         </Section>
         <Section title="Tool">
           <p className="flex items-center gap-8">
-            <Icon aria-hidden="true" size={15} className="text-text-2" />
+            <Icon aria-hidden="true" size={16} className="text-text-2" />
             <span className="text-15 font-semibold text-text">
               {question.tool}
             </span>
           </p>
         </Section>
         <Section title="Input">
-          <div className="flex flex-col gap-4 rounded-m bg-sunken px-12 py-10 inset-ring inset-ring-line">
+          <div className="flex flex-col gap-4 rounded-m bg-fill px-12 py-10">
             <pre
               className={cn("font-mono text-13 text-text", textFlow("prose"))}
             >
@@ -182,7 +183,7 @@ function QuestionBody({
           <p className="text-14 text-text-2">{whyAsksText(question.tool)}</p>
         </Section>
       </div>
-      <div className="flex flex-col gap-10 border-t border-line px-20 py-14">
+      <div className="flex flex-col gap-10 px-20 pt-4 pb-18">
         {question.answer ? (
           <Answered question={question} now={now} />
         ) : human === null ? (

@@ -93,3 +93,42 @@ export function addBackFailure(error: unknown): Failure {
   }
   return { code, text: failureText(error) };
 }
+
+/** How many folders a short path keeps. */
+const SHORT_FOLDERS = 2;
+
+/** `…/programming/nobs` for `/home/tanim/programming/nobs`: the last folders of a long absolute path, which the screen pairs with the whole path. The daemon sends no home folder, so the path never starts with `~`. */
+export function shortPath(path: string): string {
+  const parts = path.split("/").filter((part) => part !== "");
+  if (parts.length <= SHORT_FOLDERS + 1) {
+    return path;
+  }
+  return `…/${parts.slice(-SHORT_FOLDERS).join("/")}`;
+}
+
+/** How many agents a project card names before it says how many more there are. */
+const NAMED_AGENTS = 3;
+
+export interface AgentsLine {
+  /** The agents the card names, in order. */
+  named: string[];
+  /** `and 3 more`, or null when the card names every agent. */
+  more: string | null;
+  /** Every agent, `@a, @b and @c`, for a screen reader and the hover text. */
+  all: string;
+}
+
+/** The connected agents of a project card as plain names: the first three, then how many more. */
+export function agentsLine(names: readonly string[]): AgentsLine {
+  const at = names.map((name) => `@${name}`);
+  const all =
+    at.length <= 1
+      ? (at[0] ?? "")
+      : `${at.slice(0, -1).join(", ")} and ${at.at(-1) ?? ""}`;
+  const hidden = names.length - NAMED_AGENTS;
+  return {
+    named: names.slice(0, NAMED_AGENTS),
+    more: hidden > 0 ? `and ${String(hidden)} more` : null,
+    all,
+  };
+}
