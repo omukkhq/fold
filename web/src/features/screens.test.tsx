@@ -109,19 +109,16 @@ describe("Projects screen", () => {
     expect(demo.getAttribute("href")).toBe("/p/demo/board");
     expect(within(demo).getByText(/17 tasks/)).toBeTruthy();
     expect(within(demo).getByText(/main r5/)).toBeTruthy();
-    // The chip line keeps a hidden copy of each chip to measure.
-    expect(within(demo).getAllByText("@frontend")).toHaveLength(2);
+    expect(within(demo).getByText("@frontend")).toBeTruthy();
     expect(within(demo).getByText(/changed \d+ s ago/)).toBeTruthy();
     expect(within(demo).getByText("$12.34")).toBeTruthy();
     expect(within(demo).getByText("today $1.20 · 7 days $5.67")).toBeTruthy();
-    expect(screen.getByText("Cost of all projects")).toBeTruthy();
+    expect(screen.getByText(/^All projects/).textContent).toContain("$12.34");
     expect(screen.getByText("Could not open this project.")).toBeTruthy();
     expect(screen.queryByRole("link", { name: /Archive/ })).toBeNull();
   });
 
-  it("shows +N for the agent chips that do not fit and gives a screen reader their names", async () => {
-    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(100);
-    vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(250);
+  it("names three agents, says how many more, and gives a screen reader every name", async () => {
     stubFetch({
       "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
       "GET /api/v1/projects": {
@@ -158,12 +155,13 @@ describe("Projects screen", () => {
     });
     renderAt("/projects");
     const demo = await screen.findByRole("link", {
-      name: /3 more agents: @beta, @gamma, @delta/,
+      name: /@alpha, @beta, @gamma and @delta/,
     });
-    const more = within(demo).getByText("+3");
+    const more = within(demo).getByText(/and 1 more/);
     expect(more.getAttribute("aria-hidden")).toBe("true");
+    expect(within(demo).queryByText("@delta")).toBeNull();
     expect(more.parentElement?.getAttribute("title")).toBe(
-      "3 more agents: @beta, @gamma, @delta",
+      "@alpha, @beta, @gamma and @delta",
     );
   });
 
@@ -216,7 +214,7 @@ describe("Projects screen", () => {
     );
     expect(
       await within(results).findByRole("button", {
-        name: "Remove Old site from fold",
+        name: "More for Old site",
       }),
     ).toBeTruthy();
     expect(calls.map((call) => call.method)).toContain("POST");
@@ -254,7 +252,10 @@ describe("Projects screen", () => {
     });
     renderAt("/projects");
     await userEvent.click(
-      await screen.findByRole("button", { name: "Remove Web shop from fold" }),
+      await screen.findByRole("button", { name: "More for Web shop" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Remove from fold…" }),
     );
     const dialog = await screen.findByRole("dialog", {
       name: "Remove Web shop from fold?",
