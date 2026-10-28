@@ -8,8 +8,6 @@ export type Missing =
 export interface MissingState {
   title: string;
   text: string;
-  /** The daemon's code when the state stands for its refusal; null for an address fold refuses before it asks the daemon. */
-  code: string | null;
   href: string;
   linkText: string;
 }
@@ -28,7 +26,6 @@ export function missingState(slug: string, missing: Missing): MissingState {
     return {
       title: "Page not found",
       text: "This project has no page at this address. Open the board to continue.",
-      code: null,
       href: projectPath(slug, "board"),
       linkText: "Back to board",
     };
@@ -41,7 +38,6 @@ export function missingState(slug: string, missing: Missing): MissingState {
   return {
     title: `${kind.title} ${missing.id} not found`,
     text: `This project has no ${kind.noun} with this id. The id may be mistyped, or the link may come from another project. ${next}`,
-    code: missing.kind === "batch" ? "review_batch_not_found" : null,
     href: projectPath(slug, kind.list),
     linkText: `Back to ${kind.list}`,
   };

@@ -34,14 +34,12 @@ describe("movesByTask", () => {
         title: "Format counts",
         path: ["in_progress", "review", "done"],
         at: 3_000,
-        unread: false,
       },
       {
         task: "T-9",
         title: null,
         path: ["todo", "in_progress"],
         at: 1_000,
-        unread: true,
       },
     ]);
   });

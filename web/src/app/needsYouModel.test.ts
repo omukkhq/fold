@@ -9,7 +9,6 @@ import {
   pathsText,
   questionText,
   titleText,
-  waitingText,
   type NeedsYouGroup,
 } from "./needsYouModel";
 
@@ -466,10 +465,6 @@ describe("needsYouGroups", () => {
       href: "/p/demo/settings",
     });
     expect(groups[1]?.lines[1]).not.toHaveProperty("hint");
-  });
-
-  it("counts what waits", () => {
-    expect(waitingText(4)).toBe("4 waiting");
   });
 });
 

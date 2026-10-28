@@ -19,29 +19,15 @@ export interface StatusLook {
   text: string;
   /** The dot, from the `status-*` token. */
   dot: string;
-  /** The pill's fill and text colour. */
-  pill: string;
 }
 
 // Full class names, so the Tailwind scanner sees every one.
 const STATUS: Record<TaskStatus, StatusLook> = {
-  backlog: {
-    text: "Backlog",
-    dot: "bg-status-backlog",
-    pill: "bg-sunken text-text-2",
-  },
-  todo: { text: "To do", dot: "bg-status-todo", pill: "bg-sunken text-text" },
-  in_progress: {
-    text: "In progress",
-    dot: "bg-status-progress",
-    pill: "bg-accent-soft text-accent",
-  },
-  review: {
-    text: "Review",
-    dot: "bg-status-review",
-    pill: "bg-warn-soft text-warn",
-  },
-  done: { text: "Done", dot: "bg-status-done", pill: "bg-fill text-text" },
+  backlog: { text: "Backlog", dot: "bg-status-backlog" },
+  todo: { text: "To do", dot: "bg-status-todo" },
+  in_progress: { text: "In progress", dot: "bg-status-progress" },
+  review: { text: "Review", dot: "bg-status-review" },
+  done: { text: "Done", dot: "bg-status-done" },
 };
 
 export function statusLook(status: TaskStatus): StatusLook {

@@ -152,7 +152,7 @@ export function changeLetter(change: ChangeKind): string {
 
 export type ChangeTone = "added" | "deleted" | "other";
 
-/** Added files take the primary soft fill and deleted files the danger soft fill. */
+/** Added files take the ok tone and deleted files the bad tone; every other change stays quiet. */
 export function changeTone(change: ChangeKind): ChangeTone {
   if (change === "added") {
     return "added";

@@ -318,10 +318,6 @@ export function needsYouGroups(
   })).filter((group) => group.lines.length > 0);
 }
 
-export function waitingText(count: number): string {
-  return `${String(count)} waiting`;
-}
-
 /** The title as plain words, for the tooltip of a title the line cuts; null for a line without one. */
 export function fullTitle(line: Pick<NeedsYouLine, "title">): string | null {
   if (line.title === null) return null;

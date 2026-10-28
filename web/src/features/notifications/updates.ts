@@ -10,8 +10,6 @@ export interface TaskMoves {
   path: TaskStatus[];
   /** The time of the newest move, in epoch milliseconds. */
   at: number;
-  /** True when one of the moves arrived since the list was last shown. */
-  unread: boolean;
 }
 
 /**
@@ -37,7 +35,6 @@ export function movesByTask(feed: readonly FeedEntry[]): TaskMoves[] {
           ...oldestFirst.map((e) => e.to),
         ],
         at: Math.max(...entries.map((e) => e.at)),
-        unread: entries.some((e) => e.unread),
       };
     })
     .sort((a, b) => b.at - a.at);
