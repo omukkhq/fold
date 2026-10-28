@@ -956,6 +956,20 @@ async fn a_worker_that_waits_for_its_checks_stalls_only_a_window_after_the_run()
     assert_eq!(agent_check_run(&fx, "frontend").await, expected);
     assert_eq!(fx.agent_attention().await["frontend"], json!([]));
 
+    let quiet = live.view.last_activity_at;
+    fx.handle.live.set_check_run(id, None);
+    assert!(fx.handle.live.set_stalled(id, quiet, true));
+    assert_eq!(
+        fx.check().await,
+        1,
+        "a tick that finds the run first counts the flag it clears"
+    );
+    assert!(!fx.stalled(id));
+    assert_eq!(
+        serde_json::to_value(fx.handle.live.get(id).unwrap().view.check_run).unwrap(),
+        expected
+    );
+
     fx.advance(3 * STALL);
     assert_eq!(fx.check().await, 0, "a worker that waits for its run");
     assert!(!fx.stalled(id));

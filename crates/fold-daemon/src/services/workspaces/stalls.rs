@@ -14,7 +14,7 @@ use crate::live::{LiveCheckRun, LiveState};
 use crate::projects::ProjectHandle;
 use crate::services::projects::load_config;
 
-/// Decides the stalled flag of every live workspace of `project` at `now`, with the project's `stall_minutes`, and sets it in the live state, together with the check run that goes in each workspace. A workspace whose files are its open proposal's newest version never stalls while the proposal waits on others; once it comes back to its author, the stall time counts from that moment at the earliest. A workspace whose checks run never stalls, and the stall time counts from the end of its newest run at the earliest, so the worker gets the whole window to act on the result. A flag or run that changes publishes `workspace.changed`; nothing is stored and nothing else follows. Returns how many flags changed. While the project's agents are paused no flag changes, and after a resume the stall time counts from the resume at the earliest, so the paused time never stalls a worker.
+/// Decides the stalled flag of every live workspace of `project` at `now`, with the project's `stall_minutes`, and sets it in the live state, together with the check run that goes in each workspace. A workspace whose files are its open proposal's newest version never stalls while the proposal waits on others; once it comes back to its author, the stall time counts from that moment at the earliest. A workspace whose checks run never stalls, and the stall time counts from the end of its newest run at the earliest, so the worker gets the whole window to act on the result. A flag or run that changes publishes `workspace.changed`; nothing is stored and nothing else follows. Returns how many flags changed, the ones a starting run cleared included. While the project's agents are paused no flag changes except the clear at a run's start, and after a resume the stall time counts from the resume at the earliest, so the paused time never stalls a worker.
 pub async fn check_stalls(
     project: &ProjectHandle,
     now: Timestamp,
@@ -40,7 +40,9 @@ pub(super) async fn decide_stalls(
     for state in states {
         let view = &state.view;
         let run = inputs.running.get(&view.workspace).copied();
-        live.set_check_run(view.workspace, run);
+        if live.set_check_run(view.workspace, run) {
+            changed += 1;
+        }
         if inputs.paused {
             continue;
         }

@@ -728,7 +728,7 @@ impl LiveState {
         self.shared.stalls.lock().await
     }
 
-    /// Sets the check run that goes in the workspace, as the stall check read it from the store, and returns whether it changed. A run that goes clears the stalled flag at once.
+    /// Sets the check run that goes in the workspace, as the stall check read it from the store. A run that goes clears the stalled flag at once; returns whether it cleared one.
     pub fn set_check_run(&self, workspace: WorkspaceId, run: Option<LiveCheckRun>) -> bool {
         let shared = &self.shared;
         let map = shared.states.write();
@@ -738,6 +738,7 @@ impl LiveState {
         if current.view.check_run == run {
             return false;
         }
+        let cleared = run.is_some() && current.view.stalled;
         let mut next = WorkspaceLive::clone(current);
         next.view.check_run = run;
         if run.is_some() {
@@ -747,7 +748,7 @@ impl LiveState {
         shared
             .states
             .store(map, &shared.bus, workspace, Arc::new(next), true);
-        true
+        cleared
     }
 
     fn update(&self, workspace: WorkspaceId, change: impl FnOnce(&mut LiveWorkspace)) {
