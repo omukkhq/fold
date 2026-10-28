@@ -11,6 +11,8 @@ import {
   comparisonNote,
   comparisonTitle,
   hiddenLinesText,
+  showLinesText,
+  wholeFileText,
   isWorkingChanges,
   lineCounts,
   lineLabel,
@@ -229,6 +231,10 @@ describe("row text", () => {
   it("counts hidden lines and remaining rows", () => {
     expect(hiddenLinesText(1)).toBe("Show 1 unchanged line");
     expect(hiddenLinesText(12)).toBe("Show 12 unchanged lines");
+    expect(showLinesText(4, 4)).toBe("Show line 4");
+    expect(showLinesText(14, 33)).toBe("Show lines 14–33");
+    expect(wholeFileText(false)).toBe("Show whole file");
+    expect(wholeFileText(true)).toBe("Show changes only");
     expect(moreRowsText(500)).toBe("Show more · 500 more rows");
   });
 });
