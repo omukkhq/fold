@@ -16,8 +16,6 @@ import { Label } from "@/components/label/Label";
 import { LABEL_NAMES } from "@/components/label/labelColors";
 import { Popover } from "@/components/overlay/Popover";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
-import { cn } from "@/lib/cn";
-import { focusRing } from "@/lib/focus";
 import {
   areaChanges,
   areaOptions,
@@ -76,7 +74,6 @@ function AreaGroup({ slug, task, areas, labels, controls }: GroupProps) {
             pending={write.isPending}
             disabled={!controls.area}
             pendingLabel="Changing area…"
-            className="text-accent"
           >
             Change
           </SmallAction>
@@ -86,11 +83,11 @@ function AreaGroup({ slug, task, areas, labels, controls }: GroupProps) {
       {task.areas_conflict ? (
         <p
           role="note"
-          className="flex items-start gap-10 rounded-m bg-warn-soft px-12 py-10 text-13 leading-normal text-text-2"
+          className="flex items-start gap-8 rounded-s bg-warn-soft px-10 py-8 text-13 leading-normal text-text-2"
         >
           <CircleAlert
             aria-hidden="true"
-            size={16}
+            size={14}
             className="mt-2 shrink-0 text-warn"
           />
           This task has the labels of two areas, but a task belongs to one. Use
@@ -98,20 +95,25 @@ function AreaGroup({ slug, task, areas, labels, controls }: GroupProps) {
         </p>
       ) : null}
       {view.areas.length === 0 ? (
-        <p className="flex items-start gap-10 rounded-m bg-warn-soft px-12 py-10 text-13 leading-normal text-text-2">
+        <p className="flex items-start gap-8 rounded-s bg-warn-soft px-10 py-8 text-13 leading-normal text-text-2">
           <CircleAlert
             aria-hidden="true"
-            size={16}
+            size={14}
             className="mt-2 shrink-0 text-warn"
           />
           No area yet: the main agent chooses one. Pick an area to give it to
           that lead at once.
         </p>
       ) : (
-        <ul aria-label="Areas of this task" className="flex flex-col gap-6">
+        <ul aria-label="Areas of this task" className="flex flex-col gap-4">
           {view.areas.map((area) => (
-            <li key={area.name} className="flex items-center gap-8">
-              <Label color={area.label.color}>{area.label.name}</Label>
+            <li
+              key={area.name}
+              className="flex flex-wrap items-center gap-x-6 gap-y-2"
+            >
+              <Label color={area.label.color} className="text-14 text-text">
+                {area.label.name}
+              </Label>
               <span className="text-13 text-text-2">{ownerLine(area)}</span>
             </li>
           ))}
@@ -233,43 +235,44 @@ function LabelsGroup(props: GroupProps) {
   );
   const { others } = taskLabelView(task.labels, areas);
   return (
-    <SideGroup title="Labels">
-      <div className="flex flex-wrap items-center gap-6">
-        {others.map((label) => (
-          <RemovableLabel
-            key={label.name}
-            label={label}
-            pending={remove.isPending && remove.variables === label.name}
-            disabled={!controls.labels}
-            onRemove={() => {
-              remove.mutate(label.name);
-            }}
-          />
-        ))}
+    <SideGroup
+      title="Labels"
+      action={
         <Popover
+          align="end"
           trigger={
-            <button
-              type="button"
-              disabled={!controls.labels}
-              className={cn(
-                "inline-flex items-center gap-4 rounded-s border border-dashed border-line bg-surface px-7 py-2 text-13 leading-tight font-medium text-text-2 hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-60",
-                focusRing,
-              )}
-            >
-              <Plus aria-hidden="true" size={11} />
+            <SmallAction icon={Plus} disabled={!controls.labels}>
               Add label
-            </button>
+            </SmallAction>
           }
         >
           <AddLabelPanel {...props} />
         </Popover>
-      </div>
+      }
+    >
+      {others.length === 0 ? (
+        <span className="text-text-2">None</span>
+      ) : (
+        <div className="flex flex-wrap items-center gap-6">
+          {others.map((label) => (
+            <RemovableLabel
+              key={label.name}
+              label={label}
+              pending={remove.isPending && remove.variables === label.name}
+              disabled={!controls.labels}
+              onRemove={() => {
+                remove.mutate(label.name);
+              }}
+            />
+          ))}
+        </div>
+      )}
       <WriteError error={remove.error} />
     </SideGroup>
   );
 }
 
-/** The side column's Area and Labels groups. They wait for the area list, since it decides which labels are areas. */
+/** The People group's Area and Labels rows. They wait for the area list, since it decides which labels are areas. */
 export function LabelsSide({ slug, task }: { slug: string; task: TaskDetail }) {
   const { areas, labels, failed, retry } = useAreas(slug);
   const writing =
@@ -279,7 +282,7 @@ export function LabelsSide({ slug, task }: { slug: string; task: TaskDetail }) {
     return (
       <SideGroup title="Area">
         <ErrorBanner
-          className="rounded-m border-b-0 px-12 inset-ring inset-ring-line"
+          className="rounded-m border-b-0 px-12"
           title="The areas could not load."
           message="The daemon did not answer."
           onRetry={retry}
@@ -290,7 +293,7 @@ export function LabelsSide({ slug, task }: { slug: string; task: TaskDetail }) {
   if (areas === null) {
     return (
       <SideGroup title="Area">
-        <p className="text-14 text-text-2">Reading the areas…</p>
+        <p className="text-text-2">Reading the areas…</p>
       </SideGroup>
     );
   }

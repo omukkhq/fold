@@ -1,6 +1,5 @@
 import type { LucideIcon } from "lucide-react";
 import type { ComponentProps, ReactNode, SyntheticEvent } from "react";
-import type { TaskStatus } from "@/api/board";
 import { ApiError } from "@/api/errors";
 import { HrefLink } from "@/app/HrefLink";
 import {
@@ -14,7 +13,6 @@ import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { describeError } from "./errors";
-import { statusLook } from "./text";
 
 /** react-hook-form's submit handler returns a promise that a form event cannot take; validation errors land in the form state. */
 export function submit(
@@ -25,7 +23,7 @@ export function submit(
   };
 }
 
-/** A main-column section title, 16 / 600. */
+/** A main-column section title. */
 export function SectionHead({
   title,
   children,
@@ -34,66 +32,86 @@ export function SectionHead({
   children?: ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-10">
-      <h3 className="text-16 leading-tight font-semibold text-text">{title}</h3>
+    <div className="flex flex-wrap items-center gap-10">
+      <h3 className="font-title text-18 leading-tight font-semibold text-text">
+        {title}
+      </h3>
       {children}
     </div>
   );
 }
 
-/** A side-column group with its tracked overline title. */
+/** One of the side panel's three groups, People, Work and Links: a surface block on the panel's ground. */
+export function SideCard({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      aria-label={title}
+      className="flex flex-col gap-14 rounded-m bg-surface px-16 pt-14 pb-16"
+    >
+      <h3 className="font-title text-16 leading-tight font-semibold text-text">
+        {title}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
+/** One row of a side group: the field label on the left, the value at 14px on the right, and an optional control at the end of the value. */
 export function SideGroup({
   title,
   action,
   children,
 }: {
   title: string;
-  /** A control at the end of the title row. */
+  /** A control at the end of the row. */
   action?: ReactNode;
   children: ReactNode;
 }) {
-  const heading = (
-    <h3 className="font-title text-13 leading-tight font-semibold text-text-2">
-      {title}
-    </h3>
-  );
   return (
-    <section aria-label={title} className="flex flex-col gap-8">
-      {action ? (
-        <div className="flex items-center justify-between gap-8">
-          {heading}
-          {action}
+    <section
+      aria-label={title}
+      className="grid grid-cols-[var(--width-side-label)_minmax(0,1fr)] items-baseline gap-x-12"
+    >
+      <h4 className="font-title text-13 leading-tight font-semibold text-text-2">
+        {title}
+      </h4>
+      <div className="flex min-w-0 items-start gap-8">
+        <div className="flex min-w-0 flex-1 flex-col gap-4 text-14 text-text">
+          {children}
         </div>
-      ) : (
-        heading
-      )}
-      {children}
+        {action}
+      </div>
     </section>
   );
 }
 
-export function KeyValue({ name, value }: { name: string; value: string }) {
+/** The group's empty items in one line, so they take no row each; nothing when no item is empty. */
+export function NothingYet({ text }: { text: string | null }) {
+  if (text === null) {
+    return null;
+  }
   return (
-    <div className="flex items-center gap-8">
-      <span className="w-skeleton-s shrink-0 text-14 text-text-2">{name}</span>
-      <span className="min-w-0 truncate font-mono text-13 text-text">
-        {value}
-      </span>
-    </div>
+    <p className="text-14 leading-normal text-text-2">
+      <span className="font-medium text-text">Nothing yet:</span> {text}
+    </p>
   );
 }
 
-export function StatusMark({ status }: { status: TaskStatus }) {
-  const look = statusLook(status);
-  return (
-    <span className="inline-flex shrink-0 items-center gap-5 text-13 text-text-2">
-      <span
-        aria-hidden="true"
-        className={cn("size-7 rounded-full", look.dot)}
-      />
-      {look.text}
-    </span>
-  );
+/** A secondary line under a side value: a time, a claim, a base. */
+export function SideNote({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return <p className={cn("text-13 text-text-2", className)}>{children}</p>;
 }
 
 /** A link drawn as a button, for actions that open another screen. */
@@ -123,7 +141,7 @@ export function LinkButton({
   );
 }
 
-/** A small ghost action, such as `Change` and `Edit`. */
+/** A small action drawn as accent text, such as `Change` and `Add label`. */
 export function SmallAction({
   icon: Icon,
   children,
@@ -144,12 +162,12 @@ export function SmallAction({
       disabled={isInert(disabled, pending)}
       aria-busy={pending ? true : undefined}
       className={cn(
-        "inline-flex items-center gap-6 rounded-m px-6 py-3 text-13 font-medium text-text-2 hover:bg-sunken",
+        "inline-flex shrink-0 items-center gap-6 rounded-s font-title text-14 font-semibold whitespace-nowrap text-accent hover:underline disabled:cursor-not-allowed disabled:opacity-60",
         focusRing,
         className,
       )}
     >
-      <Icon aria-hidden="true" size={13} />
+      <Icon aria-hidden="true" size={14} />
       {controlLabel(children, pending, pendingLabel)}
     </button>
   );
@@ -173,7 +191,7 @@ export function WriteError({ error }: { error: Error | null }) {
   }
   return (
     <ErrorBanner
-      className="rounded-m border-b-0 px-12 inset-ring inset-ring-line"
+      className="rounded-m border-b-0 px-12"
       title="The change was refused."
       message={
         error instanceof ApiError && error.message !== ""

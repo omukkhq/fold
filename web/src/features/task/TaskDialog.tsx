@@ -10,9 +10,11 @@ import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
 import { failureText } from "@/format/failure";
+import { PHONE_LAYOUT } from "@/features/board/view";
 import { useLiveStatus } from "@/live/status";
 import { useDataClock } from "@/live/useDataClock";
 import { cn } from "@/lib/cn";
+import { useMediaQuery } from "@/lib/pageState";
 import { insetFocusRing } from "@/lib/focus";
 import { ArchiveMenu } from "./ArchiveMenu";
 import { ChecklistSection } from "./ChecklistSection";
@@ -20,6 +22,7 @@ import { DescriptionSection } from "./DescriptionSection";
 import { DialogFrame } from "./DialogFrame";
 import { HumanWork } from "./HumanWork";
 import { needsProposal } from "./leadCheck";
+import { PhoneFacts } from "./PhoneFacts";
 import { liveStrip } from "./liveStrip";
 import { MessagesSection } from "./MessagesSection";
 import { taskBody } from "./taskBody";
@@ -53,7 +56,13 @@ function CopyLink() {
         setState("idle");
       }}
     >
-      {copied ? "Link copied" : state === "failed" ? "Not copied" : "Copy link"}
+      <span className="max-md:sr-only">
+        {copied
+          ? "Link copied"
+          : state === "failed"
+            ? "Not copied"
+            : "Copy link"}
+      </span>
     </Button>
   );
 }
@@ -79,6 +88,7 @@ function Loaded({
     streamed?.last_activity_at,
   ]);
   const live = task.workspace === null ? null : (streamed ?? null);
+  const phone = useMediaQuery(PHONE_LAYOUT);
   return (
     <div className="flex flex-col md:min-h-0 md:flex-row">
       <div
@@ -86,7 +96,7 @@ function Loaded({
         aria-label="Task"
         tabIndex={0}
         className={cn(
-          "flex min-w-0 flex-1 flex-col gap-24 px-24 pt-22 pb-24 md:overflow-y-auto md:pr-28",
+          "flex min-w-0 flex-1 flex-col gap-24 px-16 pt-16 pb-28 md:overflow-y-auto md:px-28 md:pt-22",
           insetFocusRing,
         )}
       >
@@ -95,6 +105,7 @@ function Loaded({
           task={task}
           strip={liveStrip(task, live, now)}
         />
+        {phone ? <PhoneFacts slug={slug} task={task} /> : null}
         <HumanWork slug={slug} task={task} />
         <DescriptionSection slug={slug} task={task} />
         <ChecklistSection slug={slug} task={task} />

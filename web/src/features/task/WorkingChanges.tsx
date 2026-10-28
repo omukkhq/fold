@@ -1,6 +1,7 @@
 import { FileDiff, GitCompare } from "lucide-react";
 import type { LiveWorkspace, TaskWorkspaceInfo } from "@/api/tasks";
 import { HrefLink } from "@/app/HrefLink";
+import { Chip } from "@/components/badge/Chip";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { diffPath } from "./links";
@@ -15,9 +16,9 @@ import {
 import { LinkButton, SectionHead } from "./parts";
 
 const TONES: Record<ChangeTone, string> = {
-  added: "bg-accent-soft text-accent",
-  deleted: "bg-bad-soft text-bad",
-  other: "bg-surface text-text-2",
+  added: "text-ok",
+  deleted: "text-bad",
+  other: "text-text-2",
 };
 
 function FileRow({
@@ -35,7 +36,7 @@ function FileRow({
       <HrefLink
         href={diffPath(slug, { to: workspace, path: file.path })}
         className={cn(
-          "flex items-center gap-10 rounded-s px-10 py-6 hover:bg-surface",
+          "flex items-center gap-10 rounded-s px-14 py-7 hover:bg-fill",
           focusRing,
         )}
       >
@@ -43,7 +44,7 @@ function FileRow({
         <span
           aria-hidden="true"
           className={cn(
-            "inline-flex size-18 shrink-0 items-center justify-center rounded-s font-mono text-13 font-bold",
+            "w-16 shrink-0 font-mono text-13",
             TONES[changeTone(file.change)],
           )}
         >
@@ -55,10 +56,12 @@ function FileRow({
             : file.path}
         </span>
         {counts.added ? (
-          <span className="font-mono text-13 text-accent">{counts.added}</span>
+          <span className="text-13 text-ok tabular-nums">{counts.added}</span>
         ) : null}
         {counts.removed ? (
-          <span className="font-mono text-13 text-bad">{counts.removed}</span>
+          <span className="text-13 text-bad tabular-nums">
+            {counts.removed}
+          </span>
         ) : null}
       </HrefLink>
     </li>
@@ -86,13 +89,9 @@ export function WorkingChanges({
       <SectionHead title="Working changes">
         {workspace && live ? (
           <>
-            <span className="inline-flex items-center gap-6 rounded-s bg-accent-soft px-8 py-2 text-13 font-medium text-accent">
-              <span
-                aria-hidden="true"
-                className="size-7 rounded-full bg-accent"
-              />
+            <Chip className="bg-accent-soft text-accent">
               {liveChipText(live, now)}
-            </span>
+            </Chip>
             <span className="text-14 text-text-2">
               {changesNote(live, info)}
             </span>
@@ -108,7 +107,7 @@ export function WorkingChanges({
           No working changes in {workspace}.
         </p>
       ) : (
-        <ul className="flex flex-col rounded-m bg-sunken p-6">
+        <ul className="flex flex-col rounded-m bg-bg py-4">
           {live.files.map((file) => (
             <FileRow
               key={file.path}

@@ -587,19 +587,26 @@ describe("the task dialog route", () => {
       "Working changes",
       "Messages",
       "Responsible",
+      "People",
+      "Work",
+      "Links",
       "Workspace",
-      "Checkpoints",
       "Human review",
       "Dependencies",
     ]) {
       expect(region(dialog, name), name).toBeTruthy();
     }
-    // The task read carries no changesets or proposal yet, so these draw their empty states; History has none and is left out.
+    // The task read carries no changesets or proposal yet, so the Work group names them in one line; History has none and is left out.
+    for (const name of ["Checkpoints", "Changesets"]) {
+      expect(within(dialog).queryByRole("region", { name }), name).toBeNull();
+    }
     expect(
-      within(region(dialog, "Changesets")).getByText("No changesets yet."),
-    ).toBeTruthy();
+      within(dialog).queryByRole("region", { name: "Proposal" }),
+    ).toBeNull();
     expect(
-      within(region(dialog, "Proposal")).getByText(/None yet\. It opens when/),
+      within(region(dialog, "Work")).getByText(
+        /^no checkpoints, no changesets, no proposal\. A proposal opens when/,
+      ),
     ).toBeTruthy();
     expect(
       within(dialog).queryByRole("region", { name: "History" }),
@@ -648,6 +655,17 @@ describe("the task dialog route", () => {
       within(changes).queryByRole("link", { name: "Compare with main" }),
     ).toBeNull();
     expect(within(dialog).getByText("is editing")).toBeTruthy();
+    // The strip is one fact; the files and the base wait behind its info button, which a click opens too.
+    const details = within(within(dialog).getByLabelText("Live")).getByRole(
+      "button",
+      {
+        name: "Details: 1 file · base r7",
+      },
+    );
+    await userEvent.click(details);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "1 file · base r7",
+    );
     const deps = region(dialog, "Dependencies");
     expect(within(deps).getByText("Form field components")).toBeTruthy();
     expect(within(deps).getByText("Login flow")).toBeTruthy();
@@ -743,7 +761,7 @@ describe("the task dialog route", () => {
     ).toBeTruthy();
     const ws = region(dialog, "Workspace");
     expect(within(ws).getByText("ws/T-2")).toBeTruthy();
-    expect(within(ws).getByText("r7 (main is r8)")).toBeTruthy();
+    expect(within(ws).getByText("Base r7 (main is r8)")).toBeTruthy();
     expect(within(ws).getByText(/Main moved 1 revision/)).toBeTruthy();
     expect(
       within(region(dialog, "Working changes"))
@@ -777,6 +795,10 @@ describe("the task dialog route", () => {
         .getAttribute("href"),
     ).toBe(`/p/demo/messages?thread=${messageId(30)}`);
     const history = region(dialog, "History");
+    expect(within(history).queryByText(/Claimed by/)).toBeNull();
+    await userEvent.click(
+      within(history).getByRole("button", { name: "History" }),
+    );
     expect(
       within(history).getByText(byContent(/Claimed by @frontend\/ui/)),
     ).toBeTruthy();
@@ -927,6 +949,15 @@ describe("the task dialog route", () => {
       within(dialog).getByRole("complementary", { name: "Task details" })
         .tabIndex,
     ).toBe(0);
+  }, 15_000);
+
+  it("takes the focus itself on open, so Copy link shows no ring before the human moves", async () => {
+    const { dialog } = await openTask();
+    expect(document.activeElement).toBe(dialog);
+    await userEvent.tab();
+    expect(document.activeElement).toBe(
+      within(dialog).getByRole("button", { name: "Copy link" }),
+    );
   }, 15_000);
 
   it("keeps the task on screen when a read again fails, with a line that reads it again on Retry", async () => {
@@ -1686,8 +1717,11 @@ describe("the human edits", () => {
   it("adds a dependency with a pending state, then removes it", async () => {
     const { dialog } = await openTask();
     const deps = region(dialog, "Dependencies");
+    // Add dependency sits at the foot of the Links group; its form opens among the dependencies.
     await userEvent.click(
-      within(deps).getByRole("button", { name: "Add dependency" }),
+      within(region(dialog, "Links")).getByRole("button", {
+        name: "Add dependency",
+      }),
     );
     await userEvent.type(
       within(deps).getByRole("textbox", { name: "T-2 needs" }),
@@ -1725,8 +1759,11 @@ describe("the human edits", () => {
     const deps = region(dialog, "Dependencies");
     const needs = within(deps).getByRole("list", { name: "Needs" });
     const before = needs.textContent;
+    // Add dependency sits at the foot of the Links group; its form opens among the dependencies.
     await userEvent.click(
-      within(deps).getByRole("button", { name: "Add dependency" }),
+      within(region(dialog, "Links")).getByRole("button", {
+        name: "Add dependency",
+      }),
     );
     await userEvent.type(
       within(deps).getByRole("textbox", { name: "T-2 needs" }),
@@ -1747,8 +1784,11 @@ describe("the human edits", () => {
   it("shows any other refusal in an error banner with the daemon's message", async () => {
     const { dialog } = await openTask();
     const deps = region(dialog, "Dependencies");
+    // Add dependency sits at the foot of the Links group; its form opens among the dependencies.
     await userEvent.click(
-      within(deps).getByRole("button", { name: "Add dependency" }),
+      within(region(dialog, "Links")).getByRole("button", {
+        name: "Add dependency",
+      }),
     );
     await userEvent.type(
       within(deps).getByRole("textbox", { name: "T-2 needs" }),

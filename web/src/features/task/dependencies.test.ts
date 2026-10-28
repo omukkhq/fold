@@ -6,7 +6,7 @@ import {
   cyclePath,
   cycleText,
   groupDependencies,
-  needsTitle,
+  waitingText,
 } from "./dependencies";
 
 const edge = (
@@ -58,13 +58,13 @@ describe("groupDependencies", () => {
   });
 });
 
-describe("needsTitle", () => {
-  it("names the unfinished prerequisites", () => {
-    expect(needsTitle(groupDependencies([edge("T-1", "needs", "done")]))).toBe(
-      "Needs",
-    );
-    expect(needsTitle(groupDependencies([edge("T-1", "needs")]))).toBe(
-      "Needs · 1 unfinished",
+describe("waitingText", () => {
+  it("counts the unfinished prerequisites", () => {
+    expect(
+      waitingText(groupDependencies([edge("T-1", "needs", "done")])),
+    ).toBeNull();
+    expect(waitingText(groupDependencies([edge("T-1", "needs")]))).toBe(
+      "1 unfinished",
     );
   });
 });

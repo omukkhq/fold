@@ -46,13 +46,13 @@ import { useTaskWrite } from "./useTaskWrite";
 
 function Message({ slug, message }: { slug: string; message: TaskMessage }) {
   return (
-    <li className="flex flex-col gap-4 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-line">
+    <li className="flex max-w-measure flex-col gap-4 rounded-m bg-bg px-14 py-10">
       <div className="flex items-center gap-8">
         <PersonName name={message.sender} slot="messageHead" />
         <ArrowRight aria-label="to" size={12} className="text-text-2" />
         <PersonList
           names={message.recipients.map((r) => r.name)}
-          className="font-mono text-13 text-text-2"
+          className="text-13 text-text-2"
           nameClassName="text-14"
         />
         <HrefLink
@@ -243,7 +243,7 @@ export function MessagesSection({
   return (
     <section aria-label="Messages" className="flex flex-col gap-10">
       <div className="flex flex-wrap items-center gap-10">
-        <h3 className="text-16 leading-tight font-semibold text-text">
+        <h3 className="font-title text-18 leading-tight font-semibold text-text">
           <button
             type="button"
             aria-expanded={open}

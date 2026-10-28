@@ -193,7 +193,7 @@ export function RemovableLabel({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-5 rounded-s py-2 pr-4 pl-6 text-13 leading-tight font-medium text-text-2 inset-ring inset-ring-line",
+        "inline-flex items-center gap-5 rounded-pill py-2 pr-4 pl-8 text-13 leading-tight font-medium text-text",
         labelColors(label.color).soft,
       )}
     >
@@ -264,7 +264,7 @@ export function LabelsField({
           <div
             ref={box}
             className={cn(
-              "flex flex-wrap items-center gap-6 rounded-m bg-surface px-8 py-7 inset-ring inset-ring-line has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent",
+              "flex flex-wrap items-center gap-6 rounded-s bg-fill px-8 py-6 has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent",
               disabled && "opacity-60",
             )}
           >

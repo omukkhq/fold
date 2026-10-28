@@ -47,7 +47,7 @@ function DescriptionEditor({
             autoFocus
             disabled={write.isPending}
             error={form.formState.errors.description?.message}
-            className="font-mono text-13"
+            className="leading-normal"
             ref={field.ref}
             value={field.value}
             onValueChange={field.onChange}
