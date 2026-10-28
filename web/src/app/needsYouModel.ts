@@ -2,7 +2,7 @@ import type { NeedsYouItem, NeedsYouKind } from "@/api/workers";
 import { taskPath } from "@/features/board/card";
 import { messagesHref } from "@/features/messages/search";
 import { asksText } from "@/features/workers/permission";
-import { codeData } from "@/format/codeText";
+import { codeData, codeParts } from "@/format/codeText";
 import { projectPath, withQuery } from "@/routes/paths";
 
 /** A line of the list: a person who asks, or an item chip, then the words and the screen it opens, if any. */
@@ -283,4 +283,12 @@ export function needsYouGroups(
 
 export function waitingText(count: number): string {
   return `${String(count)} waiting`;
+}
+
+/** The second line's title as plain words, for the tooltip and the `title` of a title the line cuts with an ellipsis; null for a line without one. */
+export function fullTitle(line: Pick<NeedsYouLine, "title">): string | null {
+  if (line.title === null) return null;
+  return codeParts(line.title)
+    .map((part) => (typeof part === "string" ? part : part.code))
+    .join("");
 }

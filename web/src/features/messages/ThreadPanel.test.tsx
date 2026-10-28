@@ -137,6 +137,12 @@ describe("ThreadPanel", () => {
     expect(
       screen.getByRole("link", { name: "Open T-12" }).getAttribute("href"),
     ).toBe("/p/demo/t/T-12");
+    const chip = screen
+      .getAllByRole("link")
+      .find((link) => link.textContent === "T-12");
+    expect(chip?.querySelector("span")?.className).toContain(
+      "whitespace-nowrap",
+    );
   });
 
   it("says a message to humans was delivered, marks the signed-in human and marks the thread read for them", async () => {

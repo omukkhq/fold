@@ -190,6 +190,13 @@ describe("LiveActivityScreen", () => {
     expect(hrefs).toContain("/p/demo/t/T-1");
     expect(hrefs).toContain("/p/demo/diff?from=r7&to=ws-1&path=src%2Fa.ts");
     expect(hrefs).toContain("/p/demo/diff?from=r7&to=ck-1");
+    const recorded = within(panel).getByRole("region", {
+      name: "Recorded changes in ws-1",
+    });
+    const checkpoint = within(recorded).getByRole("link", { name: "ck-1" });
+    expect(checkpoint.className).toContain("whitespace-nowrap");
+    const text = checkpoint.nextElementSibling;
+    expect(text?.getAttribute("title")).toBe(text?.textContent);
   });
 
   it("updates the file list from a workspace_changed event and drops a panel on a snapshot", async () => {

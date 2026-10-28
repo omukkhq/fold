@@ -136,7 +136,10 @@ export function RecordedZone({ entry, items, now }: RecordedZoneProps) {
           {items.map((item) => (
             <li key={item.id} className="flex items-center gap-8">
               <IdLink href={item.href}>{item.id}</IdLink>
-              <span className="min-w-0 flex-1 truncate text-bar text-text">
+              <span
+                className="min-w-0 flex-1 truncate text-bar text-text"
+                title={item.text}
+              >
                 {item.text}
               </span>
               <span className="text-meta whitespace-nowrap text-text-muted">

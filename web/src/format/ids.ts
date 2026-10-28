@@ -79,3 +79,26 @@ export function parseId(text: string): FoundId | null {
   }
   return null;
 }
+
+/** One run of a sentence: plain words, or a public id. */
+export interface IdRun {
+  text: string;
+  id: boolean;
+}
+
+/** Splits `text` into its public ids and the words between them, so a screen can keep each id on one line: a browser breaks a line after the hyphen of `T-7`. */
+export function idRuns(text: string): IdRun[] {
+  const runs: IdRun[] = [];
+  let at = 0;
+  for (const found of findIds(text)) {
+    if (found.start > at) {
+      runs.push({ text: text.slice(at, found.start), id: false });
+    }
+    runs.push({ text: found.text, id: true });
+    at = found.end;
+  }
+  if (at < text.length) {
+    runs.push({ text: text.slice(at), id: false });
+  }
+  return runs;
+}
