@@ -48,6 +48,7 @@ import {
   segmentClasses,
 } from "@/components/segments/segmentStyles";
 import { Skeleton } from "@/components/states/Skeleton";
+import { BAR_TAB } from "@/features/proposals/barTab";
 import { detailHref } from "@/features/proposals/view";
 import { cn } from "@/lib/cn";
 import { focusRing, insetFocusRing } from "@/lib/focus";
@@ -86,9 +87,6 @@ import { projectPath } from "@/routes/paths";
 const HEAD = cn(TABLE_HEAD, "px-14 pt-10 pb-6 whitespace-nowrap");
 const CELL = cn(TABLE_CELL, "px-14 py-12");
 const CARD = "flex flex-col gap-10 rounded-m bg-surface px-16 py-14";
-/** A tab of the batch's bar, drawn as the proposal page draws its tabs. */
-const TAB =
-  "inline-flex shrink-0 items-center rounded-s px-12 py-7 font-title text-15 leading-tight font-medium whitespace-nowrap text-text-2 hover:text-text data-[state=active]:bg-sunken data-[state=active]:font-semibold data-[state=active]:text-text";
 
 const VERDICT_LOOK: Record<
   VerdictKind,
@@ -330,10 +328,10 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
           aria-label="Batch"
           className="flex gap-2 self-start rounded-m bg-surface p-6"
         >
-          <RadixTabs.Trigger value="members" className={cn(TAB, focusRing)}>
+          <RadixTabs.Trigger value="members" className={cn(BAR_TAB, focusRing)}>
             Members
           </RadixTabs.Trigger>
-          <RadixTabs.Trigger value="changes" className={cn(TAB, focusRing)}>
+          <RadixTabs.Trigger value="changes" className={cn(BAR_TAB, focusRing)}>
             Merged changes
           </RadixTabs.Trigger>
         </RadixTabs.List>
@@ -512,6 +510,8 @@ export function BatchScreen({ slug, id, search, onSearch }: BatchScreenProps) {
                     <IconButton
                       aria-label="Copy the path"
                       size="sm"
+                      // The path row is sunken, which the quiet fill matches, so the button takes the surface to keep an edge.
+                      className="bg-surface hover:bg-line"
                       onClick={() => {
                         void navigator.clipboard
                           .writeText(checkout.path ?? "")

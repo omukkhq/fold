@@ -10,7 +10,13 @@ import {
   Send,
   Undo2,
 } from "lucide-react";
-import { useId, useRef, useState, type ReactNode } from "react";
+import {
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Controller, useForm } from "react-hook-form";
 import type { ProposalDetail } from "@/api/proposals";
 import { HrefLink } from "@/app/HrefLink";
@@ -28,7 +34,14 @@ import {
   type QuestionValues,
   type RequestChangesValues,
 } from "./compose";
-import { approveReason, barNotes, phoneMore, reviewerLine } from "./decisions";
+import {
+  approveReason,
+  barNotes,
+  moreLabel,
+  phoneMore,
+  phonePendingText,
+  reviewerLine,
+} from "./decisions";
 import { keptApprovalsNote } from "./edit";
 import { NAME_NOTE } from "./lineQuestions";
 import { detailHref, type DetailView } from "./view";
@@ -233,6 +246,14 @@ function AskForm({
   );
 }
 
+/** The heights the bar takes, in pixels. */
+export interface BarLayout {
+  /** The bar at the top of the page, tabs included. */
+  bar: number;
+  /** The decisions alone, which a phone draws at the bottom of the screen. */
+  phoneBar: number;
+}
+
 export interface DecisionBarProps {
   slug: string;
   proposal: ProposalDetail;
@@ -246,6 +267,8 @@ export interface DecisionBarProps {
   changesHref: string;
   /** Resolves once the question is stored; rejects with its error. */
   onAsk: (body: string) => Promise<void>;
+  /** Hears the bar's height, which a side column held under it while the page scrolls stands below, and the height of the decisions, which a phone draws over the bottom of the screen, so the page leaves that much room under its end. */
+  onLayout?: (layout: BarLayout) => void;
 }
 
 /**
@@ -261,8 +284,31 @@ export function DecisionBar({
   tabs,
   changesHref,
   onAsk,
+  onLayout,
 }: DecisionBarProps) {
   const [panel, setPanel] = useState<Panel | null>(null);
+  const bar = useRef<HTMLDivElement>(null);
+  const group = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const outer = bar.current;
+    const inner = group.current;
+    if (
+      outer === null ||
+      inner === null ||
+      onLayout === undefined ||
+      typeof ResizeObserver === "undefined"
+    ) {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      onLayout({ bar: outer.offsetHeight, phoneBar: inner.offsetHeight });
+    });
+    observer.observe(outer);
+    observer.observe(inner);
+    return () => {
+      observer.disconnect();
+    };
+  }, [onLayout]);
   const opener = useRef<HTMLElement | null>(null);
   const moreButton = useRef<HTMLButtonElement>(null);
   const approveId = useId();
@@ -300,7 +346,10 @@ export function DecisionBar({
   };
 
   return (
-    <div className="sticky top-0 z-3 mx-16 mt-14 flex flex-wrap items-center gap-x-12 gap-y-6 rounded-m bg-surface p-6 md:mx-24">
+    <div
+      ref={bar}
+      className="sticky top-0 z-3 mx-16 mt-14 flex flex-wrap items-center gap-x-12 gap-y-6 rounded-m bg-surface p-6 md:mx-24"
+    >
       {tabs}
       <RadixPopover.Root
         open={panel !== null}
@@ -310,6 +359,7 @@ export function DecisionBar({
       >
         <RadixPopover.Anchor asChild>
           <div
+            ref={group}
             role="group"
             aria-label="Your review"
             className="flex min-w-0 flex-col items-end gap-4 md:ml-auto max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-3 max-md:items-stretch max-md:border-t max-md:border-line max-md:bg-surface max-md:px-12 max-md:pt-8 max-md:pb-16"
@@ -412,11 +462,7 @@ export function DecisionBar({
                     ref={moreButton}
                     variant="quiet"
                     className="md:hidden"
-                    aria-label={
-                      more.includes("integrate")
-                        ? "More: Integrate, Ask the author"
-                        : "More: Ask the author"
-                    }
+                    aria-label={moreLabel(more, current)}
                   >
                     <Ellipsis aria-hidden="true" size={16} />
                   </IconButton>
@@ -478,6 +524,14 @@ export function DecisionBar({
                 ))}
               </div>
             ) : null}
+            {phonePendingText(actions.pending, current) === null ? null : (
+              <p
+                role="status"
+                className="px-2 text-13 font-medium text-text md:hidden max-md:order-1"
+              >
+                {phonePendingText(actions.pending, current)}
+              </p>
+            )}
             {actions.failure ? (
               <p
                 role="alert"

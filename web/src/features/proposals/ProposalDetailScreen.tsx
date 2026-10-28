@@ -7,7 +7,7 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query";
 import { GitPullRequest } from "lucide-react";
-import { useState } from "react";
+import { type CSSProperties, useState } from "react";
 import { keys } from "@/api/keys";
 import { sendMessage, type NewMessage } from "@/api/messages";
 import {
@@ -48,6 +48,7 @@ import {
   visibleActions,
   type HumanAction,
 } from "./actions";
+import { BAR_TAB } from "./barTab";
 import { ChangesTab } from "./ChangesTab";
 import { QUEUED_BLOCK, queuedNote } from "./checkRuns";
 import { ChecksTab } from "./ChecksTab";
@@ -55,7 +56,11 @@ import { allRuns } from "./runList";
 import { conversationThreads } from "./conversation";
 import { ConversationTab } from "./ConversationTab";
 import { describeFailure, reloadsProposal } from "./errors";
-import { DecisionBar, type ActionHandlers } from "./DecisionBar";
+import {
+  type ActionHandlers,
+  type BarLayout,
+  DecisionBar,
+} from "./DecisionBar";
 import { integrationOf, mainHead } from "./integration";
 import { lineQuestions } from "./lineQuestions";
 import { OverviewTab } from "./OverviewTab";
@@ -83,10 +88,6 @@ interface ProposalDetailScreenProps {
   onSearch: (next: DetailSearch, history?: "push" | "replace") => void;
 }
 
-/** A tab of the decision bar: a quiet pill that takes the sunken tone when it is the current one. */
-const TAB =
-  "inline-flex shrink-0 items-center gap-6 rounded-s px-12 py-7 font-title text-15 leading-tight font-medium whitespace-nowrap text-text-2 hover:text-text data-[state=active]:bg-sunken data-[state=active]:font-semibold data-[state=active]:text-text";
-
 function TabTrigger({
   value,
   label,
@@ -97,7 +98,7 @@ function TabTrigger({
   count: string | null;
 }) {
   return (
-    <RadixTabs.Trigger value={value} className={cn(TAB, focusRing)}>
+    <RadixTabs.Trigger value={value} className={cn(BAR_TAB, focusRing)}>
       {label}
       {count === null ? null : (
         <span className="font-body text-13 font-medium text-text-2 tabular-nums">
@@ -116,6 +117,7 @@ export function ProposalDetailScreen({
   onSearch,
 }: ProposalDetailScreenProps) {
   const { data } = useSuspenseQuery(proposalQuery(slug, id));
+  const [layout, setLayout] = useState<BarLayout | null>(null);
   const comments = useQuery({
     ...proposalCommentsQuery(slug, id),
     enabled: data !== null,
@@ -276,7 +278,15 @@ export function ProposalDetailScreen({
   });
   const tabHref = (next: DetailSearch) => detailHref(slug, id, next);
   // A panel spans the page, so its ring is drawn inside it where no edge clips it. On a phone the decisions take the bottom of the screen, so the panel leaves room for them under its end.
-  const content = cn(insetFocusRing, "max-md:pb-(--height-bar)");
+  const content = cn(insetFocusRing, "max-md:pb-(--decisions-height)");
+  // The bar's measured heights: the phone's decisions for the room under a panel, the top bar for a column held under it.
+  const measured: CSSProperties & Record<`--${string}`, string> =
+    layout === null
+      ? { "--decisions-height": "var(--height-bar)" }
+      : {
+          "--decisions-height": `${String(layout.phoneBar)}px`,
+          "--decision-bar-height": `${String(layout.bar)}px`,
+        };
 
   return (
     <div className="flex min-w-0 flex-col">
@@ -300,8 +310,10 @@ export function ProposalDetailScreen({
           if (isDetailTab(value)) onSearch(tabSearch(search, value), "push");
         }}
         className="flex min-w-0 flex-col"
+        style={measured}
       >
         <DecisionBar
+          onLayout={setLayout}
           slug={slug}
           proposal={data}
           human={human}
