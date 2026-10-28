@@ -262,6 +262,7 @@ async fn the_board_returns_five_columns_in_order_with_blocked_blocks_and_attenti
             "proposal": null,
             "activity": null,
             "edits_after_version": null,
+            "check_run": null,
         })
     );
     let todo = &board["columns"][1]["cards"][0];
@@ -543,6 +544,7 @@ async fn reads_and_writes_return_the_declared_shapes() {
         "integration",
         "human_review_set_at",
         "edits_after_version",
+        "check_run",
     ] {
         assert_eq!(view[null], Value::Null, "{null}");
     }

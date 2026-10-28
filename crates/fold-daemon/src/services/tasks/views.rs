@@ -26,6 +26,7 @@ use super::{
     ChecklistItemView, ClaimView, HumanReviewMark, LabelView, REPORT_LIMIT, ReportView, TaskError,
     TaskService, TaskView, area_labels, label_view, task_not_found, view,
 };
+use crate::live::LiveCheckRun;
 use crate::services::reviews::{ProposalPlan, proposal_plans};
 
 /// How many Done cards the board returns: the most recently completed ones. The Done column's `total` counts them all.
@@ -145,6 +146,8 @@ pub struct TaskDetail {
     pub activity: Option<Activity>,
     /// See [`TaskService::edits_after_version`].
     pub edits_after_version: Option<bool>,
+    /// See [`TaskService::check_run`].
+    pub check_run: Option<LiveCheckRun>,
     /// Of the live workspace, or of the latest one when none is live; newest first.
     pub changesets: Vec<ChangesetSummary>,
     /// Of the live workspace, or of the latest one when none is live; pruned ones left out, newest first.
@@ -215,6 +218,8 @@ pub struct BoardCard {
     pub activity: Option<Activity>,
     /// See [`TaskService::edits_after_version`].
     pub edits_after_version: Option<bool>,
+    /// See [`TaskService::check_run`].
+    pub check_run: Option<LiveCheckRun>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -431,6 +436,7 @@ impl TaskService {
             .filter(|p| p.standing != ProposalStanding::Integrated)
             .map(|p| p.id);
         let edits_after_version = self.edits_after_version(workspace, open);
+        let check_run = self.check_run(workspace);
         let status_reason = status_reason(&facts, workspace, open);
         Ok(TaskDetail {
             task: view(row, labels, &areas),
@@ -446,6 +452,7 @@ impl TaskService {
             workspace_info: info,
             activity,
             edits_after_version,
+            check_run,
             changesets,
             checkpoints,
             proposal,
@@ -483,6 +490,12 @@ impl TaskService {
             return None;
         }
         live.view.edits_after_version
+    }
+
+    /// The check run that goes in the live workspace, as the live state holds it. `None` while no run goes, and while the live state does not hold the workspace.
+    fn check_run(&self, workspace: Option<WorkspaceId>) -> Option<LiveCheckRun> {
+        let live = workspace.and_then(|id| self.live.as_ref()?.get(id))?;
+        live.view.check_run
     }
 
     /// The readers a human's feedback on the task goes to, the default first, as [`feedback_readers`] chooses them, read in one read transaction.
@@ -600,6 +613,7 @@ impl TaskService {
                 completed_at: snapshot.completions.get(&row.id).copied(),
                 proposal,
                 edits_after_version,
+                check_run: self.check_run(snapshot.workspaces.get(&row.id).copied()),
                 activity: self.activity_of(
                     snapshot.workspaces.get(&row.id).copied(),
                     snapshot.activity.get(&row.id).copied(),

@@ -15,7 +15,7 @@ use utoipa_axum::routes;
 use super::Project;
 use super::actor::Human;
 use super::error::{ApiError, ApiJson, ErrorEnvelope, fold};
-use super::events::{CheckpointSummary, DurableEventType};
+use super::events::{CheckpointSummary, DurableEventType, LiveCheckRun};
 use super::reviews::{ReviewPlanWait, ReviewVerdict};
 use crate::daemon::AppState;
 use crate::services::tasks::{self as service, ItemContent};
@@ -281,6 +281,9 @@ pub struct BoardCard {
     /// Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them.
     #[schema(required = true)]
     pub edits_after_version: Option<bool>,
+    /// The check run that goes in the live workspace; its worker waits for the result and is not stalled while it goes. Null while no run goes.
+    #[schema(required = true)]
+    pub check_run: Option<LiveCheckRun>,
 }
 
 /// Where a proposal stands, as the pill on a card and the block of a task draw it.
@@ -381,6 +384,7 @@ impl From<service::BoardCard> for BoardCard {
             proposal: card.proposal.map(BoardProposal::from),
             activity: card.activity.map(BoardActivity::from),
             edits_after_version: card.edits_after_version,
+            check_run: card.check_run,
         }
     }
 }
@@ -543,6 +547,9 @@ pub struct TaskView {
     /// Whether the files of the live workspace differ from the tree of the open proposal's newest version: false while every file is the same, so the holder sent its work and waits, true from the first file that differs. Null without an open proposal or before the live state compared them.
     #[schema(required = true)]
     pub edits_after_version: Option<bool>,
+    /// The check run that goes in the live workspace; its worker waits for the result and is not stalled while it goes. Null while no run goes.
+    #[schema(required = true)]
+    pub check_run: Option<LiveCheckRun>,
     /// Of the live workspace, or of the latest one when none is live; newest first.
     pub changesets: Vec<TaskChangeset>,
     /// Of the live workspace, or of the latest one when none is live; pruned ones left out, newest first.
@@ -805,6 +812,7 @@ impl From<service::TaskDetail> for TaskView {
             }),
             activity: detail.activity.map(BoardActivity::from),
             edits_after_version: detail.edits_after_version,
+            check_run: detail.check_run,
             changesets: detail
                 .changesets
                 .into_iter()

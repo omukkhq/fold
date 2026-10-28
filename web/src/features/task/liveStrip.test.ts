@@ -43,6 +43,7 @@ function live(extra: Partial<LiveWorkspace> = {}): LiveWorkspace {
     proposal: null,
     stalled: false,
     edits_after_version: null,
+    check_run: null,
     ...extra,
   };
 }

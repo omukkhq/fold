@@ -112,6 +112,7 @@ function live(id: string, summary: string): LiveWorkspace {
     proposal: null,
     stalled: false,
     edits_after_version: null,
+    check_run: null,
   };
 }
 

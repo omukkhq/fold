@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT w.number AS \"workspace!: i64\", MAX(c.finished_at) AS \"ended_at!: i64\"\n           FROM check_runs c\n           JOIN workspaces w ON w.id = c.workspace_id\n           WHERE c.stage = 'proposal' AND c.finished_at IS NOT NULL\n           GROUP BY c.workspace_id\n           ORDER BY w.number",
+  "describe": {
+    "columns": [
+      {
+        "name": "workspace!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "workspaces",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "ended_at!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "53340fd9fd16db19bcaf47acb0f8c0faed82d6321f4ba46a553f4bfb6af3a570"
+}

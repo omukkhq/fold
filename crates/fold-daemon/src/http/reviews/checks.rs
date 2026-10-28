@@ -2,7 +2,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use fold_core::CheckRunId;
 use fold_core::reviews::checks::{Outcome, Purpose, RunReason, RunState, Stage};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -38,7 +38,7 @@ impl From<Stage> for CheckStage {
 }
 
 /// What asked for a run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckPurpose {
     Check,

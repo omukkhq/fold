@@ -271,6 +271,21 @@ impl WorkspaceService {
         live.reload_checkpoints(workspace).await;
     }
 
+    /// After the commit that started or ended a check run: decides the running checks and the stalled flags of the live workspaces at once instead of on the stall job's next tick. A failed decision leaves them to that tick.
+    pub(crate) async fn checks_changed(&self) {
+        let Some(live) = &self.live else {
+            return;
+        };
+        if let Err(error) =
+            stalls::decide_stalls(&self.store, &self.paths, live, self.clock.now()).await
+        {
+            tracing::warn!(
+                code = error.log_code(),
+                "the running checks were not decided; the stall job's next tick decides them"
+            );
+        }
+    }
+
     /// After the commit of a sync or restore: the live state compares against the new base and scans the files the command wrote.
     async fn live_base(&self, workspace: WorkspaceId, base: RevisionId) {
         let Some(live) = &self.live else {

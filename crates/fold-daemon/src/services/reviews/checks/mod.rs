@@ -310,6 +310,7 @@ impl ReviewService {
             })
             .await?;
         self.bus.publish(buffer);
+        self.workspaces.checks_changed().await;
         tracing::info!(run = %run.id, task = %task, workspace = %snapped.id, purpose = purpose.as_str(), "check run started");
         Ok(run)
     }
@@ -479,6 +480,7 @@ impl ReviewService {
         self.workspaces
             .proposal_changed(snapped.id, Some(proposal))
             .await;
+        self.workspaces.checks_changed().await;
         tracing::info!(run = %run.id, proposal = %proposal, "check run passed and made its version");
         Ok(())
     }
@@ -509,6 +511,7 @@ impl ReviewService {
             .await?;
         if ended {
             self.bus.publish(buffer);
+            self.workspaces.checks_changed().await;
             tracing::info!(run = %run.id, state = verdict.state.as_str(), reason = verdict.reason.map(RunReason::as_str), "check run ended");
         }
         Ok(())

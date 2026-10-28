@@ -9,8 +9,8 @@ use fold_core::object::ObjectHash;
 use fold_core::stall::{self, ProposalTurn, WorkspaceFact};
 use fold_core::tree::{ChangeKind as FileChangeKind, ChangeTally, FlatTree};
 use fold_core::{
-    CheckpointId, Clock, EventActor, FoldError, LiveEvent, NewEvent, ProjectConfig, ProjectPaths,
-    ProposalId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId, codes,
+    CheckRunId, CheckpointId, Clock, EventActor, FoldError, LiveEvent, NewEvent, ProjectConfig,
+    ProjectPaths, ProposalId, RevisionId, TaskId, Timestamp, WorkerName, WorkspaceId, codes,
 };
 use fold_store::workspaces::{self, Checkpoint, CheckpointKind, WorkspaceKind, WorkspaceState};
 use fold_store::{Store, reviews};
@@ -32,6 +32,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use utoipa::ToSchema;
 
+use crate::http::reviews::checks::CheckPurpose;
 use crate::services::events::{EventBuffer, EventBus};
 use crate::services::workspaces::{WorkspaceError, capabilities};
 use crate::support::{blocking, lock, unpoisoned};
@@ -125,6 +126,23 @@ pub struct LiveWorkspace {
     /// Whether the working files differ from the tree of the open proposal's newest version: false while every file is the same, true from the first file that differs. Null without an open proposal.
     #[schema(required = true)]
     pub edits_after_version: Option<bool>,
+    /// The check run that goes in the workspace: the worker's `run_checks` or the gate of its `create_proposal` or `update_proposal`. The worker waits for its result, so it is not stalled while the run goes, and the stall time counts from the run's end at the earliest. Null while no run goes.
+    #[schema(required = true)]
+    pub check_run: Option<LiveCheckRun>,
+}
+
+/// A check run that goes in a workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LiveCheckRun {
+    #[schema(value_type = String, example = "cr-4")]
+    pub run: CheckRunId,
+    pub purpose: CheckPurpose,
+    /// The proposal whose next version the run makes when its checks pass; null for `check` and `create_proposal`.
+    #[schema(value_type = Option<String>, required = true, example = "P-3")]
+    pub proposal: Option<ProposalId>,
+    /// UTC milliseconds.
+    #[schema(value_type = i64)]
+    pub started_at: Timestamp,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -283,6 +301,8 @@ struct Shared {
     caps: Arc<OnceLock<Capabilities>>,
     /// Attach and detach of the project run one at a time.
     lifecycle: tokio::sync::Mutex<()>,
+    /// Stall decisions run one at a time, so a decision from older store facts never lands after a newer one.
+    stalls: tokio::sync::Mutex<()>,
 }
 
 impl Drop for Shared {
@@ -404,6 +424,7 @@ impl LiveState {
                 backend: Mutex::new(backend),
                 caps,
                 lifecycle: tokio::sync::Mutex::new(()),
+                stalls: tokio::sync::Mutex::new(()),
             }),
         }
     }
@@ -536,6 +557,7 @@ impl LiveState {
                 proposal,
                 stalled: false,
                 edits_after_version: None,
+                check_run: None,
             },
             last_activity,
             last_full: shared.clock.now(),
@@ -671,6 +693,33 @@ impl LiveState {
         }
         let mut next = WorkspaceLive::clone(current);
         next.view.stalled = stalled;
+        next.updated_at = shared.clock.now();
+        shared
+            .states
+            .store(map, &shared.bus, workspace, Arc::new(next), true);
+        true
+    }
+
+    /// Holds the project's turn for a stall decision until the guard drops.
+    pub async fn stall_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.shared.stalls.lock().await
+    }
+
+    /// Sets the check run that goes in the workspace, as the stall check read it from the store, and returns whether it changed. A run that goes clears the stalled flag at once.
+    pub fn set_check_run(&self, workspace: WorkspaceId, run: Option<LiveCheckRun>) -> bool {
+        let shared = &self.shared;
+        let map = shared.states.write();
+        let Some(current) = map.get(&workspace) else {
+            return false;
+        };
+        if current.view.check_run == run {
+            return false;
+        }
+        let mut next = WorkspaceLive::clone(current);
+        next.view.check_run = run;
+        if run.is_some() {
+            next.view.stalled = false;
+        }
         next.updated_at = shared.clock.now();
         shared
             .states
