@@ -685,6 +685,44 @@ async fn a_failed_send_tries_again_with_the_same_webhook_id() {
 }
 
 #[tokio::test]
+async fn a_failed_test_is_one_try_that_never_goes_again() {
+    let mut fx = Fixture::new().await;
+    let mut receiver = Receiver::start(&[503]).await;
+    let (target, _) = fx.target("webhook", &receiver.url, false, json!({})).await;
+    let (status, body) = fx
+        .call(
+            Method::POST,
+            &format!("/api/v1/projects/demo/notify/targets/{target}/test"),
+            None,
+        )
+        .await;
+    assert_eq!(
+        (status, body["error"]["code"].as_str()),
+        (StatusCode::BAD_GATEWAY, Some("notify_send_failed"))
+    );
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("HTTP 503")
+    );
+    receiver.next().await;
+    let (_, log) = fx
+        .call(
+            Method::GET,
+            &format!("/api/v1/projects/demo/notify/targets/{target}/sends"),
+            None,
+        )
+        .await;
+    assert_eq!(log["sends"][0]["state"], "given_up");
+    assert_eq!(log["sends"][0]["tries"], 1);
+    assert_eq!(log["sends"][0]["test"], true);
+    fx.advance(Duration::from_secs(60));
+    assert_eq!(fx.pass().await, 0);
+    assert!(receiver.none_waiting());
+}
+
+#[tokio::test]
 async fn a_gone_receiver_turns_its_target_off_at_once() {
     let mut fx = Fixture::new().await;
     let mut receiver = Receiver::start(&[410]).await;

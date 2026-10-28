@@ -224,15 +224,17 @@ pub(crate) async fn attempt(
     {
         return Ok(None);
     }
-    post_and_record(handle, settings, applying, send, started).await
+    post_and_record(handle, settings, applying, send, started, false).await
 }
 
+/// With `once`, a failed try gives the send up instead of waiting for the next: a test send is one try that a person waits for.
 async fn post_and_record(
     handle: &ProjectHandle,
     settings: &NotifySettings,
     applying: &Applying,
     send: &SendRow,
     started: Timestamp,
+    once: bool,
 ) -> Result<Option<Tried>, FoldError> {
     let target = applying.target.clone();
     let (webhook_id, body) = (send.webhook_id.clone(), send.body.clone());
@@ -247,7 +249,10 @@ async fn post_and_record(
     )));
     let now = handle.clock.now();
     let tries = send.tries.saturating_add(1);
-    let judgement = judge(answer, tries, now);
+    let judgement = match judge(answer, tries, now) {
+        Judgement::Retry(_) if once => Judgement::GiveUp,
+        judged => judged,
+    };
     let (state, next_try_at) = match judgement {
         Judgement::Delivered => (SendState::Delivered, None),
         Judgement::Retry(at) => (SendState::Pending, Some(at)),
@@ -341,7 +346,7 @@ pub async fn test_target(
         })
         .await
         .map_err(from_store)?;
-    let tried = post_and_record(handle, settings, &applying, &send, now).await?;
+    let tried = post_and_record(handle, settings, &applying, &send, now, true).await?;
     settings.wake(Some(&handle.slug));
     match tried {
         Some(tried) if tried.judgement == Judgement::Delivered => Ok(send.number),
