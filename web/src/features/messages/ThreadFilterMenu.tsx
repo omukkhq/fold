@@ -79,7 +79,7 @@ export function ThreadFilterMenu({
             Show
           </p>
           <div
-            role="radiogroup"
+            role="group"
             aria-labelledby={`${id}-show`}
             className="flex flex-col"
           >
@@ -89,8 +89,7 @@ export function ThreadFilterMenu({
                 <button
                   key={option.show}
                   type="button"
-                  role="radio"
-                  aria-checked={on}
+                  aria-pressed={on}
                   onClick={() => {
                     onShow(option.show);
                   }}

@@ -20,7 +20,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { expectMentionPopover } from "@/test/mentionBox";
 import { mentionRoutes } from "@/test/mentionRoutes";
-import { daemon } from "@/test/daemon";
+import { daemon, refuse } from "@/test/daemon";
 import { message, recipient, thread as baseThread } from "@/test/messages";
 import { ApiError } from "@/api/errors";
 import type { ThreadView } from "@/api/messages";
@@ -30,6 +30,7 @@ import { ThreadPanel } from "./ThreadPanel";
 afterEach(() => {
   cleanup();
   daemon.reset();
+  vi.unstubAllGlobals();
 });
 
 vi.mock("@/api/client", async (importOriginal) => {
@@ -102,6 +103,40 @@ describe("ThreadPanel", () => {
     expect(
       daemon.made("POST /api/v1/projects/demo/asks/answered")[0]?.body,
     ).toEqual({ thread: MESSAGE });
+  });
+
+  it("shows a refused mark under the thread's bar, so a long error never squeezes the title", async () => {
+    daemon.on(
+      "POST /api/v1/projects/demo/asks/answered",
+      refuse(409, "ask_closed"),
+    );
+    await setup(() => Promise.resolve());
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark answered" }),
+    );
+    const alert = await screen.findByRole("alert");
+    expect(alert.closest("header")).toBeNull();
+    expect(alert.parentElement?.previousElementSibling?.tagName).toBe("HEADER");
+  });
+
+  it("names the keys in the reply placeholder only on the wide layout", async () => {
+    await setup(() => Promise.resolve());
+    expect(screen.getByLabelText("Reply").getAttribute("placeholder")).toBe(
+      "Reply to @frontend/ui…",
+    );
+    cleanup();
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    await setup(() => Promise.resolve());
+    expect(screen.getByLabelText("Reply").getAttribute("placeholder")).toBe(
+      "Reply to @frontend/ui…  Enter sends, Shift+Enter adds a line",
+    );
   });
 
   it("offers only the reply box while only a worker's question waits", async () => {

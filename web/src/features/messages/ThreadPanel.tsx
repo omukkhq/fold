@@ -33,7 +33,7 @@ import {
 } from "./follow";
 import { unreadBy } from "./delivery";
 import { replyPlaceholder } from "./filters";
-import { MarkAnswered } from "./MarkAnswered";
+import { useMarkAnsweredBar } from "./MarkAnswered";
 import { threadCanMarkAnswered } from "./answered";
 import { MessageItem } from "./MessageItem";
 import { chosenAnswers } from "./question";
@@ -90,6 +90,7 @@ export function ThreadPanel({
 }: ThreadPanelProps) {
   const chosen = chosenAnswers(thread);
   const you = useQuery(sessionQuery()).data?.human ?? null;
+  const mark = useMarkAnsweredBar(slug, { thread: thread.id });
   const [picked, setPicked] = useState<string | null>(null);
   const target = replyTarget(thread, you, picked);
   const unread = unreadBy(thread.messages, you);
@@ -205,9 +206,7 @@ export function ThreadPanel({
           </p>
         </div>
         <div className="flex shrink-0 items-start gap-8">
-          {threadCanMarkAnswered(thread) ? (
-            <MarkAnswered slug={slug} scope={{ thread: thread.id }} bar />
-          ) : null}
+          {threadCanMarkAnswered(thread) ? mark.button : null}
           {thread.task ? (
             <HrefLink
               href={projectPath(slug, "t", thread.task)}
@@ -225,6 +224,11 @@ export function ThreadPanel({
           ) : null}
         </div>
       </header>
+      {mark.lines === null ? null : (
+        <div className="flex shrink-0 flex-col gap-2 bg-surface px-12 pb-8 lg:bg-transparent lg:px-28">
+          {mark.lines}
+        </div>
+      )}
 
       <div
         ref={scroller}
