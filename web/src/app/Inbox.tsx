@@ -340,7 +340,10 @@ export function Inbox({ slug }: { slug: string }) {
             </RadixTabs.List>
             <RadixTabs.Content
               value="needs"
-              className="min-h-0 overflow-y-auto px-6 pb-10 outline-none"
+              className={cn(
+                "min-h-0 overflow-y-auto px-6 pb-10",
+                insetFocusRing,
+              )}
             >
               {groups.length === 0 ? (
                 <p className="px-10 py-12 text-14 text-text-2">
@@ -368,7 +371,7 @@ export function Inbox({ slug }: { slug: string }) {
             </RadixTabs.Content>
             <RadixTabs.Content
               value="updates"
-              className="flex min-h-0 flex-col outline-none"
+              className={cn("flex min-h-0 flex-col", insetFocusRing)}
             >
               {rows.length === 0 ? (
                 <p className="px-16 py-12 text-14 text-text-2">No card moves</p>

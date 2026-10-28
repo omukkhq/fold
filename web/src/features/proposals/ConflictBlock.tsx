@@ -1,3 +1,4 @@
+import { IdText } from "@/components/text/IdText";
 import { CODE_BOX, textFlow } from "@/components/text/textFlow";
 import { cn } from "@/lib/cn";
 import { ActorText } from "@/people/ActorText";
@@ -28,11 +29,13 @@ export function ConflictBlock({
       <h3 className="text-14 leading-tight font-semibold text-bad">
         Conflict report
       </h3>
-      <dl className="flex flex-col gap-2 font-mono text-13 text-text-2">
+      <dl className="flex flex-col gap-2 text-13 text-text-2">
         {reportTrees(report, ref).map((side) => (
-          <div key={side.label} className="flex gap-6">
-            <dt className="shrink-0">{side.label}</dt>
-            <dd className="min-w-0 truncate">{side.entry}</dd>
+          <div key={side.label} className="flex items-baseline gap-6">
+            <dt className="shrink-0">
+              <IdText text={side.label} />
+            </dt>
+            <dd className="min-w-0 truncate font-mono">{side.entry}</dd>
           </div>
         ))}
       </dl>
@@ -48,11 +51,13 @@ export function ConflictBlock({
             >
               {conflictKindText(file.kind)}
             </p>
-            <dl className="flex flex-col gap-2 font-mono text-13 text-text-2">
+            <dl className="flex flex-col gap-2 text-13 text-text-2">
               {fileSides(file, ref, report).map((side) => (
-                <div key={side.label} className="flex gap-6">
-                  <dt className="shrink-0">{side.label}</dt>
-                  <dd className="min-w-0 truncate">{side.entry}</dd>
+                <div key={side.label} className="flex items-baseline gap-6">
+                  <dt className="shrink-0">
+                    <IdText text={side.label} />
+                  </dt>
+                  <dd className="min-w-0 truncate font-mono">{side.entry}</dd>
                 </div>
               ))}
             </dl>
@@ -66,7 +71,9 @@ export function ConflictBlock({
               >
                 {hunkSides(hunk, ref).map(({ label, lines }) => (
                   <div key={label} className="flex flex-col">
-                    <span className="text-text-2">{label}</span>
+                    <span className="font-body text-text-2">
+                      <IdText text={label} />
+                    </span>
                     {lines.map((text, n) => (
                       <code
                         key={n}

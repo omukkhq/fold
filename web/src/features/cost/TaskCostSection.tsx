@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { taskCostQuery } from "@/api/cost";
 import { HrefLink } from "@/app/HrefLink";
-import { Mono } from "@/components/mono/Mono";
 import { SideGroup } from "@/features/task/parts";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
+import { PersonName } from "@/people/PersonName";
 import { projectPath } from "@/routes/paths";
 import { taskCostSection } from "./cost";
 
@@ -79,7 +79,7 @@ export function TaskCostSection({
             {section.rows.map((row) => (
               <li key={row.name} className="flex items-start gap-8">
                 <span className="flex min-w-0 flex-1 flex-col gap-2">
-                  <Mono className="text-13 text-text">{row.name}</Mono>
+                  <PersonName name={row.name} className="text-13" />
                   <span className="text-13 leading-normal text-text-2">
                     {row.line}
                   </span>

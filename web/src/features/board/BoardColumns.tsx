@@ -116,7 +116,10 @@ function PhoneBoard({
       {current ? (
         <RadixTabs.Content
           value={current.spec.status}
-          className="flex min-h-0 flex-1 flex-col gap-10 outline-none"
+          className={cn(
+            "flex min-h-0 flex-1 flex-col gap-10 rounded-s",
+            focusRing,
+          )}
         >
           <section
             aria-label={current.spec.name}

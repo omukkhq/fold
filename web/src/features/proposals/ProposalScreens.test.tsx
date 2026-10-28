@@ -1527,7 +1527,9 @@ describe("Proposal detail", () => {
     expect(
       within(report).getByText("const max = Math.max(...totals, 1);"),
     ).toBeTruthy();
-    expect(within(report).getByText("P-4 v2 · after line 3")).toBeTruthy();
+    expect(
+      within(report).getByText(byContent(/^P-4 v2 · after line 3$/)),
+    ).toBeTruthy();
     expect(
       within(report).getByText(byContent(/@backend\/db runs sync_workspace/)),
     ).toBeTruthy();
