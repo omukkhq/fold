@@ -1,5 +1,7 @@
 import type { TaskDetail } from "@/api/tasks";
 import { Label } from "@/components/label/Label";
+import { cn } from "@/lib/cn";
+import { focusRing } from "@/lib/focus";
 import { PersonName } from "@/people/PersonName";
 import { ownerLine, taskLabelView } from "./areas";
 import { useAreas } from "./LabelFields";
@@ -9,7 +11,7 @@ const FACT_LABEL =
 
 /** On a phone the side panel follows the messages, so who is responsible and the area come first, under the status. */
 export function PhoneFacts({ slug, task }: { slug: string; task: TaskDetail }) {
-  const { areas } = useAreas(slug);
+  const { areas, failed, retry } = useAreas(slug);
   const holder = task.claims[0]?.holder ?? null;
   const view = areas === null ? null : taskLabelView(task.labels, areas);
   return (
@@ -24,7 +26,18 @@ export function PhoneFacts({ slug, task }: { slug: string; task: TaskDetail }) {
       </dd>
       <dt className={FACT_LABEL}>Area</dt>
       <dd className="flex flex-col gap-2">
-        {view === null ? (
+        {failed ? (
+          <span role="alert" className="flex flex-wrap items-center gap-x-8">
+            The areas could not load.
+            <button
+              type="button"
+              onClick={retry}
+              className={cn("rounded-s text-accent underline", focusRing)}
+            >
+              Retry
+            </button>
+          </span>
+        ) : view === null ? (
           <span className="text-text-2">Reading the areas…</span>
         ) : view.areas.length === 0 ? (
           <span className="text-text-2">Not chosen yet</span>

@@ -51,6 +51,15 @@ export function phoneColumn(columns: readonly ColumnView[]): TaskStatus {
   return (needs ?? filled)?.status ?? "todo";
 }
 
+/** The column a phone shows: the one the person chose, else the one the board opened on, which stays put while live updates and filters change the cards; before the board has loaded, the opening choice of the cards there are. */
+export function phoneShown(
+  chosen: TaskStatus | null,
+  opened: TaskStatus | null,
+  columns: readonly ColumnView[],
+): TaskStatus {
+  return chosen ?? opened ?? phoneColumn(columns);
+}
+
 /** The line under the phone's column switcher: `In progress: author working`. */
 export function phoneHint(name: string, hint: string): string {
   return `${name}: ${hint.charAt(0).toLowerCase()}${hint.slice(1)}`;

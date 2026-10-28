@@ -20,7 +20,13 @@ import { BoardToolbar } from "./BoardToolbar";
 import { groupColumns } from "./columns";
 import { applyFilters, labelOptions, needsYouCount } from "./filters";
 import { isFiltered, type BoardSearch } from "./search";
-import { PHONE_LAYOUT, phoneColumn, reconnectAsOf, summaryText } from "./view";
+import {
+  PHONE_LAYOUT,
+  phoneColumn,
+  phoneShown,
+  reconnectAsOf,
+  summaryText,
+} from "./view";
 
 export interface BoardScreenProps {
   slug: string;
@@ -56,8 +62,12 @@ export function BoardScreen({ slug, search, onSearch }: BoardScreenProps) {
   const asOf = reconnectAsOf(status, board.dataUpdatedAt);
   const isPhone = useMediaQuery(PHONE_LAYOUT);
   const [chosen, setChosen] = useState<TaskStatus | null>(null);
+  const [opened, setOpened] = useState<TaskStatus | null>(null);
+  if (opened === null && board.data !== undefined) {
+    setOpened(phoneColumn(columns));
+  }
   const phone = isPhone
-    ? { selected: chosen ?? phoneColumn(columns), onSelect: setChosen }
+    ? { selected: phoneShown(chosen, opened, columns), onSelect: setChosen }
     : null;
 
   let body;

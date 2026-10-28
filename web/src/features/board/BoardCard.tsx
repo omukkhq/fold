@@ -6,6 +6,7 @@ import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import type { BoardCard as BoardCardData } from "@/api/board";
 import { keys } from "@/api/keys";
 import { HrefLink } from "@/app/HrefLink";
+import { IdText } from "@/components/text/IdText";
 import { Chip } from "@/components/badge/Chip";
 import { Card } from "@/components/card/Card";
 import { Id } from "@/components/id/Id";
@@ -223,6 +224,13 @@ export function BoardCard({
           onPointerLeave={() => {
             if (withPeek) peek.pointerLeave();
           }}
+          onPointerDown={(event) => {
+            // The panel is inside the card in the DOM, and a press there has its own rule.
+            const inPanel =
+              event.target instanceof Element &&
+              event.target.closest("[data-peek-panel]") !== null;
+            if (withPeek && !inPanel) peek.cardPress();
+          }}
           onFocus={() => {
             if (withPeek) peek.focusIn();
           }}
@@ -239,9 +247,15 @@ export function BoardCard({
           </HrefLink>
           <MetaLine card={card} />
           {chip ? (
-            <Chip tone={chip.tone} className="mt-2 self-start">
-              <chip.icon aria-hidden="true" size={14} />
-              {chip.text}
+            // A long chip, such as a list of blockers, wraps inside the card; its ids stay whole.
+            <Chip
+              tone={chip.tone}
+              className="mt-2 max-w-full self-start whitespace-normal"
+            >
+              <chip.icon aria-hidden="true" size={14} className="shrink-0" />
+              <span className="min-w-0">
+                <IdText text={chip.text} />
+              </span>
             </Chip>
           ) : null}
           {shown ? (
@@ -262,6 +276,11 @@ export function BoardCard({
               }}
               onPointerDownOutside={(event) => {
                 if (inside(event.target)) event.preventDefault();
+              }}
+              aria-label={`${card.task} details`}
+              data-peek-panel=""
+              onPointerDown={() => {
+                peek.press();
               }}
               className="z-10 w-side-panel rounded-m bg-surface px-16 py-14 text-14 text-text shadow-pop outline-none"
             >

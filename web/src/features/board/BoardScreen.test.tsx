@@ -211,6 +211,13 @@ const rowText = (panel: HTMLElement, name: string) =>
   within(panel).getByText(name, { selector: "dt" }).nextElementSibling
     ?.textContent;
 
+/** Finds the innermost element whose whole text is `text`, as a chip whose ids sit in their own spans so they never break. */
+function wholeText(text: string) {
+  return (_content: string, element: Element | null) =>
+    element?.textContent === text &&
+    ![...element.children].some((child) => child.textContent === text);
+}
+
 describe("BoardScreen", () => {
   it("shows the five columns from Backlog to Done with their cards", async () => {
     setup();
@@ -273,7 +280,7 @@ describe("BoardScreen", () => {
     setup(data);
     await screen.findByRole("region", { name: "Backlog" });
     // The chip names the proposal; the activity line waits in the detail panel.
-    expect(screen.getByText("P-3 changes requested")).toBeTruthy();
+    expect(screen.getByText(wholeText("P-3 changes requested"))).toBeTruthy();
     expect(screen.queryByText("Editing src/routes/login.tsx")).toBeNull();
     const panel = await openPanel("Add the session cookie and sign-out");
     expect(
@@ -325,8 +332,12 @@ describe("BoardScreen", () => {
     expect(within(cardOf("T-3")).getByText("Question for you")).toBeTruthy();
     expect(within(cardOf("T-6")).getByText("Your review")).toBeTruthy();
     expect(within(cardOf("T-7")).getByText("Stalled · needs you")).toBeTruthy();
-    expect(within(cardOf("T-5")).getByText("Blocked by T-3")).toBeTruthy();
-    expect(within(cardOf("T-4")).getByText("needs T-2")).toBeTruthy();
+    expect(
+      within(cardOf("T-5")).getByText(wholeText("Blocked by T-3")),
+    ).toBeTruthy();
+    expect(
+      within(cardOf("T-4")).getByText(wholeText("needs T-2")),
+    ).toBeTruthy();
     // One chip per card: the stale claim and the human review mark wait in the panel.
     expect(screen.queryByText("Stale claim · needs you")).toBeNull();
     const quiet = await openPanel("Quiet worker");

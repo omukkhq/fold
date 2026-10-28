@@ -82,6 +82,51 @@ describe("hoverPeek", () => {
     expect(changes).toEqual([true, false]);
   });
 
+  it("does not open for the focus a press on the card brings, and opens for the next focus", () => {
+    const { peek, changes } = setup();
+    peek.cardPress();
+    peek.focusIn();
+    expect(changes).toEqual([]);
+    peek.focusOut(false);
+    peek.focusIn();
+    expect(changes).toEqual([true]);
+  });
+
+  it("forgets a press on the card that brought no focus once the pointer leaves", () => {
+    const { peek, changes } = setup();
+    peek.cardPress();
+    peek.pointerLeave();
+    peek.focusIn();
+    expect(changes).toEqual([true]);
+  });
+
+  it("holds the panel after a press inside it until the pointer comes back and leaves, or a dismiss", () => {
+    const { peek, changes } = setup();
+    peek.press();
+    peek.pointerEnter("mouse");
+    vi.advanceTimersByTime(OPEN_DELAY_MS);
+    peek.press();
+    peek.focusIn();
+    peek.focusOut(false);
+    peek.pointerLeave();
+    vi.advanceTimersByTime(CLOSE_DELAY_MS);
+    expect(changes).toEqual([true]);
+    peek.pointerEnter("mouse");
+    peek.pointerLeave();
+    vi.advanceTimersByTime(CLOSE_DELAY_MS);
+    expect(changes).toEqual([true, false]);
+    peek.pointerEnter("mouse");
+    vi.advanceTimersByTime(OPEN_DELAY_MS);
+    peek.press();
+    peek.pointerLeave();
+    peek.dismiss();
+    expect(changes).toEqual([true, false, true, false]);
+    peek.pointerEnter("mouse");
+    peek.pointerLeave();
+    vi.advanceTimersByTime(OPEN_DELAY_MS);
+    expect(changes).toEqual([true, false, true, false]);
+  });
+
   it("drops a pending open when stopped", () => {
     const { peek, changes } = setup();
     peek.pointerEnter("mouse");

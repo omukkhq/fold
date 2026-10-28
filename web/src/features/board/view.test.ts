@@ -7,6 +7,7 @@ import {
   cardCount,
   needsYouPill,
   phoneColumn,
+  phoneShown,
   phoneHint,
   reconnectAsOf,
   summaryText,
@@ -108,5 +109,14 @@ describe("phoneHint", () => {
     );
     expect(taskCountText(1)).toBe("1 task");
     expect(taskCountText(4)).toBe("4 tasks");
+  });
+});
+
+describe("phoneShown", () => {
+  it("keeps the column the board opened on while the cards change, and follows the person's choice", () => {
+    const later = groupColumns([make("T-1", "in_progress")]);
+    expect(phoneShown(null, "backlog", later)).toBe("backlog");
+    expect(phoneShown("done", "backlog", later)).toBe("done");
+    expect(phoneShown(null, null, later)).toBe("in_progress");
   });
 });

@@ -13,7 +13,7 @@ import {
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { Skeleton } from "@/components/states/Skeleton";
 import { cn } from "@/lib/cn";
-import { focusRing } from "@/lib/focus";
+import { focusRing, insetFocusRing } from "@/lib/focus";
 import { projectPath } from "@/routes/paths";
 import { BoardCard } from "./BoardCard";
 import { newTaskPath } from "./card";
@@ -96,7 +96,8 @@ function PhoneBoard({
     >
       <RadixTabs.List
         aria-label="Column"
-        className={cn(SEGMENT_LIST, "flex-nowrap bg-surface")}
+        // Long counts or a narrow phone make the switch wider than the screen, so it scrolls sideways and its rings sit inside.
+        className={cn(SEGMENT_LIST, "flex-nowrap overflow-x-auto bg-surface")}
       >
         {frames.map((frame) => (
           <RadixTabs.Trigger
@@ -105,7 +106,7 @@ function PhoneBoard({
             className={cn(
               segmentClasses(frame === current),
               "flex-auto px-4 whitespace-nowrap shadow-none data-[state=active]:bg-fill",
-              focusRing,
+              insetFocusRing,
             )}
           >
             {frame.spec.name}{" "}
