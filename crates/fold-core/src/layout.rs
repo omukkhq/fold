@@ -202,12 +202,34 @@ pub fn session_settings() -> serde_json::Value {
 /// The folder of the project's Claude Code skills, relative to the project root.
 pub const SKILLS_DIR: &str = ".claude/skills";
 
+/// Claude Code's settings of one person on one machine, which no revision needs.
+pub const LOCAL_SETTINGS_FILE: &str = ".claude/settings.local.json";
+
 /// The name of the skill a session opened by hand loads, which indexes the skill of each role.
 pub const INDEX_SKILL: &str = "fold";
 
-/// Whether `name` is a folder of [`SKILLS_DIR`] that fold writes whole and refreshes after each upgrade: the [`INDEX_SKILL`] or the skill of a role. Every session starts in the project root and reads them there, so main never needs them.
+/// The folders of [`SKILLS_DIR`] that fold writes whole and refreshes after each upgrade: the [`INDEX_SKILL`], then the skill of each role. Every session starts in the project root and reads them there, so main never needs them.
+pub fn fold_skills() -> impl Iterator<Item = &'static str> {
+    std::iter::once(INDEX_SKILL).chain(Role::ALL.iter().map(|role| role.skill()))
+}
+
+/// Whether `name` is one of [`fold_skills`].
 pub fn is_fold_skill(name: &str) -> bool {
-    name == INDEX_SKILL || Role::ALL.iter().any(|role| role.skill() == name)
+    fold_skills().any(|skill| skill == name)
+}
+
+/// Whether the tree path `path` lies below one of [`fold_skills`] in [`SKILLS_DIR`].
+pub fn is_fold_skill_file(path: &[u8]) -> bool {
+    let Some(rest) = path
+        .strip_prefix(SKILLS_DIR.as_bytes())
+        .and_then(|rest| rest.strip_prefix(b"/"))
+    else {
+        return false;
+    };
+    rest.iter()
+        .position(|&byte| byte == b'/')
+        .and_then(|slash| std::str::from_utf8(&rest[..slash]).ok())
+        .is_some_and(is_fold_skill)
 }
 
 /// The parent of every workspace directory relative to the project root.
@@ -262,6 +284,28 @@ mod tests {
         assert!(is_fold_skill("fold-task-worker"));
         for name in ["fold-custom", "fold-", "folder", "deploy", ""] {
             assert!(!is_fold_skill(name), "{name}");
+        }
+        assert_eq!(fold_skills().count(), Role::ALL.len() + 1);
+    }
+
+    #[test]
+    fn a_fold_skill_file_lies_below_one_of_folds_skill_folders() {
+        for path in [
+            ".claude/skills/fold/SKILL.md",
+            ".claude/skills/fold/deep/notes.md",
+            ".claude/skills/fold-reviewer/SKILL.md",
+        ] {
+            assert!(is_fold_skill_file(path.as_bytes()), "{path}");
+        }
+        for path in [
+            ".claude/skills/fold",
+            ".claude/skills/fold-custom/SKILL.md",
+            ".claude/skills/deploy/SKILL.md",
+            ".claude/skillsfold/SKILL.md",
+            "src/.claude/skills/fold/SKILL.md",
+            ".claude/settings.local.json",
+        ] {
+            assert!(!is_fold_skill_file(path.as_bytes()), "{path}");
         }
     }
 

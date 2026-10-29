@@ -1,19 +1,19 @@
 use std::sync::Arc;
 
-use fold_core::layout::{SKILLS_DIR, is_fold_skill};
+use fold_core::layout::{SKILLS_DIR, is_fold_skill_file};
 use fold_core::object::ObjectHash;
 use fold_core::{Actor, FoldError, RevisionId, codes, policy};
 use fold_store::StoreError;
 use fold_store::workspaces::{
     self, StashState, conflicted_human_change, open_unstash, stash_stack,
 };
-use fold_vcs::compare::load_flat;
+use fold_vcs::compare::{load_flat, load_flat_below};
 use fold_vcs::git::{CommitId, Git};
 use fold_vcs::git_remote::{BranchState, exclude_claude_files};
 use fold_vcs::git_sync_map::SyncMap;
-#[cfg(doc)]
-use fold_vcs::ignore::CLAUDE_EXCLUDES;
 use fold_vcs::ignore::IgnoreRules;
+#[cfg(doc)]
+use fold_vcs::ignore::{EXCLUDE_NOTE, claude_excludes};
 use fold_vcs::objects::ObjectStore;
 use fold_vcs::paths::RepoPath;
 use fold_vcs::revision_store::write_initial_tree;
@@ -222,7 +222,7 @@ pub enum FoldSkills {
     Waits(&'static str),
 }
 
-/// Keeps the Claude Code files that belong to no revision out of main, as fold itself when the daemon opens a project (`policy::can_untrack_fold_skills`). `.fold/exclude` first gets each line of [`CLAUDE_EXCLUDES`] it does not list, after the lines already there. Then, when main tracks files below a folder of fold's own skills (`layout::is_fold_skill`) that the ignore rules leave out now, so not one that a `!` line of a `.foldignore` brings back, fold makes one revision titled [`FOLD_SKILLS_TITLE`] that stops tracking them, as `fld untrack` stops tracking the files a human names: under the project's remote lock and folder lock, after the folder follows main, the change goes from the checkout record to the record without the files and merges onto main through the integration procedure as an integration of kind `record` of `fold`. No human made it, so it records no human change; its transaction gives the checkout record the change's tree instead, so the follow after it leaves the files in the folder, and while Git sync is on, the revision's commit removes them from the branch and the index only. A tracked `.claude/settings.local.json` or any other file of `.claude` stays tracked.
+/// Keeps the Claude Code files that belong to no revision out of main, as fold itself when the daemon opens a project (`policy::can_untrack_fold_skills`). `.fold/exclude` first gets [`EXCLUDE_NOTE`] at its top when it does not hold it, and each line of [`claude_excludes`] it does not list after the lines already there, so a line a person removed comes back at the next open. Then, when main tracks files below a folder of fold's own skills (`layout::is_fold_skill_file`), which reads only main's `.claude/skills` folder, that the ignore rules leave out now, so not one that a `!` line of a `.foldignore` brings back, fold makes one revision titled [`FOLD_SKILLS_TITLE`] that stops tracking them, as `fld untrack` stops tracking the files a human names: under the project's remote lock and folder lock, after the folder follows main, the change goes from the checkout record to the record without the files and merges onto main through the integration procedure as an integration of kind `record` of `fold`. No human made it, so it records no human change; its transaction gives the checkout record the change's tree instead, so the follow after it leaves the files in the folder, and while Git sync is on, the revision's commit removes them from the branch and the index only. A tracked `.claude/settings.local.json` or any other file of `.claude` stays tracked.
 ///
 /// A folder that is not ready is left as it is, with [`FoldSkills::Waits`]: a branch or `HEAD` that shows a change fold did not make, commits of the human that wait, paths held by main, a stash conflict or an unstash that stopped part-way, a human change that waits for the main agent, a folder that did not follow, or a file whose entry in the record is not main's. Once main tracks none of the files, the next open finds nothing to do.
 pub async fn keep_fold_skills_out(
@@ -259,9 +259,9 @@ async fn fold_skill_files(
     blocking(move || {
         let _objects = objects_guard;
         let objects = ObjectStore::open_existing(&paths.fold_dir())?;
-        let main = load_flat(&objects, &tree)?;
+        let skills = load_flat_below(&objects, &tree, SKILLS_DIR.as_bytes())?;
         let rules = IgnoreRules::new(paths.root());
-        Ok(main
+        Ok(skills
             .keys()
             .filter(|path| is_fold_skill_file(path))
             .filter(|path| RepoPath::parse(path).is_ok_and(|path| rules.is_ignored(&path, false)))
@@ -269,20 +269,6 @@ async fn fold_skill_files(
             .collect())
     })
     .await
-}
-
-/// Whether `path` lies below a folder of [`SKILLS_DIR`] that fold writes whole.
-fn is_fold_skill_file(path: &[u8]) -> bool {
-    let Some(rest) = path
-        .strip_prefix(SKILLS_DIR.as_bytes())
-        .and_then(|rest| rest.strip_prefix(b"/"))
-    else {
-        return false;
-    };
-    rest.iter()
-        .position(|&byte| byte == b'/')
-        .and_then(|slash| std::str::from_utf8(&rest[..slash]).ok())
-        .is_some_and(is_fold_skill)
 }
 
 async fn stop_tracking_fold_skills(

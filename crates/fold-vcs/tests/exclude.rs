@@ -127,7 +127,7 @@ fn the_claude_lines_leave_out_folds_skills_and_the_local_settings_and_nothing_el
     let root = dir.path();
     write(root, ".fold/exclude", "/.fold/\nnotes/\n");
     let added = exclude_claude_files(&root.join(".fold")).unwrap();
-    assert_eq!(added, fold_vcs::ignore::CLAUDE_EXCLUDES.map(str::to_owned));
+    assert_eq!(added, fold_vcs::ignore::claude_excludes());
     let rules = IgnoreRules::new(root);
     for path in [
         ".claude/skills/fold/SKILL.md",
@@ -142,6 +142,7 @@ fn the_claude_lines_leave_out_folds_skills_and_the_local_settings_and_nothing_el
     for path in [
         ".claude/settings.json",
         ".claude/skills/deploy/SKILL.md",
+        ".claude/skills/fold-custom/SKILL.md",
         ".claude/agents/reviewer.md",
         ".claude/commands/ship.md",
         "src/.claude/skills/fold/SKILL.md",
@@ -149,7 +150,7 @@ fn the_claude_lines_leave_out_folds_skills_and_the_local_settings_and_nothing_el
     ] {
         assert!(!ignored(&rules, path, false), "{path}");
     }
-    // The user's lines stay where they are, and a second call adds nothing.
+    // The note goes on top and fold's lines after the user's, which stay where they are; a second call adds nothing.
     assert!(
         exclude_claude_files(&root.join(".fold"))
             .unwrap()
@@ -157,7 +158,29 @@ fn the_claude_lines_leave_out_folds_skills_and_the_local_settings_and_nothing_el
     );
     assert_eq!(
         fs::read_to_string(root.join(".fold/exclude")).unwrap(),
-        "/.fold/\nnotes/\n/.claude/skills/fold/\n/.claude/skills/fold-*/\n/.claude/settings.local.json\n"
+        "# fold writes this file. To keep a path, add a ! line to .foldignore.\n/.fold/\nnotes/\n/.claude/skills/fold/\n/.claude/skills/fold-area-lead/\n/.claude/skills/fold-review-lead/\n/.claude/skills/fold-task-worker/\n/.claude/skills/fold-reviewer/\n/.claude/skills/fold-main/\n/.claude/settings.local.json\n"
+    );
+}
+
+#[test]
+fn a_missing_line_comes_back_and_a_moved_note_stays_where_the_user_put_it() {
+    use fold_vcs::git_remote::exclude_claude_files;
+    use fold_vcs::ignore::EXCLUDE_NOTE;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let kept: Vec<String> = fold_vcs::ignore::claude_excludes()
+        .into_iter()
+        .filter(|line| line != "/.claude/skills/fold-main/")
+        .collect();
+    let file = format!("/.fold/\nmine/\n{EXCLUDE_NOTE}\n{}\n", kept.join("\n"));
+    write(root, ".fold/exclude", &file);
+    assert_eq!(
+        exclude_claude_files(&root.join(".fold")).unwrap(),
+        ["/.claude/skills/fold-main/"]
+    );
+    assert_eq!(
+        fs::read_to_string(root.join(".fold/exclude")).unwrap(),
+        format!("{file}/.claude/skills/fold-main/\n")
     );
 }
 

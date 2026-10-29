@@ -1371,7 +1371,10 @@ fn run_state_names() -> BTreeSet<&'static str> {
 
 #[test]
 fn the_reference_names_the_claude_files_fold_keeps_out_of_main() {
-    for line in fold_vcs::ignore::CLAUDE_EXCLUDES {
+    for line in fold_vcs::ignore::claude_excludes()
+        .into_iter()
+        .chain([fold_vcs::ignore::EXCLUDE_NOTE.to_owned()])
+    {
         assert!(
             REFERENCE.contains(&format!("`{line}`")),
             "REFERENCE.md does not name `{line}`"
@@ -1405,6 +1408,7 @@ fn the_exclude_lines_leave_out_every_skill_file_fold_writes_and_only_those_folde
         claude_files::SETTINGS_FILE,
         claude_files::AGENTS_FILE,
         ".claude/skills/deploy/SKILL.md",
+        ".claude/skills/fold-custom/SKILL.md",
     ] {
         assert!(!ignored(path), "{path}");
     }

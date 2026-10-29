@@ -8,20 +8,21 @@ use fold_core::{Actor, EventFilter, codes};
 use fold_daemon::services::projects::{FOLD_SKILLS_TITLE, FoldSkills, keep_fold_skills_out};
 use fold_store::testing::eventually;
 use fold_vcs::git::Git;
-use fold_vcs::ignore::CLAUDE_EXCLUDES;
+use fold_vcs::ignore::{EXCLUDE_NOTE, claude_excludes};
 use serde_json::{Value, json};
 
 use crate::common::acceptance::{Harness, WAIT};
 use crate::folder_stash::wait_for;
 use crate::human_changes::{branch_born, file_of, git, integrate};
 
-/// The skills and settings an older fold left tracked on main, with a skill of the user's own and a role skill that the user's `.foldignore` brings back.
-pub const OLD_FILES: [(&str, &str); 7] = [
+/// The skills and settings an older fold left tracked on main, with two skills of the user's own, one whose name starts with `fold-`, and a role skill that the user's `.foldignore` brings back.
+pub const OLD_FILES: [(&str, &str); 8] = [
     (".claude/skills/fold/SKILL.md", "old index\n"),
     (".claude/skills/fold/REFERENCE.md", "old reference\n"),
     (".claude/skills/fold-main/SKILL.md", "old main\n"),
     (".claude/skills/fold-reviewer/SKILL.md", "kept reviewer\n"),
     (".claude/skills/deploy/SKILL.md", "mine\n"),
+    (".claude/skills/fold-custom/SKILL.md", "my own fold skill\n"),
     (".claude/settings.json", "{\"shared\": true}\n"),
     (".claude/settings.local.json", "{\"mine\": true}\n"),
 ];
@@ -83,10 +84,13 @@ async fn the_first_open_after_an_upgrade_stops_tracking_folds_skills_once_and_ke
     let recorded_before = fold_events(&h, types::HUMAN_CHANGE_RECORDED).await.len();
 
     h.restart().await;
-    // The lines come after the user's own, once each.
+    // The note comes first and fold's lines after the user's own, once each.
     let lines = exclude(&dir);
-    assert!(lines.starts_with("local/\n"), "{lines}");
-    for line in CLAUDE_EXCLUDES {
+    assert!(
+        lines.starts_with(&format!("{EXCLUDE_NOTE}\nlocal/\n")),
+        "{lines}"
+    );
+    for line in claude_excludes() {
         assert_eq!(
             lines.lines().filter(|found| *found == line).count(),
             1,
@@ -248,10 +252,16 @@ async fn with_git_sync_folds_revision_removes_the_skills_from_the_branch_and_the
         assert!(!listed.lines().any(|found| found == path), "{listed}");
         assert_eq!(git(&dir, &["ls-files", path]), "", "{path}");
     }
-    assert_eq!(
-        git(&dir, &["ls-files", ".claude/settings.local.json"]),
-        ".claude/settings.local.json\n"
-    );
+    // The user's own skills, also one whose name starts with `fold-`, the kept role skill and the settings stay on the branch and in the index.
+    for (path, _) in OLD_FILES {
+        if !STOPPED.contains(&path) {
+            assert!(
+                listed.lines().any(|found| found == path),
+                "{path}: {listed}"
+            );
+            assert_eq!(git(&dir, &["ls-files", path]), format!("{path}\n"));
+        }
+    }
     assert_eq!(git(&dir, &["rev-parse", "HEAD"]).trim(), commit.as_str());
     // The files stay, and Git leaves them out through the exclude file, so the folder is clean.
     for (path, text) in OLD_FILES {

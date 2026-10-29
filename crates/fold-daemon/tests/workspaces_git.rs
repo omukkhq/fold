@@ -219,7 +219,7 @@ async fn from_git_makes_the_repository_the_project_and_head_its_first_commit() {
     );
     assert_eq!(git(&repo, &["status", "--porcelain"]), "");
     let exclude = fs::read_to_string(paths.fold_dir().join("exclude")).unwrap();
-    for line in fold_vcs::ignore::CLAUDE_EXCLUDES {
+    for line in fold_vcs::ignore::claude_excludes() {
         assert_eq!(
             exclude.lines().filter(|found| *found == line).count(),
             1,

@@ -420,17 +420,23 @@ async fn a_plain_init_keeps_the_gitignore_and_writes_no_git_data() {
     std::fs::write(root.join(".claude/skills/fold-main/SKILL.md"), "steps\n").unwrap();
     std::fs::write(root.join(".claude/settings.local.json"), "{}\n").unwrap();
     std::fs::write(root.join(".claude/settings.json"), "{}\n").unwrap();
+    std::fs::create_dir_all(root.join(".claude/skills/fold-custom")).unwrap();
+    std::fs::write(root.join(".claude/skills/fold-custom/SKILL.md"), "mine\n").unwrap();
     let project = init_project(&host.paths, &root, None, &crate::common::ana(), &host.clock)
         .await
         .unwrap();
     assert_eq!(project.revision.to_string(), "r1");
-    // `.gitignore`, the empty `.foldignore` and the shared Claude Code settings; the ignore rules leave `target/`, fold's skills and the local settings out.
-    assert_eq!(project.imported.files, 3);
+    // `.gitignore`, the empty `.foldignore`, the shared Claude Code settings and the user's own skill whose name starts with `fold-`; the ignore rules leave `target/`, fold's skills and the local settings out.
+    assert_eq!(project.imported.files, 4);
     assert_eq!(read(&root, ".gitignore"), "target/\n");
     assert_eq!(read(&root, ".foldignore"), "");
     assert_eq!(
         read(&root, ".fold/exclude"),
-        "/.fold/\n/.claude/skills/fold/\n/.claude/skills/fold-*/\n/.claude/settings.local.json\n"
+        format!(
+            "{}\n/.fold/\n{}\n",
+            fold_vcs::ignore::EXCLUDE_NOTE,
+            fold_vcs::ignore::claude_excludes().join("\n")
+        )
     );
     assert!(!root.join(".git").exists());
 }
@@ -471,10 +477,7 @@ async fn init_with_git_records_the_folder_as_r1_and_the_gitignore_as_r2() {
         1
     );
     let exclude = std::fs::read_to_string(root.join(".git/info/exclude")).unwrap();
-    for line in ["/.fold/"]
-        .into_iter()
-        .chain(fold_vcs::ignore::CLAUDE_EXCLUDES)
-    {
+    for line in std::iter::once("/.fold/".to_owned()).chain(fold_vcs::ignore::claude_excludes()) {
         assert_eq!(
             exclude.lines().filter(|found| *found == line).count(),
             1,
