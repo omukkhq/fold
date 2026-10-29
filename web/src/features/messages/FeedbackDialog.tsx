@@ -1,4 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useId } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { Button } from "@/components/button/Button";
 import { TextField } from "@/components/form/controls";
@@ -43,6 +44,8 @@ export function FeedbackDialog({
     }
   });
 
+  const formId = useId();
+
   return (
     <Dialog
       open={open}
@@ -53,8 +56,31 @@ export function FeedbackDialog({
       }}
       title="Send feedback"
       description="The message reaches the agent that works on the task. It changes nothing on the task."
+      footer={
+        <div className="flex justify-end gap-8">
+          <Button
+            variant="ghost"
+            disabled={isSubmitting}
+            onClick={() => {
+              onOpenChange(false);
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            form={formId}
+            variant="primary"
+            pending={isSubmitting}
+            pendingLabel="Sending feedback…"
+          >
+            Send feedback
+          </Button>
+        </div>
+      }
     >
       <form
+        id={formId}
         onSubmit={(event) => void submit(event)}
         className="flex flex-col gap-12"
         noValidate
@@ -85,25 +111,6 @@ export function FeedbackDialog({
             The message was not sent. {errors.root.message}
           </p>
         ) : null}
-        <div className="flex justify-end gap-8">
-          <Button
-            variant="ghost"
-            disabled={isSubmitting}
-            onClick={() => {
-              onOpenChange(false);
-            }}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            pending={isSubmitting}
-            pendingLabel="Sending feedback…"
-          >
-            Send feedback
-          </Button>
-        </div>
       </form>
     </Dialog>
   );

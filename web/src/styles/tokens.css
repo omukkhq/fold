@@ -37,6 +37,13 @@
     0 18px 44px var(--shade-far);
   --elevation-dialog: 0 16px 48px #0a0a0b40;
 
+  /* The stacking order, low to high: the sticky and fixed bars of a page, toasts, dialogs with their scrim and the phone menu, popovers and menus (which also open inside dialogs), tooltips. */
+  --layer-sticky: 10;
+  --layer-toast: 20;
+  --layer-dialog: 30;
+  --layer-pop: 40;
+  --layer-tooltip: 50;
+
   --space-0: 0px;
   --space-2: 2px;
   --space-3: 3px;
@@ -62,7 +69,6 @@
   --height-bar: 60px;
   --height-bar-compact: 56px;
   --height-chart: 140px;
-  --height-review-dialog: 480px;
   --width-skeleton-s: 70px;
   --width-skeleton-l: 120px;
   --width-diff-number: 44px;

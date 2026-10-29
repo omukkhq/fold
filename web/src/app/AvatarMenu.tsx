@@ -40,7 +40,7 @@ export function AvatarMenu({ className }: { className?: string }) {
           sideOffset={8}
           collisionPadding={16}
           aria-label="Your menu"
-          className="z-10 flex w-menu max-w-(--width-popover-max) flex-col overflow-hidden rounded-m bg-surface pb-6 shadow-pop outline-none"
+          className="z-pop flex w-menu max-w-(--width-popover-max) flex-col overflow-hidden rounded-m bg-surface pb-6 shadow-pop outline-none"
         >
           {actor === null ? null : (
             <p className="flex flex-col gap-2 px-16 pt-14 pb-6">

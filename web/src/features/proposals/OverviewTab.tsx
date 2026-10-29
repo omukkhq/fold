@@ -352,6 +352,7 @@ function FullReview({
 }) {
   return (
     <Dialog
+      wide
       title={`${item.head} on v${String(entry.version.version)}`}
       trigger={
         <button
@@ -362,37 +363,33 @@ function FullReview({
         </button>
       }
     >
-      <div className="flex w-dialog max-w-full flex-col gap-10">
-        <p className="text-13 text-text-2">
-          <PersonName name={item.review.reviewer} /> ·{" "}
-          {formatAsOfMinute(now, item.review.created_at)}
-          {item.scope === null ? "" : ` · ${item.scope}`}
-        </p>
-        <div className="flex max-h-review-dialog flex-col gap-14 overflow-y-auto">
-          <MentionText
-            text={item.review.body.trim() || item.head}
-            slug={slug}
-            className="text-15 leading-normal"
-          />
-          {item.comments.length === 0 ? null : (
-            <section
-              aria-label="Comments of the review"
-              className="flex flex-col gap-8"
-            >
-              <h3 className={LABEL}>Comments</h3>
-              <ul className="flex flex-col gap-8">
-                {item.comments.map((comment) => (
-                  <ReviewCommentItem
-                    key={comment.id}
-                    slug={slug}
-                    comment={comment}
-                  />
-                ))}
-              </ul>
-            </section>
-          )}
-        </div>
-      </div>
+      <p className="text-13 text-text-2">
+        <PersonName name={item.review.reviewer} /> ·{" "}
+        {formatAsOfMinute(now, item.review.created_at)}
+        {item.scope === null ? "" : ` · ${item.scope}`}
+      </p>
+      <MentionText
+        text={item.review.body.trim() || item.head}
+        slug={slug}
+        className="text-15 leading-normal"
+      />
+      {item.comments.length === 0 ? null : (
+        <section
+          aria-label="Comments of the review"
+          className="flex flex-col gap-8"
+        >
+          <h3 className={LABEL}>Comments</h3>
+          <ul className="flex flex-col gap-8">
+            {item.comments.map((comment) => (
+              <ReviewCommentItem
+                key={comment.id}
+                slug={slug}
+                comment={comment}
+              />
+            ))}
+          </ul>
+        </section>
+      )}
     </Dialog>
   );
 }

@@ -231,7 +231,7 @@ export const MentionTextarea = forwardRef<
           onInteractOutside={(event) => {
             if (event.target === inner.current) event.preventDefault();
           }}
-          className="z-20 flex w-side-panel flex-col rounded-m bg-surface py-6 shadow-dialog outline-none"
+          className="z-pop flex w-side-panel flex-col rounded-m bg-surface py-6 shadow-dialog outline-none"
         >
           <ul
             id={listId}
