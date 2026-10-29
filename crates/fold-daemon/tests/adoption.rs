@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
 use std::fs;
 use std::pin::pin;
 use std::time::Duration;
@@ -52,13 +53,7 @@ async fn the_next_claimant_takes_over_the_open_proposal_with_the_workspace() {
     let dir = fx.dir(".fold/ws/t-1");
     fs::write(dir.join("src/lib.rs"), EDITED).unwrap();
     let proposal = reviews
-        .create_proposal(
-            &by(&fx.frontend),
-            t(1),
-            "Edit the lib",
-            "Make the change the task asks for.",
-            None,
-        )
+        .create_proposal_covering(&by(&fx.frontend), t(1), "Edit the lib", None)
         .await
         .unwrap()
         .detail()
@@ -88,12 +83,7 @@ async fn the_next_claimant_takes_over_the_open_proposal_with_the_workspace() {
     );
     fs::write(dir.join("src/lib.rs"), b"pub fn x() { done() }\n").unwrap();
     let updated = reviews
-        .update_proposal(
-            &by(&fx.backend),
-            proposal,
-            "Make the change the task asks for.",
-            None,
-        )
+        .update_proposal_covering(&by(&fx.backend), proposal, None)
         .await
         .unwrap()
         .detail()

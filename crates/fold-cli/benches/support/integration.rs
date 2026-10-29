@@ -42,8 +42,11 @@ pub async fn measure(
             prepend_line(&first_directory.join(&file), "first proposal")?;
             append_line(&second_directory.join(&file), "second proposal")?;
         }
-        let first = propose(agents.frontend, &first_task, "first").await?;
-        let second = propose(agents.backend, &second_task, "second").await?;
+        let files: Vec<String> = (0..sizes.proposal_files)
+            .map(|index| path_of(index, sizes.directories))
+            .collect();
+        let first = propose(agents.frontend, &first_task, "first", &files).await?;
+        let second = propose(agents.backend, &second_task, "second", &files).await?;
         for proposal in [&first, &second] {
             agents
                 .review
@@ -64,12 +67,21 @@ pub async fn measure(
     Ok(timings)
 }
 
-/// Creates the proposal of `task` and returns its public id, such as `P-3`.
-async fn propose(session: &Session, task: &str, title: &str) -> BenchResult<String> {
+/// Creates the proposal of `task`, whose changed files are `files`, and returns its public id, such as `P-3`.
+async fn propose(
+    session: &Session,
+    task: &str,
+    title: &str,
+    files: &[String],
+) -> BenchResult<String> {
+    let intent = json!({
+        "summary": "Adds a line to each file.",
+        "parts": [{"name": "Lines", "does": "Adds one line to each file.", "files": files}],
+    });
     let created = session
         .call(
             "create_proposal",
-            json!({"intent": "Make the change the task asks for.",  "task": task, "title": title }),
+            json!({"intent": intent, "task": task, "title": title }),
         )
         .await?;
     match created["id"].as_str() {

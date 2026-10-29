@@ -254,7 +254,17 @@ impl Fixture {
                 &author,
                 t(1),
                 "Add the report",
-                "Adds the report.\n\nIt does not change the schema.",
+                crate::common::intents::intent_of(
+                    "Adds the report.\n\nIt does not change the schema.",
+                    &[
+                        (
+                            "Report",
+                            "Adds z and renames x to y.",
+                            &["src/lib.rs", "src/new.rs"],
+                        ),
+                        ("Docs link", "Links the readme from docs.", &["docs/readme"]),
+                    ],
+                ),
                 Some("tests pass"),
             )
             .await

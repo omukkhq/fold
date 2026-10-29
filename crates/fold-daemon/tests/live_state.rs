@@ -1,3 +1,4 @@
+use crate::common::intents::Covering as _;
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1016,13 +1017,7 @@ async fn proposal_commands_update_the_proposal_and_checkpoints_of_the_state() {
     let actor = by(&fx.frontend);
     fs::write(dir.join("README.md"), "# demo\nfirst\n").unwrap();
     let opened = reviews
-        .create_proposal(
-            &actor,
-            t(1),
-            "Change the readme",
-            "Make the change the task asks for.",
-            None,
-        )
+        .create_proposal_covering(&actor, t(1), "Change the readme", None)
         .await
         .unwrap()
         .detail()
@@ -1035,12 +1030,7 @@ async fn proposal_commands_update_the_proposal_and_checkpoints_of_the_state() {
 
     fs::write(dir.join("README.md"), "# demo\nsecond\n").unwrap();
     reviews
-        .update_proposal(
-            &actor,
-            proposal,
-            "Make the change the task asks for.",
-            Some("tests pass"),
-        )
+        .update_proposal_covering(&actor, proposal, Some("tests pass"))
         .await
         .unwrap()
         .detail()
@@ -1088,13 +1078,7 @@ async fn the_working_files_count_as_sent_while_they_are_the_newest_version() {
     assert_eq!(edits().await, None, "no proposal yet");
 
     let proposal = reviews
-        .create_proposal(
-            &actor,
-            t(1),
-            "Change the readme",
-            "Make the change the task asks for.",
-            None,
-        )
+        .create_proposal_covering(&actor, t(1), "Change the readme", None)
         .await
         .unwrap()
         .detail()
@@ -1118,12 +1102,7 @@ async fn the_working_files_count_as_sent_while_they_are_the_newest_version() {
 
     fs::write(dir.join("README.md"), "# demo\nsecond\n").unwrap();
     reviews
-        .update_proposal(
-            &actor,
-            proposal,
-            "Make the change the task asks for.",
-            Some("tests pass"),
-        )
+        .update_proposal_covering(&actor, proposal, Some("tests pass"))
         .await
         .unwrap();
     assert_eq!(edits().await, Some(false), "the new version holds the edit");
@@ -1173,13 +1152,7 @@ async fn a_version_tree_that_cannot_be_read_counts_as_edited() {
     fs::write(dir.join("README.md"), "# demo\nsent\n").unwrap();
     fx.live.rescan(id).await.unwrap();
     let proposal = reviews
-        .create_proposal(
-            &by(&fx.frontend),
-            t(1),
-            "Change the readme",
-            "Make the change the task asks for.",
-            None,
-        )
+        .create_proposal_covering(&by(&fx.frontend), t(1), "Change the readme", None)
         .await
         .unwrap()
         .detail()
@@ -1219,13 +1192,7 @@ async fn a_reject_clears_the_proposal_of_the_state() {
     );
     fs::write(dir.join("README.md"), "# demo\nfirst\n").unwrap();
     let opened = reviews
-        .create_proposal(
-            &by(&fx.frontend),
-            t(1),
-            "Change the readme",
-            "Make the change the task asks for.",
-            None,
-        )
+        .create_proposal_covering(&by(&fx.frontend), t(1), "Change the readme", None)
         .await
         .unwrap()
         .detail()

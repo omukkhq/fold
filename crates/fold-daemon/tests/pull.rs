@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -272,13 +273,7 @@ impl Project {
         }
         let proposal = self
             .reviews()
-            .create_proposal(
-                &author,
-                task,
-                "Change files",
-                "Make the change the task asks for.",
-                None,
-            )
+            .create_proposal_covering(&author, task, "Change files", None)
             .await
             .unwrap()
             .detail()
@@ -718,13 +713,7 @@ async fn a_conflict_becomes_a_sync_task_that_reaches_the_remote() {
         .unwrap();
     let proposal = project
         .reviews()
-        .create_proposal(
-            &agent,
-            task,
-            "Sync with the remote",
-            "Make the change the task asks for.",
-            None,
-        )
+        .create_proposal_covering(&agent, task, "Sync with the remote", None)
         .await
         .unwrap()
         .detail()

@@ -1,3 +1,4 @@
+use crate::common::intents::Covering as _;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -334,13 +335,7 @@ async fn each_command_first_checkpoints_the_state_it_found() {
 
     fx.edit("before the proposal\n").await;
     let opened = reviews
-        .create_proposal(
-            &fx.actor,
-            t(1),
-            "A change",
-            "Make the change the task asks for.",
-            None,
-        )
+        .create_proposal_covering(&fx.actor, t(1), "A change", None)
         .await
         .unwrap()
         .detail()
@@ -351,12 +346,7 @@ async fn each_command_first_checkpoints_the_state_it_found() {
 
     fx.edit("before the update\n").await;
     let updated = reviews
-        .update_proposal(
-            &fx.actor,
-            opened.summary.id,
-            "Make the change the task asks for.",
-            None,
-        )
+        .update_proposal_covering(&fx.actor, opened.summary.id, None)
         .await
         .unwrap()
         .detail()

@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
 use crate::common::roles::give_role;
 use crate::daemon_support::{Opened, agent, t};
 use axum::http::StatusCode;
@@ -46,13 +47,7 @@ async fn proposed() -> Opened {
     std::fs::write(dir.join("src/lib.rs"), "pub fn y() {}\n").unwrap();
     let reviews = reviews(&opened);
     reviews
-        .create_proposal(
-            &agent("frontend"),
-            t(1),
-            "Change x",
-            "Make the change the task asks for.",
-            None,
-        )
+        .create_proposal_covering(&agent("frontend"), t(1), "Change x", None)
         .await
         .unwrap()
         .detail()
@@ -114,13 +109,7 @@ async fn a_batch_checkout_lists_its_batch_and_its_members_in_merge_order() {
     std::fs::write(dir.join("src/two.rs"), "pub fn two() {}\n").unwrap();
     let reviews = reviews(&opened);
     reviews
-        .create_proposal(
-            &agent("frontend"),
-            t(2),
-            "Add two",
-            "Make the change the task asks for.",
-            None,
-        )
+        .create_proposal_covering(&agent("frontend"), t(2), "Add two", None)
         .await
         .unwrap()
         .detail()

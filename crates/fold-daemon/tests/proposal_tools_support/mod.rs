@@ -1,3 +1,4 @@
+use crate::common::intents::Covering as _;
 use std::sync::Arc;
 
 use fold_core::object::ObjectKind;
@@ -162,13 +163,7 @@ impl Fixture {
             .unwrap();
         self.write(task, "src/lib.rs", content);
         self.reviews()
-            .create_proposal(
-                author,
-                t(task),
-                "Change the library",
-                "Make the change the task asks for.",
-                Some("tests pass"),
-            )
+            .create_proposal_covering(author, t(task), "Change the library", Some("tests pass"))
             .await
             .unwrap()
             .detail()
@@ -193,13 +188,7 @@ impl Fixture {
         );
         let reviews = self.reviews();
         let Proposed::Checking { run, .. } = reviews
-            .create_proposal(
-                author,
-                t(1),
-                "Add checks",
-                "Make the change the task asks for.",
-                None,
-            )
+            .create_proposal_covering(author, t(1), "Add checks", None)
             .await
             .unwrap()
         else {
@@ -225,7 +214,7 @@ impl Fixture {
         self.write(1, "src/lib.rs", "pub fn z() {}\n");
         let Proposed::Checking { run, .. } = self
             .reviews()
-            .update_proposal(author, p1(), "Make the change the task asks for.", None)
+            .update_proposal_covering(author, p1(), None)
             .await
             .unwrap()
         else {
@@ -254,14 +243,7 @@ impl Fixture {
         };
         let FixOutcome::Checking { run, .. } = self
             .reviews()
-            .submit_review_fix(
-                reviewer,
-                p1(),
-                1,
-                &[fix],
-                "cargo test: ok",
-                "Make the change the task asks for.",
-            )
+            .submit_review_fix_covering(reviewer, p1(), 1, &[fix], "cargo test: ok")
             .await
             .unwrap()
         else {

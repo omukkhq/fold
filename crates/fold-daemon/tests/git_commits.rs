@@ -58,7 +58,7 @@ async fn a_proposal_integration_becomes_one_commit_with_the_git_identity_and_tra
     );
     assert_eq!(
         git(&mirror, &["log", "-1", "--format=%B", &second]),
-        "Add the report\n\nAdds the report.\n\nIt does not change the schema.\n\nFold-Proposal: P-1\nFold-Version: 1\nFold-Task: T-1\nFold-Revision: r2\n\n"
+        "Add the report\n\nAdds the report.\n\nIt does not change the schema.\n\nReport: Adds z and renames x to y.\nDocs link: Links the readme from docs.\n\nFold-Proposal: P-1\nFold-Version: 1\nFold-Task: T-1\nFold-Revision: r2\n\n"
     );
     let created = fx
         .count("SELECT created_at FROM revisions WHERE number = 2")

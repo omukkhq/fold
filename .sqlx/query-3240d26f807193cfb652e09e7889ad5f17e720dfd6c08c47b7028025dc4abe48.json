@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO proposal_intent_entries (version_id, section, position, text)\n                 VALUES (?1, ?2, ?3, ?4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "3240d26f807193cfb652e09e7889ad5f17e720dfd6c08c47b7028025dc4abe48"
+}

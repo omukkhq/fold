@@ -10,7 +10,7 @@ use fold_daemon::services::events::EventService;
 use fold_daemon::services::messages::MessageService;
 use fold_store::testing::eventually;
 use http_body_util::BodyExt;
-use rmcp::model::{CallToolRequestParams, CallToolResult};
+use rmcp::model::CallToolResult;
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
 use serde_json::{Value, json};
@@ -57,10 +57,7 @@ async fn call(client: &Client, tool: &str, arguments: Value) -> CallToolResult {
     let Value::Object(arguments) = arguments else {
         panic!("arguments must be an object");
     };
-    client
-        .call_tool(CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments))
-        .await
-        .unwrap()
+    crate::common::intents::call_tool(client, tool, arguments).await
 }
 
 fn body(result: &CallToolResult) -> Value {

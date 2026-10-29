@@ -79,7 +79,15 @@ async fn project(host: &Host) -> ProjectPaths {
         &author,
         task,
         "Add the page",
-        "Make the change the task asks for.",
+        fold_core::reviews::ProposalIntent {
+            summary: "Adds z.".to_owned(),
+            parts: vec![fold_core::reviews::IntentPart {
+                name: "New function".to_owned(),
+                does: "Adds z.".to_owned(),
+                files: vec!["src/new.rs".to_owned()],
+            }],
+            ..Default::default()
+        },
         None,
     )
     .await

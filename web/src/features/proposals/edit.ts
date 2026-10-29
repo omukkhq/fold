@@ -1,6 +1,12 @@
 import type { ComparedFile } from "@/api/diff";
-import type { NewEdit, ProposalDetail, VersionFile } from "@/api/proposals";
-import { MAX_INTENT_CHARS, versionIntent } from "./intent";
+import type {
+  Intent,
+  NewEdit,
+  ProposalDetail,
+  VersionFile,
+} from "@/api/proposals";
+import { versionIntent } from "./intent";
+import { intentOf, sameIntent, type IntentDraft } from "./intentDraft";
 import type { DetailView } from "./view";
 
 /**
@@ -85,59 +91,40 @@ export function changed(
   return value !== source.text;
 }
 
-/** The edit of `path` on the version on screen, never the current version the cache holds at the click, so a newer version makes the daemon refuse with `stale_version`. The intent goes with it only when the human changed the one the box `started` with; otherwise the new version keeps the edited version's intent. */
+/** The edit of `path` on the version on screen, never the current version the cache holds at the click, so a newer version makes the daemon refuse with `stale_version`. The intent goes with it when the version has none to keep (`started` null) or the human changed it; otherwise the new version keeps the edited version's intent. */
 export function editRequest(
   view: Pick<DetailView, "version">,
   path: string,
   value: string,
   source: Extract<EditSource, { kind: "text" }>,
-  intent = "",
-  started = "",
+  draft: IntentDraft,
+  started: Intent | null,
 ): NewEdit {
-  const written = intent.trim();
+  const written = intentOf(draft);
   return {
     version: view.version,
     path,
     content: savedContent(value, source.lineEnding),
-    ...(written === "" || written === started.trim()
+    ...(started !== null && sameIntent(written, started)
       ? {}
       : { intent: written }),
   };
 }
 
-/** The intent the edit box starts with: the edited version's, so the human changes what the edit changes instead of writing it again. */
-export function editIntent(proposal: ProposalDetail, version: number): string {
+/** The intent the edit form starts with: the edited version's, so the human changes what the edit changes instead of writing it again; null for a version without one. */
+export function editIntent(
+  proposal: ProposalDetail,
+  version: number,
+): Intent | null {
   const edited = proposal.versions.find((v) => v.version === version);
-  return edited === undefined ? "" : (versionIntent(edited) ?? "");
+  return edited === undefined ? null : versionIntent(edited);
 }
 
-/** Why Save cannot send the intent as it stands; null when it can. Every new version carries an intent, so an empty one keeps Save off, also on the edit of a version that has none. */
-export function intentProblem(intent: string): string | null {
-  // The daemon counts Unicode code points, as Array.from does.
-  const length = Array.from(intent.trim()).length;
-  if (length > MAX_INTENT_CHARS) {
-    return `The intent can hold at most ${String(MAX_INTENT_CHARS)} characters; it has ${String(length)}.`;
-  }
-  if (length === 0) {
-    return "Say what the new version does, why, what it does not change and its risks.";
-  }
-  return null;
-}
-
-/** The problem the intent box shows: none while the box of a version without an intent is still empty, because its hint already asks for one. */
-export function shownIntentProblem(
-  intent: string,
-  started: string,
-): string | null {
-  if (started === "" && intent.trim() === "") return null;
-  return intentProblem(intent);
-}
-
-/** The hint under the intent box: what an intent says, and where the box's text came from. */
-export function intentHint(version: number, started: string): string {
+/** The hint over the intent form: what an intent says, and where the form's text came from. */
+export function intentHint(version: number, started: Intent | null): string {
   const next = `v${String(version + 1)}`;
-  const what = `What ${next} does, why, what it does not change and its risks.`;
-  return started === ""
+  const what = `How ${next} works in the code, and its parts: every file ${next} changes belongs to exactly one part.`;
+  return started === null
     ? `${what} v${String(version)} has no intent, so write one for ${next}.`
     : `${what} It starts as the intent of v${String(version)}; change what your edit changes.`;
 }

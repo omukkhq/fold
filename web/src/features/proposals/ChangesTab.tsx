@@ -41,6 +41,7 @@ import { AskAuthorBox } from "./AskAuthorBox";
 import { canEdit, editableFile } from "./edit";
 import { describeFailure } from "./errors";
 import { FileEditor } from "./FileEditor";
+import { versionIntent } from "./intent";
 import { ChangedFiles } from "./ChangedFiles";
 import { useChangedFiles } from "./changedFilesState";
 import {
@@ -235,6 +236,9 @@ function ChangeBody({
     held,
   );
   const editable = canEdit(proposal, human, view) && editableFile(file);
+  const shownVersionRow = proposal.versions.find((v) => v.version === version);
+  const shownIntent =
+    shownVersionRow === undefined ? null : versionIntent(shownVersionRow);
   const questionById = new Map(questions.map((q) => [q.id, q]));
   const requests = useQuery(requestsQuery(slug));
   const makeRequest = useCodeRequest(slug);
@@ -270,6 +274,10 @@ function ChangeBody({
           proposal={proposal}
           view={view}
           path={file.path}
+          files={(proposal.selected.version === version
+            ? proposal.files
+            : files
+          ).map((changedFile) => changedFile.path)}
           onCancel={() => {
             setEditing(null);
           }}
@@ -291,6 +299,7 @@ function ChangeBody({
       ) : (
         <ChangedFiles
           state={tree}
+          intent={shownIntent}
           comparison={data}
           selectedPath={file?.path}
           onSelectFile={showFile}

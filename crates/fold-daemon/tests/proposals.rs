@@ -1,4 +1,7 @@
+use crate::common::intents::Covering as _;
+use crate::common::intents::intent_of;
 use crate::common::roles::give_role;
+use fold_core::reviews::ProposalIntent;
 use fold_core::roles::Role;
 use std::sync::Arc;
 use std::time::Duration;
@@ -168,13 +171,7 @@ impl Fixture {
 
     async fn create(&self, worker: &WorkerRow) -> Result<ProposalDetail, ReviewError> {
         self.reviews
-            .create_proposal(
-                &by(worker),
-                t(1),
-                "Add the report",
-                "Make the change the task asks for.",
-                Some("tests pass"),
-            )
+            .create_proposal_covering(&by(worker), t(1), "Add the report", Some("tests pass"))
             .await
             .map(|proposed| proposed.detail().unwrap())
     }
@@ -453,12 +450,7 @@ async fn create_proposal_records_a_changeset_only_when_the_tree_changed() {
     fx.write("README.md", "# changed\n");
     let third = fx
         .reviews
-        .update_proposal(
-            &by(&fx.frontend),
-            p(2),
-            "Make the change the task asks for.",
-            None,
-        )
+        .update_proposal_covering(&by(&fx.frontend), p(2), None)
         .await
         .unwrap()
         .detail()
@@ -486,39 +478,21 @@ async fn create_proposal_refuses_without_claim() {
     for actor in [human(), Actor::System] {
         let error = refusal(
             fx.reviews
-                .create_proposal(
-                    &actor,
-                    t(1),
-                    "Add the report",
-                    "Make the change the task asks for.",
-                    None,
-                )
+                .create_proposal_covering(&actor, t(1), "Add the report", None)
                 .await,
         );
         assert_eq!(error.code(), codes::NOT_CLAIM_HOLDER);
     }
     let error = refusal(
         fx.reviews
-            .create_proposal(
-                &by(&fx.frontend),
-                t(2),
-                "Add the report",
-                "Make the change the task asks for.",
-                None,
-            )
+            .create_proposal_covering(&by(&fx.frontend), t(2), "Add the report", None)
             .await,
     );
     assert_eq!(error.code(), codes::NOT_CLAIM_HOLDER);
     assert_eq!(details(&error), json!({"task": "T-2", "holder": null}));
     let error = refusal(
         fx.reviews
-            .create_proposal(
-                &by(&fx.frontend),
-                t(9),
-                "Add the report",
-                "Make the change the task asks for.",
-                None,
-            )
+            .create_proposal_covering(&by(&fx.frontend), t(9), "Add the report", None)
             .await,
     );
     assert_eq!(error.code(), codes::TASK_NOT_FOUND);
@@ -625,12 +599,7 @@ async fn a_proposal_waits_for_an_unfinished_sync_or_restore() {
     fx.execute(mark).await;
     let error = refusal(
         fx.reviews
-            .update_proposal(
-                &by(&fx.frontend),
-                p(1),
-                "Make the change the task asks for.",
-                None,
-            )
+            .update_proposal_covering(&by(&fx.frontend), p(1), None)
             .await,
     );
     assert_eq!(error.code(), codes::WORKSPACE_WRITE_UNFINISHED);
@@ -644,13 +613,7 @@ async fn create_proposal_refuses_bad_input_and_a_closed_task() {
     for title in ["", "   ", "two\nlines", &"x".repeat(201)] {
         let error = refusal(
             fx.reviews
-                .create_proposal(
-                    &by(&fx.frontend),
-                    t(1),
-                    title,
-                    "Make the change the task asks for.",
-                    None,
-                )
+                .create_proposal_covering(&by(&fx.frontend), t(1), title, None)
                 .await,
         );
         assert_eq!(error.code(), codes::INVALID_REQUEST, "{title:?}");
@@ -658,13 +621,7 @@ async fn create_proposal_refuses_bad_input_and_a_closed_task() {
     }
     let detail = fx
         .reviews
-        .create_proposal(
-            &by(&fx.frontend),
-            t(1),
-            "  Add it  ",
-            "Make the change the task asks for.",
-            Some("  "),
-        )
+        .create_proposal_covering(&by(&fx.frontend), t(1), "  Add it  ", Some("  "))
         .await
         .unwrap()
         .detail()
@@ -697,11 +654,10 @@ async fn two_concurrent_create_proposal_calls_give_one_proposal_exists() {
     let (one, two) = (fx.service(), fx.service());
     let create = async |service: &ReviewService| {
         service
-            .create_proposal(
+            .create_proposal_covering(
                 &by(&fx.frontend),
                 t(1),
                 "Add the report",
-                "Make the change the task asks for.",
                 Some("tests pass"),
             )
             .await
@@ -740,12 +696,7 @@ async fn update_proposal_adds_v2_and_returns_task_to_review() {
     let before = fx.last_seq().await;
     let detail = fx
         .reviews
-        .update_proposal(
-            &by(&fx.frontend),
-            p(1),
-            "Make the change the task asks for.",
-            Some("fixed the review"),
-        )
+        .update_proposal_covering(&by(&fx.frontend), p(1), Some("fixed the review"))
         .await
         .unwrap()
         .detail()
@@ -800,12 +751,7 @@ async fn update_proposal_refuses_an_unchanged_version() {
     for evidence in [None, Some("tests pass")] {
         let error = refusal(
             fx.reviews
-                .update_proposal(
-                    &by(&fx.frontend),
-                    p(1),
-                    "Make the change the task asks for.",
-                    evidence,
-                )
+                .update_proposal_covering(&by(&fx.frontend), p(1), evidence)
                 .await,
         );
         assert_eq!(error.code(), codes::VERSION_UNCHANGED);
@@ -815,12 +761,7 @@ async fn update_proposal_refuses_an_unchanged_version() {
 
     let detail = fx
         .reviews
-        .update_proposal(
-            &by(&fx.frontend),
-            p(1),
-            "Make the change the task asks for.",
-            Some("more tests"),
-        )
+        .update_proposal_covering(&by(&fx.frontend), p(1), Some("more tests"))
         .await
         .unwrap()
         .detail()
@@ -841,12 +782,7 @@ async fn update_proposal_refuses_others_and_proposals_that_are_not_open() {
     for actor in [by(&fx.backend), human(), reviewer("review")] {
         let error = refusal(
             fx.reviews
-                .update_proposal(
-                    &actor,
-                    p(1),
-                    "Make the change the task asks for.",
-                    Some("x"),
-                )
+                .update_proposal_covering(&actor, p(1), Some("x"))
                 .await,
         );
         assert_eq!(error.code(), codes::NOT_PROPOSAL_AUTHOR);
@@ -857,12 +793,7 @@ async fn update_proposal_refuses_others_and_proposals_that_are_not_open() {
     }
     let error = refusal(
         fx.reviews
-            .update_proposal(
-                &by(&fx.frontend),
-                p(7),
-                "Make the change the task asks for.",
-                Some("x"),
-            )
+            .update_proposal_covering(&by(&fx.frontend), p(7), Some("x"))
             .await,
     );
     assert_eq!(error.code(), codes::PROPOSAL_NOT_FOUND);
@@ -871,12 +802,7 @@ async fn update_proposal_refuses_others_and_proposals_that_are_not_open() {
     fx.write("a", CONFLICTED);
     let error = refusal(
         fx.reviews
-            .update_proposal(
-                &by(&fx.frontend),
-                p(1),
-                "Make the change the task asks for.",
-                Some("x"),
-            )
+            .update_proposal_covering(&by(&fx.frontend), p(1), Some("x"))
             .await,
     );
     assert_eq!(error.code(), codes::UNRESOLVED_CONFLICTS);
@@ -886,12 +812,7 @@ async fn update_proposal_refuses_others_and_proposals_that_are_not_open() {
         .unwrap();
     let error = refusal(
         fx.reviews
-            .update_proposal(
-                &by(&fx.frontend),
-                p(1),
-                "Make the change the task asks for.",
-                Some("x"),
-            )
+            .update_proposal_covering(&by(&fx.frontend), p(1), Some("x"))
             .await,
     );
     assert_eq!(error.code(), codes::PROPOSAL_NOT_OPEN);
@@ -1093,13 +1014,7 @@ async fn list_proposals_filters_by_state_and_review_claim() {
         .unwrap();
     fx.create(&fx.frontend).await.unwrap();
     fx.reviews
-        .create_proposal(
-            &by(&fx.backend),
-            t(2),
-            "Add the API",
-            "Make the change the task asks for.",
-            None,
-        )
+        .create_proposal_covering(&by(&fx.backend), t(2), "Add the API", None)
         .await
         .unwrap()
         .detail()
@@ -1181,13 +1096,7 @@ async fn retire_proposal_ends_a_proposal_for_reject_and_integration() {
     fx.workspace(&fx.backend, 2).await;
     fx.create(&fx.frontend).await.unwrap();
     fx.reviews
-        .create_proposal(
-            &by(&fx.backend),
-            t(2),
-            "Add the API",
-            "Make the change the task asks for.",
-            None,
-        )
+        .create_proposal_covering(&by(&fx.backend), t(2), "Add the API", None)
         .await
         .unwrap()
         .detail()
@@ -1252,29 +1161,87 @@ async fn retire_proposal_ends_a_proposal_for_reject_and_integration() {
 }
 
 #[tokio::test]
-async fn every_version_holds_its_own_checked_intent() {
+async fn every_version_holds_its_own_checked_intent_whose_parts_cover_its_files() {
     let fx = Fixture::new().await;
     fx.workspace(&fx.frontend, 1).await;
     fx.write("src/lib.rs", "pub fn y() {}\n");
+    fx.write("src/report.rs", "pub fn total() {}\n");
     let before = fx.last_seq().await;
-    for (intent, reason) in [(" \n ".to_owned(), "empty"), ("x".repeat(2001), "too_long")] {
+    let report = intent_of(
+        "  The report sums the tasks.\r\n\r\nIt leaves the schema as it is.  ",
+        &[
+            ("Rename", "Renames x to y.", &["src/lib.rs"]),
+            ("Report", "Adds total.", &["src/report.rs"]),
+        ],
+    );
+    let refusals: [(ProposalIntent, serde_json::Value); 5] = [
+        (
+            ProposalIntent {
+                summary: " \n ".to_owned(),
+                ..report.clone()
+            },
+            json!({"field": "intent.summary", "reason": "empty"}),
+        ),
+        (
+            ProposalIntent {
+                summary: "x".repeat(1201),
+                ..report.clone()
+            },
+            json!({"field": "intent.summary", "reason": "too_long", "max_chars": 1200}),
+        ),
+        (
+            intent_of(
+                "Renames x.",
+                &[("Rename", "Renames x to y.", &["src/lib.rs"])],
+            ),
+            json!({"field": "intent.parts", "reason": "part_files_uncovered", "uncovered": ["src/report.rs"], "uncovered_count": 1, "outside": [], "outside_count": 0}),
+        ),
+        (
+            intent_of(
+                "Renames x.",
+                &[
+                    ("Rename", "Renames x to y.", &["src/lib.rs", "README.md"]),
+                    ("Report", "Adds total.", &["src/report.rs"]),
+                ],
+            ),
+            json!({"field": "intent.parts", "reason": "part_file_outside_diff", "uncovered": [], "uncovered_count": 0, "outside": ["README.md"], "outside_count": 1}),
+        ),
+        (
+            intent_of(
+                "Renames x.",
+                &[
+                    ("Rename", "Renames x to y.", &["src/lib.rs"]),
+                    ("Report", "Adds total.", &["src/report.rs", "src/lib.rs"]),
+                ],
+            ),
+            json!({"field": "intent.parts", "reason": "file_in_two_parts", "files": ["src/lib.rs"]}),
+        ),
+    ];
+    for (intent, expected) in refusals {
         let error = refusal(
             fx.reviews
-                .create_proposal(&by(&fx.frontend), t(1), "Add the report", &intent, None)
+                .create_proposal(&by(&fx.frontend), t(1), "Add the report", intent, None)
                 .await,
         );
         assert_eq!(error.code(), codes::INVALID_INTENT);
-        assert_eq!(
-            details(&error),
-            json!({"field": "intent", "reason": reason, "max_chars": 2000})
-        );
-        assert!(
-            error
-                .hint()
-                .unwrap()
-                .starts_with("call create_proposal again")
-        );
+        assert_eq!(details(&error), expected);
+        assert!(error.hint().unwrap().contains("call create_proposal again"));
     }
+    let outside = refusal(
+        fx.reviews
+            .create_proposal(
+                &by(&fx.frontend),
+                t(1),
+                "Add the report",
+                intent_of(
+                    "Renames x.",
+                    &[("Rename", "Renames x to y.", &["../lib.rs"])],
+                ),
+                None,
+            )
+            .await,
+    );
+    assert_eq!(outside.code(), codes::INVALID_PATH);
     assert!(fx.events_after(before).await.is_empty());
     assert_eq!(fx.count("SELECT COUNT(*) FROM proposals").await, 0);
 
@@ -1284,20 +1251,23 @@ async fn every_version_holds_its_own_checked_intent() {
             &by(&fx.frontend),
             t(1),
             "Add the report",
-            "  Adds the report.\r\n\r\nIt leaves the schema as it is.  ",
+            report.clone(),
             None,
         )
         .await
         .unwrap()
         .detail()
         .unwrap();
+    let stored = v1.selected.intent.clone().unwrap();
     assert_eq!(
-        v1.selected.intent.as_deref(),
-        Some("Adds the report.\n\nIt leaves the schema as it is.")
+        stored.summary,
+        "The report sums the tasks.\n\nIt leaves the schema as it is."
     );
+    assert_eq!(stored.parts, report.parts);
+    assert!(stored.contracts.is_empty() && stored.decisions.is_empty());
     let error = refusal(
         fx.reviews
-            .update_proposal(&by(&fx.frontend), p(1), "", None)
+            .update_proposal(&by(&fx.frontend), p(1), ProposalIntent::default(), None)
             .await,
     );
     assert_eq!(error.code(), codes::INVALID_INTENT);
@@ -1309,14 +1279,14 @@ async fn every_version_holds_its_own_checked_intent() {
     );
 
     // Only the intent changes, so the new version holds the same files.
+    let total = ProposalIntent {
+        summary: "The report sums the tasks and their total.".to_owned(),
+        decisions: vec!["The total counts closed tasks too.".to_owned()],
+        ..report.clone()
+    };
     let v2 = fx
         .reviews
-        .update_proposal(
-            &by(&fx.frontend),
-            p(1),
-            "Adds the report and its total.",
-            None,
-        )
+        .update_proposal(&by(&fx.frontend), p(1), total.clone(), None)
         .await
         .unwrap()
         .detail()
@@ -1326,21 +1296,13 @@ async fn every_version_holds_its_own_checked_intent() {
     assert_eq!(
         v2.versions
             .iter()
-            .map(|v| v.intent.as_deref())
+            .map(|v| v.intent.clone())
             .collect::<Vec<_>>(),
-        [
-            Some("Adds the report.\n\nIt leaves the schema as it is."),
-            Some("Adds the report and its total.")
-        ]
+        [Some(stored), Some(total.clone())]
     );
     let error = refusal(
         fx.reviews
-            .update_proposal(
-                &by(&fx.frontend),
-                p(1),
-                "Adds the report and its total.",
-                None,
-            )
+            .update_proposal(&by(&fx.frontend), p(1), total, None)
             .await,
     );
     assert_eq!(error.code(), codes::VERSION_UNCHANGED);

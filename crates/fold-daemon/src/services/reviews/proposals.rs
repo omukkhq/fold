@@ -5,7 +5,7 @@ use fold_core::merge::ConflictReport;
 use fold_core::object::ObjectHash;
 use fold_core::reviews::checks::Purpose;
 use fold_core::reviews::{HumanReviewMark, ReviewFact, Verdict, human_approval_standing};
-use fold_core::reviews::{MAX_REASON_CHARS, proposal_intent};
+use fold_core::reviews::{MAX_REASON_CHARS, ProposalIntent, intent_coverage, proposal_intent};
 use fold_core::status::ProposalFact;
 use fold_core::tree::ChangeCounts;
 use fold_core::{
@@ -31,7 +31,7 @@ use crate::services::tasks::{
     closed_refusal, proposal_kind_refusal, recompute, task_not_found, worker_row,
 };
 use crate::services::workspaces::{
-    ArchiveReason, ProposalSnapshot, archive_in_tx, auto_checkpoint_in_tx,
+    ArchiveReason, ProposalSnapshot, StateRef, archive_in_tx, auto_checkpoint_in_tx, file_path,
 };
 
 /// The longest proposal title, in characters.
@@ -130,8 +130,8 @@ pub struct VersionView {
     pub changeset: ChangesetId,
     pub stats: ChangeCounts,
     pub evidence: Option<String>,
-    /// What the change does, why, what it leaves as it is and its risks; `None` on a version made before intents existed.
-    pub intent: Option<String>,
+    /// How the change works in the code, part by part; `None` on a version made before intents existed.
+    pub intent: Option<ProposalIntent>,
     pub created_by: String,
     pub created_at: Timestamp,
     /// A human made this version by editing the one before it in a human review, so it keeps that version's agent approvals until it is sent for review again.
@@ -268,7 +268,7 @@ pub(super) struct VersionInput<'a> {
     pub recorded: &'a ProposalSnapshot,
     pub evidence: Option<&'a str>,
     /// The checked intent; `None` keeps the current version's, as for a run started before intents existed.
-    pub intent: Option<&'a str>,
+    pub intent: Option<&'a ProposalIntent>,
     /// The version adds, changes or removes the checks file, so it needs a human.
     pub checks_changed: bool,
     pub now: Timestamp,
@@ -281,7 +281,7 @@ impl ReviewService {
         actor: &Actor,
         task: TaskId,
         title: &str,
-        intent: &str,
+        intent: ProposalIntent,
         evidence: Option<&str>,
     ) -> Result<Proposed, ReviewError> {
         let title = check_title(title)?;
@@ -296,6 +296,8 @@ impl ReviewService {
         };
         let workspace = open_checks(actor, task, facts)?.1;
         let recorded = self.workspaces.snapshot_for_proposal(&workspace).await?;
+        self.check_coverage(&intent, workspace.base, recorded.tree, "create_proposal")
+            .await?;
         let gate = self.proposal_gate(&workspace, recorded.tree).await?;
         let checks_changed = match gate {
             GateDecision::Ready { checks_changed } => checks_changed,
@@ -347,7 +349,7 @@ impl ReviewService {
         &self,
         actor: &Actor,
         proposal: ProposalId,
-        intent: &str,
+        intent: ProposalIntent,
         evidence: Option<&str>,
     ) -> Result<Proposed, ReviewError> {
         let intent = proposal_intent(intent, "update_proposal")?;
@@ -361,6 +363,8 @@ impl ReviewService {
         let live = workspaces::live_task_workspace(read, row.task).await?;
         let workspace = usable_workspace(live, row.task, &row.author)?;
         let recorded = self.workspaces.snapshot_for_proposal(&workspace).await?;
+        self.check_coverage(&intent, workspace.base, recorded.tree, "update_proposal")
+            .await?;
         let current = reviews::list_versions(read, proposal)
             .await?
             .pop()
@@ -630,14 +634,14 @@ pub(super) async fn add_version_in_tx(
         .evidence
         .map(str::to_owned)
         .or(current.evidence.clone());
-    let intent = input.intent.map(str::to_owned).or(current.intent.clone());
+    let intent = input.intent.cloned().or(current.intent.clone());
     unchanged_refusal(
         proposal,
         &current,
         live.base,
         recorded.tree,
         evidence.as_deref(),
-        intent.as_deref(),
+        intent.as_ref(),
     )?;
     let author = row.author.clone();
     let head = record_in_tx(
@@ -657,7 +661,7 @@ pub(super) async fn add_version_in_tx(
         tree: recorded.tree,
         head_changeset: head,
         evidence: evidence.as_deref(),
-        intent: intent.as_deref(),
+        intent: intent.as_ref(),
         created_by: author.as_str(),
         fixed_in_checkout: None,
     };
@@ -681,12 +685,12 @@ fn unchanged_refusal(
     base: RevisionId,
     tree: ObjectHash,
     evidence: Option<&str>,
-    intent: Option<&str>,
+    intent: Option<&ProposalIntent>,
 ) -> Result<(), ReviewError> {
     if current.base != base
         || current.tree != tree
         || current.evidence.as_deref() != evidence
-        || current.intent.as_deref() != intent
+        || current.intent.as_ref() != intent
     {
         return Ok(());
     }
@@ -700,6 +704,30 @@ fn unchanged_refusal(
     ])
     .with_hint("change the workspace, the intent or the evidence, then call update_proposal")
     .into())
+}
+
+impl ReviewService {
+    /// Refuses with `invalid_intent` unless the parts of the checked `intent` cover the files that `tree` changes against `base`, as the Changes tab lists them (a rename by its new path), by [`intent_coverage`]. A part's path that is not a relative, normalised path inside the project is `invalid_path`. `again` names the call that sends the intent again.
+    pub(super) async fn check_coverage(
+        &self,
+        intent: &ProposalIntent,
+        base: RevisionId,
+        tree: ObjectHash,
+        again: &str,
+    ) -> Result<(), ReviewError> {
+        for path in intent.files() {
+            file_path(path)?;
+        }
+        let changed: Vec<String> = self
+            .workspaces
+            .compare_states(StateRef::Revision(base), StateRef::Tree(tree))
+            .await?
+            .files
+            .iter()
+            .map(|file| file.path.to_string())
+            .collect();
+        Ok(intent_coverage(intent, &changed, again)?)
+    }
 }
 
 /// Gives the task the human review mark fold sets for a change of the checks file, with `task.human_review_set`, when the version changes the file and the task has no mark.

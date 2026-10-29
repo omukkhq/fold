@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO proposal_intent_files (part_id, version_id, position, path)\n                 VALUES (?1, ?2, ?3, ?4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "3730c327dc8fa31d5a932e2b129c26591b268003697e29173a4d274c24ff93aa"
+}

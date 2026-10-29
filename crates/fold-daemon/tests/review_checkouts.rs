@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::common::intents::Covering as _;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
@@ -97,12 +98,7 @@ async fn checkout_materialises_the_current_version_tree() {
 
     fx.write("src/lib.rs", "pub fn v2() {}\n");
     fx.reviews
-        .update_proposal(
-            &by(&fx.frontend.worker),
-            p(1),
-            "Make the change the task asks for.",
-            None,
-        )
+        .update_proposal_covering(&by(&fx.frontend.worker), p(1), None)
         .await
         .unwrap()
         .detail()

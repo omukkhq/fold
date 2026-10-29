@@ -4,12 +4,35 @@ use std::path::Path;
 use std::process::Command;
 
 use fold_store::testing::eventually;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::common::acceptance::{Harness, WAIT};
 
-const FIRST: &str = "Adds POST /login so a user can sign in. It does not change sign-up. Risk: a wrong password gets no limit on tries.";
-const SECOND: &str = "Adds POST /login so a user can sign in, and refuses GET with 405.\n\nIt does not change sign-up. Risk: a wrong password gets no limit on tries.";
+const FIRST: &str =
+    "The login route checks the password against the stored hash and opens a session.";
+const SECOND: &str = "The login route checks the password against the stored hash and opens a session.\n\nA GET of the route is refused with 405.";
+
+/// The intent of v1: one part for the route.
+fn first() -> Value {
+    json!({
+        "summary": FIRST,
+        "parts": [{"name": "Login route", "does": "POST /login checks the password and opens a session.", "files": ["src/login.txt"]}],
+        "contracts": {"routes": ["POST /login"]},
+    })
+}
+
+/// The intent of v2: the route refuses GET and a second part holds its test.
+fn second() -> Value {
+    json!({
+        "summary": SECOND,
+        "parts": [
+            {"name": "Login route", "does": "POST /login checks the password and opens a session; GET answers 405.", "files": ["src/login.txt"]},
+            {"name": "Tests", "does": "A GET of /login gets 405.", "files": ["tests/login.txt"]},
+        ],
+        "contracts": {"routes": ["POST /login", "GET /login answers 405"]},
+        "not_changed": ["Sign-up."],
+    })
+}
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -36,7 +59,7 @@ async fn committed(h: &Harness) -> i64 {
     .unwrap()
 }
 
-/// Acceptance 30: backend sends its login endpoint with an intent, which fold refuses empty. The reviewer reads the intent, sees that the diff does less than it says and asks for changes; backend sends v2 with its own intent, and v1 keeps its own. The reviewer approves and integrates v2, and the Git commit of the integration has the title as its subject and v2's intent as its body. No event carries the intent.
+/// Acceptance 30: backend sends its login endpoint with an intent, which fold refuses empty and refuses again while a changed file belongs to no part. The reviewer reads the intent part by part, sees that the diff does less than it says and asks for changes; backend sends v2 with its own intent, a second part for its test, and v1 keeps its own. The reviewer approves and integrates v2, and the Git commit of the integration has the title as its subject and v2's summary, parts and contracts as its body. No event carries the intent.
 #[tokio::test]
 async fn acceptance_30_each_version_states_its_intent_and_the_commit_body_carries_it() {
     let h = Harness::start().await;
@@ -53,15 +76,25 @@ async fn acceptance_30_each_version_states_its_intent_and_the_commit_body_carrie
         .refused(
             "backend",
             "create_proposal",
-            json!({"task": task, "title": "Add the login endpoint", "intent": " "}),
+            json!({"task": task, "title": "Add the login endpoint", "intent": {"summary": " ", "parts": first()["parts"]}}),
         )
         .await;
     assert_eq!(refused["code"], "invalid_intent");
+    assert_eq!(refused["details"]["field"], "intent.summary");
+    let uncovered = h
+        .refused(
+            "backend",
+            "create_proposal",
+            json!({"task": task, "title": "Add the login endpoint", "intent": {"summary": FIRST, "parts": [{"name": "Login route", "does": "Adds the route.", "files": []}]}}),
+        )
+        .await;
+    assert_eq!(uncovered["details"]["reason"], "part_files_uncovered");
+    assert_eq!(uncovered["details"]["uncovered"], json!(["src/login.txt"]));
     let created = h
         .call(
             "backend",
             "create_proposal",
-            json!({"task": task, "title": "Add the login endpoint", "intent": FIRST, "evidence": "check-login: 1 passed"}),
+            json!({"task": task, "title": "Add the login endpoint", "intent": first(), "evidence": "check-login: 1 passed"}),
         )
         .await;
     let proposal = created["id"].as_str().unwrap().to_owned();
@@ -73,7 +106,7 @@ async fn acceptance_30_each_version_states_its_intent_and_the_commit_body_carrie
             json!({"id": proposal, "detail": "full"}),
         )
         .await;
-    assert_eq!(read["intent"], FIRST);
+    assert_eq!(read["intent"], first());
     h.call(
         "review",
         "submit_review",
@@ -81,7 +114,10 @@ async fn acceptance_30_each_version_states_its_intent_and_the_commit_body_carrie
     )
     .await;
 
-    work.write(&[("src/login.txt", "POST /login\nGET /login -> 405\n")]);
+    work.write(&[
+        ("src/login.txt", "POST /login\nGET /login -> 405\n"),
+        ("tests/login.txt", "GET /login is 405\n"),
+    ]);
     h.call(
         "backend",
         "record_changes",
@@ -92,7 +128,7 @@ async fn acceptance_30_each_version_states_its_intent_and_the_commit_body_carrie
         .call(
             "backend",
             "update_proposal",
-            json!({"id": proposal, "intent": SECOND}),
+            json!({"id": proposal, "intent": second()}),
         )
         .await;
     assert_eq!(updated["version"], "v2", "{updated}");
@@ -103,7 +139,14 @@ async fn acceptance_30_each_version_states_its_intent_and_the_commit_body_carrie
             json!({"id": proposal, "detail": "full"}),
         )
         .await;
-    assert_eq!(current["intent"], SECOND);
+    assert_eq!(current["intent"], second());
+    let short = h
+        .call("review", "get_proposal", json!({"id": proposal}))
+        .await;
+    assert_eq!(
+        short["intent"],
+        json!({"summary": SECOND, "parts": [{"name": "Login route", "files": 1}, {"name": "Tests", "files": 1}]})
+    );
     let earlier = h
         .call(
             "review",
@@ -111,7 +154,7 @@ async fn acceptance_30_each_version_states_its_intent_and_the_commit_body_carrie
             json!({"id": proposal, "version": 1, "detail": "full"}),
         )
         .await;
-    assert_eq!(earlier["intent"], FIRST, "v1 keeps its own intent");
+    assert_eq!(earlier["intent"], first(), "v1 keeps its own intent");
 
     h.approve(&proposal).await;
     let integrated = h
@@ -130,7 +173,9 @@ async fn acceptance_30_each_version_states_its_intent_and_the_commit_body_carrie
     let git_dir = h.project.paths().git_dir();
     let body = git(&git_dir, &["log", "-1", "--format=%B", "refs/fold/head"]);
     assert!(
-        body.starts_with(&format!("Add the login endpoint\n\n{SECOND}\n\n")),
+        body.starts_with(&format!(
+            "Add the login endpoint\n\n{SECOND}\n\nLogin route: POST /login checks the password and opens a session; GET answers 405.\nTests: A GET of /login gets 405.\n\nRoutes: POST /login; GET /login answers 405\n\n"
+        )),
         "{body}"
     );
     assert!(
@@ -143,7 +188,7 @@ async fn acceptance_30_each_version_states_its_intent_and_the_commit_body_carrie
     for event in h.events().await {
         let data = event.data.to_string();
         assert!(
-            !data.contains("POST /login so a user"),
+            !data.contains("stored hash") && !data.contains("Sign-up"),
             "{} carries the intent",
             event.kind
         );
