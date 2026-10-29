@@ -22,7 +22,7 @@ export function fileRows(text: string): LineRow[] {
 export function firstRowLimit(line: number | undefined): number {
   return line === undefined
     ? ROW_LIMIT
-    : Math.max(1, Math.ceil(line / ROW_LIMIT)) * ROW_LIMIT;
+    : Math.ceil(line / ROW_LIMIT) * ROW_LIMIT;
 }
 
 /** The line a link opened the file at, selected so it stands out; null without one or past the end of the file. */
