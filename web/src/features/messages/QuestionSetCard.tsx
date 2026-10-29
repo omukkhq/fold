@@ -30,7 +30,7 @@ interface QuestionSetCardProps {
   set: OpenSet;
   /** How many other sets of the chat wait behind this one. */
   more: number;
-  /** The question heading, which takes the focus when the card shows the next question. */
+  /** The question heading, which takes the focus when the card shows the next question, so a screen reader reads it; only the script focuses it, so it draws no focus ring while the choices keep theirs. */
   headingRef: RefObject<HTMLHeadingElement | null>;
   /** Resolves once the daemon has stored the one reply with every answer; rejects with its error. */
   onAnswer: (ask: string, answers: string[]) => Promise<void>;
@@ -209,11 +209,10 @@ export function QuestionSetCard({
                 : undefined
             }
             className={cn(
-              "rounded-s text-text",
+              "text-text outline-none",
               headingQuestion(question.text)
                 ? "font-title text-18 leading-tight font-semibold lg:text-21"
                 : "text-15",
-              focusRing,
             )}
           >
             {headingQuestion(question.text) ? (

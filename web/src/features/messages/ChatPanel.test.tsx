@@ -552,6 +552,9 @@ describe("ChatPanel question set", () => {
       name: "Question 2 of 3: Which keys must the workers use?",
     });
     expect(document.activeElement).toBe(second);
+    // The script moves the focus there for screen readers; the heading draws no ring.
+    expect(second.className).toContain("outline-none");
+    expect(second.className).not.toContain("focus-visible:outline-2");
     await userEvent.keyboard("2");
     expect(
       within(card()).getByRole("heading", {
