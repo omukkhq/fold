@@ -140,8 +140,10 @@ impl ReviewService {
                         actor,
                         &row,
                         &checkout,
-                        (current.base, tree),
-                        (&evidence, &intent),
+                        current.base,
+                        tree,
+                        &evidence,
+                        &intent,
                         job,
                     )
                     .await;
@@ -178,18 +180,22 @@ impl ReviewService {
         })))
     }
 
-    /// Writes the running `review_fix` run of the fixed `tree` in the reviewer's checkout and runs it in the background; the call answers at once.
-    /// `fixed` is the base and the fixed tree, `text` the evidence and the intent of the version the run waits to make.
+    /// Writes the running `review_fix` run of the fixed `tree` in the reviewer's checkout and runs it in the background; the call answers at once. `evidence` and `intent` are those of the version the run waits to make.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the step of a command, with the inputs its earlier steps produced"
+    )]
     async fn start_fix_run(
         &self,
         actor: &Actor,
         row: &ProposalRow,
         checkout: &WorkspaceRow,
-        fixed: (RevisionId, ObjectHash),
-        text: (&str, &str),
+        base: RevisionId,
+        tree: ObjectHash,
+        evidence: &str,
+        intent: &str,
         job: GateJob,
     ) -> Result<FixOutcome, ReviewError> {
-        let ((base, tree), (evidence, intent)) = (fixed, text);
         let fix = job.fix.ok_or(StoreError::Corrupt("check_runs.purpose"))?;
         let proposal = row.id;
         let now = self.clock.now();
