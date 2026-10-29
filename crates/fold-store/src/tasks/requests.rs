@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 
 use fold_core::object::ObjectHash;
-use fold_core::requests::{Draft, DraftCard, DraftEdge, RequestKind, RequestState, Requester};
-use fold_core::{LabelName, RequestId, TaskId, Timestamp, WorkerName};
+use fold_core::requests::{
+    CodeAnchor, CodeRef, Draft, DraftCard, DraftEdge, RequestKind, RequestState, Requester,
+};
+use fold_core::reviews::Side;
+use fold_core::{LabelName, ProposalId, RequestId, RevisionId, TaskId, Timestamp, WorkerName};
 use sqlx::SqliteConnection;
 
 use crate::columns::{count, time};
@@ -34,6 +37,8 @@ pub struct RequestRow {
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     pub latest_version: Option<u32>,
+    /// The code the request was made on; `None` for a request written without a selection.
+    pub code: Option<CodeRef>,
 }
 
 /// The values of a new request, which starts `open` without a kind, a title or a drafter.
@@ -104,9 +109,18 @@ macro_rules! select_requests {
                       r.drafter_worker_id, w.agent_id AS "drafter_agent_id?: i64",
                       w.name AS "drafter_name?: String", r.drafter_since,
                       r.close_reason, r.created_at, r.updated_at,
-                      (SELECT MAX(d.version) FROM request_drafts d WHERE d.request_id = r.id) AS "latest_version?: i64"
+                      (SELECT MAX(d.version) FROM request_drafts d WHERE d.request_id = r.id) AS "latest_version?: i64",
+                      c.path AS "code_path?: String", c.start_line AS "code_start?: i64",
+                      c.end_line AS "code_end?: i64", c.excerpt AS "code_excerpt?: String",
+                      c.excerpt_cut AS "code_cut?: bool", c.side AS "code_side?: String",
+                      cr.number AS "code_revision?: i64", cp.number AS "code_proposal?: i64",
+                      cv.version AS "code_version?: i64"
                FROM requests r
                LEFT JOIN workers w ON w.id = r.drafter_worker_id
+               LEFT JOIN request_code_refs c ON c.request_id = r.id
+               LEFT JOIN revisions cr ON cr.id = c.revision_id
+               LEFT JOIN proposal_versions cv ON cv.id = c.version_id
+               LEFT JOIN proposals cp ON cp.id = cv.proposal_id
                "# + $tail
             $(, $arg)*
         )
@@ -128,10 +142,57 @@ struct RawRequest {
     created_at: i64,
     updated_at: i64,
     latest_version: Option<i64>,
+    code_path: Option<String>,
+    code_start: Option<i64>,
+    code_end: Option<i64>,
+    code_excerpt: Option<String>,
+    code_cut: Option<bool>,
+    code_side: Option<String>,
+    code_revision: Option<i64>,
+    code_proposal: Option<i64>,
+    code_version: Option<i64>,
 }
 
 impl RawRequest {
-    fn into_row(self) -> Result<RequestRow, StoreError> {
+    fn code(&mut self) -> Result<Option<CodeRef>, StoreError> {
+        let (Some(path), Some(start), Some(end), Some(excerpt), Some(cut)) = (
+            self.code_path.take(),
+            self.code_start,
+            self.code_end,
+            self.code_excerpt.take(),
+            self.code_cut,
+        ) else {
+            return Ok(None);
+        };
+        let anchor = match (
+            self.code_revision,
+            self.code_proposal,
+            self.code_version,
+            self.code_side.as_deref(),
+        ) {
+            (Some(revision), None, None, None) => CodeAnchor::Revision(
+                RevisionId::try_from_db(revision).ok_or(StoreError::Corrupt("revisions.number"))?,
+            ),
+            (None, Some(proposal), Some(version), Some(side)) => CodeAnchor::Version {
+                proposal: ProposalId::try_from_db(proposal)
+                    .ok_or(StoreError::Corrupt("proposals.number"))?,
+                version: count(version, "proposal_versions.version")?,
+                side: Side::parse(side).ok_or(StoreError::Corrupt("request_code_refs.side"))?,
+            },
+            _ => return Err(StoreError::Corrupt("request_code_refs.anchor")),
+        };
+        Ok(Some(CodeRef {
+            anchor,
+            path,
+            start_line: count(start, "request_code_refs.start_line")?,
+            end_line: count(end, "request_code_refs.end_line")?,
+            excerpt,
+            excerpt_cut: cut,
+        }))
+    }
+
+    fn into_row(mut self) -> Result<RequestRow, StoreError> {
+        let code = self.code()?;
         let drafter = match (
             self.drafter_worker_id,
             self.drafter_agent_id,
@@ -168,6 +229,7 @@ impl RawRequest {
                 .latest_version
                 .map(|value| count(value, "request_drafts.version"))
                 .transpose()?,
+            code,
         })
     }
 }
@@ -213,6 +275,53 @@ pub async fn insert_attachment(
         size,
         object,
         now
+    )
+    .execute(tx.conn())
+    .await?;
+    expect_one(result.rows_affected())
+}
+
+/// Records the code a new request was made on. The anchor's revision or proposal version must exist; the caller has checked the path and read the excerpt from its tree.
+pub async fn insert_code_ref(
+    tx: &mut WriteTx,
+    request: RequestId,
+    code: &CodeRef,
+) -> Result<(), StoreError> {
+    let number = request.to_db();
+    let (revision, proposal, version, side) = match code.anchor {
+        CodeAnchor::Revision(revision) => (Some(revision.to_db()), None, None, None),
+        CodeAnchor::Version {
+            proposal,
+            version,
+            side,
+        } => (
+            None,
+            Some(proposal.to_db()),
+            Some(i64::from(version)),
+            Some(side.as_str()),
+        ),
+    };
+    let start = i64::from(code.start_line);
+    let end = i64::from(code.end_line);
+    let result = sqlx::query!(
+        "INSERT INTO request_code_refs
+             (request_id, revision_id, version_id, side, path, start_line, end_line, excerpt, excerpt_cut)
+         SELECT r.id,
+                (SELECT id FROM revisions WHERE number = ?2),
+                (SELECT v.id FROM proposal_versions v JOIN proposals p ON p.id = v.proposal_id
+                 WHERE p.number = ?3 AND v.version = ?4),
+                ?5, ?6, ?7, ?8, ?9, ?10
+         FROM requests r WHERE r.number = ?1",
+        number,
+        revision,
+        proposal,
+        version,
+        side,
+        code.path,
+        start,
+        end,
+        code.excerpt,
+        code.excerpt_cut
     )
     .execute(tx.conn())
     .await?;

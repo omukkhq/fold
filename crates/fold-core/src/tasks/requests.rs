@@ -8,7 +8,8 @@ use crate::agents::roles::Role;
 use crate::agents::{AgentName, HumanName};
 use crate::error::{FoldError, codes};
 use crate::events::EventActor;
-use crate::ids::{RequestId, TaskId};
+use crate::ids::{ProposalId, RequestId, RevisionId, TaskId};
+use crate::reviews::Side;
 use crate::tasks::claims::is_stale;
 use crate::tasks::dag::{Dag, EdgeRefusal};
 use crate::tasks::{LabelName, define_names};
@@ -554,6 +555,39 @@ pub fn validate_draft(cards: Vec<DraftCard>, edges: Vec<DraftEdge>) -> Result<Dr
         cards: checked,
         edges,
     })
+}
+
+/// What the lines of a request made on code belong to: a revision of main, or one side of a proposal version, the base tree (`old`) or the version's own tree (`new`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodeAnchor {
+    Revision(RevisionId),
+    Version {
+        proposal: ProposalId,
+        version: u32,
+        side: Side,
+    },
+}
+
+/// The lines a human selected to make a request, as the requester names them. The service checks the path and reads the lines.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeSelection {
+    pub anchor: CodeAnchor,
+    pub path: String,
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+/// The stored code location of a request: the selection with the lines it quoted when the request was made, so the request keeps them when the code moves on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeRef {
+    pub anchor: CodeAnchor,
+    pub path: String,
+    pub start_line: u32,
+    pub end_line: u32,
+    /// The lines as the tree had them, joined by newlines and cut as a line question's excerpt is.
+    pub excerpt: String,
+    /// The excerpt holds only the first of the lines.
+    pub excerpt_cut: bool,
 }
 
 #[cfg(test)]

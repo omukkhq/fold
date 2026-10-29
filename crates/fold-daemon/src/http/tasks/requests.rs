@@ -8,10 +8,10 @@ use axum::http::header::{
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use fold_core::requests::{
-    DraftCard, DraftEdge, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, Requester, attachment_too_large,
-    check_attachment_count, valid_media_type,
+    CodeAnchor, CodeRef, CodeSelection, DraftCard, DraftEdge, MAX_ATTACHMENT_BYTES,
+    MAX_ATTACHMENTS, Requester, attachment_too_large, check_attachment_count, valid_media_type,
 };
-use fold_core::{FoldError, LabelName, RequestId, codes};
+use fold_core::{FoldError, LabelName, ProposalId, RequestId, RevisionId, codes};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use utoipa::{IntoParams, ToSchema};
@@ -21,6 +21,7 @@ use utoipa_axum::routes;
 use super::super::Project;
 use super::super::actor::Human;
 use super::super::error::{ApiError, ApiJson, ApiQuery, ErrorEnvelope};
+use super::super::reviews::CommentSide;
 use crate::daemon::AppState;
 use crate::services::tasks::{self as service, NewRequestAttachment, SubmitDraft};
 
@@ -31,6 +32,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_requests, create_request))
         .layer(DefaultBodyLimit::max(MAX_CREATE_BODY))
+        .routes(routes!(create_code_request))
         .routes(routes!(get_request))
         .routes(routes!(get_request_attachment))
         .routes(routes!(request_draft_changes))
@@ -107,10 +109,69 @@ pub struct RequestSummary {
     /// The newest draft version; null before the first draft.
     #[schema(required = true)]
     pub latest_version: Option<u32>,
+    /// The code the request was made on; null for a request written without a selection.
+    #[schema(required = true)]
+    pub code: Option<RequestCodeView>,
     /// UTC milliseconds.
     pub created_at: i64,
     /// UTC milliseconds.
     pub updated_at: i64,
+}
+
+/// The lines a request was made on: a run of lines of one file in a revision of main, or in one side of a proposal version.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RequestCodeView {
+    #[schema(example = "web/src/board.ts")]
+    pub path: String,
+    /// 1-based.
+    pub start_line: u32,
+    /// 1-based, at least `start_line`.
+    pub end_line: u32,
+    /// The lines as the tree held them when the request was made, joined by newlines.
+    pub excerpt: String,
+    /// The excerpt holds only the first of the lines.
+    pub excerpt_cut: bool,
+    /// The revision of main the lines belong to; null for lines of a proposal version.
+    #[schema(required = true, example = "r17")]
+    pub revision: Option<String>,
+    /// The proposal whose version the lines belong to; null for lines of a revision.
+    #[schema(required = true, example = "P-3")]
+    pub proposal: Option<String>,
+    /// The proposal version; null for lines of a revision.
+    #[schema(required = true)]
+    pub version: Option<u32>,
+    /// The side of the version: `old` is its base, `new` the version itself; null for lines of a revision.
+    #[schema(required = true)]
+    pub side: Option<CommentSide>,
+}
+
+impl From<CodeRef> for RequestCodeView {
+    fn from(code: CodeRef) -> Self {
+        let (revision, proposal, version, side) = match code.anchor {
+            CodeAnchor::Revision(revision) => (Some(revision.to_string()), None, None, None),
+            CodeAnchor::Version {
+                proposal,
+                version,
+                side,
+            } => (
+                None,
+                Some(proposal.to_string()),
+                Some(version),
+                Some(side.into()),
+            ),
+        };
+        Self {
+            path: code.path,
+            start_line: code.start_line,
+            end_line: code.end_line,
+            excerpt: code.excerpt,
+            excerpt_cut: code.excerpt_cut,
+            revision,
+            proposal,
+            version,
+            side,
+        }
+    }
 }
 
 impl From<service::RequestView> for RequestSummary {
@@ -124,6 +185,7 @@ impl From<service::RequestView> for RequestSummary {
             requester: view.requester.label(),
             drafter: view.drafter.map(|worker| worker.to_string()),
             latest_version: view.latest_version,
+            code: view.code.map(Into::into),
             created_at: view.created_at.as_millis(),
             updated_at: view.updated_at.as_millis(),
         }
@@ -318,6 +380,59 @@ pub struct CreateRequestForm {
     files: Vec<Vec<u8>>,
 }
 
+/// A request about lines a human selected. Name the lines by `revision`, or by `proposal`, `version` and `side`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CodeRequestBody {
+    /// The message in Markdown. `#` names a fold item and `@` names a file; the daemon parses nothing.
+    pub body: String,
+    /// The file the lines belong to, relative to the tree's root.
+    #[schema(example = "web/src/board.ts")]
+    pub path: String,
+    /// 1-based.
+    pub start_line: u32,
+    /// 1-based, at least `start_line`.
+    pub end_line: u32,
+    /// A revision of main, such as `r17`.
+    #[serde(default)]
+    pub revision: Option<String>,
+    /// A proposal, such as `P-3`, with `version` and `side`.
+    #[serde(default)]
+    pub proposal: Option<String>,
+    #[serde(default)]
+    pub version: Option<u32>,
+    #[serde(default)]
+    pub side: Option<CommentSide>,
+}
+
+impl CodeRequestBody {
+    fn selection(self) -> Result<(String, CodeSelection), ApiError> {
+        let anchor = match (self.revision, self.proposal, self.version, self.side) {
+            (Some(revision), None, None, None) => {
+                CodeAnchor::Revision(revision.parse::<RevisionId>().map_err(FoldError::from)?)
+            }
+            (None, Some(proposal), Some(version), Some(side)) => CodeAnchor::Version {
+                proposal: proposal.parse::<ProposalId>().map_err(FoldError::from)?,
+                version,
+                side: side.into(),
+            },
+            _ => {
+                return Err(ApiError::invalid_request(
+                    "name the lines by revision, or by proposal, version and side",
+                ));
+            }
+        };
+        Ok((
+            self.body,
+            CodeSelection {
+                anchor,
+                path: self.path,
+                start_line: self.start_line,
+                end_line: self.end_line,
+            },
+        ))
+    }
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct DraftChangesBody {
     /// The draft version the requester read, which must be the latest.
@@ -467,6 +582,37 @@ pub async fn create_request(
         .create_request(&human.actor(), &body, attachments)
         .await
         .map_err(ApiError::from)?;
+    Ok((StatusCode::CREATED, Json(detail(&project, view.id).await?)))
+}
+
+/// A named human creates a request about lines they selected in a revision of main or in a proposal version. It is the same request as `POST /requests` makes, with the code location and a short excerpt of the lines added.
+#[utoipa::path(
+    post,
+    path = "/api/v1/projects/{slug}/requests/from-code",
+    operation_id = "create_code_request",
+    params(("slug" = String, Path, description = "The project slug")),
+    request_body = CodeRequestBody,
+    responses(
+        (status = 201, description = "The created request", body = RequestDetailView),
+        (status = 400, description = "`invalid_request` (no body, or the lines are not named by a revision or by a proposal version and side), `invalid_id` or `invalid_path`", body = ErrorEnvelope),
+        (status = 401, description = "`human_name_required`", body = ErrorEnvelope),
+        (status = 404, description = "`revision_not_found`, `proposal_not_found` (also for a version the proposal does not have) or `project_not_found`", body = ErrorEnvelope),
+        (status = 422, description = "`unknown_comment_path`: the tree has no text file at the path; `invalid_comment_range`: the lines are not in the file", body = ErrorEnvelope),
+        (status = 503, description = "`project_unavailable`", body = ErrorEnvelope),
+        (status = 500, description = "Internal error", body = ErrorEnvelope),
+    )
+)]
+pub async fn create_code_request(
+    human: Human,
+    project: Project,
+    ApiJson(body): ApiJson<CodeRequestBody>,
+) -> Result<(StatusCode, Json<RequestDetailView>), ApiError> {
+    let (body, selection) = body.selection()?;
+    let view = project
+        .0
+        .tasks
+        .create_code_request(&human.actor(), &body, selection)
+        .await?;
     Ok((StatusCode::CREATED, Json(detail(&project, view.id).await?)))
 }
 
