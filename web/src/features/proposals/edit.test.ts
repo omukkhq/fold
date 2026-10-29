@@ -16,7 +16,9 @@ import {
   editSource,
   editableFile,
   inHumanReview,
+  intentHint,
   intentProblem,
+  shownIntentProblem,
   keptApprovalsNote,
   savedContent,
 } from "./edit";
@@ -211,14 +213,32 @@ describe("the intent of a human edit", () => {
   });
 
   it("names what keeps Save off", () => {
-    expect(intentProblem("Adds it.", "Adds it.")).toBeNull();
-    expect(intentProblem("", "")).toBeNull();
-    expect(intentProblem("  ", "Adds it.")).toBe(
+    expect(intentProblem("Adds it.")).toBeNull();
+    const empty =
+      "Say what the new version does, why, what it does not change and its risks.";
+    expect(intentProblem("  ")).toBe(empty);
+    expect(intentProblem("")).toBe(empty);
+    expect(intentProblem("é".repeat(2000))).toBeNull();
+    expect(intentProblem("x".repeat(2001))).toBe(
+      "The intent can hold at most 2000 characters; it has 2001.",
+    );
+  });
+
+  it("asks for an intent on the edit of a version without one, without an error before the human writes", () => {
+    expect(shownIntentProblem("", "")).toBeNull();
+    expect(shownIntentProblem("  ", "")).toBeNull();
+    expect(shownIntentProblem("x".repeat(2001), "")).toBe(
+      "The intent can hold at most 2000 characters; it has 2001.",
+    );
+    expect(shownIntentProblem("", "Adds it.")).toBe(
       "Say what the new version does, why, what it does not change and its risks.",
     );
-    expect(intentProblem("é".repeat(2000), "")).toBeNull();
-    expect(intentProblem("x".repeat(2001), "")).toBe(
-      "The intent can hold at most 2000 characters; it has 2001.",
+    expect(shownIntentProblem("Adds it.", "Adds it.")).toBeNull();
+    expect(intentHint(2, "")).toBe(
+      "What v3 does, why, what it does not change and its risks. v2 has no intent, so write one for v3.",
+    );
+    expect(intentHint(2, "Adds it.")).toBe(
+      "What v3 does, why, what it does not change and its risks. It starts as the intent of v2; change what your edit changes.",
     );
   });
 });

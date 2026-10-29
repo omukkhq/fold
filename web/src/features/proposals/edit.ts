@@ -111,17 +111,35 @@ export function editIntent(proposal: ProposalDetail, version: number): string {
   return edited === undefined ? "" : (versionIntent(edited) ?? "");
 }
 
-/** Why Save cannot send the intent as it stands; null when it can. An empty intent of a version that had one would silently keep the old one, so the human writes one. */
-export function intentProblem(intent: string, started: string): string | null {
+/** Why Save cannot send the intent as it stands; null when it can. Every new version carries an intent, so an empty one keeps Save off, also on the edit of a version that has none. */
+export function intentProblem(intent: string): string | null {
   // The daemon counts Unicode code points, as Array.from does.
   const length = Array.from(intent.trim()).length;
   if (length > MAX_INTENT_CHARS) {
     return `The intent can hold at most ${String(MAX_INTENT_CHARS)} characters; it has ${String(length)}.`;
   }
-  if (length === 0 && started !== "") {
+  if (length === 0) {
     return "Say what the new version does, why, what it does not change and its risks.";
   }
   return null;
+}
+
+/** The problem the intent box shows: none while the box of a version without an intent is still empty, because its hint already asks for one. */
+export function shownIntentProblem(
+  intent: string,
+  started: string,
+): string | null {
+  if (started === "" && intent.trim() === "") return null;
+  return intentProblem(intent);
+}
+
+/** The hint under the intent box: what an intent says, and where the box's text came from. */
+export function intentHint(version: number, started: string): string {
+  const next = `v${String(version + 1)}`;
+  const what = `What ${next} does, why, what it does not change and its risks.`;
+  return started === ""
+    ? `${what} v${String(version)} has no intent, so write one for ${next}.`
+    : `${what} It starts as the intent of v${String(version)}; change what your edit changes.`;
 }
 
 /** The line over the edit box: what a save writes, and that the approvals stay. */
