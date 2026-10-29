@@ -17,6 +17,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { expectMentionPopover } from "@/test/mentionBox";
 import { mentionRoutes } from "@/test/mentionRoutes";
@@ -25,7 +26,15 @@ import { message, recipient, thread as baseThread } from "@/test/messages";
 import { ApiError } from "@/api/errors";
 import type { ThreadView } from "@/api/messages";
 import { formatAsOfMinute } from "@/format/time";
-import { ThreadPanel } from "./ThreadPanel";
+import { ChatPanel } from "./ChatPanel";
+import { groupChats, type AgentChat } from "./chats";
+
+/** The one chat of a thread's agent. */
+function chatOf(...threads: ThreadView[]): AgentChat {
+  const [chat] = groupChats(threads);
+  if (!chat) throw new Error("no chat");
+  return chat;
+}
 
 afterEach(() => {
   cleanup();
@@ -68,9 +77,9 @@ async function setup(
     getParentRoute: () => root,
     path: "/",
     component: () => (
-      <ThreadPanel
+      <ChatPanel
         slug="demo"
-        thread={shown}
+        chat={chatOf(shown)}
         now={NOW}
         onReply={onReply}
         shown={onScreen}
@@ -89,7 +98,7 @@ async function setup(
   await screen.findByLabelText("Reply");
 }
 
-describe("ThreadPanel", () => {
+describe("ChatPanel", () => {
   it("marks the thread's asks answered and says when another human answered first", async () => {
     daemon.on("POST /api/v1/projects/demo/asks/answered", {
       status: 200,
@@ -161,22 +170,22 @@ describe("ThreadPanel", () => {
     await expectMentionPopover(screen.getByLabelText("Reply"));
   });
 
-  it("shows the thread, delivery lines and the task link", async () => {
+  it("shows the chat, delivery lines and the task links of the bar and of each message", async () => {
     await setup(() => Promise.resolve());
-    expect(
-      within(screen.getByRole("article")).getByText("Which one?"),
-    ).toBeTruthy();
+    const article = screen.getByRole("article");
+    expect(within(article).getByText("Which one?")).toBeTruthy();
     const delivered = screen.getByText("delivered to", { exact: false });
     expect(delivered.textContent).toContain("tanim");
     expect(delivered.querySelector('[data-person="human"]')).toBeTruthy();
+    const header = document.querySelector("header");
+    if (!header) throw new Error("no header");
     expect(
-      screen.getByRole("link", { name: "Open T-12" }).getAttribute("href"),
+      within(header).getByRole("link", { name: "T-12" }).getAttribute("href"),
     ).toBe("/p/demo/t/T-12");
-    const chip = screen
-      .getAllByRole("link")
-      .find((link) => link.textContent === "T-12");
-    expect(chip?.className).toContain("whitespace-nowrap");
-    expect(chip?.className).not.toContain("font-mono");
+    const chip = within(article).getByRole("link", { name: "T-12" });
+    expect(chip.getAttribute("href")).toBe("/p/demo/t/T-12");
+    expect(chip.className).toContain("whitespace-nowrap");
+    expect(chip.className).not.toContain("font-mono");
   });
 
   it("says a message to humans was delivered, marks the signed-in human and marks the thread read for them", async () => {
@@ -428,7 +437,7 @@ describe("ThreadPanel", () => {
   });
 });
 
-describe("ThreadPanel question", () => {
+describe("ChatPanel question", () => {
   const QUESTION = `m-${String(34)}`;
   const ANSWER = `m-${String(35)}`;
   const asked = baseThread(QUESTION, {
@@ -472,7 +481,12 @@ describe("ThreadPanel question", () => {
       getParentRoute: () => root,
       path: "/",
       component: () => (
-        <ThreadPanel slug="demo" thread={shown} now={NOW} onReply={onReply} />
+        <ChatPanel
+          slug="demo"
+          chat={chatOf(shown)}
+          now={NOW}
+          onReply={onReply}
+        />
       ),
     });
     const router = createRouter({
@@ -545,7 +559,17 @@ describe("ThreadPanel question", () => {
       onReply,
     );
     const box = await screen.findByLabelText("Reply");
-    expect(screen.queryByText("Your own answer to the question of")).toBeNull();
+    // The dock holds the question, so the reply box answers it from the start.
+    const dock = screen.getByRole("region", { name: "Open questions" });
+    expect(
+      within(dock).getByRole("heading", { name: "Question" }),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole("region", { name: "Messages" })).queryByRole(
+        "list",
+        { name: "Choices" },
+      ),
+    ).toBeNull();
     await userEvent.click(
       screen.getByRole("button", {
         name: "Or write your own answer in the reply box below",
@@ -596,7 +620,16 @@ describe("ThreadPanel question", () => {
       }),
       onReply,
     );
-    expect(await screen.findByText("Waits for your answer")).toBeTruthy();
+    const dock = await screen.findByRole("region", { name: "Open questions" });
+    expect(within(dock).getByText("Null or other?")).toBeTruthy();
+    expect(
+      within(dock).getByText("Write your answer in the reply box below."),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: "Question waits for your answer below",
+      }),
+    ).toBeTruthy();
     expect(
       screen.getByText("Your own answer to the question of", { exact: false })
         .textContent,
@@ -638,5 +671,298 @@ describe("ThreadPanel question", () => {
     expect(within(quote).getByText("const b = 2;")).toBeTruthy();
     expect(within(quote).getByText("8")).toBeTruthy();
     expect(within(quote).getByText("The first 2 of 114 lines.")).toBeTruthy();
+  });
+});
+
+describe("ChatPanel with several threads", () => {
+  const ASK_A = `m-${String(50)}`;
+  const NOTE = `m-${String(51)}`;
+  const ASK_B = `m-${String(52)}`;
+  const REPORT = `m-${String(53)}`;
+  const choice = (id: string, body: string, at: number, fields = {}) =>
+    message(id, {
+      sender: "frontend",
+      recipients: [recipient("human:tanim")],
+      body,
+      choices: [
+        { label: "Yes", description: null },
+        { label: "No", description: null },
+      ],
+      sent_at: at,
+      ...fields,
+    });
+  const first = baseThread(ASK_A, {
+    task: "T-12",
+    participants: ["frontend", "human:tanim"],
+    awaiting_human: true,
+    last_at: NOW - 3000,
+    messages: [
+      choice(ASK_A, "Use Recharts?", NOW - 4000, { task: "T-12" }),
+      message(NOTE, {
+        sender: "frontend",
+        body: "I wait for the answer.",
+        sent_at: NOW - 3000,
+      }),
+    ],
+  });
+  const second = baseThread(ASK_B, {
+    proposal: "P-3",
+    participants: ["frontend", "human:tanim"],
+    awaiting_human: true,
+    last_at: NOW - 2000,
+    messages: [choice(ASK_B, "Keep the old port?", NOW - 2000)],
+  });
+  const third = baseThread(REPORT, {
+    request: "RQ-4",
+    participants: ["frontend", "human:tanim"],
+    last_at: NOW - 1000,
+    messages: [
+      message(REPORT, {
+        sender: "frontend",
+        body: "The request is drafted.",
+        sent_at: NOW - 1000,
+      }),
+    ],
+  });
+
+  let change: (threads: ThreadView[]) => void = () => undefined;
+
+  function Harness({
+    initial,
+    link,
+    onReply,
+  }: {
+    initial: ThreadView[];
+    link?: string;
+    onReply: (replyTo: string, body: string) => Promise<void>;
+  }) {
+    const [threads, setThreads] = useState(initial);
+    change = setThreads;
+    return (
+      <ChatPanel
+        slug="demo"
+        chat={chatOf(...threads)}
+        link={link}
+        now={NOW}
+        onReply={onReply}
+      />
+    );
+  }
+
+  async function renderChat(
+    initial: ThreadView[],
+    onReply: (replyTo: string, body: string) => Promise<void>,
+    link?: string,
+  ) {
+    const root = createRootRoute();
+    const index = createRoute({
+      getParentRoute: () => root,
+      path: "/",
+      component: () => (
+        <Harness initial={initial} link={link} onReply={onReply} />
+      ),
+    });
+    const router = createRouter({
+      routeTree: root.addChildren([index]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByLabelText("Reply");
+  }
+
+  const dock = () => screen.getByRole("region", { name: "Open questions" });
+
+  it("shows every thread with the agent in time order, each message with its context", async () => {
+    await renderChat([first, second, third], () => Promise.resolve());
+    const articles = within(
+      screen.getByRole("region", { name: "Messages" }),
+    ).getAllByRole("article");
+    expect(articles.map((a) => a.querySelector("a")?.textContent)).toEqual([
+      "T-12",
+      "T-12",
+      "P-3",
+      "RQ-4",
+    ]);
+    expect(articles[3]?.textContent).toContain("The request is drafted.");
+  });
+
+  it("asks the open questions one after another and sends each answer to its own thread", async () => {
+    const onReply = vi.fn(() => Promise.resolve());
+    await renderChat([first, second, third], onReply);
+    expect(
+      within(dock()).getByRole("heading", { name: "Question 1 of 2" }),
+    ).toBeTruthy();
+    expect(within(dock()).getByText("Use Recharts?")).toBeTruthy();
+    expect(
+      within(dock()).getByRole<HTMLButtonElement>("button", {
+        name: "Previous question",
+      }).disabled,
+    ).toBe(true);
+    await userEvent.click(
+      within(dock()).getByRole("button", { name: "Next question" }),
+    );
+    expect(within(dock()).getByText("Keep the old port?")).toBeTruthy();
+    await userEvent.click(
+      within(dock()).getByRole("button", { name: "Previous question" }),
+    );
+    await userEvent.click(
+      within(within(dock()).getByRole("list", { name: "Choices" })).getByRole(
+        "button",
+        { name: /^Yes/ },
+      ),
+    );
+    expect(onReply).toHaveBeenCalledWith(ASK_A, "Yes");
+    // The daemon stores the answer; the question leaves the queue and the next one shows.
+    act(() => {
+      change([
+        {
+          ...first,
+          messages: [
+            ...first.messages,
+            message(`m-${String(54)}`, {
+              sender: "human:tanim",
+              body: "Yes",
+              reply_to: ASK_A,
+              sent_at: NOW,
+            }),
+          ],
+        },
+        second,
+        third,
+      ]);
+    });
+    expect(
+      within(dock()).getByRole("heading", { name: "Question" }),
+    ).toBeTruthy();
+    expect(within(dock()).getByText("Keep the old port?")).toBeTruthy();
+    expect(
+      screen.getByText("Chosen option of the question above"),
+    ).toBeTruthy();
+    await userEvent.type(screen.getByLabelText("Reply"), "Keep it{Enter}");
+    expect(onReply).toHaveBeenLastCalledWith(ASK_B, "Keep it");
+  });
+
+  it("opens the dock at the question a link names, and steps to a question from the timeline", async () => {
+    await renderChat([first, second, third], () => Promise.resolve(), ASK_B);
+    expect(
+      within(dock()).getByRole("heading", { name: "Question 2 of 2" }),
+    ).toBeTruthy();
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Question 1 of 2 waits for your answer below",
+      }),
+    );
+    expect(within(dock()).getByText("Use Recharts?")).toBeTruthy();
+  });
+
+  it("replies in the newest thread, or in the thread the person chooses", async () => {
+    const onReply = vi.fn(() => Promise.resolve());
+    const talk: ThreadView = {
+      ...first,
+      awaiting_human: false,
+      messages: [
+        message(ASK_A, {
+          sender: "frontend",
+          body: "Use Recharts?",
+          sent_at: NOW - 4000,
+        }),
+        message(NOTE, {
+          sender: "frontend",
+          body: "I wait for the answer.",
+          sent_at: NOW - 3000,
+        }),
+      ],
+    };
+    const plain = [talk, third];
+    await renderChat(plain, onReply);
+    expect(screen.queryByRole("region", { name: "Open questions" })).toBeNull();
+    const about = screen.getByRole<HTMLSelectElement>("combobox", {
+      name: "About",
+    });
+    expect(about.value).toBe(REPORT);
+    expect([...about.options].map((option) => option.textContent)).toEqual([
+      "RQ-4 · The request is drafted.",
+      "T-12 · Use Recharts?",
+    ]);
+    await userEvent.type(screen.getByLabelText("Reply"), "Thanks{Enter}");
+    expect(onReply).toHaveBeenLastCalledWith(REPORT, "Thanks");
+    await userEvent.selectOptions(about, ASK_A);
+    await userEvent.type(screen.getByLabelText("Reply"), "Go on{Enter}");
+    expect(onReply).toHaveBeenLastCalledWith(NOTE, "Go on");
+  });
+
+  it("offers the open question and the threads, and answers the question by default", async () => {
+    const onReply = vi.fn(() => Promise.resolve());
+    await renderChat([first, third], onReply);
+    const about = screen.getByRole<HTMLSelectElement>("combobox", {
+      name: "About",
+    });
+    expect(about.value).toBe("question");
+    expect(about.options[0]?.textContent).toBe("Answer to question");
+    await userEvent.selectOptions(about, REPORT);
+    await userEvent.type(screen.getByLabelText("Reply"), "Later{Enter}");
+    expect(onReply).toHaveBeenLastCalledWith(REPORT, "Later");
+  });
+
+  it("shows a thread the agent started with another agent, under each agent's name", async () => {
+    const shared = baseThread(`m-${String(60)}`, {
+      participants: ["frontend", "backend", "human:tanim"],
+      last_at: NOW,
+      messages: [
+        message(`m-${String(60)}`, {
+          sender: "frontend",
+          recipients: [recipient("backend")],
+          body: "Which field?",
+          sent_at: NOW - 10,
+        }),
+        message(`m-${String(61)}`, {
+          sender: "backend",
+          body: "The TIN.",
+          sent_at: NOW,
+        }),
+      ],
+    });
+    await renderChat([shared, third], () => Promise.resolve());
+    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe(
+      "@frontend",
+    );
+    const articles = within(
+      screen.getByRole("region", { name: "Messages" }),
+    ).getAllByRole("article");
+    expect(articles.at(-1)?.textContent).toContain("backend");
+    expect(articles.at(-1)?.textContent).toContain("The TIN.");
+  });
+
+  it("marks each unread thread of the chat read once", async () => {
+    daemon.on("GET /api/v1/session", {
+      status: 200,
+      body: { human: "tanim", authenticated: true },
+    });
+    for (const id of [ASK_A, REPORT]) {
+      daemon.on(`POST /api/v1/projects/demo/threads/${id}/read`, {
+        status: 200,
+        body: { read: [id] },
+      });
+    }
+    const unread = (t: ThreadView): ThreadView => ({
+      ...t,
+      messages: t.messages.map((m) => ({
+        ...m,
+        recipients: [recipient("human:tanim")],
+      })),
+    });
+    await renderChat([unread(first), unread(third)], () => Promise.resolve());
+    await waitFor(() => {
+      expect(
+        daemon.made(`POST /api/v1/projects/demo/threads/${ASK_A}/read`),
+      ).toHaveLength(1);
+      expect(
+        daemon.made(`POST /api/v1/projects/demo/threads/${REPORT}/read`),
+      ).toHaveLength(1);
+    });
   });
 });

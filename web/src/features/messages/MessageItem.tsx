@@ -1,9 +1,14 @@
 import { Bot, CircleHelp } from "lucide-react";
 import type { MessageView, ThreadView } from "@/api/messages";
+import { chipClasses } from "@/components/badge/chips";
+import { Id } from "@/components/id/Id";
 import { formatClock } from "@/format/time";
 import { cn } from "@/lib/cn";
+import { focusRing } from "@/lib/focus";
+import { idHref } from "@/routes/paths";
 import { ActorText } from "@/people/ActorText";
 import { bareName } from "@/people/names";
+import type { MessageContext } from "./chats";
 import { MessageBody } from "./MessageBody";
 import { initial, messageSide, recipientsPhrase } from "./messageLayout";
 import { isQuestion } from "./question";
@@ -20,8 +25,31 @@ interface MessageItemProps {
   you: string | null;
   /** The message answers a question by naming one of its options. */
   chosen: boolean;
+  /** The request, proposal or task the message is about, for its chip. */
+  context?: MessageContext | null;
+  /** The step of the question dock that shows this question, such as `Question 2 of 3`; the dock holds its choices. */
+  docked?: string | null;
+  /** Shows this question in the dock. */
+  onDock?: () => void;
   onReply: (replyTo: string, body: string) => Promise<void>;
   onWriteOwn: (question: MessageView) => void;
+}
+
+function ContextChip({
+  slug,
+  context,
+}: {
+  slug: string;
+  context: MessageContext;
+}) {
+  return (
+    <Id
+      href={idHref(slug, context.kind, context.id)}
+      className="text-13 text-text-2"
+    >
+      {context.id}
+    </Id>
+  );
 }
 
 function Avatar({ sender }: { sender: string }) {
@@ -60,10 +88,15 @@ export function MessageItem({
   now,
   you,
   chosen,
+  context = null,
+  docked = null,
+  onDock,
   onReply,
   onWriteOwn,
 }: MessageItemProps) {
   const side = messageSide(message.sender, you);
+  const chip =
+    context === null ? null : <ContextChip slug={slug} context={context} />;
   const time = (
     <time
       dateTime={new Date(message.sent_at).toISOString()}
@@ -84,9 +117,10 @@ export function MessageItem({
 
   if (side === "own") {
     return (
-      <li className="flex justify-end pl-32 lg:pl-44">
+      <li data-message={message.id} className="flex justify-end pl-32 lg:pl-44">
         <article className="flex min-w-0 max-w-measure flex-col items-end gap-6">
           <p className="flex items-baseline gap-8">
+            {chip}
             {time}
             <span className="text-15 font-semibold text-text">You</span>
           </p>
@@ -105,7 +139,7 @@ export function MessageItem({
   }
 
   return (
-    <li className="flex gap-12">
+    <li data-message={message.id} className="flex gap-12">
       <span className="hidden sm:flex">
         <Avatar sender={message.sender} />
       </span>
@@ -124,13 +158,16 @@ export function MessageItem({
               <ActorText segments={recipientsPhrase(message, you)} you={you} />
             </span>
           ) : null}
-          {freeAskWaitsForYou(thread, message, you) ? (
+          {docked === null && freeAskWaitsForYou(thread, message, you) ? (
             <span className="inline-flex items-center gap-5 rounded-pill bg-warn-soft px-8 py-2 text-13 font-semibold text-warn">
               <CircleHelp aria-hidden="true" size={14} />
               Waits for your answer
             </span>
           ) : null}
-          <span className="ml-auto">{time}</span>
+          <span className="ml-auto flex items-baseline gap-8">
+            {chip}
+            {time}
+          </span>
         </p>
         {lines}
         <div className="max-w-measure">
@@ -140,7 +177,16 @@ export function MessageItem({
             <MessageBody body={message.body} slug={slug} />
           )}
         </div>
-        {isQuestion(message) ? (
+        {docked !== null ? (
+          <button
+            type="button"
+            onClick={onDock}
+            className={cn(chipClasses("warn"), "self-start", focusRing)}
+          >
+            <CircleHelp aria-hidden="true" size={14} />
+            {docked} waits for your answer below
+          </button>
+        ) : isQuestion(message) ? (
           <QuestionChoices
             thread={thread}
             question={message}

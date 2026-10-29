@@ -3,7 +3,9 @@ import type { ThreadFilter } from "./filters";
 import { projectPath, withQuery } from "@/routes/paths";
 
 export interface MessagesSearch extends ThreadFilter {
-  /** A thread id, or the id of a message in it. */
+  /** The chat with one agent, by the agent's name. */
+  chat?: string;
+  /** A thread id, or the id of a message in it: the chat that holds it opens at that message. */
   thread?: string;
 }
 
@@ -22,10 +24,12 @@ function idOf(value: unknown, kind: string): string | undefined {
 export function normalizeSearch(raw: Record<string, unknown>): MessagesSearch {
   const search: MessagesSearch = {};
   const agent = text(raw.agent);
+  const chat = text(raw.chat);
   const task = idOf(raw.task, "task");
   const proposal = idOf(raw.proposal, "proposal");
   const thread = idOf(raw.thread, "message");
   if (agent !== undefined) search.agent = agent;
+  if (chat !== undefined) search.chat = chat;
   if (task !== undefined) search.task = task;
   if (proposal !== undefined) search.proposal = proposal;
   if (thread !== undefined) search.thread = thread;
@@ -39,7 +43,7 @@ export function normalizeSearch(raw: Record<string, unknown>): MessagesSearch {
 /** The messages path for a search, with only the set fields. */
 export function messagesHref(slug: string, search: MessagesSearch): string {
   const params = new URLSearchParams();
-  for (const key of ["agent", "task", "proposal", "thread"] as const) {
+  for (const key of ["agent", "task", "proposal", "chat", "thread"] as const) {
     const value = search[key];
     if (value !== undefined) params.set(key, value);
   }

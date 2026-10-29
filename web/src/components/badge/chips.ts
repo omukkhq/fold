@@ -20,5 +20,5 @@ const COUNT_SHAPE =
 /** A count of things that wait for a person, in gold. */
 export const COUNT_CLASSES = `${COUNT_SHAPE} bg-warn-soft text-warn`;
 
-/** How many filters are on, in the accent tone: it waits for no one, so it is never gold. */
+/** A count of what waits for no one, such as the filters that are on or unread messages, in the accent tone: it is never gold. */
 export const FILTER_COUNT_CLASSES = `${COUNT_SHAPE} bg-accent-soft text-accent`;

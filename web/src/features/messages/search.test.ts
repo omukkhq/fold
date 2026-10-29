@@ -8,12 +8,14 @@ describe("normalizeSearch", () => {
         agent: "frontend/ui",
         task: "T-12",
         proposal: "P-3",
+        chat: "frontend/ui",
         thread: "m-31",
       }),
     ).toEqual({
       agent: "frontend/ui",
       task: "T-12",
       proposal: "P-3",
+      chat: "frontend/ui",
       thread: "m-31",
     });
   });
@@ -45,6 +47,9 @@ describe("messagesHref", () => {
     expect(messagesHref("demo", {})).toBe("/p/demo/messages");
     expect(messagesHref("demo", { agent: "a/b", thread: "m-1" })).toBe(
       "/p/demo/messages?agent=a%2Fb&thread=m-1",
+    );
+    expect(messagesHref("demo", { chat: "backend", task: "T-2" })).toBe(
+      "/p/demo/messages?task=T-2&chat=backend",
     );
     expect(messagesHref("demo", { waiting: true })).toBe(
       "/p/demo/messages?waiting=1",

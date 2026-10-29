@@ -191,9 +191,9 @@ export function filterSummary(filter: ThreadFilter): string {
   return set === 0 ? show : `${show} · ${String(set)} more`;
 }
 
-/** `1 thread`, `5 threads`. */
-export function threadCount(count: number): string {
-  return `${String(count)} ${count === 1 ? "thread" : "threads"}`;
+/** `1 chat`, `5 chats`. */
+export function chatCount(count: number): string {
+  return `${String(count)} ${count === 1 ? "chat" : "chats"}`;
 }
 
 /** The choices of one narrowing menu, with the value the address sets even when no listed thread holds it, so the menu shows what the list narrows to. */

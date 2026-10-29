@@ -27,21 +27,23 @@ import { Tooltip } from "@/components/overlay/Tooltip";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
+import { ChatList } from "./ChatList";
+import { ChatPanel } from "./ChatPanel";
+import { groupChats } from "./chats";
 import {
+  chatCount,
   filterOptions,
   filterThreads,
+  findThread,
   searchThreads,
   showOptions,
-  threadCount,
   withShow,
   type ThreadFilter,
 } from "./filters";
 import { FeedbackDialog } from "./FeedbackDialog";
-import { isMissingThread, openThread } from "./openThread";
+import { isMissingThread, openChat, visibleChats } from "./openThread";
 import { messagesHref, type MessagesSearch } from "./search";
 import { ThreadFilterMenu } from "./ThreadFilterMenu";
-import { ThreadList } from "./ThreadList";
-import { ThreadPanel } from "./ThreadPanel";
 import { paneShown, WIDE_LAYOUT } from "./readGate";
 
 interface MessagesScreenProps {
@@ -74,18 +76,30 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
     questions: search.questions,
     mine: search.mine,
   };
-  const visible = filterThreads(data, filter, you);
-  const shown = searchThreads(visible, query);
-  const target = openThread(data, visible, search.thread);
-  // A thread the listing did not reach is read on its own.
+  const missing =
+    search.thread !== undefined && findThread(data, search.thread) === null
+      ? search.thread
+      : null;
+  // A thread the listing did not reach is read on its own and joins the chat of its agent.
   const unlisted = useQuery({
-    ...threadQuery(slug, target.kind === "unlisted" ? target.id : ""),
-    enabled: target.kind === "unlisted",
+    ...threadQuery(slug, missing ?? ""),
+    enabled: missing !== null,
   });
-  const open =
-    target.kind === "listed" ? target.thread : (unlisted.data ?? null);
-  const paneOnScreen = paneShown(search.thread, useMediaQuery(WIDE_LAYOUT));
-  const listHref = messagesHref(slug, { ...search, thread: undefined });
+  const all =
+    missing !== null && unlisted.data ? [...data, unlisted.data] : data;
+  const chats = groupChats(all);
+  const kept = filterThreads(all, filter, you);
+  const visible = visibleChats(chats, kept);
+  const shown = visibleChats(visible, searchThreads(kept, query));
+  const target = openChat(all, chats, visible, search);
+  const open = target.kind === "listed" ? target.chat : null;
+  const requested = search.thread ?? search.chat;
+  const paneOnScreen = paneShown(requested, useMediaQuery(WIDE_LAYOUT));
+  const listHref = messagesHref(slug, {
+    ...search,
+    chat: undefined,
+    thread: undefined,
+  });
 
   function go(next: MessagesSearch) {
     void router.navigate({ href: messagesHref(slug, next) });
@@ -96,7 +110,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
       <div
         className={cn(
           "min-h-0 flex-1 flex-col lg:flex lg:w-thread-list lg:flex-none lg:bg-surface",
-          search.thread === undefined ? "flex" : "hidden",
+          requested === undefined ? "flex" : "hidden",
         )}
       >
         <h1 className="sr-only">Messages</h1>
@@ -110,8 +124,8 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
               />
               <input
                 type="search"
-                aria-label="Search threads"
-                placeholder="Search threads, agents, tasks"
+                aria-label="Search chats"
+                placeholder="Search chats, agents, tasks"
                 value={query}
                 onChange={(event) => {
                   setQuery(event.target.value);
@@ -138,14 +152,23 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
               shows={showOptions(data, you)}
               options={filterOptions(data)}
               onShow={(next) => {
-                go({ ...withShow(search, next), thread: undefined });
+                go({
+                  ...withShow(search, next),
+                  chat: undefined,
+                  thread: undefined,
+                });
               }}
               onNarrow={(key, value) => {
-                go({ ...search, thread: undefined, [key]: value });
+                go({
+                  ...search,
+                  chat: undefined,
+                  thread: undefined,
+                  [key]: value,
+                });
               }}
             />
             <p className="shrink-0 text-13 text-text-2">
-              {threadCount(shown.length)}
+              {chatCount(shown.length)}
             </p>
           </div>
         </div>
@@ -156,22 +179,27 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
                 icon={MessagesSquare}
                 className="lg:bg-fill"
                 title={
-                  data.length === 0 ? "No messages yet" : "No thread matches"
+                  data.length === 0 ? "No messages yet" : "No chat matches"
                 }
               >
                 {data.length === 0
                   ? "Feedback you send and messages from agents appear here."
-                  : "Change or clear the search and the filters to see more threads."}
+                  : "Change or clear the search and the filters to see more chats."}
               </EmptyPanel>
             </div>
           ) : (
-            <ThreadList
-              threads={shown}
-              selected={paneOnScreen ? (open?.id ?? null) : null}
+            <ChatList
+              chats={shown}
+              selected={paneOnScreen ? (open?.key ?? null) : null}
               now={dataUpdatedAt}
               you={you}
-              hrefOf={(thread) =>
-                messagesHref(slug, { ...search, thread: thread.id })
+              hrefOf={(chat) =>
+                messagesHref(
+                  slug,
+                  chat.agent === null
+                    ? { ...search, chat: undefined, thread: chat.key }
+                    : { ...search, chat: chat.key, thread: undefined },
+                )
               }
             />
           )}
@@ -185,10 +213,10 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
       <div
         className={cn(
           "min-h-0 min-w-0 flex-1 flex-col lg:flex",
-          search.thread === undefined ? "hidden" : "flex",
+          requested === undefined ? "hidden" : "flex",
         )}
       >
-        {target.kind === "unlisted" && !unlisted.data ? (
+        {target.kind === "unlisted" ? (
           <div className="flex min-h-0 flex-1 flex-col gap-8 p-16 lg:p-28">
             <HrefLink
               href={listHref}
@@ -199,7 +227,7 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
               )}
             >
               <ArrowLeft aria-hidden="true" size={15} />
-              Threads
+              Chats
             </HrefLink>
             <UnlistedThread
               id={target.id}
@@ -209,10 +237,11 @@ export function MessagesScreen({ slug, search }: MessagesScreenProps) {
           </div>
         ) : null}
         {open ? (
-          <ThreadPanel
-            key={open.id}
+          <ChatPanel
+            key={`${open.key} ${search.thread ?? ""}`}
             slug={slug}
-            thread={open}
+            chat={open}
+            link={search.thread}
             now={dataUpdatedAt}
             backHref={listHref}
             shown={paneOnScreen}

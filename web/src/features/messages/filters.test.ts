@@ -13,7 +13,7 @@ import {
   showFilter,
   showOptions,
   startedBy,
-  threadCount,
+  chatCount,
   withShow,
   replyPlaceholder,
   replyTargets,
@@ -262,9 +262,9 @@ describe("the Show choice", () => {
     );
     expect(filterSummary({ proposal: "P-1" })).toBe("All threads · 1 more");
   });
-  it("counts the threads it shows", () => {
-    expect(threadCount(1)).toBe("1 thread");
-    expect(threadCount(5)).toBe("5 threads");
+  it("counts the chats it shows", () => {
+    expect(chatCount(1)).toBe("1 chat");
+    expect(chatCount(5)).toBe("5 chats");
   });
 });
 

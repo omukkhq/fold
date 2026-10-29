@@ -5,7 +5,12 @@ import {
   Loader2,
   Send,
 } from "lucide-react";
-import { useLayoutEffect, useRef, type ComponentProps } from "react";
+import {
+  useLayoutEffect,
+  useRef,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import { buttonClasses } from "@/components/button/buttonStyles";
 import { IconButton } from "@/components/button/Button";
 import { cn } from "@/lib/cn";
@@ -25,6 +30,8 @@ interface ReplyBoxProps {
   pending: boolean;
   /** The agent whose question the text answers, or null for a plain reply. */
   answering: string | null;
+  /** The choice of what the reply is about, above the text. */
+  about?: ReactNode;
   invalid: string | null;
   failure: string | null;
   onSubmit: ComponentProps<"form">["onSubmit"];
@@ -42,6 +49,7 @@ export function ReplyBox({
   placeholder,
   pending,
   answering,
+  about = null,
   invalid,
   failure,
   onSubmit,
@@ -64,6 +72,11 @@ export function ReplyBox({
       className="flex shrink-0 flex-col gap-6 px-12 pt-6 pb-14 lg:px-28 lg:pt-8 lg:pb-20"
     >
       <div className="flex w-full max-w-thread-column flex-wrap items-end gap-x-8 gap-y-2 rounded-l bg-surface py-6 pr-6 pl-14 has-[textarea:focus-visible]:outline-2 has-[textarea:focus-visible]:outline-offset-2 has-[textarea:focus-visible]:outline-accent sm:flex-col sm:flex-nowrap sm:items-stretch sm:gap-4 sm:py-10 sm:pr-10 sm:pl-16">
+        {about === null ? null : (
+          <div className="flex basis-full items-center gap-6 pt-4 text-13 text-text-2 sm:basis-auto sm:pt-0">
+            {about}
+          </div>
+        )}
         {answering === null ? null : (
           <p className="flex basis-full items-center gap-6 pt-4 text-13 text-text-2 sm:basis-auto sm:pt-0">
             <CornerDownLeft aria-hidden="true" size={14} className="shrink-0" />

@@ -32,3 +32,27 @@ export function readDue({
   }
   return unread;
 }
+
+/** One mark-read call: the thread and its newest message that waits for the signed-in human. */
+export interface ReadCall {
+  thread: string;
+  unread: string;
+}
+
+/** The mark-read calls due for a chat's threads, one per thread whose newest unread message has no call yet; none while the human cannot see the chat. */
+export function readsDue(
+  unread: readonly ReadCall[],
+  shown: boolean,
+  visible: boolean,
+  marked: ReadonlyMap<string, string>,
+): ReadCall[] {
+  return unread.filter(
+    (call) =>
+      readDue({
+        unread: call.unread,
+        shown,
+        visible,
+        marked: marked.get(call.thread) ?? null,
+      }) !== null,
+  );
+}

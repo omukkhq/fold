@@ -96,7 +96,7 @@ describe("MessagesScreen", () => {
   it("says no thread matches when the filters hide every thread", async () => {
     await setup({ task: "T-999" }, [question]);
     expect(
-      screen.getByRole("region", { name: "No thread matches" }),
+      screen.getByRole("region", { name: "No chat matches" }),
     ).toBeTruthy();
   });
 
@@ -111,7 +111,7 @@ describe("MessagesScreen", () => {
 
   it("marks the open thread in the list only while its pane shows", async () => {
     const current = () =>
-      within(screen.getByRole("list", { name: "Threads" }))
+      within(screen.getByRole("list", { name: "Chats" }))
         .getAllByRole("link")
         .filter((link) => link.getAttribute("aria-current") === "true");
     await setup({}, [question]);
@@ -133,16 +133,18 @@ describe("MessagesScreen", () => {
     expect(current()).toHaveLength(1);
   });
 
-  it("names a thread by its first line and marks a question waiting for a human", async () => {
+  it("names a chat by its agent and counts the questions that wait for you", async () => {
     await setup({}, [question]);
-    const list = screen.getByRole("list", { name: "Threads" });
-    expect(within(list).getByText("Which chart library?")).toBeTruthy();
+    const list = screen.getByRole("list", { name: "Chats" });
+    const row = within(list).getByRole("link");
+    expect(row.textContent).toContain("@frontend/ui");
+    expect(row.textContent).toContain("Which chart library?");
     expect(
-      within(list).getByRole("img", { name: "waits for you" }),
+      within(row).getByRole("status", { name: "1 question waits for you" }),
     ).toBeTruthy();
   });
 
-  it("marks each thread the badge counts and shows only them with the waiting filter", async () => {
+  it("joins the threads of one agent into one chat and keeps it with the waiting filter", async () => {
     const report = thread(SECOND, {
       participants: ["frontend/ui", "human:tanim"],
       last_at: 2000,
@@ -150,16 +152,31 @@ describe("MessagesScreen", () => {
     });
     const other = thread(`m-${String(40)}`, {
       awaiting_human: true,
+      participants: ["backend", "human:tanim"],
       last_at: 500,
-      messages: [message(`m-${String(40)}`, { body: "Which port?" })],
+      messages: [
+        message(`m-${String(40)}`, {
+          sender: "backend",
+          recipients: [recipient("human:tanim")],
+          body: "Which port?",
+          sent_at: 500,
+        }),
+      ],
     });
     const threads = [report, question, other];
     await setup({}, threads);
-    const list = screen.getByRole("list", { name: "Threads" });
-    const total = threads.filter((t) => t.awaiting_human).length;
+    const rows = () =>
+      within(screen.getByRole("list", { name: "Chats" })).getAllByRole("link");
+    expect(rows().map((row) => row.textContent)).toEqual([
+      expect.stringContaining("@frontend/ui"),
+      expect.stringContaining("@backend"),
+    ]);
+    // The chat shows its newest message, from the thread that does not wait.
+    expect(rows()[0]?.textContent).toContain("The build passes.");
+    expect(screen.getByText("2 chats")).toBeTruthy();
     expect(
-      within(list).getAllByRole("img", { name: "waits for you" }),
-    ).toHaveLength(total);
+      screen.getAllByRole("status", { name: "1 question waits for you" }),
+    ).toHaveLength(2);
     await userEvent.click(
       screen.getByRole("button", { name: "Filter: All threads" }),
     );
@@ -167,17 +184,12 @@ describe("MessagesScreen", () => {
     const waiting = within(menu).getByRole("button", { name: /Waits for you/ });
     expect(waiting.getAttribute("aria-pressed")).toBe("false");
     expect(
-      within(waiting).getByRole("status", {
-        name: `${String(total)} wait for you`,
-      }),
+      within(waiting).getByRole("status", { name: "2 wait for you" }),
     ).toBeTruthy();
     cleanup();
-    await setup({ waiting: true }, threads);
-    const filtered = screen.getByRole("list", { name: "Threads" });
-    expect(within(filtered).queryByText("The build passes.")).toBeNull();
-    expect(
-      within(filtered).getAllByRole("img", { name: "waits for you" }),
-    ).toHaveLength(total);
+    await setup({ waiting: true }, [report, other]);
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0]?.textContent).toContain("@backend");
     await userEvent.click(
       screen.getByRole("button", { name: "Filter: Waits for you" }),
     );
@@ -187,12 +199,35 @@ describe("MessagesScreen", () => {
         .getByRole("button", { name: /Waits for you/ })
         .getAttribute("aria-pressed"),
     ).toBe("true");
+    expect(screen.getByText("1 chat")).toBeTruthy();
+  });
+
+  it("opens a chat from its row, and a link to a message in the chat that holds it", async () => {
+    const later = thread(SECOND, {
+      task: "T-3",
+      participants: ["frontend/ui", "human:tanim"],
+      last_at: 2000,
+      messages: [message(SECOND, { body: "Started T-3.", sent_at: 2000 })],
+    });
+    await setup({}, [later, question]);
     expect(
-      within(open)
-        .getByRole("button", { name: "All threads" })
-        .getAttribute("aria-pressed"),
-    ).toBe("false");
-    expect(screen.getByText("2 threads")).toBeTruthy();
+      within(screen.getByRole("list", { name: "Chats" }))
+        .getByRole("link")
+        .getAttribute("href"),
+    ).toBe("/p/demo/messages?chat=frontend%2Fui");
+    cleanup();
+    await setup({ thread: FIRST }, [later, question]);
+    const chat = screen.getByRole("region", { name: "@frontend/ui" });
+    const messages = within(chat).getByRole("region", { name: "Messages" });
+    expect(within(messages).getAllByRole("article")).toHaveLength(2);
+    expect(
+      within(chat).getByRole("region", { name: "Open questions" }).textContent,
+    ).toContain("Which chart library?");
+    expect(
+      within(chat)
+        .getByRole("link", { name: "Back to chats" })
+        .getAttribute("href"),
+    ).toBe("/p/demo/messages");
   });
 
   it("names the task the address narrows to in the filter menu", async () => {
@@ -203,7 +238,7 @@ describe("MessagesScreen", () => {
     });
     await setup({ task: "T-12" }, [report, question]);
     expect(
-      within(screen.getByRole("list", { name: "Threads" })).getAllByRole(
+      within(screen.getByRole("list", { name: "Chats" })).getAllByRole(
         "listitem",
       ),
     ).toHaveLength(1);
@@ -241,7 +276,13 @@ describe("MessagesScreen", () => {
     const report = thread(SECOND, {
       participants: ["backend", "human:tanim"],
       last_at: 2000,
-      messages: [message(SECOND, { body: "The build passes.", sent_at: 2000 })],
+      messages: [
+        message(SECOND, {
+          sender: "backend",
+          body: "The build passes.",
+          sent_at: 2000,
+        }),
+      ],
     });
     const asked = thread(`m-${String(41)}`, {
       last_at: 500,
@@ -253,19 +294,21 @@ describe("MessagesScreen", () => {
       ],
     });
     await setup({}, [report, asked]);
-    const list = () => screen.getByRole("list", { name: "Threads" });
-    await userEvent.type(screen.getByLabelText("Search threads"), "build");
+    const list = () => screen.getByRole("list", { name: "Chats" });
+    await userEvent.type(screen.getByLabelText("Search chats"), "build");
     expect(within(list()).getAllByRole("listitem")).toHaveLength(1);
     expect(within(list()).getAllByText("The build passes.")).toHaveLength(1);
-    await userEvent.clear(screen.getByLabelText("Search threads"));
-    await userEvent.type(screen.getByLabelText("Search threads"), "nothing");
+    await userEvent.clear(screen.getByLabelText("Search chats"));
+    await userEvent.type(screen.getByLabelText("Search chats"), "nothing");
     expect(
-      screen.getByRole("region", { name: "No thread matches" }),
+      screen.getByRole("region", { name: "No chat matches" }),
     ).toBeTruthy();
     cleanup();
     await setup({ questions: true }, [report, asked]);
     expect(within(list()).getAllByRole("listitem")).toHaveLength(1);
-    expect(within(list()).getAllByText("Which port?")).toHaveLength(1);
+    expect(within(list()).getByRole("link").textContent).toContain(
+      "@frontend/ui",
+    );
     expect(
       screen.getByRole("button", { name: "Filter: Questions" }),
     ).toBeTruthy();
@@ -355,7 +398,7 @@ describe("MessagesScreen", () => {
       within(panel).getByLabelText<HTMLTextAreaElement>("Reply").value,
     ).toBe("");
     expect(
-      within(screen.getByRole("list", { name: "Threads" })).queryByRole("img", {
+      within(screen.getByRole("list", { name: "Chats" })).queryByRole("img", {
         name: "waits for you",
       }),
     ).toBeNull();

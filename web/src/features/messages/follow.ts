@@ -69,3 +69,11 @@ export function followResizes<T>(
     observer.disconnect();
   };
 }
+
+/** The room above a linked message, so the message before it shows that more comes above. */
+export const ANCHOR_GAP = 24;
+
+/** Puts a linked message near the top of the view; `top` is its offset inside the scrolled content. */
+export function toMessage(box: { scrollTop: number }, top: number): void {
+  box.scrollTop = Math.max(top - ANCHOR_GAP, 0);
+}
