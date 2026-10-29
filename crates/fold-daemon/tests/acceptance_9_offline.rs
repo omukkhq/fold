@@ -175,7 +175,7 @@ async fn propose_again(harness: &Harness, agent: &str, work: &Work, title: &str)
         .call(
             agent,
             "create_proposal",
-            json!({"task": work.task, "title": title, "evidence": "tests pass"}),
+            json!({"intent": "Make the change the task asks for.", "task": work.task, "title": title, "evidence": "tests pass"}),
         )
         .await;
     assert_eq!(created["status"], "review", "{created}");
@@ -337,7 +337,7 @@ async fn flow() {
         .call(
             "backend",
             "create_proposal",
-            json!({"task": endpoint, "title": "Add the login endpoint", "evidence": "tests pass"}),
+            json!({"intent": "Make the change the task asks for.", "task": endpoint, "title": "Add the login endpoint", "evidence": "tests pass"}),
         )
         .await;
     assert_eq!(created["status"], "review", "{created}");

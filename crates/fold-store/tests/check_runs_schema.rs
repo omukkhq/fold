@@ -59,6 +59,7 @@ fn workspace_run(number: u32) -> NewCheckRun<'static> {
         actor: "backend",
         title: None,
         evidence: None,
+        intent: None,
         batch: None,
     }
 }
@@ -253,9 +254,28 @@ async fn the_columns_match_the_stage_and_purpose() {
     let titled = NewCheckRun {
         purpose: Purpose::CreateProposal,
         title: Some("Add the board"),
+        intent: Some("Adds the board; the cards stay as they are."),
         ..workspace_run(3)
     };
     insert(&store, &titled).await.unwrap();
+    let stored = checks::get_run(store.read(), run_id(3))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.intent.as_deref(),
+        Some("Adds the board; the cards stay as they are.")
+    );
+    let changed = exec(
+        &store,
+        "UPDATE check_runs SET intent = 'other' WHERE number = 3",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        changed.to_string().contains("check_runs_intent_fixed"),
+        "{changed}"
+    );
     let missing = store
         .write(async |tx| checks::finish_run(tx, run_id(3), RunState::Running, None, at(2)).await)
         .await;

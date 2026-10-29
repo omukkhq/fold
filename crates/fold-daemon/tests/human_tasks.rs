@@ -147,7 +147,7 @@ async fn a_human_task_blocks_its_dependents_until_a_human_marks_it_done_and_no_a
         (
             SOLO,
             "create_proposal",
-            json!({"task": "T-1", "title": "Verify it"}),
+            json!({"intent": "Make the change the task asks for.", "task": "T-1", "title": "Verify it"}),
         ),
         (SOLO, "report_task", json!({"id": "T-1", "note": "Done."})),
         (

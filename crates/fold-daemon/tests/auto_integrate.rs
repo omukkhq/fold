@@ -129,7 +129,13 @@ async fn propose(fx: &Fixture, author: &Actor, task: u32, path: &str, content: &
         .unwrap();
     fx.write(task, path, content);
     fx.reviews()
-        .create_proposal(author, t(task), "Change it", None)
+        .create_proposal(
+            author,
+            t(task),
+            "Change it",
+            "Make the change the task asks for.",
+            None,
+        )
         .await
         .unwrap()
         .detail()

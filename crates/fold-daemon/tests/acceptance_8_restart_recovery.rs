@@ -133,7 +133,7 @@ impl Scene {
             .call(
                 "frontend",
                 "create_proposal",
-                json!({"task": tasks[0], "title": "Build the login screen"}),
+                json!({"intent": "Make the change the task asks for.", "task": tasks[0], "title": "Build the login screen"}),
             )
             .await;
         assert_eq!(proposal["id"], "P-1", "{proposal}");

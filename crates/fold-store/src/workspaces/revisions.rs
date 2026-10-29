@@ -66,6 +66,8 @@ pub struct IntegratedProposal {
     pub task_title: String,
     pub agent: String,
     pub worker: String,
+    /// The intent of the integrated version; `None` for a version made before intents existed.
+    pub intent: Option<String>,
 }
 
 /// The genesis revision `r0` for `tree`, the start of every project: no parent, no integration. The caller stores it with `fold-vcs` before `create_initial_revision`.
@@ -308,6 +310,7 @@ struct RawRow {
     worker: Option<String>,
     git_commit: Option<String>,
     batch_number: Option<i64>,
+    intent: Option<String>,
 }
 
 async fn one<'e, E>(executor: E, number: RevisionId) -> Result<Option<RevisionRow>, StoreError>
@@ -343,7 +346,8 @@ where
                   pr.number AS "proposal_number?: i64", pr.title AS "proposal_title?",
                   v.version AS "version?: i64", t.number AS "task_number?: i64",
                   t.title AS "task_title?", a.name AS "agent?", w.name AS "worker?",
-                  rc."commit" AS "git_commit?", rb.number AS "batch_number?: i64"
+                  rc."commit" AS "git_commit?", rb.number AS "batch_number?: i64",
+                  v.intent AS "intent?"
            FROM revisions r
            LEFT JOIN revisions p ON p.id = r.parent_id
            LEFT JOIN integrations i ON i.id = r.integration_id
@@ -388,7 +392,8 @@ where
                   pr.number AS "proposal_number?: i64", pr.title AS "proposal_title?",
                   v.version AS "version?: i64", t.number AS "task_number?: i64",
                   t.title AS "task_title?", a.name AS "agent?", w.name AS "worker?",
-                  rc."commit" AS "git_commit?", rb.number AS "batch_number?: i64"
+                  rc."commit" AS "git_commit?", rb.number AS "batch_number?: i64",
+                  v.intent AS "intent?"
            FROM revisions r
            LEFT JOIN revisions p ON p.id = r.parent_id
            LEFT JOIN integrations i ON i.id = r.integration_id
@@ -470,6 +475,7 @@ fn row(raw: RawRow) -> Result<RevisionRow, StoreError> {
                     task_title,
                     agent,
                     worker,
+                    intent: raw.intent,
                 }),
                 _ => None,
             },

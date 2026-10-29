@@ -46,7 +46,13 @@ async fn proposed() -> Opened {
     std::fs::write(dir.join("src/lib.rs"), "pub fn y() {}\n").unwrap();
     let reviews = reviews(&opened);
     reviews
-        .create_proposal(&agent("frontend"), t(1), "Change x", None)
+        .create_proposal(
+            &agent("frontend"),
+            t(1),
+            "Change x",
+            "Make the change the task asks for.",
+            None,
+        )
         .await
         .unwrap()
         .detail()
@@ -108,7 +114,13 @@ async fn a_batch_checkout_lists_its_batch_and_its_members_in_merge_order() {
     std::fs::write(dir.join("src/two.rs"), "pub fn two() {}\n").unwrap();
     let reviews = reviews(&opened);
     reviews
-        .create_proposal(&agent("frontend"), t(2), "Add two", None)
+        .create_proposal(
+            &agent("frontend"),
+            t(2),
+            "Add two",
+            "Make the change the task asks for.",
+            None,
+        )
         .await
         .unwrap()
         .detail()

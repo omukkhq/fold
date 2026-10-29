@@ -175,7 +175,13 @@ async fn second_proposal(fx: &Fixture) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, "second\n").unwrap();
     fx.reviews
-        .create_proposal(&author, t(2), "Add the second page", None)
+        .create_proposal(
+            &author,
+            t(2),
+            "Add the second page",
+            "Make the change the task asks for.",
+            None,
+        )
         .await
         .unwrap()
         .detail()

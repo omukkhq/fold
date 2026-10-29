@@ -200,7 +200,11 @@ async fn acceptance_7_conflicted_proposal_integrates_after_sync_and_a_new_versio
         .await;
     assert!(recorded["changeset"].as_str().is_some(), "{recorded}");
     let updated = harness
-        .call("backend", "update_proposal", json!({"id": second_proposal}))
+        .call(
+            "backend",
+            "update_proposal",
+            json!({"intent": "Make the change the task asks for.", "id": second_proposal}),
+        )
         .await;
     assert_eq!(updated["version"], "v2");
     assert_eq!(updated["state"], "open");

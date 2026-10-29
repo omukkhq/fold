@@ -54,6 +54,7 @@ export function proposalVersion(
     files_modified: 1,
     files_deleted: 0,
     evidence: null,
+    intent: null,
     created_by: "backend/db",
     created_at: T0 + version * 60_000,
     human_edit: false,

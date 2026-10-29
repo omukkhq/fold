@@ -272,7 +272,13 @@ impl Project {
         }
         let proposal = self
             .reviews()
-            .create_proposal(&author, task, "Change files", None)
+            .create_proposal(
+                &author,
+                task,
+                "Change files",
+                "Make the change the task asks for.",
+                None,
+            )
             .await
             .unwrap()
             .detail()
@@ -712,7 +718,13 @@ async fn a_conflict_becomes_a_sync_task_that_reaches_the_remote() {
         .unwrap();
     let proposal = project
         .reviews()
-        .create_proposal(&agent, task, "Sync with the remote", None)
+        .create_proposal(
+            &agent,
+            task,
+            "Sync with the remote",
+            "Make the change the task asks for.",
+            None,
+        )
         .await
         .unwrap()
         .detail()

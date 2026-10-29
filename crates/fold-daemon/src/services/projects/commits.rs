@@ -295,7 +295,7 @@ fn merge_parents(row: &RevisionRow) -> Result<Vec<CommitId>, StoreError> {
     Ok(parents)
 }
 
-/// The message of the commit a revision becomes, ending in Git trailers that name it by public ids and never name an agent or a human: fold's names stay in fold. An integrated proposal gives its title as the subject and its task's title as the body. A direct change gives the message the main agent wrote, as it wrote it. A pull that merged a remote commit names that commit; an imported `r1` names its source; any other revision is `fold r<n>`.
+/// The message of the commit a revision becomes, ending in Git trailers that name it by public ids and never name an agent or a human: fold's names stay in fold. An integrated proposal gives its title as the subject and the intent of the integrated version as the body, so the history says what each change is for; a version made before intents existed gives its task's title. Each member of a review batch becomes its own revision and so its own commit with its own intent. A direct change gives the message the main agent wrote, as it wrote it. A pull that merged a remote commit names that commit; an imported `r1` names its source; any other revision is `fold r<n>`.
 pub fn commit_message(row: &RevisionRow) -> String {
     let revision = row.number;
     let Some(integration) = &row.integration else {
@@ -308,7 +308,12 @@ pub fn commit_message(row: &RevisionRow) -> String {
         (Some(proposal), _) => format!(
             "{}\n\n{}\n\nFold-Proposal: {}\nFold-Version: {}\nFold-Task: {}\nFold-Revision: {revision}\n",
             one_line(&proposal.title),
-            one_line(&proposal.task_title),
+            proposal
+                .intent
+                .as_deref()
+                .map(paragraphs)
+                .filter(|body| !body.is_empty())
+                .unwrap_or_else(|| one_line(&proposal.task_title)),
             proposal.number,
             proposal.version,
             proposal.task,
@@ -348,6 +353,27 @@ pub fn commit_message(row: &RevisionRow) -> String {
             },
         },
     }
+}
+
+/// The intent as a commit body: its lines without trailing space and without the runs of blank lines that would split it into more paragraphs than it has.
+fn paragraphs(text: &str) -> String {
+    let mut body = String::new();
+    let mut blank = false;
+    for line in text.trim().lines().map(str::trim_end) {
+        if line.is_empty() {
+            blank = !body.is_empty();
+            continue;
+        }
+        if blank {
+            body.push('\n');
+            blank = false;
+        }
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(line);
+    }
+    body
 }
 
 /// A subject or body line is one line whatever the stored text holds.
@@ -408,11 +434,24 @@ mod tests {
                 task_title: "Reports\nfor admins".to_owned(),
                 agent: "backend".to_owned(),
                 worker: "backend/db".to_owned(),
+                intent: None,
             }),
             changeset: None,
             message: None,
             batch: None,
         }
+    }
+
+    fn with_intent(intent: &str) -> IntegrationInfo {
+        let mut info = integration(
+            IntegrationKind::Proposal,
+            Some(("Add the reports schema", 12)),
+            None,
+        );
+        if let Some(proposal) = info.proposal.as_mut() {
+            proposal.intent = Some(intent.to_owned());
+        }
+        info
     }
 
     fn direct(message: &str) -> IntegrationInfo {
@@ -451,6 +490,20 @@ mod tests {
                     )),
                 ),
                 "Two lines\n\nReports for admins\n\nFold-Proposal: P-4\nFold-Version: 2\nFold-Task: T-3\nFold-Revision: r8\n",
+            ),
+            (
+                row(
+                    14,
+                    None,
+                    Some(with_intent(
+                        "  Adds the reports schema.  \n\n\n\nWhy: admins need it.\r\nIt does not change the users table.\n",
+                    )),
+                ),
+                "Add the reports schema\n\nAdds the reports schema.\n\nWhy: admins need it.\nIt does not change the users table.\n\nFold-Proposal: P-4\nFold-Version: 2\nFold-Task: T-12\nFold-Revision: r14\n",
+            ),
+            (
+                row(15, None, Some(with_intent(" \n "))),
+                "Add the reports schema\n\nReports for admins\n\nFold-Proposal: P-4\nFold-Version: 2\nFold-Task: T-12\nFold-Revision: r15\n",
             ),
             (
                 row(1, Some("/home/ana/src/app"), None),

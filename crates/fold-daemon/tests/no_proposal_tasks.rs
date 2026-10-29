@@ -146,7 +146,7 @@ async fn a_task_without_a_proposal_goes_from_todo_to_done_through_its_claim_repo
         ("create_workspace", json!({"task": "T-1"})),
         (
             "create_proposal",
-            json!({"task": "T-1", "title": "Draw the board"}),
+            json!({"intent": "Make the change the task asks for.", "task": "T-1", "title": "Draw the board"}),
         ),
     ] {
         let refused = harness.refused(TASK_WORKER, tool, arguments).await;

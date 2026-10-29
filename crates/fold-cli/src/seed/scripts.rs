@@ -279,21 +279,27 @@ fn workspace(task: &str) -> Step {
     )
 }
 
-fn propose(task: &str, title: &str, evidence: &str) -> [Step; 2] {
+fn propose(task: &str, title: &str, intent: &str, evidence: &str) -> [Step; 2] {
     [
         call("record_changes", json!({"ws": "${ws}", "message": title})),
         call_saving(
             "create_proposal",
-            json!({"task": task, "title": title, "evidence": evidence}),
+            json!({"task": task, "title": title, "intent": intent, "evidence": evidence}),
             &[("proposal", "/id")],
         ),
     ]
 }
 
-fn proposing_worker(task: &str, edits: Vec<Step>, title: &str, evidence: &str) -> Script {
+fn proposing_worker(
+    task: &str,
+    edits: Vec<Step>,
+    title: &str,
+    intent: &str,
+    evidence: &str,
+) -> Script {
     let mut steps = vec![workspace(task)];
     steps.extend(edits);
-    steps.extend(propose(task, title, evidence));
+    steps.extend(propose(task, title, intent, evidence));
     one_turn(steps, "Proposed ${proposal}.")
 }
 
@@ -302,6 +308,7 @@ fn schema_worker(tasks: &Tasks) -> Script {
         &tasks.schema,
         vec![insert("src/db.js", 6, "  tables.set(\"users\", []);\n")],
         "Create the users table",
+        "Adds an empty users table when the service starts, so sign-up has somewhere to write. It does not change the other tables. Risk: none; the table starts empty.",
         "The service starts and the users table exists.",
     )
 }
@@ -345,6 +352,7 @@ fn audit_worker(tasks: &Tasks) -> Script {
             "export function record(log, who, what) {\n  log.push({ who, what });\n}\n",
         )],
         "Record changes in an audit log",
+        "Adds record(), which appends who changed what to the audit log, so a change can be traced. It does not read or trim the log. Risk: the log grows without a limit.",
         "Each write adds one entry.",
     )
 }
@@ -382,6 +390,7 @@ fn local_worker(tasks: &Tasks) -> Script {
             "  return new Date(value).toLocaleDateString(\"en-GB\");",
         )],
         "Show dates in the local time zone",
+        "Shows each date in the reader's local time zone instead of UTC, so a date matches the reader's day. It does not change how dates are stored. Risk: a date near midnight moves to the next or previous day.",
         "Checked in the list view with two time zones.",
     )
 }
@@ -395,6 +404,7 @@ fn relative_worker(tasks: &Tasks) -> Script {
             "  return relativeTime(Date.now() - new Date(value));",
         )],
         "Show dates as relative text",
+        "Shows each date as relative text such as 3 hours ago, so recent items are easy to read. It does not change how dates are stored. Risk: an old date loses its exact day.",
         "Checked with items from the last day.",
     )
 }
@@ -409,6 +419,7 @@ fn counts_worker(tasks: &Tasks) -> Script {
             "  return count.toLocaleString(\"en-US\");",
         )],
         "Format counts with separators",
+        "Formats counts with thousands separators, so large counts are easy to read. It does not change small counts. Risk: none.",
         "Checked with counts above one thousand.",
     );
     script.turns.push(Turn {
@@ -425,7 +436,7 @@ fn counts_worker(tasks: &Tasks) -> Script {
             ),
             call(
                 "update_proposal",
-                json!({"id": "${proposal}", "evidence": "Checked with counts from 1 to 10000000."}),
+                json!({"id": "${proposal}", "intent": "Formats counts with thousands separators at every size, so large counts are easy to read. It does not change how counts are stored. Risk: none.", "evidence": "Checked with counts from 1 to 10000000."}),
             ),
         ],
         reply: Some("Updated ${proposal}.".to_owned()),
@@ -443,6 +454,7 @@ fn login_worker(tasks: &Tasks) -> Script {
             "  const handler = routes(db);\n  const form = {\n    fields: [\"name\", \"password\"],\n    submit: (values) => db.insert(\"sessions\", values),\n  };\n  handler.login = form;",
         )],
         "Add the login form",
+        "Adds a login form with name and password that starts a session, so a user can sign in. It does not check the password yet. Risk: any password signs in until the check exists.",
         "The form renders and submits.",
     )
 }

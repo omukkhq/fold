@@ -280,6 +280,7 @@ async fn a_batch_run_names_its_batch_and_shows_on_each_member_version() {
         actor: "fold",
         title: None,
         evidence: None,
+        intent: None,
         batch,
     };
     let batched = run(1, Some(rb(2)));

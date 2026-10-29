@@ -118,6 +118,8 @@ pub struct VersionRow {
     pub head_changeset: ChangesetId,
     pub stats: ChangeCounts,
     pub evidence: Option<String>,
+    /// What the version is for; `None` on a version made before intents existed.
+    pub intent: Option<String>,
     pub created_by: String,
     pub created_at: Timestamp,
     /// A human sent this version for review again, so the approvals it kept from an earlier version no longer count.
@@ -141,6 +143,7 @@ pub struct NewVersion<'a> {
     pub tree: ObjectHash,
     pub head_changeset: ChangesetId,
     pub evidence: Option<&'a str>,
+    pub intent: Option<&'a str>,
     pub created_by: &'a str,
     /// The review checkout a reviewer's fix came from; it must be a review checkout of the same proposal.
     pub fixed_in_checkout: Option<WorkspaceId>,
@@ -213,9 +216,9 @@ async fn insert_version(
     let inserted = sqlx::query!(
         "INSERT INTO proposal_versions (proposal_id, version, base_revision_id, tree_hash,
                                         head_changeset_id, evidence, created_by, created_at,
-                                        fixed_in_checkout_id)
+                                        fixed_in_checkout_id, intent)
          SELECT p.id, ?2, r.id, ?4, c.id, ?6, ?7, ?8,
-                (SELECT w.id FROM workspaces w WHERE w.number = ?9)
+                (SELECT w.id FROM workspaces w WHERE w.number = ?9), ?10
          FROM proposals p, revisions r, changesets c
          WHERE p.number = ?1 AND r.number = ?3 AND c.number = ?5
            AND (?9 IS NULL OR EXISTS (SELECT 1 FROM workspaces w WHERE w.number = ?9))",
@@ -227,7 +230,8 @@ async fn insert_version(
         new.evidence,
         new.created_by,
         now,
-        checkout
+        checkout,
+        new.intent
     )
     .execute(tx.conn())
     .await?
@@ -543,7 +547,7 @@ pub async fn list_versions(
     let number = proposal.to_db();
     let rows = sqlx::query!(
         r#"SELECT v.version, r.number AS "base!: i64", v.tree_hash,
-                  c.number AS "changeset!: i64", c.stats, v.evidence, v.created_by, v.created_at,
+                  c.number AS "changeset!: i64", c.stats, v.evidence, v.intent, v.created_by, v.created_at,
                   EXISTS (SELECT 1 FROM review_again_requests q WHERE q.version_id = v.id) AS "review_again!: bool",
                   f.number AS "fixed_in?: i64"
            FROM proposal_versions v
@@ -572,6 +576,7 @@ pub async fn list_versions(
                     .ok_or(StoreError::Corrupt("changesets.number"))?,
                 stats: parse_stats(&row.stats).ok_or(StoreError::Corrupt("changesets.stats"))?,
                 evidence: row.evidence,
+                intent: row.intent,
                 created_by: row.created_by,
                 created_at: time(row.created_at, "proposal_versions.created_at")?,
                 review_again: row.review_again,
