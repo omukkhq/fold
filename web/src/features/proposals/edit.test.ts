@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { VersionFile } from "@/api/proposals";
 import { comparedFile } from "@/test/diff";
 import {
+  intent,
   proposalDetail,
   proposalSummary,
   proposalVersion,
 } from "@/test/proposals";
+import { draftOf } from "./intentDraft";
 import {
   canEdit,
   canSendForReviewAgain,
@@ -17,8 +19,6 @@ import {
   editableFile,
   inHumanReview,
   intentHint,
-  intentProblem,
-  shownIntentProblem,
   keptApprovalsNote,
   savedContent,
 } from "./edit";
@@ -115,7 +115,17 @@ describe("the edit box content", () => {
     if (source.kind !== "text") throw new Error("text expected");
     expect(changed(source, "a\nb\n")).toBe(false);
     expect(changed(source, "a\n")).toBe(true);
-    expect(editRequest({ version: 2 }, "src/lib.rs", "a\n", source)).toEqual({
+    const kept = intent("Adds a.", [["Lib", "Adds a.", ["src/lib.rs"]]]);
+    expect(
+      editRequest(
+        { version: 2 },
+        "src/lib.rs",
+        "a\n",
+        source,
+        draftOf(kept, []),
+        kept,
+      ),
+    ).toEqual({
       version: 2,
       path: "src/lib.rs",
       content: "a\r\n",
@@ -179,66 +189,42 @@ describe("the intent of a human edit", () => {
     text: "a\n",
     lineEnding: "\n" as const,
   };
+  const KEPT = intent("Adds the table.", [["Table", "Adds it.", ["a.txt"]]]);
 
   it("starts as the edited version's intent", () => {
     const p = proposalDetail(proposalSummary("P-4", { current_version: 2 }), {
-      versions: [
-        proposalVersion(1),
-        proposalVersion(2, { intent: " Adds the table. " }),
-      ],
+      versions: [proposalVersion(1), proposalVersion(2, { intent: KEPT })],
     });
-    expect(editIntent(p, 2)).toBe("Adds the table.");
-    expect(editIntent(p, 1)).toBe("");
-    expect(editIntent(p, 9)).toBe("");
+    expect(editIntent(p, 2)).toBe(KEPT);
+    expect(editIntent(p, 1)).toBeNull();
+    expect(editIntent(p, 9)).toBeNull();
   });
 
-  it("sends the intent only when the human changed it", () => {
+  it("sends the intent only when the human changed it or the version has none", () => {
     const base = { version: 2, path: "a.txt", content: "b\n" };
+    const same = draftOf(KEPT, []);
     expect(
-      editRequest({ version: 2 }, "a.txt", "b\n", source, " Kept. ", "Kept."),
+      editRequest({ version: 2 }, "a.txt", "b\n", source, same, KEPT),
     ).toEqual(base);
+    const spaced = { ...same, summary: "  Adds the table.  " };
     expect(
-      editRequest({ version: 2 }, "a.txt", "b\n", source, " ", ""),
+      editRequest({ version: 2 }, "a.txt", "b\n", source, spaced, KEPT),
     ).toEqual(base);
+    const written = { ...same, summary: " Returns 3. " };
     expect(
-      editRequest(
-        { version: 2 },
-        "a.txt",
-        "b\n",
-        source,
-        " Returns 3. ",
-        "Kept.",
-      ),
-    ).toEqual({ ...base, intent: "Returns 3." });
+      editRequest({ version: 2 }, "a.txt", "b\n", source, written, KEPT),
+    ).toEqual({ ...base, intent: { ...KEPT, summary: "Returns 3." } });
+    expect(
+      editRequest({ version: 2 }, "a.txt", "b\n", source, same, null),
+    ).toEqual({ ...base, intent: KEPT });
   });
 
-  it("names what keeps Save off", () => {
-    expect(intentProblem("Adds it.")).toBeNull();
-    const empty =
-      "Say what the new version does, why, what it does not change and its risks.";
-    expect(intentProblem("  ")).toBe(empty);
-    expect(intentProblem("")).toBe(empty);
-    expect(intentProblem("é".repeat(2000))).toBeNull();
-    expect(intentProblem("x".repeat(2001))).toBe(
-      "The intent can hold at most 2000 characters; it has 2001.",
+  it("says what the intent holds and where the form starts", () => {
+    expect(intentHint(2, null)).toBe(
+      "How v3 works in the code, and its parts: every file v3 changes belongs to exactly one part. v2 has no intent, so write one for v3.",
     );
-  });
-
-  it("asks for an intent on the edit of a version without one, without an error before the human writes", () => {
-    expect(shownIntentProblem("", "")).toBeNull();
-    expect(shownIntentProblem("  ", "")).toBeNull();
-    expect(shownIntentProblem("x".repeat(2001), "")).toBe(
-      "The intent can hold at most 2000 characters; it has 2001.",
-    );
-    expect(shownIntentProblem("", "Adds it.")).toBe(
-      "Say what the new version does, why, what it does not change and its risks.",
-    );
-    expect(shownIntentProblem("Adds it.", "Adds it.")).toBeNull();
-    expect(intentHint(2, "")).toBe(
-      "What v3 does, why, what it does not change and its risks. v2 has no intent, so write one for v3.",
-    );
-    expect(intentHint(2, "Adds it.")).toBe(
-      "What v3 does, why, what it does not change and its risks. It starts as the intent of v2; change what your edit changes.",
+    expect(intentHint(2, KEPT)).toBe(
+      "How v3 works in the code, and its parts: every file v3 changes belongs to exactly one part. It starts as the intent of v2; change what your edit changes.",
     );
   });
 });

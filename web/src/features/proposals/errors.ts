@@ -2,7 +2,6 @@ import { ApiError, apiErrorCode } from "@/api/errors";
 import { commonText } from "@/format/failure";
 import { atName } from "@/people/names";
 import { updateRunsLine } from "./actions";
-import { MAX_INTENT_CHARS } from "./intent";
 
 /** `inline` shows on the control whose write failed: the actions or the form. `banner` shows above the screen. */
 export type FailurePlace = "inline" | "banner";
@@ -174,12 +173,50 @@ const ENTRIES: Record<string, Entry> = {
   },
   invalid_intent: {
     place: "inline",
-    text: (d) =>
-      d.reason === "too_long"
-        ? `The intent is too long. Keep it to ${count(d, "max_chars") ?? String(MAX_INTENT_CHARS)} characters.`
-        : "Say what the new version does, why, what it does not change and its risks.",
+    text: intentText,
   },
 };
+
+/** The paths an `invalid_intent` refusal names under `key`, joined for a sentence. */
+function pathList(d: Details, key: string): string {
+  const paths = d[key];
+  return Array.isArray(paths)
+    ? paths.filter((path) => typeof path === "string").join(", ")
+    : "";
+}
+
+/** What was wrong with the intent, from the refusal's reason and field; never the text, which the details do not hold. */
+function intentText(d: Details): string {
+  const max = count(d, "max_chars");
+  switch (d.reason) {
+    case "missing":
+      return "This version has no intent. Write one for the new version.";
+    case "too_long":
+      return max === null
+        ? "A text of the intent is too long."
+        : `A text of the intent is too long. Keep it to ${max} characters.`;
+    case "control_character":
+      return "A text of the intent holds a control character. Remove it.";
+    case "no_parts":
+      return "The intent needs at least one part.";
+    case "too_many_parts":
+      return `The intent has too many parts. Keep it to ${count(d, "max") ?? "12"}.`;
+    case "too_many_entries":
+      return `A list of the intent has too many entries. Keep it to ${count(d, "max") ?? "20"}.`;
+    case "duplicate_part":
+      return "Two parts have the same name. Give each part its own name.";
+    case "file_in_two_parts":
+      return `A file is in more than one part: ${pathList(d, "files")}. Keep each file in one part.`;
+    case "part_without_files":
+      return "A part names no file. Give it its files or remove it.";
+    case "part_files_uncovered":
+      return `These changed files belong to no part: ${pathList(d, "uncovered")}. Add each to the part whose code it changes.`;
+    case "part_file_outside_diff":
+      return `The version does not change these files: ${pathList(d, "outside")}. Remove them from the parts.`;
+    default:
+      return "Write the summary and the parts of the intent, each with what it does and its files.";
+  }
+}
 
 /** Where and how the screen shows a failed write. It branches on the error code; a code every screen words the same way shows its shared sentence as a banner, and the message shows only for a code without an entry. */
 export function describeFailure(error: unknown): Failure {

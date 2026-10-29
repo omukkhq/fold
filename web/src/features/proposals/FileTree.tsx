@@ -5,6 +5,7 @@ import { changeBadge, lineCounts } from "@/features/diff/present";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
 import { treeRows, type ChangeNode, type TreeRow } from "./folderTree";
+import { filterGroups, type PartGroup } from "./partGroups";
 
 const ROW =
   "flex w-full min-w-0 items-center gap-8 rounded-s py-5 pr-8 text-left hover:bg-surface/60";
@@ -128,8 +129,64 @@ function Row({
   );
 }
 
+/** The changed files under the name of the part each belongs to, each file by its whole path. */
+function GroupedFiles({
+  groups,
+  selectedPath,
+  viewed,
+  onSelect,
+}: {
+  groups: readonly PartGroup[];
+  selectedPath: string | null;
+  viewed: ReadonlySet<string>;
+  onSelect: (path: string) => void;
+}) {
+  if (groups.length === 0) {
+    return <p className="px-4 text-13 text-text-2">No file matches.</p>;
+  }
+  return (
+    <ul className="flex flex-col gap-6">
+      {groups.map((group) => (
+        <li key={group.name} className="flex flex-col">
+          <span
+            className={cn(
+              "px-8 pt-6 pb-2 font-title text-13 font-semibold",
+              group.outside ? "text-warn" : "text-text-2",
+            )}
+          >
+            {group.name}
+          </span>
+          <ul className="flex flex-col">
+            {group.files.map((file) => (
+              <Row
+                key={file.path}
+                row={{
+                  node: {
+                    kind: "file",
+                    name: file.path,
+                    path: file.path,
+                    file,
+                  },
+                  depth: 0,
+                  open: false,
+                }}
+                selected={file.path === selectedPath}
+                viewed={viewed.has(file.path)}
+                onToggle={() => {}}
+                onSelect={onSelect}
+              />
+            ))}
+          </ul>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export interface FileTreeProps {
   nodes: readonly ChangeNode[];
+  /** The files grouped by the part of the intent each belongs to; the tree shows these groups instead of its folders. null without an intent. */
+  groups?: readonly PartGroup[] | null;
   selectedPath: string | null;
   viewed: ReadonlySet<string>;
   /** `2 of 33 viewed`. */
@@ -146,6 +203,7 @@ export interface FileTreeProps {
 /** The changed files as folders that open and close, with a filter; a folder shows the lines added and removed below it. */
 export function FileTree({
   nodes,
+  groups = null,
   selectedPath,
   viewed,
   viewedText,
@@ -196,15 +254,24 @@ export function FileTree({
           className={cn(controlClasses, "bg-surface pl-32 text-14", focusRing)}
         />
       </div>
-      <div className="flex flex-wrap items-center gap-x-12 gap-y-2 px-4">
-        <button type="button" className={action} onClick={onExpandAll}>
-          Expand all
-        </button>
-        <button type="button" className={action} onClick={onCollapseAll}>
-          Collapse all
-        </button>
-      </div>
-      {rows.length === 0 ? (
+      {groups === null ? (
+        <div className="flex flex-wrap items-center gap-x-12 gap-y-2 px-4">
+          <button type="button" className={action} onClick={onExpandAll}>
+            Expand all
+          </button>
+          <button type="button" className={action} onClick={onCollapseAll}>
+            Collapse all
+          </button>
+        </div>
+      ) : null}
+      {groups !== null ? (
+        <GroupedFiles
+          groups={filterGroups(groups, filter)}
+          selectedPath={selectedPath}
+          viewed={viewed}
+          onSelect={onSelect}
+        />
+      ) : rows.length === 0 ? (
         <p className="px-4 text-13 text-text-2">No file matches.</p>
       ) : (
         <ul className="flex flex-col">

@@ -2789,8 +2789,7 @@ export interface components {
         EditFileBody: {
             /** @description The whole new content of the file, as UTF-8 text. */
             content: string;
-            /** @description The intent of the new version: 1 to 2000 characters on what the change does, why, what it leaves as it is and its risks. Leave it out to keep the intent of the version the human edited; a version made before intents existed has none, so its edit needs one. */
-            intent?: string | null;
+            intent?: components["schemas"]["Intent"] | null;
             /** @description The file, such as `src/lib.rs`: a text file of that version. */
             path: string;
             /**
@@ -3199,6 +3198,45 @@ export interface components {
         };
         /** @enum {string} */
         IntegrationResultKind: "succeeded" | "checks_failed" | "queued";
+        /** @description How the change of a proposal version works in the code, so a human understands and judges it without reading every line: the summary and the parts of the diff always, and the contracts, the decisions and what it does not change when they apply. A section without entries does not show. Every file the version changes belongs to exactly one part. */
+        Intent: {
+            contracts: components["schemas"]["IntentContracts"];
+            /** @description The choices the author made and why, and open questions with the message that asks them; empty when none apply. */
+            decisions: string[];
+            /** @description What a reader may think the change touches but it does not; empty when nothing applies. */
+            not_changed: string[];
+            /** @description The parts of the diff in reading order, 1 to 12. */
+            parts: components["schemas"]["IntentPart"][];
+            /** @description How the change works in the code: the flow, the states and the rules, at most 1200 characters; it may hold line breaks. */
+            summary: string;
+        };
+        /** @description The contracts a change adds or changes, by kind; a kind the change does not touch is empty. Each entry is one line of at most 300 characters, at most 20 per kind. */
+        IntentContracts: {
+            commands: string[];
+            config: string[];
+            database: string[];
+            errors: string[];
+            events: string[];
+            rights: string[];
+            routes: string[];
+        };
+        /** @description One part of a version's diff. */
+        IntentPart: {
+            /** @description What this part of the code does, at most 800 characters; it may hold line breaks. */
+            does: string;
+            /**
+             * @description The changed files of the part, as the version's diff names them (a renamed file by its new path). A file belongs to one part only.
+             * @example [
+             *       "src/cases.rs"
+             *     ]
+             */
+            files: string[];
+            /**
+             * @description A short name, one line of at most 80 characters, unique in the intent.
+             * @example Case model and migration
+             */
+            name: string;
+        };
         Label: {
             /**
              * @description One of sage, slate, teal, ink, gold, moss, plum, stone.
@@ -4048,8 +4086,7 @@ export interface components {
             files_modified: number;
             /** @description A human made this version by editing the one before it in a human review. It keeps the agent approvals of that version until it is sent for review again; a human approves it again. */
             human_edit: boolean;
-            /** @description What the change does, why, what it leaves as it is and its risks, as the version's author, reviewer or human editor wrote it; `null` on a version made before intents existed. */
-            intent: string | null;
+            intent: components["schemas"]["Intent"] | null;
             /** @description A human sent this version for review again, so the approvals it kept no longer count. */
             review_again: boolean;
             /** @description The reviewer that holds the review claim made this version by fixing the one before it in its review checkout. It starts without approvals like every version. */
@@ -10000,7 +10037,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProposalVersion"];
                 };
             };
-            /** @description `invalid_request`, `invalid_path`, `invalid_id`, `invalid_name` or `invalid_intent` (`details.reason`: `missing` for no intent on a version that has none, `empty`, `too_long` or `control_character`) */
+            /** @description `invalid_request`, `invalid_path`, `invalid_id`, `invalid_name` or `invalid_intent` (`details.field` names the part of the intent and `details.reason` is `missing` for no intent on a version that has none, `empty`, `too_long`, `control_character`, `no_parts`, `too_many_parts`, `too_many_entries`, `duplicate_part`, `file_in_two_parts`, `part_without_files`, `part_files_uncovered` with `details.uncovered` or `part_file_outside_diff` with `details.outside`) */
             400: {
                 headers: {
                     [name: string]: unknown;

@@ -3,6 +3,7 @@ import type {
   CheckRun,
   ConflictReport,
   Gate,
+  Intent,
   ProposalDetail,
   ProposalSummary,
   ProposalVersion,
@@ -12,6 +13,34 @@ import type {
 import type { Revision } from "@/api/repository";
 
 const T0 = 1_760_000_000_000;
+
+/** An intent of `summary` and `parts`, each a name, what it does and its files, with every other section empty unless `fields` sets it. */
+export function intent(
+  summary: string,
+  parts: readonly (readonly [string, string, readonly string[]])[],
+  fields: Partial<Intent> = {},
+): Intent {
+  return {
+    summary,
+    parts: parts.map(([name, does, files]) => ({
+      name,
+      does,
+      files: [...files],
+    })),
+    contracts: {
+      routes: [],
+      database: [],
+      rights: [],
+      config: [],
+      errors: [],
+      events: [],
+      commands: [],
+    },
+    decisions: [],
+    not_changed: [],
+    ...fields,
+  };
+}
 
 /** A proposal row as the list route sends it: open, with the reviewer, nothing else set; a human review mark starts unmet. */
 export function proposalSummary(
