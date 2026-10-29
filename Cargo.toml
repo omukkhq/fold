@@ -23,7 +23,7 @@ print_stdout = "deny"
 allow_attributes = "deny"
 allow_attributes_without_reason = "deny"
 
-# Checks, tests and coverage build with this profile, and the test profile inherits it. Every worktree builds into one shared cargo target directory, so incremental data for each fold crate and test binary would be stored once per worktree and fill the disk. Line tables keep file and line numbers in backtraces at a fraction of the size and link time of full debug info. Dependencies stay at opt-level 0: optimizing them makes a build from empty more than twice as long and the build folder larger, and the test run is no faster because the slowest tests run fold code.
+# Checks and tests build with this profile, and the test profile inherits it. Every worktree builds into one shared cargo target directory, so incremental data for each fold crate and test binary would be stored once per worktree and fill the disk. Line tables keep file and line numbers in backtraces at a fraction of the size and link time of full debug info. Dependencies stay at opt-level 0: optimizing them makes a build from empty more than twice as long and the build folder larger, and the test run is no faster because the slowest tests run fold code.
 [profile.dev]
 incremental = false
 debug = "line-tables-only"

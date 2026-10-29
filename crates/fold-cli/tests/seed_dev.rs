@@ -63,7 +63,7 @@ impl Host {
         Self { dir, daemon }
     }
 
-    /// Closes the stub workers and waits for them to exit, so none is killed while it writes its coverage profile.
+    /// Closes the stub workers and waits for them to exit, so none is killed in the middle of a write.
     async fn stop(self) {
         self.daemon.shutdown().await;
     }
