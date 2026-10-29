@@ -280,6 +280,24 @@ async fn the_columns_match_the_stage_and_purpose() {
         .write(async |tx| checks::finish_run(tx, run_id(3), RunState::Running, None, at(2)).await)
         .await;
     assert!(missing.is_err(), "a run never ends as running");
+    let long = "x".repeat(2001);
+    for (number, intent) in [(4, ""), (5, long.as_str())] {
+        let refused = insert(
+            &store,
+            &NewCheckRun {
+                purpose: Purpose::CreateProposal,
+                title: Some("Add the board"),
+                intent: Some(intent),
+                ..workspace_run(number)
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            refused.to_string().contains("check_runs_intent_size"),
+            "{refused}"
+        );
+    }
 }
 
 #[tokio::test]
