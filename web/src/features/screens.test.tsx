@@ -7,7 +7,13 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Suspense, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -103,19 +109,16 @@ describe("Projects screen", () => {
     expect(demo.getAttribute("href")).toBe("/p/demo/board");
     expect(within(demo).getByText(/17 tasks/)).toBeTruthy();
     expect(within(demo).getByText(/main r5/)).toBeTruthy();
-    // The chip line keeps a hidden copy of each chip to measure.
-    expect(within(demo).getAllByText("@frontend")).toHaveLength(2);
+    expect(within(demo).getByText("@frontend")).toBeTruthy();
     expect(within(demo).getByText(/changed \d+ s ago/)).toBeTruthy();
     expect(within(demo).getByText("$12.34")).toBeTruthy();
     expect(within(demo).getByText("today $1.20 · 7 days $5.67")).toBeTruthy();
-    expect(screen.getByText("Cost of all projects")).toBeTruthy();
+    expect(screen.getByText(/^All projects/).textContent).toContain("$12.34");
     expect(screen.getByText("Could not open this project.")).toBeTruthy();
     expect(screen.queryByRole("link", { name: /Archive/ })).toBeNull();
   });
 
-  it("shows +N for the agent chips that do not fit and gives a screen reader their names", async () => {
-    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(100);
-    vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(250);
+  it("names three agents, says how many more, and gives a screen reader and the tooltip every name", async () => {
     stubFetch({
       "GET /api/v1/session": { body: { human: "tanim", authenticated: true } },
       "GET /api/v1/projects": {
@@ -152,12 +155,15 @@ describe("Projects screen", () => {
     });
     renderAt("/projects");
     const demo = await screen.findByRole("link", {
-      name: /3 more agents: @beta, @gamma, @delta/,
+      name: /@alpha, @beta, @gamma and @delta/,
     });
-    const more = within(demo).getByText("+3");
+    const more = within(demo).getByText(/and 1 more/);
     expect(more.getAttribute("aria-hidden")).toBe("true");
-    expect(more.parentElement?.getAttribute("title")).toBe(
-      "3 more agents: @beta, @gamma, @delta",
+    expect(within(demo).queryByText("@delta")).toBeNull();
+    expect(more.parentElement?.hasAttribute("title")).toBe(false);
+    await userEvent.hover(more);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "@alpha, @beta, @gamma and @delta",
     );
   });
 
@@ -210,7 +216,7 @@ describe("Projects screen", () => {
     );
     expect(
       await within(results).findByRole("button", {
-        name: "Remove Old site from fold",
+        name: "More for Old site",
       }),
     ).toBeTruthy();
     expect(calls.map((call) => call.method)).toContain("POST");
@@ -248,7 +254,10 @@ describe("Projects screen", () => {
     });
     renderAt("/projects");
     await userEvent.click(
-      await screen.findByRole("button", { name: "Remove Web shop from fold" }),
+      await screen.findByRole("button", { name: "More for Web shop" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Remove from fold…" }),
     );
     const dialog = await screen.findByRole("dialog", {
       name: "Remove Web shop from fold?",
@@ -510,6 +519,88 @@ describe("A project fold removed", () => {
   });
 });
 
+describe("A not-found inside an open project", () => {
+  function stubProject(
+    batch: StubReply = errorReply(404, "review_batch_not_found"),
+  ) {
+    stubFetch({
+      ...shellRoutes(["demo"]),
+      "GET /api/v1/projects/demo/workers": { body: workerList() },
+      "GET /api/v1/projects/demo/events": () =>
+        new Promise<StubReply>(() => undefined),
+      "GET /api/v1/projects/demo/reviews/batches/rb-1": batch,
+    });
+  }
+
+  /** The not-found state under the project's top bar and tabs, never the project not-found state, and no failure. */
+  async function missingInShell(title: string, back: string) {
+    const panel = await screen.findByRole("region", { name: title });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      within(panel)
+        .getAllByRole("link")
+        .map((link) => [link.textContent, link.getAttribute("href")]),
+    ).toEqual([[expect.stringContaining("Back to") as string, back]]);
+    expect(screen.getByRole("navigation", { name: "Project" })).toBeTruthy();
+    expect(screen.queryByText("Project not found")).toBeNull();
+    return panel;
+  }
+
+  it("says a batch the daemon does not have is not found and leads to the proposals", async () => {
+    stubProject();
+    renderAt("/p/demo/batches/rb-1");
+    const panel = await missingInShell(
+      "Batch rb-1 not found",
+      "/p/demo/proposals",
+    );
+    expect(panel.textContent).toContain("no review batch with this id");
+  });
+
+  it("shows the error state, not a missing batch, when the daemon fails to answer for the batch", async () => {
+    stubProject(errorReply(500, "internal"));
+    renderAt("/p/demo/batches/rb-1");
+    expect(await screen.findByText("This screen could not load.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "Project" })).toBeTruthy();
+    expect(screen.queryByText(/not found/)).toBeNull();
+  });
+
+  it("says the same of an id that is no batch id", async () => {
+    stubProject();
+    renderAt("/p/demo/batches/P-1");
+    await missingInShell("Batch P-1 not found", "/p/demo/proposals");
+  });
+
+  it("names a malformed task, proposal or request id and leads to the board or its list", async () => {
+    stubProject();
+    renderAt("/p/demo/t/abc");
+    await missingInShell("Task abc not found", "/p/demo/board");
+    cleanup();
+    renderAt("/p/demo/proposals/xyz");
+    await missingInShell("Proposal xyz not found", "/p/demo/proposals");
+    cleanup();
+    renderAt("/p/demo/requests/RQ-x");
+    await missingInShell("Request RQ-x not found", "/p/demo/requests");
+  });
+
+  it("says a page the project does not have is not found", async () => {
+    stubProject();
+    renderAt("/p/demo/nowhere");
+    await missingInShell("Page not found", "/p/demo/board");
+    cleanup();
+    renderAt("/p/demo/diff");
+    await missingInShell("Page not found", "/p/demo/board");
+  });
+
+  it("keeps the project not-found state for an address that is no project slug", async () => {
+    stubFetch(shellRoutes(["demo"]));
+    renderAt("/p/Not_A_Slug/board");
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Project not found");
+    expect(screen.queryByRole("navigation", { name: "Project" })).toBeNull();
+  });
+});
+
 describe("The top bar", () => {
   it("links the wordmark to the projects page and switches among the five most recent projects", async () => {
     const slugs = ["a", "b", "c", "d", "e", "f"];
@@ -553,22 +644,44 @@ describe("The top bar", () => {
   });
 });
 
-describe("The signed-in name", () => {
-  it("names the signed-in human in the top bar and opens the name from the icon", async () => {
-    stubFetch({
+describe("The avatar menu", () => {
+  it("names the signed-in human, holds the theme and signs out to the sign-in screen", async () => {
+    let signedIn = true;
+    const calls = stubFetch({
       ...shellRoutes(["f"]),
+      "GET /api/v1/session": () => ({
+        body: signedIn
+          ? { human: "tanim", authenticated: true }
+          : { human: null, authenticated: false },
+      }),
       "GET /api/v1/projects/f/workers": { body: workerList() },
       "GET /api/v1/projects/f/events": () => new Promise<StubReply>(() => {}),
+      "DELETE /api/v1/session": () => {
+        signedIn = false;
+        return { status: 204 };
+      },
     });
-    renderAt("/p/f/agents");
+    const router = renderAt("/p/f/agents");
     const button = await screen.findByRole("button", {
-      name: "Signed in as @tanim",
+      name: "Your menu, signed in as @tanim",
     });
-    expect(within(button).getByText("@tanim").className).toContain("lg:inline");
+    expect(button.textContent).toBe("TA");
     await userEvent.click(button);
-    expect((await screen.findByRole("dialog")).textContent).toBe(
-      "Signed in as @tanim",
+    const menu = await screen.findByRole("dialog", { name: "Your menu" });
+    expect(menu.textContent).toContain("Signed in as@tanim");
+    const dark = within(menu).getByRole("button", { name: "Dark" });
+    await userEvent.click(dark);
+    expect(dark.getAttribute("aria-pressed")).toBe("true");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    await userEvent.click(within(menu).getByRole("button", { name: "System" }));
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+    await userEvent.click(
+      within(menu).getByRole("button", { name: "Sign out" }),
     );
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/sign-in");
+    });
+    expect(calls.some((c) => c.method === "DELETE")).toBe(true);
   });
 });
 
@@ -599,8 +712,13 @@ describe("Repository screen", () => {
       "r2",
       "r1",
     ]);
-    expect(within(revisions).getByText(/pull · 9f2c1ab/)).toBeTruthy();
-    expect(within(revisions).getByText(/P-5 · Change 5/)).toBeTruthy();
+    expect(
+      within(revisions).getByText("Pull of the remote commit 9f2c1ab"),
+    ).toBeTruthy();
+    expect(within(revisions).getByText("Change 5")).toBeTruthy();
+    expect(within(revisions).getByText(/P-5 for T-/)).toBeTruthy();
+    expect(within(rows[0] ?? revisions).getByText("head of main")).toBeTruthy();
+    expect(within(revisions).getAllByText("head of main")).toHaveLength(1);
   });
 
   it("names main's head from the repository route under the tree", async () => {

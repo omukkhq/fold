@@ -7,7 +7,7 @@ use utoipa_axum::routes;
 
 use super::Project;
 use super::error::{ApiError, ApiQuery, ErrorEnvelope};
-use super::events::DurableEvent;
+use super::events::{DurableEvent, LiveCheckRun};
 use super::tasks::AttentionKind;
 use crate::daemon::AppState;
 use crate::push::PushReach;
@@ -219,6 +219,9 @@ pub struct WorkerWorkspace {
     pub last_activity_at: Option<fold_core::Timestamp>,
     #[schema(required = true, example = "ck-88")]
     pub latest_checkpoint: Option<String>,
+    /// The check run that goes in the workspace; the worker waits for its result and is not stalled while it goes. Null while no run goes.
+    #[schema(required = true)]
+    pub check_run: Option<LiveCheckRun>,
 }
 
 /// A missing workspace's directory is gone from disk, but it still holds the task in progress.
@@ -263,6 +266,7 @@ impl From<&WorkspaceSummary> for WorkerWorkspace {
             changed_files: workspace.changed_files,
             last_activity_at: workspace.last_activity_at,
             latest_checkpoint: workspace.latest_checkpoint.map(|id| id.to_string()),
+            check_run: workspace.check_run,
         }
     }
 }

@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO notify_state (id, last_seq, next_send)\n           VALUES (1, (SELECT COALESCE(MAX(seq), 0) FROM events), 2)\n           ON CONFLICT (id) DO UPDATE SET next_send = next_send + 1\n           RETURNING next_send - 1 AS \"number!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f5fdc9aa2cbe92f2f03ccb8db515593b292a979a2efa2d04d08fefe5cd1c0fae"
+}

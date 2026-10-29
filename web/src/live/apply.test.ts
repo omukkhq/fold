@@ -112,6 +112,7 @@ function live(id: string, summary: string): LiveWorkspace {
     proposal: null,
     stalled: false,
     edits_after_version: null,
+    check_run: null,
   };
 }
 
@@ -538,6 +539,7 @@ describe("invalidation rules", () => {
     expect(refreshes(keys.reviewBatchFileDiff(slug, "rb-3", "a.ts"))).toBe(
       true,
     );
+    expect(refreshes(keys.reviewBatchFile(slug, "rb-3", "a.ts"))).toBe(true);
   });
 
   it("refreshes the review batches for a batch's queued integration and its members' integrations, and not for a single one", () => {
@@ -707,6 +709,20 @@ describe("invalidation rules", () => {
     expect(hit(keys.agents(slug))).toBe(true);
   });
 
+  it("refreshes the agents and the workers, whose workspaces name the run that goes, when a check run starts or ends", () => {
+    for (const type of ["checks.started", "checks.finished"]) {
+      invalidated = [];
+      applyEvent(
+        client,
+        slug,
+        ev(type, { task: "T-2", workspace: "ws-6", data: { run: "cr-4" } }),
+      );
+      expect(hit(keys.agents(slug)), type).toBe(true);
+      expect(hit(keys.workers(slug)), type).toBe(true);
+      expect(hit(keys.board(slug)), type).toBe(true);
+    }
+  });
+
   it("refreshes the workers, their questions and the needs-you list for worker events", () => {
     applyEvent(client, slug, ev("worker.permission_asked"));
     for (const key of [
@@ -717,6 +733,27 @@ describe("invalidation rules", () => {
     ]) {
       expect(hit(key)).toBe(true);
     }
+  });
+
+  it("refreshes the notice settings, the target's send log and Needs you when a notice target changes", () => {
+    applyEvent(
+      client,
+      slug,
+      ev("notify.target_changed", {
+        actor: "fold",
+        data: {
+          target: "nt-3",
+          name: "Team Slack",
+          host: true,
+          state: "failing",
+        },
+      }),
+    );
+    expect(hit(keys.notify(slug))).toBe(true);
+    expect(refreshes(keys.notifySends(slug, "nt-3"))).toBe(true);
+    expect(hit(keys.needsYou(slug))).toBe(true);
+    expect(refreshes(keys.notify("other"))).toBe(false);
+    expect(refreshes(keys.board(slug))).toBe(false);
   });
 
   it("refreshes the workers for a change of the worker limits", () => {

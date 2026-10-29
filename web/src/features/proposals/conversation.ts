@@ -172,14 +172,6 @@ export function conversationThreads(
   );
 }
 
-/** The newest threads, whatever their state, as the overview lists them. */
-export function latestThreads(
-  threads: readonly ConversationThread[],
-  limit = 3,
-): ConversationThread[] {
-  return [...threads].sort((a, b) => b.at - a.at).slice(0, limit);
-}
-
 export type StateFilter = "all" | ConversationState;
 
 export interface ConversationFilter {
@@ -249,17 +241,25 @@ export function stateOptions(
   }));
 }
 
-/** The kinds as options; choosing the chosen kind again shows every kind. */
+/** Every kind as an option, after the option for any of them. */
 export function kindOptions(
   threads: readonly ConversationThread[],
   filter: ConversationFilter,
-): FilterOption<ConversationKind>[] {
-  return KIND_LABELS.map(([value, label]) => ({
-    value,
-    label,
-    count: filterConversation(threads, { ...filter, kind: value }).length,
-    selected: filter.kind === value,
-  }));
+): FilterOption<ConversationKind | null>[] {
+  return [
+    {
+      value: null,
+      label: "Any kind",
+      count: filterConversation(threads, { ...filter, kind: null }).length,
+      selected: filter.kind === null,
+    },
+    ...KIND_LABELS.map(([value, label]) => ({
+      value,
+      label,
+      count: filterConversation(threads, { ...filter, kind: value }).length,
+      selected: filter.kind === value,
+    })),
+  ];
 }
 
 /** Every version a thread is about, newest first, after the option for all of them. */
@@ -363,24 +363,37 @@ export function rangeLines(
   );
 }
 
-/** The first line of the newest entry, for the overview's list. */
-export function lastLine(thread: ConversationThread): {
-  author: string;
-  text: string;
-} {
-  const source = thread.source;
-  const entries =
-    source.type === "message"
-      ? source.thread.messages.map((m) => ({ author: m.sender, body: m.body }))
-      : source.thread.comments.map(({ comment }) => ({
-          author: comment.author,
-          body: comment.body,
-        }));
-  let author = "";
-  let body = "";
-  for (const entry of entries) {
-    author = entry.author;
-    body = entry.body;
-  }
-  return { author, text: body.trim().split("\n")[0] ?? "" };
+/** The About card's line on the conversation: how many threads it holds and how many wait for the human's answer; null for a proposal nobody wrote about. */
+export function conversationFact(
+  threads: readonly ConversationThread[],
+): { threads: string; waiting: string | null } | null {
+  if (threads.length === 0) return null;
+  const waiting = threads.filter((t) => t.state === "needs_answer").length;
+  return {
+    threads:
+      threads.length === 1 ? "1 thread" : `${String(threads.length)} threads`,
+    waiting:
+      waiting === 0
+        ? null
+        : waiting === 1
+          ? "1 needs your answer"
+          : `${String(waiting)} need your answer`,
+  };
+}
+
+/** The state chips the filter row shows: All, every state that holds a thread, and the chosen state even when it holds none. */
+export function chipStates(
+  options: readonly FilterOption<StateFilter>[],
+): FilterOption<StateFilter>[] {
+  return options.filter(
+    (option) => option.value === "all" || option.count > 0 || option.selected,
+  );
+}
+
+/** The words of a dropdown of the filter row: the chosen option, or the words for every option. */
+export function chosenLabel<T>(
+  options: readonly FilterOption<T>[],
+  none: string,
+): string {
+  return options.find((option) => option.selected)?.label ?? none;
 }

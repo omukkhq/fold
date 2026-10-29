@@ -5,9 +5,6 @@ import type { LiveStatus } from "../live/status";
 import { syncedAt } from "./streamStatusModel";
 import { projectPath, withQuery } from "@/routes/paths";
 
-/** The top bar has room for three chips beside the stream status and the Theme button. */
-export const MAX_CHIPS = 3;
-
 /** Tasks the agent's workers hold an implementation claim on. */
 export function workingCount(agent: ProjectAgent): number {
   return agent.workers.reduce(
@@ -20,6 +17,15 @@ export function workingCount(agent: ProjectAgent): number {
 /** Tasks with a stalled worker. */
 export function stalledCount(agent: ProjectAgent): number {
   return agent.attention.filter((item) => item.kind === "stalled").length;
+}
+
+/** Workspaces of the agent's workers in which a check run goes: the worker waits for its result, which is no stall. */
+export function checkingCount(agent: ProjectAgent): number {
+  return agent.workers.reduce(
+    (count, worker) =>
+      count + worker.workspaces.filter((ws) => ws.check_run !== null).length,
+    0,
+  );
 }
 
 type AgentProcess = NonNullable<ProjectAgent["process"]>;
@@ -37,10 +43,22 @@ export function failedText(reason: string | null): string {
   return words === undefined ? "failed" : `failed: ${words}`;
 }
 
-/** `text`, followed by the count of stalled tasks when there are any. */
+/** `text`, followed by the count of stalled tasks and by the check runs that go, when there are any. */
 function withStalled(agent: ProjectAgent, text: string): string {
   const stalled = stalledCount(agent);
-  return stalled > 0 ? `${text} · ${String(stalled)} stalled` : text;
+  const checking = checkingCount(agent);
+  const parts = [text];
+  if (stalled > 0) {
+    parts.push(`${String(stalled)} stalled`);
+  }
+  if (checking > 0) {
+    parts.push(
+      checking === 1
+        ? "running checks"
+        : `running checks in ${String(checking)} tasks`,
+    );
+  }
+  return parts.join(" · ");
 }
 
 /** What the chip says of a process whose turns fail before they reach the model, which the daemon decides. */
@@ -78,7 +96,7 @@ function processText(agent: ProjectAgent, process: AgentProcess): string {
 }
 
 /** The process the chip follows: the one fold supervises for the agent, unless that process has ended while a session the user started is connected as the agent. */
-function chipProcess(agent: ProjectAgent): AgentProcess | null {
+export function chipProcess(agent: ProjectAgent): AgentProcess | null {
   const { process } = agent;
   if (process === null) {
     return null;
@@ -154,10 +172,10 @@ export function chipStateText(
 }
 
 /**
- * Connected agents (active or idle, by `chipPresence`) before offline ones, each group in the order the API lists them, at most `MAX_CHIPS`.
- * Active and idle share a group because presence flips between them every few minutes, and a chip keeps its place while it does.
+ * Every agent for the Agents panel: connected ones (active or idle, by `chipPresence`) before offline ones, each group in the order the API lists them.
+ * Active and idle share a group because presence flips between them every few minutes, and a row keeps its place while it does.
  */
-export function chipAgents(
+export function panelAgents(
   agents: readonly ProjectAgent[],
   paused: boolean,
 ): ProjectAgent[] {
@@ -167,7 +185,7 @@ export function chipAgents(
   const offline = agents.filter(
     (agent) => chipPresence(agent, paused) === "offline",
   );
-  return [...connected, ...offline].slice(0, MAX_CHIPS);
+  return [...connected, ...offline];
 }
 
 /** The board filtered to the agent's tasks, through the board's `agent` search param. */

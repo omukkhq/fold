@@ -9,7 +9,6 @@ type Schemas = components["schemas"];
 export type ChangeKind = Schemas["FileChangeKind"];
 /** A changed file of a comparison. A binary file is compared by hash only; a hash is null on the side where the file does not exist. */
 export type ComparedFile = Schemas["ComparedFile"];
-export type StateKind = Schemas["StateKindView"];
 /** One side of a comparison as the daemon resolved the `from` or `to` reference. */
 export type ComparedState = Schemas["ComparedState"];
 export type Comparison = Schemas["ComparisonView"];

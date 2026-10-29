@@ -91,14 +91,14 @@ To run the tests of one file in `crates/<crate>/tests/`, select its module: `car
 ## Web
 
 1. **Keep the application static.** Vite + React with no SSR; routing with TanStack Router, server state with TanStack Query.
-2. **Use the semantic tokens in `web/src/styles/tokens.css`, never raw colours.** Their names match the variables in `fold.pen`; type, spacing and radii come from the tokens too.
+2. **`web/src/styles/tokens.css` is the source of truth for the look.** Colour, type, spacing and radii come only from its tokens, in light and dark; never a raw colour or an off-scale size. Gold (`warn`) marks only what waits for a person or needs attention, groups separate by surface steps and space instead of outlines, ids use the body face with tabular numbers, and mono is only for code, diffs and paths.
 3. **Build on Radix primitives** for menus, dialogs, popovers, tabs and tooltips. Don't hand-roll focus management.
 4. **Use Lucide icons** (`lucide-react`).
 5. **Call the API only through `web/src/api/client.ts`.** Type data with the generated schema types, never a hand-written copy. Branch on the error `code`, never the message.
 6. **Live data comes from the event stream.** Apply events to the Query cache through `web/src/live/`; never poll a screen that the stream covers.
 7. **The board is read-only.** No drag and drop, no status control; cards move only because the daemon's state changed.
 8. **Show a pending state, never optimistic success,** for every human write.
-9. **Match the Pencil frame for the screen you build.** Open it through the Pencil MCP by its code, and take loading, empty and error states from their frames or the shared patterns in `W00`.
+9. **Build screens from the shared components.** Buttons, chips, counts, cards, field labels, tables, tooltips and ids come from `web/src/components/`, and loading, empty, missing and error states from `web/src/components/states/`, so every screen shares one look.
 10. **Load every font and asset from the bundle.** Nothing comes from a CDN.
 11. **TypeScript is strict.** No `any`, no `@ts-ignore`, no `as unknown as`. Keep components thin and put their decisions in tested `.ts` modules.
 

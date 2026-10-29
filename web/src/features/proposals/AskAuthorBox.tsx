@@ -54,7 +54,7 @@ export function AskAuthorBox({
       onSubmit={(event) => void submit(event)}
       className="flex flex-col gap-8"
     >
-      <p className="flex items-center gap-8 text-code leading-snug font-semibold text-secondary-text">
+      <p className="flex items-center gap-8 text-13 leading-tight font-semibold text-warn">
         <MessageCircleQuestion aria-hidden="true" size={14} />
         {title}
       </p>
@@ -76,12 +76,10 @@ export function AskAuthorBox({
         )}
       />
       {errors.body ? (
-        <p className="text-meta font-medium text-danger">
-          {errors.body.message}
-        </p>
+        <p className="text-13 font-medium text-bad">{errors.body.message}</p>
       ) : null}
       {errors.root ? (
-        <p role="alert" className="text-meta font-medium text-danger">
+        <p role="alert" className="text-13 font-medium text-bad">
           The question was not sent. {errors.root.message}
         </p>
       ) : null}
@@ -98,7 +96,7 @@ export function AskAuthorBox({
         <Button variant="ghost" disabled={isSubmitting} onClick={onCancel}>
           Cancel
         </Button>
-        <span className="text-meta text-text-muted">
+        <span className="text-13 text-text-2">
           The author answers in a thread on the Messages screen. The review
           stays as it is.
         </span>

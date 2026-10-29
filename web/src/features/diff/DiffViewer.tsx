@@ -1,4 +1,9 @@
-import { ChevronsDown, TriangleAlert } from "lucide-react";
+import {
+  ChevronsDown,
+  FoldVertical,
+  TriangleAlert,
+  UnfoldVertical,
+} from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { ComparedFile, FileDiff, FileWarning } from "@/api/diff";
 import { Button } from "@/components/button/Button";
@@ -7,9 +12,21 @@ import { Skeleton } from "@/components/states/Skeleton";
 import { DiffRows } from "./DiffRows";
 import { FileList } from "./FileList";
 import {
+  diffSides,
+  expandPart,
+  gapText,
+  hasGaps,
+  layoutWithGaps,
+  spansOn,
+  type FileTextView,
+  type GapText,
+  type KeptRange,
+  type ShownSpans,
+  type Span,
+} from "./gaps";
+import {
   ROW_LIMIT,
   fileBody,
-  layoutFile,
   listedFiles,
   shownEntry,
   threadEnds,
@@ -21,6 +38,7 @@ import {
   moreRowsText,
   tooLargeNote,
   warningNote,
+  wholeFileText,
 } from "./present";
 import type { DiffSelection, DiffThread } from "./selection";
 
@@ -44,6 +62,8 @@ export interface DiffViewerProps {
   filesTitle?: string;
   /** Read only for a file whose body is text; a binary file and an unchanged rename need no hunks. */
   fileDiff: FileDiffView;
+  /** The new side of the shown file, from which the unchanged lines around its hunks are shown. Without it the file shows its hunks only. */
+  fileText?: FileTextView;
   selection: DiffSelection | null;
   onSelect: (selection: DiffSelection | null) => void;
   threads?: readonly DiffThread[];
@@ -61,29 +81,32 @@ export interface DiffViewerProps {
   headExtra?: (path: string) => ReactNode;
 }
 
-type BodyProps = Omit<
+type PanelProps = Omit<
   DiffViewerProps,
-  | "comparison"
-  | "selectedPath"
-  | "onSelectFile"
-  | "filesTitle"
-  | "fileNav"
-  | "headExtra"
-> & { file: ComparedFile };
+  "comparison" | "selectedPath" | "onSelectFile" | "filesTitle" | "fileNav"
+> & { file: ComparedFile; split: boolean };
+
+type BodyProps = Omit<PanelProps, "fileText" | "headExtra" | "split"> & {
+  gaps: GapText | null;
+  spans: readonly Span[];
+  whole: boolean;
+  onSpans: (spans: Span[]) => void;
+  onGapRetry?: () => void;
+};
 
 /** The head's path: with a nav beside it the folder part is dimmed before the name, as the tree already names the folders. */
 function HeadPath({ path, split }: { path: string; split: boolean }) {
   if (!split) {
     return (
-      <h2 className="min-w-0 flex-1 truncate font-mono text-code font-semibold text-text">
+      <h2 className="min-w-0 flex-1 truncate font-mono text-13 font-semibold text-text">
         {path}
       </h2>
     );
   }
   const cut = path.lastIndexOf("/") + 1;
   return (
-    <h2 className="min-w-0 flex-1 font-mono text-code break-all text-text">
-      <span className="font-regular text-text-faint">{path.slice(0, cut)}</span>
+    <h2 className="min-w-0 flex-1 font-mono text-13 break-all text-text">
+      <span className="font-regular text-text-2">{path.slice(0, cut)}</span>
       <span className="font-semibold">{path.slice(cut)}</span>
     </h2>
   );
@@ -92,10 +115,8 @@ function HeadPath({ path, split }: { path: string; split: boolean }) {
 function Hash({ side, hash }: { side: string; hash: string | null }) {
   return (
     <div className="flex gap-10">
-      <dt className="w-diff-number shrink-0 text-bar text-text-muted">
-        {side}
-      </dt>
-      <dd className="min-w-0 font-mono text-code break-all text-text">
+      <dt className="w-diff-number shrink-0 text-13 text-text-2">{side}</dt>
+      <dd className="min-w-0 font-mono text-13 break-all text-text">
         {hash ?? "no file"}
       </dd>
     </div>
@@ -113,7 +134,7 @@ function HashOnly({
 }) {
   return (
     <div className="flex flex-col gap-8 px-14 py-12">
-      <p className="text-bar text-text-muted">{note}</p>
+      <p className="text-14 text-text-2">{note}</p>
       <dl className="flex flex-col gap-4">
         <Hash side="old" hash={oldHash} />
         <Hash side="new" hash={newHash} />
@@ -122,10 +143,35 @@ function HashOnly({
   );
 }
 
+/** The lines a thread, a mark or the selection stands on: they stay on screen when the gap around them is closed. */
+function keptRanges(
+  path: string,
+  ranges: readonly DiffThread[],
+  selection: DiffSelection | null,
+): KeptRange[] {
+  const own = ranges
+    .map((r) => r.range)
+    .filter((r) => r.path === path)
+    .map((r) => ({ side: r.side, start: r.start_line, end: r.end_line }));
+  if (selection?.path === path) {
+    own.push({
+      side: selection.side,
+      start: selection.start_line,
+      end: selection.end_line,
+    });
+  }
+  return own;
+}
+
 function FileBody({
   file,
   fileDiff,
   rowLimit = ROW_LIMIT,
+  gaps,
+  spans,
+  whole,
+  onSpans,
+  onGapRetry,
   ...rows
 }: BodyProps) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
@@ -143,7 +189,7 @@ function FileBody({
   }
   if (body === "unchanged") {
     return (
-      <p className="px-14 py-12 text-bar text-text-muted">
+      <p className="px-14 py-12 text-14 text-text-2">
         The content did not change.
       </p>
     );
@@ -170,14 +216,22 @@ function FileBody({
       />
     );
   }
-  const layout = layoutFile(diff.hunks, expanded, limit, {
-    keep: threadEnds(rows.threads ?? [], file.path),
-  });
+  const threads = rows.threads ?? [];
+  const kept = keptRanges(
+    file.path,
+    [...threads, ...(rows.marks ?? [])],
+    rows.selection,
+  );
+  const layout = layoutWithGaps(
+    diff.hunks,
+    expanded,
+    gaps === null ? null : { text: gaps, spans, whole, kept },
+    limit,
+    { keep: threadEnds(threads, file.path) },
+  );
   if (layout.rows.length === 0) {
     return (
-      <p className="px-14 py-12 text-bar text-text-muted">
-        The file has no lines.
-      </p>
+      <p className="px-14 py-12 text-14 text-text-2">The file has no lines.</p>
     );
   }
   return (
@@ -189,13 +243,20 @@ function FileBody({
         onExpand={(key) => {
           setExpanded((old) => new Set([...old, key]));
         }}
+        onGap={(row, how) => {
+          const result = expandPart(spans, row, how);
+          onSpans(result.spans);
+          return result.focus;
+        }}
+        onGapRetry={onGapRetry}
       />
       {layout.remaining > 0 ? (
-        <div className="border-t border-border-subtle px-14 py-8">
+        <div className="bg-diff-hunk px-8 py-3">
           <Button
             variant="ghost"
             size="sm"
-            icon={<ChevronsDown aria-hidden="true" size={13} />}
+            className="text-accent hover:bg-surface hover:text-accent"
+            icon={<ChevronsDown aria-hidden="true" size={14} />}
             onClick={() => {
               setLimit((old) => old + rowLimit);
             }}
@@ -205,6 +266,89 @@ function FileBody({
         </div>
       ) : null}
     </>
+  );
+}
+
+/** What the file can show beyond its hunks: null when it has no text source or its text cannot give lines. */
+function shownGaps(
+  file: ComparedFile,
+  fileDiff: FileDiffView,
+  fileText: FileTextView | undefined,
+): GapText | null {
+  if (fileText === undefined || fileBody(file) !== "text") return null;
+  if (fileDiff.status !== "ready") return null;
+  const diff = fileDiff.diff;
+  if (diff.binary || diff.too_large || diff.hunks.length === 0) return null;
+  return gapText(diff.hunks, diff.new_hash, fileText);
+}
+
+/** One file: its head and its lines. The lines the reader showed belong to the file and the sides it compares, so another file or another version of it starts with its hunks only. */
+function FilePanel({ file, split, headExtra, fileText, ...body }: PanelProps) {
+  const sides = diffSides(
+    body.fileDiff.status === "ready" ? body.fileDiff.diff : null,
+  );
+  const [shown, setShown] = useState<ShownSpans>({ sides, spans: [] });
+  const spans = spansOn(shown, sides);
+  const setSpans = (next: readonly Span[]) => {
+    setShown({ sides, spans: next });
+  };
+  const [whole, setWhole] = useState(false);
+  const counts = lineCounts(file);
+  const note = changeNote(file);
+  const gaps = shownGaps(file, body.fileDiff, fileText);
+  const hunks =
+    body.fileDiff.status === "ready" ? body.fileDiff.diff.hunks : [];
+  const toggle =
+    gaps !== null &&
+    gaps.status !== "error" &&
+    (gaps.status === "pending" || hasGaps(hunks, gaps.lines.length));
+  return (
+    <section
+      aria-label={file.path}
+      className="min-w-0 flex-1 overflow-hidden rounded-m bg-surface"
+    >
+      <header className="flex flex-wrap items-center gap-x-10 gap-y-4 py-9 pr-10 pl-14">
+        <HeadPath path={file.path} split={split} />
+        {counts.added ? (
+          <span className="font-mono text-13 text-ok">{counts.added}</span>
+        ) : null}
+        {counts.removed ? (
+          <span className="font-mono text-13 text-bad">{counts.removed}</span>
+        ) : null}
+        {note ? <span className="text-13 text-text-2">{note}</span> : null}
+        {toggle ? (
+          <Button
+            size="sm"
+            icon={
+              whole ? (
+                <FoldVertical aria-hidden="true" size={14} />
+              ) : (
+                <UnfoldVertical aria-hidden="true" size={14} />
+              )
+            }
+            pending={gaps.status === "pending"}
+            pendingLabel="Loading the file…"
+            onClick={() => {
+              setSpans([]);
+              setWhole((old) => !old);
+            }}
+          >
+            {/* On a phone the icon alone keeps the path readable; the label stays the button's name. */}
+            <span className="max-sm:sr-only">{wholeFileText(whole)}</span>
+          </Button>
+        ) : null}
+        {headExtra?.(file.path)}
+      </header>
+      <FileBody
+        file={file}
+        {...body}
+        gaps={gaps}
+        spans={spans}
+        whole={whole}
+        onSpans={setSpans}
+        onGapRetry={fileText?.status === "error" ? fileText.retry : undefined}
+      />
+    </section>
   );
 }
 
@@ -223,7 +367,7 @@ export function DiffViewer({
   const split = fileNav !== undefined;
   const frame = split
     ? "flex min-w-0 flex-1 flex-col gap-16 lg:flex-row lg:items-start lg:gap-20"
-    : "flex min-w-0 flex-1 items-start gap-20";
+    : "flex min-w-0 flex-1 flex-col gap-16 md:flex-row md:items-start md:gap-20";
   const list = fileNav ?? (
     <FileList
       files={files}
@@ -241,18 +385,18 @@ export function DiffViewer({
         {list}
         <section
           aria-label={shown.warning.path}
-          className="min-w-0 flex-1 overflow-hidden rounded-l border border-border-subtle bg-surface"
+          className="min-w-0 flex-1 overflow-hidden rounded-m bg-surface"
         >
-          <header className="flex items-center gap-10 border-b border-border-subtle bg-bg px-14 py-9">
-            <h2 className="min-w-0 flex-1 truncate font-mono text-code font-semibold text-text">
+          <header className="flex items-center gap-10 px-14 py-9">
+            <h2 className="min-w-0 flex-1 truncate font-mono text-13 font-semibold text-text">
               {shown.warning.path}
             </h2>
           </header>
-          <p className="flex items-start gap-8 px-14 py-12 text-bar text-text-muted">
+          <p className="flex items-start gap-8 px-14 py-12 text-14 text-text-2">
             <TriangleAlert
               aria-hidden="true"
               size={14}
-              className="mt-2 shrink-0 text-secondary-text"
+              className="mt-2 shrink-0 text-warn"
             />
             {warningNote(shown.warning)}
           </p>
@@ -260,36 +404,16 @@ export function DiffViewer({
       </div>
     );
   }
-  const file = shown.file;
-  const counts = lineCounts(file);
-  const note = changeNote(file);
   return (
     <div className={frame}>
       {list}
-      <section
-        aria-label={file.path}
-        className="min-w-0 flex-1 overflow-hidden rounded-l border border-border-subtle bg-surface"
-      >
-        {/* The rows' fills would cover an inset ring, so the panel has a real border; the head's padding gives up a pixel to each border, so the borders do not change the head's height. */}
-        <header className="flex items-center gap-10 border-b border-border-subtle bg-bg px-14 py-9">
-          <HeadPath path={file.path} split={split} />
-          {counts.added ? (
-            <span className="font-mono text-meta text-primary-text">
-              {counts.added}
-            </span>
-          ) : null}
-          {counts.removed ? (
-            <span className="font-mono text-meta text-danger">
-              {counts.removed}
-            </span>
-          ) : null}
-          {note ? (
-            <span className="text-meta text-text-muted">{note}</span>
-          ) : null}
-          {headExtra?.(file.path)}
-        </header>
-        <FileBody key={file.path} file={file} {...body} />
-      </section>
+      <FilePanel
+        key={shown.file.path}
+        file={shown.file}
+        split={split}
+        headExtra={headExtra}
+        {...body}
+      />
     </div>
   );
 }

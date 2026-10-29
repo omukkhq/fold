@@ -9,6 +9,7 @@ use fold_core::tree::{EntryKind, FlatEntry, FlatTree, flatten};
 use fold_core::{FoldError, codes};
 use serde_json::json;
 
+use crate::browse::FileContent;
 use crate::diff::{
     DEFAULT_CONTEXT, Hunk, MAX_INLINE_BYTES, count_lines, diff_text, is_binary, line_count,
 };
@@ -645,6 +646,38 @@ fn side_len(
         };
     }
     objects.blob_size(&entry.hash).map_err(FoldError::from)
+}
+
+/// One file of `state`, read as [`crate::browse::read_file`] reads one of a stored tree: content the store does not hold comes from the state's own blobs, a symlink gives its target text, and a file larger than [`MAX_INLINE_BYTES`] gives only its size and hash. A path the state holds no entry at is `not_found`.
+pub fn read_state_file(
+    objects: &ObjectStore,
+    state: &State,
+    path: &RepoPath,
+) -> Result<FileContent, FoldError> {
+    let entry = state.entries.get(path.as_bytes()).copied().ok_or_else(|| {
+        FoldError::new(codes::NOT_FOUND, "the path has no file in this tree")
+            .with_details([("path", json!(path.to_string()))])
+    })?;
+    let size = side_len(objects, state, Some(path), Some(entry))?;
+    if size > MAX_INLINE_BYTES as u64 {
+        return Ok(FileContent {
+            kind: entry.kind,
+            hash: entry.hash,
+            size,
+            bytes: Vec::new(),
+            binary: false,
+            too_large: true,
+        });
+    }
+    let bytes = content(objects, state, path, entry)?;
+    Ok(FileContent {
+        kind: entry.kind,
+        hash: entry.hash,
+        size,
+        binary: is_binary(&bytes),
+        bytes,
+        too_large: false,
+    })
 }
 
 fn side_content(

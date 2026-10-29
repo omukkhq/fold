@@ -1,9 +1,12 @@
+import { useQuery } from "@tanstack/react-query";
+import { repositoryQuery } from "@/api/repositoryQueries";
 import { ReconnectingBanner } from "../../components/states/ReconnectingBanner";
 import { EmptyPanel } from "../../components/states/EmptyPanel";
 import { ErrorBanner } from "../../components/states/ErrorBanner";
 import { Skeleton } from "../../components/states/Skeleton";
 import { EventStream } from "./EventStream";
 import { ReviewCheckouts } from "./ReviewCheckouts";
+import { mainHeadText } from "./attention";
 import { shownAsOf } from "./liveStates";
 import { useLiveActivity } from "./useLiveActivity";
 import { WorkspacePanel } from "./WorkspacePanel";
@@ -12,6 +15,7 @@ import { LegendItem } from "./Zones";
 export function LiveActivityScreen({ slug }: { slug: string }) {
   const activity = useLiveActivity(slug);
   const { live, now } = activity;
+  const main = mainHeadText(useQuery(repositoryQuery(slug)).data);
   return (
     <>
       {live.state === "reconnecting" ? (
@@ -24,22 +28,23 @@ export function LiveActivityScreen({ slug }: { slug: string }) {
           onRetry={activity.retry}
         />
       ) : null}
-      <div className="flex flex-col gap-24 px-24 pt-20 pb-24 lg:flex-row">
-        <div className="flex min-w-0 flex-1 flex-col gap-16">
-          <div className="flex flex-wrap items-end justify-between gap-14">
-            <div className="flex flex-col gap-4">
-              <h1 className="text-screen font-semibold text-text">Activity</h1>
-              <p className="text-body text-text-muted">
-                What every worker is doing now. Working changes are not in main
-                until a proposal is integrated.
-              </p>
-            </div>
-            <ul aria-label="Legend" className="flex items-center gap-14">
-              <LegendItem tone="working">Working, not recorded</LegendItem>
-              <LegendItem tone="recorded">Recorded changeset</LegendItem>
-              <LegendItem tone="main">Main</LegendItem>
-            </ul>
+      <div className="flex flex-col gap-22 px-16 pt-20 pb-24 md:px-24 lg:flex-row lg:items-start">
+        <div className="flex min-w-0 flex-1 flex-col gap-14">
+          <div className="flex flex-col gap-4">
+            <h1 className="text-24 font-semibold text-text">Activity</h1>
+            <p className="max-w-measure text-15 text-text-2">
+              What every worker is doing now. Working changes are not in main
+              until a proposal is integrated.
+            </p>
           </div>
+          <ul
+            aria-label="Legend"
+            className="flex flex-wrap items-center gap-x-20 gap-y-8"
+          >
+            {main === null ? null : <LegendItem tone="main">{main}</LegendItem>}
+            <LegendItem tone="working">Working, not recorded</LegendItem>
+            <LegendItem tone="recorded">Recorded changeset</LegendItem>
+          </ul>
           {activity.status === "pending" ? (
             <>
               <Skeleton />

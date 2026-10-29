@@ -40,16 +40,16 @@ export function CommitId({
         setState("idle");
       }}
       className={cn(
-        "inline-flex items-center gap-4 rounded-s font-mono text-meta text-text-muted hover:text-text",
+        "inline-flex items-center gap-4 rounded-s font-mono text-13 text-text-2 hover:text-text",
         focusRing,
         className,
       )}
     >
       {short}
       {state === "copied" ? (
-        <Check aria-hidden size={12} />
+        <Check aria-hidden size={14} />
       ) : (
-        <Copy aria-hidden size={12} className="text-text-faint" />
+        <Copy aria-hidden size={14} className="text-text-2" />
       )}
       <span role="status" className="sr-only">
         {state === "copied" ? "Copied" : state === "failed" ? "Not copied" : ""}

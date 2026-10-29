@@ -2,27 +2,37 @@ import * as RadixDialog from "@radix-ui/react-dialog";
 import { ChevronRight, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { IconButton } from "@/components/button/Button";
+import { Id } from "@/components/id/Id";
 import { cn } from "@/lib/cn";
 
 interface Props {
   /** The last crumb: the task id, or `New task`. */
   crumb: string;
-  /** An id takes the mono face; a word does not. */
+  /** An id keeps its digits even and never wraps. */
   crumbIsId: boolean;
   /** Head actions before Close. */
   actions?: ReactNode;
   /** Whether the body renders a `Dialog.Description`; Radix warns when the content names one that is absent. */
   described: boolean;
+  /**
+   * Whether the body is the task's two columns, which scroll on their own from `md` up. Below `md` the columns
+   * stack, so the body scrolls as one there, as every other body does.
+   */
+  split?: boolean;
+  /** The create form is one column, so the dialog is narrower. */
+  narrow?: boolean;
   onClose: () => void;
   children: ReactNode;
 }
 
-/** The dialog over the board: the crumb head (the project is in the top bar already) with its actions, and a body that scrolls with the page. */
+/** The dialog over the board: the crumb head (the project is in the top bar already) with its actions stays in place, and only the body scrolls. */
 export function DialogFrame({
   crumb,
   crumbIsId,
   actions,
   described,
+  split = false,
+  narrow = false,
   onClose,
   children,
 }: Props) {
@@ -35,36 +45,61 @@ export function DialogFrame({
     >
       <RadixDialog.Portal>
         {/* z-10 lifts the dialog over the board's raised marks; menus and popovers share it and open later in the DOM, so they stay on top. */}
-        <RadixDialog.Overlay className="fixed inset-0 z-10 flex justify-center overflow-y-auto bg-scrim px-16 py-32">
+        <RadixDialog.Overlay className="fixed inset-0 z-10 flex justify-center bg-scrim px-16 py-32 max-md:p-0">
           <RadixDialog.Content
             {...(described ? {} : { "aria-describedby": undefined })}
-            className="flex h-max w-dialog max-w-full flex-col rounded-l bg-surface shadow-dialog inset-ring inset-ring-border outline-none"
+            // The dialog itself takes the focus on open, so no control shows a ring before the human moves.
+            onOpenAutoFocus={(event) => {
+              const content = event.currentTarget;
+              if (
+                content instanceof HTMLElement &&
+                !content.contains(document.activeElement)
+              ) {
+                event.preventDefault();
+                content.focus();
+              }
+            }}
+            className={cn(
+              "flex max-h-full max-w-full flex-col self-start overflow-hidden rounded-l bg-surface shadow-dialog outline-none focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-accent max-md:h-full max-md:w-full max-md:rounded-none max-md:focus-visible:-outline-offset-2",
+              narrow ? "w-dialog-narrow" : "w-dialog",
+            )}
           >
-            <div className="flex items-center justify-between gap-12 border-b border-border-subtle py-12 pr-16 pl-24">
+            <div className="flex shrink-0 items-center justify-between gap-12 border-b border-line py-10 pr-14 pl-24">
               <nav
                 aria-label="Breadcrumb"
-                className="flex items-center gap-8 text-bar text-text-muted"
+                className="flex min-w-0 items-center gap-6 text-14 text-text-2"
               >
                 <span>Board</span>
                 <ChevronRight
                   aria-hidden="true"
-                  size={13}
-                  className="text-text-faint"
+                  size={14}
+                  className="shrink-0 text-text-2"
                 />
-                <span className={cn("text-text", crumbIsId && "font-mono")}>
-                  {crumb}
-                </span>
+                {crumbIsId ? (
+                  <Id className="font-semibold text-text">{crumb}</Id>
+                ) : (
+                  <span className="font-semibold text-text">{crumb}</span>
+                )}
               </nav>
               <div className="flex items-center gap-4">
                 {actions}
                 <RadixDialog.Close asChild>
                   <IconButton aria-label="Close">
-                    <X aria-hidden="true" size={15} />
+                    <X aria-hidden="true" size={16} />
                   </IconButton>
                 </RadixDialog.Close>
               </div>
             </div>
-            {children}
+            <div
+              className={cn(
+                "min-h-0",
+                split
+                  ? "max-md:overflow-y-auto md:flex md:flex-col"
+                  : "overflow-y-auto",
+              )}
+            >
+              {children}
+            </div>
           </RadixDialog.Content>
         </RadixDialog.Overlay>
       </RadixDialog.Portal>

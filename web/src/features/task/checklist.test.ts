@@ -81,6 +81,6 @@ describe("the link texts", () => {
 
   it("say fold ticked a Done child", () => {
     expect(linkedStateText(linked(true), "Done")).toBe("Done · ticked by fold");
-    expect(linkedStateText(linked(false), "In Progress")).toBe("In Progress");
+    expect(linkedStateText(linked(false), "In progress")).toBe("In progress");
   });
 });

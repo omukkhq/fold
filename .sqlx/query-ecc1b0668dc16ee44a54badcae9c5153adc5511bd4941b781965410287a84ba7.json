@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO notify_outbox (target, seq, notice, opened, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "ecc1b0668dc16ee44a54badcae9c5153adc5511bd4941b781965410287a84ba7"
+}

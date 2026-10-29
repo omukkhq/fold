@@ -39,7 +39,7 @@ export function MentionText({
   return (
     <p
       className={cn(
-        "text-body leading-normal text-text",
+        "text-15 leading-normal text-text",
         textFlow("prose"),
         className,
       )}

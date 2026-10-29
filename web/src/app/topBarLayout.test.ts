@@ -1,52 +1,48 @@
 import { describe, expect, it } from "vitest";
 import {
-  MORE_TRIGGER_CLASS,
-  TOP_BAR_ITEMS,
-  inMore,
-  moreAlert,
-  moreItems,
-  moreLabel,
-  rowItemClass,
+  NARROW_ONLY,
+  SWITCHER_FIT,
+  WIDE_ONLY,
+  menuAlert,
+  menuLabel,
+  switcherTooltip,
 } from "./topBarLayout";
+import themeCss from "../styles/index.css?raw";
 
 describe("the top bar layout", () => {
-  it("keeps Needs you, the bell and the name in the compact row", () => {
-    expect(TOP_BAR_ITEMS.filter((item) => !inMore(item))).toEqual([
-      "needsYou",
-      "bell",
-      "name",
-    ]);
-  });
-
-  it("puts the live state, the pause control, the agents and the theme switch behind More, in row order", () => {
-    expect(moreItems()).toEqual(["stream", "pause", "agents", "theme"]);
-  });
-
-  it("hides only the More items below lg, and the More button from lg", () => {
-    expect(rowItemClass("stream")).toBe("max-lg:hidden");
-    expect(rowItemClass("agents")).toBe("max-lg:hidden");
-    expect(rowItemClass("theme")).toBe("max-lg:hidden");
-    expect(rowItemClass("bell")).toBe("");
-    expect(MORE_TRIGGER_CLASS).toBe("lg:hidden");
+  it("swaps the full row and the menu at the wide breakpoint of 1440px", () => {
+    expect(WIDE_ONLY).toBe("max-wide:hidden");
+    expect(NARROW_ONLY).toBe("wide:hidden");
+    expect(themeCss).toMatch(/--breakpoint-wide:\s*90rem;/);
   });
 });
 
-describe("the More button's alert", () => {
+describe("the project switcher's tooltip", () => {
+  it("names only a slug the switcher cuts", () => {
+    expect(switcherTooltip("a".repeat(SWITCHER_FIT))).toBeNull();
+    expect(switcherTooltip("nobs-demo")).toBeNull();
+    expect(switcherTooltip("frontend-rewrite-demo")).toBe(
+      "frontend-rewrite-demo",
+    );
+  });
+});
+
+describe("the menu button's alert", () => {
   it("says nothing while the stream is live or connecting and the agents run", () => {
-    expect(moreAlert("live", false)).toBeNull();
-    expect(moreAlert("connecting", false)).toBeNull();
-    expect(moreLabel(null)).toBe("More");
+    expect(menuAlert("live", false)).toBeNull();
+    expect(menuAlert("connecting", false)).toBeNull();
+    expect(menuLabel(null)).toBe("Menu");
   });
 
   it("tells a reconnecting stream before a pause", () => {
-    const alert = moreAlert("reconnecting", true);
-    expect(alert).toEqual({ label: "Reconnecting", dot: "bg-secondary" });
-    expect(moreLabel(alert)).toBe("More, Reconnecting");
+    const alert = menuAlert("reconnecting", true);
+    expect(alert).toEqual({ label: "Reconnecting", dot: "bg-warn" });
+    expect(menuLabel(alert)).toBe("Menu, Reconnecting");
   });
 
   it("tells paused agents", () => {
-    const alert = moreAlert("live", true);
-    expect(alert).toEqual({ label: "Agents paused", dot: "bg-warning" });
-    expect(moreLabel(alert)).toBe("More, Agents paused");
+    const alert = menuAlert("live", true);
+    expect(alert).toEqual({ label: "Agents paused", dot: "bg-warn" });
+    expect(menuLabel(alert)).toBe("Menu, Agents paused");
   });
 });

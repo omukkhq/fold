@@ -38,6 +38,7 @@ const DOMAINS = new Set([
   "human_change",
   "stash",
   "checks",
+  "notify",
 ]);
 
 export function domainOf(type: string): string | null {
@@ -369,7 +370,7 @@ function invalidationKeys(
     case "label":
       return [board, keys.labels(slug), ...taskKey];
     case "task": {
-      // Needs you lists human tasks in Todo and tasks with a blocker, which any task event can add or remove; the human review mark also decides which proposals wait for the human. A change of the labels can move the task to another area, whose lead reads its feedback.
+      // Needs you lists human tasks in To do and tasks with a blocker, which any task event can add or remove; the human review mark also decides which proposals wait for the human. A change of the labels can move the task to another area, whose lead reads its feedback.
       const readers = task === null ? [] : [keys.taskReaders(slug, task)];
       return type === "task.human_review_set" ||
         type === "task.human_review_cleared"
@@ -440,11 +441,14 @@ function invalidationKeys(
       const nextVersion =
         event.data.purpose === "update_proposal" ||
         event.data.purpose === "review_fix";
+      // The agents and the workers name the run that goes in each worker's workspace.
       return [
         keys.proposals(slug),
         ...pages,
         ...taskKey,
         board,
+        keys.agents(slug),
+        keys.workers(slug),
         ...(run === null ? [] : [keys.checkRun(slug, run)]),
         ...(nextVersion ? [keys.reviewBatches(slug)] : []),
       ];
@@ -500,6 +504,9 @@ function invalidationKeys(
       ];
     case "project":
       return [keys.project(slug), keys.workers(slug), keys.agents(slug)];
+    // A host target's change reaches every open project. The notify key is the prefix of each target's send log, and fold turning a target off or on opens or ends its Needs you item.
+    case "notify":
+      return [keys.notify(slug), keys.needsYou(slug)];
     case "request":
       return type === "request.approved"
         ? [

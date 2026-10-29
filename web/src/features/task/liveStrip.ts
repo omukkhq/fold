@@ -1,4 +1,5 @@
 import type { CheckpointSummary, LiveWorkspace, TaskDetail } from "@/api/tasks";
+import { checkRunText, currentCheckRun } from "@/features/board/checkRun";
 import {
   sentText,
   sentVersion,
@@ -11,12 +12,14 @@ type ChangeKind = LiveWorkspace["files"][number]["change"];
 
 export interface LiveStrip {
   worker: string;
-  /** `is editing`; `sent P-1 v1` while the workspace files are the open proposal's newest version; or `no edits for 7 min` while the daemon reports the worker stalled and no sent version waits on others. */
+  /** `is running checks for v2` while a check run goes in the workspace; `is editing`; `sent P-1 v1` while the workspace files are the open proposal's newest version; or `no edits for 7 min` while the daemon reports the worker stalled and no sent version waits on others. */
   verb: string;
-  /** The file being edited; null after a sent version, while stalled or unless exactly one file changed. */
+  /** The file being edited; null while checks run, after a sent version, while stalled or unless exactly one file changed. */
   file: string | null;
-  /** `· 4 files · ck-31 3 min ago · base r7`, after what a sent version waits for: `· waits for review · 4 files · …`. */
-  rest: string;
+  /** What a sent version waits for, `waits for review`; null without one and while checks run. */
+  wait: string | null;
+  /** The strip's details behind its info button: `4 files · ck-31 3 min ago · base r7`; null when the stream and the task read name none. */
+  details: string | null;
   stalled: boolean;
 }
 
@@ -55,15 +58,16 @@ export function baseText(workspace: { base: string; main?: string }): string {
 }
 
 /**
- * Who is editing what, or which version the holder sent and what it waits for, then the files changed, the latest checkpoint and the base.
- * The task payload names the workspace, and its details, activity, checkpoints and proposal; the event stream's frame fills in the rest.
- * The stall wording shows while no sent version waits on others. Null without a workspace.
+ * One fact, who is editing what, that the holder waits for its checks, or which version the holder sent and what it waits for, and its details: the files changed, the latest checkpoint and the base.
+ * The task payload names the workspace, and its details, activity, checkpoints, proposal and check run; the event stream's frame fills in the rest.
+ * A check run that goes leads, and the stall wording shows only while no run goes and no sent version waits on others. Null without a workspace.
  */
 export function liveStrip(
   task: Pick<
     TaskDetail,
     | "activity"
     | "attention"
+    | "check_run"
     | "checkpoints"
     | "claims"
     | "edits_after_version"
@@ -88,13 +92,14 @@ export function liveStrip(
     live,
     task.attention,
   );
-  const stalled = showsStall(sent, task.attention);
+  const run = currentCheckRun(task.check_run, live);
+  const stalled = run === null && showsStall(sent, task.attention);
   const activity = task.activity ?? null;
   const lastEdit = Math.max(
     activity?.at ?? Number.NEGATIVE_INFINITY,
     live?.last_activity_at ?? Number.NEGATIVE_INFINITY,
   );
-  const parts: string[] = sent === null ? [] : [waitText(sent.waits)];
+  const parts: string[] = [];
   if (live) {
     parts.push(files(live.files.length));
   }
@@ -109,16 +114,21 @@ export function liveStrip(
   const [only, ...others] = live?.files ?? [];
   const liveFile = only !== undefined && others.length === 0 ? only.path : null;
   let verb = "is editing";
-  if (stalled && Number.isFinite(lastEdit)) {
+  if (run !== null) {
+    const text = checkRunText(run, task.proposal);
+    verb = `is ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+  } else if (stalled && Number.isFinite(lastEdit)) {
     verb = formatQuiet(now, lastEdit);
   } else if (sent !== null) {
     verb = sentText(sent);
   }
+  const quiet = run !== null || sent !== null || stalled;
   return {
     worker,
     verb,
-    file: sent !== null || stalled ? null : (activity?.path ?? liveFile),
-    rest: parts.length > 0 ? `· ${parts.join(" · ")}` : "",
+    file: quiet ? null : (activity?.path ?? liveFile),
+    wait: run === null && sent !== null ? waitText(sent.waits) : null,
+    details: parts.length > 0 ? parts.join(" · ") : null,
     stalled,
   };
 }
@@ -149,7 +159,7 @@ export function changeLetter(change: ChangeKind): string {
 
 export type ChangeTone = "added" | "deleted" | "other";
 
-/** Added files take the primary soft fill and deleted files the danger soft fill. */
+/** Added files take the ok tone and deleted files the bad tone; every other change stays quiet. */
 export function changeTone(change: ChangeKind): ChangeTone {
   if (change === "added") {
     return "added";

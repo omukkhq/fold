@@ -8,6 +8,7 @@ import {
   listProposalThreads,
   listThreads,
 } from "./messages";
+import { getProjectNotify, listNotifySends } from "./notify";
 import { getProject, listProjects } from "./projects";
 import { localDayStart } from "../format/days";
 import {
@@ -25,6 +26,7 @@ import { getRequest, getThread, listRequests } from "./requests";
 import {
   getReviewBatch,
   getReviewBatchDiff,
+  getReviewBatchFile,
   getReviewBatchFileDiff,
   listReviewBatches,
 } from "./reviews";
@@ -284,4 +286,23 @@ export const reviewBatchFileDiffQuery = (
     queryKey: keys.reviewBatchFileDiff(slug, id, path),
     queryFn: () => getReviewBatchFileDiff(slug, id, path),
     staleTime: Infinity,
+  });
+
+export const reviewBatchFileQuery = (slug: string, id: string, path: string) =>
+  queryOptions({
+    queryKey: keys.reviewBatchFile(slug, id, path),
+    queryFn: () => getReviewBatchFile(slug, id, path),
+    staleTime: Infinity,
+  });
+
+export const projectNotifyQuery = (slug: string) =>
+  queryOptions({
+    queryKey: keys.notify(slug),
+    queryFn: () => getProjectNotify(slug),
+  });
+
+export const notifySendsQuery = (slug: string, target: string) =>
+  queryOptions({
+    queryKey: keys.notifySends(slug, target),
+    queryFn: () => listNotifySends(slug, target),
   });

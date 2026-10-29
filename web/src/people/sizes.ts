@@ -17,30 +17,24 @@ export type PersonSlot =
   | "answeredBy"
   | "batchHead";
 
-type Size =
-  | "text-meta"
-  | "text-code"
-  | "text-bar"
-  | "text-body"
-  | "text-card"
-  | "text-section";
+type Size = "text-13" | "text-14" | "text-15" | "text-16";
 
-/** The type step per slot and kind: 12 meta, 12.5 code, 13 bar, 14 body, 15 card, 16 section. The author cell, the waiting lines, the foot and the team's group notes use 13.5, which no token has, so they take bar, the nearest. */
+/** The type step per slot and kind: 13 metadata, 14 rows and controls, 15 body, 16 titles. */
 const SLOT_SIZES: Record<PersonSlot, Record<PersonKind, Size>> = {
-  messageHead: { agent: "text-meta", human: "text-bar" },
-  requester: { agent: "text-bar", human: "text-body" },
-  gate: { agent: "text-bar", human: "text-body" },
-  waitingChip: { agent: "text-meta", human: "text-bar" },
-  eventActor: { agent: "text-code", human: "text-bar" },
-  authorCell: { agent: "text-bar", human: "text-bar" },
-  waitingLine: { agent: "text-code", human: "text-bar" },
-  foot: { agent: "text-bar", human: "text-bar" },
-  teamRow: { agent: "text-body", human: "text-bar" },
-  teamNote: { agent: "text-card", human: "text-bar" },
-  needsYouLine: { agent: "text-body", human: "text-body" },
-  panelName: { agent: "text-section", human: "text-section" },
-  answeredBy: { agent: "text-body", human: "text-body" },
-  batchHead: { agent: "text-card", human: "text-card" },
+  messageHead: { agent: "text-13", human: "text-14" },
+  requester: { agent: "text-14", human: "text-15" },
+  gate: { agent: "text-14", human: "text-15" },
+  waitingChip: { agent: "text-13", human: "text-14" },
+  eventActor: { agent: "text-13", human: "text-14" },
+  authorCell: { agent: "text-14", human: "text-14" },
+  waitingLine: { agent: "text-13", human: "text-14" },
+  foot: { agent: "text-14", human: "text-14" },
+  teamRow: { agent: "text-15", human: "text-14" },
+  teamNote: { agent: "text-16", human: "text-14" },
+  needsYouLine: { agent: "text-15", human: "text-15" },
+  panelName: { agent: "text-16", human: "text-16" },
+  answeredBy: { agent: "text-15", human: "text-15" },
+  batchHead: { agent: "text-16", human: "text-16" },
 };
 
 export function slotSize(slot: PersonSlot, kind: PersonKind): string {

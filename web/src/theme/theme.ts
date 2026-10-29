@@ -7,16 +7,6 @@ export function parseStoredTheme(raw: string | null): ThemeChoice | null {
   return raw === "light" || raw === "dark" || raw === "system" ? raw : null;
 }
 
-export function resolveTheme(
-  stored: ThemeChoice | null,
-  systemPrefersDark: boolean,
-): Theme {
-  if (stored === "light" || stored === "dark") {
-    return stored;
-  }
-  return systemPrefersDark ? "dark" : "light";
-}
-
 /** Storage can be missing or throw (private windows, blocked site data); the page then follows the system. */
 export function readStoredTheme(
   storage: Pick<Storage, "getItem">,

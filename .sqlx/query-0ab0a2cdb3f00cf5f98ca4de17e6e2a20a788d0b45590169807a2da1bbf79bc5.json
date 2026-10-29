@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM notify_sends WHERE target = ?1 AND state IN ('delivered', 'given_up')\n         AND id NOT IN (SELECT id FROM notify_sends WHERE target = ?1 ORDER BY id DESC LIMIT ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "0ab0a2cdb3f00cf5f98ca4de17e6e2a20a788d0b45590169807a2da1bbf79bc5"
+}

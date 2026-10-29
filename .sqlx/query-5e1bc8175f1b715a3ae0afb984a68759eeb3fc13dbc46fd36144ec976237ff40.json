@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO notify_sends (number, target, webhook_id, state, next_try_at, body, summary, notices, test, created_at)\n         VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8, ?4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "5e1bc8175f1b715a3ae0afb984a68759eeb3fc13dbc46fd36144ec976237ff40"
+}

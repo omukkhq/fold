@@ -24,26 +24,26 @@ export function ThreadBox({
     <ol
       aria-label={`Thread ${thread.id}`}
       data-outdated={thread.outdated || undefined}
-      className="flex flex-col gap-8"
+      className="flex flex-col gap-10"
     >
       {thread.comments.map((entry) => (
         <li key={entry.comment.id}>
           <article
             className={cn(
-              "flex flex-col gap-4 rounded-m bg-surface px-12 py-10 inset-ring inset-ring-border-subtle",
+              "flex flex-col gap-2",
               thread.outdated && !entry.reply && "opacity-80",
             )}
           >
-            <p className="flex items-center gap-8 font-mono text-caption text-text-muted">
-              <PersonName name={entry.comment.author} className="text-meta" />
-              <span className="min-w-0 truncate">
-                {commentNote(thread, entry)}
-              </span>
-              <span className="ml-auto font-ui text-meta text-text-faint">
-                {formatAsOfMinute(now, entry.comment.created_at)}
-              </span>
+            <p className="text-13 text-text-2">
+              <PersonName name={entry.comment.author} /> ·{" "}
+              <span>{commentNote(thread, entry)}</span> ·{" "}
+              {formatAsOfMinute(now, entry.comment.created_at)}
             </p>
-            <MentionText text={entry.comment.body} slug={slug} />
+            <MentionText
+              text={entry.comment.body}
+              slug={slug}
+              className="max-w-measure text-15 leading-normal"
+            />
           </article>
         </li>
       ))}
@@ -96,7 +96,7 @@ export function CommentComposer({
       onSubmit={(event) => void submit(event)}
       className="flex flex-col gap-8"
     >
-      <p className="flex items-center gap-8 text-code leading-snug font-semibold text-primary-text">
+      <p className="flex items-center gap-8 text-13 leading-tight font-semibold text-accent">
         <TextSelect aria-hidden="true" size={14} />
         {title}
       </p>
@@ -120,12 +120,10 @@ export function CommentComposer({
         )}
       />
       {errors.body ? (
-        <p className="text-meta font-medium text-danger">
-          {errors.body.message}
-        </p>
+        <p className="text-13 font-medium text-bad">{errors.body.message}</p>
       ) : null}
       {errors.root ? (
-        <p role="alert" className="text-meta font-medium text-danger">
+        <p role="alert" className="text-13 font-medium text-bad">
           The comment was not saved. {errors.root.message}
         </p>
       ) : null}
@@ -142,7 +140,7 @@ export function CommentComposer({
         <Button variant="ghost" disabled={isSubmitting} onClick={onCancel}>
           Cancel
         </Button>
-        <span className="text-meta text-text-muted">
+        <span className="text-13 text-text-2">
           Shift-click line numbers to select a range
         </span>
       </div>

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM notify_outbox WHERE target = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "9fe58162e339cb4eb81c34ce51079df3cf849491ea5932f8275bc0f052876444"
+}

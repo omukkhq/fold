@@ -6,6 +6,7 @@ import {
   addEntries,
   clearAll,
   clearEntry,
+  clearTask,
   entryKey,
   keeps,
   markRead,
@@ -22,7 +23,7 @@ import {
   type CardMove,
   type MoveReader,
 } from "./moves";
-import { toastParts } from "./text";
+import { toastText } from "./text";
 
 /** At most this many toasts show at once; an older one closes when a newer one arrives. */
 export const TOAST_LIMIT = 3;
@@ -30,8 +31,7 @@ export const TOAST_LIMIT = 3;
 export interface MoveToast {
   id: number;
   slug: string;
-  /** One part per task, shown joined by a middle dot. */
-  parts: string[];
+  text: string;
 }
 
 type FeedStorage = Pick<Storage, "getItem" | "setItem">;
@@ -74,6 +74,8 @@ export interface NotificationStore {
   sync: (key: string | null, value: string | null) => void;
   markRead: (slug: string) => void;
   clear: (slug: string, key: string) => void;
+  /** Clears every move of one task, the Inbox row that groups them. */
+  clearTask: (slug: string, task: string) => void;
   clearAll: (slug: string) => void;
   dismiss: (id: number) => void;
 }
@@ -151,11 +153,11 @@ export function createNotificationStore(
     if (found === undefined) {
       found = createBatcher<TitledMove>(
         (moves) => {
-          const parts = toastParts(moves);
-          if (parts.length === 0) {
+          const text = toastText(moves);
+          if (text === "") {
             return;
           }
-          toasts = [...toasts, { id: nextToast++, slug, parts }].slice(
+          toasts = [...toasts, { id: nextToast++, slug, text }].slice(
             -TOAST_LIMIT,
           );
           emit();
@@ -272,6 +274,9 @@ export function createNotificationStore(
     },
     clear(slug, key) {
       setState(slug, clearEntry(state(slug), key));
+    },
+    clearTask(slug, task) {
+      setState(slug, clearTask(state(slug), task));
     },
     clearAll(slug) {
       setState(slug, clearAll(state(slug)));

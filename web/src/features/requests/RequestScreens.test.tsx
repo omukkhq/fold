@@ -410,26 +410,39 @@ async function rows() {
   return within(table)
     .getAllByRole("row")
     .slice(1)
-    .map((row) => row.querySelector("td")?.textContent ?? "");
+    .map(
+      (row) =>
+        /RQ-\d+(?= ·)/.exec(row.querySelector("td")?.textContent ?? "")?.[0] ??
+        "",
+    );
 }
 
 describe("Requests list", () => {
-  it("lists every request with its kind, state and drafter; an unsorted one shows its excerpt muted", async () => {
+  it("lists every request with its kind, state and drafter; an untitled one shows its excerpt in the text colour", async () => {
     renderAt("/p/demo/requests");
     expect(await rows()).toEqual(["RQ-7", "RQ-6", "RQ-4", "RQ-3"]);
     const excerpt = screen.getByRole("link", {
       name: "Product wants the board as a spreadsheet",
     });
-    expect(excerpt.className).toContain("text-text-muted");
+    expect(excerpt.className).toContain("text-text");
+    expect(excerpt.className).not.toContain("text-text-2");
     const unsorted = excerpt.closest("tr");
-    expect(unsorted && within(unsorted).getByText("Unsorted")).toBeTruthy();
-    expect(unsorted && within(unsorted).getByText("unclaimed")).toBeTruthy();
-    expect(screen.getByText("4 requests · 1 needs a human")).toBeTruthy();
     expect(
-      screen
-        .getByRole("link", { name: "All · 4" })
-        .getAttribute("aria-current"),
+      unsorted && within(unsorted).getByText("RQ-7 · Unsorted · no title yet"),
+    ).toBeTruthy();
+    expect(unsorted && within(unsorted).getByText("Not claimed")).toBeTruthy();
+    expect(
+      screen.getByText(byContent("4 requests · 1 needs a human")),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "All 4" }).getAttribute("aria-current"),
     ).toBe("page");
+    const states = screen.getByRole("navigation", { name: "Request state" });
+    expect(
+      within(states)
+        .getAllByRole("link")
+        .map((link) => link.textContent),
+    ).toEqual(["All 4", "Open 1", "Drafting 1", "Draft ready 2"]);
     expect(
       screen.getByRole("navigation", { name: "Project" }).textContent,
     ).toContain("Requests");
@@ -438,7 +451,10 @@ describe("Requests list", () => {
   it("filters by state, kind and the human's own requests through the address", async () => {
     const { router } = renderAt("/p/demo/requests?state=draft_ready");
     expect(await rows()).toEqual(["RQ-4", "RQ-3"]);
-    await userEvent.click(screen.getByRole("button", { name: "Bug" }));
+    await userEvent.click(screen.getByRole("button", { name: "Kind: all" }));
+    await userEvent.click(
+      await screen.findByRole("menuitemradio", { name: "Bug" }),
+    );
     await waitFor(() => {
       expect(router.state.location.search).toEqual({
         state: "draft_ready",
@@ -467,6 +483,42 @@ describe("Requests list", () => {
     await waitFor(async () => {
       expect(await rows()).toEqual(["RQ-7", "RQ-6", "RQ-4", "RQ-3", "RQ-9"]);
     });
+  });
+
+  it("shows each request as a card on a phone that opens from anywhere on it, with cards while the list loads", async () => {
+    // A phone: every max-width query matches and no min-width one does.
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query.includes("max-width"),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    let release: () => void = () => undefined;
+    const answer = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    daemon.on("GET /api/v1/projects/:slug/requests", async () => {
+      await answer;
+      return ok({ items: [...requests.values()].map((d) => d.request) });
+    });
+    renderAt("/p/demo/requests");
+    const loading = await screen.findByRole("list", {
+      name: "Loading requests",
+    });
+    expect(loading.getAttribute("aria-busy")).toBe("true");
+    expect(screen.queryByRole("table")).toBeNull();
+    release();
+    const cards = await screen.findByRole("list", { name: "Requests" });
+    expect(within(cards).getAllByRole("listitem")).toHaveLength(4);
+    const link = within(cards).getByRole("link", {
+      name: "Product wants the board as a spreadsheet",
+    });
+    // The title's link stretches over its card.
+    expect(link.className).toContain("after:inset-0");
+    expect(link.closest("li")?.className).toContain("relative");
+    expect(screen.queryByRole("table")).toBeNull();
   });
 
   it("renders the empty state for a project without requests", async () => {
@@ -652,7 +704,7 @@ describe("Request detail", () => {
     ).toBe("/api/v1/projects/demo/requests/RQ-4/attachments/1");
     expect(screen.getByText("Version 2 of 2")).toBeTruthy();
     expect(screen.getByText("PDF download")).toBeTruthy();
-    expect(screen.getByText("CSV download needs Query")).toBeTruthy();
+    expect(screen.getByText("· CSV download needs Query")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "v1" }));
     expect(screen.getByText("Version 1 of 2")).toBeTruthy();
     expect(screen.queryByText("PDF download")).toBeNull();
@@ -692,7 +744,9 @@ describe("Request detail", () => {
     const panel = await screen.findByRole("complementary", {
       name: "Request actions",
     });
-    expect(within(panel).getByText(/You asked for RQ-4/)).toBeTruthy();
+    expect(
+      within(panel).getByText(byContent(/^You asked for RQ-4/)),
+    ).toBeTruthy();
     const release = hold();
     await userEvent.click(
       within(panel).getByRole("button", { name: "Approve v2" }),
@@ -719,7 +773,7 @@ describe("Request detail", () => {
     await waitFor(() => {
       expect(within(created).getByText("Board T-12")).toBeTruthy();
     });
-    expect(within(created).getByText("Todo")).toBeTruthy();
+    expect(within(created).getByText("To do")).toBeTruthy();
     expect(within(created).getAllByText("Backlog")).toHaveLength(2);
     expect(within(created).getByText("from c3")).toBeTruthy();
     expect(screen.getByRole("combobox", { name: "Message" })).toHaveProperty(
@@ -868,7 +922,9 @@ describe("Request detail", () => {
     ).toBeTruthy();
     expect(within(panel).queryAllByRole("button")).toEqual([]);
     expect(
-      within(panel).getByText(
+      within(
+        screen.getByRole("region", { name: "About this request" }),
+      ).getByText(
         byContent(
           "@review approves one version at a time. Each new version starts unapproved.",
         ),
@@ -920,15 +976,19 @@ describe("Request detail", () => {
         request: "RQ-4",
       },
     );
-    expect(screen.getByText("2 messages in the thread of RQ-4")).toBeTruthy();
+    expect(
+      screen.getByText(byContent("2 messages in the thread of RQ-4")),
+    ).toBeTruthy();
   });
 
   it("explains an id the project does not have", async () => {
     renderAt("/p/demo/requests/RQ-99");
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("RQ-99 does not exist in this project");
+    const panel = await screen.findByRole("region", {
+      name: "Request RQ-99 not found",
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(
-      within(alert)
+      within(panel)
         .getByRole("link", { name: "Back to requests" })
         .getAttribute("href"),
     ).toBe("/p/demo/requests");

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectAgent } from "../api/agentBar";
-import { agent as baseAgent, claim, worker } from "../test/agents";
+import { agent as baseAgent, claim, worker, workspace } from "../test/agents";
 import { INITIAL_STATUS, type LiveStatus } from "../live/status";
 import {
-  MAX_CHIPS,
   agentBoardPath,
   agentStateText,
-  chipAgents,
+  checkingCount,
+  panelAgents,
   chipPresence,
   chipStateText,
   failedText,
@@ -22,6 +22,8 @@ interface ChipOptions {
   working?: number;
   /** Of those, the tasks with a stalled item. */
   stalled?: number;
+  /** Of those, the tasks whose workspace runs checks. */
+  checking?: number;
 }
 
 /** An agent whose single worker holds `working` implementation claims, `stalled` of their tasks stalled. */
@@ -30,12 +32,28 @@ const agent = ({
   presence = "active",
   working = 0,
   stalled = 0,
+  checking = 0,
 }: ChipOptions): ProjectAgent => ({
   ...baseAgent(name, { presence }),
   workers: [
     worker(name, {
       claims: Array.from({ length: working }, (_, i) =>
         claim({ task: `T-${String(i + 1)}` }),
+      ),
+      workspaces: Array.from({ length: working }, (_, i) =>
+        workspace({
+          ws: `ws-${String(i + 1)}`,
+          task: `T-${String(i + 1)}`,
+          check_run:
+            i < checking
+              ? {
+                  run: `cr-${String(i + 1)}`,
+                  purpose: "check",
+                  proposal: null,
+                  started_at: 0,
+                }
+              : null,
+        }),
       ),
     }),
   ],
@@ -102,6 +120,19 @@ describe("agentStateText of a supervised agent", () => {
     expect(agentStateText(supervised("idle", { stalled: 1 }))).toBe(
       "idle · 1 stalled",
     );
+  });
+
+  it("says that the checks of its tasks run, which is no stall", () => {
+    expect(
+      agentStateText(supervised("working", { working: 1, checking: 1 })),
+    ).toBe("1 working · running checks");
+    expect(
+      agentStateText(
+        supervised("idle", { working: 3, stalled: 1, checking: 2 }),
+      ),
+    ).toBe("idle · 1 stalled · running checks in 2 tasks");
+    expect(checkingCount(agent({ working: 3, checking: 2 }))).toBe(2);
+    expect(checkingCount(agent({ working: 3 }))).toBe(0);
   });
 
   it("says that a process whose turns fail cannot reach the model unless it failed for a reason the chip names, with Claude Code's error as the tooltip", () => {
@@ -243,14 +274,14 @@ describe("isPaused", () => {
   });
 });
 
-describe("chipAgents", () => {
+describe("panelAgents", () => {
   it("puts connected agents first and keeps the API order inside each group, without changing the input", () => {
     const input = [
       agent({ name: "review", presence: "offline" }),
       agent({ name: "zed", presence: "idle" }),
       agent({ name: "backend", presence: "active" }),
     ];
-    expect(chipAgents(input, false).map((a) => a.name)).toEqual([
+    expect(panelAgents(input, false).map((a) => a.name)).toEqual([
       "zed",
       "backend",
       "review",
@@ -267,8 +298,8 @@ describe("chipAgents", () => {
       agent({ name: "frontend", presence: "idle" }),
       agent({ name: "backend", presence: "active" }),
     ];
-    expect(chipAgents(after, false).map((a) => a.name)).toEqual(
-      chipAgents(before, false).map((a) => a.name),
+    expect(panelAgents(after, false).map((a) => a.name)).toEqual(
+      panelAgents(before, false).map((a) => a.name),
     );
   });
 
@@ -278,7 +309,7 @@ describe("chipAgents", () => {
       agent({ name: "main", presence: "offline" }),
       { ...supervised("idle"), name: "api-lead" },
     ];
-    expect(chipAgents(input, false).map((a) => a.name)).toEqual([
+    expect(panelAgents(input, false).map((a) => a.name)).toEqual([
       "api-lead",
       "web-lead",
       "main",
@@ -291,14 +322,14 @@ describe("chipAgents", () => {
       { ...agent({ name: "main", presence: "active" }), tags: ["main"] },
       { ...supervised("idle"), name: "api-lead" },
     ];
-    expect(chipAgents(input, true).map((a) => a.name)).toEqual([
+    expect(panelAgents(input, true).map((a) => a.name)).toEqual([
       "main",
       "web-lead",
       "api-lead",
     ]);
   });
 
-  it("draws at most the chips the top bar has room for, connected ones first", () => {
+  it("lists every agent, connected ones first", () => {
     const input = [
       agent({ name: "a", presence: "offline" }),
       agent({ name: "b" }),
@@ -306,9 +337,8 @@ describe("chipAgents", () => {
       agent({ name: "d" }),
       agent({ name: "e" }),
     ];
-    const shown = chipAgents(input, false);
-    expect(shown).toHaveLength(MAX_CHIPS);
-    expect(shown.map((a) => a.name)).toEqual(["b", "c", "d"]);
+    const shown = panelAgents(input, false);
+    expect(shown.map((a) => a.name)).toEqual(["b", "c", "d", "e", "a"]);
   });
 });
 

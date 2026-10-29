@@ -16,14 +16,14 @@ function Note({
   note: MenuNote;
 }) {
   return (
-    <p role="status" className="text-code text-text-muted">
+    <p role="status" className="text-13 text-text-2">
       {note.text}
       {note.link ? (
         <>
           {" "}
           <HrefLink
             href={detailHref(slug, id, note.link.search)}
-            className={cn("rounded-s text-primary-text underline", focusRing)}
+            className={cn("rounded-s text-accent underline", focusRing)}
           >
             {note.link.label}
           </HrefLink>

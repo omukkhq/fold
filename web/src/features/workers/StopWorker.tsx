@@ -63,7 +63,7 @@ export function StopWorker({
         {idleLabel}
       </Button>
       {note ? (
-        <p id={noteId} className="text-meta text-text-faint">
+        <p id={noteId} className="text-13 text-text-2">
           {note}
         </p>
       ) : null}

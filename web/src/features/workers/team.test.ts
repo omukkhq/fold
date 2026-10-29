@@ -20,6 +20,8 @@ import {
   batchedProposals,
   contextText,
   costText,
+  errorHoverText,
+  groupName,
   hasNoLeads,
   heldBatch,
   isPausedWorker,
@@ -30,12 +32,15 @@ import {
   mainNote,
   mainPill,
   noticeStep,
+  opensToSession,
   ownedTasks,
   pillSpec,
   rowError,
   roleModel,
   showsSupervisedMain,
   roleName,
+  sessionsFact,
+  stepHoverText,
   stepOf,
   stopControl,
   teamGroups,
@@ -43,6 +48,8 @@ import {
   waitsForTaskWorkers,
   workerStep,
   workspaceOf,
+  runsChecks,
+  withChecks,
   type TeamInput,
 } from "./team";
 
@@ -87,8 +94,15 @@ describe("pills", () => {
     expect(mainPill("active")).toEqual({ label: "active", tone: "working" });
     expect(mainPill("idle")).toEqual({ label: "idle", tone: "idle" });
     expect(mainPill("offline")).toEqual({ label: "offline", tone: "stopped" });
-    expect(pillSpec("failed").fill).toBe("bg-danger-soft");
-    expect(pillSpec("ready").text).toBe("text-success");
+    expect(pillSpec("failed").fill).toBe("bg-bad-soft");
+    expect(pillSpec("ready").text).toBe("text-ok");
+    // Gold is for a worker that waits for a person, never for one that stops.
+    expect(pillSpec("stopping").fill).toBe("bg-fill");
+    expect(pillSpec("stopped")).toEqual({
+      fill: "bg-fill",
+      dot: "bg-presence-offline",
+      text: "text-text",
+    });
   });
 
   it("names every role", () => {
@@ -162,18 +176,33 @@ describe("steps", () => {
     expect(stepOf({ step: "tool_use", tool: "Edit" })).toEqual({
       tool: "Edit",
       text: "",
-      faint: false,
     });
     expect(stepOf({ step: "tool_use", tool: null }).text).toBe("calls a tool");
     expect(stepOf({ step: "permission_request", tool: "Bash" })).toEqual({
       tool: "Bash",
       text: "waits for your answer",
-      faint: false,
     });
     expect(stepOf({ step: "thinking", tool: null }).text).toBe("thinking");
     expect(stepOf({ step: "future_kind", tool: null }).text).toBe(
       "future_kind",
     );
+  });
+
+  it("gives a cut step and an error in its place their whole text on hover", () => {
+    expect(stepHoverText({ tool: "Edit", text: "" })).toBeNull();
+    expect(
+      stepHoverText({ tool: null, text: "waiting for its next turn" }),
+    ).toBe("waiting for its next turn");
+    expect(stepHoverText({ tool: "Bash", text: "waits for your answer" })).toBe(
+      "Bash · waits for your answer",
+    );
+    expect(
+      errorHoverText({
+        title: "cannot reach the model",
+        text: "Invalid API key",
+        hint: null,
+      }),
+    ).toBe("cannot reach the model: Invalid API key");
   });
 
   it("uses the live step only while the process works", () => {
@@ -182,7 +211,6 @@ describe("steps", () => {
     expect(workerStep(workerProcess("w"), {})).toEqual({
       tool: null,
       text: "in a turn",
-      faint: true,
     });
     const states = [
       ["starting", "starting the process"],
@@ -258,7 +286,7 @@ describe("steps", () => {
       step: { text: "paused · resumes in its own session" },
       stop: null,
     });
-    expect(pillSpec("paused").fill).toBe("bg-warning-soft");
+    expect(pillSpec("paused").fill).toBe("bg-warn-soft");
     const [running] = teamGroups(input({ workers: workerList({ workers }) }));
     expect(running?.rows[0]?.pill).toEqual(workerPill("working"));
   });
@@ -275,7 +303,7 @@ describe("steps", () => {
     expect(current?.rows[0]?.olderFold).toBe(false);
   });
 
-  it("shows a worker's last error under its step, and what to check once it cannot reach the model", () => {
+  it("names a worker's last error in the place of its step, also while it runs, and what to check once it cannot reach the model", () => {
     expect(rowError(workerProcess("web-lead"))).toBeNull();
     expect(
       rowError(workerProcess("web-lead", { last_error: "Reached max turns" })),
@@ -296,6 +324,32 @@ describe("steps", () => {
       input({ workers: workerList({ workers: [failing] }) }),
     );
     expect(group?.rows[0]?.error?.title).toBe("cannot reach the model");
+    // An idle worker that cannot reach the model still shows it in its row.
+    expect(group?.rows[0]?.errorInStep).toBe(true);
+    const [ended] = teamGroups(
+      input({
+        workers: workerList({
+          workers: [{ ...failing, state: "failed" }],
+        }),
+      }),
+    );
+    expect(ended?.rows[0]?.errorInStep).toBe(true);
+    const [fine] = teamGroups(
+      input({
+        workers: workerList({
+          workers: [{ ...failing, last_error: null, model_unreachable: false }],
+        }),
+      }),
+    );
+    expect(fine?.rows[0]?.errorInStep).toBe(false);
+  });
+
+  it("words the earlier sessions of an open row", () => {
+    expect(sessionsFact([])).toBe("first session");
+    expect(sessionsFact(["2a8f6309-aaaa-bbbb"])).toBe("1 earlier: 2a8f6309");
+    expect(sessionsFact(["2a8f6309-aaaa", "d94cb4d2-bbbb"])).toBe(
+      "2 earlier: 2a8f6309, d94cb4d2",
+    );
   });
 
   it("offers Stop to a live process and a pending stop while it stops", () => {
@@ -318,6 +372,46 @@ describe("lookups", () => {
     expect(workspaceOf(agents, "web-worker", "T-12")).toBe("ws-7");
     expect(workspaceOf(agents, "web-worker", "T-99")).toBeNull();
     expect(workspaceOf(agents, "other", "T-12")).toBeNull();
+  });
+
+  it("adds running checks to the step of a live worker whose workspace runs them", () => {
+    const run = {
+      run: "cr-4",
+      purpose: "check" as const,
+      proposal: null,
+      started_at: 0,
+    };
+    const agents = [
+      agent("web-lead", {
+        workers: [
+          worker("web-lead", {
+            workspaces: [workspace(), workspace({ check_run: run })],
+          }),
+        ],
+      }),
+    ];
+    expect(runsChecks(agents, "web-lead")).toBe(true);
+    expect(runsChecks(agents, "other")).toBe(false);
+    const rows = (state: "idle" | "stopped") =>
+      teamGroups(
+        input({
+          agents,
+          workers: workerList({
+            workers: [workerProcess("web-lead", { state })],
+          }),
+        }),
+      ).flatMap((group) => group.rows);
+    expect(rows("idle")[0]?.step).toEqual({
+      tool: null,
+      text: "waiting for its next turn · running checks",
+    });
+    expect(rows("stopped")[0]?.step.text).not.toContain("running checks");
+    expect(withChecks({ tool: "Bash", text: "" }, true)).toEqual({
+      tool: "Bash",
+      text: "running checks",
+    });
+    const step = { tool: null, text: "in a turn" };
+    expect(withChecks(step, false)).toBe(step);
   });
 
   it("picks the open batch of a holder, else its newest", () => {
@@ -351,7 +445,6 @@ describe("notices", () => {
     expect(noticeStep(agent("main", { notices: "unreachable" }))).toEqual({
       tool: null,
       text: "not reachable · reads new messages from its inbox",
-      faint: true,
     });
     expect(noticeStep(agent("main", { notices: "failing" }))?.text).toBe(
       "notices fail · reads new messages from its inbox",
@@ -437,7 +530,7 @@ describe("teamGroups", () => {
       asks: true,
       model: "-",
       bound: { kind: "ids", text: "T-12 · ws-7, T-13", batch: null },
-      step: { tool: "Edit", text: "", faint: false },
+      step: { tool: "Edit", text: "" },
       session: { short: "0f8e2c1a" },
     });
     expect(api?.label).toEqual({ name: "api", color: "stone" });
@@ -656,6 +749,31 @@ describe("teamGroups", () => {
     expect(onlyMain[0]?.rows[0]?.bound).toEqual({ kind: "text", text: "-" });
     expect(onlyMain[0]?.rows[0]?.pill.label).toBe("offline");
     expect(mainAgentName([])).toBe("main");
+    const mainRow = onlyMain[0]?.rows[0];
+    expect(mainRow && opensToSession(mainRow)).toBe(false);
+    const groups = teamGroups(
+      input({
+        agents: [agent("main")],
+        labels: [{ name: "frontend", color: "sage" }],
+        workers: workerList({
+          areas: [areaEntry("web", "frontend"), areaEntry("ops", "infra")],
+          workers: [
+            workerProcess("web-lead", { role: "area_lead", area: "web" }),
+            workerProcess("review-lead", { role: "review_lead" }),
+            workerProcess("loose", { role: "task_worker", area: null }),
+          ],
+        }),
+      }),
+    );
+    expect(groups.map(groupName)).toEqual([
+      "Main agent",
+      "frontend",
+      "infra",
+      "No area",
+      "Review",
+    ]);
+    const leadRow = groups[1]?.rows[0];
+    expect(leadRow && opensToSession(leadRow)).toBe(true);
   });
 
   it("finds the row of the worker that asks a question", () => {

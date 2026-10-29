@@ -1,11 +1,12 @@
 import type { LiveStatus } from "@/live/status";
+import type { TaskStatus } from "@/api/board";
 import type { ColumnView } from "./columns";
 
 export function cardCount(columns: readonly ColumnView[]): number {
   return columns.reduce((sum, column) => sum + column.count, 0);
 }
 
-/** `17 tasks · 3 ready`, where ready is the Todo column; an empty board says `0 tasks`. */
+/** `17 tasks · 3 ready`, where ready is the To do column; an empty board says `0 tasks`. */
 export function summaryText(columns: readonly ColumnView[]): string {
   const total = cardCount(columns);
   if (total === 0) {
@@ -30,18 +31,41 @@ export function reconnectAsOf(
   return Math.max(status.lastEventAt ?? 0, dataUpdatedAt);
 }
 
-export interface NeedsYouLook {
-  variant: "primary" | "secondary";
-  /** The count pill's text, or null when the button says `· 0` in its label. */
-  pill: string | null;
+/** The Attention button's gold count: the number while items wait, `–` while the board loads, and none at zero, where the label says `· 0`. */
+export function needsYouPill(count: number | null): string | null {
+  if (count === null) {
+    return "–";
+  }
+  return count > 0 ? String(count) : null;
 }
 
-/** The Attention button: ink with a count while items wait, ink with `–` while the board loads, plain at zero. */
-export function needsYouLook(count: number | null): NeedsYouLook {
-  if (count === null) {
-    return { variant: "primary", pill: "–" };
-  }
-  return count > 0
-    ? { variant: "primary", pill: String(count) }
-    : { variant: "secondary", pill: null };
+/** Below this width the board shows one column at a time under a column switcher. */
+export const PHONE_LAYOUT = "(max-width: 47.99rem)";
+
+/** The column a phone opens on: the first that holds a card that needs a person, else the first with a card, else To do. */
+export function phoneColumn(columns: readonly ColumnView[]): TaskStatus {
+  const needs = columns.find((c) =>
+    c.cards.some((card) => card.attention.length > 0),
+  );
+  const filled = columns.find((c) => c.cards.length > 0);
+  return (needs ?? filled)?.status ?? "todo";
+}
+
+/** The column a phone shows: the one the person chose, else the one the board opened on, which stays put while live updates and filters change the cards; before the board has loaded, the opening choice of the cards there are. */
+export function phoneShown(
+  chosen: TaskStatus | null,
+  opened: TaskStatus | null,
+  columns: readonly ColumnView[],
+): TaskStatus {
+  return chosen ?? opened ?? phoneColumn(columns);
+}
+
+/** The line under the phone's column switcher: `In progress: author working`. */
+export function phoneHint(name: string, hint: string): string {
+  return `${name}: ${hint.charAt(0).toLowerCase()}${hint.slice(1)}`;
+}
+
+/** `4 tasks`, beside the phone's column line. */
+export function taskCountText(count: number): string {
+  return `${String(count)} ${count === 1 ? "task" : "tasks"}`;
 }

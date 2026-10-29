@@ -6,20 +6,19 @@ describe("badgeSpec", () => {
     const spec = badgeSpec(tone);
     expect(spec.text.length).toBeGreaterThan(0);
     expect(spec.icon).toBeDefined();
-    expect(spec.classes).toMatch(/^bg-[a-z-]+ text-[a-z-]+$/);
-    expect(spec.shape).toMatch(/^px-\d+ py-\d+ text-[a-z]+ leading-snug$/);
+    expect(spec.classes).toMatch(/^bg-[a-z0-9-]+ text-[a-z0-9-]+$/);
+    expect(spec.shape).toMatch(/^px-\d+ py-\d+ text-\d+ leading-tight$/);
   });
 
-  it("draws the blocked mark 3 by 8 at 11px", () => {
-    expect(badgeSpec("blocked").shape).toBe(
-      "px-8 py-3 text-caption leading-snug",
-    );
+  it("draws every tone as the same 13px chip", () => {
+    for (const tone of BADGE_TONES)
+      expect(badgeSpec(tone).shape).toBe("px-9 py-2 text-13 leading-tight");
   });
 
-  it("draws a requested change in the danger tone, as the proposal list does", () => {
-    expect(badgeSpec("proposal-changes").classes).toBe(
-      "bg-danger-soft text-danger",
-    );
+  it("keeps gold for what waits for a person", () => {
+    expect(badgeSpec("needs-you").classes).toBe("bg-warn-soft text-warn");
+    expect(badgeSpec("stalled").classes).toBe("bg-warn-soft text-warn");
+    expect(badgeSpec("stale").classes).toBe("bg-fill text-text");
   });
 
   it("shows every tone with its own text", () => {
@@ -30,11 +29,11 @@ describe("badgeSpec", () => {
 
 describe("badgeText", () => {
   it("uses the tone text by default", () => {
-    expect(badgeText("blocked")).toBe("Blocked");
+    expect(badgeText("stalled")).toBe("Stalled");
   });
 
   it("uses the caller's text when given", () => {
-    expect(badgeText("blocked", "Blocked by T-9")).toBe("Blocked by T-9");
+    expect(badgeText("stalled", "Stalled for 4m")).toBe("Stalled for 4m");
   });
 
   it("falls back to the tone text for blank text", () => {

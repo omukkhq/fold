@@ -24,28 +24,30 @@ export function ChangedFileRow({
       <HrefLink
         href={workingFileHref(slug, base, workspace, file.path)}
         className={cn(
-          "flex items-center gap-10 rounded-s px-4 py-3 hover:bg-sunken",
+          "-mx-6 flex items-center gap-10 rounded-s px-6 py-3 hover:bg-fill/60",
           focusRing,
         )}
       >
         <span
-          title={kind.label}
-          className="inline-flex size-18 shrink-0 items-center justify-center rounded-s bg-sunken font-mono text-caption font-bold text-text-muted"
+          className={cn(
+            "inline-flex size-20 shrink-0 items-center justify-center rounded-s font-mono text-13 font-semibold",
+            kind.tone,
+          )}
         >
           <span aria-hidden="true">{kind.letter}</span>
           <span className="sr-only">{kind.label}</span>
         </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-meta text-text">
+        <span className="min-w-0 flex-1 truncate font-mono text-13 text-text">
           {fileLabel(file)}
         </span>
         {file.binary ? (
-          <span className="font-mono text-meta text-text-muted">binary</span>
+          <span className="font-mono text-13 text-text-2">binary</span>
         ) : (
           <>
-            <span className="font-mono text-meta text-primary-text">
+            <span className="font-mono text-13 text-ok">
               +{file.added_lines}
             </span>
-            <span className="font-mono text-meta text-danger">
+            <span className="font-mono text-13 text-bad">
               {"−"}
               {file.removed_lines}
             </span>

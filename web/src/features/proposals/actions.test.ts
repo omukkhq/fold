@@ -408,10 +408,11 @@ describe("showsApproveLine", () => {
     expect(showsApproveLine(fix, fix, true)).toBe(false);
   });
 
-  it("keeps every other line under Approve", () => {
+  it("shows any other line that both buttons share once, and Approve's own line on its own", () => {
     expect(
       showsApproveLine(AGENT_APPROVES_FIRST, AGENT_APPROVES_FIRST, true),
-    ).toBe(true);
+    ).toBe(false);
+    expect(showsApproveLine(AGENT_APPROVES_FIRST, null, true)).toBe(true);
     expect(showsApproveLine(null, CHECKS_FAILED, true)).toBe(false);
   });
 });

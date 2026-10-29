@@ -59,7 +59,7 @@ export function CloseDialog({
       >
         <label
           htmlFor="close-reason"
-          className="text-bar leading-snug font-semibold text-text"
+          className="text-14 leading-tight font-semibold text-text"
         >
           Reason
         </label>
@@ -82,12 +82,12 @@ export function CloseDialog({
           )}
         />
         {errors.reason ? (
-          <p className="text-meta font-medium text-danger">
+          <p className="text-13 font-medium text-bad">
             {errors.reason.message}
           </p>
         ) : null}
         {failure ? (
-          <p role="alert" className="text-meta font-medium text-danger">
+          <p role="alert" className="text-13 font-medium text-bad">
             {failure.text}
             {failure.code ? (
               <span className="font-mono font-regular">

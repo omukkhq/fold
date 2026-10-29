@@ -2,7 +2,11 @@ import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, ChevronDown, CircleAlert, Pencil } from "lucide-react";
 import { useState } from "react";
 import type { CheckRun, ProposalDetail, ReviewComment } from "@/api/proposals";
-import { proposalChangesQuery, proposalFileDiffQuery } from "@/api/queries";
+import {
+  proposalChangesQuery,
+  proposalFileDiffQuery,
+  proposalFileQuery,
+} from "@/api/queries";
 import { HrefLink } from "@/app/HrefLink";
 import { Button } from "@/components/button/Button";
 import { Menu } from "@/components/overlay/Menu";
@@ -13,7 +17,12 @@ import {
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
-import { useFileDiff } from "@/features/diff/fileDiff";
+import {
+  needsFileText,
+  useFileDiff,
+  useFileText,
+} from "@/features/diff/fileDiff";
+import type { LineSet } from "@/features/diff/gaps";
 import { currentFile, fileBody, listedFiles } from "@/features/diff/layout";
 import type { DiffSelection } from "@/features/diff/selection";
 import { cn } from "@/lib/cn";
@@ -25,7 +34,6 @@ import { describeFailure } from "./errors";
 import { FileEditor } from "./FileEditor";
 import { ChangedFiles } from "./ChangedFiles";
 import { useChangedFiles } from "./changedFilesState";
-import { HumanActions, type ActionHandlers } from "./HumanActions";
 import {
   lineMenu,
   questionHref,
@@ -37,7 +45,7 @@ import { QuestionMarker } from "./QuestionMarker";
 import { SelectionMenu } from "./SelectionMenu";
 import { approvalLine, checksWord } from "./stateLine";
 import { CommentComposer, ThreadBox } from "./Threads";
-import { buildThreads, heldLines, placeThreads } from "./threadsModel";
+import { buildThreads, heldFileLines, placeThreads } from "./threadsModel";
 import {
   changeOptions,
   detailHref,
@@ -63,18 +71,14 @@ function Toolbar({
   slug,
   proposal,
   view,
-  human,
   runs,
-  actions,
   onSearch,
 }: {
   slug: string;
   proposal: ProposalDetail;
   view: DetailView;
-  human: string | null;
   /** The shown version's runs; null until they arrive. */
   runs: readonly CheckRun[] | null;
-  actions: ActionHandlers;
   onSearch: (next: DetailSearch) => void;
 }) {
   const id = proposal.summary.id;
@@ -85,14 +89,14 @@ function Toolbar({
   const checks = checksWord(runs);
   const StateIcon = approval.tone === "approved" ? CheckCircle2 : CircleAlert;
   return (
-    <div className="flex flex-col gap-10 border-b border-border-subtle px-16 py-12 md:px-24">
+    <div className="px-16 pt-16 md:px-24">
       <div className="flex flex-wrap items-center gap-x-12 gap-y-8">
         <Menu
           trigger={
             <Button
               size="sm"
               aria-label={`Version: ${shown?.label ?? view.label}`}
-              icon={<ChevronDown aria-hidden="true" size={14} />}
+              icon={<ChevronDown aria-hidden="true" size={16} />}
             >
               {shown?.label ?? view.label}
             </Button>
@@ -118,17 +122,17 @@ function Toolbar({
             ))}
           </nav>
         )}
-        <p className="flex min-w-0 flex-wrap items-center gap-x-6 text-code text-text-muted md:ml-auto">
+        <p className="flex min-w-0 flex-wrap items-center gap-x-8 text-14 text-text-2 md:ml-auto">
           <StateIcon
             aria-hidden="true"
             size={14}
             className={cn(
               "shrink-0",
               approval.tone === "approved"
-                ? "text-primary-text"
+                ? "text-ok"
                 : approval.tone === "changes"
-                  ? "text-danger"
-                  : "text-text-faint",
+                  ? "text-bad"
+                  : "text-text-2",
             )}
           />
           <span>
@@ -136,26 +140,13 @@ function Toolbar({
             {checks === null ? "" : ` · ${checks}`} ·{" "}
             <HrefLink
               href={detailHref(slug, id, {})}
-              className={cn(
-                "rounded-s text-primary-text hover:underline",
-                focusRing,
-              )}
+              className={cn("rounded-s text-accent hover:underline", focusRing)}
             >
               Overview
             </HrefLink>
           </span>
         </p>
       </div>
-      {human !== null && proposal.summary.state === "open" ? (
-        <HumanActions
-          proposal={proposal}
-          human={human}
-          view={view}
-          slug={slug}
-          actions={actions}
-          compact
-        />
-      ) : null}
     </div>
   );
 }
@@ -170,7 +161,6 @@ export interface ChangesTabProps {
   human: string | null;
   now: number;
   runs: readonly CheckRun[] | null;
-  actions: ActionHandlers;
   onSearch: (next: DetailSearch) => void;
   onComment: (comment: LineComment) => Promise<void>;
   /** Resolves once the question is stored and the proposal's threads are read again. */
@@ -192,7 +182,7 @@ function ChangeBody({
   onComment,
   onAsk,
   onEdited,
-}: Omit<ChangesTabProps, "runs" | "actions">) {
+}: Omit<ChangesTabProps, "runs">) {
   const id = proposal.summary.id;
   const comparison = useQuery(proposalChangesQuery(slug, id, view.range));
   const [selection, setSelection] = useState<DiffSelection | null>(null);
@@ -213,14 +203,20 @@ function ChangeBody({
     file !== null && fileBody(file) === "text",
   );
   const version = shownVersion(view);
+  const fileText = useFileText(
+    proposalFileQuery(slug, id, version, file?.path ?? ""),
+    needsFileText(file, fileDiff),
+  );
   const threads = buildThreads(comments, version);
   const byId = new Map(threads.map((t) => [t.id, t]));
   // Only the file on screen has its hunks read; a file whose text is not shown holds no line.
-  const held = new Map<string, ReadonlySet<string>>();
+  const held = new Map<string, LineSet>();
   if (file !== null && fileBody(file) !== "text") {
     held.set(file.path, new Set());
   } else if (file !== null && fileDiff.status === "ready") {
-    held.set(file.path, heldLines(fileDiff.diff.hunks));
+    const diff = fileDiff.diff;
+    const lines = heldFileLines(diff.hunks, diff.new_hash, fileText);
+    if (lines !== null) held.set(file.path, lines);
   }
   const { placed, unplaced } = placeThreads(
     threads,
@@ -266,21 +262,7 @@ function ChangeBody({
     onSearch({ ...search, tab: "changes", path });
   };
   return (
-    <div className="flex min-w-0 flex-col gap-16 px-16 pt-16 pb-24 md:px-24">
-      {editable ? (
-        <div className="flex justify-end">
-          <Button
-            size="sm"
-            icon={<Pencil aria-hidden="true" size={14} />}
-            onClick={() => {
-              select(null);
-              setEditing(file.path);
-            }}
-          >
-            Edit {file.path}
-          </Button>
-        </div>
-      ) : null}
+    <div className="flex min-w-0 flex-col gap-16 px-16 pt-16 pb-28 md:px-24">
       {files.length === 0 ? (
         <EmptyPanel title="No changes">{emptyChangeText(view)}</EmptyPanel>
       ) : (
@@ -290,8 +272,24 @@ function ChangeBody({
           selectedPath={file?.path}
           onSelectFile={showFile}
           fileDiff={fileDiff}
+          fileText={fileText}
           selection={selection}
           onSelect={select}
+          headAction={(path) =>
+            editable && path === file.path ? (
+              <Button
+                size="sm"
+                aria-label={`Edit ${file.path}`}
+                icon={<Pencil aria-hidden="true" size={14} />}
+                onClick={() => {
+                  select(null);
+                  setEditing(file.path);
+                }}
+              >
+                Edit
+              </Button>
+            ) : null
+          }
           threads={placed}
           marks={questionMarks(questions, view)}
           renderMark={(mark, first) => {
@@ -368,11 +366,16 @@ function ChangeBody({
       )}
       {unplaced.length > 0 ? (
         <section aria-label="Other comments" className="flex flex-col gap-10">
-          <h2 className="text-overline leading-snug font-semibold text-primary-text uppercase">
+          <h2 className="text-16 leading-tight font-semibold text-text">
             Other comments
           </h2>
           {unplaced.map((thread) => (
-            <ThreadBox key={thread.id} slug={slug} thread={thread} now={now} />
+            <div
+              key={thread.id}
+              className="max-w-measure rounded-r-m border-l-3 border-accent bg-surface px-14 py-10"
+            >
+              <ThreadBox slug={slug} thread={thread} now={now} />
+            </div>
           ))}
         </section>
       ) : null}
@@ -380,16 +383,14 @@ function ChangeBody({
   );
 }
 
-export function ChangesTab({ runs, actions, ...body }: ChangesTabProps) {
+export function ChangesTab({ runs, ...body }: ChangesTabProps) {
   return (
     <div className="flex min-w-0 flex-col">
       <Toolbar
         slug={body.slug}
         proposal={body.proposal}
         view={body.view}
-        human={body.human}
         runs={runs}
-        actions={actions}
         onSearch={body.onSearch}
       />
       <ChangeBody

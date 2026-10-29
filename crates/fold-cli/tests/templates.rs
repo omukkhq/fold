@@ -171,7 +171,7 @@ const FOLD_TOOLS: [&str; 96] = [
 const PENDING_TOOLS: [&str; 0] = [];
 
 /// Every code of the error table and the named `invalid_request` reasons.
-const FOLD_ERROR_CODES: [&str; 174] = [
+const FOLD_ERROR_CODES: [&str; 181] = [
     "invalid_id",
     "invalid_timestamp",
     "invalid_request",
@@ -346,6 +346,13 @@ const FOLD_ERROR_CODES: [&str; 174] = [
     "main_not_supervised",
     "update_checks_running",
     "path_not_tracked",
+    "notify_target_not_found",
+    "invalid_notify_target",
+    "notify_send_failed",
+    "notify_settings_io",
+    "plaintext_notify_target",
+    "notify_send_not_found",
+    "notify_target_inactive",
 ];
 
 /// The codes of `FOLD_ERROR_CODES` that `fold_core::codes` does not define yet. A code leaves this list in the change that adds it.
@@ -1277,7 +1284,15 @@ const REFERENCE_SECTIONS: [&str; 7] = [
 ];
 
 /// Backticked names of the reference that are neither tools, codes, config or checks keys nor run states, but the values and fields it explains.
-const REFERENCE_NAMES: [&str; 1] = ["session_days"];
+const REFERENCE_NAMES: [&str; 7] = [
+    "session_days",
+    "needs_you",
+    "sent_back",
+    "changes_requested",
+    "to_human",
+    "whsec_",
+    "target_changed",
+];
 
 /// Every key of `.fold/config.toml` as `(section, key)`, from the serialised form of a config that sets every optional key, so a new field of the config structs fails the reference test until the reference shows it. A section of named tables, such as `[remotes.<name>]`, is its name with a `.` after it.
 #[cfg(test)]

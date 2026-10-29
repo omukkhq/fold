@@ -19,7 +19,7 @@ export const KINDS: readonly KindKey[] = [
   "unsorted",
 ];
 
-/** The list's address: one state segment (all when absent), one kind toggle and the Mine toggle. */
+/** The list's address: one state segment (all when absent), one kind and the Mine toggle. */
 export interface ListSearch {
   state?: RequestState;
   kind?: KindKey;
@@ -92,6 +92,14 @@ export function countByState(
   return counts;
 }
 
+/** The state segments that have requests under the kind and Mine filters, and the chosen one even when it has none, so it can be cleared. */
+export function visibleStates(
+  counts: StateCounts,
+  chosen: RequestState | undefined,
+): RequestState[] {
+  return STATES.filter((s) => counts[s] > 0 || s === chosen);
+}
+
 export function isNarrowed(search: ListSearch): boolean {
   return (
     search.kind !== undefined ||
@@ -108,10 +116,16 @@ export function listHref(slug: string, search: ListSearch): string {
   return withQuery(projectPath(slug, "requests"), params);
 }
 
-/** Pressing the active kind clears it; pressing another replaces it. */
-export function toggleKind(search: ListSearch, kind: KindKey): ListSearch {
-  const { kind: current, ...rest } = search;
-  return current === kind ? rest : { ...rest, kind };
+/** The Kind menu sets one kind, or none for every kind. */
+export function withKind(
+  search: ListSearch,
+  kind: KindKey | undefined,
+): ListSearch {
+  return {
+    ...(search.state === undefined ? {} : { state: search.state }),
+    ...(kind === undefined ? {} : { kind }),
+    ...(search.mine ? { mine: true as const } : {}),
+  };
 }
 
 export function toggleMine(search: ListSearch): ListSearch {

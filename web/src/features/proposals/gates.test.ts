@@ -13,6 +13,7 @@ import {
   review,
 } from "@/test/proposals";
 import {
+  checklistGates,
   gateText as gateTextSegments,
   shownGates,
   waitingSummary as waitingSummarySegments,
@@ -56,6 +57,26 @@ const task = (id: string, status: ProposalTask["status"]): ProposalTask => ({
   title: id,
   description: "",
   status,
+});
+
+describe("checklistGates", () => {
+  it("lists the gates not met first, each group in check order", () => {
+    const gates = [
+      gate("merge", "checked_at_integration"),
+      gate("prerequisites", "unmet"),
+      gate("approval"),
+      gate("caller"),
+      gate("human_review", "unmet"),
+      gate("open"),
+    ];
+    expect(checklistGates(gates).map((g) => g.gate)).toEqual([
+      "human_review",
+      "prerequisites",
+      "caller",
+      "approval",
+      "merge",
+    ]);
+  });
 });
 
 describe("shownGates", () => {
@@ -251,7 +272,7 @@ describe("waitingSummary", () => {
     expect(
       waitingSummary(proposal({ conflicted: true, turn: "with_author" })),
     ).toBe(
-      "fold sent the report to @backend/db. The task is back in In Progress until a new version arrives.",
+      "fold sent the report to @backend/db. The task is back in In progress until a new version arrives.",
     );
     expect(waitingSummary(proposal({ turn: "with_author" }))).toBe(
       "Waiting for @backend/db to send a new version.",

@@ -15,7 +15,10 @@ import type { ReactNode } from "react";
 import { Controller, useForm } from "react-hook-form";
 import type { RequestDetail } from "@/api/requests";
 import { HrefLink } from "@/app/HrefLink";
+import { Chip } from "@/components/badge/Chip";
 import { Button } from "@/components/button/Button";
+import { Id } from "@/components/id/Id";
+import { IdText } from "@/components/text/IdText";
 import {
   buttonClasses,
   buttonIconClass,
@@ -37,14 +40,71 @@ import {
 } from "./actions";
 import { changesSchema, type ChangesValues } from "./compose";
 import type { Failure } from "./errors";
-import { drafterLine, type CreatedTask } from "./present";
+import {
+  drafterLine,
+  stateChip,
+  statusHeading,
+  type CreatedTask,
+} from "./present";
 import { OVERLINE } from "./RequestContent";
 import { projectPath } from "@/routes/paths";
 
-function Block({ title, children }: { title: string; children: ReactNode }) {
+/** A part of a side card, headed one level under the card; `quiet` leaves its name to screen readers, where the card's heading already says it. */
+function Block({
+  title,
+  quiet = false,
+  children,
+}: {
+  title: string;
+  quiet?: boolean;
+  children: ReactNode;
+}) {
   return (
     <section aria-label={title} className="flex flex-col gap-8">
-      <h2 className={OVERLINE}>{title}</h2>
+      <h3 className={quiet ? "sr-only" : OVERLINE}>{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+const CARD = "flex flex-col gap-14 rounded-m bg-surface px-18 pt-16 pb-18";
+
+/** The request's state, what it waits for and who acts next, above the actions that state allows. */
+export function StatusCard({
+  detail,
+  human,
+  now,
+  children,
+}: {
+  detail: RequestDetail;
+  human: string | null;
+  now: number;
+  children: ReactNode;
+}) {
+  const chip = stateChip(detail.request, human);
+  return (
+    <section aria-label="Status" className={CARD}>
+      <div className="flex flex-col items-start gap-6">
+        <Chip tone={chip.tone}>{chip.label}</Chip>
+        <h2 className="font-title text-18 leading-tight font-semibold text-text">
+          <ActorText
+            segments={statusHeading(detail, human, now)}
+            personClassName="text-18"
+          />
+        </h2>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** Who drafts the request and its versions. */
+export function AboutCard({ children }: { children: ReactNode }) {
+  return (
+    <section aria-label="About this request" className={CARD}>
+      <h2 className="font-title text-16 leading-tight font-semibold text-text">
+        About this request
+      </h2>
       {children}
     </section>
   );
@@ -55,7 +115,7 @@ function FailureLine({ failure }: { failure: Failure | null }) {
   return (
     <p
       role="alert"
-      className="flex flex-col gap-2 text-meta font-medium text-danger"
+      className="flex flex-col gap-2 text-13 font-medium text-bad"
     >
       {failure.text}
       {failure.code ? (
@@ -117,26 +177,27 @@ export function DecisionPanel({
   });
   const has = (a: RequestAction) => actions.includes(a);
   return (
-    <Block title="Your decision">
-      <p className="text-bar leading-snug text-text-muted">
-        {decisionText(r, actions, busy)}
+    <Block title="Your decision" quiet>
+      <p className="text-15 text-text">
+        <IdText text={decisionText(r, actions, busy)} />
       </p>
       {olderDraft ? (
-        <p className="text-meta text-text-muted">{OLDER_DRAFT_NOTE}</p>
+        <p className="text-13 text-text-2">{OLDER_DRAFT_NOTE}</p>
       ) : null}
       {has("approve") ? (
         <>
           <Button
             variant="primary"
+            className="w-full py-9"
             pending={pending === "approve"}
             pendingLabel={`Approving ${v}…`}
             disabled={busy}
-            icon={<Check aria-hidden="true" size={15} />}
+            icon={<Check aria-hidden="true" size={16} />}
             onClick={onApprove}
           >
             Approve {v}
           </Button>
-          <p className="text-meta text-text-muted">
+          <p className="text-13 text-text-2">
             {pending === "approve"
               ? pendingText("approve", r, cards)
               : `Creates ${String(cards)} ${cards === 1 ? "task" : "tasks"} on the board.`}
@@ -147,12 +208,9 @@ export function DecisionPanel({
         <form
           noValidate
           onSubmit={(event) => void submit(event)}
-          className="flex flex-col gap-8"
+          className="flex flex-col gap-6 pt-8"
         >
-          <label
-            htmlFor="request-changes"
-            className="text-bar leading-snug font-semibold text-text"
-          >
+          <label htmlFor="request-changes" className={OVERLINE}>
             Comment for {v}
           </label>
           <Controller
@@ -174,32 +232,33 @@ export function DecisionPanel({
             )}
           />
           {errors.comment ? (
-            <p className="text-meta font-medium text-danger">
+            <p className="text-13 font-medium text-bad">
               {errors.comment.message}
             </p>
           ) : null}
           <Button
             type="submit"
+            className="w-full"
             pending={pending === "request_changes"}
             pendingLabel="Requesting changes…"
             disabled={busy}
-            icon={<MessageSquareWarning aria-hidden="true" size={15} />}
+            icon={<MessageSquareWarning aria-hidden="true" size={16} />}
           >
             Request changes
           </Button>
           {pending === "request_changes" ? (
-            <p className="text-meta text-text-muted">
+            <p className="text-13 text-text-2">
               {pendingText("request_changes", r, cards)}
             </p>
           ) : null}
         </form>
       ) : null}
-      <div className="flex gap-8">
+      <div className="flex gap-8 pt-4">
         {has("edit") ? (
           <Button
             className="flex-1"
             disabled={busy}
-            icon={<Pencil aria-hidden="true" size={15} />}
+            icon={<Pencil aria-hidden="true" size={16} />}
             onClick={onEdit}
           >
             Edit
@@ -207,11 +266,12 @@ export function DecisionPanel({
         ) : null}
         {has("close") ? (
           <Button
-            className="flex-1 text-danger"
+            variant="danger"
+            className="flex-1"
             pending={pending === "close"}
             pendingLabel="Closing…"
             disabled={busy}
-            icon={<X aria-hidden="true" size={15} />}
+            icon={<X aria-hidden="true" size={16} />}
             onClick={onClose}
           >
             Close
@@ -219,9 +279,7 @@ export function DecisionPanel({
         ) : null}
       </div>
       {pending === "close" ? (
-        <p className="text-meta text-text-muted">
-          {pendingText("close", r, cards)}
-        </p>
+        <p className="text-13 text-text-2">{pendingText("close", r, cards)}</p>
       ) : null}
       <FailureLine failure={failure} />
     </Block>
@@ -230,9 +288,13 @@ export function DecisionPanel({
 
 export function ViewerPanel({ detail }: { detail: RequestDetail }) {
   return (
-    <Block title="Decision">
-      <p className="flex items-start gap-8 rounded-m bg-sunken px-12 py-10 text-bar leading-snug text-text-muted">
-        <Lock aria-hidden="true" size={15} className="mt-2 shrink-0" />
+    <Block title="Decision" quiet>
+      <p className="flex items-start gap-8 rounded-s bg-fill px-12 py-10 text-14 text-text">
+        <Lock
+          aria-hidden="true"
+          size={16}
+          className="mt-2 shrink-0 text-text-2"
+        />
         <ActorText segments={viewerText(detail.request)} />
       </p>
     </Block>
@@ -266,14 +328,11 @@ export function EditingPanel({
   return (
     <>
       <Block title="Editing">
-        <p className="text-bar leading-snug text-text-muted">
+        <p className="text-14 text-text">
           Edit the cards and the edges, then save. fold keeps v{latest} and adds
           your changes as {next}, which starts unapproved.
         </p>
-        <label
-          htmlFor="draft-note"
-          className="text-bar leading-snug font-semibold text-text"
-        >
+        <label htmlFor="draft-note" className={OVERLINE}>
           Note for {next}
         </label>
         <MentionTextarea
@@ -289,20 +348,20 @@ export function EditingPanel({
           variant="primary"
           pending={saving}
           pendingLabel={`Saving ${next}…`}
-          icon={<Save aria-hidden="true" size={15} />}
+          icon={<Save aria-hidden="true" size={16} />}
           onClick={onSave}
         >
           Save as {next}
         </Button>
         <Button
           disabled={saving}
-          icon={<X aria-hidden="true" size={15} />}
+          icon={<X aria-hidden="true" size={16} />}
           onClick={onCancel}
         >
           Cancel
         </Button>
         {saving ? (
-          <p className="text-meta text-text-muted">
+          <p className="text-13 text-text-2">
             Waiting for fold to save {next}. The cards and edges stay locked
             until it answers.
           </p>
@@ -310,7 +369,7 @@ export function EditingPanel({
         <FailureLine failure={failure} />
       </Block>
       <Block title="A draft needs">
-        <ul className="flex list-disc flex-col gap-4 pl-16 text-meta text-text-muted">
+        <ul className="flex list-disc flex-col gap-4 pl-16 text-13 text-text-2">
           <li>1 to 20 cards</li>
           <li>A title of up to 200 characters on every card</li>
           <li>A description on every card</li>
@@ -331,7 +390,7 @@ export function CreatedTasksPanel({
 }) {
   return (
     <Block title="Created tasks">
-      <p className="text-bar leading-snug text-text-muted">
+      <p className="text-14 text-text">
         The cards are tasks now. Their columns are calculated like every other
         task.
       </p>
@@ -343,21 +402,17 @@ export function CreatedTasksPanel({
               <HrefLink
                 href={projectPath(slug, "t", t.task)}
                 className={cn(
-                  "flex flex-col gap-4 rounded-m bg-surface px-10 py-8 inset-ring inset-ring-border-subtle hover:bg-bg",
+                  "flex flex-col gap-4 rounded-s bg-fill px-12 py-8 hover:bg-line",
                   focusRing,
                 )}
               >
                 <span className="flex items-center gap-8">
-                  <span className="font-mono text-code font-semibold text-text">
-                    {t.task}
-                  </span>
+                  <Id className="text-13 font-semibold text-text">{t.task}</Id>
                   {t.key ? (
-                    <span className="text-meta text-text-muted">
-                      from {t.key}
-                    </span>
+                    <span className="text-13 text-text-2">from {t.key}</span>
                   ) : null}
                   {column ? (
-                    <span className="ml-auto flex items-center gap-4 text-meta text-text-muted">
+                    <span className="ml-auto flex items-center gap-4 text-13 text-text-2">
                       <span
                         aria-hidden="true"
                         className={cn("size-6 rounded-full", column.dot)}
@@ -366,7 +421,7 @@ export function CreatedTasksPanel({
                     </span>
                   ) : null}
                 </span>
-                <span className="text-bar text-text">{t.title}</span>
+                <span className="text-14 text-text">{t.title}</span>
               </HrefLink>
             </li>
           );
@@ -374,10 +429,10 @@ export function CreatedTasksPanel({
       </ul>
       <HrefLink
         href={projectPath(slug, "board")}
-        className={cn(buttonClasses("secondary", "md"), focusRing)}
+        className={cn(buttonClasses("quiet", "md"), focusRing)}
       >
-        <span className={buttonIconClass("secondary")}>
-          <Kanban aria-hidden="true" size={15} />
+        <span className={buttonIconClass("quiet")}>
+          <Kanban aria-hidden="true" size={16} />
         </span>
         Open on the board
       </HrefLink>
@@ -395,8 +450,8 @@ export function ClosedPanel({
   known: Known;
 }) {
   return (
-    <Block title="Closed">
-      <p className="text-bar leading-snug text-text-muted">
+    <Block title="Closed" quiet>
+      <p className="text-14 text-text">
         <PersonName name={detail.request.requester} /> closed the request. It
         only reads now.
       </p>
@@ -405,7 +460,7 @@ export function ClosedPanel({
           text={detail.close_reason}
           slug={slug}
           known={known}
-          className="text-bar"
+          className="text-14"
         />
       ) : null}
     </Block>
@@ -423,15 +478,15 @@ export function DrafterBlock({
   return (
     <Block title="Drafter">
       {drafter === null ? (
-        <p className="text-bar text-text-muted">
+        <p className="text-14 text-text-2">
           No orchestrator has claimed the request.
         </p>
       ) : (
         <>
           <p className="flex items-center gap-8">
-            <PersonName name={drafter} className="text-body" />
+            <PersonName name={drafter} className="text-15" />
           </p>
-          <p className="text-meta text-text-muted">
+          <p className="text-13 text-text-2">
             {drafterLine(detail.drafts, drafter, now)}
           </p>
         </>
@@ -456,30 +511,28 @@ export function VersionsBlock({
     <Block title="Versions">
       <ul className="flex flex-col gap-6">
         {[...detail.drafts].reverse().map((d) => (
-          <li
-            key={d.version}
-            className="flex items-baseline gap-8 font-mono text-code"
-          >
+          <li key={d.version} className="flex items-baseline gap-8 text-14">
             <span
               className={cn(
+                "tabular-nums",
                 d.version === latest
                   ? "font-semibold text-text"
-                  : "text-text-muted",
+                  : "text-text-2",
               )}
             >
               v{d.version}
             </span>
-            <span className="min-w-0 flex-1 truncate text-text-muted">
-              <PersonName name={d.author} className="text-bar" />
+            <span className="min-w-0 flex-1 truncate text-text-2">
+              <PersonName name={d.author} className="text-14" />
             </span>
-            <span className="font-ui text-meta text-text-muted">
+            <span className="text-13 text-text-2 tabular-nums">
               {d.version === latest ? "current · " : ""}
               {formatAsOfMinute(now, d.created_at)}
             </span>
           </li>
         ))}
       </ul>
-      <p className="text-meta text-text-muted">
+      <p className="text-13 text-text-2">
         <ActorText segments={versionsNote(detail.request, human)} />
       </p>
     </Block>

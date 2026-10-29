@@ -68,18 +68,18 @@ function WorkspaceSide({
       })
     : [];
   return (
-    <aside className="flex w-side-panel shrink-0 flex-col gap-20">
+    <aside className="flex w-full shrink-0 flex-col gap-20 lg:w-side-panel">
       <section className="flex flex-col gap-8">
-        <h2 className="text-overline leading-snug font-semibold text-primary-text uppercase">
+        <h2 className="font-title text-13 leading-tight font-semibold text-text-2">
           This view
         </h2>
-        <p className="text-bar leading-snug text-text-muted">
+        <p className="text-14 leading-tight text-text-2">
           {workingNote(comparison)}
         </p>
       </section>
       {options.length > 0 ? (
         <nav aria-label="Compare with" className="flex flex-col gap-8">
-          <h2 className="text-overline leading-snug font-semibold text-primary-text uppercase">
+          <h2 className="font-title text-13 leading-tight font-semibold text-text-2">
             Compare with
           </h2>
           <ul className="flex flex-col gap-8">
@@ -89,7 +89,7 @@ function WorkspaceSide({
                   href={option.href}
                   aria-current={option.current ? "page" : undefined}
                   className={cn(
-                    "rounded-s text-body text-text hover:text-primary-text",
+                    "rounded-s text-15 text-text hover:text-accent",
                     option.current && "font-semibold",
                     focusRing,
                   )}
@@ -125,7 +125,7 @@ export function DiffScreen({
 
   if (comparison === null) {
     return (
-      <div className="p-24">
+      <div className="px-16 py-24 md:px-24">
         <EmptyPanel title="Nothing to compare">
           {search.from === undefined
             ? `fold has no comparison for ${search.to}.`
@@ -143,7 +143,7 @@ export function DiffScreen({
         now={now}
         readAt={comparison.source === "working" ? readAt : null}
       />
-      <div className="flex items-start gap-20 px-24 pt-4 pb-24">
+      <div className="flex flex-col gap-20 px-16 pt-4 pb-24 md:px-24 lg:flex-row lg:items-start">
         {shown === null ? (
           <EmptyPanel title="No changes" className="flex-1">
             {`${comparison.from.id} and ${comparison.to.id} hold the same files.`}

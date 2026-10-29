@@ -110,3 +110,10 @@ export function pausedBanner(
       "Every worker is stopped and keeps its session. Claims keep their leases. Approved proposals still integrate. Resume starts the workers again.",
   };
 }
+
+/** The sentence beside the pause control: what a pause keeps, or what a resume starts. */
+export function pauseNote(paused: boolean): string {
+  return paused
+    ? "Every worker is stopped and keeps its session. Resume starts the workers again."
+    : "Pause stops every worker. Each keeps its session, and claims keep their leases.";
+}

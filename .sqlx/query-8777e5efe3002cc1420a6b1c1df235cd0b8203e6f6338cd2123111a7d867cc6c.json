@@ -1,0 +1,194 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT number, target, webhook_id, state, tries, next_try_at, body, summary, notices, test,\n                  created_at, last_try_at, status, error, duration_ms\n           FROM notify_sends WHERE state IN ('pending', 'sending') ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "number",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_sends",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "target",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_sends",
+            "name": "target"
+          }
+        }
+      },
+      {
+        "name": "webhook_id",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "notify_sends",
+            "name": "webhook_id"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "notify_sends",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "tries",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_sends",
+            "name": "tries"
+          }
+        }
+      },
+      {
+        "name": "next_try_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_sends",
+            "name": "next_try_at"
+          }
+        }
+      },
+      {
+        "name": "body",
+        "ordinal": 6,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "notify_sends",
+            "name": "body"
+          }
+        }
+      },
+      {
+        "name": "summary",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "notify_sends",
+            "name": "summary"
+          }
+        }
+      },
+      {
+        "name": "notices",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_sends",
+            "name": "notices"
+          }
+        }
+      },
+      {
+        "name": "test",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_sends",
+            "name": "test"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_sends",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "last_try_at",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_sends",
+            "name": "last_try_at"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_sends",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "error",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "notify_sends",
+            "name": "error"
+          }
+        }
+      },
+      {
+        "name": "duration_ms",
+        "ordinal": 14,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "notify_sends",
+            "name": "duration_ms"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "8777e5efe3002cc1420a6b1c1df235cd0b8203e6f6338cd2123111a7d867cc6c"
+}

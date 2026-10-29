@@ -20,6 +20,7 @@ import {
 import { Button, IconButton } from "@/components/button/Button";
 import { textFlow } from "@/components/text/textFlow";
 import { formatAsOfMinute } from "@/format/time";
+import { IdText } from "@/components/text/IdText";
 import { cn } from "@/lib/cn";
 import { PersonName } from "@/people/PersonName";
 import { ErrorNote } from "./parts";
@@ -41,8 +42,7 @@ const ICONS: Record<ToolIcon, LucideIcon> = {
   wrench: Wrench,
 };
 
-const OVERLINE =
-  "text-label leading-snug font-semibold tracking-overline text-primary-text uppercase";
+const OVERLINE = "font-title text-13 leading-tight font-semibold text-text-2";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -91,10 +91,10 @@ export function PermissionPanel({
   return (
     <aside
       aria-label="Permission question"
-      className="flex w-review-panel shrink-0 flex-col self-start rounded-l border border-border-subtle bg-surface"
+      className="flex w-full shrink-0 flex-col self-start rounded-m bg-surface lg:w-review-panel"
     >
-      <div className="flex items-center justify-between border-b border-border-subtle py-12 pr-12 pl-20">
-        <h2 className="text-section leading-snug font-semibold text-text">
+      <div className="flex items-center justify-between pt-12 pr-12 pl-20">
+        <h2 className="text-16 leading-tight font-semibold text-text">
           Permission question
         </h2>
         <IconButton aria-label="Close" size="sm" onClick={onClose}>
@@ -102,7 +102,7 @@ export function PermissionPanel({
         </IconButton>
       </div>
       {question === null ? (
-        <p className="px-20 py-18 text-bar text-text-muted">
+        <p className="px-20 py-18 text-14 text-text-2">
           This question has no open request any more: it has its answer, or fold
           stopped its worker.
         </p>
@@ -150,10 +150,10 @@ function QuestionBody({
           <PersonName name={question.worker} slot="panelName" />
           {row ? (
             <p className="flex items-center gap-8">
-              <span className="text-bar text-text-muted">{row.role}</span>
+              <span className="text-14 text-text-2">{row.role}</span>
               {bound && bound.kind === "ids" ? (
-                <span className="font-mono text-meta text-text">
-                  {bound.text}
+                <span className="text-14 text-text">
+                  <IdText text={bound.text} />
                 </span>
               ) : null}
             </p>
@@ -161,35 +161,33 @@ function QuestionBody({
         </Section>
         <Section title="Tool">
           <p className="flex items-center gap-8">
-            <Icon aria-hidden="true" size={15} className="text-text-muted" />
-            <span className="text-body font-semibold text-text">
+            <Icon aria-hidden="true" size={16} className="text-text-2" />
+            <span className="text-15 font-semibold text-text">
               {question.tool}
             </span>
           </p>
         </Section>
         <Section title="Input">
-          <div className="flex flex-col gap-4 rounded-m bg-sunken px-12 py-10 inset-ring inset-ring-border">
+          <div className="flex flex-col gap-4 rounded-m bg-fill px-12 py-10">
             <pre
-              className={cn("font-mono text-code text-text", textFlow("prose"))}
+              className={cn("font-mono text-13 text-text", textFlow("prose"))}
             >
               {input.text}
             </pre>
             {input.note ? (
-              <p className="text-code text-text-muted">{input.note}</p>
+              <p className="text-13 text-text-2">{input.note}</p>
             ) : null}
           </div>
         </Section>
         <Section title="Why fold asks">
-          <p className="text-bar text-text-muted">
-            {whyAsksText(question.tool)}
-          </p>
+          <p className="text-14 text-text-2">{whyAsksText(question.tool)}</p>
         </Section>
       </div>
-      <div className="flex flex-col gap-10 border-t border-border-subtle px-20 py-14">
+      <div className="flex flex-col gap-10 px-20 pt-4 pb-18">
         {question.answer ? (
           <Answered question={question} now={now} />
         ) : human === null ? (
-          <p className="text-bar text-text-muted">
+          <p className="text-14 text-text-2">
             Tell fold your name first: only a named human allows or denies a
             call.
           </p>
@@ -221,7 +219,7 @@ function QuestionBody({
               </Button>
             </div>
             {error ? <ErrorNote failure={answerFailure(error)} /> : null}
-            <p className="text-meta text-text-faint">
+            <p className="text-13 text-text-2">
               {pending === null
                 ? "The worker waits until you answer."
                 : "fold sends your answer to the worker. The panel updates when the daemon confirms it."}
@@ -248,23 +246,20 @@ function Answered({
       role="status"
       className={cn(
         "flex items-start gap-10 rounded-m px-12 py-10",
-        line.allowed ? "bg-success-soft" : "bg-danger-soft",
+        line.allowed ? "bg-ok-soft" : "bg-bad-soft",
       )}
     >
       <Icon
         aria-hidden="true"
         size={16}
-        className={cn(
-          "mt-2 shrink-0",
-          line.allowed ? "text-success" : "text-danger",
-        )}
+        className={cn("mt-2 shrink-0", line.allowed ? "text-ok" : "text-bad")}
       />
       <div className="flex flex-col gap-2">
-        <p className="text-bar font-semibold text-text">
+        <p className="text-14 font-semibold text-text">
           {line.lead}
           <PersonName name={line.by} slot="answeredBy" />
         </p>
-        <p className="text-code text-text-muted">
+        <p className="text-13 text-text-2">
           {formatAsOfMinute(now, question.answer.answered_at)} · {line.after}
         </p>
       </div>

@@ -29,7 +29,7 @@ interface TreeViewProps {
 /** The tree at one revision. A directory loads its children when it first opens; a symlink opens like a file and shows its target text, and is never followed. An entry whose name is not UTF-8 shows but cannot be opened. */
 export function TreeView(props: TreeViewProps) {
   return (
-    <div className="overflow-hidden rounded-l bg-surface inset-ring inset-ring-border-subtle">
+    <div className="rounded-m bg-surface p-6">
       <TreeLevel {...props} dir="" />
     </div>
   );
@@ -62,16 +62,19 @@ function TreeLevel({ dir, ...props }: TreeViewProps & { dir: string }) {
 function TreeRow({ entry, ...props }: TreeViewProps & { entry: TreeEntry }) {
   const { expanded, openPath, onToggle, onOpenFile } = props;
   const row =
-    "flex w-full items-center gap-10 px-14 py-10 text-left hover:bg-sunken";
+    "flex w-full items-center gap-10 rounded-s px-10 py-6 text-left hover:bg-fill/55";
   if (!isOpenable(entry)) {
     return (
-      <li className="border-b border-border-subtle last:border-b-0">
+      <li>
         <div className={cn(row, "hover:bg-transparent")}>
-          <FileQuestion aria-hidden size={15} className="text-text-muted" />
-          <Mono className="flex-1 text-bar text-text">{entry.name}</Mono>
-          <Mono className="text-label text-text-muted">
-            name is not UTF-8, not openable
+          <span className="w-14 shrink-0" />
+          <FileQuestion aria-hidden size={16} className="text-text-2" />
+          <Mono className="min-w-0 flex-1 truncate text-14 text-text">
+            {entry.name}
           </Mono>
+          <span className="text-13 text-text-2">
+            name is not UTF-8, not openable
+          </span>
         </div>
       </li>
     );
@@ -81,7 +84,7 @@ function TreeRow({ entry, ...props }: TreeViewProps & { entry: TreeEntry }) {
     const FolderIcon = open ? FolderOpen : Folder;
     const Chevron = open ? ChevronDown : ChevronRight;
     return (
-      <li className="border-b border-border-subtle last:border-b-0">
+      <li>
         <button
           type="button"
           aria-expanded={open}
@@ -90,12 +93,18 @@ function TreeRow({ entry, ...props }: TreeViewProps & { entry: TreeEntry }) {
           }}
           className={cn(row, focusRing)}
         >
-          <Chevron aria-hidden size={13} className="text-text-muted" />
-          <FolderIcon aria-hidden size={15} className="text-primary" />
-          <Mono className="text-bar text-text">{entry.name}</Mono>
+          <Chevron
+            aria-hidden
+            size={14}
+            className="w-14 shrink-0 text-text-2"
+          />
+          <FolderIcon aria-hidden size={16} className="shrink-0 text-text-2" />
+          <Mono className="min-w-0 flex-1 truncate text-14 text-text">
+            {entry.name}
+          </Mono>
         </button>
         {open ? (
-          <div className="ml-24 border-l border-border-subtle">
+          <div className="pl-22">
             <TreeLevel {...props} dir={entry.path} />
           </div>
         ) : null}
@@ -103,7 +112,7 @@ function TreeRow({ entry, ...props }: TreeViewProps & { entry: TreeEntry }) {
     );
   }
   return (
-    <li className="border-b border-border-subtle last:border-b-0">
+    <li>
       <button
         type="button"
         aria-current={openPath === entry.path ? "true" : undefined}
@@ -112,25 +121,26 @@ function TreeRow({ entry, ...props }: TreeViewProps & { entry: TreeEntry }) {
         }}
         className={cn(
           row,
-          openPath === entry.path && "bg-primary-soft",
+          openPath === entry.path && "bg-fill hover:bg-fill",
           focusRing,
         )}
       >
+        <span className="w-14 shrink-0" />
         {entry.kind === "symlink" ? (
-          <Link2 aria-hidden size={15} className="text-text-muted" />
+          <Link2 aria-hidden size={16} className="shrink-0 text-text-2" />
         ) : (
-          <File aria-hidden size={15} className="text-text-muted" />
+          <File aria-hidden size={16} className="shrink-0 text-text-2" />
         )}
-        <Mono className="flex-1 text-bar text-text">{entry.name}</Mono>
-        {symlinkLabel(entry) === null ? null : (
-          <Mono className="text-label text-text-muted">
-            {symlinkLabel(entry)}
-          </Mono>
-        )}
+        <Mono className="min-w-0 flex-1 truncate text-14 text-text">
+          {entry.name}
+          {symlinkLabel(entry) === null ? null : (
+            <span className="text-text-2"> {symlinkLabel(entry)}</span>
+          )}
+        </Mono>
         {entry.size === null || entry.kind === "symlink" ? null : (
-          <Mono className="text-label text-text-muted">
+          <span className="shrink-0 text-13 text-text-2 tabular-nums">
             {formatSize(entry.size)}
-          </Mono>
+          </span>
         )}
       </button>
     </li>

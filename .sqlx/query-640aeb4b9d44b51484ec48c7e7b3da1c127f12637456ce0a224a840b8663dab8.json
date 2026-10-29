@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO notify_state (id, last_seq) VALUES (1, ?1)\n         ON CONFLICT (id) DO UPDATE SET last_seq = MAX(last_seq, excluded.last_seq)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "640aeb4b9d44b51484ec48c7e7b3da1c127f12637456ce0a224a840b8663dab8"
+}

@@ -24,20 +24,17 @@ interface MessageItemProps {
   onWriteOwn: (question: MessageView) => void;
 }
 
-function Avatar({ sender, small }: { sender: string; small: boolean }) {
+function Avatar({ sender }: { sender: string }) {
   const agent = messageSide(sender, null) === "agent";
   return (
     <span
       aria-hidden="true"
       className={cn(
-        "grid shrink-0 place-items-center font-bold",
-        small ? "size-24 text-caption" : "size-28 text-meta",
-        agent
-          ? "rounded-m bg-secondary-soft text-secondary-text"
-          : "rounded-full bg-primary-soft text-primary-text",
+        "grid size-32 shrink-0 place-items-center bg-accent-soft font-title text-14 font-bold text-accent",
+        agent ? "rounded-m" : "rounded-full",
       )}
     >
-      {agent ? <Bot size={small ? 13 : 16} /> : initial(sender)}
+      {agent ? <Bot size={16} /> : initial(sender)}
     </span>
   );
 }
@@ -45,8 +42,8 @@ function Avatar({ sender, small }: { sender: string; small: boolean }) {
 function ChosenAnswer({ body, own }: { body: string; own: boolean }) {
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-body font-semibold text-text">{body.trim()}</p>
-      <p className="text-code text-text-muted">
+      <p className="text-15 font-semibold text-text">{body.trim()}</p>
+      <p className="text-13 text-text-2">
         {own
           ? "Your answer to the question above"
           : "Chosen option of the question above"}
@@ -70,7 +67,7 @@ export function MessageItem({
   const time = (
     <time
       dateTime={new Date(message.sent_at).toISOString()}
-      className="text-meta text-text-faint"
+      className="text-13 text-text-2"
     >
       {formatClock(message.sent_at)}
     </time>
@@ -81,21 +78,20 @@ export function MessageItem({
         slug={slug}
         proposal={message.proposal}
         lines={message.lines}
+        onSurface={false}
       />
     );
 
   if (side === "own") {
     return (
-      <li className="flex justify-end pl-40">
+      <li className="flex justify-end pl-32 lg:pl-44">
         <article className="flex min-w-0 max-w-measure flex-col items-end gap-6">
           <p className="flex items-baseline gap-8">
             {time}
-            <span className="text-body font-semibold text-primary-text">
-              You
-            </span>
+            <span className="text-15 font-semibold text-text">You</span>
           </p>
           {lines}
-          <div className="max-w-full rounded-chip rounded-br-s bg-primary-soft px-14 py-10 inset-ring inset-ring-primary-muted">
+          <div className="max-w-full rounded-l rounded-br-s bg-accent-soft px-14 py-10">
             {chosen ? (
               <ChosenAnswer body={message.body} own />
             ) : (
@@ -111,29 +107,26 @@ export function MessageItem({
   return (
     <li className="flex gap-12">
       <span className="hidden sm:flex">
-        <Avatar sender={message.sender} small={false} />
+        <Avatar sender={message.sender} />
       </span>
       <article className="flex min-w-0 flex-1 flex-col gap-6">
-        <p className="flex flex-wrap items-center gap-x-8 gap-y-2">
-          <span className="sm:hidden">
-            <Avatar sender={message.sender} small />
-          </span>
+        <p className="flex flex-wrap items-baseline gap-x-8 gap-y-2">
           <span
             className={cn(
-              "text-body font-semibold",
-              side === "agent" ? "text-secondary-text" : "text-primary-text",
+              "text-15 font-semibold",
+              side === "agent" ? "text-text" : "text-accent",
             )}
           >
             {bareName(message.sender)}
           </span>
           {message.recipients.length > 0 ? (
-            <span className="hidden text-code text-text-faint sm:inline">
+            <span className="hidden text-13 text-text-2 sm:inline">
               <ActorText segments={recipientsPhrase(message, you)} you={you} />
             </span>
           ) : null}
           {freeAskWaitsForYou(thread, message, you) ? (
-            <span className="inline-flex items-center gap-5 rounded-chip bg-warning-soft px-8 py-2 text-label font-semibold text-warning">
-              <CircleHelp aria-hidden="true" size={12} strokeWidth={2.2} />
+            <span className="inline-flex items-center gap-5 rounded-pill bg-warn-soft px-8 py-2 text-13 font-semibold text-warn">
+              <CircleHelp aria-hidden="true" size={14} />
               Waits for your answer
             </span>
           ) : null}

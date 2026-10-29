@@ -81,7 +81,7 @@ export function FeedbackDialog({
           )}
         />
         {errors.root ? (
-          <p role="alert" className="text-bar font-medium text-danger">
+          <p role="alert" className="text-14 font-medium text-bad">
             The message was not sent. {errors.root.message}
           </p>
         ) : null}

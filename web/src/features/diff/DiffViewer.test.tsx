@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComparedFile, FileDiff, FileWarning } from "@/api/diff";
 import { add, comparison, ctx, del, fileDiff, hunk } from "@/test/diff";
 import { DiffViewer, type FileDiffView } from "./DiffViewer";
+import type { FileTextView } from "./gaps";
 import type { DiffSelection, DiffThread } from "./selection";
 
 afterEach(cleanup);
@@ -44,6 +45,7 @@ const DIFF: FileDiff = fileDiff(A, [
 
 interface HarnessProps {
   fileDiff?: FileDiffView;
+  fileText?: FileTextView;
   warnings?: FileWarning[];
   threads?: DiffThread[];
   rowLimit?: number;
@@ -53,6 +55,7 @@ interface HarnessProps {
 
 function Harness({
   fileDiff = { status: "ready", diff: DIFF },
+  fileText,
   warnings = [],
   threads,
   rowLimit,
@@ -69,6 +72,7 @@ function Harness({
         selectedPath={path}
         onSelectFile={setPath}
         fileDiff={fileDiff}
+        fileText={fileText}
         selection={selection}
         onSelect={(next) => {
           onSelect?.(next);
@@ -357,5 +361,214 @@ describe("DiffViewer", () => {
     rerender(<Harness fileDiff={{ status: "error", retry }} />);
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  describe("the unchanged lines around the hunks", () => {
+    // 80 old lines; new line 30 is changed and a line is added after line 59, so the new file has 81 lines and old = new - 1 below it.
+    const OLD = Array.from({ length: 80 }, (_, i) => `l${String(i + 1)}`);
+    const NEW = [
+      ...OLD.slice(0, 29),
+      "L30",
+      ...OLD.slice(30, 59),
+      "added",
+      ...OLD.slice(59),
+    ];
+    const LONG: FileDiff = fileDiff(A, [
+      hunk(27, 27, [
+        ...OLD.slice(26, 29).map(ctx),
+        del("l30"),
+        add("L30"),
+        ...OLD.slice(30, 33).map(ctx),
+      ]),
+      hunk(57, 57, [
+        ...OLD.slice(56, 59).map(ctx),
+        add("added"),
+        ...OLD.slice(59, 62).map(ctx),
+      ]),
+    ]);
+    const FILE = {
+      hash: A.new_hash ?? "",
+      binary: false,
+      too_large: false,
+      text: NEW.map((l) => `${l}\n`).join(""),
+    };
+    const TEXT: FileTextView = { status: "ready", file: FILE };
+    const long = { status: "ready", diff: LONG } as const;
+    const button = (name: string | RegExp) =>
+      screen.getByRole("button", { name });
+
+    it("names the hidden lines of each gap with the controls that show them", () => {
+      render(<Harness fileDiff={long} fileText={TEXT} />);
+      expect(button("Show all 26 unchanged lines")).toBeTruthy();
+      expect(button("Show lines 7–26")).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: "Show lines 1–20" }),
+      ).toBeNull();
+      expect(button("Show all 23 unchanged lines")).toBeTruthy();
+      expect(button("Show lines 34–53")).toBeTruthy();
+      expect(button("Show lines 37–56")).toBeTruthy();
+      expect(button("Show all 18 unchanged lines")).toBeTruthy();
+      expect(screen.getByText("@@ −27,7 +27,7 @@")).toBeTruthy();
+      expect(screen.getByText("@@ −57,6 +57,7 @@")).toBeTruthy();
+    });
+
+    it("shows a step of lines with both numbers and moves focus to the first of them", async () => {
+      const user = userEvent.setup();
+      render(<Harness fileDiff={long} fileText={TEXT} />);
+      await user.click(button("Show lines 34–53"));
+      const first = cell(/^Unchanged line, old 34, new 34: l34$/);
+      expect(document.activeElement).toBe(first);
+      expect(cell(/^Unchanged line, old 53, new 53: l53$/)).toBeTruthy();
+      expect(button("Show all 3 unchanged lines")).toBeTruthy();
+      expect(screen.queryByText("@@ −57,6 +57,7 @@")).toBeNull();
+      await user.click(button("Show all 18 unchanged lines"));
+      expect(cell(/^Unchanged line, old 80, new 81: l80$/)).toBeTruthy();
+      expect(document.activeElement).toBe(
+        cell(/^Unchanged line, old 63, new 64: l63$/),
+      );
+    });
+
+    it("shows the whole file and only the changes again", async () => {
+      const user = userEvent.setup();
+      render(<Harness fileDiff={long} fileText={TEXT} />);
+      await user.click(button("Show lines 7–26"));
+      await user.click(button("Show whole file"));
+      expect(
+        screen.queryByRole("button", { name: /unchanged lines/ }),
+      ).toBeNull();
+      expect(screen.queryByText(/^@@/)).toBeNull();
+      expect(
+        screen.getAllByRole("gridcell", { name: /, new \d+:/ }),
+      ).toHaveLength(81);
+      await user.click(button("Show changes only"));
+      expect(button("Show all 26 unchanged lines")).toBeTruthy();
+      expect(screen.queryByRole("gridcell", { name: /new 7: l7$/ })).toBeNull();
+    });
+
+    it("starts another version of the file with its hunks only, and keeps the whole file shown", async () => {
+      const user = userEvent.setup();
+      const hash = "d".repeat(64);
+      const next = {
+        status: "ready",
+        diff: { ...LONG, new_hash: hash },
+      } as const;
+      const nextText: FileTextView = {
+        status: "ready",
+        file: { ...FILE, hash },
+      };
+      const { rerender } = render(<Harness fileDiff={long} fileText={TEXT} />);
+      await user.click(button("Show lines 34–53"));
+      expect(cell(/^Unchanged line, old 34, new 34: l34$/)).toBeTruthy();
+      rerender(<Harness fileDiff={next} fileText={nextText} />);
+      expect(
+        screen.queryByRole("gridcell", { name: /new 34: l34$/ }),
+      ).toBeNull();
+      expect(button("Show all 23 unchanged lines")).toBeTruthy();
+      await user.click(button("Show whole file"));
+      rerender(<Harness fileDiff={long} fileText={TEXT} />);
+      expect(button("Show changes only")).toBeTruthy();
+      expect(
+        screen.getAllByRole("gridcell", { name: /, new \d+:/ }),
+      ).toHaveLength(81);
+    });
+
+    it("selects an expanded line on the new side, as any unchanged line", async () => {
+      const user = userEvent.setup();
+      render(<Harness fileDiff={long} fileText={TEXT} />);
+      await user.click(button("Show all 18 unchanged lines"));
+      await user.click(cell(/old 69, new 70: l69$/));
+      expect(selection()).toEqual({
+        path: "src/a.ts",
+        side: "new",
+        start_line: 70,
+        end_line: 70,
+      });
+      expect(screen.getByText("Composer new 70-70")).toBeTruthy();
+    });
+
+    it("keeps the lines around a thread in a gap on screen", () => {
+      render(
+        <Harness
+          fileDiff={long}
+          fileText={TEXT}
+          threads={[
+            {
+              id: "t9",
+              range: {
+                path: "src/a.ts",
+                side: "old",
+                start_line: 69,
+                end_line: 69,
+              },
+            },
+          ]}
+        />,
+      );
+      expect(screen.getByText("Thread t9")).toBeTruthy();
+      expect(cell(/old 66, new 67: l66$/)).toBeTruthy();
+      expect(cell(/old 72, new 73: l72$/)).toBeTruthy();
+      expect(screen.queryByRole("gridcell", { name: /new 74:/ })).toBeNull();
+      expect(button("Show all 3 unchanged lines")).toBeTruthy();
+      expect(button("Show all 8 unchanged lines")).toBeTruthy();
+    });
+
+    it("waits with the controls while the file loads, and offers Retry when it fails", async () => {
+      const user = userEvent.setup();
+      const retry = vi.fn();
+      const { rerender } = render(
+        <Harness fileDiff={long} fileText={{ status: "pending" }} />,
+      );
+      const loading = screen.getAllByRole("button", {
+        name: "Loading unchanged lines…",
+      });
+      expect(loading).toHaveLength(2);
+      expect(loading.every((b) => b.hasAttribute("disabled"))).toBe(true);
+      expect(button("Loading the file…").hasAttribute("disabled")).toBe(true);
+      expect(screen.getByText("@@ −27,7 +27,7 @@")).toBeTruthy();
+      rerender(
+        <Harness fileDiff={long} fileText={{ status: "error", retry }} />,
+      );
+      expect(
+        screen.getAllByText("The unchanged lines could not load."),
+      ).toHaveLength(2);
+      expect(screen.queryByRole("button", { name: /whole file/ })).toBeNull();
+      await user.click(
+        screen.getAllByRole("button", { name: "Retry" })[0] as HTMLElement,
+      );
+      expect(retry).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows only the hunks when the read file is not the one they were built from", () => {
+      const other: FileTextView = {
+        status: "ready",
+        file: { ...FILE, hash: "c".repeat(64) },
+      };
+      render(<Harness fileDiff={long} fileText={other} />);
+      expect(
+        screen.queryByRole("button", { name: /unchanged lines/ }),
+      ).toBeNull();
+      expect(screen.queryByRole("button", { name: /whole file/ })).toBeNull();
+      expect(screen.getByText("@@ −27,7 +27,7 @@")).toBeTruthy();
+    });
+
+    it("offers no whole file when the hunks hold every line", () => {
+      const diff = fileDiff(A, [hunk(1, 1, [del("a"), add("b")])]);
+      render(
+        <Harness
+          fileDiff={{ status: "ready", diff }}
+          fileText={{
+            status: "ready",
+            file: {
+              hash: A.new_hash ?? "",
+              binary: false,
+              too_large: false,
+              text: "b\n",
+            },
+          }}
+        />,
+      );
+      expect(screen.queryByRole("button", { name: /whole file/ })).toBeNull();
+      expect(screen.getByText("@@ −1,1 +1,1 @@")).toBeTruthy();
+    });
   });
 });

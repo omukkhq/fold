@@ -37,6 +37,7 @@ function workspace(): LiveWorkspace {
     proposal: "P-3",
     stalled: false,
     edits_after_version: null,
+    check_run: null,
   };
 }
 
@@ -169,6 +170,18 @@ describe("isEventEnvelope", () => {
     expect(isEventEnvelope(frame)).toBe(true);
   });
 
+  it("accepts a workspace whose checks run, with a purpose this build does not know too", () => {
+    const run = {
+      run: "cr-4",
+      purpose: "update_proposal",
+      proposal: "P-3",
+      started_at: 1,
+    };
+    expect(isEventEnvelope({ ...changed(), check_run: run })).toBe(true);
+    const future = { ...run, purpose: "future", proposal: null };
+    expect(isLiveWorkspace({ ...workspace(), check_run: future })).toBe(true);
+  });
+
   it("accepts a stored event of a type this build does not know", () => {
     expect(isEventEnvelope({ ...stored(), type: "future.thing" })).toBe(true);
   });
@@ -232,6 +245,8 @@ describe("isEventEnvelope", () => {
       ["proposal", 3],
       ["stalled", "yes"],
       ["edits_after_version", "no"],
+      ["check_run", "cr-1"],
+      ["check_run", { run: "cr-1", purpose: "check", proposal: null }],
     ] as const) {
       expect(isEventEnvelope({ ...changed(), [key]: value }), key).toBe(false);
     }

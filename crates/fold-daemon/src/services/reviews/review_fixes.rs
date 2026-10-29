@@ -223,6 +223,7 @@ impl ReviewService {
             })
             .await?;
         self.bus.publish(buffer);
+        self.workspaces.checks_changed().await;
         tracing::info!(run = %run.id, proposal = %proposal, checkout = %checkout.id, "check run of a review fix started");
         let checking = FixOutcome::Checking {
             run: run.id,
@@ -336,6 +337,7 @@ impl ReviewService {
                 self.workspaces
                     .proposal_changed(live.id, Some(proposal))
                     .await;
+                self.workspaces.checks_changed().await;
                 tracing::info!(run = %run.id, proposal = %proposal, "check run passed and made the review fix version");
                 Ok(())
             }

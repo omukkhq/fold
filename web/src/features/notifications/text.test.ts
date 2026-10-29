@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { TaskStatus } from "@/api/board";
 import type { CardMove } from "./moves";
-import { TOAST_TITLE, bellLabel, moveText, toastLine, toastText } from "./text";
+import {
+  TOAST_TITLE,
+  moveText,
+  toastLine,
+  toastParts,
+  toastText,
+} from "./text";
 
 function move(
   seq: number,
@@ -14,59 +20,80 @@ function move(
 }
 
 describe("toastText", () => {
-  it("lists the moves of a batch in the order they happened", () => {
+  it("names the task of a single move, with its title cut when long", () => {
+    expect(toastText([move(1, "T-12", "review")])).toBe("T-12 moved to Review");
     expect(
-      toastText([move(2, "T-14", "done"), move(1, "T-12", "review")]),
-    ).toBe("T-12 moved to Review · T-14 moved to Done");
+      toastText([move(1, "T-12", "review", "in_progress", "Add PIN sign-in")]),
+    ).toBe("T-12 “Add PIN sign-in” moved to Review");
+    const long = "a".repeat(TOAST_TITLE + 5);
+    const line = toastLine({ task: "T-1", to: "done", title: long });
+    expect(line).toBe(`T-1 “${"a".repeat(TOAST_TITLE - 1)}…” moved to Done`);
   });
 
-  it("names a task once, with the column it reached last", () => {
+  it("counts two or more moves per column", () => {
+    expect(
+      toastText([
+        move(1, "T-1", "review", "in_progress", "One"),
+        move(2, "T-2", "review"),
+        move(3, "T-3", "review"),
+        move(4, "T-4", "done", "review"),
+      ]),
+    ).toBe("3 cards moved to Review, 1 moved to Done");
+    expect(
+      toastText([move(1, "T-1", "done", "review"), move(2, "T-2", "done")]),
+    ).toBe("2 cards moved to Done");
+    expect(
+      toastText([move(1, "T-1", "todo", "backlog"), move(2, "T-2", "done")]),
+    ).toBe("1 card moved to To do, 1 moved to Done");
+  });
+
+  it("keeps the board's column order, whatever the order of the moves", () => {
+    expect(
+      toastParts([
+        move(1, "T-1", "done", "review"),
+        move(2, "T-2", "review"),
+        move(3, "T-3", "done", "review"),
+        move(4, "T-4", "backlog", "todo"),
+      ]),
+    ).toEqual([
+      "1 card moved to Backlog",
+      "1 moved to Review",
+      "2 moved to Done",
+    ]);
+  });
+
+  it("counts a task once, with the column it reached last", () => {
     expect(
       toastText([
         move(1, "T-12", "review"),
         move(2, "T-14", "review"),
         move(3, "T-12", "done", "review"),
       ]),
-    ).toBe("T-14 moved to Review · T-12 moved to Done");
+    ).toBe("1 card moved to Review, 1 moved to Done");
+    expect(
+      toastText([
+        move(3, "T-12", "done", "review"),
+        move(1, "T-12", "review"),
+        move(2, "T-14", "done"),
+      ]),
+    ).toBe("2 cards moved to Done");
   });
 
   it("leaves out a task that ended in the column it started from", () => {
     expect(
       toastText([
         move(1, "T-12", "todo", "backlog"),
-        move(2, "T-14", "done", "review"),
+        move(2, "T-14", "done", "review", "Ship it"),
         move(3, "T-12", "backlog", "todo"),
       ]),
-    ).toBe("T-14 moved to Done");
+    ).toBe("T-14 “Ship it” moved to Done");
     expect(
-      toastText([
+      toastParts([
         move(1, "T-12", "todo", "backlog"),
         move(2, "T-12", "backlog", "todo"),
       ]),
-    ).toBe("");
-  });
-
-  it("counts the tasks past the third", () => {
-    expect(
-      toastText([
-        move(1, "T-1", "todo"),
-        move(2, "T-2", "todo"),
-        move(3, "T-3", "todo"),
-        move(4, "T-4", "todo"),
-        move(5, "T-5", "backlog"),
-      ]),
-    ).toBe(
-      "T-1 moved to Todo · T-2 moved to Todo · T-3 moved to Todo · 2 more",
-    );
-  });
-
-  it("names the task's title and cuts a long one", () => {
-    expect(
-      toastText([move(1, "T-12", "review", "in_progress", "Add the bell")]),
-    ).toBe("T-12 “Add the bell” moved to Review");
-    const long = "a".repeat(TOAST_TITLE + 5);
-    const line = toastLine({ task: "T-1", to: "done", title: long });
-    expect(line).toBe(`T-1 “${"a".repeat(TOAST_TITLE - 1)}…” moved to Done`);
+    ).toEqual([]);
+    expect(toastText([])).toBe("");
   });
 });
 
@@ -75,10 +102,5 @@ describe("labels", () => {
     expect(moveText({ task: "T-7", to: "backlog" })).toBe(
       "T-7 moved to Backlog",
     );
-  });
-
-  it("gives the bell a name with the unread count", () => {
-    expect(bellLabel(0)).toBe("Notifications");
-    expect(bellLabel(3)).toBe("Notifications, 3 unread");
   });
 });

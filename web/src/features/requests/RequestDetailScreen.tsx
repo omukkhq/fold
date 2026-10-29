@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { boardCards, boardQuery } from "@/api/board";
 import { keys } from "@/api/keys";
@@ -17,15 +17,9 @@ import {
   sendRequestMessage,
   type RequestDetail,
 } from "@/api/requests";
-import { HrefLink } from "@/app/HrefLink";
+import { MissingPanel } from "@/app/MissingPanel";
 import { Button } from "@/components/button/Button";
-import {
-  buttonClasses,
-  buttonIconClass,
-} from "@/components/button/buttonStyles";
 import { Skeleton } from "@/components/states/Skeleton";
-import { cn } from "@/lib/cn";
-import { focusRing } from "@/lib/focus";
 import { useNow } from "@/live/useNow";
 import { knownFrom } from "@/mentions/parse";
 import {
@@ -59,15 +53,16 @@ import {
   VersionTabs,
 } from "./RequestContent";
 import {
+  AboutCard,
   ClosedPanel,
   CreatedTasksPanel,
   DecisionPanel,
   DrafterBlock,
   EditingPanel,
+  StatusCard,
   VersionsBlock,
   ViewerPanel,
 } from "./SidePanel";
-import { projectPath } from "@/routes/paths";
 
 interface RequestDetailScreenProps {
   slug: string;
@@ -103,7 +98,7 @@ export function RequestDetailPending({
   id: string;
 }) {
   return (
-    <div className="flex flex-col gap-16 px-24 pt-18 pb-24">
+    <div className="flex flex-col gap-16 px-16 pt-16 pb-24 md:px-28 md:pt-20 md:pb-32">
       <Crumb slug={slug} id={id} />
       <Skeleton />
       <div className="flex items-start gap-24">
@@ -197,44 +192,24 @@ export function RequestDetailScreen({
   });
 
   if (query.isPending) return <RequestDetailPending slug={slug} id={id} />;
+  if (detail === null && !query.isError) {
+    return <MissingPanel slug={slug} missing={{ kind: "request", id }} />;
+  }
   if (query.isError || detail === null) {
-    const missing = detail === null && !query.isError;
     return (
-      <div className="flex flex-col gap-16 px-24 pt-18 pb-24">
+      <div className="flex flex-col gap-16 px-16 pt-16 pb-24 md:px-28 md:pt-20 md:pb-32">
         <Crumb slug={slug} id={id} />
         <FailurePanel
-          title={
-            missing
-              ? `${id} does not exist in this project`
-              : `Could not load ${id}`
-          }
-          text={
-            missing
-              ? "The id may be mistyped, or the link may come from another project. Open the list to find the request."
-              : "The daemon answered with an error. Nothing is lost; try again."
-          }
-          code={
-            missing ? "request_not_found" : describeFailure(query.error).code
-          }
+          title={`Could not load ${id}`}
+          text="The daemon answered with an error. Nothing is lost; try again."
+          code={describeFailure(query.error).code}
           action={
-            missing ? (
-              <HrefLink
-                href={projectPath(slug, "requests")}
-                className={cn(buttonClasses("secondary", "md"), focusRing)}
-              >
-                <span className={buttonIconClass("secondary")}>
-                  <ArrowLeft aria-hidden="true" size={15} />
-                </span>
-                Back to requests
-              </HrefLink>
-            ) : (
-              <Button
-                icon={<RefreshCw aria-hidden="true" size={15} />}
-                onClick={() => void query.refetch()}
-              >
-                Try again
-              </Button>
-            )
+            <Button
+              icon={<RefreshCw aria-hidden="true" size={15} />}
+              onClick={() => void query.refetch()}
+            >
+              Try again
+            </Button>
           }
         />
       </div>
@@ -280,128 +255,142 @@ export function RequestDetailScreen({
     write.mutate({ action: "edit", form: editing, note });
   };
 
+  const status = (
+    <StatusCard detail={detail} human={human} now={now}>
+      {kind === "approved" ? (
+        <CreatedTasksPanel
+          slug={slug}
+          tasks={createdTasks(
+            detail,
+            board.data ? boardCards(board.data) : undefined,
+          )}
+        />
+      ) : kind === "closed" ? (
+        <ClosedPanel slug={slug} detail={detail} known={known} />
+      ) : kind === "viewer" ? (
+        <ViewerPanel detail={detail} />
+      ) : kind === "editing" ? (
+        <EditingPanel
+          slug={slug}
+          detail={detail}
+          note={note}
+          saving={pending === "edit"}
+          failure={failureOf("edit")}
+          onNote={setNote}
+          onSave={save}
+          onCancel={() => {
+            setEditing(null);
+            setNote("");
+            setFailure(null);
+          }}
+        />
+      ) : (
+        <DecisionPanel
+          slug={slug}
+          detail={detail}
+          actions={actions}
+          pending={pending}
+          failure={decisionFailure}
+          cards={latest?.cards.length ?? 0}
+          olderDraft={olderDraft}
+          onApprove={() => {
+            write.mutate({
+              action: "approve",
+              version: r.latest_version ?? 0,
+            });
+          }}
+          onRequestChanges={async (comment) => {
+            await write.mutateAsync({
+              action: "request_changes",
+              version: r.latest_version ?? 0,
+              comment,
+            });
+          }}
+          onEdit={() => {
+            if (latest) {
+              setFailure(null);
+              setEditing(formFrom(latest));
+            }
+          }}
+          onClose={() => {
+            setFailure(null);
+            setClosing(true);
+          }}
+        />
+      )}
+    </StatusCard>
+  );
+  const about = (
+    <AboutCard>
+      <DrafterBlock detail={detail} now={now} />
+      <VersionsBlock detail={detail} human={human} now={now} />
+    </AboutCard>
+  );
+  const content = (
+    <div className="flex w-full min-w-0 max-w-thread-column flex-col gap-28">
+      <BodySection slug={slug} detail={detail} known={known} />
+      {editing !== null ? (
+        <DraftEditor
+          slug={slug}
+          form={editing}
+          next={(r.latest_version ?? 0) + 1}
+          locked={pending === "edit"}
+          onChange={setEditing}
+        />
+      ) : (
+        <DraftView
+          slug={slug}
+          detail={detail}
+          draft={draft}
+          known={known}
+          now={now}
+          tabs={
+            draft && detail.drafts.length > 1 ? (
+              <VersionTabs
+                drafts={detail.drafts}
+                shown={draft.version}
+                disabled={pending !== null}
+                onShow={setChosen}
+              />
+            ) : null
+          }
+        />
+      )}
+      <CommentsSection slug={slug} detail={detail} known={known} now={now} />
+      <ThreadSection
+        slug={slug}
+        detail={detail}
+        messages={thread.data?.messages}
+        known={known}
+        now={now}
+        target={target.label}
+        closed={threadClosedText(r)}
+        failure={threadFailure}
+        onSend={async (body) => {
+          await message.mutateAsync({ body, to: target.to });
+        }}
+      />
+    </div>
+  );
+
   return (
-    <div className="flex flex-col gap-16 px-24 pt-18 pb-24">
+    <div className="flex flex-col gap-16 px-16 pt-16 pb-24 md:px-28 md:pt-20 md:pb-32">
       <Crumb slug={slug} id={id} />
       <RequestHeader detail={detail} now={now} />
-      <div className="flex flex-col items-start gap-24 lg:flex-row">
-        <div className="flex w-full min-w-0 flex-1 flex-col gap-24">
-          <BodySection slug={slug} detail={detail} known={known} />
-          {editing !== null ? (
-            <DraftEditor
-              slug={slug}
-              form={editing}
-              next={(r.latest_version ?? 0) + 1}
-              locked={pending === "edit"}
-              onChange={setEditing}
-            />
-          ) : (
-            <DraftView
-              slug={slug}
-              detail={detail}
-              draft={draft}
-              known={known}
-              now={now}
-              tabs={
-                draft && detail.drafts.length > 1 ? (
-                  <VersionTabs
-                    drafts={detail.drafts}
-                    shown={draft.version}
-                    disabled={pending !== null}
-                    onShow={setChosen}
-                  />
-                ) : null
-              }
-            />
-          )}
-          <CommentsSection
-            slug={slug}
-            detail={detail}
-            known={known}
-            now={now}
-          />
-          <ThreadSection
-            slug={slug}
-            detail={detail}
-            messages={thread.data?.messages}
-            known={known}
-            now={now}
-            target={target.label}
-            closed={threadClosedText(r)}
-            failure={threadFailure}
-            onSend={async (body) => {
-              await message.mutateAsync({ body, to: target.to });
-            }}
-          />
-        </div>
+      {/* One tree for every width, so a resize never remounts a form and loses what the human typed: below lg the actions come first and the about card last; from lg the content holds the left column and the two cards stack on the right. */}
+      <div className="flex flex-col gap-24 lg:grid lg:grid-cols-[minmax(0,1fr)_var(--width-side-panel)] lg:grid-rows-[auto_1fr] lg:items-start lg:gap-x-28 lg:gap-y-16">
         <aside
           aria-label="Request actions"
-          className="flex w-full shrink-0 flex-col gap-20 border-border-subtle lg:w-side-panel lg:border-l lg:pl-20"
+          className="flex flex-col lg:col-start-2 lg:row-start-1"
         >
-          {kind === "approved" ? (
-            <CreatedTasksPanel
-              slug={slug}
-              tasks={createdTasks(
-                detail,
-                board.data ? boardCards(board.data) : undefined,
-              )}
-            />
-          ) : kind === "closed" ? (
-            <ClosedPanel slug={slug} detail={detail} known={known} />
-          ) : kind === "viewer" ? (
-            <ViewerPanel detail={detail} />
-          ) : kind === "editing" ? (
-            <EditingPanel
-              slug={slug}
-              detail={detail}
-              note={note}
-              saving={pending === "edit"}
-              failure={failureOf("edit")}
-              onNote={setNote}
-              onSave={save}
-              onCancel={() => {
-                setEditing(null);
-                setNote("");
-                setFailure(null);
-              }}
-            />
-          ) : (
-            <DecisionPanel
-              slug={slug}
-              detail={detail}
-              actions={actions}
-              pending={pending}
-              failure={decisionFailure}
-              cards={latest?.cards.length ?? 0}
-              olderDraft={olderDraft}
-              onApprove={() => {
-                write.mutate({
-                  action: "approve",
-                  version: r.latest_version ?? 0,
-                });
-              }}
-              onRequestChanges={async (comment) => {
-                await write.mutateAsync({
-                  action: "request_changes",
-                  version: r.latest_version ?? 0,
-                  comment,
-                });
-              }}
-              onEdit={() => {
-                if (latest) {
-                  setFailure(null);
-                  setEditing(formFrom(latest));
-                }
-              }}
-              onClose={() => {
-                setFailure(null);
-                setClosing(true);
-              }}
-            />
-          )}
-          <DrafterBlock detail={detail} now={now} />
-          <VersionsBlock detail={detail} human={human} now={now} />
+          {status}
         </aside>
+        <div className="flex min-w-0 flex-col lg:col-start-1 lg:row-span-2 lg:row-start-1">
+          {content}
+        </div>
+        <div className="flex flex-col lg:col-start-2 lg:row-start-2">
+          {about}
+        </div>
       </div>
       <CloseDialog
         slug={slug}

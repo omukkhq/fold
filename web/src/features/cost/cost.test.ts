@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { ProjectSummary } from "@/api/projects";
 import { projectCost, taskCost, tokens } from "@/test/cost";
 import {
+  chartAxis,
   allProjectsCost,
   areaRows,
   barLabel,
   costChart,
   costTiles,
+  tileHoverText,
   isCostRange,
   isEmptyCost,
   modelRows,
@@ -69,6 +71,8 @@ describe("costTiles", () => {
         tokens: ["400.0k tokens", "32.0k output"],
       },
     ]);
+    const [total] = costTiles(projectCost(TODAY));
+    expect(total && tileHoverText(total)).toBe("2.0M tokens · 160.0k output");
   });
 
   it("counts the supervised main agent among the leads", () => {
@@ -116,10 +120,18 @@ describe("costChart", () => {
       { role: "task_worker", cost: 1_000_000, tokens: 200_000 },
       { role: "reviewer", cost: 500_000, tokens: 100_000 },
     ]);
-    expect(nine?.height).toBe(1);
+    expect(nine?.height).toBe(0.75);
+    expect(chart.axis.ticks.map((tick) => tick.label)).toEqual([
+      "$0.00",
+      "$0.50",
+      "$1.00",
+      "$1.50",
+      "$2.00",
+    ]);
     expect(nine?.tick).toBe("09");
+    expect(nine?.narrowTick).toBe("09");
     expect(nine?.title).toBe("09:00 today");
-    expect(chart.bars[14]?.height).toBeCloseTo(1 / 6);
+    expect(chart.bars[14]?.height).toBeCloseTo(0.125);
     expect(chart.bars[0]?.cost).toBe(0);
     if (nine) {
       expect(barLabel(nine)).toBe("09:00 today: $1.50 · 300.0k tokens");
@@ -147,7 +159,60 @@ describe("costChart", () => {
     expect(chart.title).toBe("Tokens by hour");
     expect(chart.bars[9]?.height).toBe(0.25);
     expect(chart.bars[10]?.height).toBe(1);
+    expect(chart.axis.top).toBe(400);
     expect(costChart(view, "today", NOW).bars[9]?.height).toBe(1);
+  });
+
+  it("rounds the value axis up to steps of 1, 2, 2.5 or 5", () => {
+    expect(chartAxis(0, "cost")).toEqual({
+      top: 0,
+      ticks: [{ label: "$0.00", at: 0 }],
+    });
+    expect(chartAxis(1_650_000, "cost").top).toBe(2_000_000);
+    expect(chartAxis(900_000, "cost").top).toBe(1_000_000);
+    expect(chartAxis(3_000_000, "cost").top).toBe(4_000_000);
+    expect(chartAxis(4_100_000, "cost").top).toBe(8_000_000);
+    expect(chartAxis(9_000_000, "cost").top).toBe(10_000_000);
+    // A cent is the smallest step the cost labels tell apart.
+    expect(chartAxis(1_234, "cost").ticks.map((tick) => tick.label)).toEqual([
+      "$0.00",
+      "$0.01",
+      "$0.02",
+      "$0.03",
+      "$0.04",
+    ]);
+    expect(chartAxis(3, "tokens").top).toBe(4);
+    expect(chartAxis(648_000, "tokens").ticks.at(-1)).toEqual({
+      label: "800.0k",
+      at: 1,
+    });
+    // A step of 2.5 stays only where every tick's label names its value exactly.
+    expect(
+      chartAxis(9_000_000, "cost").ticks.map((tick) => tick.label),
+    ).toEqual(["$0.00", "$2.50", "$5.00", "$7.50", "$10.00"]);
+    expect(chartAxis(90_000, "cost").ticks.map((tick) => tick.label)).toEqual([
+      "$0.00",
+      "$0.05",
+      "$0.10",
+      "$0.15",
+      "$0.20",
+    ]);
+    expect(chartAxis(9, "tokens").ticks.map((tick) => tick.label)).toEqual([
+      "0",
+      "5",
+      "10",
+      "15",
+      "20",
+    ]);
+    expect(chartAxis(90, "tokens").ticks.map((tick) => tick.label)).toEqual([
+      "0",
+      "25",
+      "50",
+      "75",
+      "100",
+    ]);
+    expect(chartAxis(9_000, "tokens").ticks.at(1)?.label).toBe("2.5k");
+    expect(chartAxis(9_000_000, "tokens").ticks.at(1)?.label).toBe("2.5M");
   });
 
   it("draws the last seven days by weekday", () => {
@@ -205,6 +270,15 @@ describe("costChart", () => {
       "Oct 19",
       "Oct 20",
       "Oct 21",
+    ]);
+    expect(chart.bars.map((bar) => bar.narrowTick)).toEqual([
+      "15",
+      "16",
+      "17",
+      "18",
+      "19",
+      "20",
+      "21",
     ]);
     const long = costChart(
       projectCost(TODAY, {

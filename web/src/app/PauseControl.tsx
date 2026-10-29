@@ -18,8 +18,17 @@ import {
   type PauseAction,
 } from "./pause";
 
-/** The top bar's pause and resume of every agent of the project. Only a named human pauses, so the control waits for a name; it stays pending until the project shows the daemon's new state. */
-export function PauseControl({ slug }: { slug: string }) {
+/** The Agents panel's pause and resume of every agent of the project. Only a named human pauses, so the control waits for a name; it stays pending until the project shows the daemon's new state. */
+export function PauseControl({
+  slug,
+  className,
+  onSunken = false,
+}: {
+  slug: string;
+  className?: string;
+  /** The control sits on the sunken tone, as in the Agents panel, so the button takes the surface instead of the fill. */
+  onSunken?: boolean;
+}) {
   const project = useQuery(projectQuery(slug));
   const session = useQuery(sessionQuery());
   const queryClient = useQueryClient();
@@ -45,21 +54,15 @@ export function PauseControl({ slug }: { slug: string }) {
   }
   const Icon = view.paused ? Play : Pause;
   return (
-    <div className="flex items-center gap-8 max-lg:flex-col max-lg:items-stretch">
+    <div className={cn("flex flex-col items-end gap-6", className)}>
       <Button
-        size="sm"
+        variant="quiet"
         pending={view.pending}
         pendingLabel={view.pendingLabel}
-        icon={
-          <Icon
-            aria-hidden="true"
-            size={13}
-            className={view.paused ? "text-warning" : "text-text-muted"}
-          />
-        }
+        icon={<Icon aria-hidden="true" size={16} />}
         className={cn(
-          "max-lg:min-h-44 max-lg:px-14",
-          view.paused && "bg-warning-soft inset-ring-warning",
+          onSunken && "bg-surface hover:bg-surface",
+          view.paused && "bg-warn-soft text-warn hover:bg-warn-soft",
         )}
         onClick={() => {
           write.mutate(view.action);
@@ -68,7 +71,7 @@ export function PauseControl({ slug }: { slug: string }) {
         {view.label}
       </Button>
       {last.error === null ? null : (
-        <span role="alert" className="text-meta text-danger">
+        <span role="alert" className="text-13 text-bad">
           {failureText(last.error)}
         </span>
       )}

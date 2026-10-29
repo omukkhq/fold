@@ -58,6 +58,7 @@ mod folder;
 mod folder_status;
 mod gc;
 mod git_status;
+pub mod notify;
 mod pull;
 mod record;
 mod remote;
@@ -388,8 +389,10 @@ async fn init_with(
             .unwrap_or_default(),
     };
     let registry = Store::open_registry(&host.registry_db()).await?;
+    let notify = notify::NotifySettings::new(host.notify_dir());
     let init = Init {
         registry: &registry,
+        notify: &notify,
         root_text: &root_text,
         human,
         git: &git,
@@ -404,6 +407,8 @@ async fn init_with(
 /// The inputs every step of one init shares.
 struct Init<'a> {
     registry: &'a Store,
+    /// A project that takes over the slug of a registration whose `.fold/` was deleted starts with no notice targets.
+    notify: &'a notify::NotifySettings,
     root_text: &'a str,
     human: &'a HumanName,
     git: &'a Git,
@@ -500,6 +505,9 @@ impl Init<'_> {
         )
         .into()));
         let (row, replaced) = register(self.registry, self.root_text, name, replaces, now).await?;
+        if replaced {
+            self.notify.forget_project(&row.slug).await;
+        }
         Ok(InitializedProject {
             slug: row.slug,
             name: row.name,
@@ -1589,6 +1597,8 @@ pub struct GitAttention {
     moved: std::sync::Mutex<Option<(Timestamp, String)>>,
     /// Since when the project folder waits on changes of the human's that no revision records, with the paths main changed that hold them.
     held: std::sync::Mutex<Option<(Timestamp, Vec<String>)>>,
+    /// True once a run that raises attention noted the branch and the held folder since the project opened. Until then a missing item says nothing, so the notifier keeps what it knew of these items across a restart.
+    observed: AtomicBool,
 }
 
 /// How a run changed the project's attention.
@@ -1618,6 +1628,16 @@ impl GitAttention {
             let since = moved.as_ref().map_or(now, |(since, _)| *since);
             (since, hint)
         });
+    }
+
+    /// Whether a run noted the branch and the held folder since the project opened.
+    pub fn observed(&self) -> bool {
+        self.observed.load(Ordering::Relaxed)
+    }
+
+    /// Marks that a run noted the branch and the held folder, so their absence now means they ended.
+    pub fn mark_observed(&self) {
+        self.observed.store(true, Ordering::Relaxed);
     }
 
     /// Since when the project folder waits on changes of the human's that no revision records, with the paths main changed that hold them.
@@ -2003,12 +2023,16 @@ pub async fn remove_deleted_on_host(host: &HostPaths) -> Result<Vec<String>, Pro
         return Ok(Vec::new());
     }
     let registry = Store::open_registry(&host.registry_db()).await?;
-    let removed = remove_deleted_rows(&registry).await;
+    let removed =
+        remove_deleted_rows(&registry, &notify::NotifySettings::new(host.notify_dir())).await;
     registry.close().await?;
     removed
 }
 
-async fn remove_deleted_rows(registry: &Store) -> Result<Vec<String>, ProjectError> {
+async fn remove_deleted_rows(
+    registry: &Store,
+    notify: &notify::NotifySettings,
+) -> Result<Vec<String>, ProjectError> {
     let mut removed = Vec::new();
     for row in projects::list_projects(registry.read()).await? {
         let gone =
@@ -2022,6 +2046,7 @@ async fn remove_deleted_rows(registry: &Store) -> Result<Vec<String>, ProjectErr
                 .await?
         {
             tracing::warn!(project = %row.slug, root = %row.root, "the project folder has no .fold; fold removed the project");
+            notify.forget_project(&row.slug).await;
             removed.push(row.slug);
         }
     }

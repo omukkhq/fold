@@ -9,37 +9,32 @@
   --color-bg: var(--bg);
   --color-surface: var(--surface);
   --color-sunken: var(--sunken);
-  --color-raised: var(--raised);
-  --color-border: var(--border);
-  --color-border-subtle: var(--border-subtle);
+  --color-line: var(--line);
+  --color-fill: var(--fill);
   --color-text: var(--text);
-  --color-text-muted: var(--text-muted);
-  --color-text-faint: var(--text-faint);
+  --color-text-2: var(--text-2);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
   --color-ink: var(--ink);
   --color-on-ink: var(--on-ink);
-  --color-primary: var(--primary);
-  --color-primary-strong: var(--primary-strong);
-  --color-primary-muted: var(--primary-muted);
-  --color-primary-text: var(--primary-text);
-  --color-primary-soft: var(--primary-soft);
-  --color-on-primary: var(--on-primary);
-  --color-secondary: var(--secondary);
-  --color-secondary-text: var(--secondary-text);
-  --color-secondary-soft: var(--secondary-soft);
-  --color-success: var(--success);
-  --color-success-soft: var(--success-soft);
-  --color-success-text: var(--success-text);
-  --color-danger: var(--danger);
-  --color-danger-soft: var(--danger-soft);
+  --color-scrim: var(--scrim);
   --color-status-backlog: var(--status-backlog);
   --color-status-todo: var(--status-todo);
   --color-status-progress: var(--status-progress);
   --color-status-review: var(--status-review);
   --color-status-done: var(--status-done);
   --color-diff-add: var(--diff-add);
-  --color-diff-add-strong: var(--diff-add-strong);
   --color-diff-del: var(--diff-del);
-  --color-diff-del-strong: var(--diff-del-strong);
+  --color-diff-context: var(--diff-context);
+  --color-diff-hunk: var(--diff-hunk);
+  --color-diff-selected: var(--diff-selected);
+  --color-diff-comment-marker: var(--diff-comment-marker);
   --color-label-sage: var(--label-sage);
   --color-label-slate: var(--label-slate);
   --color-label-teal: var(--label-teal);
@@ -48,14 +43,6 @@
   --color-label-moss: var(--label-moss);
   --color-label-plum: var(--label-plum);
   --color-label-stone: var(--label-stone);
-  --color-warning: var(--warning);
-  --color-warning-soft: var(--warning-soft);
-  --color-focus-ring: var(--focus-ring);
-  --color-scrim: var(--scrim);
-  --color-presence-active: var(--presence-active);
-  --color-presence-idle: var(--presence-idle);
-  --color-presence-offline: var(--presence-offline);
-  --color-ink-soft: var(--ink-soft);
   --color-label-sage-soft: var(--label-sage-soft);
   --color-label-slate-soft: var(--label-slate-soft);
   --color-label-teal-soft: var(--label-teal-soft);
@@ -64,50 +51,47 @@
   --color-label-moss-soft: var(--label-moss-soft);
   --color-label-plum-soft: var(--label-plum-soft);
   --color-label-stone-soft: var(--label-stone-soft);
-  --color-diff-context: var(--diff-context);
-  --color-diff-hunk: var(--diff-hunk);
-  --color-diff-selected: var(--diff-selected);
-  --color-diff-comment-marker: var(--diff-comment-marker);
-  --color-diff-outdated: var(--diff-outdated);
-  --color-muted: var(--text-muted);
-  --color-faint: var(--text-faint);
+  --color-presence-idle: var(--presence-idle);
+  --color-presence-offline: var(--presence-offline);
+  --color-syntax-keyword: var(--syntax-keyword);
+  --color-syntax-string: var(--syntax-string);
+  --color-syntax-comment: var(--syntax-comment);
+  --color-syntax-number: var(--syntax-number);
+  --color-syntax-function: var(--syntax-function);
+  --color-syntax-type: var(--syntax-type);
+  --color-syntax-constant: var(--syntax-constant);
+  --color-syntax-punctuation: var(--syntax-punctuation);
 
   --font-*: initial;
-  --font-ui: var(--font-ui);
-  --font-mono: var(--font-mono);
-  /* JetBrains Mono's contextual alternates draw `=>` and `!=` as one glyph; mono text shows code, ids and paths as typed. */
+  --font-title: var(--title);
+  --font-body: var(--body);
+  --font-mono: var(--mono);
+  /* JetBrains Mono's contextual alternates draw `=>` and `!=` as one glyph; mono text shows code and paths as typed. */
   --font-mono--font-feature-settings: "calt" 0, "liga" 0;
 
   --radius-*: initial;
-  --radius-xs: var(--radius-xs);
-  --radius-s: var(--radius-s);
-  --radius-m: var(--radius-m);
-  --radius-l: var(--radius-l);
-  --radius-chip: var(--radius-chip);
-  --radius-xl: var(--radius-xl);
+  --radius-s: var(--r-s);
+  --radius-m: var(--r-m);
+  --radius-l: var(--r-l);
+  --radius-pill: var(--r-pill);
 
   --text-*: initial;
-  --text-page: var(--size-page);
-  --text-screen: var(--size-screen);
-  --text-wordmark: var(--size-wordmark);
-  --text-wordmark--letter-spacing: var(--tracking-wordmark);
-  --text-item-title: var(--size-item-title);
-  --text-section: var(--size-section);
-  --text-card: var(--size-card);
-  --text-body: var(--size-body);
-  --text-bar: var(--size-bar);
-  --text-micro: var(--size-micro);
-  --text-caption: var(--size-caption);
-  --text-meta: var(--size-meta);
-  --text-code: var(--size-code);
-  --text-label: var(--size-label);
-  --text-overline: var(--size-overline);
-  --text-overline--letter-spacing: var(--tracking-overline);
+  --text-12: var(--fs-12);
+  --text-13: var(--fs-13);
+  --text-14: var(--fs-14);
+  --text-15: var(--fs-15);
+  --text-16: var(--fs-16);
+  --text-18: var(--fs-18);
+  --text-21: var(--fs-21);
+  --text-24: var(--fs-24);
+  --text-28: var(--fs-28);
 
   --leading-*: initial;
-  --leading-snug: var(--leading-snug);
-  --leading-normal: var(--leading-normal);
-  --leading-loose: var(--leading-loose);
+  --leading-tight: var(--lh-tight);
+  --leading-normal: var(--lh);
+
+  --tracking-*: initial;
+  --tracking-wordmark: var(--tracking-wordmark);
 
   --font-weight-*: initial;
   --font-weight-regular: var(--weight-regular);
@@ -116,7 +100,7 @@
   --font-weight-bold: var(--weight-bold);
 
   --shadow-*: initial;
-  --shadow-card: var(--elevation-card);
+  --shadow-pop: var(--elevation-pop);
   --shadow-dialog: var(--elevation-dialog);
 
   --spacing-*: initial;
@@ -144,8 +128,9 @@
   --spacing-44: var(--space-44);
 
   --container-*: initial;
-  --container-measure: var(--width-measure);
+  --container-measure: var(--measure);
   --container-thread-column: var(--width-thread-column);
+  --container-switcher: var(--width-switcher);
 
   --width-*: initial;
   --width-skeleton-s: var(--width-skeleton-s);
@@ -165,19 +150,24 @@
   --width-git-location: var(--width-git-location);
   --width-git-branch: var(--width-git-branch);
   --width-git-commit: var(--width-git-commit);
-  --width-project-agents: var(--width-project-agents);
-  --width-project-state: var(--width-project-state);
-  --width-needs-you: var(--width-needs-you);
-  --width-notifications: var(--width-notifications);
+  --width-inbox: var(--width-inbox);
+  --width-agents: var(--width-agents);
+  --width-menu: var(--width-menu);
   --width-toast: var(--width-toast);
-  --width-transcript: var(--width-transcript);
   --width-column: var(--width-column);
   --width-fact-label: var(--width-fact-label);
-  --width-filter-column: var(--width-filter-column);
-  --width-group-head: var(--width-group-head);
+  --width-content: var(--width-content);
+  --width-task-side: var(--width-task-side);
+  --width-side-label: var(--width-side-label);
+  --width-dialog-narrow: var(--width-dialog-narrow);
+  --width-label-input: var(--width-label-input);
+
+  /* The width from which the top bar shows its full row of tabs, the Agents control and the avatar. A breakpoint cannot read a variable, so the value is written here. */
+  --breakpoint-wide: 90rem;
 
   --height-*: initial;
   --height-bar: var(--height-bar);
+  --height-bar-compact: var(--height-bar-compact);
   --height-chart: var(--height-chart);
   --height-review-dialog: var(--height-review-dialog);
 }
@@ -186,8 +176,15 @@
   html {
     background: var(--bg);
     color: var(--text);
-    font-family: var(--font-ui);
-    font-size: var(--size-body);
-    line-height: var(--leading-normal);
+    font-family: var(--body);
+    font-size: var(--fs-15);
+    line-height: var(--lh);
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--title);
+    line-height: var(--lh-tight);
   }
 }

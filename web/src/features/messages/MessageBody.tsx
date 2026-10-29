@@ -1,7 +1,9 @@
 import { Fragment } from "react";
 import { HrefLink } from "@/app/HrefLink";
 import { textFlow } from "@/components/text/textFlow";
+import { ID_LINK_CLASSES } from "@/components/id/idStyles";
 import { cn } from "@/lib/cn";
+import { focusRing } from "@/lib/focus";
 import { MentionLink } from "@/mentions/MentionLink";
 import { mentionHref, splitMentions } from "@/mentions/parse";
 import { mentionTag } from "@/mentions/remark";
@@ -12,7 +14,7 @@ import { linkify } from "./linkify";
 export function MessageBody({ body, slug }: { body: string; slug: string }) {
   const people = usePeople(slug);
   return (
-    <p className={cn("text-body leading-normal text-text", textFlow("prose"))}>
+    <p className={cn("text-15 leading-normal text-text", textFlow("prose"))}>
       {splitMentions(body, undefined, people).map((part, index) => (
         <Fragment key={index}>
           {part.mention ? (
@@ -28,7 +30,7 @@ export function MessageBody({ body, slug }: { body: string; slug: string }) {
                 <HrefLink
                   key={at}
                   href={segment.href}
-                  className="font-mono text-code text-primary-text hover:underline"
+                  className={cn(ID_LINK_CLASSES, focusRing)}
                 >
                   {segment.text}
                 </HrefLink>

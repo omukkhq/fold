@@ -54,19 +54,17 @@ export function FileEditor({
   return (
     <section
       aria-label={`Edit ${path}`}
-      className="flex min-w-0 flex-1 flex-col gap-10 rounded-l bg-surface p-16 inset-ring inset-ring-border-subtle"
+      className="flex min-w-0 flex-1 flex-col gap-10 rounded-m bg-surface p-16"
     >
-      <h2 className="flex items-center gap-8 text-bar font-semibold text-text">
+      <h2 className="flex items-center gap-8 text-14 font-semibold text-text">
         <Pencil aria-hidden="true" size={15} className="shrink-0" />
         <span className="min-w-0 font-mono break-all">{path}</span>
       </h2>
       {source.kind === "blocked" ? (
-        <p className="text-code leading-snug text-text-muted">
-          {source.reason}
-        </p>
+        <p className="text-13 leading-tight text-text-2">{source.reason}</p>
       ) : (
         <>
-          <p className="text-code leading-snug text-text-muted">
+          <p className="text-13 leading-tight text-text-2">
             {editNotice(view.version)}
           </p>
           <Textarea
@@ -78,12 +76,12 @@ export function FileEditor({
             onChange={(event) => {
               setValue(event.target.value);
             }}
-            className="resize-y font-mono text-code"
+            className="resize-y font-mono text-13"
           />
         </>
       )}
       {save.isError ? (
-        <p role="alert" className="text-meta font-medium text-danger">
+        <p role="alert" className="text-13 font-medium text-bad">
           {describeFailure(save.error).text}
         </p>
       ) : null}

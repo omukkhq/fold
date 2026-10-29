@@ -2,7 +2,6 @@ import * as RadixDialog from "@radix-ui/react-dialog";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { Check, Link, SearchX } from "lucide-react";
 import { useState } from "react";
-import { isApiError } from "@/api/errors";
 import { keys } from "@/api/keys";
 import { taskQuery, type LiveWorkspace, type TaskDetail } from "@/api/tasks";
 import { Button } from "@/components/button/Button";
@@ -10,16 +9,23 @@ import { copyOutcome, type CopyState } from "@/components/mono/commitCopy";
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
+import { failureText } from "@/format/failure";
+import { PHONE_LAYOUT } from "@/features/board/view";
 import { useLiveStatus } from "@/live/status";
 import { useDataClock } from "@/live/useDataClock";
+import { cn } from "@/lib/cn";
+import { useMediaQuery } from "@/lib/pageState";
+import { insetFocusRing } from "@/lib/focus";
 import { ArchiveMenu } from "./ArchiveMenu";
 import { ChecklistSection } from "./ChecklistSection";
 import { DescriptionSection } from "./DescriptionSection";
 import { DialogFrame } from "./DialogFrame";
 import { HumanWork } from "./HumanWork";
 import { needsProposal } from "./leadCheck";
+import { PhoneFacts } from "./PhoneFacts";
 import { liveStrip } from "./liveStrip";
 import { MessagesSection } from "./MessagesSection";
+import { taskBody } from "./taskBody";
 import { TaskSide } from "./TaskSide";
 import { TitleBlock } from "./TitleBlock";
 import { WorkingChanges } from "./WorkingChanges";
@@ -38,9 +44,9 @@ function CopyLink() {
       variant="ghost"
       icon={
         copied ? (
-          <Check aria-hidden="true" size={15} />
+          <Check aria-hidden="true" size={16} />
         ) : (
-          <Link aria-hidden="true" size={15} />
+          <Link aria-hidden="true" size={16} />
         )
       }
       onClick={() => {
@@ -50,7 +56,13 @@ function CopyLink() {
         setState("idle");
       }}
     >
-      {copied ? "Link copied" : state === "failed" ? "Not copied" : "Copy link"}
+      <span className="max-md:sr-only">
+        {copied
+          ? "Link copied"
+          : state === "failed"
+            ? "Not copied"
+            : "Copy link"}
+      </span>
     </Button>
   );
 }
@@ -76,14 +88,24 @@ function Loaded({
     streamed?.last_activity_at,
   ]);
   const live = task.workspace === null ? null : (streamed ?? null);
+  const phone = useMediaQuery(PHONE_LAYOUT);
   return (
-    <div className="flex flex-col gap-28 px-24 pt-22 pb-24 md:flex-row">
-      <div className="flex min-w-0 flex-1 flex-col gap-24">
+    <div className="flex flex-col md:min-h-0 md:flex-row">
+      <div
+        role="region"
+        aria-label="Task"
+        tabIndex={0}
+        className={cn(
+          "flex min-w-0 flex-1 flex-col gap-24 px-16 pt-16 pb-28 md:overflow-y-auto md:px-28 md:pt-22",
+          insetFocusRing,
+        )}
+      >
         <TitleBlock
           slug={slug}
           task={task}
           strip={liveStrip(task, live, now)}
         />
+        {phone ? <PhoneFacts slug={slug} task={task} /> : null}
         <HumanWork slug={slug} task={task} />
         <DescriptionSection slug={slug} task={task} />
         <ChecklistSection slug={slug} task={task} />
@@ -122,10 +144,11 @@ function Loading() {
  */
 export function TaskDialog({ slug, task, onClose }: TaskDialogProps) {
   const query = useQuery(taskQuery(slug, task));
+  const view = taskBody(query.data, query.error);
   let body;
-  if (query.isPending) {
+  if (view.kind === "loading") {
     body = <Loading />;
-  } else if (query.isError && isApiError(query.error, "task_not_found")) {
+  } else if (view.kind === "missing") {
     body = (
       <div className="px-24 pt-22 pb-24">
         <RadixDialog.Title className="sr-only">
@@ -137,7 +160,7 @@ export function TaskDialog({ slug, task, onClose }: TaskDialogProps) {
         </EmptyPanel>
       </div>
     );
-  } else if (query.isError) {
+  } else if (view.kind === "failed") {
     body = (
       <>
         <RadixDialog.Title className="sr-only">
@@ -152,7 +175,17 @@ export function TaskDialog({ slug, task, onClose }: TaskDialogProps) {
     );
   } else {
     body = (
-      <Loaded slug={slug} task={query.data} readAt={query.dataUpdatedAt} />
+      <>
+        {view.failure === null ? null : (
+          <ErrorBanner
+            title="The task could not be read again."
+            message={failureText(view.failure)}
+            onRetry={() => void query.refetch()}
+            className="shrink-0"
+          />
+        )}
+        <Loaded slug={slug} task={view.task} readAt={query.dataUpdatedAt} />
+      </>
     );
   }
   return (
@@ -160,16 +193,17 @@ export function TaskDialog({ slug, task, onClose }: TaskDialogProps) {
       crumb={task}
       crumbIsId
       actions={
-        query.isError ? undefined : (
+        view.kind === "missing" || view.kind === "failed" ? undefined : (
           <>
             <CopyLink />
-            {query.isSuccess ? (
+            {view.kind === "loaded" ? (
               <ArchiveMenu slug={slug} task={task} onArchived={onClose} />
             ) : null}
           </>
         )
       }
-      described={query.isSuccess && Boolean(query.data.status_reason)}
+      described={view.kind === "loaded" && Boolean(view.task.status_reason)}
+      split={view.kind === "loaded"}
       onClose={onClose}
     >
       {body}

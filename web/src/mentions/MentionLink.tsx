@@ -12,7 +12,7 @@ import { Children, type ReactNode } from "react";
 import { HrefLink } from "@/app/HrefLink";
 import { cn } from "@/lib/cn";
 import { focusRing } from "@/lib/focus";
-import { chipLabel } from "./chip";
+import { chipFace, chipLabel } from "./chip";
 
 const ICONS: Record<string, LucideIcon> = {
   task: ListChecks,
@@ -36,10 +36,7 @@ export function MentionLink({
 }) {
   if (tag === "human") {
     return (
-      <span
-        data-mention="human"
-        className="font-ui font-medium text-primary-text"
-      >
+      <span data-mention="human" className="font-medium text-accent">
         {children}
       </span>
     );
@@ -49,10 +46,7 @@ export function MentionLink({
       <HrefLink
         href={href}
         data-mention="agent"
-        className={cn(
-          "font-ui font-medium text-secondary-text hover:underline",
-          focusRing,
-        )}
+        className={cn("font-medium text-text hover:underline", focusRing)}
       >
         {children}
       </HrefLink>
@@ -64,11 +58,12 @@ export function MentionLink({
       href={href ?? ""}
       data-mention={tag}
       className={cn(
-        "inline-flex items-center gap-4 rounded-s bg-primary-soft px-5 align-baseline font-mono text-code text-primary-text hover:underline",
+        "inline-flex items-center gap-4 rounded-s bg-accent-soft px-5 align-baseline text-accent hover:underline",
+        chipFace(tag),
         focusRing,
       )}
     >
-      <Icon aria-hidden="true" size={12} className="shrink-0" />
+      <Icon aria-hidden="true" size={14} className="shrink-0" />
       {Children.map(children, (child) =>
         typeof child === "string" ? chipLabel(child) : child,
       )}

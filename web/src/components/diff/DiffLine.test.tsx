@@ -18,7 +18,7 @@ describe("DiffLine", () => {
     expect(screen.getByText("Added line")).toBeTruthy();
     expect(screen.getByText("+")).toBeTruthy();
     expect(screen.getByText("12").className).toContain("w-diff-number");
-    expect(screen.getByText("12").className).toContain("text-text-muted");
+    expect(screen.getByText("12").className).toContain("text-text-2");
     expect(screen.getByText("let a = 1;").className).toContain("font-mono");
   });
 
@@ -35,9 +35,9 @@ describe("DiffLine", () => {
     );
     const row = container.firstElementChild;
     expect(row?.className).toContain("bg-diff-selected");
-    expect(row?.className).toContain("before:bg-primary");
+    expect(row?.className).toContain("before:bg-accent");
     expect(row?.hasAttribute("data-selected")).toBe(true);
-    expect(screen.getByText("3").className).toContain("text-primary-text");
+    expect(screen.getByText("3").className).toContain("text-accent");
     expect(screen.getByRole("button", { name: "Comment" })).toBeTruthy();
   });
 
@@ -51,9 +51,7 @@ describe("DiffLine", () => {
       </>,
     );
     expect(screen.getByText("Hunk header")).toBeTruthy();
-    expect(screen.getByText("@@ -1,3 +1,4 @@").className).toContain(
-      "text-label",
-    );
+    expect(screen.getByText("@@ -1,3 +1,4 @@").className).toContain("text-13");
     expect(screen.getByText("Unchanged line")).toBeTruthy();
   });
 });

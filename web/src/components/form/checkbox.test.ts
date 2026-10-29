@@ -14,7 +14,7 @@ describe("checkboxClasses", () => {
     const classes = checkboxClasses.split(" ");
     expect(classes).toContain("size-16");
     expect(classes).toContain("rounded-s");
-    expect(classes).toContain("data-[state=checked]:bg-primary");
-    expect(classes).toContain("text-on-primary");
+    expect(classes).toContain("data-[state=checked]:bg-ink");
+    expect(classes).toContain("text-on-ink");
   });
 });

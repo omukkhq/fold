@@ -10,20 +10,19 @@ import {
   transcriptCopy,
 } from "./session";
 
+const KEY = "font-title text-13 leading-tight font-semibold text-text-2";
+
 function CopyText({
   target,
-  className,
   children,
 }: {
   target: CopyTarget;
-  className?: string;
   children: ReactNode;
 }) {
   const [state, setState] = useState<CopyState>("idle");
   return (
     <button
       type="button"
-      title={target.text}
       aria-label={target.label}
       onClick={() => {
         void copyOutcome(target.text, navigator.clipboard).then(setState);
@@ -32,16 +31,15 @@ function CopyText({
         setState("idle");
       }}
       className={cn(
-        "inline-flex min-w-0 items-center gap-4 rounded-s font-mono text-meta whitespace-nowrap text-text-muted hover:text-text",
+        "-ml-6 inline-flex min-w-0 items-start gap-8 rounded-s px-6 py-2 text-left font-mono text-13 text-text hover:bg-surface",
         focusRing,
-        className,
       )}
     >
-      {children}
+      <span className="min-w-0 wrap-anywhere">{children}</span>
       {state === "copied" ? (
-        <Check aria-hidden size={12} className="shrink-0" />
+        <Check aria-hidden size={14} className="mt-2 shrink-0 text-ok" />
       ) : (
-        <Copy aria-hidden size={12} className="shrink-0 text-text-faint" />
+        <Copy aria-hidden size={14} className="mt-2 shrink-0 text-text-2" />
       )}
       <span role="status" className="sr-only">
         {state === "copied" ? "Copied" : state === "failed" ? "Not copied" : ""}
@@ -50,21 +48,23 @@ function CopyText({
   );
 }
 
-/** The worker's Claude Code session id and the path of its transcript, each copied when clicked. */
+/** The worker's Claude Code session id and the path of its transcript, each copied when clicked; they sit in the worker's open row as label and value pairs of a two-column grid. */
 export function SessionLine({ session }: { session: SessionView }) {
   const transcript = transcriptCopy(session);
   return (
-    <span className="flex min-w-0 items-center gap-8">
-      <CopyText target={sessionCopy(session)}>session {session.short}</CopyText>
+    <>
+      <span className={KEY}>Session</span>
+      <span className="min-w-0">
+        <CopyText target={sessionCopy(session)}>{session.short}</CopyText>
+      </span>
+      <span className={KEY}>Transcript</span>
       {transcript === null ? (
-        <span className="text-meta whitespace-nowrap text-text-faint">
-          transcript path unknown
-        </span>
+        <span className="text-13 text-text-2">transcript path unknown</span>
       ) : (
-        <CopyText target={transcript} className="w-transcript">
-          <span className="min-w-0 truncate">{transcript.text}</span>
-        </CopyText>
+        <span className="min-w-0">
+          <CopyText target={transcript}>{transcript.text}</CopyText>
+        </span>
       )}
-    </span>
+    </>
   );
 }

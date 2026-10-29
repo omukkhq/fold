@@ -3,6 +3,7 @@ import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
+/** An empty list or a missing item: one surface block without an outline, and the next step. */
 interface EmptyPanelProps {
   /** An empty board draws no icon, so a screen may leave it out. */
   icon?: LucideIcon;
@@ -24,20 +25,24 @@ export function EmptyPanel({
     <section
       aria-label={title}
       className={cn(
-        "flex flex-col items-start gap-10 rounded-m px-14 py-18 inset-ring inset-ring-border",
+        "flex items-start gap-14 rounded-m bg-surface p-24",
         className,
       )}
     >
       {Icon ? (
-        <Icon aria-hidden="true" size={18} className="text-text-faint" />
+        <Icon
+          aria-hidden="true"
+          size={20}
+          className="mt-2 shrink-0 text-text-2"
+        />
       ) : null}
-      <h2 className="text-card leading-snug font-semibold text-text">
-        {title}
-      </h2>
-      <p className="text-bar leading-snug text-text-muted">
-        <CodeText text={children} />
-      </p>
-      {action}
+      <div className="flex min-w-0 flex-col items-start gap-8">
+        <h2 className="text-18 font-semibold text-text">{title}</h2>
+        <p className="max-w-measure text-15 text-text">
+          <CodeText text={children} />
+        </p>
+        {action}
+      </div>
     </section>
   );
 }

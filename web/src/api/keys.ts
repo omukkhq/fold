@@ -124,6 +124,13 @@ export const keys = {
     [slug, "review-batches", batch, "diff"] as const,
   reviewBatchFileDiff: (slug: string, batch: string, path: string) =>
     [slug, "review-batches", batch, "diff", path] as const,
+  /** Under the batch, so a moved main reads the merged side's file again with the merged change. */
+  reviewBatchFile: (slug: string, batch: string, path: string) =>
+    [slug, "review-batches", batch, "file", path] as const,
   /** The workspaces a stored event ended since the last snapshot, written only by the event stream. */
   endedWorkspaces: (slug: string) => [slug, "ended-workspaces"] as const,
+  /** The prefix of the send logs too. `notify.target_changed` refreshes it; a person's rotation, host switch and web address change name no event, so their own write refreshes it. */
+  notify: (slug: string) => [slug, "notify"] as const,
+  notifySends: (slug: string, target: string) =>
+    [slug, "notify", "sends", target] as const,
 };

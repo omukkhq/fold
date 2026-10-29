@@ -11,24 +11,32 @@ export function QuotedLines({
   slug,
   proposal,
   lines,
+  onSurface = true,
 }: {
   slug: string;
   proposal: string | null;
   lines: MessageLines;
+  /** The quote sits on a surface, such as a message card, so it takes the fill tone to stand apart; a thread on the page tone shows it on a surface. */
+  onSurface?: boolean;
 }) {
   const head = lineRefText(lines);
   const note = cutNote(lines);
   return (
-    <figure className="flex flex-col overflow-hidden rounded-s inset-ring inset-ring-border-subtle">
-      <figcaption className="flex items-center gap-6 border-b border-border-subtle bg-bg px-10 py-6 font-mono text-caption text-text-muted">
-        <FileCode aria-hidden="true" size={13} className="shrink-0" />
+    <figure
+      className={cn(
+        "flex max-w-measure flex-col overflow-hidden rounded-m",
+        onSurface ? "bg-fill" : "bg-surface",
+      )}
+    >
+      <figcaption className="flex items-center gap-6 px-12 pt-8 pb-4 font-mono text-13 text-text-2">
+        <FileCode aria-hidden="true" size={14} className="shrink-0" />
         {proposal === null ? (
           <span className="min-w-0 truncate">{head}</span>
         ) : (
           <HrefLink
             href={lineRefHref(slug, proposal, lines)}
             className={cn(
-              "min-w-0 truncate rounded-s text-primary-text hover:underline",
+              "min-w-0 truncate rounded-s text-accent hover:underline",
               focusRing,
             )}
           >
@@ -39,14 +47,14 @@ export function QuotedLines({
       <pre
         className={cn(
           CODE_BOX,
-          "bg-surface py-6 font-mono text-code leading-snug text-text",
+          "pt-4 pb-10 font-mono text-13 leading-normal text-text",
         )}
       >
         {quotedLines(lines).map((line) => (
           <div key={line.number} className="flex">
             <span
               aria-hidden="true"
-              className="w-diff-number shrink-0 pr-8 text-right text-text-faint select-none"
+              className="w-diff-number shrink-0 pr-8 text-right text-text-2 select-none"
             >
               {line.number}
             </span>
@@ -55,9 +63,7 @@ export function QuotedLines({
         ))}
       </pre>
       {note === null ? null : (
-        <p className="border-t border-border-subtle px-10 py-4 text-meta text-text-muted">
-          {note}
-        </p>
+        <p className="px-12 pb-8 text-13 text-text-2">{note}</p>
       )}
     </figure>
   );

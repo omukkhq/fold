@@ -6,7 +6,7 @@ type MonoProps =
   | ({ href?: undefined } & ComponentProps<"span">)
   | ({ href: string } & ComponentProps<"a">);
 
-/** An id or a path in the mono face; with `href` it is a link. */
+/** A path, a command or a commit in the mono face; with `href` it is a link. Public ids use `Id`. */
 export function Mono(props: MonoProps) {
   if (props.href !== undefined) {
     const { className, ...rest } = props;
@@ -14,7 +14,7 @@ export function Mono(props: MonoProps) {
       <a
         {...rest}
         className={cn(
-          "rounded-s font-mono text-code text-primary-text underline-offset-2 hover:underline",
+          "rounded-s font-mono text-13 text-accent underline-offset-2 hover:underline",
           focusRing,
           className,
         )}
@@ -22,5 +22,5 @@ export function Mono(props: MonoProps) {
     );
   }
   const { className, ...rest } = props;
-  return <span {...rest} className={cn("font-mono text-code", className)} />;
+  return <span {...rest} className={cn("font-mono text-13", className)} />;
 }

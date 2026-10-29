@@ -20,13 +20,13 @@ export const COLUMNS: readonly ColumnSpec[] = [
   },
   {
     status: "todo",
-    name: "Todo",
+    name: "To do",
     hint: "Ready to start",
     dot: "bg-status-todo",
   },
   {
     status: "in_progress",
-    name: "In Progress",
+    name: "In progress",
     hint: "Author working",
     dot: "bg-status-progress",
   },

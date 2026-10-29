@@ -1,24 +1,6 @@
-import {
-  CircleAlert,
-  Clock,
-  GitMerge,
-  Hand,
-  History,
-  OctagonAlert,
-  UserCheck,
-  type LucideIcon,
-} from "lucide-react";
+import { Clock, Hand, History, type LucideIcon } from "lucide-react";
 
-export const BADGE_TONES = [
-  "proposal-changes",
-  "proposal-conflict",
-  "human-review",
-  "needs-you",
-  "blocked",
-  "stalled",
-  "stale",
-  "outdated",
-] as const;
+export const BADGE_TONES = ["needs-you", "stalled", "stale"] as const;
 
 export type BadgeTone = (typeof BADGE_TONES)[number];
 
@@ -28,64 +10,31 @@ export interface BadgeSpec {
   text: string;
   /** Classes for the fill and the text and icon colour. */
   classes: string;
-  /** Padding and type size; a badge has one of three shapes. */
+  /** Padding and type size, the same for every tone. */
   shape: string;
 }
 
-// The proposal pill, the attention mark and the Blocked mark. The leading follows the size, because
-// tailwind-merge drops a leading that comes before a size.
-const PILL = "px-8 py-2 text-meta leading-snug";
-const ATTENTION = "px-7 py-2 text-meta leading-snug";
-const BLOCKED = "px-8 py-3 text-caption leading-snug";
+/** Every badge is one chip shape: 13px on a pill, no outline. */
+const CHIP = "px-9 py-2 text-13 leading-tight";
 
 const SPECS: Record<BadgeTone, BadgeSpec> = {
-  "proposal-changes": {
-    icon: CircleAlert,
-    text: "Changes requested",
-    classes: "bg-danger-soft text-danger",
-    shape: PILL,
-  },
-  "proposal-conflict": {
-    icon: GitMerge,
-    text: "Conflict",
-    classes: "bg-danger-soft text-danger",
-    shape: PILL,
-  },
-  "human-review": {
-    icon: UserCheck,
-    text: "Human review",
-    classes: "bg-secondary-soft text-secondary-text",
-    shape: PILL,
-  },
   "needs-you": {
     icon: Hand,
     text: "Needs you",
-    classes: "bg-ink text-on-ink",
-    shape: ATTENTION,
-  },
-  blocked: {
-    icon: OctagonAlert,
-    text: "Blocked",
-    classes: "bg-danger-soft text-danger",
-    shape: BLOCKED,
+    classes: "bg-warn-soft text-warn",
+    shape: CHIP,
   },
   stalled: {
     icon: Clock,
     text: "Stalled",
-    classes: "bg-secondary-soft text-secondary-text",
-    shape: PILL,
+    classes: "bg-warn-soft text-warn",
+    shape: CHIP,
   },
   stale: {
     icon: History,
     text: "Stale",
-    classes: "bg-ink-soft text-text-muted",
-    shape: PILL,
-  },
-  outdated: {
-    icon: History,
-    text: "Outdated",
-    classes: "bg-sunken text-text-muted",
-    shape: PILL,
+    classes: "bg-fill text-text",
+    shape: CHIP,
   },
 };
 

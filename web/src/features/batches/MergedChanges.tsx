@@ -1,6 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { Diff, GitMerge } from "lucide-react";
-import { reviewBatchDiffQuery, reviewBatchFileDiffQuery } from "@/api/queries";
+import {
+  reviewBatchDiffQuery,
+  reviewBatchFileDiffQuery,
+  reviewBatchFileQuery,
+} from "@/api/queries";
 import type { ReviewBatch, ReviewBatchDiff } from "@/api/reviews";
 import { HrefLink } from "@/app/HrefLink";
 import {
@@ -10,7 +14,11 @@ import {
 import { EmptyPanel } from "@/components/states/EmptyPanel";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
-import { useFileDiff } from "@/features/diff/fileDiff";
+import {
+  needsFileText,
+  useFileDiff,
+  useFileText,
+} from "@/features/diff/fileDiff";
 import { currentFile, fileBody, listedFiles } from "@/features/diff/layout";
 import { ChangedFiles } from "@/features/proposals/ChangedFiles";
 import { useChangedFiles } from "@/features/proposals/changedFilesState";
@@ -54,49 +62,53 @@ function MergedBody({
     reviewBatchFileDiffQuery(slug, id, file?.path ?? ""),
     file !== null && fileBody(file) === "text",
   );
+  const fileText = useFileText(
+    reviewBatchFileQuery(slug, id, file?.path ?? ""),
+    needsFileText(file, fileDiff),
+  );
   const line = mergedLine(diff);
   const integrates = integratesLine(batch, diff);
   const conflict = conflictNote(diff);
   return (
     <div className="flex min-w-0 flex-col gap-16">
       {line === null ? null : (
-        <p className="flex flex-wrap items-center gap-x-8 gap-y-4 text-bar text-text-muted">
-          <GitMerge aria-hidden="true" size={14} className="shrink-0" />
-          <span className="font-mono text-code text-text">{line}</span>
+        <p className="flex flex-wrap items-center gap-x-8 gap-y-4 text-14 text-text-2">
+          <GitMerge aria-hidden="true" size={16} className="shrink-0" />
+          <span className="text-text tabular-nums">{line}</span>
           {diff.files.length === 0 ? null : (
-            <span className="font-mono text-code">
-              {countsText(diff.totals)}
-            </span>
+            <span className="tabular-nums">{countsText(diff.totals)}</span>
           )}
           {integrates === null ? null : (
-            <span className="text-bar text-text-muted">· {integrates}</span>
+            <span className="text-14 text-text-2">· {integrates}</span>
           )}
         </p>
       )}
       {conflict === null || diff.conflict === null ? null : (
         <div
           role="alert"
-          className="flex flex-wrap items-start gap-12 rounded-m bg-danger-soft px-16 py-12"
+          className="flex flex-wrap items-start gap-12 rounded-m bg-bad-soft px-16 py-14"
         >
           <GitMerge
             aria-hidden="true"
             size={16}
-            className="mt-2 shrink-0 text-danger"
+            className="mt-4 shrink-0 text-bad"
           />
-          <div className="flex min-w-0 flex-1 flex-col gap-4">
-            <p className="text-body font-semibold text-danger">
-              {conflict.title}
-            </p>
-            <p className="text-bar wrap-anywhere text-text-muted">
+          <div className="flex min-w-0 flex-1 flex-col gap-2">
+            <p className="text-15 font-semibold text-bad">{conflict.title}</p>
+            <p className="max-w-measure text-15 wrap-anywhere text-text">
               {conflict.text}
             </p>
           </div>
           <HrefLink
             href={detailHref(slug, diff.conflict.proposal, {})}
-            className={cn(buttonClasses("secondary", "md"), focusRing)}
+            className={cn(
+              buttonClasses("quiet", "md"),
+              "bg-surface hover:bg-surface",
+              focusRing,
+            )}
           >
-            <span className={buttonIconClass("secondary")}>
-              <Diff aria-hidden="true" size={15} />
+            <span className={buttonIconClass("quiet")}>
+              <Diff aria-hidden="true" size={16} />
             </span>
             Open {diff.conflict.proposal}
           </HrefLink>
@@ -113,6 +125,7 @@ function MergedBody({
           selectedPath={file?.path}
           onSelectFile={onPath}
           fileDiff={fileDiff}
+          fileText={fileText}
           selection={null}
           onSelect={() => undefined}
         />

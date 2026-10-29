@@ -11,20 +11,21 @@ describe("cn", () => {
   });
 
   it("keeps a size token and a colour token apart", () => {
-    expect(cn("text-meta", "text-muted")).toBe("text-meta text-muted");
+    expect(cn("text-13", "text-text-2")).toBe("text-13 text-text-2");
   });
 
   it("replaces one size token with another", () => {
-    expect(cn("text-meta", "text-body")).toBe("text-body");
+    expect(cn("text-13", "text-15")).toBe("text-15");
   });
 
   it("replaces one weight token with another", () => {
     expect(cn("font-medium", "font-bold")).toBe("font-bold");
   });
 
-  it("knows the bar and wordmark sizes, so a colour keeps them", () => {
-    expect(cn("text-bar", "text-text")).toBe("text-bar text-text");
-    expect(cn("text-wordmark", "text-muted")).toBe("text-wordmark text-muted");
+  it("knows the numbered sizes, so a colour keeps them", () => {
+    expect(cn("text-14", "text-text")).toBe("text-14 text-text");
+    expect(cn("text-21", "text-text-2")).toBe("text-21 text-text-2");
+    expect(cn("text-12", "text-28")).toBe("text-28");
   });
 
   it("replaces one radius token with another", () => {
@@ -32,17 +33,17 @@ describe("cn", () => {
   });
 
   it("replaces one inset ring colour with another", () => {
-    expect(cn("inset-ring inset-ring-border", "inset-ring-danger")).toBe(
-      "inset-ring inset-ring-danger",
+    expect(cn("inset-ring inset-ring-line", "inset-ring-bad")).toBe(
+      "inset-ring inset-ring-bad",
     );
   });
 
   it("keeps a leading that follows the size", () => {
-    expect(cn("leading-snug", "text-body")).toBe("text-body");
-    expect(cn("text-body leading-snug")).toBe("text-body leading-snug");
+    expect(cn("leading-tight", "text-15")).toBe("text-15");
+    expect(cn("text-15 leading-tight")).toBe("text-15 leading-tight");
   });
 
   it("replaces one elevation token with another", () => {
-    expect(cn("shadow-card", "shadow-dialog")).toBe("shadow-dialog");
+    expect(cn("shadow-pop", "shadow-dialog")).toBe("shadow-dialog");
   });
 });

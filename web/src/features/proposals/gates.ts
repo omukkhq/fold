@@ -142,7 +142,7 @@ export function waitingSummary(p: ProposalDetail): Segments | null {
   const v = `v${String(s.current_version)}`;
   const author = actorSegment(s.author);
   if (s.conflicted) {
-    return seg`fold sent the report to ${author}. The task is back in In Progress until a new version arrives.`;
+    return seg`fold sent the report to ${author}. The task is back in In progress until a new version arrives.`;
   }
   if (s.turn === "with_author") {
     return seg`Waiting for ${author} to send a new version.`;
@@ -165,4 +165,13 @@ export function waitingSummary(p: ProposalDetail): Segments | null {
   }
   if (unmet) return ["Waiting on the gates above."];
   return seg`Every gate is met. Next, ${INTEGRATORS}, or a human can integrate here.`;
+}
+
+/** The gates as the integration checklist lists them: the gates not met first, each group in check order. */
+export function checklistGates(gates: readonly Gate[]): Gate[] {
+  const shown = shownGates(gates);
+  return [
+    ...shown.filter((g) => g.status === "unmet"),
+    ...shown.filter((g) => g.status !== "unmet"),
+  ];
 }

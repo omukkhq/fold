@@ -2,33 +2,19 @@ import { clsx, type ClassValue } from "clsx";
 import { extendTailwindMerge } from "tailwind-merge";
 
 // The theme resets Tailwind's default scales, so tailwind-merge must learn the token names:
-// otherwise `text-meta` (a size) and `text-muted` (a colour) look like the same group.
+// otherwise `text-13` (a size) and `text-text-2` (a colour) look like the same group.
 const twMerge = extendTailwindMerge({
   extend: {
     classGroups: {
       "font-size": [
         {
-          text: [
-            "page",
-            "screen",
-            "wordmark",
-            "item-title",
-            "section",
-            "card",
-            "body",
-            "bar",
-            "micro",
-            "caption",
-            "meta",
-            "code",
-            "label",
-            "overline",
-          ],
+          text: ["12", "13", "14", "15", "16", "18", "21", "24", "28"],
         },
       ],
       "font-weight": [{ font: ["regular", "medium", "semibold", "bold"] }],
-      shadow: [{ shadow: ["card", "dialog"] }],
-      rounded: [{ rounded: ["xs", "s", "m", "l"] }],
+      shadow: [{ shadow: ["pop", "dialog"] }],
+      rounded: [{ rounded: ["s", "m", "l", "pill"] }],
+      tracking: [{ tracking: ["wordmark"] }],
     },
   },
 });

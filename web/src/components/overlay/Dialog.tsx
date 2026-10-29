@@ -28,21 +28,21 @@ export function Dialog({
       ) : null}
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="fixed inset-0 bg-scrim" />
-        <RadixDialog.Content className="fixed top-1/2 left-1/2 flex w-max max-w-full -translate-x-1/2 -translate-y-1/2 flex-col gap-12 rounded-l bg-raised p-20 shadow-dialog inset-ring inset-ring-border outline-none">
+        <RadixDialog.Content className="fixed top-1/2 left-1/2 flex w-max max-w-full -translate-x-1/2 -translate-y-1/2 flex-col gap-12 rounded-l bg-surface p-20 shadow-dialog outline-none">
           <div className="flex items-start justify-between gap-12">
             <div className="flex flex-col gap-4">
-              <RadixDialog.Title className="text-section font-semibold text-text">
+              <RadixDialog.Title className="text-16 font-semibold text-text">
                 {title}
               </RadixDialog.Title>
               {description ? (
-                <RadixDialog.Description className="text-body text-text-muted">
+                <RadixDialog.Description className="text-15 text-text-2">
                   {description}
                 </RadixDialog.Description>
               ) : null}
             </div>
             <RadixDialog.Close asChild>
               <IconButton aria-label="Close" size="sm">
-                <X aria-hidden="true" size={13} />
+                <X aria-hidden="true" size={14} />
               </IconButton>
             </RadixDialog.Close>
           </div>

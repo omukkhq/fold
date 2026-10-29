@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DurableEvent } from "../../api/events";
 import schema from "../../api/schema.d.ts?raw";
-import { Check, MessageSquare, X } from "lucide-react";
+import { Bell, BellOff, Check, MessageSquare, X } from "lucide-react";
 import { codeParts } from "../../format/codeText";
 import { EVENT_TYPES, eventLine } from "./eventLine";
 
@@ -112,10 +112,10 @@ describe("eventLine", () => {
       eventLine(event(type, { data })).text;
     expect(
       line("task.status_changed", { from: "todo", to: "in_progress" }),
-    ).toBe("T-12 moved to In Progress");
+    ).toBe("T-12 moved to In progress");
     expect(
       line("task.status_changed", { from: "review", to: "in_progress" }),
-    ).toBe("T-12 back to In Progress");
+    ).toBe("T-12 back to In progress");
     expect(line("task.status_changed", { to: "done" })).toBe(
       "T-12 moved to Done",
     );
@@ -705,6 +705,42 @@ describe("eventLine", () => {
       "rb-3 is ready: P-4, P-6 integrate together",
     );
     expect(ready({ batch: "rb-3" })).toBe("rb-3 is ready to integrate");
+  });
+
+  it("names a notice target's change by its state", () => {
+    const changed = (data: Record<string, unknown>, actor = "human:tanim") =>
+      eventLine(
+        event("notify.target_changed", {
+          actor,
+          task: null,
+          proposal: null,
+          workspace: null,
+          revision: null,
+          data,
+        }),
+      );
+    const target = { target: "nt-3", name: "Team Slack" };
+    expect(changed({ ...target, host: false, state: "on" }).text).toBe(
+      "changed notice target nt-3 “Team Slack”; it is on",
+    );
+    expect(changed({ ...target, host: true, state: "on" }, "fold").text).toBe(
+      "turned host notice target nt-3 “Team Slack” on again",
+    );
+    expect(changed({ ...target, host: false, state: "off" }).text).toBe(
+      "changed notice target nt-3 “Team Slack”; it is off",
+    );
+    expect(changed({ ...target, state: "gone" }, "fold").text).toBe(
+      "turned off notice target nt-3 “Team Slack”: its receiver is gone",
+    );
+    expect(changed({ ...target, state: "failing" }, "fold").text).toBe(
+      "turned off notice target nt-3 “Team Slack” after its sends failed",
+    );
+    expect(changed({ ...target, state: "removed" }).text).toBe(
+      "removed notice target nt-3 “Team Slack”",
+    );
+    expect(changed({}).text).toBe("changed notice target");
+    expect(changed({ ...target, state: "on" }).icon).toBe(Bell);
+    expect(changed({ ...target, state: "failing" }).icon).toBe(BellOff);
   });
 
   it("marks integrations, main moves, request approvals, recorded human changes and batch integrations as emphasised, review approvals by their verdict", () => {

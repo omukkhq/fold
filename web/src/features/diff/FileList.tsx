@@ -24,10 +24,10 @@ export function FileList({
   return (
     <nav
       aria-label="Changed files"
-      className="flex w-file-list shrink-0 flex-col gap-2"
+      className="flex shrink-0 flex-col gap-2 md:w-file-list"
     >
       {title ? (
-        <h2 className="text-overline leading-snug font-semibold text-primary-text uppercase">
+        <h2 className="font-title text-13 leading-tight font-semibold text-text-2">
           {title}
         </h2>
       ) : null}
@@ -46,40 +46,38 @@ export function FileList({
                   onSelectFile(file.path);
                 }}
                 className={cn(
-                  "flex w-full items-center gap-10 rounded-s px-8 py-6 text-left hover:bg-sunken",
-                  current && "bg-sunken",
+                  "flex w-full items-center gap-10 rounded-s px-8 py-5 text-left hover:bg-surface/60",
+                  current && "bg-surface hover:bg-surface",
                   focusRing,
                 )}
               >
                 <span
                   className={cn(
-                    "flex size-18 shrink-0 items-center justify-center rounded-s font-mono text-caption font-bold",
+                    "w-14 shrink-0 text-center font-title text-13 font-bold",
                     badge.classes,
                   )}
                 >
                   <span aria-hidden="true">{badge.letter}</span>
                   <span className="sr-only">{badge.label}</span>
                 </span>
-                <span className="min-w-0 flex-1 truncate font-mono text-label text-text">
+                <span className="min-w-0 flex-1 truncate font-mono text-13 text-text">
                   {file.path}
                 </span>
                 {warned ? (
-                  <span className="font-mono text-meta text-secondary-text">
+                  <span className="font-mono text-13 text-warn">
                     {warningMark(warned)}
                   </span>
                 ) : null}
                 {file.binary ? (
-                  <span className="font-mono text-meta text-text-muted">
-                    bin
-                  </span>
+                  <span className="font-mono text-13 text-text-2">bin</span>
                 ) : null}
                 {counts.added ? (
-                  <span className="font-mono text-meta text-primary-text">
+                  <span className="font-mono text-13 text-ok">
                     {counts.added}
                   </span>
                 ) : null}
                 {counts.removed ? (
-                  <span className="font-mono text-meta text-danger">
+                  <span className="font-mono text-13 text-bad">
                     {counts.removed}
                   </span>
                 ) : null}
@@ -100,18 +98,18 @@ export function FileList({
                     onSelectFile(warning.path);
                   }}
                   className={cn(
-                    "flex w-full items-center gap-10 rounded-s px-8 py-6 text-left hover:bg-sunken",
-                    current && "bg-sunken",
+                    "flex w-full items-center gap-10 rounded-s px-8 py-5 text-left hover:bg-surface/60",
+                    current && "bg-surface hover:bg-surface",
                     focusRing,
                   )}
                 >
-                  <span className="flex size-18 shrink-0 items-center justify-center rounded-s bg-secondary-soft text-secondary-text">
-                    <TriangleAlert aria-hidden="true" size={12} />
+                  <span className="flex w-14 shrink-0 justify-center text-warn">
+                    <TriangleAlert aria-hidden="true" size={14} />
                   </span>
-                  <span className="min-w-0 flex-1 truncate font-mono text-label text-text">
+                  <span className="min-w-0 flex-1 truncate font-mono text-13 text-text">
                     {warning.path}
                   </span>
-                  <span className="font-mono text-meta text-text-muted">
+                  <span className="font-mono text-13 text-text-2">
                     {warningMark(warning)}
                   </span>
                 </button>

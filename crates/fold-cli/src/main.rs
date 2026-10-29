@@ -66,6 +66,8 @@ enum Command {
     Hook(hook::HookArgs),
     /// Bring the commits of a Git remote into main; a conflict becomes a sync task. The remote's name can be left out when the project has only one
     Pull(commands::remote::PullArgs),
+    /// Send the project's events to webhooks, Slack or Discord: list, add, edit, remove, test and log the notice targets
+    Notify(commands::notify::NotifyArgs),
     /// Pause every agent of the project: fold stops each worker, keeps its session and starts none until fld resume
     Pause(commands::pause::PauseArgs),
     /// Resume the agents of a paused project: each stopped worker runs again in its own session
@@ -161,6 +163,10 @@ fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write) -> Result
         }
         Some(Command::Pull(args)) => {
             commands::remote::run_pull(&args, out).map_err(Failure::Remote)
+        }
+        Some(Command::Notify(args)) => {
+            commands::notify::run(&args, &mut std::io::BufReader::new(std::io::stdin()), out)
+                .map_err(Failure::Remote)
         }
         Some(Command::Pause(args)) => {
             commands::pause::run_pause(&args, out).map_err(Failure::Remote)
@@ -325,7 +331,7 @@ mod tests {
             panic!("expected a parse failure, got {result:?}");
         };
         assert_eq!(error.kind(), ErrorKind::DisplayVersion);
-        assert_eq!(error.to_string().trim(), "fld 0.5.2");
+        assert_eq!(error.to_string().trim(), "fld 0.6.0");
         assert!(out.is_empty());
     }
 

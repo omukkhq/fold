@@ -5,19 +5,20 @@ describe("NAV_ENTRIES", () => {
   it("lists the entries in top bar order", () => {
     expect(NAV_ENTRIES.map((e) => e.label)).toEqual([
       "Board",
-      "Activity",
       "Proposals",
       "Requests",
-      "Agents",
       "Messages",
+      "Agents",
       "Repository",
+      "Activity",
+      "Settings",
     ]);
   });
 });
 
 describe("navPath", () => {
   it("builds the project path of an entry", () => {
-    const entry = NAV_ENTRIES[2];
+    const entry = NAV_ENTRIES[1];
     expect(entry && navPath("demo", entry)).toBe("/p/demo/proposals");
   });
 });
@@ -36,6 +37,7 @@ describe("activeNav", () => {
     ["/p/demo/agents", "agents"],
     ["/p/demo/messages", "messages"],
     ["/p/demo/repository", "repository"],
+    ["/p/demo/settings", "settings"],
   ])("%s selects %s", (path, id) => {
     expect(activeNav(path)).toBe(id);
   });

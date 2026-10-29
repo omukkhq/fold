@@ -1,32 +1,28 @@
 import { Hand, MessageCircle, UserCheck } from "lucide-react";
 import { describe, expect, it } from "vitest";
 import type { AttentionItem, AttentionKind } from "@/api/board";
-import { attentionMark, attentionSpec, hasKind } from "./attention";
+import { attentionMark, hasKind } from "./attention";
 
 const items = (...kinds: AttentionKind[]): AttentionItem[] =>
   kinds.map((kind) => ({ kind, closable: kind === "question" }));
 
-describe("attentionSpec", () => {
-  it("maps each kind to its badge and text", () => {
-    expect(attentionSpec("question")).toMatchObject({
+describe("attentionMark per kind", () => {
+  it("maps each kind to its icon and text", () => {
+    expect(attentionMark(items("question"))).toMatchObject({
       icon: MessageCircle,
-      tone: "needs-you",
-      mark: "Question for you",
+      text: "Question for you",
     });
-    expect(attentionSpec("human_review")).toMatchObject({
+    expect(attentionMark(items("human_review"))).toMatchObject({
       icon: UserCheck,
-      tone: "human-review",
-      mark: "Your review",
+      text: "Your review",
     });
-    expect(attentionSpec("stalled")).toMatchObject({
+    expect(attentionMark(items("stalled"))).toMatchObject({
       icon: Hand,
-      tone: "stalled",
-      mark: "Stalled · needs you",
+      text: "Stalled · needs you",
     });
-    expect(attentionSpec("stale_claim")).toMatchObject({
+    expect(attentionMark(items("stale_claim"))).toMatchObject({
       icon: Hand,
-      tone: "stale",
-      mark: "Stale claim · needs you",
+      text: "Stale claim · needs you",
     });
   });
 });

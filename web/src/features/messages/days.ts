@@ -1,4 +1,5 @@
 import type { MessageView } from "@/api/messages";
+import { formatClock } from "@/format/time";
 
 const MONTHS = [
   "Jan",
@@ -37,6 +38,13 @@ export function dayLabel(now: number, at: number): string {
   return when.getFullYear() === new Date(now).getFullYear()
     ? date
     : `${date}, ${String(when.getFullYear())}`;
+}
+
+/** A thread row's time: the clock for a message of today, else the day as a divider names it. */
+export function rowTime(now: number, at: number): string {
+  return startOfDay(at) === startOfDay(now)
+    ? formatClock(at)
+    : dayLabel(now, at);
 }
 
 export type ThreadItem =

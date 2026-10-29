@@ -76,7 +76,7 @@ export function ClampText({
             setExpanded(!expanded);
           }}
           className={cn(
-            "rounded-s text-meta font-semibold text-primary-text hover:underline",
+            "rounded-s text-13 font-semibold text-accent hover:underline",
             focusRing,
           )}
         >

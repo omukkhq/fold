@@ -19,7 +19,8 @@
               "checkpoints": [],
               "proposal": null,
               "stalled": false,
-              "edits_after_version": null
+              "edits_after_version": null,
+              "check_run": null
             },
             {
               "workspace": "ws-2",
@@ -41,7 +42,8 @@
               "checkpoints": [],
               "proposal": null,
               "stalled": false,
-              "edits_after_version": null
+              "edits_after_version": null,
+              "check_run": null
             },
             {
               "workspace": "ws-3",
@@ -54,7 +56,8 @@
               "checkpoints": [],
               "proposal": null,
               "stalled": false,
-              "edits_after_version": null
+              "edits_after_version": null,
+              "check_run": null
             }
           ]
         }
@@ -82,7 +85,8 @@
           "checkpoints": [],
           "proposal": null,
           "stalled": false,
-          "edits_after_version": null
+          "edits_after_version": null,
+          "check_run": null
         }
       },
       {
@@ -180,7 +184,8 @@
               ],
               "proposal": null,
               "stalled": false,
-              "edits_after_version": null
+              "edits_after_version": null,
+              "check_run": null
             },
             {
               "workspace": "ws-3",
@@ -193,7 +198,8 @@
               "checkpoints": [],
               "proposal": null,
               "stalled": false,
-              "edits_after_version": null
+              "edits_after_version": null,
+              "check_run": null
             }
           ]
         }
@@ -236,7 +242,8 @@
           ],
           "proposal": null,
           "stalled": false,
-          "edits_after_version": null
+          "edits_after_version": null,
+          "check_run": null
         }
       },
       {
@@ -280,7 +287,8 @@
           "checkpoints": [],
           "proposal": null,
           "stalled": false,
-          "edits_after_version": null
+          "edits_after_version": null,
+          "check_run": null
         }
       }
     ]
