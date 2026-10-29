@@ -11,7 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { HrefLink } from "@/app/HrefLink";
-import { markThreadRead, type MessageView } from "@/api/messages";
+import { markThreadRead } from "@/api/messages";
 import { sessionQuery } from "@/api/queries";
 import { IdLink } from "@/components/id/IdLink";
 import type { IdKind } from "@/format/ids";
@@ -42,23 +42,15 @@ import {
   toBottom,
   toMessage,
 } from "./follow";
-import { markResetDue } from "./answered";
+import { markResetDue, threadCanMarkAnswered } from "./answered";
 import { useMarkAnsweredBar } from "./MarkAnswered";
 import { MessageItem } from "./MessageItem";
 import { chatAnchor } from "./openThread";
 import { chosenAnswers } from "./question";
-import { QuestionDock } from "./QuestionDock";
-import {
-  answeredAway,
-  cursorAt,
-  markableThread,
-  openQuestions,
-  queueIndex,
-  startCursor,
-  stepText,
-} from "./questionQueue";
+import { QuestionSetCard } from "./QuestionSetCard";
 import { readsDue, WIDE_LAYOUT } from "./readGate";
 import { ReplyBox } from "./ReplyBox";
+import { answeredAway, chatSets, markScope } from "./sets";
 
 interface ChatPanelProps {
   slug: string;
@@ -66,8 +58,12 @@ interface ChatPanelProps {
   /** The thread or message the address names; the chat opens at it. */
   link?: string;
   now: number;
+  /** The asks that wait for the signed-in human, as Needs you lists them. */
+  open: ReadonlySet<string>;
   /** Resolves once the daemon has taken the reply; rejects with its error. */
   onReply: (replyTo: string, body: string) => Promise<void>;
+  /** Resolves once the daemon has stored the one reply with every answer of the set and the screen read the asks again; rejects with its error. */
+  onAnswer: (ask: string, answers: string[]) => Promise<void>;
   /** The chat list's address, for the back arrow at phone width. */
   backHref?: string;
   /** The pane is on the screen; a hidden pane marks nothing read. */
@@ -102,13 +98,15 @@ function SubjectLink({
   );
 }
 
-/** Every message between the signed-in human and one agent, across its threads, with the asks that wait for an answer docked above the reply box. */
+/** Every message between the signed-in human and one agent, across its threads, with the oldest question set that waits for an answer on a card above the reply box. */
 export function ChatPanel({
   slug,
   chat,
   link,
   now,
+  open,
   onReply,
+  onAnswer,
   backHref,
   shown = true,
 }: ChatPanelProps) {
@@ -116,22 +114,16 @@ export function ChatPanel({
   const messages = chatMessages(chat);
   const threadOf = threadsByMessage(chat);
   const newest = messages.at(-1)?.id ?? null;
-  const [anchor] = useState(() => chatAnchor(chat, link, you));
-  const queue = openQuestions(chat, you);
-  // Without a link the dock starts at the oldest question, even when the newest message is a question.
-  const [cursor, setCursor] = useState(() =>
-    startCursor(queue, link === undefined ? null : anchor),
-  );
-  const index = queueIndex(queue, cursor);
-  const current = queue[index] ?? null;
-  const step = stepText(index, queue.length);
+  const [anchor] = useState(() => chatAnchor(chat, link, open));
+  const sets = chatSets(chat, open);
+  const current = sets[0] ?? null;
   const [about, setAbout] = useState<string | null>(null);
-  const [picked, setPicked] = useState<string | null>(null);
-  const target = chatReplyTarget(chat, you, current, about, picked);
-  const options = aboutOptions(chat, current, step);
-  const markable = markableThread(chat, current);
-  const markableId = markable?.id ?? null;
-  const mark = useMarkAnsweredBar(slug, { thread: markableId ?? "" });
+  const [answered, setAnswered] = useState(false);
+  const target = chatReplyTarget(chat, you, current, about);
+  const options = aboutOptions(chat);
+  const scope = markScope(current, chat.threads.find(threadCanMarkAnswered));
+  const markableId = scope?.ask ?? scope?.thread ?? null;
+  const mark = useMarkAnsweredBar(slug, scope ?? { thread: "" });
   const resetMark = mark.reset;
   const offered = useRef(markableId);
   useEffect(() => {
@@ -159,7 +151,6 @@ export function ChatPanel({
     handleSubmit,
     reset,
     setError,
-    setFocus,
     formState: { errors, isSubmitting },
   } = useForm<ReplyValues>({
     resolver: zodResolver(replySchema),
@@ -205,38 +196,28 @@ export function ChatPanel({
     followNewest(scroller.current, following);
   };
 
-  const dockHeading = useRef<HTMLHeadingElement>(null);
+  const cardHeading = useRef<HTMLHeadingElement>(null);
   const replyBox = useRef<HTMLTextAreaElement | null>(null);
-  const [dockFocus, setDockFocus] = useState(0);
-  useEffect(() => {
-    if (dockFocus > 0) dockHeading.current?.focus();
-  }, [dockFocus]);
-  // A choice the person clicked leaves with its answered question and drops the focus; the next question, else the reply box, takes it.
+  // An answered set leaves with the control that sent it and drops the focus; the next set, else the reply box, takes it.
   const currentId = current?.message.id ?? null;
-  const shownQuestion = useRef(currentId);
+  const shownSet = useRef(currentId);
   useEffect(() => {
-    const before = shownQuestion.current;
-    shownQuestion.current = currentId;
-    if (!answeredAway(before, queue)) return;
+    const before = shownSet.current;
+    shownSet.current = currentId;
+    if (!answeredAway(before, sets)) return;
     const active = document.activeElement;
     if (active !== null && active !== document.body) return;
     if (currentId === null) {
       replyBox.current?.focus();
     } else {
-      dockHeading.current?.focus();
+      cardHeading.current?.focus();
     }
-  }, [currentId, queue]);
+  }, [currentId, sets]);
 
-  // A written answer belongs to the question it was picked for, so moving the dock to another question drops the pick.
-  const showQuestion = (at: number, focus: boolean) => {
-    setCursor(cursorAt(queue, at));
-    setPicked(null);
-    if (focus) setDockFocus((n) => n + 1);
-  };
-
-  const writeOwn = (question: MessageView) => {
-    setPicked(question.id);
-    setFocus("body");
+  const answer = async (ask: string, answers: string[]) => {
+    await onAnswer(ask, answers);
+    setAnswered(true);
+    followNewest(scroller.current, following);
   };
 
   const send = async ({ body }: ReplyValues) => {
@@ -246,7 +227,6 @@ export function ChatPanel({
     try {
       await reply(target.replyTo, body.trim());
       reset();
-      setPicked(null);
     } catch (error) {
       setError("root", { message: failureText(error) });
     }
@@ -303,7 +283,7 @@ export function ChatPanel({
             </span>
           </p>
         </div>
-        {markable === null ? null : (
+        {scope === null ? null : (
           <div className="flex shrink-0 items-start gap-8">{mark.button}</div>
         )}
       </header>
@@ -328,7 +308,7 @@ export function ChatPanel({
       >
         <ol
           ref={content}
-          className="flex w-full max-w-thread-column flex-col gap-18 pt-14 pb-12 lg:gap-24 lg:pt-6 lg:pb-20"
+          className="mt-auto flex w-full max-w-thread-column flex-col gap-18 pt-14 pb-12 lg:gap-24 lg:pt-6 lg:pb-20"
         >
           {withDays(messages, now).map((item) => {
             if (item.kind === "day") {
@@ -343,7 +323,7 @@ export function ChatPanel({
             }
             const thread = threadOf.get(item.message.id);
             if (thread === undefined) return null;
-            const queued = queue.findIndex(
+            const queued = sets.findIndex(
               (q) => q.message.id === item.message.id,
             );
             return (
@@ -356,32 +336,37 @@ export function ChatPanel({
                 you={you}
                 chosen={chosen.has(item.message.id)}
                 context={messageContext(item.message, thread)}
-                docked={queued < 0 ? null : stepText(queued, queue.length)}
+                docked={queued < 0 ? null : queued === 0 ? "shown" : "queued"}
                 onDock={() => {
-                  showQuestion(queued, true);
+                  cardHeading.current?.focus();
                 }}
-                onReply={reply}
-                onWriteOwn={writeOwn}
               />
             );
           })}
         </ol>
       </div>
 
-      <QuestionDock
-        slug={slug}
-        queue={queue}
-        index={index}
-        stepLabel={step}
-        you={you}
-        now={now}
-        headingRef={dockHeading}
-        onStep={(next) => {
-          showQuestion(next, false);
-        }}
-        onReply={reply}
-        onWriteOwn={writeOwn}
-      />
+      {answered && current === null ? (
+        <p
+          role="status"
+          className="shrink-0 px-16 pb-6 text-14 text-ok lg:px-28"
+        >
+          Answers sent.
+        </p>
+      ) : null}
+      {current === null ? null : (
+        <QuestionSetCard
+          key={current.message.id}
+          slug={slug}
+          set={current}
+          more={sets.length - 1}
+          headingRef={cardHeading}
+          onAnswer={answer}
+          onStart={() => {
+            setAnswered(false);
+          }}
+        />
+      )}
 
       <Controller
         control={control}
@@ -412,7 +397,6 @@ export function ChatPanel({
                     disabled={isSubmitting}
                     onChange={(event) => {
                       setAbout(event.target.value);
-                      setPicked(null);
                     }}
                     className={cn(
                       "min-w-0 flex-1 truncate rounded-s bg-fill px-8 py-3 text-13 text-text max-sm:min-h-44 sm:flex-none",

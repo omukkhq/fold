@@ -12,10 +12,9 @@ import type { MessageContext } from "./chats";
 import { MessageBody } from "./MessageBody";
 import { initial, messageSide, recipientsPhrase } from "./messageLayout";
 import { isQuestion } from "./question";
-import { QuestionChoices } from "./QuestionChoices";
 import { QuotedLines } from "./QuotedLines";
 import { Receipts } from "./Receipts";
-import { freeAskWaitsForYou } from "./replyTarget";
+import { answeredPairs, listedQuestions, type AnsweredPair } from "./sets";
 
 interface MessageItemProps {
   slug: string;
@@ -27,12 +26,10 @@ interface MessageItemProps {
   chosen: boolean;
   /** The request, proposal or task the message is about, for its chip. */
   context?: MessageContext | null;
-  /** The step of the question dock that shows this question, such as `Question 2 of 3`; the dock holds its choices. */
-  docked?: string | null;
-  /** Shows this question in the dock. */
+  /** The open set this message asks: `shown` on the card below, `queued` behind it; null for any other message. */
+  docked?: "shown" | "queued" | null;
+  /** Moves the focus to the card that shows this set. */
   onDock?: () => void;
-  onReply: (replyTo: string, body: string) => Promise<void>;
-  onWriteOwn: (question: MessageView) => void;
 }
 
 function ContextChip({
@@ -80,6 +77,42 @@ function ChosenAnswer({ body, own }: { body: string; own: boolean }) {
   );
 }
 
+/** Each question of an answered set with the answer the reply gave it. */
+function AnsweredPairs({ pairs }: { pairs: AnsweredPair[] }) {
+  return (
+    <dl className="flex flex-col gap-8">
+      {pairs.map((pair, i) => (
+        <div key={`${String(i)} ${pair.question}`} className="flex flex-col">
+          <dt className="text-14 text-text-2">{pair.question}</dt>
+          <dd className="text-15 font-semibold whitespace-pre-wrap text-text">
+            {pair.answer}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** The questions of a closed set under its body, so the timeline keeps what was asked; an open set shows its questions one at a time on the card only. */
+function AskedQuestions({ message }: { message: MessageView }) {
+  const listed = listedQuestions(message);
+  if (listed.length > 0) {
+    return (
+      <ol className="flex list-decimal flex-col gap-2 pl-20 text-14 text-text-2">
+        {listed.map((q, i) => (
+          <li key={`${String(i)} ${q.text}`}>{q.text}</li>
+        ))}
+      </ol>
+    );
+  }
+  if (!isQuestion(message)) return null;
+  return (
+    <p className="text-14 text-text-2">
+      {message.choices.map((c) => c.label).join(" · ")}
+    </p>
+  );
+}
+
 /** One message of a thread: the signed-in human's own as a bubble on the right, any other sender's on the left under its name. */
 export function MessageItem({
   slug,
@@ -91,9 +124,8 @@ export function MessageItem({
   context = null,
   docked = null,
   onDock,
-  onReply,
-  onWriteOwn,
 }: MessageItemProps) {
+  const pairs = answeredPairs(message, thread);
   const side = messageSide(message.sender, you);
   const chip =
     context === null ? null : <ContextChip slug={slug} context={context} />;
@@ -126,7 +158,9 @@ export function MessageItem({
           </p>
           {lines}
           <div className="max-w-full rounded-l rounded-br-s bg-accent-soft px-14 py-10">
-            {chosen ? (
+            {pairs !== null ? (
+              <AnsweredPairs pairs={pairs} />
+            ) : chosen ? (
               <ChosenAnswer body={message.body} own />
             ) : (
               <MessageBody body={message.body} slug={slug} />
@@ -158,7 +192,7 @@ export function MessageItem({
               <ActorText segments={recipientsPhrase(message, you)} you={you} />
             </span>
           ) : null}
-          {docked === null && freeAskWaitsForYou(thread, message, you) ? (
+          {docked === "queued" ? (
             <span className="inline-flex items-center gap-5 rounded-pill bg-warn-soft px-8 py-2 text-13 font-semibold text-warn">
               <CircleHelp aria-hidden="true" size={14} />
               Waits for your answer
@@ -171,31 +205,28 @@ export function MessageItem({
         </p>
         {lines}
         <div className="max-w-measure">
-          {chosen ? (
+          {docked === "queued" ? (
+            <p className="text-14 text-text-2">
+              Its questions show once you answer the set below.
+            </p>
+          ) : pairs !== null ? (
+            <AnsweredPairs pairs={pairs} />
+          ) : chosen ? (
             <ChosenAnswer body={message.body} own={false} />
           ) : (
             <MessageBody body={message.body} slug={slug} />
           )}
         </div>
-        {docked !== null ? (
+        {docked === null ? <AskedQuestions message={message} /> : null}
+        {docked === "shown" ? (
           <button
             type="button"
             onClick={onDock}
             className={cn(chipClasses("warn"), "self-start", focusRing)}
           >
             <CircleHelp aria-hidden="true" size={14} />
-            {docked} waits for your answer below
+            Waits for your answer below
           </button>
-        ) : isQuestion(message) ? (
-          <QuestionChoices
-            thread={thread}
-            question={message}
-            you={you}
-            onReply={onReply}
-            onWriteOwn={() => {
-              onWriteOwn(message);
-            }}
-          />
         ) : null}
         <Receipts message={message} now={now} you={you} />
       </article>

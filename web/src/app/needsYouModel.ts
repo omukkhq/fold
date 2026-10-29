@@ -129,10 +129,11 @@ export function pathsText(paths: readonly string[]): string | null {
     : `${codeData(first)} and ${String(paths.length - 1)} more`;
 }
 
-/** `asks about Chart library` with the question's header, else what kind of answer it wants. */
+/** `asks 3 questions` for a set of several, else `asks about Chart library` with the question's header, else what kind of answer it wants. */
 export function questionText(
-  item: Pick<NeedsYouItem, "header" | "choices">,
+  item: Pick<NeedsYouItem, "header" | "choices" | "questions">,
 ): string {
+  if (item.questions > 1) return `asks ${String(item.questions)} questions`;
   if (item.header !== null) return `asks about ${codeData(item.header)}`;
   return item.choices.length > 0 ? "asks you to choose" : "asks a question";
 }

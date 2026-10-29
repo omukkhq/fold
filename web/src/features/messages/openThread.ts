@@ -9,7 +9,7 @@ import {
 } from "./chats";
 import { atName } from "@/people/names";
 import { findThread } from "./filters";
-import { openQuestions } from "./questionQueue";
+import { chatSets } from "./sets";
 
 /** The chat pane's content: a chat of the listing, a thread read on its own because the listing did not reach it, or a chat key that no listed chat has. */
 export type OpenChat =
@@ -51,13 +51,13 @@ export function openChat(
 }
 
 /**
- * The message the chat opens at. A link to a message opens at it; a link to a thread opens at its oldest question to the signed-in human, else at its newest message; otherwise the chat opens at its newest message.
+ * The message the chat opens at. A link to a message opens at it; a link to a thread opens at its oldest set that waits for the signed-in human, else at its newest message; otherwise the chat opens at its newest message. `open` holds the asks that wait for them.
  * A thread's id is also the id of its first message, so such a link reads as a link to the thread.
  */
 export function chatAnchor(
   chat: AgentChat,
   link: string | undefined,
-  you: string | null,
+  open: ReadonlySet<string>,
 ): string | null {
   const thread = threadIn(chat, link);
   if (thread === null || link === undefined) {
@@ -66,7 +66,7 @@ export function chatAnchor(
   if (thread.id !== link) return link;
   const own: AgentChat = { ...chat, threads: [thread] };
   return (
-    openQuestions(own, you)[0]?.message.id ?? thread.messages.at(-1)?.id ?? null
+    chatSets(own, open)[0]?.message.id ?? thread.messages.at(-1)?.id ?? null
   );
 }
 

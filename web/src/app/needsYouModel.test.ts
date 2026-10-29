@@ -158,11 +158,21 @@ describe("needsYouGroups", () => {
 
   it("names a question by its header", () => {
     const choices = [{ label: "Red", description: null }];
-    expect(questionText({ header: "Chart library", choices })).toBe(
-      "asks about Chart library",
+    expect(
+      questionText({ header: "Chart library", choices, questions: 1 }),
+    ).toBe("asks about Chart library");
+    expect(questionText({ header: null, choices, questions: 1 })).toBe(
+      "asks you to choose",
     );
-    expect(questionText({ header: null, choices })).toBe("asks you to choose");
-    expect(questionText({ header: null, choices: [] })).toBe("asks a question");
+    expect(questionText({ header: null, choices: [], questions: 1 })).toBe(
+      "asks a question",
+    );
+  });
+
+  it("counts the questions of a set of several", () => {
+    expect(questionText({ header: null, choices: [], questions: 3 })).toBe(
+      "asks 3 questions",
+    );
   });
 
   it("trims a title for the second line and leaves a blank one out", () => {
@@ -253,9 +263,9 @@ describe("needsYouGroups", () => {
     expect(pathsText(["a.md", "b.md", "c.md"])).toBe("a.md and 2 more");
     expect(pathsText(["a`b.md", "c.md"])).toBe("a\\`b.md and 1 more");
     expect(titleText(" Wait for `x` ")).toBe("Wait for \\`x\\`");
-    expect(questionText({ header: "Use `pnpm`?", choices: [] })).toBe(
-      "asks about Use \\`pnpm\\`?",
-    );
+    expect(
+      questionText({ header: "Use `pnpm`?", choices: [], questions: 1 }),
+    ).toBe("asks about Use \\`pnpm\\`?");
   });
 
   it("links a Git branch that fold did not move to the history of main with the command that brings it back", () => {

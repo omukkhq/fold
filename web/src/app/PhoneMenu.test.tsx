@@ -11,6 +11,7 @@ import {
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
+import { needsItem } from "@/test/workers";
 import { keys } from "../api/keys";
 import { liveStatusStore } from "../live/status";
 import { agent } from "../test/agents";
@@ -35,8 +36,11 @@ async function renderMenu(pausedSince: number | null) {
     overview: { paused_since: pausedSince },
   });
   client.setQueryData(keys.session(), { human: "tanim", authenticated: true });
-  client.setQueryData(keys.needsYou("demo"), []);
-  // One chat whose two questions wait: the tab counts questions, as the chat row does.
+  // Two sets wait in Needs you: the tab counts sets, as the chat rows do.
+  client.setQueryData(keys.needsYou("demo"), [
+    needsItem({ kind: "question", message: FIRST }),
+    needsItem({ kind: "question", message: SECOND }),
+  ]);
   const ask = (id: string) =>
     message(id, {
       sender: "web-lead",
@@ -101,7 +105,7 @@ describe("PhoneMenu", () => {
     ).toBe("page");
     expect(
       within(tabs).getByRole("status", {
-        name: "2 questions wait for your answer",
+        name: "2 question sets wait for your answer",
       }).textContent,
     ).toBe("2");
     expect(within(menu).getByText("1 working · 2 in all")).toBeTruthy();

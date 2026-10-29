@@ -260,35 +260,30 @@ describe("the Show choice", () => {
     expect(showFilter(withShow({}, "questions"))).toBe("questions");
     expect(showFilter(withShow({}, "waiting"))).toBe("waiting");
   });
-  it("counts the waiting questions and offers Mine only to a signed-in human", () => {
-    const asking = thread("m-20", {
-      awaiting_human: true,
-      messages: [
-        message("m-20", {
-          sender: "frontend",
-          recipients: [recipient("human:tanim")],
-          asks_human: true,
-        }),
-        message("m-21", {
-          sender: "frontend",
-          recipients: [recipient("human:tanim")],
-          choices: [{ label: "Yes", description: null }],
-        }),
-      ],
-    });
-    expect(
-      showOptions([...threads, asking], "tanim").map((c) => [c.label, c.count]),
-    ).toEqual([
+  it("shows the count of waiting sets and offers Mine only to a signed-in human", () => {
+    expect(showOptions("tanim", 2).map((c) => [c.label, c.count])).toEqual([
       ["All chats", null],
       ["Waits for you", 2],
       ["Questions", null],
       ["Mine", null],
     ]);
-    expect(showOptions([], null).map((c) => [c.label, c.count])).toEqual([
+    expect(showOptions(null, 0).map((c) => [c.label, c.count])).toEqual([
       ["All chats", null],
       ["Waits for you", 0],
       ["Questions", null],
     ]);
+  });
+  it("counts a question set as an ask", () => {
+    const set = thread("m-30", {
+      messages: [
+        message("m-30", {
+          sender: "frontend",
+          recipients: [recipient("human:tanim")],
+          questions: [{ text: "Connected?", header: null, choices: [] }],
+        }),
+      ],
+    });
+    expect(hasAsk(set)).toBe(true);
   });
   it("names the Show choice on the button and counts the other set filters", () => {
     expect(filterSummary({})).toBe("All chats");

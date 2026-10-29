@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { keys } from "@/api/keys";
 import type { ThreadView } from "@/api/messages";
 import { message, recipient, thread } from "@/test/messages";
+import { needsItem } from "@/test/workers";
 import { errorReply, stubFetch } from "@/test/stubFetch";
 import { MessagesScreen } from "./MessagesScreen";
 import type { MessagesSearch } from "./search";
@@ -31,6 +32,7 @@ afterEach(() => {
 /** The router of the latest setup, to read where a filter choice leads. */
 let lastRouter: { state: { location: { href: string } } } | null = null;
 
+/** The threads marked as waiting hold the asks Needs you lists, their first message each. */
 async function setup(
   search: MessagesSearch,
   threads: ThreadView[],
@@ -43,6 +45,12 @@ async function setup(
     items: threads,
     more,
   });
+  queryClient.setQueryData(
+    keys.needsYou("demo"),
+    threads
+      .filter((t) => t.awaiting_human)
+      .map((t) => needsItem({ kind: "question", message: t.id })),
+  );
   const root = createRootRoute();
   const index = createRoute({
     getParentRoute: () => root,
@@ -140,7 +148,9 @@ describe("MessagesScreen", () => {
     expect(row.textContent).toContain("@frontend/ui");
     expect(row.textContent).toContain("Which chart library?");
     expect(
-      within(row).getByRole("status", { name: "1 question waits for you" }),
+      within(row).getByRole("status", {
+        name: "1 question set waits for you",
+      }),
     ).toBeTruthy();
   });
 
@@ -175,7 +185,7 @@ describe("MessagesScreen", () => {
     expect(rows()[0]?.textContent).toContain("The build passes.");
     expect(screen.getByText("2 chats")).toBeTruthy();
     expect(
-      screen.getAllByRole("status", { name: "1 question waits for you" }),
+      screen.getAllByRole("status", { name: "1 question set waits for you" }),
     ).toHaveLength(2);
     await userEvent.click(
       screen.getByRole("button", { name: "Filter: All chats" }),
@@ -221,7 +231,8 @@ describe("MessagesScreen", () => {
     const messages = within(chat).getByRole("region", { name: "Messages" });
     expect(within(messages).getAllByRole("article")).toHaveLength(2);
     expect(
-      within(chat).getByRole("region", { name: "Open questions" }).textContent,
+      within(chat).getByRole("region", { name: "Open question set" })
+        .textContent,
     ).toContain("Which chart library?");
     expect(
       within(chat)

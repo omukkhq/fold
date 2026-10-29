@@ -47,12 +47,16 @@ describe("chatRow", () => {
   it("names the agent, shows its newest message and counts what waits for you", () => {
     const [chat] = groupChats([note, waiting]);
     if (!chat) throw new Error("no chat");
-    const row = chatRow(chat, "tanim");
+    const row = chatRow(chat, "tanim", new Set(["m-2"]));
     expect(row.title).toEqual({ agent: "web-worker-39" });
     expect(segmentsText(row.preview)).toBe("Use null?");
     expect(row.questions).toBe(1);
-    // The unread ask counts once, as a question.
+    // The unread ask counts once, as a question set.
     expect(row.unread).toBe(1);
+    // An ask that Needs you no longer lists is no set, only an unread message.
+    const closed = chatRow(chat, "tanim", new Set());
+    expect(closed.questions).toBe(0);
+    expect(closed.unread).toBe(2);
   });
 
   it("names a chat without an agent by its thread and counts nothing for no one signed in", () => {
@@ -62,10 +66,10 @@ describe("chatRow", () => {
     });
     const [chat] = groupChats([own]);
     if (!chat) throw new Error("no chat");
-    const row = chatRow(chat, null);
+    const row = chatRow(chat, null, new Set());
     expect(row.title).toEqual({ text: "Todo" });
     expect(row.unread).toBe(0);
-    expect(chatRow({ ...chat, threads: [] }, null)).toEqual({
+    expect(chatRow({ ...chat, threads: [] }, null, new Set())).toEqual({
       title: { text: "m-5" },
       preview: [],
       questions: 0,
@@ -74,8 +78,8 @@ describe("chatRow", () => {
   });
 
   it("words its counts", () => {
-    expect(questionsLabel(1)).toBe("1 question waits for you");
-    expect(questionsLabel(3)).toBe("3 questions wait for you");
+    expect(questionsLabel(1)).toBe("1 question set waits for you");
+    expect(questionsLabel(3)).toBe("3 question sets wait for you");
     expect(unreadLabel(1)).toBe("1 unread message");
     expect(unreadLabel(2)).toBe("2 unread messages");
   });
