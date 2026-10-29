@@ -360,6 +360,14 @@ const TREES: Record<string, ReturnType<typeof entry>[]> = {
 };
 
 const FILES: Record<string, Record<string, unknown>> = {
+  "long.txt": {
+    kind: "file",
+    binary: false,
+    too_large: false,
+    text: Array.from({ length: 1001 }, (_, i) => `line ${String(i + 1)}`).join(
+      "\n",
+    ),
+  },
   "README.md": {
     kind: "file",
     binary: false,
@@ -842,6 +850,26 @@ describe("Repository screen", () => {
     ).toBeTruthy();
     await user.click(within(file).getByRole("button", { name: "Done" }));
     expect(within(file).queryByText(/with these lines/)).toBeNull();
+  });
+
+  it("shows a long file a thousand lines at a time", async () => {
+    renderRepository(undefined, REVISIONS, "long.txt");
+    const user = userEvent.setup();
+    const file = await screen.findByRole("region", { name: "File long.txt" });
+    expect(
+      await within(file).findByRole("gridcell", {
+        name: "Line 1000: line 1000",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(file).queryByRole("gridcell", { name: "Line 1001: line 1001" }),
+    ).toBeNull();
+    await user.click(
+      within(file).getByRole("button", { name: "Show more · 1 more row" }),
+    );
+    expect(
+      within(file).getByRole("gridcell", { name: "Line 1001: line 1001" }),
+    ).toBeTruthy();
   });
 
   it("opens a binary file with its size and hash", async () => {

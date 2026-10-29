@@ -1,12 +1,15 @@
 import { Id } from "@/components/id/Id";
 import { useQuery } from "@tanstack/react-query";
-import { FileX, Link2, Ruler } from "lucide-react";
+import { ChevronsDown, FileX, Link2, Ruler } from "lucide-react";
 import { useState } from "react";
 import { Mono } from "@/components/mono/Mono";
 import { ErrorBanner } from "@/components/states/ErrorBanner";
 import { Skeleton } from "@/components/states/Skeleton";
 import { requestsQuery } from "@/api/queries";
+import { Button } from "@/components/button/Button";
 import { DiffRows } from "@/features/diff/DiffRows";
+import { ROW_LIMIT } from "@/features/diff/layout";
+import { moreRowsText } from "@/features/diff/present";
 import type { DiffSelection } from "@/features/diff/selection";
 import { revisionRequestMarks } from "@/features/requests/codeLocation";
 import { CodeRequestComposer } from "@/features/requests/CodeRequestComposer";
@@ -26,7 +29,9 @@ export function FileView({ slug, revision, path }: FileViewProps) {
   const file = useQuery(fileQuery(slug, revision, path));
   const requests = useQuery(requestsQuery(slug));
   const [selection, setSelection] = useState<DiffSelection | null>(null);
+  const [limit, setLimit] = useState(ROW_LIMIT);
   const shown = file.data ? fileState(file.data) : null;
+  const rows = shown?.kind === "text" ? fileRows(shown.text) : [];
   const byId = new Map((requests.data ?? []).map((r) => [r.id, r]));
   return (
     <section
@@ -52,7 +57,7 @@ export function FileView({ slug, revision, path }: FileViewProps) {
           <DiffRows
             variant="file"
             path={path}
-            rows={fileRows(shown.text)}
+            rows={rows.slice(0, limit)}
             selection={selection}
             onSelect={setSelection}
             onExpand={() => undefined}
@@ -79,6 +84,21 @@ export function FileView({ slug, revision, path }: FileViewProps) {
               />
             )}
           />
+          {rows.length > limit ? (
+            <div className="bg-diff-hunk px-8 py-3">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-accent hover:bg-surface hover:text-accent"
+                icon={<ChevronsDown aria-hidden="true" size={14} />}
+                onClick={() => {
+                  setLimit((old) => old + ROW_LIMIT);
+                }}
+              >
+                {moreRowsText(rows.length - limit)}
+              </Button>
+            </div>
+          ) : null}
         </div>
       ) : null}
       {shown?.kind === "symlink" ? (
