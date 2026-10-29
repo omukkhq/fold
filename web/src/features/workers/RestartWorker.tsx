@@ -6,6 +6,12 @@ import { keys } from "@/api/keys";
 import { restartWorker } from "@/api/workers";
 import { Button, IconButton } from "@/components/button/Button";
 import { MentionTextarea } from "@/mentions/MentionTextarea";
+import { cn } from "@/lib/cn";
+import {
+  dialogBody,
+  dialogContent,
+  dialogOverlay,
+} from "@/components/overlay/dialogStyles";
 import { ErrorNote } from "./parts";
 import { restartBody, restartFailure } from "./restart";
 
@@ -60,79 +66,87 @@ export function RestartWorker({
         </Button>
       </RadixDialog.Trigger>
       <RadixDialog.Portal>
-        <RadixDialog.Overlay className="fixed inset-0 bg-scrim" />
-        <RadixDialog.Content className="fixed top-1/2 left-1/2 flex max-h-full w-request-dialog max-w-full -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-l bg-surface shadow-dialog outline-none">
-          <div className="flex items-center justify-between pt-16 pr-16 pb-4 pl-24">
-            <RadixDialog.Title className="text-16 leading-tight font-semibold text-text">
-              Start {name} in a new session
-            </RadixDialog.Title>
-            <RadixDialog.Close asChild>
-              <IconButton
-                aria-label="Close"
-                size="sm"
-                disabled={restart.isPending}
-              >
-                <X aria-hidden="true" size={13} />
-              </IconButton>
-            </RadixDialog.Close>
-          </div>
-          <form
-            noValidate
-            onSubmit={(event) => {
-              event.preventDefault();
-              restart.mutate();
-            }}
-            className="flex flex-col"
+        <RadixDialog.Overlay className={dialogOverlay}>
+          <RadixDialog.Content
+            className={cn(dialogContent, "w-request-dialog")}
           >
-            <div className="flex flex-col gap-16 px-24 pt-18 pb-20">
-              <RadixDialog.Description className="text-14 text-text-2">
-                fold stops the worker when it runs, then starts it with a new
-                Claude Code session and its role's first turn. It forgets its
-                current session but keeps its name, its claims and the workers
-                it started.
-              </RadixDialog.Description>
-              {previousSessions.length > 0 ? (
-                <p className="text-13 text-text-2">
-                  Earlier sessions:{" "}
-                  <span className="font-mono">
-                    {previousSessions.join(", ")}
-                  </span>
-                </p>
-              ) : null}
-              <div className="flex flex-col gap-6">
-                <label htmlFor={`${ids}-instructions`} className={FIELD_LABEL}>
-                  Instructions
-                </label>
-                <MentionTextarea
-                  id={`${ids}-instructions`}
-                  slug={slug}
-                  rows={3}
-                  value={instructions}
-                  onValueChange={setInstructions}
-                  readOnly={restart.isPending}
-                  className="resize-y"
-                />
+            <div className="flex shrink-0 items-center justify-between pt-16 pr-16 pb-4 pl-24">
+              <RadixDialog.Title className="text-16 leading-tight font-semibold text-text">
+                Start {name} in a new session
+              </RadixDialog.Title>
+              <RadixDialog.Close asChild>
+                <IconButton
+                  aria-label="Close"
+                  size="sm"
+                  disabled={restart.isPending}
+                >
+                  <X aria-hidden="true" size={13} />
+                </IconButton>
+              </RadixDialog.Close>
+            </div>
+            <form
+              noValidate
+              onSubmit={(event) => {
+                event.preventDefault();
+                restart.mutate();
+              }}
+              className="flex min-h-0 flex-col"
+            >
+              <div className={dialogBody}>
+                <div className="flex flex-col gap-16 px-24 pt-18 pb-20">
+                  <RadixDialog.Description className="text-14 text-text-2">
+                    fold stops the worker when it runs, then starts it with a
+                    new Claude Code session and its role's first turn. It
+                    forgets its current session but keeps its name, its claims
+                    and the workers it started.
+                  </RadixDialog.Description>
+                  {previousSessions.length > 0 ? (
+                    <p className="text-13 text-text-2">
+                      Earlier sessions:{" "}
+                      <span className="font-mono">
+                        {previousSessions.join(", ")}
+                      </span>
+                    </p>
+                  ) : null}
+                  <div className="flex flex-col gap-6">
+                    <label
+                      htmlFor={`${ids}-instructions`}
+                      className={FIELD_LABEL}
+                    >
+                      Instructions
+                    </label>
+                    <MentionTextarea
+                      id={`${ids}-instructions`}
+                      slug={slug}
+                      rows={3}
+                      value={instructions}
+                      onValueChange={setInstructions}
+                      readOnly={restart.isPending}
+                      className="resize-y"
+                    />
+                  </div>
+                  {restart.isError ? (
+                    <ErrorNote failure={restartFailure(restart.error)} />
+                  ) : null}
+                </div>
               </div>
-              {restart.isError ? (
-                <ErrorNote failure={restartFailure(restart.error)} />
-              ) : null}
-            </div>
-            <div className="flex items-center justify-end gap-8 px-24 pt-4 pb-20">
-              <Button disabled={restart.isPending} onClick={close}>
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                variant="primary"
-                pending={restart.isPending}
-                pendingLabel="Starting…"
-                icon={<RotateCcw aria-hidden="true" size={15} />}
-              >
-                Start new session
-              </Button>
-            </div>
-          </form>
-        </RadixDialog.Content>
+              <div className="flex shrink-0 items-center justify-end gap-8 px-24 pt-4 pb-20">
+                <Button disabled={restart.isPending} onClick={close}>
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  pending={restart.isPending}
+                  pendingLabel="Starting…"
+                  icon={<RotateCcw aria-hidden="true" size={15} />}
+                >
+                  Start new session
+                </Button>
+              </div>
+            </form>
+          </RadixDialog.Content>
+        </RadixDialog.Overlay>
       </RadixDialog.Portal>
     </RadixDialog.Root>
   );

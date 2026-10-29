@@ -99,7 +99,7 @@ function StripDetails({ details }: { details: string }) {
             side="bottom"
             align="end"
             sideOffset={6}
-            className="z-20 max-w-measure rounded-s bg-ink px-10 py-6 text-13 text-on-ink"
+            className="z-tooltip max-w-measure rounded-s bg-ink px-10 py-6 text-13 text-on-ink"
           >
             {details}
           </RadixTooltip.Content>

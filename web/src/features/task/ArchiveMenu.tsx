@@ -49,30 +49,32 @@ export function ArchiveMenu({
         }}
         title={`Archive ${task}?`}
         description="The task leaves the board and its dependencies are removed. Its history stays in the activity list."
+        footer={
+          <div className="flex gap-8">
+            <Button
+              variant="danger"
+              pending={archive.isPending}
+              pendingLabel="Archiving task…"
+              onClick={() => {
+                archive.mutate(undefined, { onSuccess: onArchived });
+              }}
+            >
+              Archive task
+            </Button>
+            <Button
+              variant="ghost"
+              disabled={archive.isPending}
+              onClick={() => {
+                setConfirming(false);
+                archive.reset();
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        }
       >
         <WriteError error={archive.error} />
-        <div className="flex gap-8">
-          <Button
-            variant="danger"
-            pending={archive.isPending}
-            pendingLabel="Archiving task…"
-            onClick={() => {
-              archive.mutate(undefined, { onSuccess: onArchived });
-            }}
-          >
-            Archive task
-          </Button>
-          <Button
-            variant="ghost"
-            disabled={archive.isPending}
-            onClick={() => {
-              setConfirming(false);
-              archive.reset();
-            }}
-          >
-            Cancel
-          </Button>
-        </div>
       </Dialog>
     </>
   );

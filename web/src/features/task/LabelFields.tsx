@@ -96,7 +96,7 @@ export function AreaMenu({
         <DropdownMenu.Content
           align="start"
           sideOffset={4}
-          className={cn(menuContent, "z-20 w-side-panel")}
+          className={cn(menuContent, "w-side-panel")}
         >
           <DropdownMenu.RadioGroup value={value} onValueChange={onValueChange}>
             {[null, ...options].map((option) => (
@@ -358,7 +358,7 @@ export function LabelsField({
                 event.preventDefault();
               }
             }}
-            className={cn(menuContent, "z-20 w-side-panel")}
+            className={cn(menuContent, "w-side-panel")}
           >
             {choices.length === 0 ? (
               <p className="px-8 py-6 text-14 text-text-2">

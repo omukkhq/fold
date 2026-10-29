@@ -348,7 +348,7 @@ export function DecisionBar({
   return (
     <div
       ref={bar}
-      className="sticky top-0 z-3 mx-16 mt-14 flex flex-wrap items-center gap-x-12 gap-y-6 rounded-m bg-surface p-6 md:mx-24"
+      className="sticky top-0 z-sticky mx-16 mt-14 flex flex-wrap items-center gap-x-12 gap-y-6 rounded-m bg-surface p-6 md:mx-24"
     >
       {tabs}
       <RadixPopover.Root
@@ -362,7 +362,7 @@ export function DecisionBar({
             ref={group}
             role="group"
             aria-label="Your review"
-            className="flex min-w-0 flex-col items-end gap-4 md:ml-auto max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-3 max-md:items-stretch max-md:border-t max-md:border-line max-md:bg-surface max-md:px-12 max-md:pt-8 max-md:pb-16"
+            className="flex min-w-0 flex-col items-end gap-4 md:ml-auto max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-sticky max-md:items-stretch max-md:border-t max-md:border-line max-md:bg-surface max-md:px-12 max-md:pt-8 max-md:pb-16"
           >
             <div className="flex flex-wrap items-center justify-end gap-6 max-md:order-2 max-md:flex-nowrap">
               {decides && !view.current ? (
@@ -555,7 +555,7 @@ export function DecisionBar({
               event.preventDefault();
               opener.current?.focus();
             }}
-            className="z-10 flex w-history max-w-(--width-popover-max) flex-col rounded-m bg-surface p-16 shadow-pop outline-none"
+            className="z-pop flex w-history max-w-(--width-popover-max) flex-col rounded-m bg-surface p-16 shadow-pop outline-none"
           >
             {panel === "request" ? (
               <RequestChangesForm

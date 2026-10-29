@@ -267,7 +267,7 @@ function ChartBar({ bar }: { bar: CostBar }) {
       <RadixTooltip.Portal>
         <RadixTooltip.Content
           sideOffset={4}
-          className="z-10 flex flex-col gap-2 rounded-s bg-ink px-8 py-6 text-13 text-on-ink"
+          className="z-tooltip flex flex-col gap-2 rounded-s bg-ink px-8 py-6 text-13 text-on-ink"
         >
           <span className="font-semibold">
             {bar.title} · {costText(bar.cost)} · {tokensText(bar.tokens)} tokens
