@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO message_answers (reply_id, ask_id, question, answer)\n             VALUES ((SELECT id FROM messages WHERE number = ?1),\n                     (SELECT id FROM messages WHERE number = ?2), ?3, ?4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "8d4112d36f9574cda54f184b12fa02b27328cc2c264ce46d7f9caafe9a5f99e4"
+}

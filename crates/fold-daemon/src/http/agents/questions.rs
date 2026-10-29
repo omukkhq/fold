@@ -206,6 +206,8 @@ pub struct NeedsYouEntry {
     /// The short header of a `question`, such as `Chart library`.
     #[schema(required = true, example = "Chart library")]
     pub header: Option<String>,
+    /// How many questions a `question` asks as one set, which a human answers together in one reply; 0 for every other kind.
+    pub questions: usize,
     /// The second line of a `human_review` (the proposal title) and of a `request_draft` (the request title, which the claim gave it); the task title of a `human_task` or a `blocker`; the file, line and problem of a `checks_file_invalid_on_main`; Claude Code's error of a `worker_model_unreachable`.
     #[schema(required = true, example = "Database schema for reports")]
     pub title: Option<String>,
@@ -266,6 +268,7 @@ impl From<NeedsYouItem> for NeedsYouEntry {
             humans: item.humans.iter().map(ToString::to_string).collect(),
             choices: item.choices.into_iter().map(MessageChoice::from).collect(),
             header: item.header,
+            questions: item.questions,
             title: item.title,
             reason: item.reason,
             commit: item.commit,

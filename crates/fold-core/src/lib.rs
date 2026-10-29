@@ -46,7 +46,7 @@ pub use layout::{
 };
 pub use messages::{
     Address, AddressError, AddressedAs, Choice, Directory, DirectoryAgent, MessageBody,
-    MessageChoices, Recipient, ResolveError, Sender, Target,
+    MessageChoices, QuestionSet, Recipient, ResolveError, Sender, SetQuestion, Target,
 };
 pub use policy::PolicyDenied;
 pub use projects::{choose_slug, slugify};

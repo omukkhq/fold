@@ -30,7 +30,7 @@ pub use projects::{
     can_add_exclude_patterns, can_change_notifications, can_enable_git, can_pull, can_record,
     can_remove_project, can_stash,
 };
-pub use questions::{can_answer_worker_permission, can_close_ask};
+pub use questions::{can_answer_worker_permission, can_close_ask, can_list_open_asks};
 pub use requests::{can_claim_request, can_create_request, is_drafter, is_requester};
 pub use sessions::{SessionPeer, can_bind_agent, can_name_human};
 pub use tasks::{

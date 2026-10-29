@@ -498,3 +498,105 @@ async fn a_human_acknowledges_only_their_own_rows_of_one_thread() {
         "another human's row, a worker's row and another thread stay unread"
     );
 }
+
+#[tokio::test]
+async fn a_set_keeps_its_questions_and_a_reply_that_answers_one_set_leaves_the_other_open() {
+    let project = seeded().await;
+    let store = project.store();
+    for sql in [
+        "INSERT INTO messages (id, number, thread_id, sender_kind, sender_worker_id, body, created_at)
+         VALUES (2, 2, 2, 'worker', 1, 'two sets', 0), (3, 3, 2, 'worker', 1, 'one more', 0)",
+        "INSERT INTO message_recipients (message_id, human, addressed_as) VALUES (2, 'ana', 'humans'), (3, 'ana', 'humans')",
+        "INSERT INTO message_questions (message_id, position, text, header) VALUES (2, 1, 'Connected?', NULL), (2, 2, 'Keys?', 'Keys'), (3, 1, 'Suite?', NULL)",
+        "INSERT INTO message_question_choices (message_id, question, position, label) VALUES (2, 1, 1, 'Yes'), (2, 1, 2, 'Not yet')",
+    ] {
+        exec(store, sql).await.unwrap();
+    }
+    let open = "SELECT COUNT(*) FROM open_human_questions";
+    assert_eq!(count(store, open).await, 2, "each set is an ask of its own");
+
+    let choices = exec(
+        store,
+        "INSERT INTO message_choices (message_id, position, label) VALUES (2, 1, 'Red')",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        choices
+            .to_string()
+            .contains("message_questions_not_choices"),
+        "{choices}"
+    );
+    let orphan = exec(
+        store,
+        "INSERT INTO message_question_choices (message_id, question, position, label) VALUES (2, 3, 1, 'x')",
+    )
+    .await
+    .unwrap_err();
+    assert!(orphan.to_string().contains("FOREIGN KEY"), "{orphan}");
+
+    // The human's reply in the thread answers m-3 only, so the older m-2 keeps waiting.
+    for sql in [
+        "INSERT INTO messages (id, number, thread_id, reply_to, sender_kind, sender_human, body, created_at)
+         VALUES (4, 4, 2, 3, 'human', 'ana', 'Run it', 0)",
+        "INSERT INTO message_answers (reply_id, ask_id, question, answer) VALUES (4, 3, 1, 'Run it')",
+    ] {
+        exec(store, sql).await.unwrap();
+    }
+    let waiting: Vec<i64> = sqlx::query_scalar("SELECT number FROM open_human_questions")
+        .fetch_all(store.read())
+        .await
+        .unwrap();
+    assert_eq!(waiting, [2]);
+    let twice = exec(
+        store,
+        "INSERT INTO message_answers (reply_id, ask_id, question, answer) VALUES (4, 2, 1, 'Yes')",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        twice
+            .to_string()
+            .contains("message_answers_reply_in_thread"),
+        "a reply answers one ask: {twice}"
+    );
+    let from_agent = exec(
+        store,
+        "INSERT INTO message_answers (reply_id, ask_id, question, answer) VALUES (3, 2, 1, 'Yes')",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        from_agent
+            .to_string()
+            .contains("message_answers_reply_in_thread"),
+        "{from_agent}"
+    );
+
+    // A free reply without answers ends every ask before it in the thread.
+    exec(
+        store,
+        "INSERT INTO messages (id, number, thread_id, reply_to, sender_kind, sender_human, body, created_at)
+         VALUES (5, 5, 2, 2, 'human', 'ana', 'all done', 0)",
+    )
+    .await
+    .unwrap();
+    assert_eq!(count(store, open).await, 0);
+    let again = exec(
+        store,
+        "INSERT INTO message_answers (reply_id, ask_id, question, answer) VALUES (5, 3, 1, 'No')",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        again.to_string().contains("message_answers_once") || again.to_string().contains("UNIQUE"),
+        "{again}"
+    );
+    for table in [
+        "message_questions",
+        "message_question_choices",
+        "message_answers",
+    ] {
+        assert_append_only(store, table).await;
+    }
+}

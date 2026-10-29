@@ -36,10 +36,15 @@ INSERT INTO message_recipients (message_id, human, addressed_as) VALUES (9, 'ana
 INSERT INTO message_ask_closures (message_id, reason, closed_by, created_at) VALUES (9, 'dismissed', 'human:ana', 0);
 INSERT INTO messages (id, number, thread_id, sender_kind, sender_human, proposal_id, body, created_at) VALUES (10, 10, 10, 'human', 'ana', 1, 'why', 0);
 INSERT INTO message_line_refs (message_id, version_id, path, side, start_line, end_line, excerpt, excerpt_cut) VALUES (10, 1, 'a.rs', 'new', 1, 2, 'a', 0);
+INSERT INTO messages (id, number, thread_id, sender_kind, sender_worker_id, body, created_at) VALUES (11, 11, 11, 'worker', 1, 'two questions', 0);
+INSERT INTO message_questions (message_id, position, text) VALUES (11, 1, 'Connected?'), (11, 2, 'Keys?');
+INSERT INTO message_question_choices (message_id, question, position, label) VALUES (11, 1, 1, 'Yes'), (11, 1, 2, 'No');
+INSERT INTO messages (id, number, thread_id, reply_to, sender_kind, sender_human, body, created_at) VALUES (12, 12, 11, 11, 'human', 'ana', 'answers', 0);
+INSERT INTO message_answers (reply_id, ask_id, question, answer) VALUES (12, 11, 1, 'Yes'), (12, 11, 2, 'Mock');
 INSERT INTO worker_turns (worker_process_id, role, cost_micro_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, failed, interrupted, created_at) VALUES (1, 'review_lead', 10, 0, 0, 0, 0, 0, 0, 0);
 ";
 
-const APPEND_ONLY: [&str; 21] = [
+const APPEND_ONLY: [&str; 24] = [
     "completions",
     "revisions",
     "changesets",
@@ -61,14 +66,20 @@ const APPEND_ONLY: [&str; 21] = [
     "message_ask_closures",
     "message_line_refs",
     "worker_turns",
+    "message_questions",
+    "message_question_choices",
+    "message_answers",
 ];
 
 /// The append-only tables whose rows are derived in the transaction of a row that carries the time, so they have no `created_at` of their own.
-const WITHOUT_CREATED_AT: [&str; 4] = [
+const WITHOUT_CREATED_AT: [&str; 7] = [
     "review_batch_lines",
     "worker_question_messages",
     "message_choices",
     "message_line_refs",
+    "message_questions",
+    "message_question_choices",
+    "message_answers",
 ];
 
 #[cfg(test)]
@@ -123,10 +134,13 @@ async fn baseline_creates_every_table_of_the_data_model() {
         "integration_requests",
         "integrations",
         "labels",
+        "message_answers",
         "message_ask_closures",
         "message_choices",
         "message_line_refs",
+        "message_question_choices",
         "message_question_headers",
+        "message_questions",
         "message_recipients",
         "messages",
         "notify_needs_you",

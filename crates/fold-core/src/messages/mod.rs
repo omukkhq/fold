@@ -11,6 +11,13 @@ use crate::error::{FoldError, codes};
 use crate::events::EventActor;
 use crate::text::{LineFault, one_line};
 
+mod sets;
+
+pub use sets::{
+    AskParts, FIRST_LINE_LEN, MAX_QUESTION_LEN, MAX_SET_QUESTIONS, QuestionSet, SetQuestion,
+    answers_body, ask_questions, first_line, set_answers,
+};
+
 const TAG_PREFIX: &str = "tag:";
 const HUMAN_PREFIX: &str = EventActor::HUMAN_PREFIX;
 pub(crate) const ALL: &str = "all";

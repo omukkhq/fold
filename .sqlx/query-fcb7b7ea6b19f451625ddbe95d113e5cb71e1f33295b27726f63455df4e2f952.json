@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT a.answer, r.sender_human AS \"human!: String\"\n           FROM message_answers a\n           JOIN messages k ON k.id = a.ask_id\n           JOIN messages r ON r.id = a.reply_id\n           WHERE k.number = ?1\n           ORDER BY a.question",
+  "describe": {
+    "columns": [
+      {
+        "name": "answer",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "message_answers",
+            "name": "answer"
+          }
+        }
+      },
+      {
+        "name": "human!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "sender_human"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "fcb7b7ea6b19f451625ddbe95d113e5cb71e1f33295b27726f63455df4e2f952"
+}

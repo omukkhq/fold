@@ -283,6 +283,8 @@ async fn the_list_filters_by_agent_task_proposal_and_awaiting_human() {
     assert_eq!(
         keys,
         [
+            "answers",
+            "answers_ask",
             "asks_human",
             "body",
             "choices",
@@ -290,13 +292,15 @@ async fn the_list_filters_by_agent_task_proposal_and_awaiting_human() {
             "id",
             "lines",
             "proposal",
+            "questions",
             "recipients",
             "reply_to",
             "request",
             "sender",
             "sent_at",
             "task",
-            "thread"
+            "thread",
+            "worker_question"
         ]
     );
     assert_eq!(recipients(message), ["human:ana", "human:tanim"]);
@@ -814,4 +818,104 @@ async fn the_signed_in_human_marks_a_thread_read_for_themselves_only() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(code(&body), "human_name_required");
+}
+
+#[tokio::test]
+async fn a_human_answers_every_question_of_a_set_in_one_reply_and_marks_one_ask_answered() {
+    let fixture = Fixture::new().await;
+    let questions = fold_core::QuestionSet::parse(&[
+        fold_core::SetQuestion {
+            text: "Connected?".to_owned(),
+            header: Some("MCP".to_owned()),
+            choices: vec![
+                fold_core::Choice::label("Yes"),
+                fold_core::Choice::label("Not yet"),
+            ],
+        },
+        fold_core::SetQuestion {
+            text: "Which keys?".to_owned(),
+            header: None,
+            choices: Vec::new(),
+        },
+    ])
+    .unwrap();
+    for _ in 0..2 {
+        fixture
+            .messages
+            .send_set(
+                &agent("design"),
+                SendMessage {
+                    to: Address::parse_all(&["humans"]).unwrap(),
+                    body: MessageBody::parse("Both wait.").unwrap(),
+                    task: None,
+                    proposal: None,
+                    reply_to: None,
+                },
+                None,
+                questions.clone(),
+            )
+            .await
+            .unwrap();
+    }
+    let (_, thread) = fixture.get("/threads/m-1").await;
+    let set = &thread["messages"][0];
+    assert_eq!(set["questions"][0]["text"], "Connected?");
+    assert_eq!(set["questions"][0]["header"], "MCP");
+    assert_eq!(set["questions"][0]["choices"][1]["label"], "Not yet");
+    assert_eq!(set["questions"][1]["choices"], json!([]));
+    assert_eq!(set["answers"], json!([]));
+    assert_eq!(set["answers_ask"], Value::Null);
+    assert_eq!(set["worker_question"], false);
+
+    let answer = |id: &str, body: Value| {
+        let router = socket_router(fixture.state.clone());
+        let path = format!("{BASE}/asks/{id}/answer");
+        async move {
+            call(
+                router,
+                Method::POST,
+                &path,
+                &[("x-fold-human", "ana")],
+                Some(body),
+            )
+            .await
+        }
+    };
+    let (status, body) = answer("m-1", json!({"answers": ["Yes"]})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(code(&body), "invalid_request");
+    assert_eq!(body["error"]["details"]["reason"], "answers");
+    let (status, reply) = answer("m-1", json!({"answers": ["yes", "Mock them"]})).await;
+    assert_eq!(status, StatusCode::CREATED, "{reply}");
+    assert_eq!(reply["reply_to"], "m-1");
+    assert_eq!(reply["answers"], json!(["Yes", "Mock them"]));
+    assert_eq!(reply["answers_ask"], "m-1");
+    assert_eq!(recipients(&reply), ["design"]);
+    let (status, body) = answer("m-1", json!({"answers": ["Yes", "x"]})).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(code(&body), "ask_not_open");
+    let (status, body) = answer("m-9", json!({"answers": ["Yes", "x"]})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(code(&body), "message_not_found");
+
+    let (status, body) = call(
+        socket_router(fixture.state.clone()),
+        Method::POST,
+        &format!("{BASE}/asks/answered"),
+        &[("x-fold-human", "ana")],
+        Some(json!({"ask": "m-2"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["answered"], json!(["m-2"]));
+    let (status, body) = call(
+        socket_router(fixture.state.clone()),
+        Method::POST,
+        &format!("{BASE}/asks/answered"),
+        &[("x-fold-human", "ana")],
+        Some(json!({"ask": "m-2", "thread": "m-2"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(code(&body), "invalid_request");
 }

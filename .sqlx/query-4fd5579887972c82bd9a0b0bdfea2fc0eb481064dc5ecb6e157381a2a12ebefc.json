@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS \"worker?: String\",\n                  m.sender_human, t.number AS \"task?: i64\", p.number AS \"proposal?: i64\",\n                  rq.number AS \"request?: i64\", m.body, m.created_at,\n                  m.asks_human AS \"asks_human!: bool\"\n           FROM messages m\n           LEFT JOIN workers w ON w.id = m.sender_worker_id\n           LEFT JOIN tasks t ON t.id = m.task_id\n           LEFT JOIN proposals p ON p.id = m.proposal_id\n           LEFT JOIN requests rq ON rq.id = m.request_id\n           WHERE m.number IN (SELECT value FROM json_each(?))\n           ORDER BY m.number",
+  "query": "SELECT m.number, m.thread_id, m.reply_to, m.sender_kind, w.name AS \"worker?: String\",\n                  m.sender_human, t.number AS \"task?: i64\", p.number AS \"proposal?: i64\",\n                  rq.number AS \"request?: i64\", m.body, m.created_at,\n                  m.asks_human AS \"asks_human!: bool\",\n                  EXISTS (SELECT 1 FROM worker_question_messages q WHERE q.message_id = m.id)\n                      AS \"worker_question!: bool\"\n           FROM messages m\n           LEFT JOIN workers w ON w.id = m.sender_worker_id\n           LEFT JOIN tasks t ON t.id = m.task_id\n           LEFT JOIN proposals p ON p.id = m.proposal_id\n           LEFT JOIN requests rq ON rq.id = m.request_id\n           WHERE m.number IN (SELECT value FROM json_each(?))\n           ORDER BY m.number",
   "describe": {
     "columns": [
       {
@@ -134,6 +134,12 @@
             "name": "asks_human"
           }
         }
+      },
+      {
+        "name": "worker_question!: bool",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -151,8 +157,9 @@
       true,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "3bcb4d1d1a48e30f93e0e24b76c76d2239bdab35fed1b5b27a10b2debebae6b1"
+  "hash": "4fd5579887972c82bd9a0b0bdfea2fc0eb481064dc5ecb6e157381a2a12ebefc"
 }
