@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { byContent } from "@/test/content";
+import { comparedFile } from "@/test/diff";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import {
@@ -2071,6 +2072,11 @@ describe("Human edit", () => {
   const AGAIN = "POST /api/v1/projects/demo/proposals/P-4/review-again";
 
   function editRoutes(): void {
+    // The version's whole diff, which the intent of a version without one starts with.
+    update("P-4", (p) => ({
+      ...p,
+      files: [comparedFile(SCHEMA, "added")],
+    }));
     daemon.on("GET /api/v1/projects/:slug/proposals/:id/file", () =>
       ok({
         path: SCHEMA,

@@ -274,7 +274,10 @@ function ChangeBody({
           proposal={proposal}
           view={view}
           path={file.path}
-          files={files.map((changedFile) => changedFile.path)}
+          files={(proposal.selected.version === version
+            ? proposal.files
+            : files
+          ).map((changedFile) => changedFile.path)}
           onCancel={() => {
             setEditing(null);
           }}
