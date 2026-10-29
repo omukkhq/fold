@@ -897,6 +897,12 @@ impl ReviewService {
             Subject::Pull { remote_commit, .. } => {
                 tracing::info!(remote_commit = %remote_commit, revision = %next, integration = %integration, "remote commit integrated");
             }
+            Subject::Record {
+                by: RecordAuthor::Fold { .. },
+                ..
+            } => {
+                tracing::info!(revision = %next, integration = %integration, "fold's own change integrated");
+            }
             Subject::Record { commit, .. } => {
                 tracing::info!(commit = commit.as_deref().unwrap_or("none"), revision = %next, integration = %integration, "human change integrated");
             }

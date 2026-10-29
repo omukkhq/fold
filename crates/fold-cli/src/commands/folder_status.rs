@@ -14,7 +14,7 @@ use crate::output::{self, Item};
 const LISTED_PATHS: usize = 10;
 
 /// Claude Code's settings of one person on one machine, which `.fold/exclude` leaves out of every new project and which stays tracked where main holds it already.
-const LOCAL_SETTINGS: &str = ".claude/settings.local.json";
+const LOCAL_SETTINGS: &str = fold_core::layout::LOCAL_SETTINGS_FILE;
 
 #[derive(Args, Debug)]
 pub struct StatusArgs {
@@ -102,6 +102,7 @@ fn status_lines(
         };
         format!("{files} {verb} ignore rules; `fld status --json` lists them")
     });
+    let skills_note = skills_note(&ignored_tracked);
     let settings_note = ignored_tracked.contains(&LOCAL_SETTINGS).then(|| {
         format!("{LOCAL_SETTINGS} holds your own Claude Code settings; `fld untrack {LOCAL_SETTINGS}` stops tracking it and leaves it on disk")
     });
@@ -118,6 +119,9 @@ fn status_lines(
             clean.detail(synced);
         }
         if let Some(note) = &ignored_note {
+            clean.detail(note);
+        }
+        if let Some(note) = &skills_note {
             clean.detail(note);
         }
         if let Some(note) = &settings_note {
@@ -144,6 +148,9 @@ fn status_lines(
         place.detail(synced);
     }
     if let Some(note) = &ignored_note {
+        place.detail(note);
+    }
+    if let Some(note) = &skills_note {
         place.detail(note);
     }
     if let Some(note) = &settings_note {
@@ -347,6 +354,31 @@ fn skipped_reason(reason: &str) -> &str {
     }
 }
 
+/// The note for tracked files of fold's own skills that the ignore rules leave out: the daemon stops tracking them at its next start of the project, and `fld untrack` with their folders does it at once. It names each folder once.
+fn skills_note(ignored_tracked: &[&str]) -> Option<String> {
+    let skills = fold_core::layout::SKILLS_DIR;
+    let mut folders: Vec<String> = ignored_tracked
+        .iter()
+        .filter(|path| fold_core::layout::is_fold_skill_file(path.as_bytes()))
+        .filter_map(|path| {
+            path.strip_prefix(skills)?
+                .strip_prefix('/')?
+                .split('/')
+                .next()
+        })
+        .map(|name| output::escape_control(&format!("{skills}/{name}")))
+        .collect();
+    folders.sort();
+    folders.dedup();
+    if folders.is_empty() {
+        return None;
+    }
+    let folders = folders.join(" ");
+    Some(format!(
+        "main still tracks fold's skills in {folders}; the daemon's next start stops tracking them, or `fld untrack {folders}` does it now and leaves them on disk"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -462,6 +494,29 @@ mod tests {
                 "",
                 "2 files to record · 1 held by main · 2 stash entries",
             ]
+        );
+    }
+
+    #[test]
+    fn tracked_fold_skills_name_their_folders_and_the_untrack_that_stops_tracking_them() {
+        let answer = answer(json!({"ignored_tracked": [
+            ".claude/skills/fold-main/SKILL.md",
+            ".claude/skills/fold/ERRORS.md",
+            ".claude/skills/fold/SKILL.md",
+            ".claude/skills/fold-custom/SKILL.md",
+            "app.env",
+        ]}));
+        assert_eq!(
+            lines(answer),
+            [
+                "Nothing to record: the project folder is at main r12",
+                "  ↳ 5 tracked files match ignore rules; `fld status --json` lists them",
+                "  ↳ main still tracks fold's skills in .claude/skills/fold .claude/skills/fold-main; the daemon's next start stops tracking them, or `fld untrack .claude/skills/fold .claude/skills/fold-main` does it now and leaves them on disk",
+            ]
+        );
+        assert_eq!(
+            skills_note(&["app.env", ".claude/skills/fold-custom/a.md"]),
+            None
         );
     }
 
