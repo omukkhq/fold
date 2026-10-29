@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use axum::http::{Method, StatusCode};
 use fold_core::events::types;
 use fold_core::{Actor, EventFilter, codes};
+use fold_daemon::projects::FolderFiles;
 use fold_daemon::services::projects::{FOLD_SKILLS_TITLE, FoldSkills, keep_fold_skills_out};
 use fold_store::testing::eventually;
 use fold_vcs::git::Git;
@@ -266,6 +267,82 @@ async fn with_git_sync_folds_revision_removes_the_skills_from_the_branch_and_the
     // The files stay, and Git leaves them out through the exclude file, so the folder is clean.
     for (path, text) in OLD_FILES {
         assert_eq!(read(&dir, path).as_deref(), Some(text), "{path}");
+    }
+    assert_eq!(git(&dir, &["status", "--porcelain"]), "");
+}
+
+/// fold's skills as an upgraded `fld serve` writes them into the project folder at each open, before the revision runs.
+fn upgraded_skills() -> FolderFiles {
+    FolderFiles::new(|root: &Path| {
+        for path in STOPPED {
+            std::fs::write(root.join(path), format!("new {path}\n")).unwrap();
+        }
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn skills_an_upgrade_writes_again_before_the_revision_stay_on_disk_and_leave_main() {
+    let mut h = Harness::start_plain().await;
+    let dir = root(&h);
+    let before = as_an_older_fold_left_it(&h, "").await;
+
+    h.folder_files = upgraded_skills();
+    h.restart().await;
+    let head = h.head().await;
+    assert_eq!(head.parent.map(|parent| parent.to_string()), Some(before));
+    assert_eq!(
+        head.integration.unwrap().message.as_deref(),
+        Some(FOLD_SKILLS_TITLE)
+    );
+    let revision = head.number.to_string();
+    for path in STOPPED {
+        assert_eq!(file_of(&h, &revision, path).await, None, "{path}");
+        assert_eq!(read(&dir, path), Some(format!("new {path}\n")), "{path}");
+    }
+    let body = status(&h).await;
+    assert_eq!(body["at_main"], true);
+    assert_eq!(body["changes"], json!([]));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn with_git_skills_an_upgrade_writes_again_leave_the_branch_and_the_index_and_stay_in_the_work_tree()
+ {
+    let mut h = Harness::start().await;
+    branch_born(&h).await;
+    let dir = root(&h);
+    as_an_older_fold_left_it(&h, "/.fold/\n").await;
+    eventually(WAIT, async || {
+        let listed = git(&dir, &["ls-files", ".claude"]);
+        if listed.lines().count() == OLD_FILES.len() {
+            Ok(())
+        } else {
+            Err(listed)
+        }
+    })
+    .await;
+
+    h.folder_files = upgraded_skills();
+    h.restart().await;
+    let head = h.head().await;
+    assert_eq!(
+        head.integration.as_ref().unwrap().message.as_deref(),
+        Some(FOLD_SKILLS_TITLE)
+    );
+    eventually(WAIT, async || match fold_store::workspaces::get_by_number(
+        h.handle.store.read(),
+        head.number,
+    )
+    .await
+    .unwrap()
+    .commit
+    {
+        Some(commit) if git(&dir, &["rev-parse", "HEAD"]).trim() == commit.as_str() => Ok(()),
+        other => Err(other),
+    })
+    .await;
+    for path in STOPPED {
+        assert_eq!(git(&dir, &["ls-files", path]), "", "{path}");
+        assert_eq!(read(&dir, path), Some(format!("new {path}\n")), "{path}");
     }
     assert_eq!(git(&dir, &["status", "--porcelain"]), "");
 }
