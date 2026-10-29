@@ -116,7 +116,10 @@ export function ChatPanel({
   const newest = messages.at(-1)?.id ?? null;
   const [anchor] = useState(() => chatAnchor(chat, link, you));
   const queue = openQuestions(chat, you);
-  const [cursor, setCursor] = useState(() => startCursor(queue, anchor));
+  // Without a link the dock starts at the oldest question, even when the newest message is a question.
+  const [cursor, setCursor] = useState(() =>
+    startCursor(queue, link === undefined ? null : anchor),
+  );
   const index = queueIndex(queue, cursor);
   const current = queue[index] ?? null;
   const step = stepText(index, queue.length);
@@ -352,7 +355,7 @@ export function ChatPanel({
             answering={target?.answers?.sender ?? null}
             about={
               options.length < 2 ? null : (
-                <label className="flex min-w-0 items-center gap-6">
+                <label className="flex min-w-0 flex-1 items-center gap-6 sm:flex-none">
                   <span className="shrink-0">About</span>
                   <select
                     value={aboutValue(chat, current, about) ?? ""}
@@ -362,7 +365,7 @@ export function ChatPanel({
                       setPicked(null);
                     }}
                     className={cn(
-                      "min-w-0 truncate rounded-s bg-fill px-8 py-3 text-13 text-text max-sm:min-h-44",
+                      "min-w-0 flex-1 truncate rounded-s bg-fill px-8 py-3 text-13 text-text max-sm:min-h-44 sm:flex-none",
                       focusRing,
                     )}
                   >

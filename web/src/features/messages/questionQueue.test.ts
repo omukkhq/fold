@@ -126,6 +126,12 @@ describe("markableThread", () => {
     expect(markableThread(mixed, queue[0] ?? null)?.id).toBe("m-1");
     expect(markableThread(mixed, null)?.id).toBe("m-5");
     expect(markableThread(chat(), null)).toBeNull();
+    // A current question whose ask no human can close offers no mark, even when another thread has one.
+    const [worker] = groupChats([closable, early]);
+    if (!worker) throw new Error("no chat");
+    const first = openQuestions(worker, "tanim")[0] ?? null;
+    expect(first?.thread.id).toBe("m-1");
+    expect(markableThread(worker, first)).toBeNull();
   });
 });
 

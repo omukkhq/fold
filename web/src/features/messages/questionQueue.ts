@@ -96,13 +96,13 @@ export function stepText(index: number, total: number): string {
     : `Question ${String(index + 1)} of ${String(total)}`;
 }
 
-/** The thread that Mark answered closes the asks of: the current question's, else the newest thread of the chat with an ask a human can close; null while none waits. */
+/** The thread that Mark answered closes the asks of: the current question's while one shows, so the control never closes a question the dock does not show; without one, the newest thread of the chat with an ask a human can close. Null when that thread has no such ask. */
 export function markableThread(
   chat: AgentChat,
   current: OpenQuestion | null,
 ): ThreadView | null {
-  if (current !== null && threadCanMarkAnswered(current.thread)) {
-    return current.thread;
+  if (current !== null) {
+    return threadCanMarkAnswered(current.thread) ? current.thread : null;
   }
   return chat.threads.find(threadCanMarkAnswered) ?? null;
 }

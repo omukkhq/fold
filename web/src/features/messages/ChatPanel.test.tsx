@@ -846,6 +846,24 @@ describe("ChatPanel with several threads", () => {
     expect(onReply).toHaveBeenLastCalledWith(ASK_B, "Keep it");
   });
 
+  it("starts the dock at the oldest question when no link names one, also when the newest message is a question", async () => {
+    await renderChat([first, second], () => Promise.resolve());
+    expect(
+      within(dock()).getByRole("heading", { name: "Question 1 of 2" }),
+    ).toBeTruthy();
+  });
+
+  it("offers Mark answered only for the question the dock shows", async () => {
+    await renderChat([first, { ...second, closable: true }], () =>
+      Promise.resolve(),
+    );
+    expect(screen.queryByRole("button", { name: "Mark answered" })).toBeNull();
+    await userEvent.click(
+      within(dock()).getByRole("button", { name: "Next question" }),
+    );
+    expect(screen.getByRole("button", { name: "Mark answered" })).toBeTruthy();
+  });
+
   it("opens the dock at the question a link names, and steps to a question from the timeline", async () => {
     await renderChat([first, second, third], () => Promise.resolve(), ASK_B);
     expect(

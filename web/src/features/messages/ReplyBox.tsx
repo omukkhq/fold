@@ -73,7 +73,7 @@ export function ReplyBox({
     >
       <div className="flex w-full max-w-thread-column flex-wrap items-end gap-x-8 gap-y-2 rounded-l bg-surface py-6 pr-6 pl-14 has-[textarea:focus-visible]:outline-2 has-[textarea:focus-visible]:outline-offset-2 has-[textarea:focus-visible]:outline-accent sm:flex-col sm:flex-nowrap sm:items-stretch sm:gap-4 sm:py-10 sm:pr-10 sm:pl-16">
         {about === null ? null : (
-          <div className="flex basis-full items-center gap-6 pt-4 text-13 text-text-2 sm:basis-auto sm:pt-0">
+          <div className="flex min-w-0 basis-full items-center gap-6 pt-4 text-13 text-text-2 sm:basis-auto sm:pt-0">
             {about}
           </div>
         )}
