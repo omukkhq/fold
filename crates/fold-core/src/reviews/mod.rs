@@ -30,19 +30,35 @@ pub fn human_review_reason(reason: &str) -> Result<String, crate::FoldError> {
 /// The longest intent a proposal version takes, in characters.
 pub const MAX_INTENT_CHARS: usize = 2000;
 
-/// The intent of a proposal version: what the change does, why, what it leaves as it is and its risks, which a human reads beside the reviewer's summary instead of every line. It is stored trimmed, with each line break as `\n`, and becomes the body of the version's Git commit. An empty or too long intent is `invalid_intent`, whose details name the reason and never repeat the text; `again` names the call that sends it again.
+/// The intent of a proposal version: what the change does, why, what it leaves as it is and its risks, which a human reads beside the reviewer's summary instead of every line. It is stored trimmed, with each line break as `\n`, and becomes the body of the version's Git commit byte for byte, so it holds no control character other than a line break or a tab. An empty or too long intent, or one with another control character, is `invalid_intent`, whose details name the reason (`empty`, `too_long` or `control_character`) and never repeat the text; `again` names the call that sends it again.
 pub fn proposal_intent(intent: &str, again: &str) -> Result<String, crate::FoldError> {
     let intent = intent.trim().replace("\r\n", "\n").replace('\r', "\n");
     let reason = if intent.is_empty() {
         "empty"
     } else if intent.chars().count() > MAX_INTENT_CHARS {
         "too_long"
+    } else if intent
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        "control_character"
     } else {
         return Ok(intent);
     };
-    Err(crate::FoldError::new(
+    Err(intent_refusal(reason, again))
+}
+
+/// `invalid_intent` with the reason `missing`: the call left out the intent that a new version needs.
+pub fn missing_intent(again: &str) -> crate::FoldError {
+    intent_refusal("missing", again)
+}
+
+fn intent_refusal(reason: &str, again: &str) -> crate::FoldError {
+    crate::FoldError::new(
         crate::codes::INVALID_INTENT,
-        format!("the intent must be 1 to {MAX_INTENT_CHARS} characters of text"),
+        format!(
+            "the intent must be 1 to {MAX_INTENT_CHARS} characters of text, with no control character other than a line break or a tab"
+        ),
     )
     .with_details([
         ("field", serde_json::json!("intent")),
@@ -50,8 +66,8 @@ pub fn proposal_intent(intent: &str, again: &str) -> Result<String, crate::FoldE
         ("max_chars", serde_json::json!(MAX_INTENT_CHARS)),
     ])
     .with_hint(format!(
-        "call {again} again with an intent of at most {MAX_INTENT_CHARS} characters: what the change does, why, what it does not change and its risks"
-    )))
+        "call {again} again with `intent`: at most {MAX_INTENT_CHARS} characters on what the change does, why, what it does not change and its risks"
+    ))
 }
 
 define_names!(
@@ -436,11 +452,27 @@ mod tests {
             proposal_intent(&longest, "create_proposal").unwrap(),
             longest
         );
-        for (text, reason) in [
+        assert_eq!(
+            proposal_intent("Adds:\n\t- the report", "create_proposal").unwrap(),
+            "Adds:\n\t- the report"
+        );
+        let refusals = [
             (" \n\t ".to_owned(), "empty"),
             ("x".repeat(MAX_INTENT_CHARS + 1), "too_long"),
-        ] {
-            let error = proposal_intent(&text, "update_proposal").unwrap_err();
+            ("Adds the \u{1b}[31mreport".to_owned(), "control_character"),
+            ("Adds the report.\0".to_owned(), "control_character"),
+            ("Adds\u{85}the report".to_owned(), "control_character"),
+        ];
+        let missing = std::iter::once(missing_intent("update_proposal"));
+        let errors = refusals
+            .iter()
+            .map(|(text, _)| proposal_intent(text, "update_proposal").unwrap_err())
+            .chain(missing);
+        let reasons = refusals
+            .iter()
+            .map(|(_, reason)| *reason)
+            .chain(["missing"]);
+        for (error, reason) in errors.zip(reasons) {
             assert_eq!(error.code(), crate::codes::INVALID_INTENT);
             assert_eq!(
                 serde_json::Value::Object(error.details().unwrap().clone()),
@@ -450,7 +482,7 @@ mod tests {
                 error
                     .hint()
                     .unwrap()
-                    .starts_with("call update_proposal again")
+                    .starts_with("call update_proposal again with `intent`")
             );
         }
     }

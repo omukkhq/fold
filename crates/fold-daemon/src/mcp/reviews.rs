@@ -3,7 +3,7 @@ use std::str::FromStr;
 use fold_core::policy::{Gate, GateState, GateStatus};
 use fold_core::reviews::plans::{PlanCandidate, plan_hint};
 use fold_core::reviews::{
-    HumanReviewMark, ReviewScope, ReviewScopeRecord, ScopeChoice, Side, Verdict,
+    HumanReviewMark, ReviewScope, ReviewScopeRecord, ScopeChoice, Side, Verdict, missing_intent,
 };
 use fold_core::text::shorten;
 use fold_core::{
@@ -59,7 +59,9 @@ pub struct CreateProposalInput {
     /// The proposal title: one line of at most 200 characters.
     pub title: String,
     /// What the change is for, 1 to 2000 characters, for the humans who read it instead of every line and the reviewer who checks the diff against it: what it does, why, what it does not change, and its risks. It becomes the body of the Git commit when the version integrates.
-    pub intent: String,
+    // serde reads a missing `Option` as `None`, so a missing intent reaches `missing_intent` while the schema lists it as a required string.
+    #[schemars(required, with = "String")]
+    pub intent: Option<String>,
     /// What shows the work is done, such as the tests you ran and their result. Leave it out for none. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub evidence: Option<String>,
@@ -124,7 +126,8 @@ pub struct UpdateProposalInput {
     /// The proposal, such as P-3. Only its author's worker can add a version.
     pub id: String,
     /// The intent of the new version, written for it: what the change is for, 1 to 2000 characters, for the humans who read it instead of every line and the reviewer who checks the diff against it: what it does, why, what it does not change, and its risks. It becomes the body of the Git commit when the version integrates.
-    pub intent: String,
+    #[schemars(required, with = "String")]
+    pub intent: Option<String>,
     /// New evidence for the new version. Leave it out to keep the current evidence. In the text `#` names a fold item (#T-12) and `@` names a file (@web/src/board.ts); the daemon parses nothing.
     #[serde(default)]
     pub evidence: Option<String>,
@@ -307,14 +310,15 @@ pub struct SubmitReviewFixInput {
     /// The commands you ran on the fixed files, such as the narrow tests of each fix, the build and the required checks, with their results.
     pub checks: String,
     /// The intent of the fixed version as a whole, 1 to 2000 characters: what the change now does, why, what it does not change, and its risks. Start from the intent of the version you fixed and say what your fix changes in it. It becomes the body of the Git commit when the version integrates.
-    pub intent: String,
+    #[schemars(required, with = "String")]
+    pub intent: Option<String>,
 }
 
 pub fn tools() -> Vec<Tool> {
     let mut tools = vec![
         Tool::new(
             CREATE_PROPOSAL,
-            "Send the work in your task workspace for review as a new proposal (v1), with its intent: what the change does, why, what it does not change and its risks (invalid_intent when it is empty or longer than 2000 characters). You must hold the task's claim. The task moves to Review. When fold-checks.toml has proposal checks for your change and no passed run_checks of the same files stands, it returns at once with checks running and a run id: fold runs the checks and opens the proposal only when they pass; the result comes as a message from fold. Wait for checks.finished with wait_for_events. A change of fold-checks.toml puts the human review mark on the task.",
+            "Send the work in your task workspace for review as a new proposal (v1), with its intent: what the change does, why, what it does not change and its risks (invalid_intent when it is missing, empty, longer than 2000 characters or holds a control character other than a line break or a tab). You must hold the task's claim. The task moves to Review. When fold-checks.toml has proposal checks for your change and no passed run_checks of the same files stands, it returns at once with checks running and a run id: fold runs the checks and opens the proposal only when they pass; the result comes as a message from fold. Wait for checks.finished with wait_for_events. A change of fold-checks.toml puts the human review mark on the task.",
             schema_for_type::<CreateProposalInput>(),
         ),
         Tool::new(
@@ -334,7 +338,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         Tool::new(
             UPDATE_PROPOSAL,
-            "Send the current state of your task workspace as the next version of your open proposal, after a change request or a conflict, with the intent of the new version (invalid_intent when it is empty or longer than 2000 characters). The proposal checks gate the version as for create_proposal: checks running means fold adds the version only when they pass.",
+            "Send the current state of your task workspace as the next version of your open proposal, after a change request or a conflict, with the intent of the new version (invalid_intent when it is missing, empty, longer than 2000 characters or holds a control character other than a line break or a tab). The proposal checks gate the version as for create_proposal: checks running means fold adds the version only when they pass.",
             schema_for_type::<UpdateProposalInput>(),
         ),
         Tool::new(
@@ -783,7 +787,10 @@ async fn create_proposal(
             actor,
             task_id(&input.task)?,
             &input.title,
-            &input.intent,
+            input
+                .intent
+                .as_deref()
+                .ok_or_else(|| missing_intent(CREATE_PROPOSAL))?,
             input.evidence.as_deref(),
         )
         .await
@@ -939,7 +946,10 @@ async fn update_proposal(
         .update_proposal(
             actor,
             proposal_id(&input.id)?,
-            &input.intent,
+            input
+                .intent
+                .as_deref()
+                .ok_or_else(|| missing_intent(UPDATE_PROPOSAL))?,
             input.evidence.as_deref(),
         )
         .await
@@ -1066,7 +1076,10 @@ async fn submit_review_fix(
             input.version,
             &fixes,
             &input.checks,
-            &input.intent,
+            input
+                .intent
+                .as_deref()
+                .ok_or_else(|| missing_intent(SUBMIT_REVIEW_FIX))?,
         )
         .await
         .map_err(from_review)?;

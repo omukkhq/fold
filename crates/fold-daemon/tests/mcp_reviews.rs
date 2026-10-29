@@ -1450,7 +1450,41 @@ async fn every_proposal_version_tool_requires_an_intent_and_get_proposal_shows_i
     )
     .await;
     assert_eq!(missing.is_error, Some(true));
-    assert_eq!(body(&missing)["error"]["code"], "invalid_request");
+    let missing = &body(&missing)["error"];
+    assert_eq!(missing["code"], "invalid_intent", "{missing}");
+    assert_eq!(missing["details"]["reason"], "missing");
+    assert!(
+        missing["hint"]
+            .as_str()
+            .unwrap()
+            .starts_with("call create_proposal again with `intent`"),
+        "{missing}"
+    );
+    let fix = json!({"id": "P-1", "version": 1, "checks": "cargo test: ok",
+                     "fixes": [{"path": "src/lib.rs", "reason": "typo"}]});
+    for (tool, arguments) in [
+        ("update_proposal", json!({"id": "P-1"})),
+        ("submit_review_fix", fix),
+    ] {
+        let refused = err(&frontend, tool, arguments).await;
+        assert_eq!(refused["code"], "invalid_intent", "{tool}: {refused}");
+        assert_eq!(refused["details"]["reason"], "missing", "{tool}");
+        assert!(
+            refused["hint"]
+                .as_str()
+                .unwrap()
+                .starts_with(&format!("call {tool} again with `intent`")),
+            "{refused}"
+        );
+    }
+    let control = err(
+        &frontend,
+        "create_proposal",
+        json!({"task": "T-1", "title": "Rename x", "intent": "Renames x.\u{1b}[2J"}),
+    )
+    .await;
+    assert_eq!(control["code"], "invalid_intent");
+    assert_eq!(control["details"]["reason"], "control_character");
     let long = "x".repeat(2001);
     let refused = err(
         &frontend,
